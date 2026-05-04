@@ -17,6 +17,7 @@ type Props = {
   onSave?: () => void;
   onToggleSelect?: () => void;
   onRemove?: () => void;
+  onShare?: () => void;
   compact?: boolean;
 };
 
@@ -27,6 +28,7 @@ export default function AppCard({
   onSave,
   onToggleSelect,
   onRemove,
+  onShare,
   compact,
 }: Props) {
   const pc = pricingColor(app.pricing);
@@ -156,6 +158,17 @@ export default function AppCard({
             <Text style={[styles.ghostBtnText, { color: "#F87171" }]}>
               Rimuovi
             </Text>
+          </TouchableOpacity>
+        ) : null}
+
+        {onShare ? (
+          <TouchableOpacity
+            style={styles.ghostBtn}
+            onPress={onShare}
+            testID={`share-${app.name.toLowerCase().replace(/\s+/g, "-")}`}
+          >
+            <Ionicons name="share-social-outline" size={15} color="#CBD5E1" />
+            <Text style={styles.ghostBtnText}>Condividi</Text>
           </TouchableOpacity>
         ) : null}
       </View>

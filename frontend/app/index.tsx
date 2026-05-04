@@ -26,7 +26,7 @@ import {
 import AppCard from "../components/AppCard";
 import CompareModal from "../components/CompareModal";
 import { startRecording, buildFormData, Recorder } from "../lib/voice";
-import { shareRecommendation } from "../lib/share";
+import { shareRecommendation, shareSingleApp } from "../lib/share";
 
 type Featured = {
   week: number;
@@ -173,6 +173,23 @@ export default function Home() {
     const status = await shareRecommendation(result.query, result.summary);
     if (status === "copied") {
       setShareStatus("Link copiato!");
+      setTimeout(() => setShareStatus(null), 2200);
+    } else if (status === "shared") {
+      setShareStatus("Condiviso ✓");
+      setTimeout(() => setShareStatus(null), 2200);
+    }
+  };
+
+  const onShareApp = async (a: AppItem) => {
+    const status = await shareSingleApp({
+      name: a.name,
+      emoji: a.icon_emoji,
+      description: a.description,
+      url: a.url,
+      query: result?.query,
+    });
+    if (status === "copied") {
+      setShareStatus("Copiato!");
       setTimeout(() => setShareStatus(null), 2200);
     } else if (status === "shared") {
       setShareStatus("Condiviso ✓");
@@ -493,6 +510,7 @@ export default function Home() {
                 selected={!!selectedForCompare.find((s) => s.id === a.id)}
                 onSave={() => toggleSave(a)}
                 onToggleSelect={() => toggleCompare(a)}
+                onShare={() => onShareApp(a)}
               />
             ))}
           </View>

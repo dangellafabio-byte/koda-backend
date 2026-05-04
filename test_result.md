@@ -101,3 +101,35 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: |
+  App "Compass" — bussola che consiglia app per qualsiasi esigenza usando AI.
+  MVP: ricerca semantica, categorie, preferiti, cronologia, dettatura vocale (Whisper),
+  app della settimana, condivisione consigli via link.
+
+frontend:
+  - task: "Share — riattivata e granulare"
+    implemented: true
+    working: "NA"
+    file: "frontend/lib/share.ts, frontend/components/AppCard.tsx, frontend/app/index.tsx, frontend/app/saved.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Reimplementata Share senza dipendenze native incompatibili (rimossa expo-sharing in fork
+          precedente). Ora usa l'API nativa Share di React Native + fallback clipboard via expo-clipboard
+          (web -> navigator.share, fallback copia testo). Aggiunto pulsante "Condividi" su ogni AppCard
+          (sia nei risultati che nei preferiti) per condividere singole app con nome, emoji, descrizione,
+          query e URL deep-link. Mantenuto pulsante condividi-tutto in testa ai risultati.
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Riabilitata la condivisione (era disconnessa nel fork precedente per via della rimozione di
+      expo-sharing). Implementazione: lib/share.ts esporta shareRecommendation e nuova shareSingleApp;
+      AppCard accetta prop opzionale onShare e mostra pulsante; index.tsx e saved.tsx wired-up.
+      Nessuna nuova dipendenza nativa: usa Share di react-native + expo-clipboard (già installato).
+      Frontend testato visivamente: bundling OK, UI carica correttamente.

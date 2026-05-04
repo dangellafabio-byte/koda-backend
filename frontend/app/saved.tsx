@@ -13,6 +13,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { API_BASE, AppItem, Favorite } from "../lib/api";
 import AppCard from "../components/AppCard";
 import CompareModal from "../components/CompareModal";
+import { shareSingleApp } from "../lib/share";
 
 export default function Saved() {
   const insets = useSafeAreaInsets();
@@ -114,6 +115,15 @@ export default function Saved() {
               selected={!!selected.find((a) => a.id === f.app.id)}
               onToggleSelect={() => toggleCompare(f.app)}
               onRemove={() => remove(f)}
+              onShare={() =>
+                shareSingleApp({
+                  name: f.app.name,
+                  emoji: f.app.icon_emoji,
+                  description: f.app.description,
+                  url: f.app.url,
+                  query: f.query || undefined,
+                })
+              }
             />
           ))}
         </ScrollView>
