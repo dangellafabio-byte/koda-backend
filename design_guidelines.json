@@ -1,0 +1,80 @@
+{
+  "theme": "dark",
+  "archetype": "5 (Jewel & Luxury)",
+  "concept": "App Compass (La Bussola delle App) - A premium, AI-powered mobile app discovery assistant.",
+  "colors": {
+    "background": "bg-slate-950",
+    "surface": "bg-white/5 backdrop-blur-xl border border-white/10",
+    "surface_hover": "hover:bg-white/10",
+    "primary": "bg-amber-400 text-slate-950 hover:bg-amber-500",
+    "primary_text": "text-amber-400",
+    "text_main": "text-slate-50",
+    "text_muted": "text-slate-400",
+    "accent_glow": "shadow-[0_0_15px_rgba(251,191,36,0.3)]"
+  },
+  "typography": {
+    "headings": "font-sans font-medium tracking-tight",
+    "body": "font-sans leading-relaxed",
+    "font_family_recommendation": "Outfit for headings, Manrope for body text (must import via Google Fonts in index.css)",
+    "h1": "text-4xl sm:text-5xl tracking-tighter",
+    "h2": "text-2xl sm:text-3xl tracking-tight",
+    "h3": "text-xl",
+    "body_text": "text-base",
+    "small_label": "text-xs tracking-[0.2em] uppercase font-bold text-amber-400/80"
+  },
+  "layout": {
+    "structure": "Mobile-first view. The main app container should be `max-w-md mx-auto h-[100dvh] relative overflow-hidden bg-slate-950 flex flex-col shadow-2xl sm:border sm:border-white/10 sm:rounded-[2.5rem] my-auto sm:h-[850px] sm:max-h-[90vh]` to simulate a mobile phone on desktop. Hide desktop scrollbars.",
+    "spacing": "Use generous spacing inside components (p-6, p-8) and tight gaps for bento grids (gap-4).",
+    "navigation": "Bottom tab navigation bar fixed to the bottom of the mobile container. Glassmorphism: `absolute bottom-0 w-full bg-slate-950/80 backdrop-blur-2xl border-t border-white/10 pb-safe pt-4 px-6 flex justify-between items-center z-50`."
+  },
+  "surfaces": {
+    "glass": "bg-white/5 backdrop-blur-xl border-white/10 border shadow-[0_8px_32px_rgba(0,0,0,0.12)]",
+    "card": "bg-slate-900/50 border border-white/5 rounded-3xl p-6",
+    "input": "bg-slate-900/80 border border-white/10 rounded-3xl p-4 focus-within:border-amber-400/50 focus-within:ring-1 focus-within:ring-amber-400/50 transition-all"
+  },
+  "components": {
+    "buttons": "Rounded-full for main CTAs. High contrast: amber bg with slate text. Always include hover states.",
+    "tags": "Rounded-full px-4 py-1.5 text-sm bg-white/5 border border-white/10 text-slate-300 whitespace-nowrap",
+    "bento_grid": "Use grid-cols-2 gap-4. Mixed spans for categories. e.g., Photo (col-span-2), Finance (col-span-1), etc."
+  },
+  "animations": {
+    "general": "Smooth, fluid transitions. Use framer-motion for page transitions and list item staggered fade-ins.",
+    "hover": "Scale down slightly on press (active:scale-95), slight lift on hover."
+  },
+  "assets": {
+    "icons_library": "@phosphor-icons/react (Weight: duotone or regular)",
+    "images": {
+      "compass_bg": {
+        "url": "https://static.prod-images.emergentagent.com/jobs/57f6b0db-2202-4324-9153-9e03fd6143da/images/11bb476cc56756d1f6a4e0ce4774d5d6f8e51e33f027146a2e9ad12970563f8e.png",
+        "description": "Abstract midnight blue background with gold accents. Use as absolute positioned background image with low opacity (20%) behind the home screen."
+      },
+      "compass_icon": {
+        "url": "https://static.prod-images.emergentagent.com/jobs/57f6b0db-2202-4324-9153-9e03fd6143da/images/2eb92306925cffbf9b7a4a093daff1000fa1e34ce908845a77f9d2664cef7220.png",
+        "description": "3D Compass Icon. Use in the header or empty states as a brand logo."
+      },
+      "empty_saved": {
+        "url": "https://static.prod-images.emergentagent.com/jobs/57f6b0db-2202-4324-9153-9e03fd6143da/images/d5ded9510b4e333d0e87fe264367722dddc9ee9a9dd2d522e07006e2d1aa3c3f.png",
+        "description": "Empty state graphic for Saved/Favorites screen."
+      }
+    }
+  },
+  "views": [
+    {
+      "name": "Home",
+      "features": "Logo header, Large AI prompt textarea ('Descrivi cosa vuoi fare...'), Suggested categories in a horizontal scroll or bento grid, Recent searches."
+    },
+    {
+      "name": "Results",
+      "features": "List of app recommendation cards. Card includes: App Name, description, platform icons (iOS/Android), price tag, save button, and download link. 'Compare' floating action button if multiple apps."
+    },
+    {
+      "name": "Comparison",
+      "features": "Side-by-side specs of 2-3 apps. Use a clean table or card layout. Criteria: Prezzo (Price), Piattaforme (Platforms), Pro (Pros), Contro (Cons)."
+    },
+    {
+      "name": "Saved",
+      "features": "Grid/List of favorite apps. Use the empty_saved image if empty."
+    }
+  ],
+  "instructions_to_main_agent": "Ensure the app feels like a premium native mobile application. The main wrapper should be constrained to mobile width on desktop, but fill the screen on actual mobile devices. Use Framer Motion for smooth tab switching and result appearance. Integrate Outfit and Manrope via Google Fonts. Use @phosphor-icons/react. All texts must be in Italian. Implement a robust bottom tab bar for navigation."
+}
