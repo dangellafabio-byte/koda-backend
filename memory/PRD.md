@@ -23,5 +23,10 @@ User wants a "compass" app that helps them discover which applications to use fo
 - `GET /api/history`, `DELETE /api/history`, `DELETE /api/history/{id}`
 - `GET /api/favorites`, `POST /api/favorites`, `DELETE /api/favorites/{id}`
 
-## Business enhancement
-Affiliate/referral revenue opportunity on app download links (App Store, Play Store, SaaS partners).
+## Iteration 2 — Voice, Featured App, Share
+- ✅ POST `/api/transcribe` (OpenAI Whisper via Emergent LLM Key) — detta richieste in italiano
+- ✅ GET `/api/featured-app` — rotazione settimanale su 8 app curate
+- ✅ Home: bottone mic 🎤 + card "App della Settimana" + bottone "Condividi" nei risultati
+- ✅ `_layout.tsx`: scaffold `expo-notifications` (schedula reminder settimanale Lun 9:00 su build nativi)
+- ✅ `app.json`: permessi `RECORD_AUDIO` Android + `NSMicrophoneUsageDescription` iOS
+- ✅ Share: Web Share API + React Native Share + fallback Clipboard (deep link `/?q=...&auto=1`)

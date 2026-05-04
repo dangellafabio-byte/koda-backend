@@ -442,6 +442,16 @@ export default function Home() {
               </View>
               <TouchableOpacity
                 style={styles.newSearchBtn}
+                onPress={onShare}
+                testID="share-btn"
+              >
+                <Ionicons name="share-social" size={14} color="#FBBF24" />
+                <Text style={styles.newSearchText}>
+                  {shareStatus || "Condividi"}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.newSearchBtn, { marginLeft: 6 }]}
                 onPress={() => {
                   setResult(null);
                   setQuery("");
