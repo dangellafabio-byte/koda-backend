@@ -25,6 +25,19 @@ import {
 } from "../lib/api";
 import AppCard from "../components/AppCard";
 import CompareModal from "../components/CompareModal";
+import { startRecording, buildFormData, Recorder } from "../lib/voice";
+import { shareRecommendation } from "../lib/share";
+
+type Featured = {
+  week: number;
+  app: {
+    name: string;
+    emoji: string;
+    tagline: string;
+    category: string;
+    url: string;
+  };
+};
 
 export default function Home() {
   const insets = useSafeAreaInsets();
@@ -39,6 +52,11 @@ export default function Home() {
   const [favorites, setFavorites] = useState<Favorite[]>([]);
   const [selectedForCompare, setSelectedForCompare] = useState<AppItem[]>([]);
   const [compareOpen, setCompareOpen] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [featured, setFeatured] = useState<Featured | null>(null);
+  const [shareStatus, setShareStatus] = useState<string | null>(null);
+  const recRef = useRef<Recorder | null>(null);
 
   const spin = useRef(new Animated.Value(0)).current;
   const scrollRef = useRef<ScrollView>(null);
@@ -91,6 +109,75 @@ export default function Home() {
       const r = await fetch(`${API_BASE}/favorites`);
       if (r.ok) setFavorites(await r.json());
     } catch {}
+  };
+
+  const loadFeatured = async () => {
+    try {
+      const r = await fetch(`${API_BASE}/featured-app`);
+      if (r.ok) setFeatured(await r.json());
+    } catch {}
+  };
+
+  useEffect(() => {
+    loadFeatured();
+  }, []);
+
+  const toggleRecording = async () => {
+    if (transcribing) return;
+    if (recording && recRef.current) {
+      try {
+        setRecording(false);
+        setTranscribing(true);
+        const res = await recRef.current.stop();
+        recRef.current = null;
+        if (!res) {
+          setTranscribing(false);
+          return;
+        }
+        const fd = buildFormData(res);
+        const r = await fetch(`${API_BASE}/transcribe`, {
+          method: "POST",
+          body: fd,
+        });
+        if (r.ok) {
+          const data = await r.json();
+          const text = (data.text || "").trim();
+          if (text) {
+            setQuery(text);
+            submit(text, selectedCategory);
+          } else {
+            setError("Non ho sentito nulla, riprova.");
+          }
+        } else {
+          setError("Trascrizione non riuscita.");
+        }
+      } catch (e) {
+        setError("Errore microfono. Controlla i permessi.");
+      } finally {
+        setTranscribing(false);
+      }
+    } else {
+      try {
+        setError(null);
+        const rec = await startRecording();
+        recRef.current = rec;
+        setRecording(true);
+      } catch (e) {
+        setError("Microfono non disponibile. Controlla i permessi.");
+      }
+    }
+  };
+
+  const onShare = async () => {
+    if (!result) return;
+    const status = await shareRecommendation(result.query, result.summary);
+    if (status === "copied") {
+      setShareStatus("Link copiato!");
+      setTimeout(() => setShareStatus(null), 2200);
+    } else if (status === "shared") {
+      setShareStatus("Condiviso ✓");
+      setTimeout(() => setShareStatus(null), 2200);
+    }
   };
 
   const submit = async (textOverride?: string, catOverride?: string | null) => {
@@ -230,24 +317,45 @@ export default function Home() {
             <View style={styles.hintRow}>
               <Ionicons name="sparkles" size={13} color="#FBBF24" />
               <Text style={styles.hintText}>
-                Powered by AI · Italiano & English
+                {recording ? "Registrazione..." : transcribing ? "Trascrivo..." : "Powered by AI · voce & testo"}
               </Text>
             </View>
-            <TouchableOpacity
-              style={[styles.submitBtn, !query.trim() && { opacity: 0.5 }]}
-              onPress={() => submit()}
-              disabled={loading || !query.trim()}
-              testID="submit-btn"
-            >
-              {loading ? (
-                <ActivityIndicator size="small" color="#020617" />
-              ) : (
-                <>
-                  <Ionicons name="arrow-forward" size={16} color="#020617" />
-                  <Text style={styles.submitBtnText}>Trova app</Text>
-                </>
-              )}
-            </TouchableOpacity>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <TouchableOpacity
+                style={[
+                  styles.micBtn,
+                  recording && styles.micBtnActive,
+                ]}
+                onPress={toggleRecording}
+                disabled={transcribing}
+                testID="mic-btn"
+              >
+                {transcribing ? (
+                  <ActivityIndicator size="small" color="#FBBF24" />
+                ) : (
+                  <Ionicons
+                    name={recording ? "stop" : "mic"}
+                    size={16}
+                    color={recording ? "#020617" : "#FBBF24"}
+                  />
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.submitBtn, !query.trim() && { opacity: 0.5 }]}
+                onPress={() => submit()}
+                disabled={loading || !query.trim()}
+                testID="submit-btn"
+              >
+                {loading ? (
+                  <ActivityIndicator size="small" color="#020617" />
+                ) : (
+                  <>
+                    <Ionicons name="arrow-forward" size={16} color="#020617" />
+                    <Text style={styles.submitBtnText}>Trova app</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
           {error ? (
             <Text style={styles.errorText} testID="error-message">
@@ -255,6 +363,32 @@ export default function Home() {
             </Text>
           ) : null}
         </View>
+
+        {/* Featured app of the week */}
+        {!result && !loading && featured && (
+          <TouchableOpacity
+            style={styles.featuredCard}
+            onPress={() => {
+              setQuery(featured.app.tagline);
+              submit(featured.app.name, null);
+            }}
+            testID="featured-card"
+          >
+            <View style={styles.featuredHeader}>
+              <Text style={styles.featuredBadge}>APP DELLA SETTIMANA · W{featured.week}</Text>
+            </View>
+            <View style={styles.featuredBody}>
+              <View style={styles.featuredIcon}>
+                <Text style={{ fontSize: 32 }}>{featured.app.emoji}</Text>
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.featuredName}>{featured.app.name}</Text>
+                <Text style={styles.featuredTag}>{featured.app.tagline}</Text>
+              </View>
+              <Ionicons name="arrow-forward-circle" size={28} color="#FBBF24" />
+            </View>
+          </TouchableOpacity>
+        )}
 
         {/* Categories */}
         {!result && !loading && (
@@ -526,4 +660,49 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   compareBarText: { color: "#020617", fontWeight: "700", fontSize: 14 },
+  micBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(251,191,36,0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(251,191,36,0.35)",
+  },
+  micBtnActive: {
+    backgroundColor: "#FBBF24",
+    borderColor: "#FBBF24",
+  },
+  featuredCard: {
+    marginTop: 24,
+    backgroundColor: "rgba(251,191,36,0.07)",
+    borderWidth: 1,
+    borderColor: "rgba(251,191,36,0.3)",
+    borderRadius: 20,
+    padding: 14,
+  },
+  featuredHeader: { marginBottom: 8 },
+  featuredBadge: {
+    color: "#FBBF24",
+    fontSize: 10,
+    letterSpacing: 2,
+    fontWeight: "800",
+  },
+  featuredBody: { flexDirection: "row", alignItems: "center" },
+  featuredIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: "rgba(251,191,36,0.18)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  featuredName: {
+    color: "#F8FAFC",
+    fontSize: 16,
+    fontWeight: "700",
+    letterSpacing: -0.3,
+  },
+  featuredTag: { color: "#CBD5E1", fontSize: 12, marginTop: 2 },
 });

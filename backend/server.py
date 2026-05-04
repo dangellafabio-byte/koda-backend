@@ -13,6 +13,8 @@ import uuid
 from datetime import datetime, timezone
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
+from emergentintegrations.llm.openai import OpenAISpeechToText
+from fastapi import UploadFile, File, Form
 
 
 ROOT_DIR = Path(__file__).parent
@@ -191,6 +193,75 @@ async def root():
 @api_router.get("/categories", response_model=List[Category])
 async def get_categories():
     return CATEGORIES
+
+
+FEATURED_ROTATION = [
+    {"name": "Notion", "emoji": "📝", "tagline": "L'area di lavoro all-in-one per note, to-do e progetti.",
+     "category": "Produttività", "url": "https://www.notion.so"},
+    {"name": "CapCut", "emoji": "🎬", "tagline": "Editing video veloce, potente e gratuito.",
+     "category": "Video", "url": "https://www.capcut.com"},
+    {"name": "Canva", "emoji": "🎨", "tagline": "Design grafico istantaneo per social, presentazioni e stampe.",
+     "category": "Design", "url": "https://www.canva.com"},
+    {"name": "Duolingo", "emoji": "🦉", "tagline": "Impara una lingua con lezioni brevi e divertenti.",
+     "category": "Studio", "url": "https://www.duolingo.com"},
+    {"name": "Splitwise", "emoji": "💸", "tagline": "Dividi spese tra amici senza discussioni.",
+     "category": "Finanza", "url": "https://www.splitwise.com"},
+    {"name": "Strava", "emoji": "🏃", "tagline": "Traccia corse, bici e allenamenti con la community.",
+     "category": "Fitness", "url": "https://www.strava.com"},
+    {"name": "Obsidian", "emoji": "🧠", "tagline": "Costruisci il tuo secondo cervello con note collegate.",
+     "category": "Produttività", "url": "https://obsidian.md"},
+    {"name": "Spark Mail", "emoji": "✉️", "tagline": "L'email intelligente che ti fa risparmiare tempo.",
+     "category": "Produttività", "url": "https://sparkmailapp.com"},
+]
+
+
+@api_router.get("/featured-app")
+async def get_featured_app():
+    # Rotate weekly based on ISO week number
+    week = datetime.now(timezone.utc).isocalendar().week
+    idx = week % len(FEATURED_ROTATION)
+    return {
+        "week": week,
+        "app": FEATURED_ROTATION[idx],
+    }
+
+
+@api_router.post("/transcribe")
+async def transcribe(audio: UploadFile = File(...), language: str = Form("it")):
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=500, detail="LLM key not configured")
+    try:
+        data = await audio.read()
+        if len(data) == 0:
+            raise HTTPException(status_code=400, detail="Empty audio")
+
+        # Save to a tmp file with correct extension
+        import tempfile
+        suffix = ".webm"
+        name = (audio.filename or "").lower()
+        for ext in (".mp3", ".mp4", ".m4a", ".wav", ".webm", ".mpga", ".mpeg"):
+            if name.endswith(ext):
+                suffix = ext
+                break
+
+        stt = OpenAISpeechToText(api_key=EMERGENT_LLM_KEY)
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(data)
+            tmp.flush()
+            tmp.seek(0)
+            with open(tmp.name, "rb") as f:
+                response = await stt.transcribe(
+                    file=f,
+                    model="whisper-1",
+                    response_format="json",
+                    language=language or "it",
+                )
+        return {"text": getattr(response, "text", "") or ""}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Transcribe error: {e}")
+        raise HTTPException(status_code=500, detail=f"Transcribe error: {str(e)}")
 
 
 @api_router.post("/recommend", response_model=RecommendResponse)
