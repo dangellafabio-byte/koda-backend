@@ -2,44 +2,9 @@ import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { View, StyleSheet, Platform } from "react-native";
-import { useEffect } from "react";
-import * as Notifications from "expo-notifications";
-
-// Schedule a weekly "App della Settimana" reminder on native builds.
-// (No-op on web/Expo Go without a dev build.)
-async function scheduleWeeklyReminder() {
-  if (Platform.OS === "web") return;
-  try {
-    const perm = await Notifications.getPermissionsAsync();
-    let granted = perm.granted;
-    if (!granted) {
-      const req = await Notifications.requestPermissionsAsync();
-      granted = req.granted;
-    }
-    if (!granted) return;
-    const existing = await Notifications.getAllScheduledNotificationsAsync();
-    if (existing.some((n) => n.content.data?.kind === "weekly-app")) return;
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: "🧭 App della Settimana",
-        body: "Apri App Compass per scoprire l'app consigliata di questa settimana.",
-        data: { kind: "weekly-app" },
-      },
-      trigger: {
-        weekday: 2, // Monday
-        hour: 9,
-        minute: 0,
-        repeats: true,
-      } as any,
-    });
-  } catch {}
-}
+import { View, StyleSheet } from "react-native";
 
 export default function RootLayout() {
-  useEffect(() => {
-    scheduleWeeklyReminder();
-  }, []);
   return (
     <SafeAreaProvider>
       <StatusBar style="light" />
