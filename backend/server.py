@@ -407,12 +407,16 @@ async def get_demo_media(fmt: str):
 @api_router.get("/demo-screen/{preset}/{name}")
 async def get_demo_screenshot(preset: str, name: str):
     # allow only expected presets/filenames
-    allowed_presets = {"ios_6_7", "play_store"}
+    allowed_presets = {"ios_6_7", "play_store", "iphone_1284x2778_clean"}
     if preset not in allowed_presets:
         raise HTTPException(status_code=404, detail="unknown preset")
     if "/" in name or ".." in name or not name.endswith(".png"):
         raise HTTPException(status_code=400, detail="invalid filename")
-    path = DEMO_DIR / "store_assets" / preset / name
+    # Choose the right base dir for clean variants
+    if preset.endswith("_clean"):
+        path = DEMO_DIR / "store_assets_clean" / preset / name
+    else:
+        path = DEMO_DIR / "store_assets" / preset / name
     if not path.exists():
         raise HTTPException(status_code=404, detail="screenshot not found")
     return FileResponse(str(path), media_type="image/png", filename=name)
