@@ -383,6 +383,9 @@ DEMO_FILES = {
     "mp4": ("compass_demo.mp4", "video/mp4"),
     "webm": ("compass_demo.webm", "video/webm"),
     "gif": ("compass_demo.gif", "image/gif"),
+    "zip": ("store_assets.zip", "application/zip"),
+    "ios-mp4": ("store_assets/video/appstore_preview_886x1920/appstore_preview_886x1920.mp4", "video/mp4"),
+    "play-mp4": ("store_assets/video/playstore_preview_1080x1920/playstore_preview_1080x1920.mp4", "video/mp4"),
 }
 
 
@@ -397,8 +400,22 @@ async def get_demo_media(fmt: str):
     return FileResponse(
         str(path),
         media_type=mime,
-        filename=filename,
+        filename=Path(filename).name,
     )
+
+
+@api_router.get("/demo-screen/{preset}/{name}")
+async def get_demo_screenshot(preset: str, name: str):
+    # allow only expected presets/filenames
+    allowed_presets = {"ios_6_7", "play_store"}
+    if preset not in allowed_presets:
+        raise HTTPException(status_code=404, detail="unknown preset")
+    if "/" in name or ".." in name or not name.endswith(".png"):
+        raise HTTPException(status_code=400, detail="invalid filename")
+    path = DEMO_DIR / "store_assets" / preset / name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="screenshot not found")
+    return FileResponse(str(path), media_type="image/png", filename=name)
 
 
 # Include the router
