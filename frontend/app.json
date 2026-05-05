@@ -16,7 +16,7 @@
     },
     "android": {
       "edgeToEdgeEnabled": true,
-      "permissions": ["RECORD_AUDIO"],
+      "permissions": ["RECORD_AUDIO", "POST_NOTIFICATIONS", "SCHEDULE_EXACT_ALARM"],
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000000"
@@ -38,7 +38,14 @@
           "backgroundColor": "#000000"
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-notifications",
+        {
+          "color": "#FBBF24",
+          "defaultChannel": "weekly-app"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

@@ -1,10 +1,21 @@
+import React, { useEffect } from "react";
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { View, StyleSheet } from "react-native";
+import { View, StyleSheet, Platform } from "react-native";
+import { scheduleWeeklyAppNotification } from "../lib/notifications";
 
 export default function RootLayout() {
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    // Fire-and-forget: ask permission + schedule weekly reminder
+    const t = setTimeout(() => {
+      scheduleWeeklyAppNotification().catch(() => {});
+    }, 1500);
+    return () => clearTimeout(t);
+  }, []);
+
   return (
     <SafeAreaProvider>
       <StatusBar style="light" />

@@ -108,6 +108,27 @@ user_problem_statement: |
   app della settimana, condivisione consigli via link.
 
 frontend:
+  - task: "Notifiche push native (settimanali)"
+    implemented: true
+    working: "NA"
+    file: "frontend/lib/notifications.ts, frontend/app/_layout.tsx, frontend/app.json"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Reinstallato expo-notifications@0.32.17 + expo-device@8.0.10 (versioni SDK 54 corrette via
+          `npx expo install`). Creato lib/notifications.ts con: setNotificationHandler globale (banner
+          in foreground), setNotificationChannelAsync Android "weekly-app", requestPermissionsAsync
+          (con fallback per device fisico), scheduleWeeklyAppNotification con trigger WEEKLY (lunedì
+          ore 9:00) e identifier idempotente "compass-weekly-app". _layout.tsx invoca lo schedule
+          all'avvio (skip su web). app.json aggiornato con plugin expo-notifications (color #FBBF24,
+          channel "weekly-app") e permessi Android POST_NOTIFICATIONS + SCHEDULE_EXACT_ALARM.
+          Web: no-op safe. Mobile: richiesta permessi + schedule alla prima apertura. Build iOS
+          dovrebbe ora compilare (errore precedente era di expo-sharing, non expo-notifications).
+
   - task: "Share — riattivata e granulare"
     implemented: true
     working: "NA"
