@@ -1,4 +1,5 @@
 from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -374,6 +375,30 @@ async def add_favorite(fav: FavoriteCreate):
 async def remove_favorite(fav_id: str):
     await db.favorites.delete_one({"id": fav_id})
     return {"ok": True}
+
+
+# ---------- Demo media (promo video / screenshots) ----------
+DEMO_DIR = Path("/app/scripts/output")
+DEMO_FILES = {
+    "mp4": ("compass_demo.mp4", "video/mp4"),
+    "webm": ("compass_demo.webm", "video/webm"),
+    "gif": ("compass_demo.gif", "image/gif"),
+}
+
+
+@api_router.get("/demo/{fmt}")
+async def get_demo_media(fmt: str):
+    if fmt not in DEMO_FILES:
+        raise HTTPException(status_code=404, detail="format not found")
+    filename, mime = DEMO_FILES[fmt]
+    path = DEMO_DIR / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="demo file not generated")
+    return FileResponse(
+        str(path),
+        media_type=mime,
+        filename=filename,
+    )
 
 
 # Include the router
