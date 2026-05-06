@@ -213,8 +213,11 @@ export default function Taccuino() {
     if (status === "idle") startTalk();
     else if (status === "recording") stopTalk();
     else if (status === "speaking") {
+      // Stop AI voice and immediately start recording — single tap interrupts and listens
       SpeechMod.stop();
       setStatus("idle");
+      // micro-delay to let speech engine release the audio session
+      setTimeout(() => startTalk(), 50);
     }
   };
 
