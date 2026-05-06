@@ -28,6 +28,15 @@ export type ExtractedFact = {
   flags?: string[];
 };
 
+export type Action = {
+  type: "schedule_notification" | "cancel_notification" | string;
+  when_iso?: string | null;
+  title?: string | null;
+  body?: string | null;
+  identifier?: string | null;
+  label?: string | null;
+};
+
 export type TimelineEntry = {
   id: string;
   role: "user" | "ai";
@@ -35,6 +44,7 @@ export type TimelineEntry = {
   tone?: Tone | null;
   domain?: Domain | null;
   extracted?: ExtractedFact | null;
+  actions?: Action[] | null;
   audio_duration_ms?: number | null;
   timestamp: string;
 };

@@ -25,9 +25,11 @@ import {
   toneStyle,
   domainBadge,
   Domain,
+  Action,
 } from "../lib/api";
 import { startRecording, buildFormData, Recorder } from "../lib/voice";
 import { SpeechMod } from "../lib/speech";
+import { scheduleAt } from "../lib/notifications";
 
 type Status = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 
@@ -131,6 +133,34 @@ export default function Taccuino() {
     [profile]
   );
 
+  // Execute side-effects requested by the AI (e.g. schedule notifications)
+  const runActions = useCallback(async (actions: Action[] | null | undefined) => {
+    if (!actions || actions.length === 0) return;
+    for (const a of actions) {
+      try {
+        if (a.type === "schedule_notification" && a.when_iso) {
+          const when = new Date(a.when_iso);
+          if (isNaN(when.getTime())) continue;
+          const id = await scheduleAt({
+            when,
+            title: a.title || "Promemoria",
+            body: a.body || "Hai una cosa da fare",
+            id: a.identifier || undefined,
+          });
+          if (!id) {
+            // Inform user gently (probably permission denied)
+            setError(
+              "Non riesco a impostare la notifica: serve il permesso 🔔. Aprila dalle impostazioni del telefono."
+            );
+            setTimeout(() => setError(null), 6000);
+          }
+        }
+      } catch (e) {
+        console.warn("action exec error", e);
+      }
+    }
+  }, []);
+
   const sendText = useCallback(
     async (text: string) => {
       const txt = text.trim();
@@ -153,6 +183,8 @@ export default function Taccuino() {
           return [...filtered, res.user_entry, res.ai_entry];
         });
         setProfile(res.profile);
+        // Execute any actions (notifications, etc.) requested by the AI
+        runActions(res.ai_entry.actions || []);
         await speakIfEnabled(res.ai_entry.text, res.ai_entry.tone || "neutral");
       } catch (e: any) {
         setError("Ops, qualcosa non funziona. Riprova.");
@@ -161,7 +193,7 @@ export default function Taccuino() {
         setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
       }
     },
-    [speakIfEnabled]
+    [speakIfEnabled, runActions]
   );
 
   // Push-to-talk
@@ -649,6 +681,36 @@ function Bubble({ entry }: { entry: TimelineEntry }) {
             {entry.extracted.item ? ` · ${entry.extracted.item}` : ""}
           </Text>
         ) : null}
+        {!isUser && entry.actions && entry.actions.length > 0 ? (
+          <View style={styles.actionList}>
+            {entry.actions.map((a, idx) => {
+              if (a.type !== "schedule_notification") return null;
+              const when = a.when_iso ? new Date(a.when_iso) : null;
+              const timeStr = when
+                ? when.toLocaleString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    day: "2-digit",
+                    month: "2-digit",
+                  })
+                : "—";
+              return (
+                <View key={idx} style={styles.actionPill}>
+                  <Text style={styles.actionEmoji}>🔔</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.actionTitle}>
+                      {a.title || "Promemoria"}
+                    </Text>
+                    <Text style={styles.actionSub}>
+                      {a.label || timeStr}
+                      {a.body ? ` · ${a.body}` : ""}
+                    </Text>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        ) : null}
       </View>
       <Text style={styles.bubbleTime}>
         {new Date(entry.timestamp).toLocaleTimeString([], {
@@ -753,6 +815,31 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 8,
     fontWeight: "600",
+  },
+
+  actionList: { marginTop: 10, gap: 6 },
+  actionPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "rgba(251,191,36,0.10)",
+    borderColor: "rgba(251,191,36,0.4)",
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+  },
+  actionEmoji: { fontSize: 18 },
+  actionTitle: {
+    color: "#FBBF24",
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.4,
+  },
+  actionSub: {
+    color: "#CBD5E1",
+    fontSize: 11,
+    marginTop: 2,
   },
 
   // Bottom bar

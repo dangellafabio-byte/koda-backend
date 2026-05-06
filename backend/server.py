@@ -428,6 +428,16 @@ class ExtractedFact(BaseModel):
     flags: List[str] = []  # e.g. ["anomalia", "abbonamento", "regalo"]
 
 
+class Action(BaseModel):
+    """An action the AI requests the client to actually perform."""
+    type: str  # "schedule_notification" | "cancel_notification" (extensible)
+    when_iso: Optional[str] = None  # ISO 8601 absolute timestamp (UTC) of the trigger
+    title: Optional[str] = None
+    body: Optional[str] = None
+    identifier: Optional[str] = None  # for cancel
+    label: Optional[str] = None  # human-friendly description (e.g. "tra 1 minuto")
+
+
 class TimelineEntry(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     role: str  # "user" | "ai"
@@ -435,6 +445,7 @@ class TimelineEntry(BaseModel):
     tone: Optional[str] = None  # neutral | calm | energetic | concerned | urgent | warm
     domain: Optional[str] = None
     extracted: Optional[ExtractedFact] = None
+    actions: List[Action] = []
     audio_duration_ms: Optional[int] = None
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -495,9 +506,13 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
     memory = profile.memory_summary or "(nessuna memoria di lungo periodo ancora costruita)"
     name_part = f" L'utente si chiama {profile.name}." if profile.name else ""
 
+    now_iso = datetime.now(timezone.utc).isoformat()
+
     base = (
         f"Sei un assistente personale vocale, intimo e discreto, integrato in un 'Taccuino Vivo'. "
         f"Rispondi SEMPRE in {lang_name}.{name_part}\n"
+        f"\n"
+        f"DATA E ORA ATTUALI (UTC): {now_iso}\n"
         f"\n"
         f"FASE RELAZIONALE: {phase}\n"
         f"- FORMALE: rispettoso, calmo, professionale. Usi 'tu' ma in modo educato. Niente confidenze.\n"
@@ -517,16 +532,29 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"4. Se l'utente chiede 'fammi il punto' o 'sunto' o 'recap', riassumi gli ultimi eventi importanti.\n"
         f"5. Se l'utente è stressato/sfogato, abbassa il tono, rassicura, non dare consigli a meno che non li chieda.\n"
         f"\n"
+        f"AZIONI CHE PUOI ESEGUIRE (campo 'actions'):\n"
+        f"Quando l'utente ti chiede di RICORDARGLI qualcosa, di SVEGLIARLO, di CHIAMARLO, di MANDARE UNA NOTIFICA, "
+        f"di IMPOSTARE UN ALLARME/PROMEMORIA/TIMER tra X minuti/ore o a un certo orario, "
+        f"DEVI restituire un'azione di tipo 'schedule_notification' nell'array 'actions'.\n"
+        f"Calcola TU il timestamp assoluto in UTC ISO 8601 (formato: YYYY-MM-DDTHH:MM:SSZ) sommando il tempo richiesto a 'DATA E ORA ATTUALI (UTC)' qui sopra.\n"
+        f"Esempi:\n"
+        f"- 'ricordami tra 1 minuto di chiamare la mamma' → action {{type:'schedule_notification', when_iso:'<now+60s in ISO>', title:'Promemoria', body:'Chiama la mamma', label:'tra 1 minuto'}}\n"
+        f"- 'sveglia tra 10 minuti' → action {{type:'schedule_notification', when_iso:'<now+600s>', title:'Sveglia', body:'È ora!', label:'tra 10 minuti'}}\n"
+        f"- 'mandami una notifica fra mezz'ora che devo prendere la pasticca' → action con when_iso = now+1800s, title='Promemoria', body='Prendi la pasticca'\n"
+        f"Nella 'reply' confermi all'utente in modo naturale (es: 'Ok, fra un minuto te lo ricordo.'). "
+        f"NON inventare azioni se l'utente non le chiede.\n"
+        f"\n"
         f"FORMATO DI RISPOSTA: Devi SEMPRE rispondere con un oggetto JSON valido (e SOLO quello, senza testo prima/dopo) così:\n"
         f"{{\n"
         f'  "reply": "la tua risposta in {lang_name}, breve, naturale, calda",\n'
         f'  "tone": "calm | energetic | concerned | urgent | warm | neutral",\n'
         f'  "domain": "soldi | tempo | spesa | salute | lavoro | casa | altro | null",\n'
         f'  "extracted": {{ "domain": "...", "intent": "...", "amount": 12.5, "currency": "EUR", "item": "...", "when": "...", "flags": ["..."] }} or null,\n'
+        f'  "actions": [{{ "type": "schedule_notification", "when_iso": "2026-05-06T13:35:00Z", "title": "Promemoria", "body": "Chiama la mamma", "label": "tra 1 minuto" }}],\n'
         f'  "memory_update": "una breve frase da aggiungere alla memoria di lungo periodo, oppure null se nulla di rilevante"\n'
         f"}}\n"
         f"\n"
-        f"NESSUN markdown, NESSUN testo extra, SOLO il JSON."
+        f"Il campo 'actions' può essere [] se non c'è nulla da fare. NESSUN markdown, NESSUN testo extra, SOLO il JSON."
     )
     return base
 
@@ -637,6 +665,7 @@ async def api_converse(req: ConverseRequest):
     domain = data.get("domain")
     extracted_raw = data.get("extracted")
     memory_update = (data.get("memory_update") or "").strip()
+    actions_raw = data.get("actions") or []
 
     extracted_obj = None
     if isinstance(extracted_raw, dict):
@@ -645,12 +674,25 @@ async def api_converse(req: ConverseRequest):
         except Exception:
             extracted_obj = None
 
+    parsed_actions: List[Action] = []
+    if isinstance(actions_raw, list):
+        for a in actions_raw:
+            if not isinstance(a, dict):
+                continue
+            try:
+                parsed_actions.append(
+                    Action(**{k: v for k, v in a.items() if k in Action.model_fields})
+                )
+            except Exception:
+                continue
+
     ai_entry = TimelineEntry(
         role="ai",
         text=reply_text,
         tone=tone if tone in {"calm", "energetic", "concerned", "urgent", "warm", "neutral"} else "neutral",
         domain=domain if domain in {"soldi", "tempo", "spesa", "salute", "lavoro", "casa", "altro"} else None,
         extracted=extracted_obj,
+        actions=parsed_actions,
     )
     await db.taccuino_timeline.insert_one(ai_entry.model_dump())
 
