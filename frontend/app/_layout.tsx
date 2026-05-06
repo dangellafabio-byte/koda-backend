@@ -1,35 +1,69 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { View, StyleSheet, Platform } from "react-native";
 import { scheduleWeeklyAppNotification } from "../lib/notifications";
+import { ThemeProvider, useTheme, ThemeName } from "../lib/theme";
+import { api } from "../lib/api";
+
+function ThemedShell({ children }: { children: React.ReactNode }) {
+  const { theme } = useTheme();
+  return (
+    <>
+      <StatusBar style={theme.isDark ? "light" : "dark"} />
+      <View style={[styles.root, { backgroundColor: theme.bg }]}>{children}</View>
+    </>
+  );
+}
 
 export default function RootLayout() {
+  const [initialTheme, setInitialTheme] = useState<ThemeName>("sistema");
+  const [ready, setReady] = useState(false);
+
   useEffect(() => {
-    if (Platform.OS === "web") return;
-    const t = setTimeout(() => {
-      scheduleWeeklyAppNotification().catch(() => {});
-    }, 1500);
-    return () => clearTimeout(t);
+    if (Platform.OS !== "web") {
+      const t = setTimeout(() => {
+        scheduleWeeklyAppNotification().catch(() => {});
+      }, 1500);
+      // not blocking init
+    }
+    (async () => {
+      try {
+        const p = await api.getProfile();
+        const t = (p.settings?.theme as ThemeName) || "sistema";
+        setInitialTheme(t);
+      } catch {}
+      setReady(true);
+    })();
   }, []);
+
+  if (!ready) {
+    // Avoid theme flash: render minimal black screen until profile arrives
+    return (
+      <SafeAreaProvider>
+        <View style={[styles.root, { backgroundColor: "#0B0F1A" }]} />
+      </SafeAreaProvider>
+    );
+  }
 
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" />
-      <View style={styles.root}>
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: "#0B0F1A" },
-            animation: "fade",
-          }}
-        />
-      </View>
+      <ThemeProvider initialName={initialTheme}>
+        <ThemedShell>
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: "transparent" },
+              animation: "fade",
+            }}
+          />
+        </ThemedShell>
+      </ThemeProvider>
     </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#0B0F1A" },
+  root: { flex: 1 },
 });

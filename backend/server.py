@@ -439,6 +439,7 @@ class TaccuinoSettings(BaseModel):
     voice_response: bool = True
     full_access_mode: bool = False  # Future: bank/calendar/health
     input_mode: str = "voice"  # "voice" | "text"
+    theme: str = "sistema"  # "sistema" | "notte" | "giorno" | "cielo" | "bosco" | "ciliegia"
     domains: dict = Field(
         default_factory=lambda: {
             "soldi": True,

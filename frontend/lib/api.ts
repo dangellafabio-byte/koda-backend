@@ -54,6 +54,7 @@ export type ProfileSettings = {
   voice_response: boolean;
   full_access_mode: boolean;
   input_mode: "voice" | "text";
+  theme: "sistema" | "notte" | "giorno" | "cielo" | "bosco" | "ciliegia";
   domains: Record<string, boolean>;
 };
 

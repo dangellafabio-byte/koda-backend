@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -30,6 +30,7 @@ import {
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { SpeechMod } from "../lib/speech";
 import { scheduleAt } from "../lib/notifications";
+import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 
 type Status = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 
@@ -53,6 +54,8 @@ function detectDeviceLang(): string {
 
 export default function Taccuino() {
   const insets = useSafeAreaInsets();
+  const { theme, themeName, setThemeName } = useTheme();
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [status, setStatus] = useState<Status>("idle");
@@ -75,6 +78,9 @@ export default function Taccuino() {
       try {
         const p = await api.getProfile();
         setProfile(p);
+        // Sync theme from profile if different
+        const tName = (p.settings?.theme as ThemeName) || "sistema";
+        if (tName !== themeName) setThemeName(tName);
         if (!p.onboarded) setShowOnboarding(true);
         else if (p.settings?.input_mode !== "text") {
           // Pre-warm mic permission so first tap goes straight to recording
@@ -86,7 +92,18 @@ export default function Taccuino() {
         console.warn("init error", e);
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const saveTheme = async (name: ThemeName) => {
+    if (!profile) return;
+    setThemeName(name);
+    const next = { ...profile, settings: { ...profile.settings, theme: name } };
+    setProfile(next);
+    try {
+      await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+  };
 
   // Pulse animation for the big button
   useEffect(() => {
@@ -377,7 +394,7 @@ export default function Taccuino() {
           onPress={askRecap}
           testID="recap-btn"
         >
-          <Ionicons name="reader-outline" size={18} color="#E2E8F0" />
+          <Ionicons name="reader-outline" size={18} color={theme.text} />
           <Text style={styles.headerBtnText}>Sunto</Text>
         </TouchableOpacity>
         <View style={styles.headerCenter}>
@@ -389,7 +406,7 @@ export default function Taccuino() {
           onPress={() => setShowSettings(true)}
           testID="settings-btn"
         >
-          <Ionicons name="settings-outline" size={18} color="#E2E8F0" />
+          <Ionicons name="settings-outline" size={18} color={theme.text} />
         </TouchableOpacity>
       </View>
 
@@ -416,7 +433,7 @@ export default function Taccuino() {
 
         {status === "thinking" && (
           <View style={[styles.bubbleAi, { alignSelf: "flex-end" }]}>
-            <ActivityIndicator size="small" color="#FBBF24" />
+            <ActivityIndicator size="small" color={theme.primary} />
           </View>
         )}
       </ScrollView>
@@ -451,7 +468,7 @@ export default function Taccuino() {
                 disabled={!textInput.trim()}
                 testID="send-btn"
               >
-                <Ionicons name="arrow-up" size={20} color="#0B0F1A" />
+                <Ionicons name="arrow-up" size={20} color={theme.primaryText} />
               </TouchableOpacity>
             </View>
           </KeyboardAvoidingView>
@@ -484,7 +501,7 @@ export default function Taccuino() {
                   testID="big-btn"
                 >
                   {status === "transcribing" || status === "thinking" ? (
-                    <ActivityIndicator color="#0B0F1A" size="large" />
+                    <ActivityIndicator color={theme.primaryText} size="large" />
                   ) : (
                     <Ionicons
                       name={
@@ -495,7 +512,7 @@ export default function Taccuino() {
                             : "mic"
                       }
                       size={42}
-                      color="#0B0F1A"
+                      color={theme.primaryText}
                     />
                   )}
                 </Pressable>
@@ -547,7 +564,7 @@ export default function Taccuino() {
             <View style={styles.settingsHeader}>
               <Text style={styles.settingsTitle}>Impostazioni</Text>
               <TouchableOpacity onPress={() => setShowSettings(false)}>
-                <Ionicons name="close" size={24} color="#E2E8F0" />
+                <Ionicons name="close" size={24} color={theme.text} />
               </TouchableOpacity>
             </View>
 
@@ -576,6 +593,48 @@ export default function Taccuino() {
 
             <View style={styles.divider} />
 
+            <Text style={styles.settingsSubtitle}>Tema</Text>
+            <View style={styles.themeRow}>
+              <TouchableOpacity
+                onPress={() => saveTheme("sistema")}
+                style={[
+                  styles.themeBtn,
+                  themeName === "sistema" && styles.themeBtnActive,
+                ]}
+                testID="theme-sistema"
+              >
+                <Ionicons
+                  name="phone-portrait-outline"
+                  size={14}
+                  color={theme.text}
+                />
+                <Text style={styles.themeBtnText}>Sistema</Text>
+              </TouchableOpacity>
+              {THEME_LIST.map((p) => (
+                <TouchableOpacity
+                  key={p.name}
+                  onPress={() => saveTheme(p.name as ThemeName)}
+                  style={[
+                    styles.themeBtn,
+                    themeName === p.name && styles.themeBtnActive,
+                  ]}
+                  testID={`theme-${p.name}`}
+                >
+                  <View
+                    style={[
+                      styles.themeSwatch,
+                      { backgroundColor: p.primary },
+                    ]}
+                  />
+                  <Text style={styles.themeBtnText}>
+                    {p.emoji} {p.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={styles.divider} />
+
             <Text style={styles.settingsSubtitle}>Modalità input</Text>
             <View style={styles.modeRow}>
               <TouchableOpacity
@@ -589,7 +648,7 @@ export default function Taccuino() {
                 <Ionicons
                   name="mic"
                   size={18}
-                  color={inputMode === "voice" ? "#0B0F1A" : "#E2E8F0"}
+                  color={inputMode === "voice" ? theme.primaryText : theme.text}
                 />
                 <Text
                   style={[
@@ -611,7 +670,7 @@ export default function Taccuino() {
                 <Ionicons
                   name="create-outline"
                   size={18}
-                  color={inputMode === "text" ? "#0B0F1A" : "#E2E8F0"}
+                  color={inputMode === "text" ? theme.primaryText : theme.text}
                 />
                 <Text
                   style={[
@@ -654,7 +713,7 @@ export default function Taccuino() {
               style={styles.dangerBtn}
               testID="reset-btn"
             >
-              <Ionicons name="trash-outline" size={16} color="#F87171" />
+              <Ionicons name="trash-outline" size={16} color={theme.danger} />
               <Text style={styles.dangerBtnText}>Cancella tutta la memoria</Text>
             </TouchableOpacity>
             <Text style={styles.dangerHint}>
@@ -676,11 +735,11 @@ export default function Taccuino() {
             <View style={styles.settingsHeader}>
               <Text style={styles.settingsTitle}>Sunto al volo</Text>
               <TouchableOpacity onPress={() => setShowRecap(false)}>
-                <Ionicons name="close" size={24} color="#E2E8F0" />
+                <Ionicons name="close" size={24} color={theme.text} />
               </TouchableOpacity>
             </View>
             {recapText === null ? (
-              <ActivityIndicator color="#FBBF24" />
+              <ActivityIndicator color={theme.primary} />
             ) : (
               <Text style={styles.recapText}>{recapText}</Text>
             )}
@@ -694,6 +753,8 @@ export default function Taccuino() {
 // =============== Sub components ===============
 
 function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  const { theme } = useTheme();
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   return (
     <TouchableOpacity
       onPress={onToggle}
@@ -705,9 +766,11 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
 }
 
 function Bubble({ entry }: { entry: TimelineEntry }) {
+  const { theme } = useTheme();
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   const isUser = entry.role === "user";
-  const tone = entry.tone || "neutral";
-  const ts = toneStyle[tone];
+  const tone = (entry.tone || "neutral") as keyof typeof theme.tone;
+  const ts = theme.tone[tone] || theme.tone.neutral;
   const dom = entry.domain ? domainBadge[entry.domain as Domain] : null;
 
   return (
@@ -780,8 +843,8 @@ function Bubble({ entry }: { entry: TimelineEntry }) {
   );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#0B0F1A" },
+const makeStyles = (t: any) => StyleSheet.create({
+  screen: { flex: 1, backgroundColor: t.bg },
 
   // Header
   header: {
@@ -792,20 +855,20 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   headerCenter: { flex: 1, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
-  dot: { width: 8, height: 8, borderRadius: 999, backgroundColor: "#22D3EE" },
-  headerTitle: { color: "#E2E8F0", fontWeight: "700", letterSpacing: 0.5, fontSize: 14 },
+  dot: { width: 8, height: 8, borderRadius: 999, backgroundColor: t.success },
+  headerTitle: { color: t.text, fontWeight: "700", letterSpacing: 0.5, fontSize: 14 },
   headerBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "rgba(255,255,255,0.04)",
-    borderColor: "rgba(255,255,255,0.08)",
+    backgroundColor: t.surfaceAlt,
+    borderColor: t.border,
     borderWidth: 1,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 999,
   },
-  headerBtnText: { color: "#E2E8F0", fontSize: 12, fontWeight: "600" },
+  headerBtnText: { color: t.text, fontSize: 12, fontWeight: "600" },
 
   // Timeline
   timeline: { flex: 1 },
@@ -818,13 +881,13 @@ const styles = StyleSheet.create({
   },
   emptyEmoji: { fontSize: 56, marginBottom: 16 },
   emptyTitle: {
-    color: "#E2E8F0",
+    color: t.text,
     fontSize: 18,
     fontWeight: "700",
     marginBottom: 10,
   },
   emptyText: {
-    color: "#94A3B8",
+    color: t.textMuted,
     fontSize: 14,
     textAlign: "center",
     lineHeight: 20,
@@ -834,7 +897,7 @@ const styles = StyleSheet.create({
   bubbleRowL: { alignItems: "flex-start" },
   bubbleRowR: { alignItems: "flex-end" },
   bubbleUser: {
-    backgroundColor: "#FBBF24",
+    backgroundColor: t.userBubble,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 18,
@@ -842,18 +905,18 @@ const styles = StyleSheet.create({
     maxWidth: "82%",
   },
   bubbleAi: {
-    backgroundColor: "rgba(148,163,184,0.10)",
+    backgroundColor: t.aiBubbleBg,
     borderWidth: 1,
-    borderColor: "rgba(148,163,184,0.35)",
+    borderColor: t.aiBubbleBorder,
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderRadius: 18,
     borderBottomLeftRadius: 4,
     maxWidth: "82%",
   },
-  bubbleUserText: { color: "#0B0F1A", fontSize: 15, lineHeight: 21 },
-  bubbleAiText: { color: "#E2E8F0", fontSize: 15, lineHeight: 21 },
-  bubbleTime: { color: "#475569", fontSize: 10, marginTop: 4, paddingHorizontal: 4 },
+  bubbleUserText: { color: t.userBubbleText, fontSize: 15, lineHeight: 21 },
+  bubbleAiText: { color: t.aiBubbleText, fontSize: 15, lineHeight: 21 },
+  bubbleTime: { color: t.textDim, fontSize: 10, marginTop: 4, paddingHorizontal: 4 },
 
   domainPill: {
     flexDirection: "row",
@@ -869,7 +932,7 @@ const styles = StyleSheet.create({
   domainEmoji: { fontSize: 11 },
   domainLabel: { fontSize: 10, fontWeight: "700", letterSpacing: 0.6, textTransform: "uppercase" },
   extractMeta: {
-    color: "#94A3B8",
+    color: t.textMuted,
     fontSize: 12,
     marginTop: 8,
     fontWeight: "600",
@@ -880,8 +943,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    backgroundColor: "rgba(251,191,36,0.10)",
-    borderColor: "rgba(251,191,36,0.4)",
+    backgroundColor: t.primarySoftBg,
+    borderColor: t.primarySoftBorder,
     borderWidth: 1,
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -889,13 +952,13 @@ const styles = StyleSheet.create({
   },
   actionEmoji: { fontSize: 18 },
   actionTitle: {
-    color: "#FBBF24",
+    color: t.primary,
     fontSize: 12,
     fontWeight: "700",
     letterSpacing: 0.4,
   },
   actionSub: {
-    color: "#CBD5E1",
+    color: t.textMuted,
     fontSize: 11,
     marginTop: 2,
   },
@@ -903,14 +966,14 @@ const styles = StyleSheet.create({
   // Bottom bar
   bottomBar: {
     paddingHorizontal: 20,
-    backgroundColor: "rgba(11,15,26,0.95)",
+    backgroundColor: t.bg,
     borderTopWidth: 1,
-    borderTopColor: "rgba(255,255,255,0.05)",
+    borderTopColor: t.divider,
   },
-  errorText: { color: "#F87171", fontSize: 12, textAlign: "center", marginTop: 8 },
+  errorText: { color: t.danger, fontSize: 12, textAlign: "center", marginTop: 8 },
   bigBtnArea: { alignItems: "center", paddingTop: 20 },
   statusLabel: {
-    color: "#64748B",
+    color: t.textDim,
     fontSize: 13,
     fontWeight: "500",
     marginBottom: 18,
@@ -921,7 +984,7 @@ const styles = StyleSheet.create({
     height: 132,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "rgba(251,191,36,0.25)",
+    borderColor: t.primarySoftBorder,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -930,7 +993,7 @@ const styles = StyleSheet.create({
     height: 112,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "rgba(251,191,36,0.45)",
+    borderColor: t.primarySoftBorder,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -938,12 +1001,12 @@ const styles = StyleSheet.create({
     width: 92,
     height: 92,
     borderRadius: 999,
-    backgroundColor: "#FBBF24",
+    backgroundColor: t.primary,
     alignItems: "center",
     justifyContent: "center",
     ...Platform.select({
       ios: {
-        shadowColor: "#FBBF24",
+        shadowColor: t.primary,
         shadowOpacity: 0.6,
         shadowRadius: 20,
         shadowOffset: { width: 0, height: 0 },
@@ -951,7 +1014,7 @@ const styles = StyleSheet.create({
       android: { elevation: 8 },
     }),
   },
-  bigBtnRec: { backgroundColor: "#EF4444" },
+  bigBtnRec: { backgroundColor: t.danger },
   altBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -960,7 +1023,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
-  altBtnText: { color: "#94A3B8", fontSize: 12 },
+  altBtnText: { color: t.textMuted, fontSize: 12 },
 
   // Text input mode
   textRow: {
@@ -974,16 +1037,16 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: t.surfaceAlt,
     alignItems: "center",
     justifyContent: "center",
   },
   textInput: {
     flex: 1,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderColor: "rgba(255,255,255,0.1)",
+    backgroundColor: t.surfaceAlt,
+    borderColor: t.border,
     borderWidth: 1,
-    color: "#E2E8F0",
+    color: t.text,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 22,
@@ -995,7 +1058,7 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 999,
-    backgroundColor: "#FBBF24",
+    backgroundColor: t.primary,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1003,28 +1066,30 @@ const styles = StyleSheet.create({
   // Modals
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.7)",
+    backgroundColor: "rgba(0,0,0,0.55)",
     justifyContent: "center",
     alignItems: "center",
     padding: 20,
   },
   onboardCard: {
-    backgroundColor: "#101622",
+    backgroundColor: t.surface,
     borderRadius: 24,
     padding: 26,
     width: "100%",
     maxWidth: 380,
     alignItems: "center",
+    borderWidth: 1,
+    borderColor: t.border,
   },
   onboardEmoji: { fontSize: 50, marginBottom: 8 },
   onboardTitle: {
-    color: "#E2E8F0",
+    color: t.text,
     fontSize: 22,
     fontWeight: "700",
     marginBottom: 8,
   },
   onboardText: {
-    color: "#94A3B8",
+    color: t.textMuted,
     fontSize: 14,
     textAlign: "center",
     lineHeight: 20,
@@ -1038,8 +1103,8 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
   langBtn: {
-    backgroundColor: "rgba(251,191,36,0.08)",
-    borderColor: "rgba(251,191,36,0.3)",
+    backgroundColor: t.primarySoftBg,
+    borderColor: t.primarySoftBorder,
     borderWidth: 1,
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -1049,15 +1114,18 @@ const styles = StyleSheet.create({
     minWidth: 92,
   },
   langEmoji: { fontSize: 22 },
-  langLabel: { color: "#E2E8F0", fontSize: 12, fontWeight: "600" },
-  onboardFoot: { color: "#475569", fontSize: 11, textAlign: "center" },
+  langLabel: { color: t.text, fontSize: 12, fontWeight: "600" },
+  onboardFoot: { color: t.textDim, fontSize: 11, textAlign: "center" },
 
   settingsCard: {
-    backgroundColor: "#101622",
+    backgroundColor: t.surface,
     borderRadius: 24,
     padding: 22,
     width: "100%",
     maxWidth: 420,
+    borderWidth: 1,
+    borderColor: t.border,
+    maxHeight: "92%",
   },
   settingsHeader: {
     flexDirection: "row",
@@ -1065,19 +1133,19 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 16,
   },
-  settingsTitle: { color: "#E2E8F0", fontSize: 18, fontWeight: "700" },
+  settingsTitle: { color: t.text, fontSize: 18, fontWeight: "700" },
   settingRow: {
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: 14,
     gap: 14,
   },
-  settingLabel: { color: "#E2E8F0", fontSize: 14, fontWeight: "600" },
-  settingHint: { color: "#64748B", fontSize: 12, marginTop: 3 },
-  divider: { height: 1, backgroundColor: "rgba(255,255,255,0.07)", marginVertical: 8 },
+  settingLabel: { color: t.text, fontSize: 14, fontWeight: "600" },
+  settingHint: { color: t.textDim, fontSize: 12, marginTop: 3 },
+  divider: { height: 1, backgroundColor: t.divider, marginVertical: 8 },
 
   settingsSubtitle: {
-    color: "#94A3B8",
+    color: t.textMuted,
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 1,
@@ -1086,33 +1154,33 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   settingsMemory: {
-    color: "#CBD5E1",
+    color: t.text,
     fontSize: 13,
     lineHeight: 19,
-    backgroundColor: "rgba(255,255,255,0.04)",
+    backgroundColor: t.surfaceAlt,
     padding: 12,
     borderRadius: 10,
     minHeight: 50,
   },
   confidenceRow: { marginTop: 14 },
-  confidenceLabel: { color: "#94A3B8", fontSize: 12, marginBottom: 6 },
+  confidenceLabel: { color: t.textMuted, fontSize: 12, marginBottom: 6 },
   confidenceBar: {
     height: 6,
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: t.surfaceAlt,
     overflow: "hidden",
   },
   confidenceFill: {
     height: "100%",
-    backgroundColor: "#FBBF24",
+    backgroundColor: t.primary,
   },
 
   dangerBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: "rgba(248,113,113,0.08)",
-    borderColor: "rgba(248,113,113,0.3)",
+    backgroundColor: t.isDark ? "rgba(248,113,113,0.08)" : "#FEE2E2",
+    borderColor: t.isDark ? "rgba(248,113,113,0.3)" : "#FCA5A5",
     borderWidth: 1,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -1120,9 +1188,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: 6,
   },
-  dangerBtnText: { color: "#F87171", fontWeight: "600", fontSize: 13 },
+  dangerBtnText: { color: t.danger, fontWeight: "600", fontSize: 13 },
   dangerHint: {
-    color: "#475569",
+    color: t.textDim,
     fontSize: 11,
     textAlign: "center",
     marginTop: 6,
@@ -1132,19 +1200,19 @@ const styles = StyleSheet.create({
     width: 46,
     height: 28,
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.1)",
+    backgroundColor: t.surfaceAlt,
     padding: 3,
     justifyContent: "center",
   },
-  toggleOn: { backgroundColor: "#FBBF24" },
+  toggleOn: { backgroundColor: t.primary },
   toggleKnob: {
     width: 22,
     height: 22,
     borderRadius: 999,
-    backgroundColor: "#E2E8F0",
+    backgroundColor: t.text,
   },
   toggleKnobOn: {
-    backgroundColor: "#0B0F1A",
+    backgroundColor: t.primaryText,
     transform: [{ translateX: 18 }],
   },
 
@@ -1155,32 +1223,68 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-    backgroundColor: "rgba(255,255,255,0.05)",
-    borderColor: "rgba(255,255,255,0.1)",
+    backgroundColor: t.surfaceAlt,
+    borderColor: t.border,
     borderWidth: 1,
     paddingVertical: 12,
     borderRadius: 14,
   },
   modeBtnActive: {
-    backgroundColor: "#FBBF24",
-    borderColor: "#FBBF24",
+    backgroundColor: t.primary,
+    borderColor: t.primary,
   },
   modeBtnText: {
-    color: "#E2E8F0",
+    color: t.text,
     fontSize: 13,
     fontWeight: "600",
   },
   modeBtnTextActive: {
-    color: "#0B0F1A",
+    color: t.primaryText,
+  },
+
+  // Theme picker
+  themeRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 4,
+  },
+  themeBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    backgroundColor: t.surfaceAlt,
+    borderColor: t.border,
+  },
+  themeBtnActive: {
+    backgroundColor: t.primarySoftBg,
+    borderColor: t.primary,
+  },
+  themeSwatch: {
+    width: 14,
+    height: 14,
+    borderRadius: 999,
+  },
+  themeBtnText: {
+    color: t.text,
+    fontSize: 12,
+    fontWeight: "600",
   },
 
   recapCard: {
-    backgroundColor: "#101622",
+    backgroundColor: t.surface,
     borderRadius: 24,
     padding: 22,
     width: "100%",
     maxWidth: 420,
     minHeight: 160,
+    borderWidth: 1,
+    borderColor: t.border,
   },
-  recapText: { color: "#E2E8F0", fontSize: 15, lineHeight: 22 },
+  recapText: { color: t.text, fontSize: 15, lineHeight: 22 },
 });
+
