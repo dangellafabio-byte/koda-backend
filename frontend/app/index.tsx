@@ -68,6 +68,13 @@ export default function Taccuino() {
   const [showRecap, setShowRecap] = useState(false);
 
   const inputMode = profile?.settings?.input_mode === "text" ? "text" : "voice";
+  const conversationOn = !!profile?.settings?.conversation_mode;
+  // Tracks "we are inside an active hands-free conversation loop"
+  const [convActive, setConvActive] = useState(false);
+  const convActiveRef = useRef(false);
+  useEffect(() => {
+    convActiveRef.current = convActive;
+  }, [convActive]);
 
   const recRef = useRef<Recorder | null>(null);
   const scrollRef = useRef<ScrollView>(null);
@@ -180,18 +187,47 @@ export default function Taccuino() {
 
   const speakIfEnabled = useCallback(
     async (text: string, tone: TimelineEntry["tone"]) => {
-      if (!profile?.settings.voice_response) return;
-      setStatus("speaking");
+      if (!profile?.settings.voice_response) {
+        // Voice response disabled — but if conversation is active, still reopen mic
+        if (convActiveRef.current && profile?.settings?.input_mode !== "text") {
+          startTalkInternal(true).catch(() => {});
+        }
+        return;
+      }
       const lang = profile?.language || "it";
       const langTag = lang === "it" ? "it-IT" : lang === "en" ? "en-US" : lang;
+
+      // BARGE-IN MODE: in active conversation, open the mic IN PARALLEL with TTS.
+      // The user can interrupt AI mid-sentence and we'll detect their speech via
+      // RMS / metering. AI voice that the mic picks up is mostly removed by the
+      // browser's echo-cancellation; whatever leaks through gets ignored thanks
+      // to the silence detector requiring a "speech burst" to trigger.
+      if (convActiveRef.current && profile?.settings?.input_mode !== "text") {
+        setStatus("speaking");
+        // 1) Start TTS (don't await)
+        const ttsPromise = SpeechMod.speak(text, { language: langTag, tone }).then(() => {
+          // When TTS naturally ends, set status accordingly only if mic took over
+          // (otherwise startTalkInternal will already have set "recording")
+        });
+        // 2) Open mic in parallel after a tiny delay so the speech engine has settled
+        setTimeout(() => {
+          if (convActiveRef.current && !recRef.current) {
+            startTalkInternal(true).catch(() => {});
+          }
+        }, 250);
+        // We don't block on TTS; the mic / silence detector drives the next turn
+        await ttsPromise;
+        // If after TTS the mic still isn't open (rare race), open it now
+        if (convActiveRef.current && !recRef.current) {
+          startTalkInternal(true).catch(() => {});
+        }
+        return;
+      }
+
+      // NORMAL (non-conversation) mode: speak then go idle
+      setStatus("speaking");
       await SpeechMod.speak(text, { language: langTag, tone });
       setStatus("idle");
-      // Conversation mode: after AI finishes, auto-start listening for next user turn
-      if (profile?.settings?.conversation_mode && profile?.settings?.input_mode !== "text") {
-        setTimeout(() => {
-          startTalkInternal(true).catch(() => {});
-        }, 350);
-      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [profile]
@@ -262,19 +298,31 @@ export default function Taccuino() {
 
   // Push-to-talk (or hands-free)
   const startTalkInternal = async (autoStopOnSilence: boolean) => {
-    if (status !== "idle") return;
+    if (status !== "idle" && status !== "speaking") return;
     setError(null);
     // Unlock speech engine on first user interaction (web only)
     unlockSpeech().catch(() => {});
     try {
-      SpeechMod.stop();
+      // If AI is currently speaking, don't kill TTS yet — wait for the user
+      // to actually start speaking before barging in.
+      if (status !== "speaking") {
+        SpeechMod.stop();
+      }
       const rec = await startRecording();
       recRef.current = rec;
-      setStatus("recording");
+      // Only mark "recording" if we're not currently in "speaking" (otherwise
+      // the speaking status is correct — barge-in detector will swap it).
+      if (status !== "speaking") setStatus("recording");
       if (autoStopOnSilence && rec.onSilence) {
         rec.onSilence(() => {
-          // After ~1.4s of silence, stop & send automatically
           if (recRef.current === rec) stopTalk();
+        });
+      }
+      if (rec.onSpeechStart) {
+        rec.onSpeechStart(() => {
+          // BARGE-IN: user started talking — kill any AI speech immediately
+          try { SpeechMod.stop(); } catch {}
+          if (recRef.current === rec) setStatus("recording");
         });
       }
     } catch (e) {
@@ -322,13 +370,30 @@ export default function Taccuino() {
   };
 
   const onBigButton = () => {
-    if (status === "idle") startTalk();
-    else if (status === "recording") stopTalk();
-    else if (status === "speaking") {
+    // STOP press: terminate any active conversation loop
+    if (convActiveRef.current && (status === "speaking" || status === "thinking" || recRef.current)) {
+      // explicit STOP from the user
+      setConvActive(false);
+      try { SpeechMod.stop(); } catch {}
+      if (recRef.current) {
+        // cancel ongoing recording without sending
+        try { recRef.current.cancel?.(); } catch {}
+        recRef.current = null;
+      }
+      setStatus("idle");
+      return;
+    }
+
+    if (status === "idle") {
+      // Tap to start. If conversation_mode is on, turn the loop ON
+      if (conversationOn) setConvActive(true);
+      startTalk();
+    } else if (status === "recording") {
+      stopTalk();
+    } else if (status === "speaking") {
       // Stop AI voice and immediately start recording — single tap interrupts and listens
       SpeechMod.stop();
       setStatus("idle");
-      // micro-delay to let speech engine release the audio session
       setTimeout(() => startTalk(), 50);
     }
   };

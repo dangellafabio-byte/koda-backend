@@ -5,8 +5,10 @@ import { Audio } from "expo-av";
 export type Recorder = {
   stop: () => Promise<{ uri?: string; blob?: Blob; mime: string; filename: string } | null>;
   cancel: () => Promise<void>;
-  /** Optional: register a callback fired when the user has been silent for ~1.2s */
+  /** Optional: register a callback fired when the user has been silent for ~1.5s after speaking */
   onSilence?: (cb: () => void) => void;
+  /** Optional: register a callback fired the first time the user actually speaks (barge-in interrupt) */
+  onSpeechStart?: (cb: () => void) => void;
 };
 
 let _webPermissionAsked = false;
@@ -44,7 +46,13 @@ export async function prewarmMic(): Promise<boolean> {
 export async function startRecording(): Promise<Recorder> {
   if (Platform.OS === "web") {
     // Web: use MediaRecorder + AnalyserNode for silence detection
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
     _webPermissionAsked = true;
     const mime = MediaRecorder.isTypeSupported("audio/webm")
       ? "audio/webm"
@@ -57,8 +65,9 @@ export async function startRecording(): Promise<Recorder> {
     mr.start();
 
     // ===== Silence detection =====
-    // RMS volume sampled every ~100ms; if below threshold for >1.4s after we heard speech, fire onSilence
+    // RMS volume sampled every ~90ms; if below threshold for >1.6s after we heard speech, fire onSilence
     let silenceCb: (() => void) | null = null;
+    let speechStartCb: (() => void) | null = null;
     const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
     const source = audioCtx.createMediaStreamSource(stream);
     const analyser = audioCtx.createAnalyser();
@@ -72,6 +81,7 @@ export async function startRecording(): Promise<Recorder> {
     const SILENCE_TIMEOUT_MS = 1600;    // a bit longer pause to allow thinking mid-sentence
     const MIN_SPEECH_BEFORE_END_MS = 600;
     const MAX_RECORDING_MS = 25000;     // safety: max 25s per turn
+    let speechStartFired = false;
     let silenceFired = false;
 
     const tickId = setInterval(() => {
@@ -85,7 +95,13 @@ export async function startRecording(): Promise<Recorder> {
       const rms = Math.sqrt(sum / buf.length);
       if (rms > SILENCE_DB_THRESHOLD) {
         lastVoiceAt = Date.now();
-        if (Date.now() - startedAt > 150) everSpoke = true;
+        if (Date.now() - startedAt > 150) {
+          everSpoke = true;
+          if (!speechStartFired && speechStartCb) {
+            speechStartFired = true;
+            try { speechStartCb(); } catch {}
+          }
+        }
       }
       const elapsed = Date.now() - startedAt;
       if (
@@ -134,6 +150,9 @@ export async function startRecording(): Promise<Recorder> {
       onSilence: (cb) => {
         silenceCb = cb;
       },
+      onSpeechStart: (cb) => {
+        speechStartCb = cb;
+      },
     };
   }
 
@@ -155,17 +174,25 @@ export async function startRecording(): Promise<Recorder> {
   await rec.startAsync();
 
   let silenceCb: (() => void) | null = null;
+  let speechStartCb: (() => void) | null = null;
   const startedAt = Date.now();
   let lastVoiceAt = Date.now();
   let everSpoke = false;
   let silenceFired = false;
+  let speechStartFired = false;
   rec.setOnRecordingStatusUpdate((status) => {
     const meter = (status as any).metering;
     if (typeof meter === "number") {
       // metering values are in dB (typically -160..0). Speech > -35 dB-ish
       if (meter > -35) {
         lastVoiceAt = Date.now();
-        if (Date.now() - startedAt > 250) everSpoke = true;
+        if (Date.now() - startedAt > 250) {
+          everSpoke = true;
+          if (!speechStartFired && speechStartCb) {
+            speechStartFired = true;
+            try { speechStartCb(); } catch {}
+          }
+        }
       }
       if (
         !silenceFired &&
@@ -190,6 +217,9 @@ export async function startRecording(): Promise<Recorder> {
     },
     onSilence: (cb) => {
       silenceCb = cb;
+    },
+    onSpeechStart: (cb) => {
+      speechStartCb = cb;
     },
   };
 }
