@@ -27,7 +27,7 @@ import {
   Domain,
   Action,
 } from "../lib/api";
-import { startRecording, buildFormData, Recorder } from "../lib/voice";
+import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { SpeechMod } from "../lib/speech";
 import { scheduleAt } from "../lib/notifications";
 
@@ -59,10 +59,11 @@ export default function Taccuino() {
   const [textInput, setTextInput] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [showText, setShowText] = useState(false); // text input mode
   const [error, setError] = useState<string | null>(null);
   const [recapText, setRecapText] = useState<string | null>(null);
   const [showRecap, setShowRecap] = useState(false);
+
+  const inputMode = profile?.settings?.input_mode === "text" ? "text" : "voice";
 
   const recRef = useRef<Recorder | null>(null);
   const scrollRef = useRef<ScrollView>(null);
@@ -75,6 +76,10 @@ export default function Taccuino() {
         const p = await api.getProfile();
         setProfile(p);
         if (!p.onboarded) setShowOnboarding(true);
+        else if (p.settings?.input_mode !== "text") {
+          // Pre-warm mic permission so first tap goes straight to recording
+          prewarmMic().catch(() => {});
+        }
         const t = await api.getTimeline(200);
         setTimeline(t);
       } catch (e) {
@@ -277,6 +282,8 @@ export default function Taccuino() {
       const p = await api.updateProfile({ language: lang, onboarded: true } as any);
       setProfile(p);
       setShowOnboarding(false);
+      // Pre-warm mic permission so first tap goes straight to recording
+      prewarmMic().catch(() => {});
       // Greet
       const greeting =
         lang === "it"
@@ -329,6 +336,19 @@ export default function Taccuino() {
     try {
       await api.updateProfile({ settings: next.settings } as any);
     } catch {}
+  };
+
+  const setInputMode = async (mode: "voice" | "text") => {
+    if (!profile) return;
+    const next = { ...profile, settings: { ...profile.settings, input_mode: mode } };
+    setProfile(next);
+    try {
+      await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+    if (mode === "voice") {
+      // pre-warm so first tap = direct recording
+      prewarmMic().catch(() => {});
+    }
   };
 
   const statusLabel = (() => {
@@ -401,39 +421,35 @@ export default function Taccuino() {
         )}
       </ScrollView>
 
-      {/* Bottom area: big button + text fallback */}
+      {/* Bottom area: voice OR text — chosen via settings */}
       <View
         style={[
           styles.bottomBar,
-          { paddingBottom: Math.max(insets.bottom, 14) + (showText ? 0 : 28) },
+          { paddingBottom: Math.max(insets.bottom, 14) + (inputMode === "text" ? 0 : 28) },
         ]}
       >
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
-        {showText ? (
+        {inputMode === "text" ? (
           <KeyboardAvoidingView
             behavior={Platform.OS === "ios" ? "padding" : undefined}
           >
             <View style={styles.textRow}>
-              <TouchableOpacity
-                onPress={() => setShowText(false)}
-                style={styles.textIconBtn}
-              >
-                <Ionicons name="mic-outline" size={20} color="#E2E8F0" />
-              </TouchableOpacity>
               <TextInput
                 value={textInput}
                 onChangeText={setTextInput}
-                placeholder="Scrivi qui se non vuoi parlare..."
+                placeholder="Scrivi qui..."
                 placeholderTextColor="#64748B"
                 style={styles.textInput}
                 onSubmitEditing={sendTextFromBox}
                 returnKeyType="send"
+                multiline
                 testID="text-input"
               />
               <TouchableOpacity
                 onPress={sendTextFromBox}
                 style={[styles.sendBtn, !textInput.trim() && { opacity: 0.4 }]}
                 disabled={!textInput.trim()}
+                testID="send-btn"
               >
                 <Ionicons name="arrow-up" size={20} color="#0B0F1A" />
               </TouchableOpacity>
@@ -485,14 +501,6 @@ export default function Taccuino() {
                 </Pressable>
               </View>
             </Animated.View>
-            <TouchableOpacity
-              onPress={() => setShowText(true)}
-              style={styles.altBtn}
-              testID="alt-text-btn"
-            >
-              <Ionicons name="create-outline" size={14} color="#94A3B8" />
-              <Text style={styles.altBtnText}>oppure scrivi</Text>
-            </TouchableOpacity>
           </View>
         )}
       </View>
@@ -564,6 +572,56 @@ export default function Taccuino() {
                 on={!!profile?.settings.voice_response}
                 onToggle={toggleVoice}
               />
+            </View>
+
+            <View style={styles.divider} />
+
+            <Text style={styles.settingsSubtitle}>Modalità input</Text>
+            <View style={styles.modeRow}>
+              <TouchableOpacity
+                onPress={() => setInputMode("voice")}
+                style={[
+                  styles.modeBtn,
+                  inputMode === "voice" && styles.modeBtnActive,
+                ]}
+                testID="mode-voice"
+              >
+                <Ionicons
+                  name="mic"
+                  size={18}
+                  color={inputMode === "voice" ? "#0B0F1A" : "#E2E8F0"}
+                />
+                <Text
+                  style={[
+                    styles.modeBtnText,
+                    inputMode === "voice" && styles.modeBtnTextActive,
+                  ]}
+                >
+                  Solo voce
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setInputMode("text")}
+                style={[
+                  styles.modeBtn,
+                  inputMode === "text" && styles.modeBtnActive,
+                ]}
+                testID="mode-text"
+              >
+                <Ionicons
+                  name="create-outline"
+                  size={18}
+                  color={inputMode === "text" ? "#0B0F1A" : "#E2E8F0"}
+                />
+                <Text
+                  style={[
+                    styles.modeBtnText,
+                    inputMode === "text" && styles.modeBtnTextActive,
+                  ]}
+                >
+                  Solo testo
+                </Text>
+              </TouchableOpacity>
             </View>
 
             <View style={styles.divider} />
@@ -1088,6 +1146,32 @@ const styles = StyleSheet.create({
   toggleKnobOn: {
     backgroundColor: "#0B0F1A",
     transform: [{ translateX: 18 }],
+  },
+
+  modeRow: { flexDirection: "row", gap: 10, marginTop: 4 },
+  modeBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderColor: "rgba(255,255,255,0.1)",
+    borderWidth: 1,
+    paddingVertical: 12,
+    borderRadius: 14,
+  },
+  modeBtnActive: {
+    backgroundColor: "#FBBF24",
+    borderColor: "#FBBF24",
+  },
+  modeBtnText: {
+    color: "#E2E8F0",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  modeBtnTextActive: {
+    color: "#0B0F1A",
   },
 
   recapCard: {

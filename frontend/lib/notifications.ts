@@ -147,31 +147,42 @@ export async function scheduleAt(args: {
 
     const handle = setTimeout(() => {
       try {
+        // 1) Speak the message via TTS so the user actually HEARS it
+        try {
+          // Lazy import to avoid circular ref
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const { SpeechMod } = require("./speech");
+          const phrase = `${args.title}. ${args.body}`;
+          SpeechMod.speak(phrase, { language: "it-IT", tone: "urgent" });
+        } catch {}
+
+        // 2) Show the system browser notification (if granted)
         // @ts-ignore
         if (typeof Notification !== "undefined" && Notification.permission === "granted") {
           // @ts-ignore
           new Notification(args.title, { body: args.body, icon: "/icon.png" });
-        } else if (typeof window !== "undefined") {
-          // Best-effort visual fallback
-          try {
-            // @ts-ignore
-            window.alert(`${args.title}\n${args.body}`);
-          } catch {}
         }
+
+        // 3) Three-tone insistent beep pattern (more attention-grabbing than a single tone)
         try {
-          // System beep via Audio API
           // @ts-ignore
           const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-          const o = ctx.createOscillator();
-          const g = ctx.createGain();
-          o.connect(g);
-          g.connect(ctx.destination);
-          o.frequency.value = 880;
-          g.gain.setValueAtTime(0.001, ctx.currentTime);
-          g.gain.exponentialRampToValueAtTime(0.5, ctx.currentTime + 0.05);
-          g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
-          o.start();
-          o.stop(ctx.currentTime + 0.6);
+          const playTone = (delay: number, freq: number, dur = 0.35) => {
+            const o = ctx.createOscillator();
+            const g = ctx.createGain();
+            o.connect(g);
+            g.connect(ctx.destination);
+            o.frequency.value = freq;
+            const start = ctx.currentTime + delay;
+            g.gain.setValueAtTime(0.001, start);
+            g.gain.exponentialRampToValueAtTime(0.45, start + 0.04);
+            g.gain.exponentialRampToValueAtTime(0.001, start + dur);
+            o.start(start);
+            o.stop(start + dur + 0.05);
+          };
+          playTone(0, 880);
+          playTone(0.45, 1108); // a higher tone
+          playTone(0.9, 880);
         } catch {}
       } catch {}
       delete webTimers[id];

@@ -7,10 +7,43 @@ export type Recorder = {
   cancel: () => Promise<void>;
 };
 
+let _webPermissionAsked = false;
+let _nativeReady = false;
+
+/**
+ * Pre-warm microphone permission so the first real tap goes straight to recording.
+ * Call once after onboarding / app load.
+ */
+export async function prewarmMic(): Promise<boolean> {
+  try {
+    if (Platform.OS === "web") {
+      // Touch the API to trigger permission prompt early, then immediately stop tracks
+      if (_webPermissionAsked) return true;
+      _webPermissionAsked = true;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop());
+      return true;
+    }
+    // Native
+    if (_nativeReady) return true;
+    const perm = await Audio.requestPermissionsAsync();
+    if (perm.status !== "granted") return false;
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: true,
+      playsInSilentModeIOS: true,
+    });
+    _nativeReady = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function startRecording(): Promise<Recorder> {
   if (Platform.OS === "web") {
     // Web: use MediaRecorder
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    _webPermissionAsked = true;
     const mime = MediaRecorder.isTypeSupported("audio/webm")
       ? "audio/webm"
       : "audio/mp4";
@@ -45,11 +78,14 @@ export async function startRecording(): Promise<Recorder> {
   }
 
   // Native: use expo-av
-  await Audio.requestPermissionsAsync();
-  await Audio.setAudioModeAsync({
-    allowsRecordingIOS: true,
-    playsInSilentModeIOS: true,
-  });
+  if (!_nativeReady) {
+    await Audio.requestPermissionsAsync();
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: true,
+      playsInSilentModeIOS: true,
+    });
+    _nativeReady = true;
+  }
   const rec = new Audio.Recording();
   await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
   await rec.startAsync();

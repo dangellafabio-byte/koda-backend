@@ -53,6 +53,7 @@ export type ProfileSettings = {
   ai_enabled: boolean;
   voice_response: boolean;
   full_access_mode: boolean;
+  input_mode: "voice" | "text";
   domains: Record<string, boolean>;
 };
 

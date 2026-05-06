@@ -257,12 +257,65 @@ async def transcribe(audio: UploadFile = File(...), language: str = Form("it")):
                     response_format="json",
                     language=language or "it",
                 )
-        return {"text": getattr(response, "text", "") or ""}
+        return {"text": _clean_whisper_output(getattr(response, "text", "") or "")}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Transcribe error: {e}")
         raise HTTPException(status_code=500, detail=f"Transcribe error: {str(e)}")
+
+
+# Common Whisper hallucinations on silent / unintelligible audio.
+# These strings appear because Whisper was trained on a lot of YouTube subtitles.
+_WHISPER_HALLUCINATIONS = [
+    "sottotitoli creati dalla comunità amara.org",
+    "sottotitoli e revisione a cura di",
+    "sottotitoli a cura di qtss",
+    "sottotitoli a cura di",
+    "buon proseguimento.",
+    "iscriviti al canale",
+    "grazie per aver guardato il video",
+    "grazie per aver visto il video",
+    "thank you.",
+    "thanks for watching",
+    "sottotitolato",
+    "sottotitoli",
+    "amara.org",
+    "qtss",
+]
+
+
+def _clean_whisper_output(text: str) -> str:
+    """Remove Whisper hallucinations and noisy junk from transcription."""
+    if not text:
+        return ""
+    t = text.strip()
+    if not t:
+        return ""
+    low = t.lower().strip("()[].,!? \n\t-—")
+    # Direct match (whole transcript is a hallucination)
+    for h in _WHISPER_HALLUCINATIONS:
+        if h in low:
+            # If the entire transcript is just hallucination, return empty
+            # If it contains useful text, strip the hallucination part
+            cleaned = t
+            # Try to strip the hallucination phrase from the text (case-insensitive)
+            import re
+            cleaned = re.sub(re.escape(h), "", cleaned, flags=re.IGNORECASE).strip()
+            cleaned = re.sub(r"^\s*[\(\[\.,!?\-—]+\s*", "", cleaned)
+            cleaned = re.sub(r"\s*[\)\]\.,!?\-—]+\s*$", "", cleaned)
+            if len(cleaned) < 3:
+                return ""
+            t = cleaned
+            low = t.lower().strip("()[].,!? \n\t-—")
+    # Reject very short outputs (< 2 chars without punctuation)
+    stripped = t.strip("()[].,!? \n\t-—")
+    if len(stripped) < 2:
+        return ""
+    # Reject if only punctuation/dots
+    if not any(c.isalnum() for c in stripped):
+        return ""
+    return t
 
 
 @api_router.post("/recommend", response_model=RecommendResponse)
@@ -385,6 +438,7 @@ class TaccuinoSettings(BaseModel):
     ai_enabled: bool = True
     voice_response: bool = True
     full_access_mode: bool = False  # Future: bank/calendar/health
+    input_mode: str = "voice"  # "voice" | "text"
     domains: dict = Field(
         default_factory=lambda: {
             "soldi": True,
