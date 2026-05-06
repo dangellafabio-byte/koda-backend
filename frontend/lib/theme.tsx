@@ -5,7 +5,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { Appearance } from "react-native";
 
-export type ThemeName = "notte" | "giorno" | "cielo" | "bosco" | "ciliegia" | "sistema";
+export type ThemeName = "notte" | "giorno" | "cielo" | "bosco" | "ciliegia" | "sistema" | "auto-orario";
 
 export type Palette = {
   name: ThemeName;
@@ -253,12 +253,18 @@ type ThemeCtx = {
   theme: Palette;
   themeName: ThemeName;
   setThemeName: (n: ThemeName) => void;
+  setHours: (dayStart: number, nightStart: number) => void;
+  dayStart: number;
+  nightStart: number;
 };
 
 const Ctx = createContext<ThemeCtx>({
   theme: NOTTE,
   themeName: "notte",
   setThemeName: () => {},
+  setHours: () => {},
+  dayStart: 7,
+  nightStart: 20,
 });
 
 export const useTheme = () => useContext(Ctx);
@@ -266,26 +272,58 @@ export const useTheme = () => useContext(Ctx);
 export function ThemeProvider({
   children,
   initialName = "notte",
+  initialDayStart = 7,
+  initialNightStart = 20,
 }: {
   children: React.ReactNode;
   initialName?: ThemeName;
+  initialDayStart?: number;
+  initialNightStart?: number;
 }) {
   const [themeName, setThemeName] = useState<ThemeName>(initialName);
   const [systemScheme, setSystemScheme] = useState(Appearance.getColorScheme());
+  const [dayStart, setDayStart] = useState(initialDayStart);
+  const [nightStart, setNightStart] = useState(initialNightStart);
+  const [, setTick] = useState(0);
 
   useEffect(() => {
     const sub = Appearance.addChangeListener((c) => setSystemScheme(c.colorScheme));
     return () => sub.remove();
   }, []);
 
+  // For "auto-orario": tick every minute so the theme switches at the configured hours
+  useEffect(() => {
+    if (themeName !== "auto-orario") return;
+    const id = setInterval(() => setTick((n) => n + 1), 60000);
+    return () => clearInterval(id);
+  }, [themeName]);
+
   const theme = useMemo(() => {
     if (themeName === "sistema") {
       return systemScheme === "dark" ? NOTTE : GIORNO;
     }
-    return THEMES[themeName] || NOTTE;
-  }, [themeName, systemScheme]);
+    if (themeName === "auto-orario") {
+      const h = new Date().getHours();
+      const isDay =
+        dayStart < nightStart
+          ? h >= dayStart && h < nightStart
+          : h >= dayStart || h < nightStart;
+      return isDay ? GIORNO : NOTTE;
+    }
+    return THEMES[themeName as Exclude<ThemeName, "sistema" | "auto-orario">] || NOTTE;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [themeName, systemScheme, dayStart, nightStart, /* tick triggers re-render */]);
+
+  const setHours = (d: number, n: number) => {
+    setDayStart(d);
+    setNightStart(n);
+  };
 
   return (
-    <Ctx.Provider value={{ theme, themeName, setThemeName }}>{children}</Ctx.Provider>
+    <Ctx.Provider
+      value={{ theme, themeName, setThemeName, setHours, dayStart, nightStart }}
+    >
+      {children}
+    </Ctx.Provider>
   );
 }

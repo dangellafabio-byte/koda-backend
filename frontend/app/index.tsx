@@ -31,6 +31,7 @@ import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voic
 import { SpeechMod } from "../lib/speech";
 import { scheduleAt } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
+import AppIcon from "../lib/AppIcon";
 
 type Status = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 
@@ -54,7 +55,7 @@ function detectDeviceLang(): string {
 
 export default function Taccuino() {
   const insets = useSafeAreaInsets();
-  const { theme, themeName, setThemeName } = useTheme();
+  const { theme, themeName, setThemeName, setHours, dayStart, nightStart } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
@@ -81,6 +82,12 @@ export default function Taccuino() {
         // Sync theme from profile if different
         const tName = (p.settings?.theme as ThemeName) || "sistema";
         if (tName !== themeName) setThemeName(tName);
+        if (
+          typeof p.settings?.day_start_hour === "number" ||
+          typeof p.settings?.night_start_hour === "number"
+        ) {
+          setHours(p.settings?.day_start_hour ?? 7, p.settings?.night_start_hour ?? 20);
+        }
         if (!p.onboarded) setShowOnboarding(true);
         else if (p.settings?.input_mode !== "text") {
           // Pre-warm mic permission so first tap goes straight to recording
@@ -103,6 +110,34 @@ export default function Taccuino() {
     try {
       await api.updateProfile({ settings: next.settings } as any);
     } catch {}
+  };
+
+  const saveHours = async (d: number, n: number) => {
+    if (!profile) return;
+    setHours(d, n);
+    const next = {
+      ...profile,
+      settings: { ...profile.settings, day_start_hour: d, night_start_hour: n },
+    };
+    setProfile(next);
+    try {
+      await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+  };
+
+  const sendTestNotification = async () => {
+    const when = new Date(Date.now() + 10000);
+    const id = await scheduleAt({
+      when,
+      title: "🔔 Taccuino — test",
+      body: "Se senti questa, le notifiche funzionano!",
+    });
+    if (id) {
+      setError("Notifica di prova fra 10 secondi 🔔");
+    } else {
+      setError("Permesso notifiche negato. Abilitalo nelle impostazioni del telefono.");
+    }
+    setTimeout(() => setError(null), 5000);
   };
 
   // Pulse animation for the big button
@@ -420,7 +455,9 @@ export default function Taccuino() {
       >
         {timeline.length === 0 ? (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyEmoji}>🪶</Text>
+            <View style={{ marginBottom: 16 }}>
+              <AppIcon size={96} />
+            </View>
             <Text style={styles.emptyTitle}>Il tuo Taccuino è vuoto</Text>
             <Text style={styles.emptyText}>
               Premi il cerchio in basso e raccontami qualcosa: una spesa,
@@ -526,7 +563,9 @@ export default function Taccuino() {
       <Modal visible={showOnboarding} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.onboardCard}>
-            <Text style={styles.onboardEmoji}>🪶</Text>
+            <View style={{ marginBottom: 8 }}>
+              <AppIcon size={80} />
+            </View>
             <Text style={styles.onboardTitle}>Benvenuto</Text>
             <Text style={styles.onboardText}>
               Sono il tuo Taccuino. Vivo nelle tue parole.{"\n"}
@@ -610,6 +649,17 @@ export default function Taccuino() {
                 />
                 <Text style={styles.themeBtnText}>Sistema</Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => saveTheme("auto-orario")}
+                style={[
+                  styles.themeBtn,
+                  themeName === "auto-orario" && styles.themeBtnActive,
+                ]}
+                testID="theme-auto-orario"
+              >
+                <Ionicons name="time-outline" size={14} color={theme.text} />
+                <Text style={styles.themeBtnText}>Auto orario</Text>
+              </TouchableOpacity>
               {THEME_LIST.map((p) => (
                 <TouchableOpacity
                   key={p.name}
@@ -632,6 +682,47 @@ export default function Taccuino() {
                 </TouchableOpacity>
               ))}
             </View>
+
+            {themeName === "auto-orario" ? (
+              <View style={styles.hoursRow}>
+                <View style={styles.hourBox}>
+                  <Text style={styles.hourLabel}>☀️ Inizio giorno</Text>
+                  <View style={styles.hourCtrl}>
+                    <TouchableOpacity
+                      onPress={() => saveHours(Math.max(0, dayStart - 1), nightStart)}
+                      style={styles.hourBtn}
+                    >
+                      <Ionicons name="remove" size={18} color={theme.text} />
+                    </TouchableOpacity>
+                    <Text style={styles.hourValue}>{String(dayStart).padStart(2, "0")}:00</Text>
+                    <TouchableOpacity
+                      onPress={() => saveHours(Math.min(23, dayStart + 1), nightStart)}
+                      style={styles.hourBtn}
+                    >
+                      <Ionicons name="add" size={18} color={theme.text} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <View style={styles.hourBox}>
+                  <Text style={styles.hourLabel}>🌙 Inizio notte</Text>
+                  <View style={styles.hourCtrl}>
+                    <TouchableOpacity
+                      onPress={() => saveHours(dayStart, Math.max(0, nightStart - 1))}
+                      style={styles.hourBtn}
+                    >
+                      <Ionicons name="remove" size={18} color={theme.text} />
+                    </TouchableOpacity>
+                    <Text style={styles.hourValue}>{String(nightStart).padStart(2, "0")}:00</Text>
+                    <TouchableOpacity
+                      onPress={() => saveHours(dayStart, Math.min(23, nightStart + 1))}
+                      style={styles.hourBtn}
+                    >
+                      <Ionicons name="add" size={18} color={theme.text} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            ) : null}
 
             <View style={styles.divider} />
 
@@ -705,6 +796,27 @@ export default function Taccuino() {
                 />
               </View>
             </View>
+
+            <View style={styles.divider} />
+
+            <View style={styles.divider} />
+
+            <Text style={styles.settingsSubtitle}>Notifiche</Text>
+            <Text style={[styles.settingsMemory, { marginBottom: 10 }]}>
+              {Platform.OS === "web"
+                ? "ℹ️ Nell'anteprima web le notifiche funzionano solo finché la scheda è aperta. Sulla app installata sul telefono funzionano anche con il telefono bloccato."
+                : "Quando l'AI imposta un promemoria, lo riceverai come notifica del telefono — anche con lo schermo bloccato."}
+            </Text>
+            <TouchableOpacity
+              onPress={sendTestNotification}
+              style={styles.dangerBtn}
+              testID="test-notif-btn"
+            >
+              <Ionicons name="notifications-outline" size={16} color={theme.text} />
+              <Text style={[styles.dangerBtnText, { color: theme.text }]}>
+                Test notifica fra 10 sec
+              </Text>
+            </TouchableOpacity>
 
             <View style={styles.divider} />
 
@@ -1273,6 +1385,48 @@ const makeStyles = (t: any) => StyleSheet.create({
     color: t.text,
     fontSize: 12,
     fontWeight: "600",
+  },
+
+  hoursRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 12,
+  },
+  hourBox: {
+    flex: 1,
+    backgroundColor: t.surfaceAlt,
+    borderColor: t.border,
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 12,
+  },
+  hourLabel: {
+    color: t.textMuted,
+    fontSize: 11,
+    fontWeight: "600",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  hourCtrl: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 6,
+  },
+  hourBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 999,
+    backgroundColor: t.primarySoftBg,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  hourValue: {
+    color: t.text,
+    fontSize: 18,
+    fontWeight: "700",
+    flex: 1,
+    textAlign: "center",
   },
 
   recapCard: {

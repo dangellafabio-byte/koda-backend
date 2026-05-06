@@ -19,6 +19,8 @@ function ThemedShell({ children }: { children: React.ReactNode }) {
 
 export default function RootLayout() {
   const [initialTheme, setInitialTheme] = useState<ThemeName>("sistema");
+  const [dayStart, setDayStart] = useState(7);
+  const [nightStart, setNightStart] = useState(20);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -33,6 +35,8 @@ export default function RootLayout() {
         const p = await api.getProfile();
         const t = (p.settings?.theme as ThemeName) || "sistema";
         setInitialTheme(t);
+        if (typeof p.settings?.day_start_hour === "number") setDayStart(p.settings.day_start_hour);
+        if (typeof p.settings?.night_start_hour === "number") setNightStart(p.settings.night_start_hour);
       } catch {}
       setReady(true);
     })();
@@ -49,7 +53,11 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <ThemeProvider initialName={initialTheme}>
+      <ThemeProvider
+        initialName={initialTheme}
+        initialDayStart={dayStart}
+        initialNightStart={nightStart}
+      >
         <ThemedShell>
           <Stack
             screenOptions={{
