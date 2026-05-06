@@ -68,9 +68,10 @@ export async function startRecording(): Promise<Recorder> {
     const startedAt = Date.now();
     let lastVoiceAt = Date.now();
     let everSpoke = false;
-    const SILENCE_DB_THRESHOLD = 0.025; // RMS in 0..1 — speech is usually >0.04
-    const SILENCE_TIMEOUT_MS = 1400;
-    const MIN_SPEECH_BEFORE_END_MS = 800;
+    const SILENCE_DB_THRESHOLD = 0.022; // slightly more tolerant for quiet voices
+    const SILENCE_TIMEOUT_MS = 1600;    // a bit longer pause to allow thinking mid-sentence
+    const MIN_SPEECH_BEFORE_END_MS = 600;
+    const MAX_RECORDING_MS = 25000;     // safety: max 25s per turn
     let silenceFired = false;
 
     const tickId = setInterval(() => {
@@ -84,14 +85,16 @@ export async function startRecording(): Promise<Recorder> {
       const rms = Math.sqrt(sum / buf.length);
       if (rms > SILENCE_DB_THRESHOLD) {
         lastVoiceAt = Date.now();
-        if (Date.now() - startedAt > 250) everSpoke = true;
+        if (Date.now() - startedAt > 150) everSpoke = true;
       }
+      const elapsed = Date.now() - startedAt;
       if (
         !silenceFired &&
-        everSpoke &&
-        Date.now() - lastVoiceAt > SILENCE_TIMEOUT_MS &&
-        Date.now() - startedAt > MIN_SPEECH_BEFORE_END_MS &&
-        silenceCb
+        silenceCb &&
+        ((everSpoke &&
+          Date.now() - lastVoiceAt > SILENCE_TIMEOUT_MS &&
+          elapsed > MIN_SPEECH_BEFORE_END_MS) ||
+          elapsed > MAX_RECORDING_MS)
       ) {
         silenceFired = true;
         try { silenceCb(); } catch {}

@@ -288,11 +288,14 @@ export default function Taccuino() {
   };
 
   const stopTalk = async () => {
-    if (status !== "recording" || !recRef.current) return;
+    // Use recRef.current as single source of truth (status check would create
+    // stale-closure bugs when called from the silence-detection callback)
+    const current = recRef.current;
+    if (!current) return;
+    recRef.current = null;
     setStatus("transcribing");
     try {
-      const res = await recRef.current.stop();
-      recRef.current = null;
+      const res = await current.stop();
       if (!res) {
         setStatus("idle");
         return;
