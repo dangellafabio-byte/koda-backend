@@ -377,8 +377,346 @@ async def remove_favorite(fav_id: str):
     return {"ok": True}
 
 
+# ============================================================
+# TACCUINO VIVO — Voice-first single-user assistant
+# ============================================================
+
+class TaccuinoSettings(BaseModel):
+    ai_enabled: bool = True
+    voice_response: bool = True
+    full_access_mode: bool = False  # Future: bank/calendar/health
+    domains: dict = Field(
+        default_factory=lambda: {
+            "soldi": True,
+            "tempo": True,
+            "spesa": True,
+            "salute": False,
+            "lavoro": False,
+            "casa": False,
+        }
+    )
+
+
+class Profile(BaseModel):
+    id: str = "me"  # singleton for single-user app
+    language: str = "it"  # "it", "en", "es", "fr", "de"
+    onboarded: bool = False
+    name: Optional[str] = None
+    confidence_level: int = 0  # 0-100, slowly grows
+    total_messages: int = 0
+    settings: TaccuinoSettings = Field(default_factory=TaccuinoSettings)
+    memory_summary: str = ""  # Periodically updated narrative about the user
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class ProfileUpdate(BaseModel):
+    language: Optional[str] = None
+    name: Optional[str] = None
+    onboarded: Optional[bool] = None
+    settings: Optional[TaccuinoSettings] = None
+
+
+class ExtractedFact(BaseModel):
+    """Structured information extracted from a user message."""
+    domain: Optional[str] = None  # soldi | tempo | spesa | salute | lavoro | casa | altro
+    intent: Optional[str] = None  # log_expense | reminder | question | recap | command | sfogo | ...
+    amount: Optional[float] = None
+    currency: Optional[str] = None
+    item: Optional[str] = None
+    when: Optional[str] = None  # natural language time reference
+    flags: List[str] = []  # e.g. ["anomalia", "abbonamento", "regalo"]
+
+
+class TimelineEntry(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    role: str  # "user" | "ai"
+    text: str
+    tone: Optional[str] = None  # neutral | calm | energetic | concerned | urgent | warm
+    domain: Optional[str] = None
+    extracted: Optional[ExtractedFact] = None
+    audio_duration_ms: Optional[int] = None
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class ConverseRequest(BaseModel):
+    text: str
+    audio_duration_ms: Optional[int] = None
+
+
+class ConverseResponse(BaseModel):
+    user_entry: TimelineEntry
+    ai_entry: TimelineEntry
+    profile: Profile
+
+
+# Helpers
+async def get_or_create_profile() -> Profile:
+    doc = await db.taccuino_profile.find_one({"id": "me"}, {"_id": 0})
+    if doc:
+        try:
+            return Profile(**doc)
+        except Exception:
+            # Corrupt doc — recreate
+            pass
+    p = Profile()
+    await db.taccuino_profile.insert_one(p.model_dump())
+    return p
+
+
+async def save_profile(p: Profile) -> Profile:
+    p.updated_at = datetime.now(timezone.utc).isoformat()
+    await db.taccuino_profile.replace_one({"id": "me"}, p.model_dump(), upsert=True)
+    return p
+
+
+def _confidence_phase(level: int) -> str:
+    if level < 20:
+        return "FORMALE"
+    if level < 60:
+        return "AMICHEVOLE"
+    return "INTIMO"
+
+
+def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> str:
+    lang = profile.language or "it"
+    lang_name = {
+        "it": "italiano",
+        "en": "english",
+        "es": "español",
+        "fr": "français",
+        "de": "deutsch",
+    }.get(lang, "italiano")
+    phase = _confidence_phase(profile.confidence_level)
+
+    domains_active = [k for k, v in (profile.settings.domains or {}).items() if v]
+    domains_str = ", ".join(domains_active) if domains_active else "nessuno"
+
+    memory = profile.memory_summary or "(nessuna memoria di lungo periodo ancora costruita)"
+    name_part = f" L'utente si chiama {profile.name}." if profile.name else ""
+
+    base = (
+        f"Sei un assistente personale vocale, intimo e discreto, integrato in un 'Taccuino Vivo'. "
+        f"Rispondi SEMPRE in {lang_name}.{name_part}\n"
+        f"\n"
+        f"FASE RELAZIONALE: {phase}\n"
+        f"- FORMALE: rispettoso, calmo, professionale. Usi 'tu' ma in modo educato. Niente confidenze.\n"
+        f"- AMICHEVOLE: tono colloquiale, usi 'noi' ('dovremmo sistemare i conti'). Suggerisci, non critichi.\n"
+        f"- INTIMO: amico vero, puoi essere più diretto, fare battute leggere, mai sgridare.\n"
+        f"\n"
+        f"DOMINI ATTIVI: {domains_str}\n"
+        f"Aiuti l'utente con: soldi (spese, budget), tempo (impegni, scadenze), spesa (lista, anomalie). "
+        f"Se chiede cose fuori dai domini attivi, dillo gentilmente.\n"
+        f"\n"
+        f"MEMORIA DI LUNGO PERIODO sull'utente:\n{memory}\n"
+        f"\n"
+        f"REGOLE FONDAMENTALI:\n"
+        f"1. NON sgridare mai. Non fare il moralista. Non insistere se l'utente sembra annoiato.\n"
+        f"2. Risposta MOLTO breve (1-3 frasi al massimo). Naturale come un vocale di un amico.\n"
+        f"3. Se rileva un'anomalia (spesa stranamente alta, abbonamento sospetto), chiedi conferma con tono curioso, non accusatorio: 'Ehi... 80€... è normale o ti sembra strano?'.\n"
+        f"4. Se l'utente chiede 'fammi il punto' o 'sunto' o 'recap', riassumi gli ultimi eventi importanti.\n"
+        f"5. Se l'utente è stressato/sfogato, abbassa il tono, rassicura, non dare consigli a meno che non li chieda.\n"
+        f"\n"
+        f"FORMATO DI RISPOSTA: Devi SEMPRE rispondere con un oggetto JSON valido (e SOLO quello, senza testo prima/dopo) così:\n"
+        f"{{\n"
+        f'  "reply": "la tua risposta in {lang_name}, breve, naturale, calda",\n'
+        f'  "tone": "calm | energetic | concerned | urgent | warm | neutral",\n'
+        f'  "domain": "soldi | tempo | spesa | salute | lavoro | casa | altro | null",\n'
+        f'  "extracted": {{ "domain": "...", "intent": "...", "amount": 12.5, "currency": "EUR", "item": "...", "when": "...", "flags": ["..."] }} or null,\n'
+        f'  "memory_update": "una breve frase da aggiungere alla memoria di lungo periodo, oppure null se nulla di rilevante"\n'
+        f"}}\n"
+        f"\n"
+        f"NESSUN markdown, NESSUN testo extra, SOLO il JSON."
+    )
+    return base
+
+
+def _format_history_for_llm(recent: List[TimelineEntry]) -> str:
+    lines = []
+    for e in recent[-12:]:  # last 12 turns
+        role = "Utente" if e.role == "user" else "Tu"
+        lines.append(f"{role}: {e.text}")
+    return "\n".join(lines)
+
+
+# ---------- Routes (Taccuino) ----------
+
+@api_router.get("/profile", response_model=Profile)
+async def api_get_profile():
+    return await get_or_create_profile()
+
+
+@api_router.put("/profile", response_model=Profile)
+async def api_update_profile(update: ProfileUpdate):
+    p = await get_or_create_profile()
+    if update.language is not None:
+        p.language = update.language
+    if update.name is not None:
+        p.name = update.name
+    if update.onboarded is not None:
+        p.onboarded = update.onboarded
+    if update.settings is not None:
+        p.settings = update.settings
+    return await save_profile(p)
+
+
+@api_router.delete("/profile")
+async def api_reset_profile():
+    """Reset entire memory and profile (free will / privacy)."""
+    await db.taccuino_profile.delete_many({})
+    await db.taccuino_timeline.delete_many({})
+    return {"ok": True, "message": "Memoria cancellata."}
+
+
+@api_router.get("/timeline", response_model=List[TimelineEntry])
+async def api_get_timeline(limit: int = 200):
+    docs = await db.taccuino_timeline.find({}, {"_id": 0}).sort("timestamp", -1).to_list(limit)
+    docs.reverse()  # chronological order (oldest first)
+    return [TimelineEntry(**d) for d in docs]
+
+
+@api_router.delete("/timeline")
+async def api_clear_timeline():
+    await db.taccuino_timeline.delete_many({})
+    return {"ok": True}
+
+
+@api_router.post("/converse", response_model=ConverseResponse)
+async def api_converse(req: ConverseRequest):
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=500, detail="LLM key not configured")
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty message")
+
+    profile = await get_or_create_profile()
+    if not profile.settings.ai_enabled:
+        # AI disabled — store user message only with a stub AI reply
+        user_entry = TimelineEntry(role="user", text=text, audio_duration_ms=req.audio_duration_ms)
+        ai_entry = TimelineEntry(
+            role="ai",
+            text="(AI in pausa)",
+            tone="neutral",
+        )
+        await db.taccuino_timeline.insert_one(user_entry.model_dump())
+        await db.taccuino_timeline.insert_one(ai_entry.model_dump())
+        return ConverseResponse(user_entry=user_entry, ai_entry=ai_entry, profile=profile)
+
+    # Save user message immediately
+    user_entry = TimelineEntry(role="user", text=text, audio_duration_ms=req.audio_duration_ms)
+    await db.taccuino_timeline.insert_one(user_entry.model_dump())
+
+    # Load recent context
+    recent_docs = await db.taccuino_timeline.find({}, {"_id": 0}).sort("timestamp", -1).to_list(20)
+    recent_docs.reverse()
+    recent = [TimelineEntry(**d) for d in recent_docs]
+
+    system_prompt = _build_conversation_system_prompt(profile, recent)
+    history_str = _format_history_for_llm(recent)
+    user_payload = (
+        f"STORICO RECENTE (per memoria a breve termine):\n{history_str}\n\n"
+        f"NUOVO MESSAGGIO DELL'UTENTE:\n{text}\n\n"
+        f"Rispondi SOLO col JSON come da istruzioni di sistema."
+    )
+
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=str(uuid.uuid4()),
+            system_message=system_prompt,
+        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        msg = UserMessage(text=user_payload)
+        raw = await chat.send_message(msg)
+    except Exception as e:
+        logger.error(f"LLM converse error: {e}")
+        raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")
+
+    data = extract_json(raw or "") or {}
+    reply_text = (data.get("reply") or "").strip() or "..."
+    tone = (data.get("tone") or "neutral").lower()
+    domain = data.get("domain")
+    extracted_raw = data.get("extracted")
+    memory_update = (data.get("memory_update") or "").strip()
+
+    extracted_obj = None
+    if isinstance(extracted_raw, dict):
+        try:
+            extracted_obj = ExtractedFact(**{k: v for k, v in extracted_raw.items() if k in ExtractedFact.model_fields})
+        except Exception:
+            extracted_obj = None
+
+    ai_entry = TimelineEntry(
+        role="ai",
+        text=reply_text,
+        tone=tone if tone in {"calm", "energetic", "concerned", "urgent", "warm", "neutral"} else "neutral",
+        domain=domain if domain in {"soldi", "tempo", "spesa", "salute", "lavoro", "casa", "altro"} else None,
+        extracted=extracted_obj,
+    )
+    await db.taccuino_timeline.insert_one(ai_entry.model_dump())
+
+    # Update profile counters & memory
+    profile.total_messages += 1
+    profile.confidence_level = min(100, profile.confidence_level + 1)
+    if memory_update and memory_update.lower() not in {"null", "none", ""}:
+        sep = "\n- " if profile.memory_summary else "- "
+        new_mem = (profile.memory_summary or "") + sep + memory_update
+        # Truncate to keep it reasonable
+        if len(new_mem) > 4000:
+            new_mem = new_mem[-4000:]
+        profile.memory_summary = new_mem
+    profile = await save_profile(profile)
+
+    return ConverseResponse(user_entry=user_entry, ai_entry=ai_entry, profile=profile)
+
+
+@api_router.get("/recap")
+async def api_recap(period: str = "today"):
+    """Generate a quick summary of the user's day/week."""
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=500, detail="LLM key not configured")
+
+    profile = await get_or_create_profile()
+    # Load today/week timeline
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    if period == "week":
+        since = now - timedelta(days=7)
+    else:
+        since = now - timedelta(hours=24)
+    docs = await db.taccuino_timeline.find(
+        {"timestamp": {"$gte": since.isoformat()}},
+        {"_id": 0},
+    ).sort("timestamp", 1).to_list(500)
+    if not docs:
+        return {"recap": "Per ora non ho nulla da riassumere — racconta qualcosa!"}
+
+    entries = [TimelineEntry(**d) for d in docs]
+    history = "\n".join(
+        f"{'Utente' if e.role == 'user' else 'AI'}: {e.text}" for e in entries
+    )
+
+    lang = profile.language or "it"
+    lang_name = {"it": "italiano", "en": "english", "es": "español", "fr": "français", "de": "deutsch"}.get(lang, "italiano")
+    sys = (
+        f"Riassumi gli eventi rilevanti delle ultime {('168 ore' if period=='week' else '24 ore')} "
+        f"in {lang_name}, in massimo 4-5 frasi naturali, come un amico che ti aggiorna. "
+        "Concentra spese, impegni, anomalie e cose importanti. Niente liste numerate, parla normalmente. "
+        "Rispondi SOLO con il testo del recap, niente JSON."
+    )
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=str(uuid.uuid4()),
+            system_message=sys,
+        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        out = await chat.send_message(UserMessage(text=history))
+    except Exception as e:
+        logger.error(f"recap error: {e}")
+        raise HTTPException(status_code=500, detail="Recap generation failed")
+    return {"recap": (out or "").strip(), "period": period}
+
+
 # ---------- Demo media (promo video / screenshots) ----------
-DEMO_DIR = Path("/app/scripts/output")
 DEMO_FILES = {
     "mp4": ("compass_demo.mp4", "video/mp4"),
     "webm": ("compass_demo.webm", "video/webm"),

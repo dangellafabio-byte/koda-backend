@@ -1,73 +1,123 @@
-// Shared types + helpers for App Compass frontend
-import { Platform } from "react-native";
+/**
+ * Taccuino Vivo — API client
+ */
 
-export const API_BASE =
-  (process.env.EXPO_PUBLIC_BACKEND_URL || "") + "/api";
-
-export type AppItem = {
-  id: string;
-  name: string;
-  description: string;
-  platforms: string[];
-  pricing: "free" | "freemium" | "paid" | string;
-  price_detail?: string | null;
-  pros: string[];
-  cons: string[];
-  best_for?: string | null;
-  url?: string | null;
-  icon_emoji?: string | null;
-};
-
-export type RecommendResponse = {
-  id: string;
-  query: string;
-  summary: string;
-  apps: AppItem[];
-  created_at: string;
-};
-
-export type Category = {
-  id: string;
-  name: string;
-  emoji: string;
-  description: string;
-  examples: string[];
-};
-
-export type Favorite = {
-  id: string;
-  app: AppItem;
-  query?: string | null;
-  created_at: string;
-};
-
-export type HistoryItem = {
-  id: string;
-  query: string;
-  summary?: string | null;
-  apps_count: number;
-  created_at: string;
-};
-
-export const pricingColor = (p: string) => {
-  switch ((p || "").toLowerCase()) {
-    case "free":
-      return { bg: "rgba(34,197,94,0.15)", text: "#4ADE80", label: "Gratis" };
-    case "paid":
-      return { bg: "rgba(239,68,68,0.15)", text: "#F87171", label: "A pagamento" };
-    case "freemium":
-    default:
-      return { bg: "rgba(251,191,36,0.15)", text: "#FBBF24", label: "Freemium" };
+const detectBackend = (): string => {
+  // EXPO_PUBLIC_BACKEND_URL is set in app .env. Falls back to relative /api on web.
+  const env = process.env.EXPO_PUBLIC_BACKEND_URL;
+  if (env) return env.replace(/\/$/, "");
+  if (typeof window !== "undefined" && window.location) {
+    return window.location.origin;
   }
+  return "";
 };
 
-export const platformIcon = (p: string): string => {
-  const k = p.toLowerCase();
-  if (k.includes("ios")) return "logo-apple";
-  if (k.includes("android")) return "logo-android";
-  if (k.includes("web")) return "globe-outline";
-  if (k.includes("desktop")) return "desktop-outline";
-  return "apps-outline";
+export const BACKEND = detectBackend();
+export const API_BASE = `${BACKEND}/api`;
+
+export type Domain = "soldi" | "tempo" | "spesa" | "salute" | "lavoro" | "casa" | "altro";
+export type Tone = "neutral" | "calm" | "energetic" | "concerned" | "urgent" | "warm";
+
+export type ExtractedFact = {
+  domain?: Domain | null;
+  intent?: string | null;
+  amount?: number | null;
+  currency?: string | null;
+  item?: string | null;
+  when?: string | null;
+  flags?: string[];
 };
 
-export const isWeb = Platform.OS === "web";
+export type TimelineEntry = {
+  id: string;
+  role: "user" | "ai";
+  text: string;
+  tone?: Tone | null;
+  domain?: Domain | null;
+  extracted?: ExtractedFact | null;
+  audio_duration_ms?: number | null;
+  timestamp: string;
+};
+
+export type ProfileSettings = {
+  ai_enabled: boolean;
+  voice_response: boolean;
+  full_access_mode: boolean;
+  domains: Record<string, boolean>;
+};
+
+export type Profile = {
+  id: string;
+  language: string;
+  onboarded: boolean;
+  name?: string | null;
+  confidence_level: number;
+  total_messages: number;
+  settings: ProfileSettings;
+  memory_summary: string;
+  created_at: string;
+  updated_at: string;
+};
+
+async function jsonReq<T>(path: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`HTTP ${r.status}: ${t}`);
+  }
+  return r.json();
+}
+
+export const api = {
+  getProfile: () => jsonReq<Profile>("/profile"),
+  updateProfile: (patch: Partial<Profile>) =>
+    jsonReq<Profile>("/profile", {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
+  resetEverything: () =>
+    jsonReq<{ ok: boolean; message: string }>("/profile", { method: "DELETE" }),
+
+  getTimeline: (limit = 200) =>
+    jsonReq<TimelineEntry[]>(`/timeline?limit=${limit}`),
+  clearTimeline: () => jsonReq<{ ok: boolean }>("/timeline", { method: "DELETE" }),
+
+  converse: (text: string, audio_duration_ms?: number) =>
+    jsonReq<{
+      user_entry: TimelineEntry;
+      ai_entry: TimelineEntry;
+      profile: Profile;
+    }>("/converse", {
+      method: "POST",
+      body: JSON.stringify({ text, audio_duration_ms }),
+    }),
+
+  recap: (period: "today" | "week" = "today") =>
+    jsonReq<{ recap: string; period: string }>(`/recap?period=${period}`),
+};
+
+// Tone -> color/icon map (UI helper)
+export const toneStyle: Record<
+  Tone,
+  { bg: string; border: string; emoji: string; label: string }
+> = {
+  neutral: { bg: "rgba(148,163,184,0.10)", border: "rgba(148,163,184,0.35)", emoji: "💬", label: "neutro" },
+  calm: { bg: "rgba(56,189,248,0.10)", border: "rgba(56,189,248,0.4)", emoji: "🌊", label: "calmo" },
+  warm: { bg: "rgba(251,191,36,0.10)", border: "rgba(251,191,36,0.4)", emoji: "🤗", label: "caldo" },
+  energetic: { bg: "rgba(34,197,94,0.10)", border: "rgba(34,197,94,0.4)", emoji: "⚡", label: "energico" },
+  concerned: { bg: "rgba(249,115,22,0.10)", border: "rgba(249,115,22,0.45)", emoji: "🤔", label: "attento" },
+  urgent: { bg: "rgba(239,68,68,0.12)", border: "rgba(239,68,68,0.5)", emoji: "🚨", label: "urgente" },
+};
+
+export const domainBadge: Record<Domain, { emoji: string; label: string; color: string }> = {
+  soldi: { emoji: "💶", label: "Soldi", color: "#FBBF24" },
+  tempo: { emoji: "⏰", label: "Tempo", color: "#A78BFA" },
+  spesa: { emoji: "🛒", label: "Spesa", color: "#34D399" },
+  salute: { emoji: "❤️", label: "Salute", color: "#F87171" },
+  lavoro: { emoji: "💼", label: "Lavoro", color: "#60A5FA" },
+  casa: { emoji: "🏠", label: "Casa", color: "#F472B6" },
+  altro: { emoji: "✨", label: "Altro", color: "#94A3B8" },
+};

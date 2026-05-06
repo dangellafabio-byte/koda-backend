@@ -1,6 +1,5 @@
 import React, { useEffect } from "react";
-import { Tabs } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { View, StyleSheet, Platform } from "react-native";
@@ -9,7 +8,6 @@ import { scheduleWeeklyAppNotification } from "../lib/notifications";
 export default function RootLayout() {
   useEffect(() => {
     if (Platform.OS === "web") return;
-    // Fire-and-forget: ask permission + schedule weekly reminder
     const t = setTimeout(() => {
       scheduleWeeklyAppNotification().catch(() => {});
     }, 1500);
@@ -20,57 +18,18 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <StatusBar style="light" />
       <View style={styles.root}>
-        <Tabs
+        <Stack
           screenOptions={{
             headerShown: false,
-            tabBarStyle: styles.tabBar,
-            tabBarActiveTintColor: "#FBBF24",
-            tabBarInactiveTintColor: "#64748B",
-            tabBarLabelStyle: styles.tabLabel,
-            tabBarItemStyle: { paddingTop: 6 },
+            contentStyle: { backgroundColor: "#0B0F1A" },
+            animation: "fade",
           }}
-        >
-          <Tabs.Screen
-            name="index"
-            options={{
-              title: "Bussola",
-              tabBarIcon: ({ color, size }) => (
-                <Ionicons name="compass" size={size} color={color} />
-              ),
-            }}
-          />
-          <Tabs.Screen
-            name="saved"
-            options={{
-              title: "Salvate",
-              tabBarIcon: ({ color, size }) => (
-                <Ionicons name="bookmark" size={size} color={color} />
-              ),
-            }}
-          />
-          <Tabs.Screen
-            name="history"
-            options={{
-              title: "Cronologia",
-              tabBarIcon: ({ color, size }) => (
-                <Ionicons name="time" size={size} color={color} />
-              ),
-            }}
-          />
-        </Tabs>
+        />
       </View>
     </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#020617" },
-  tabBar: {
-    backgroundColor: "rgba(2,6,23,0.96)",
-    borderTopColor: "rgba(255,255,255,0.08)",
-    borderTopWidth: 1,
-    height: 74,
-    paddingBottom: 14,
-  },
-  tabLabel: { fontSize: 11, fontWeight: "600", letterSpacing: 0.3 },
+  root: { flex: 1, backgroundColor: "#0B0F1A" },
 });

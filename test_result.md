@@ -103,11 +103,35 @@
 #====================================================================================================
 
 user_problem_statement: |
-  App "Compass" — bussola che consiglia app per qualsiasi esigenza usando AI.
-  MVP: ricerca semantica, categorie, preferiti, cronologia, dettatura vocale (Whisper),
-  app della settimana, condivisione consigli via link.
+  PIVOT TOTALE: l'app diventa "Taccuino Vivo", un assistente vocale single-user
+  che vive in una timeline-chat unica. L'utente parla (vocale) o scrive, l'AI
+  trascrive (Whisper), categorizza in domini (Soldi/Tempo/Spesa/Salute/Lavoro/Casa),
+  estrae fatti strutturati, risponde con tono adattivo (calm/warm/energetic/concerned/
+  urgent/neutral) e legge la risposta ad alta voce. Memoria persistente che cresce
+  con l'uso. Privacy-first: AI in pausa, reset memoria, 5 lingue.
 
 frontend:
+  - task: "Taccuino Vivo — Pivot completo"
+    implemented: true
+    working: true
+    file: "frontend/app/index.tsx, frontend/app/_layout.tsx, frontend/lib/api.ts, frontend/lib/speech.ts, frontend/lib/voice.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Pivot completo dalla App Compass al Taccuino Vivo. Cancellate tab navigation,
+          schermate Saved/History, AppCard, CompareModal. Nuovo _layout con Stack singolo.
+          index.tsx riscritto: timeline scrollabile (bolle utente gialle a dx, bolle AI
+          colorate per tono a sx), grande pulsante dorato pulsante centrale (push-to-talk),
+          fallback testo ("oppure scrivi"), header con tasti Sunto e Settings. Onboarding
+          modal con 5 lingue. Settings con toggle AI/voce, memoria visibile,
+          confidenza in barra %, reset distruttivo. Recap modal "Sunto al volo".
+          Verificato visualmente: onboarding -> chat -> categorizzazione SPESA + estrazione
+          32 EUR + risposta naturale + sunto AI funzionano end-to-end.
+
   - task: "Notifiche push native (settimanali)"
     implemented: true
     working: "NA"
