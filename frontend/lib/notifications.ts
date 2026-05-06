@@ -66,7 +66,14 @@ export async function scheduleWeeklyAppNotification(force = false): Promise<bool
     if (!granted) return false;
 
     const existing = await Notifications.getAllScheduledNotificationsAsync();
-    const already = existing.find((n) => n.identifier === "compass-weekly-app");
+    // Cancel any old "compass-weekly-app" leftover from the previous app concept
+    const legacy = existing.find((n) => n.identifier === "compass-weekly-app");
+    if (legacy) {
+      try {
+        await Notifications.cancelScheduledNotificationAsync(legacy.identifier);
+      } catch {}
+    }
+    const already = existing.find((n) => n.identifier === "taccuino-weekly-recap");
     if (already && !force) return true;
 
     if (already) {
@@ -74,12 +81,12 @@ export async function scheduleWeeklyAppNotification(force = false): Promise<bool
     }
 
     await Notifications.scheduleNotificationAsync({
-      identifier: "compass-weekly-app",
+      identifier: "taccuino-weekly-recap",
       content: {
-        title: "🧭 Nuova App della settimana",
-        body: "Apri la Bussola e scopri quale app provare questa settimana.",
+        title: "🪶 Sunto della settimana",
+        body: "Apri il Taccuino: ho qualcosa da raccontarti su come è andata.",
         sound: "default",
-        data: { type: "weekly-app" },
+        data: { type: "weekly-recap" },
       },
       // Weekly trigger: every Monday at 09:00 local time
       trigger: {
@@ -99,6 +106,8 @@ export async function scheduleWeeklyAppNotification(force = false): Promise<bool
 
 export async function cancelWeeklyAppNotification(): Promise<void> {
   try {
+    await Notifications.cancelScheduledNotificationAsync("taccuino-weekly-recap");
+    // Also clean up the legacy identifier in case it still exists
     await Notifications.cancelScheduledNotificationAsync("compass-weekly-app");
   } catch {}
 }
