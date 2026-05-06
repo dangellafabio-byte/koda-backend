@@ -28,7 +28,7 @@ import {
   Action,
 } from "../lib/api";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
-import { SpeechMod } from "../lib/speech";
+import { SpeechMod, unlockSpeech } from "../lib/speech";
 import { scheduleAt } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
@@ -186,7 +186,14 @@ export default function Taccuino() {
       const langTag = lang === "it" ? "it-IT" : lang === "en" ? "en-US" : lang;
       await SpeechMod.speak(text, { language: langTag, tone });
       setStatus("idle");
+      // Conversation mode: after AI finishes, auto-start listening for next user turn
+      if (profile?.settings?.conversation_mode && profile?.settings?.input_mode !== "text") {
+        setTimeout(() => {
+          startTalkInternal(true).catch(() => {});
+        }, 350);
+      }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [profile]
   );
 
@@ -253,18 +260,31 @@ export default function Taccuino() {
     [speakIfEnabled, runActions]
   );
 
-  // Push-to-talk
-  const startTalk = async () => {
+  // Push-to-talk (or hands-free)
+  const startTalkInternal = async (autoStopOnSilence: boolean) => {
     if (status !== "idle") return;
     setError(null);
+    // Unlock speech engine on first user interaction (web only)
+    unlockSpeech().catch(() => {});
     try {
       SpeechMod.stop();
       const rec = await startRecording();
       recRef.current = rec;
       setStatus("recording");
+      if (autoStopOnSilence && rec.onSilence) {
+        rec.onSilence(() => {
+          // After ~1.4s of silence, stop & send automatically
+          if (recRef.current === rec) stopTalk();
+        });
+      }
     } catch (e) {
       setError("Microfono non disponibile. Controlla i permessi.");
     }
+  };
+
+  const startTalk = async () => {
+    const wantHandsFree = !!profile?.settings?.conversation_mode;
+    return startTalkInternal(wantHandsFree);
   };
 
   const stopTalk = async () => {
@@ -336,6 +356,8 @@ export default function Taccuino() {
       setShowOnboarding(false);
       // Pre-warm mic permission so first tap goes straight to recording
       prewarmMic().catch(() => {});
+      // Unlock speech engine NOW (this is a user gesture; required for browser TTS)
+      unlockSpeech().catch(() => {});
       // Greet
       const greeting =
         lang === "it"
@@ -388,6 +410,23 @@ export default function Taccuino() {
     try {
       await api.updateProfile({ settings: next.settings } as any);
     } catch {}
+  };
+
+  const toggleConversation = async () => {
+    if (!profile) return;
+    const next = {
+      ...profile,
+      settings: { ...profile.settings, conversation_mode: !profile.settings.conversation_mode },
+    };
+    setProfile(next);
+    try {
+      await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+    // Pre-warm so first auto-listen is instant
+    if (!profile.settings.conversation_mode) {
+      prewarmMic().catch(() => {});
+      unlockSpeech().catch(() => {});
+    }
   };
 
   const setInputMode = async (mode: "voice" | "text") => {
@@ -627,6 +666,19 @@ export default function Taccuino() {
               <Toggle
                 on={!!profile?.settings.voice_response}
                 onToggle={toggleVoice}
+              />
+            </View>
+
+            <View style={styles.settingRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>Modalità conversazione</Text>
+                <Text style={styles.settingHint}>
+                  Hands-free: dopo che l'AI parla, riapre il microfono e si ferma da solo quando smetti.
+                </Text>
+              </View>
+              <Toggle
+                on={!!profile?.settings.conversation_mode}
+                onToggle={toggleConversation}
               />
             </View>
 

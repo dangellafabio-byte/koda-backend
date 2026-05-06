@@ -439,6 +439,7 @@ class TaccuinoSettings(BaseModel):
     voice_response: bool = True
     full_access_mode: bool = False  # Future: bank/calendar/health
     input_mode: str = "voice"  # "voice" | "text"
+    conversation_mode: bool = False  # hands-free continuous conversation
     theme: str = "sistema"  # "sistema" | "auto-orario" | "notte" | "giorno" | "cielo" | "bosco" | "ciliegia"
     day_start_hour: int = 7   # used when theme = "auto-orario"
     night_start_hour: int = 20  # used when theme = "auto-orario"

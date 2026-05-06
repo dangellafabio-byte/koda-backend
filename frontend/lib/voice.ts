@@ -5,6 +5,8 @@ import { Audio } from "expo-av";
 export type Recorder = {
   stop: () => Promise<{ uri?: string; blob?: Blob; mime: string; filename: string } | null>;
   cancel: () => Promise<void>;
+  /** Optional: register a callback fired when the user has been silent for ~1.2s */
+  onSilence?: (cb: () => void) => void;
 };
 
 let _webPermissionAsked = false;
@@ -41,7 +43,7 @@ export async function prewarmMic(): Promise<boolean> {
 
 export async function startRecording(): Promise<Recorder> {
   if (Platform.OS === "web") {
-    // Web: use MediaRecorder
+    // Web: use MediaRecorder + AnalyserNode for silence detection
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     _webPermissionAsked = true;
     const mime = MediaRecorder.isTypeSupported("audio/webm")
@@ -54,25 +56,80 @@ export async function startRecording(): Promise<Recorder> {
     };
     mr.start();
 
+    // ===== Silence detection =====
+    // RMS volume sampled every ~100ms; if below threshold for >1.4s after we heard speech, fire onSilence
+    let silenceCb: (() => void) | null = null;
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(stream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+    const buf = new Uint8Array(analyser.fftSize);
+    const startedAt = Date.now();
+    let lastVoiceAt = Date.now();
+    let everSpoke = false;
+    const SILENCE_DB_THRESHOLD = 0.025; // RMS in 0..1 — speech is usually >0.04
+    const SILENCE_TIMEOUT_MS = 1400;
+    const MIN_SPEECH_BEFORE_END_MS = 800;
+    let silenceFired = false;
+
+    const tickId = setInterval(() => {
+      analyser.getByteTimeDomainData(buf);
+      // compute RMS
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const v = (buf[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / buf.length);
+      if (rms > SILENCE_DB_THRESHOLD) {
+        lastVoiceAt = Date.now();
+        if (Date.now() - startedAt > 250) everSpoke = true;
+      }
+      if (
+        !silenceFired &&
+        everSpoke &&
+        Date.now() - lastVoiceAt > SILENCE_TIMEOUT_MS &&
+        Date.now() - startedAt > MIN_SPEECH_BEFORE_END_MS &&
+        silenceCb
+      ) {
+        silenceFired = true;
+        try { silenceCb(); } catch {}
+      }
+    }, 90);
+
     return {
       stop: () =>
         new Promise((resolve) => {
           mr.onstop = () => {
             const blob = new Blob(chunks, { type: mime });
             stream.getTracks().forEach((t) => t.stop());
+            try { clearInterval(tickId); audioCtx.close().catch(() => {}); } catch {}
             resolve({
               blob,
               mime,
               filename: mime.includes("webm") ? "audio.webm" : "audio.mp4",
             });
           };
-          mr.stop();
+          if (mr.state !== "inactive") mr.stop();
+          else {
+            const blob = new Blob(chunks, { type: mime });
+            stream.getTracks().forEach((t) => t.stop());
+            try { clearInterval(tickId); audioCtx.close().catch(() => {}); } catch {}
+            resolve({
+              blob,
+              mime,
+              filename: mime.includes("webm") ? "audio.webm" : "audio.mp4",
+            });
+          }
         }),
       cancel: async () => {
-        try {
-          mr.stop();
-        } catch {}
+        try { mr.stop(); } catch {}
         stream.getTracks().forEach((t) => t.stop());
+        try { clearInterval(tickId); audioCtx.close().catch(() => {}); } catch {}
+      },
+      onSilence: (cb) => {
+        silenceCb = cb;
       },
     };
   }
@@ -87,18 +144,49 @@ export async function startRecording(): Promise<Recorder> {
     _nativeReady = true;
   }
   const rec = new Audio.Recording();
-  await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+  // Enable metering for silence detection
+  await rec.prepareToRecordAsync({
+    ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
+    isMeteringEnabled: true,
+  } as any);
   await rec.startAsync();
+
+  let silenceCb: (() => void) | null = null;
+  const startedAt = Date.now();
+  let lastVoiceAt = Date.now();
+  let everSpoke = false;
+  let silenceFired = false;
+  rec.setOnRecordingStatusUpdate((status) => {
+    const meter = (status as any).metering;
+    if (typeof meter === "number") {
+      // metering values are in dB (typically -160..0). Speech > -35 dB-ish
+      if (meter > -35) {
+        lastVoiceAt = Date.now();
+        if (Date.now() - startedAt > 250) everSpoke = true;
+      }
+      if (
+        !silenceFired &&
+        everSpoke &&
+        Date.now() - lastVoiceAt > 1400 &&
+        Date.now() - startedAt > 800 &&
+        silenceCb
+      ) {
+        silenceFired = true;
+        try { silenceCb(); } catch {}
+      }
+    }
+  });
   return {
     stop: async () => {
-      await rec.stopAndUnloadAsync();
+      try { await rec.stopAndUnloadAsync(); } catch {}
       const uri = rec.getURI() || undefined;
       return { uri, mime: "audio/m4a", filename: "audio.m4a" };
     },
     cancel: async () => {
-      try {
-        await rec.stopAndUnloadAsync();
-      } catch {}
+      try { await rec.stopAndUnloadAsync(); } catch {}
+    },
+    onSilence: (cb) => {
+      silenceCb = cb;
     },
   };
 }
