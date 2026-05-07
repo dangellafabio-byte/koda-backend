@@ -79,6 +79,7 @@ export default function Taccuino() {
   const recRef = useRef<Recorder | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const pulse = useRef(new Animated.Value(1)).current;
+  const breathe = useRef(new Animated.Value(0)).current;
 
   // Initial load
   useEffect(() => {
@@ -146,6 +147,28 @@ export default function Taccuino() {
     }
     setTimeout(() => setError(null), 5000);
   };
+
+  // Gentle continuous breathing — always active, feels alive
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(breathe, {
+          toValue: 1,
+          duration: 2600,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(breathe, {
+          toValue: 0,
+          duration: 2600,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [breathe]);
 
   // Pulse animation for the big button
   useEffect(() => {
@@ -621,10 +644,47 @@ export default function Taccuino() {
             <Text style={styles.statusLabel}>
               {aiPaused ? "AI in pausa" : statusLabel}
             </Text>
+            {/* Breathing halos — always on, feels alive like a presence */}
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.breathHaloFar,
+                {
+                  borderColor: theme.primary,
+                  opacity: breathe.interpolate({ inputRange: [0, 1], outputRange: [0.06, 0.18] }),
+                  transform: [
+                    { scale: breathe.interpolate({ inputRange: [0, 1], outputRange: [1, 1.18] }) },
+                  ],
+                },
+              ]}
+            />
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.breathHaloNear,
+                {
+                  borderColor: theme.primary,
+                  opacity: breathe.interpolate({ inputRange: [0, 1], outputRange: [0.12, 0.28] }),
+                  transform: [
+                    { scale: breathe.interpolate({ inputRange: [0, 1], outputRange: [1, 1.1] }) },
+                  ],
+                },
+              ]}
+            />
             <Animated.View
               style={[
                 styles.bigBtnRingOuter,
-                { transform: [{ scale: pulse }] },
+                {
+                  transform: [
+                    { scale: pulse },
+                    {
+                      translateY: breathe.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0, -3],
+                      }),
+                    },
+                  ],
+                },
                 status === "recording" && { borderColor: "#EF4444" },
               ]}
             >
@@ -713,6 +773,12 @@ export default function Taccuino() {
                 <Ionicons name="close" size={24} color={theme.text} />
               </TouchableOpacity>
             </View>
+
+            <ScrollView
+              style={{ flexGrow: 0 }}
+              contentContainerStyle={{ paddingBottom: 6 }}
+              showsVerticalScrollIndicator={true}
+            >
 
             <View style={styles.settingRow}>
               <View style={{ flex: 1 }}>
@@ -951,6 +1017,7 @@ export default function Taccuino() {
             <Text style={styles.dangerHint}>
               Reset completo: profilo, taccuino e ogni ricordo.
             </Text>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -1203,13 +1270,29 @@ const makeStyles = (t: any) => StyleSheet.create({
     borderTopColor: t.divider,
   },
   errorText: { color: t.danger, fontSize: 12, textAlign: "center", marginTop: 8 },
-  bigBtnArea: { alignItems: "center", paddingTop: 20 },
+  bigBtnArea: { alignItems: "center", paddingTop: 20, position: "relative" },
   statusLabel: {
     color: t.textDim,
     fontSize: 13,
     fontWeight: "500",
     marginBottom: 18,
     letterSpacing: 0.3,
+  },
+  breathHaloFar: {
+    position: "absolute",
+    top: 62,
+    width: 190,
+    height: 190,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  breathHaloNear: {
+    position: "absolute",
+    top: 80,
+    width: 156,
+    height: 156,
+    borderRadius: 999,
+    borderWidth: 1,
   },
   bigBtnRingOuter: {
     width: 132,
