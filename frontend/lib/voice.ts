@@ -93,11 +93,11 @@ export async function startRecording(): Promise<Recorder> {
     // Lower threshold for better barge-in sensitivity, especially when AI
     // TTS is also playing (browser AEC reduces the playback signal coming
     // back through the mic — but we still need to detect quieter user speech).
-    const SILENCE_DB_THRESHOLD = 0.012;   // very tolerant — picks up quieter speech
-    const SILENCE_TIMEOUT_MS = 1200;      // snappier response after speech ends
+    const SILENCE_DB_THRESHOLD = 0.008;   // very tolerant — picks up quieter speech
+    const SILENCE_TIMEOUT_MS = 2200;      // tolerates natural mid-sentence pauses
     const MIN_SPEECH_BEFORE_END_MS = 500;
-    const MAX_RECORDING_MS = 12000;       // safety: max 12s per turn
-    const NO_SPEECH_FALLBACK_MS = 7000;   // if no speech detected at all in 7s,
+    const MAX_RECORDING_MS = 60000;       // safety: 60s per turn (long thoughts ok)
+    const NO_SPEECH_FALLBACK_MS = 12000;  // if no speech detected at all in 12s,
                                           // force stop (analyser may be broken)
     let speechStartFired = false;
     let silenceFired = false;
@@ -236,9 +236,9 @@ export async function startRecording(): Promise<Recorder> {
     const meter = (status as any).metering;
     if (typeof meter === "number") {
       // metering values are in dB (typically -160..0).
-      // Lower threshold to -45 (was -35) to catch quieter speech / further away
-      // from the mic, especially in conversation hands-free mode.
-      if (meter > -45) {
+      // Threshold -50dB catches even quieter speech / users far from mic
+      // (was -45 — tightened to -50 for better sensitivity).
+      if (meter > -50) {
         lastVoiceAt = Date.now();
         if (Date.now() - startedAt > 250) {
           everSpoke = true;
@@ -253,13 +253,13 @@ export async function startRecording(): Promise<Recorder> {
       if (
         !silenceFired &&
         ((everSpoke &&
-          Date.now() - lastVoiceAt > 1500 &&
+          Date.now() - lastVoiceAt > 2200 &&
           Date.now() - startedAt > 600) ||
-          // Fallback: if no speech ever detected after 7s, force-stop anyway
+          // Fallback: if no speech ever detected after 12s, force-stop anyway
           // (native metering can be unreliable on some iOS versions / mics)
-          (!everSpoke && Date.now() - startedAt > 7000) ||
-          // Hard cap
-          Date.now() - startedAt > 14000) &&
+          (!everSpoke && Date.now() - startedAt > 12000) ||
+          // Hard cap: 60s — gives plenty of room for long thoughts/stories
+          Date.now() - startedAt > 60000) &&
         silenceCb
       ) {
         silenceFired = true;
