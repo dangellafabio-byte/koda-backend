@@ -233,41 +233,22 @@ export default function Taccuino() {
       const lang = profile?.language || "it";
       const langTag = lang === "it" ? "it-IT" : lang === "en" ? "en-US" : lang;
 
-      // BARGE-IN MODE: in active conversation, open the mic IN PARALLEL with TTS.
-      // The user can interrupt AI mid-sentence. Crucially, while AI TTS is
-      // playing, we PAUSE the silence-end detector — otherwise the mic picks
-      // up the AI's own voice from the speaker, treats it as the user
-      // talking, and when the AI naturally stops the silence detector fires
-      // → empty/AI-voice audio gets sent to the backend instead of the
-      // user's actual reply ("AI talking to itself" loop).
+      // CONVERSATION LOOP (simplified): no parallel mic during TTS — that was
+      // causing the AI's own voice to bleed into the mic and trigger silence
+      // detection on the AI's voice instead of the user's. Now strictly
+      // sequential: AI speaks → AI finishes → mic opens for the user.
+      // Voice barge-in is replaced by tap-to-interrupt (handled in onBigButton:
+      // tapping during "speaking" stops TTS and opens the mic immediately).
       if (convActiveRef.current && profile?.settings?.input_mode !== "text") {
         setStatus("speaking");
-        // 1) Start TTS (don't await)
-        const ttsPromise = SpeechMod.speak(text, { language: langTag, tone });
-        // 2) Open mic in parallel after a tiny delay so the speech engine has settled
-        setTimeout(() => {
-          if (convActiveRef.current && !recRef.current) {
-            startTalkInternal(true).then(() => {
-              // Pause silence-end while AI is still speaking.
-              try { recRef.current?.pauseSilence?.(); } catch {}
-            }).catch(() => {});
-          }
-        }, 250);
-        // Wait for TTS to finish, THEN unlock the silence detector and reset
-        // its state so the user's actual turn starts with a clean slate.
-        await ttsPromise;
+        // Speak and WAIT for it to finish before opening the mic
+        await SpeechMod.speak(text, { language: langTag, tone });
+        // If conversation is still active, immediately open mic for next user turn
         if (convActiveRef.current) {
-          if (!recRef.current) {
-            // Mic wasn't opened in parallel (rare race) — open it now.
+          // Small delay to let iOS audio session settle from playback to recording
+          await new Promise((r) => setTimeout(r, 150));
+          if (convActiveRef.current && !recRef.current) {
             startTalkInternal(true).catch(() => {});
-          } else {
-            // Mic was open during TTS; resume normal silence detection now.
-            try {
-              recRef.current.resetSilenceState?.();
-              recRef.current.resumeSilence?.();
-            } catch {}
-            // After TTS, status should reflect that the user can speak now.
-            setStatus("recording");
           }
         }
         return;
