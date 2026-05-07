@@ -87,12 +87,15 @@ export async function startRecording(): Promise<Recorder> {
     // Lower threshold for better barge-in sensitivity, especially when AI
     // TTS is also playing (browser AEC reduces the playback signal coming
     // back through the mic — but we still need to detect quieter user speech).
-    const SILENCE_DB_THRESHOLD = 0.018;
-    const SILENCE_TIMEOUT_MS = 1600;    // a bit longer pause to allow thinking mid-sentence
-    const MIN_SPEECH_BEFORE_END_MS = 600;
-    const MAX_RECORDING_MS = 25000;     // safety: max 25s per turn
+    const SILENCE_DB_THRESHOLD = 0.012;   // very tolerant — picks up quieter speech
+    const SILENCE_TIMEOUT_MS = 1200;      // snappier response after speech ends
+    const MIN_SPEECH_BEFORE_END_MS = 500;
+    const MAX_RECORDING_MS = 12000;       // safety: max 12s per turn
+    const NO_SPEECH_FALLBACK_MS = 7000;   // if no speech detected at all in 7s,
+                                          // force stop (analyser may be broken)
     let speechStartFired = false;
     let silenceFired = false;
+    let maxRmsSeen = 0;
 
     const tickId = setInterval(() => {
       analyser.getByteTimeDomainData(buf);
@@ -103,6 +106,7 @@ export async function startRecording(): Promise<Recorder> {
         sum += v * v;
       }
       const rms = Math.sqrt(sum / buf.length);
+      if (rms > maxRmsSeen) maxRmsSeen = rms;
       if (rms > SILENCE_DB_THRESHOLD) {
         lastVoiceAt = Date.now();
         if (Date.now() - startedAt > 150) {
@@ -114,12 +118,19 @@ export async function startRecording(): Promise<Recorder> {
         }
       }
       const elapsed = Date.now() - startedAt;
+      // Auto-stop conditions:
+      // 1. Heard speech AND silence for SILENCE_TIMEOUT_MS → normal end of turn
+      // 2. NO speech detected at all after NO_SPEECH_FALLBACK_MS → analyser
+      //    likely broken (Safari AudioContext issues), force stop with whatever
+      //    audio we captured so the user doesn't hang forever
+      // 3. Hard cap MAX_RECORDING_MS → safety
       if (
         !silenceFired &&
         silenceCb &&
         ((everSpoke &&
           Date.now() - lastVoiceAt > SILENCE_TIMEOUT_MS &&
           elapsed > MIN_SPEECH_BEFORE_END_MS) ||
+          (!everSpoke && elapsed > NO_SPEECH_FALLBACK_MS) ||
           elapsed > MAX_RECORDING_MS)
       ) {
         silenceFired = true;

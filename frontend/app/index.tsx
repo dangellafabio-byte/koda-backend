@@ -585,10 +585,12 @@ export default function Taccuino() {
    * Stops any current playback first, then speaks using the user's chosen voice.
    */
   const replayMessage = async (entry: TimelineEntry) => {
-    if (!entry || entry.role !== "assistant" || !entry.text) return;
+    if (!entry || entry.role === "user" || !entry.text) return;
     SpeechMod.stop();
     try {
       const langTag = profile?.language === "it" ? "it-IT" : profile?.language || "it-IT";
+      // Make sure audio is unlocked on web (required by Safari for play())
+      await unlockSpeech();
       await SpeechMod.speak(entry.text, {
         language: langTag,
         tone: (entry.tone as Tone) || "neutral",
