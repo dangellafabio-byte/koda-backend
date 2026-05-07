@@ -159,15 +159,24 @@ async function fetchTTSBytes(
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  // Fast path: TextDecoder + btoa (works on iOS / Hermes; ~20x faster than
+  // the chunked apply approach below)
+  try {
+    if (typeof TextDecoder !== "undefined" && typeof btoa !== "undefined") {
+      const decoder = new TextDecoder("latin1");
+      const binary = decoder.decode(new Uint8Array(buffer));
+      return btoa(binary);
+    }
+  } catch {}
+  // Fallback: chunked String.fromCharCode (slower but always works)
   const bytes = new Uint8Array(buffer);
   let binary = "";
-  const chunkSize = 0x8000;
+  const chunkSize = 0x4000; // 16k — safer than 32k on some JS engines
   for (let i = 0; i < bytes.length; i += chunkSize) {
     // @ts-ignore
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)));
   }
   if (typeof btoa !== "undefined") return btoa(binary);
-  // React Native polyfill
   // @ts-ignore
   return global.btoa ? global.btoa(binary) : "";
 }
@@ -221,11 +230,46 @@ async function playElevenLabsNative(audioBuf: ArrayBuffer): Promise<boolean> {
     }
 
     // Create + play
+    // CRITICAL iOS FIX: register the playback status callback as the 3rd
+    // parameter of createAsync (not via setOnPlaybackStatusUpdate after the
+    // fact). With shouldPlay:true + late callback registration, iOS misses
+    // every status event (isPlaying, didJustFinish) → Promise never resolves
+    // → caller falls back to expo-speech (robotic voice). Known expo-av bug.
     let sound: Audio.Sound;
+    let resolvePromise: ((ok: boolean) => void) | null = null;
+    let done = false;
+    let everPlayed = false;
+    const cleanup = async () => {
+      try { await (sound as any)?.unloadAsync(); } catch {}
+      if (currentSound === sound) currentSound = null;
+      if (fileUri) {
+        try { await FileSystem.deleteAsync(fileUri, { idempotent: true }); } catch {}
+      }
+    };
+    const onStatus = (status: any) => {
+      if (!status.isLoaded) {
+        if (!done) {
+          done = true;
+          const ok = everPlayed;
+          cleanup().finally(() => resolvePromise && resolvePromise(ok));
+        }
+        return;
+      }
+      if (status.isPlaying || (status.positionMillis ?? 0) > 0) {
+        everPlayed = true;
+      }
+      if (status.didJustFinish) {
+        if (!done) {
+          done = true;
+          cleanup().finally(() => resolvePromise && resolvePromise(true));
+        }
+      }
+    };
     try {
       const created = await Audio.Sound.createAsync(
         { uri: fileUri },
-        { shouldPlay: true, volume: 1.0 },
+        { shouldPlay: false, volume: 1.0 },
+        onStatus,
       );
       sound = created.sound;
     } catch (e) {
@@ -234,38 +278,19 @@ async function playElevenLabsNative(audioBuf: ArrayBuffer): Promise<boolean> {
     }
     currentSound = sound;
 
+    // Now that the callback is registered, explicitly start playback.
+    // This guarantees iOS will fire status updates that we'll actually receive.
+    try {
+      await sound.playAsync();
+    } catch (e) {
+      console.warn("[speech] sound.playAsync failed", e);
+      try { await sound.unloadAsync(); } catch {}
+      currentSound = null;
+      return false;
+    }
+
     return await new Promise<boolean>((resolve) => {
-      let done = false;
-      let everPlayed = false;
-      const cleanup = async () => {
-        try { await sound.unloadAsync(); } catch {}
-        if (currentSound === sound) currentSound = null;
-        if (fileUri) {
-          try { await FileSystem.deleteAsync(fileUri, { idempotent: true }); } catch {}
-        }
-      };
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (!status.isLoaded) {
-          // Sound got unloaded. If we never started playing, this is a real
-          // failure (return false → caller may try fallback). If we DID play
-          // already, this is just the end / a stop call → success.
-          if (!done) {
-            done = true;
-            const ok = everPlayed; // played at least a moment → treat as success
-            cleanup().finally(() => resolve(ok));
-          }
-          return;
-        }
-        if (status.isPlaying || (status.positionMillis ?? 0) > 0) {
-          everPlayed = true;
-        }
-        if (status.didJustFinish) {
-          if (!done) {
-            done = true;
-            cleanup().finally(() => resolve(true));
-          }
-        }
-      });
+      resolvePromise = resolve;
       // Safety timeout
       setTimeout(() => {
         if (!done) {
