@@ -26,9 +26,10 @@ import {
   domainBadge,
   Domain,
   Action,
+  VoiceOption,
 } from "../lib/api";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
-import { SpeechMod, unlockSpeech } from "../lib/speech";
+import { SpeechMod, unlockSpeech, setDefaultVoiceId } from "../lib/speech";
 import { scheduleAt } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
@@ -71,6 +72,9 @@ export default function Taccuino() {
   const conversationOn = !!profile?.settings?.conversation_mode;
   // Tracks "we are inside an active hands-free conversation loop"
   const [convActive, setConvActive] = useState(false);
+  const [voices, setVoices] = useState<VoiceOption[]>([]);
+  const [voicesEnabled, setVoicesEnabled] = useState(true);
+  const [voicePreviewLoading, setVoicePreviewLoading] = useState<string | null>(null);
   const convActiveRef = useRef(false);
   useEffect(() => {
     convActiveRef.current = convActive;
@@ -95,6 +99,10 @@ export default function Taccuino() {
           typeof p.settings?.night_start_hour === "number"
         ) {
           setHours(p.settings?.day_start_hour ?? 7, p.settings?.night_start_hour ?? 20);
+        }
+        // Sync ElevenLabs voice id into speech module
+        if (p.settings?.tts_voice_id) {
+          setDefaultVoiceId(p.settings.tts_voice_id);
         }
         if (!p.onboarded) setShowOnboarding(true);
         else if (p.settings?.input_mode !== "text") {
@@ -533,6 +541,40 @@ export default function Taccuino() {
     }
   };
 
+  // Load available voices (curated + custom)
+  useEffect(() => {
+    (async () => {
+      try {
+        const v = await api.listVoices();
+        setVoices(v.voices || []);
+        setVoicesEnabled(v.enabled);
+      } catch {}
+    })();
+  }, []);
+
+  const setVoice = async (voiceId: string) => {
+    if (!profile) return;
+    const next = { ...profile, settings: { ...profile.settings, tts_voice_id: voiceId } };
+    setProfile(next);
+    setDefaultVoiceId(voiceId);
+    try {
+      await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+  };
+
+  const previewVoice = async (voiceId: string, name: string) => {
+    try {
+      setVoicePreviewLoading(voiceId);
+      SpeechMod.stop();
+      await SpeechMod.speak(
+        `Ciao, sono ${name}. Sarò io a parlarti, se vuoi.`,
+        { language: "it-IT", tone: "warm", voiceId }
+      );
+    } finally {
+      setVoicePreviewLoading(null);
+    }
+  };
+
   const statusLabel = (() => {
     switch (status) {
       case "recording":
@@ -644,27 +686,66 @@ export default function Taccuino() {
             <Text style={styles.statusLabel}>
               {aiPaused ? "AI in pausa" : statusLabel}
             </Text>
-            <Animated.View
-              style={[
-                styles.bigBtnRingOuter,
-                {
+            <View style={styles.bigBtnWrap}>
+              {/* Neon glow halo underneath — breathes wider than the button */}
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.neonGlow,
+                  status === "recording" && { backgroundColor: "#EF4444" },
+                  {
+                    opacity: breathe.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0.35, 0.7],
+                    }),
+                    transform: [
+                      {
+                        scale: breathe.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [1.0, 1.35],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              />
+              {/* Secondary softer halo for added neon bleed */}
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.neonGlowSoft,
+                  status === "recording" && { backgroundColor: "#EF4444" },
+                  {
+                    opacity: breathe.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0.2, 0.45],
+                    }),
+                    transform: [
+                      {
+                        scale: breathe.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [1.1, 1.6],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              />
+              {/* The actual button — clean, no outer rings. Breathes (scale) + mic-pulse */}
+              <Animated.View
+                style={{
                   transform: [
                     {
                       scale: Animated.multiply(
                         pulse,
-                        breathe.interpolate({ inputRange: [0, 1], outputRange: [1, 1.1] })
+                        breathe.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0.86, 1.16],
+                        })
                       ),
                     },
                   ],
-                },
-                status === "recording" && { borderColor: "#EF4444" },
-              ]}
-            >
-              <View
-                style={[
-                  styles.bigBtnRingInner,
-                  status === "recording" && { borderColor: "rgba(239,68,68,0.6)" },
-                ]}
+                }}
               >
                 <Pressable
                   onPress={onBigButton}
@@ -672,7 +753,7 @@ export default function Taccuino() {
                   style={({ pressed }) => [
                     styles.bigBtn,
                     status === "recording" && styles.bigBtnRec,
-                    pressed && { opacity: 0.85 },
+                    pressed && { opacity: 0.88 },
                   ]}
                   testID="big-btn"
                 >
@@ -687,13 +768,13 @@ export default function Taccuino() {
                             ? "volume-high"
                             : "mic"
                       }
-                      size={42}
+                      size={54}
                       color={theme.primaryText}
                     />
                   )}
                 </Pressable>
-              </View>
-            </Animated.View>
+              </Animated.View>
+            </View>
           </View>
         )}
       </View>
@@ -930,6 +1011,64 @@ export default function Taccuino() {
                   Solo testo
                 </Text>
               </TouchableOpacity>
+            </View>
+
+            <View style={styles.divider} />
+
+            <Text style={styles.settingsSubtitle}>Voce dell'assistente</Text>
+            <Text style={styles.settingsHint}>
+              {voicesEnabled
+                ? "Tocca per selezionare. Premi ▶ per ascoltare un'anteprima."
+                : "ElevenLabs non è configurato. Userò la voce del sistema."}
+            </Text>
+            <View style={styles.voicesList}>
+              {voices.map((v) => {
+                const selected = profile?.settings?.tts_voice_id === v.voice_id;
+                const loading = voicePreviewLoading === v.voice_id;
+                return (
+                  <TouchableOpacity
+                    key={v.voice_id}
+                    onPress={() => setVoice(v.voice_id)}
+                    style={[styles.voiceCard, selected && styles.voiceCardActive]}
+                    testID={`voice-${v.voice_id}`}
+                  >
+                    <View style={styles.voiceCardLeft}>
+                      <View
+                        style={[
+                          styles.voiceDot,
+                          selected && { backgroundColor: theme.primary, borderColor: theme.primary },
+                        ]}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.voiceName}>
+                          {v.name}
+                          <Text style={styles.voiceGender}>
+                            {"  "}
+                            {v.gender === "F" ? "♀" : v.gender === "M" ? "♂" : ""}
+                          </Text>
+                        </Text>
+                        <Text style={styles.voiceDesc} numberOfLines={2}>
+                          {v.description}
+                        </Text>
+                      </View>
+                    </View>
+                    <TouchableOpacity
+                      onPress={(e) => {
+                        e.stopPropagation?.();
+                        previewVoice(v.voice_id, v.name);
+                      }}
+                      style={styles.voicePlayBtn}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                      {loading ? (
+                        <ActivityIndicator size="small" color={theme.primary} />
+                      ) : (
+                        <Ionicons name="play" size={16} color={theme.primary} />
+                      )}
+                    </TouchableOpacity>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
 
             <View style={styles.divider} />
@@ -1250,27 +1389,56 @@ const makeStyles = (t: any) => StyleSheet.create({
     marginBottom: 18,
     letterSpacing: 0.3,
   },
-  bigBtnRingOuter: {
-    width: 132,
-    height: 132,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: t.primarySoftBorder,
+  bigBtnWrap: {
+    width: 160,
+    height: 160,
     alignItems: "center",
     justifyContent: "center",
   },
-  bigBtnRingInner: {
-    width: 112,
-    height: 112,
+  // Soft neon glow underneath the button; absolutely positioned, breathes
+  neonGlow: {
+    position: "absolute",
+    width: 150,
+    height: 150,
     borderRadius: 999,
-    borderWidth: 1,
-    borderColor: t.primarySoftBorder,
-    alignItems: "center",
-    justifyContent: "center",
+    backgroundColor: t.primary,
+    // Use boxShadow (web) and shadowRadius (native) for sfumato/neon bleed
+    ...Platform.select({
+      ios: {
+        shadowColor: t.primary,
+        shadowOpacity: 1.0,
+        shadowRadius: 45,
+        shadowOffset: { width: 0, height: 0 },
+      },
+      android: { elevation: 0 },
+      web: {
+        // large colored blur for the neon fade
+        boxShadow: `0 0 60px 20px ${t.primary}`,
+      } as any,
+    }),
+  },
+  neonGlowSoft: {
+    position: "absolute",
+    width: 160,
+    height: 160,
+    borderRadius: 999,
+    backgroundColor: t.primary,
+    ...Platform.select({
+      ios: {
+        shadowColor: t.primary,
+        shadowOpacity: 1.0,
+        shadowRadius: 70,
+        shadowOffset: { width: 0, height: 0 },
+      },
+      android: { elevation: 0 },
+      web: {
+        boxShadow: `0 0 90px 35px ${t.primary}`,
+      } as any,
+    }),
   },
   bigBtn: {
-    width: 92,
-    height: 92,
+    width: 130,
+    height: 130,
     borderRadius: 999,
     backgroundColor: t.primary,
     alignItems: "center",
@@ -1278,11 +1446,14 @@ const makeStyles = (t: any) => StyleSheet.create({
     ...Platform.select({
       ios: {
         shadowColor: t.primary,
-        shadowOpacity: 0.6,
-        shadowRadius: 20,
+        shadowOpacity: 0.8,
+        shadowRadius: 24,
         shadowOffset: { width: 0, height: 0 },
       },
-      android: { elevation: 8 },
+      android: { elevation: 10 },
+      web: {
+        boxShadow: `0 0 30px 4px ${t.primary}`,
+      } as any,
     }),
   },
   bigBtnRec: { backgroundColor: t.danger },
@@ -1511,6 +1682,74 @@ const makeStyles = (t: any) => StyleSheet.create({
   },
   modeBtnTextActive: {
     color: t.primaryText,
+  },
+
+  // Voice selector
+  settingsHint: {
+    color: t.textDim,
+    fontSize: 12,
+    lineHeight: 16,
+    marginBottom: 10,
+    marginTop: 2,
+  },
+  voicesList: {
+    gap: 8,
+    marginTop: 4,
+  },
+  voiceCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: t.surfaceAlt,
+    borderColor: t.border,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    gap: 10,
+  },
+  voiceCardActive: {
+    borderColor: t.primary,
+    backgroundColor: t.primarySoftBg,
+  },
+  voiceCardLeft: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  voiceDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 999,
+    borderWidth: 2,
+    borderColor: t.border,
+    backgroundColor: "transparent",
+  },
+  voiceName: {
+    color: t.text,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  voiceGender: {
+    color: t.textMuted,
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  voiceDesc: {
+    color: t.textDim,
+    fontSize: 12,
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  voicePlayBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: t.primarySoftBg,
+    borderWidth: 1,
+    borderColor: t.primarySoftBorder,
   },
 
   // Theme picker

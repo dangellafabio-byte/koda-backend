@@ -16,6 +16,15 @@ from datetime import datetime, timezone
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from emergentintegrations.llm.openai import OpenAISpeechToText
 from fastapi import UploadFile, File, Form
+from fastapi.responses import Response
+
+# ElevenLabs for natural voice TTS
+try:
+    from elevenlabs.client import ElevenLabs
+    _ELEVENLABS_AVAILABLE = True
+except Exception:
+    ElevenLabs = None  # type: ignore
+    _ELEVENLABS_AVAILABLE = False
 
 
 ROOT_DIR = Path(__file__).parent
@@ -443,6 +452,11 @@ class TaccuinoSettings(BaseModel):
     theme: str = "sistema"  # "sistema" | "auto-orario" | "notte" | "giorno" | "cielo" | "bosco" | "ciliegia"
     day_start_hour: int = 7   # used when theme = "auto-orario"
     night_start_hour: int = 20  # used when theme = "auto-orario"
+    # ElevenLabs TTS settings
+    tts_provider: str = "elevenlabs"  # "elevenlabs" | "system"
+    tts_voice_id: str = "XrExE9yKIg1WjnnlVkGX"  # Matilda - warm female, good Italian
+    tts_stability: float = 0.5
+    tts_similarity_boost: float = 0.75
     domains: dict = Field(
         default_factory=lambda: {
             "soldi": True,
@@ -814,6 +828,125 @@ async def api_recap(period: str = "today"):
         logger.error(f"recap error: {e}")
         raise HTTPException(status_code=500, detail="Recap generation failed")
     return {"recap": (out or "").strip(), "period": period}
+
+
+# ---------- ElevenLabs TTS ----------
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
+
+_eleven_client = None
+
+
+def _get_eleven_client():
+    global _eleven_client
+    if _eleven_client is not None:
+        return _eleven_client
+    if not _ELEVENLABS_AVAILABLE or not ELEVENLABS_API_KEY:
+        return None
+    try:
+        _eleven_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+        return _eleven_client
+    except Exception as e:
+        logger.error(f"ElevenLabs client init failed: {e}")
+        return None
+
+
+# Curated list of voices that work well for Italian.
+# (voice_id, display name, short description, gender)
+CURATED_VOICES = [
+    {"voice_id": "XrExE9yKIg1WjnnlVkGX", "name": "Matilda", "description": "Femminile, calda e amichevole — perfetta per un assistente personale", "gender": "F", "accent": "multilingue"},
+    {"voice_id": "EXAVITQu4vr4xnSDxMaL", "name": "Sarah", "description": "Femminile, giovane e naturale", "gender": "F", "accent": "multilingue"},
+    {"voice_id": "XB0fDUnXU5powFXDhCwa", "name": "Charlotte", "description": "Femminile, delicata e rilassante", "gender": "F", "accent": "multilingue"},
+    {"voice_id": "cgSgspJ2msm6clMCkdW9", "name": "Jessica", "description": "Femminile, chiara ed espressiva", "gender": "F", "accent": "multilingue"},
+    {"voice_id": "TX3LPaxmHKxFdv7VOQHJ", "name": "Liam", "description": "Maschile, giovane e sicuro", "gender": "M", "accent": "multilingue"},
+    {"voice_id": "IKne3meq5aSn9XLyUdCD", "name": "Charlie", "description": "Maschile, rilassato e naturale", "gender": "M", "accent": "multilingue"},
+    {"voice_id": "N2lVS1w4EtoT3dr4eOWO", "name": "Callum", "description": "Maschile, profondo e tranquillo", "gender": "M", "accent": "multilingue"},
+    {"voice_id": "onwK4e9ZLuTAKqWW03F9", "name": "Daniel", "description": "Maschile, autorevole ma cordiale", "gender": "M", "accent": "multilingue"},
+]
+
+
+class TTSRequest(BaseModel):
+    text: str
+    voice_id: Optional[str] = None
+    stability: Optional[float] = None
+    similarity_boost: Optional[float] = None
+
+
+@api_router.get("/voices")
+async def api_list_voices():
+    """Return the curated list of voices (plus user's custom voices if any)."""
+    voices = list(CURATED_VOICES)
+    client_el = _get_eleven_client()
+    if client_el is not None:
+        try:
+            res = client_el.voices.get_all()
+            all_voices = getattr(res, "voices", []) or []
+            curated_ids = {v["voice_id"] for v in CURATED_VOICES}
+            for v in all_voices:
+                vid = getattr(v, "voice_id", None)
+                name = getattr(v, "name", None)
+                category = getattr(v, "category", "") or ""
+                if vid and vid not in curated_ids and category in {"cloned", "generated", "professional"}:
+                    voices.append({
+                        "voice_id": vid,
+                        "name": name or "Voce custom",
+                        "description": f"Voce personale ({category})",
+                        "gender": "?",
+                        "accent": "custom",
+                    })
+        except Exception as e:
+            logger.warning(f"Failed to fetch custom voices: {e}")
+    return {"voices": voices, "enabled": bool(client_el)}
+
+
+@api_router.post("/tts")
+async def api_tts(req: TTSRequest):
+    """Generate TTS audio using ElevenLabs and return MP3 bytes."""
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty text")
+    # Cap text length to avoid runaway costs / long latency
+    if len(text) > 1500:
+        text = text[:1500]
+
+    client_el = _get_eleven_client()
+    if client_el is None:
+        raise HTTPException(status_code=503, detail="ElevenLabs not configured")
+
+    voice_id = req.voice_id or "XrExE9yKIg1WjnnlVkGX"
+    stability = req.stability if req.stability is not None else 0.5
+    similarity = req.similarity_boost if req.similarity_boost is not None else 0.75
+
+    try:
+        # Use the convert() method with streaming generator
+        audio_gen = client_el.text_to_speech.convert(
+            text=text,
+            voice_id=voice_id,
+            model_id="eleven_multilingual_v2",
+            output_format="mp3_44100_128",
+            voice_settings={
+                "stability": stability,
+                "similarity_boost": similarity,
+                "style": 0.0,
+                "use_speaker_boost": True,
+            },
+        )
+        audio_data = b""
+        for chunk in audio_gen:
+            if chunk:
+                audio_data += chunk
+        if not audio_data:
+            raise HTTPException(status_code=500, detail="Empty TTS response")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"ElevenLabs TTS error: {e}")
+        raise HTTPException(status_code=500, detail=f"TTS error: {str(e)}")
+
+    return Response(
+        content=audio_data,
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # ---------- Demo media (promo video / screenshots) ----------

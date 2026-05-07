@@ -56,6 +56,21 @@ export type ProfileSettings = {
   input_mode: "voice" | "text";
   theme: "sistema" | "notte" | "giorno" | "cielo" | "bosco" | "ciliegia";
   domains: Record<string, boolean>;
+  tts_provider?: "elevenlabs" | "system";
+  tts_voice_id?: string;
+  tts_stability?: number;
+  tts_similarity_boost?: number;
+  day_start_hour?: number;
+  night_start_hour?: number;
+  conversation_mode?: boolean;
+};
+
+export type VoiceOption = {
+  voice_id: string;
+  name: string;
+  description: string;
+  gender: string;
+  accent: string;
 };
 
 export type Profile = {
@@ -109,6 +124,9 @@ export const api = {
 
   recap: (period: "today" | "week" = "today") =>
     jsonReq<{ recap: string; period: string }>(`/recap?period=${period}`),
+
+  listVoices: () =>
+    jsonReq<{ voices: VoiceOption[]; enabled: boolean }>("/voices"),
 };
 
 // Tone -> color/icon map (UI helper)

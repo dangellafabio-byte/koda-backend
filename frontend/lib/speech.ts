@@ -1,16 +1,38 @@
 /**
- * Modular speak() — web uses native Web Speech API directly (more reliable than expo-speech web shim);
- * native uses expo-speech.
- * Future: swap to ElevenLabs / OpenAI TTS by editing only this file.
+ * Taccuino Vivo — Speech (TTS) module.
+ *
+ * - Primary: ElevenLabs via backend `/api/tts` (natural Italian voice).
+ * - Fallback: expo-speech / Web Speech API (robotic but always works).
+ *
+ * The `speak()` function is the single entry point; callers just await it.
+ * Callers can call `SpeechMod.stop()` at any time to cut off the current
+ * utterance (supports barge-in).
  */
 import * as Speech from "expo-speech";
+import { Audio } from "expo-av";
 import { Platform } from "react-native";
 import type { Tone } from "./api";
+import { API_BASE } from "./api";
 
 let speakingNow = false;
 let webUnlocked = false;
 let cachedVoices: SpeechSynthesisVoice[] = [];
 
+// Currently playing native Sound instance (so we can stop it mid-speech).
+let currentSound: Audio.Sound | null = null;
+// Currently playing web <audio> element (for barge-in).
+let currentWebAudio: HTMLAudioElement | null = null;
+// Abort controller for in-flight TTS network requests (so stop() cancels them too).
+let currentAbort: AbortController | null = null;
+
+// Configurable per-call voice id (can be overriden via speak() opts).
+let defaultVoiceId: string | null = null;
+
+export function setDefaultVoiceId(id: string | null | undefined) {
+  defaultVoiceId = id || null;
+}
+
+// ---------- Web Speech fallback helpers ----------
 function loadWebVoices(): Promise<SpeechSynthesisVoice[]> {
   return new Promise((resolve) => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
@@ -49,107 +71,315 @@ function pickVoice(lang: string): SpeechSynthesisVoice | undefined {
 }
 
 /**
- * "Unlock" speech engine on first user interaction.
- * Browsers require user gesture before audio playback; calling speechSynthesis
- * once with a tiny silent utterance reliably unlocks subsequent calls.
+ * Unlock audio on first user gesture (needed for both web Speech and web <audio>).
  */
 export async function unlockSpeech(): Promise<void> {
   if (Platform.OS !== "web") return;
   if (webUnlocked) return;
-  if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+  if (typeof window === "undefined") return;
   try {
-    await loadWebVoices();
-    const u = new SpeechSynthesisUtterance(" ");
-    u.volume = 0;
-    u.rate = 1;
-    window.speechSynthesis.speak(u);
+    if ("speechSynthesis" in window) {
+      await loadWebVoices();
+      const u = new SpeechSynthesisUtterance(" ");
+      u.volume = 0;
+      u.rate = 1;
+      window.speechSynthesis.speak(u);
+    }
+    // Unlock HTMLAudioElement too (autoplay policies)
+    try {
+      const a = new Audio();
+      a.muted = true;
+      await a.play().catch(() => {});
+      a.pause();
+    } catch {}
     webUnlocked = true;
-  } catch {}
+  } catch {
+    webUnlocked = true;
+  }
 }
 
+// ---------- Utility: stop everything ----------
+function stopAllPlayback() {
+  // Stop in-flight TTS request
+  try {
+    currentAbort?.abort();
+  } catch {}
+  currentAbort = null;
+
+  // Stop native Sound
+  if (currentSound) {
+    const s = currentSound;
+    currentSound = null;
+    (async () => {
+      try { await s.stopAsync(); } catch {}
+      try { await s.unloadAsync(); } catch {}
+    })();
+  }
+
+  // Stop web <audio>
+  if (currentWebAudio) {
+    try {
+      currentWebAudio.pause();
+      currentWebAudio.src = "";
+    } catch {}
+    currentWebAudio = null;
+  }
+
+  // Stop system TTS (fallback path)
+  try {
+    if (Platform.OS === "web" && typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    } else {
+      Speech.stop();
+    }
+  } catch {}
+
+  speakingNow = false;
+}
+
+// ---------- ElevenLabs path ----------
+async function fetchTTSBytes(
+  text: string,
+  voiceId: string | null,
+  signal: AbortSignal
+): Promise<ArrayBuffer | null> {
+  try {
+    const r = await fetch(`${API_BASE}/tts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice_id: voiceId || undefined }),
+      signal,
+    });
+    if (!r.ok) return null;
+    return await r.arrayBuffer();
+  } catch {
+    return null;
+  }
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    // @ts-ignore
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  if (typeof btoa !== "undefined") return btoa(binary);
+  // React Native polyfill
+  // @ts-ignore
+  return global.btoa ? global.btoa(binary) : "";
+}
+
+async function playElevenLabsNative(audioBuf: ArrayBuffer): Promise<boolean> {
+  try {
+    // Ensure audio mode allows playback in silent mode on iOS
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+      });
+    } catch {}
+    const b64 = arrayBufferToBase64(audioBuf);
+    if (!b64) return false;
+    const uri = `data:audio/mpeg;base64,${b64}`;
+    const { sound } = await Audio.Sound.createAsync(
+      { uri },
+      { shouldPlay: true, volume: 1.0 },
+    );
+    currentSound = sound;
+
+    return await new Promise<boolean>((resolve) => {
+      let done = false;
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (!status.isLoaded) {
+          if (!done) {
+            done = true;
+            resolve(false);
+          }
+          return;
+        }
+        if (status.didJustFinish) {
+          if (!done) {
+            done = true;
+            (async () => {
+              try { await sound.unloadAsync(); } catch {}
+              if (currentSound === sound) currentSound = null;
+              resolve(true);
+            })();
+          }
+        }
+      });
+      // Safety timeout
+      setTimeout(() => {
+        if (!done) {
+          done = true;
+          (async () => {
+            try { await sound.unloadAsync(); } catch {}
+            if (currentSound === sound) currentSound = null;
+            resolve(true);
+          })();
+        }
+      }, 60000);
+    });
+  } catch (e) {
+    return false;
+  }
+}
+
+async function playElevenLabsWeb(audioBuf: ArrayBuffer): Promise<boolean> {
+  try {
+    const blob = new Blob([audioBuf], { type: "audio/mpeg" });
+    const url = URL.createObjectURL(blob);
+    const a = new Audio(url);
+    a.preload = "auto";
+    currentWebAudio = a;
+
+    return await new Promise<boolean>((resolve) => {
+      let done = false;
+      const cleanup = () => {
+        try { URL.revokeObjectURL(url); } catch {}
+        if (currentWebAudio === a) currentWebAudio = null;
+      };
+      a.onended = () => {
+        if (!done) {
+          done = true;
+          cleanup();
+          resolve(true);
+        }
+      };
+      a.onerror = () => {
+        if (!done) {
+          done = true;
+          cleanup();
+          resolve(false);
+        }
+      };
+      a.onpause = () => {
+        // User-triggered pause (barge-in) is treated as end
+        if (!done && a.currentTime > 0 && !a.ended) {
+          done = true;
+          cleanup();
+          resolve(true);
+        }
+      };
+      a.play().catch(() => {
+        if (!done) {
+          done = true;
+          cleanup();
+          resolve(false);
+        }
+      });
+    });
+  } catch {
+    return false;
+  }
+}
+
+// ---------- Fallback (expo-speech / Web Speech API) ----------
+function fallbackSpeak(text: string, lang: string, tone: Tone): Promise<void> {
+  return new Promise(async (resolve) => {
+    let pitch = 1.0;
+    let rate = 1.0;
+    switch (tone) {
+      case "calm": pitch = 0.97; rate = 0.95; break;
+      case "warm": pitch = 1.0; rate = 0.97; break;
+      case "energetic": pitch = 1.08; rate = 1.04; break;
+      case "concerned": pitch = 0.95; rate = 0.96; break;
+      case "urgent": pitch = 1.1; rate = 1.06; break;
+      default: pitch = 1.0; rate = 1.0;
+    }
+    const finished = () => {
+      speakingNow = false;
+      resolve();
+    };
+    try {
+      if (Platform.OS === "web" && typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+        if (!cachedVoices.length) await loadWebVoices();
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = lang;
+        u.pitch = pitch;
+        u.rate = rate;
+        u.volume = 1.0;
+        const v = pickVoice(lang);
+        if (v) u.voice = v;
+        u.onend = finished;
+        u.onerror = finished;
+        speakingNow = true;
+        window.speechSynthesis.speak(u);
+        const timeoutMs = Math.min(60000, Math.max(4000, text.length * 100));
+        setTimeout(() => {
+          if (speakingNow) {
+            try { window.speechSynthesis.cancel(); } catch {}
+            finished();
+          }
+        }, timeoutMs);
+        return;
+      }
+      try { Speech.stop(); } catch {}
+      speakingNow = true;
+      Speech.speak(text, {
+        language: lang === "it" ? "it-IT" : lang,
+        pitch,
+        rate,
+        onDone: finished,
+        onStopped: finished,
+        onError: finished,
+      });
+    } catch {
+      finished();
+    }
+  });
+}
+
+// ---------- Public API ----------
 export const SpeechMod = {
   isSpeaking(): boolean {
     return speakingNow;
   },
   stop(): void {
-    try {
-      if (Platform.OS === "web" && typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
-      } else {
-        Speech.stop();
-      }
-    } catch {}
-    speakingNow = false;
+    stopAllPlayback();
   },
-  speak(
+  setDefaultVoiceId(id: string | null | undefined) {
+    setDefaultVoiceId(id);
+  },
+  async speak(
     text: string,
-    opts: { language?: string; tone?: Tone | null } = {}
+    opts: { language?: string; tone?: Tone | null; voiceId?: string | null; useElevenLabs?: boolean } = {}
   ): Promise<void> {
-    return new Promise(async (resolve) => {
-      if (!text) {
-        resolve();
-        return;
-      }
-      const lang = opts.language || "it-IT";
-      const t = opts.tone || "neutral";
-      let pitch = 1.0;
-      let rate = 1.0;
-      switch (t) {
-        case "calm": pitch = 0.97; rate = 0.95; break;
-        case "warm": pitch = 1.0; rate = 0.97; break;
-        case "energetic": pitch = 1.08; rate = 1.04; break;
-        case "concerned": pitch = 0.95; rate = 0.96; break;
-        case "urgent": pitch = 1.1; rate = 1.06; break;
-        default: pitch = 1.0; rate = 1.0;
-      }
+    if (!text) return;
+    const lang = opts.language || "it-IT";
+    const tone = (opts.tone || "neutral") as Tone;
+    const useEleven = opts.useElevenLabs !== false; // default ON
 
-      const finished = () => {
-        speakingNow = false;
-        resolve();
-      };
+    // Stop any existing playback before starting a new one
+    stopAllPlayback();
 
-      try {
-        if (Platform.OS === "web" && typeof window !== "undefined" && "speechSynthesis" in window) {
-          // Direct Web Speech API (more reliable than expo-speech web shim)
-          window.speechSynthesis.cancel(); // clear any queue
-          if (!cachedVoices.length) {
-            await loadWebVoices();
-          }
-          const u = new SpeechSynthesisUtterance(text);
-          u.lang = lang;
-          u.pitch = pitch;
-          u.rate = rate;
-          u.volume = 1.0;
-          const v = pickVoice(lang);
-          if (v) u.voice = v;
-          u.onend = finished;
-          u.onerror = finished;
-          speakingNow = true;
-          window.speechSynthesis.speak(u);
-          // Safety timeout (Chrome bug: long utterances can stall)
-          const timeoutMs = Math.min(60000, Math.max(4000, text.length * 100));
-          setTimeout(() => {
-            if (speakingNow) {
-              try { window.speechSynthesis.cancel(); } catch {}
-              finished();
-            }
-          }, timeoutMs);
-          return;
+    // Try ElevenLabs first
+    if (useEleven) {
+      speakingNow = true;
+      const ac = new AbortController();
+      currentAbort = ac;
+      const buf = await fetchTTSBytes(text, opts.voiceId ?? defaultVoiceId, ac.signal);
+      currentAbort = null;
+      if (buf && buf.byteLength > 0) {
+        let ok = false;
+        if (Platform.OS === "web") {
+          ok = await playElevenLabsWeb(buf);
+        } else {
+          ok = await playElevenLabsNative(buf);
         }
-        // Native fallback
-        try { Speech.stop(); } catch {}
-        speakingNow = true;
-        Speech.speak(text, {
-          language: lang === "it" ? "it-IT" : lang,
-          pitch,
-          rate,
-          onDone: finished,
-          onStopped: finished,
-          onError: finished,
-        });
-      } catch {
-        finished();
+        speakingNow = false;
+        if (ok) return;
+        // else fall through to fallback
+      } else {
+        // network/TTS failed -> fallback
+        speakingNow = false;
       }
-    });
+    }
+
+    // Fallback to system TTS
+    await fallbackSpeak(text, lang, tone);
   },
 };
