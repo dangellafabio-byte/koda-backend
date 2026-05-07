@@ -231,34 +231,48 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
     return await new Promise<boolean>((resolve) => {
       let done = false;
       let everPlayed = false;
+      let everLoaded = false;
       let localSound: Audio.Sound | null = null;
       const cleanup = async () => {
         try { await localSound?.unloadAsync(); } catch {}
         if (currentSound === localSound) currentSound = null;
       };
       const onStatus = (status: any) => {
-        if (!status.isLoaded) {
-          if (!done) {
+        if (status.isLoaded) {
+          everLoaded = true;
+          if (status.isPlaying || (status.positionMillis ?? 0) > 0) {
+            everPlayed = true;
+          }
+          if (status.didJustFinish) {
+            if (!done) {
+              done = true;
+              cleanup().finally(() => resolve(true));
+            }
+          }
+          // Surface real playback errors
+          if (status.error && everLoaded && !done) {
+            console.warn("[speech] playback error", status.error);
             done = true;
-            const ok = everPlayed;
-            cleanup().finally(() => resolve(ok));
+            cleanup().finally(() => resolve(everPlayed));
           }
           return;
         }
-        if (status.isPlaying || (status.positionMillis ?? 0) > 0) {
-          everPlayed = true;
-        }
-        if (status.didJustFinish) {
-          if (!done) {
-            done = true;
-            cleanup().finally(() => resolve(true));
-          }
+        // status.isLoaded === false.
+        // CRITICAL: while the sound is still loading (initial state from
+        // createAsync), iOS sends isLoaded:false multiple times. Don't treat
+        // those as failures or we'd return false and the caller would play
+        // the robotic fallback OVER the actually-loading ElevenLabs audio
+        // (overlap bug). Only treat unload as terminal if we'd been loaded.
+        if (everLoaded && !done) {
+          done = true;
+          const ok = everPlayed;
+          cleanup().finally(() => resolve(ok));
         }
       };
       const safetyTimer = setTimeout(() => {
         if (!done) {
           done = true;
-          cleanup().finally(() => resolve(true));
+          cleanup().finally(() => resolve(everLoaded));
         }
       }, 60000);
 
