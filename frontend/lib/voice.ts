@@ -213,8 +213,10 @@ export async function startRecording(): Promise<Recorder> {
   rec.setOnRecordingStatusUpdate((status) => {
     const meter = (status as any).metering;
     if (typeof meter === "number") {
-      // metering values are in dB (typically -160..0). Speech > -35 dB-ish
-      if (meter > -35) {
+      // metering values are in dB (typically -160..0).
+      // Lower threshold to -45 (was -35) to catch quieter speech / further away
+      // from the mic, especially in conversation hands-free mode.
+      if (meter > -45) {
         lastVoiceAt = Date.now();
         if (Date.now() - startedAt > 250) {
           everSpoke = true;
@@ -226,9 +228,14 @@ export async function startRecording(): Promise<Recorder> {
       }
       if (
         !silenceFired &&
-        everSpoke &&
-        Date.now() - lastVoiceAt > 1400 &&
-        Date.now() - startedAt > 800 &&
+        ((everSpoke &&
+          Date.now() - lastVoiceAt > 1200 &&
+          Date.now() - startedAt > 600) ||
+          // Fallback: if no speech ever detected after 6.5s, force-stop anyway
+          // (native metering can be unreliable on some iOS versions / mics)
+          (!everSpoke && Date.now() - startedAt > 6500) ||
+          // Hard cap
+          Date.now() - startedAt > 12000) &&
         silenceCb
       ) {
         silenceFired = true;
