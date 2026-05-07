@@ -10,6 +10,7 @@
  */
 import * as Speech from "expo-speech";
 import { Audio } from "expo-av";
+import * as FileSystem from "expo-file-system/legacy";
 import { Platform } from "react-native";
 import type { Tone } from "./api";
 import { API_BASE } from "./api";
@@ -172,41 +173,64 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 }
 
 async function playElevenLabsNative(audioBuf: ArrayBuffer): Promise<boolean> {
+  let fileUri: string | null = null;
   try {
-    // Ensure audio mode allows playback in silent mode on iOS
+    // CRITICAL: switch audio session to playback mode so:
+    // - hardware volume buttons control the playback volume (iOS)
+    // - audio routes through the main speaker (not earpiece on Android)
+    // - audio plays even with the silent switch on (iOS)
     try {
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
         playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
       });
     } catch {}
+
+    // Encode bytes to base64
     const b64 = arrayBufferToBase64(audioBuf);
     if (!b64) return false;
-    const uri = `data:audio/mpeg;base64,${b64}`;
+
+    // Write MP3 bytes to a temporary file. Audio.Sound playback from a real file URI
+    // is far more reliable than a data: URI on both iOS and Android (data URIs often
+    // play silently or fail to load).
+    const dir = (FileSystem.cacheDirectory || FileSystem.documentDirectory || "") as string;
+    if (!dir) return false;
+    fileUri = `${dir}taccuino_tts_${Date.now()}.mp3`;
+    await FileSystem.writeAsStringAsync(fileUri, b64, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+
+    // Create + play
     const { sound } = await Audio.Sound.createAsync(
-      { uri },
+      { uri: fileUri },
       { shouldPlay: true, volume: 1.0 },
     );
     currentSound = sound;
 
     return await new Promise<boolean>((resolve) => {
       let done = false;
+      const cleanup = async () => {
+        try { await sound.unloadAsync(); } catch {}
+        if (currentSound === sound) currentSound = null;
+        if (fileUri) {
+          try { await FileSystem.deleteAsync(fileUri, { idempotent: true }); } catch {}
+        }
+      };
       sound.setOnPlaybackStatusUpdate((status) => {
         if (!status.isLoaded) {
           if (!done) {
             done = true;
-            resolve(false);
+            cleanup().finally(() => resolve(false));
           }
           return;
         }
         if (status.didJustFinish) {
           if (!done) {
             done = true;
-            (async () => {
-              try { await sound.unloadAsync(); } catch {}
-              if (currentSound === sound) currentSound = null;
-              resolve(true);
-            })();
+            cleanup().finally(() => resolve(true));
           }
         }
       });
@@ -214,15 +238,14 @@ async function playElevenLabsNative(audioBuf: ArrayBuffer): Promise<boolean> {
       setTimeout(() => {
         if (!done) {
           done = true;
-          (async () => {
-            try { await sound.unloadAsync(); } catch {}
-            if (currentSound === sound) currentSound = null;
-            resolve(true);
-          })();
+          cleanup().finally(() => resolve(true));
         }
       }, 60000);
     });
   } catch (e) {
+    if (fileUri) {
+      try { await FileSystem.deleteAsync(fileUri, { idempotent: true }); } catch {}
+    }
     return false;
   }
 }

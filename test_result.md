@@ -1,3 +1,75 @@
+## ELEVENLABS — FIX RIPRODUZIONE AUDIO + VOLUME iPhone + UX (2026-05-07 v2)
+
+frontend:
+  - task: "speech.ts: scrivere MP3 su file system invece di data-URI (fix audio mute)"
+    implemented: true
+    working: "NA"
+    file: "frontend/lib/speech.ts, frontend/package.json"
+    stuck_count: 0
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Diagnosi: i log backend mostravano /api/tts 200 OK (l'MP3 arrivava al device) ma
+          l'utente sentiva sempre la voce robotica di expo-speech. Causa: data-URI base64 dentro
+          Audio.Sound.createAsync è inaffidabile su mobile (spesso fallisce silenziosamente).
+          Fix: aggiunto expo-file-system@55.0.19, ora playElevenLabsNative scrive l'MP3 in
+          FileSystem.cacheDirectory come file reale e Audio.Sound.createAsync({uri: fileUri})
+          carica dal disco. File cancellato dopo la riproduzione.
+  - task: "speech.ts: setAudioModeAsync per playback (fix volume buttons iPhone)"
+    implemented: true
+    working: "NA"
+    file: "frontend/lib/speech.ts"
+    stuck_count: 0
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Problema utente: su iPhone i tasti fisici del volume non controllavano la voce
+          (perché audio session restava in 'playAndRecord' dopo la registrazione, che mappa
+          su un canale dove i tasti di volume hardware non lo controllano direttamente).
+          Su Android l'audio veniva inoltre potenzialmente routato all'auricolare.
+          Fix: prima di ogni Audio.Sound.createAsync ora chiamiamo:
+            allowsRecordingIOS: false  (passa a categoria 'playback')
+            playsInSilentModeIOS: true (suona anche con switch silenzioso)
+            playThroughEarpieceAndroid: false (forza speaker principale)
+            shouldDuckAndroid: true
+          Risultato: tasti volume hardware ora controllano l'audio AI; su Android suona
+          dall'altoparlante principale a volume pieno.
+
+  - task: "Voice picker UX: tap = seleziona + ascolta (no play button)"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Rimosso il bottone play separato. Ora tap su una card voce chiama selectAndPreviewVoice
+          che salva la scelta sul profilo + suona automaticamente un'anteprima della frase
+          "Ciao, sono <Nome>. Sarò io a parlarti, da adesso." Indicatori a destra: spinner
+          mentre carica, checkmark verde se selezionata, icona volume se non selezionata.
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Fix critici alla riproduzione TTS ElevenLabs:
+      1. MP3 ora scritto su FileSystem invece di data-URI (era il motivo per cui la voce
+         robotica suonava sempre — Audio.Sound non riusciva a caricare l'audio dal data-URI
+         su mobile, cadeva sempre sul fallback expo-speech).
+      2. Audio session impostato in modalità playback prima di ogni TTS: tasti volume iPhone
+         ora funzionano, su Android audio dall'altoparlante a volume pieno.
+      3. UX: tap sulla card voce = seleziona + ascolta automaticamente, niente bottone play.
+      Backend TTS testato: 200 OK + MP3 ID3 valido. In attesa verifica utente sul device.
+
+
 ## ELEVENLABS TTS INTEGRATION (2026-05-07)
 
 backend:

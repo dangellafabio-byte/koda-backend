@@ -562,12 +562,21 @@ export default function Taccuino() {
     } catch {}
   };
 
-  const previewVoice = async (voiceId: string, name: string) => {
+  /**
+   * Tap-on-voice-card handler: select the voice AND immediately play a short
+   * preview using that voice. One gesture, no separate play button.
+   */
+  const selectAndPreviewVoice = async (voiceId: string, name: string) => {
+    // Update selection (saves to profile, sets default)
+    await setVoice(voiceId);
+    // Stop any current playback and play preview with the new voice
+    SpeechMod.stop();
     try {
       setVoicePreviewLoading(voiceId);
-      SpeechMod.stop();
+      // Make sure browser audio is unlocked (web)
+      await unlockSpeech();
       await SpeechMod.speak(
-        `Ciao, sono ${name}. Sarò io a parlarti, se vuoi.`,
+        `Ciao, sono ${name}. Sarò io a parlarti, da adesso.`,
         { language: "it-IT", tone: "warm", voiceId }
       );
     } finally {
@@ -1028,7 +1037,7 @@ export default function Taccuino() {
                 return (
                   <TouchableOpacity
                     key={v.voice_id}
-                    onPress={() => setVoice(v.voice_id)}
+                    onPress={() => selectAndPreviewVoice(v.voice_id, v.name)}
                     style={[styles.voiceCard, selected && styles.voiceCardActive]}
                     testID={`voice-${v.voice_id}`}
                   >
@@ -1052,20 +1061,13 @@ export default function Taccuino() {
                         </Text>
                       </View>
                     </View>
-                    <TouchableOpacity
-                      onPress={(e) => {
-                        e.stopPropagation?.();
-                        previewVoice(v.voice_id, v.name);
-                      }}
-                      style={styles.voicePlayBtn}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    >
-                      {loading ? (
-                        <ActivityIndicator size="small" color={theme.primary} />
-                      ) : (
-                        <Ionicons name="play" size={16} color={theme.primary} />
-                      )}
-                    </TouchableOpacity>
+                    {loading ? (
+                      <ActivityIndicator size="small" color={theme.primary} />
+                    ) : selected ? (
+                      <Ionicons name="checkmark-circle" size={22} color={theme.primary} />
+                    ) : (
+                      <Ionicons name="volume-medium-outline" size={20} color={theme.textMuted} />
+                    )}
                   </TouchableOpacity>
                 );
               })}
