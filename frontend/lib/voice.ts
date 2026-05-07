@@ -9,6 +9,12 @@ export type Recorder = {
   onSilence?: (cb: () => void) => void;
   /** Optional: register a callback fired the first time the user actually speaks (barge-in interrupt) */
   onSpeechStart?: (cb: () => void) => void;
+  /** Pause silence-end detection (still records, still fires onSpeechStart). Used during AI TTS. */
+  pauseSilence?: () => void;
+  /** Resume silence-end detection. */
+  resumeSilence?: () => void;
+  /** Reset everSpoke + lastVoiceAt → "now". Use after TTS ends so the user's turn starts fresh. */
+  resetSilenceState?: () => void;
 };
 
 let _webPermissionAsked = false;
@@ -96,6 +102,7 @@ export async function startRecording(): Promise<Recorder> {
     let speechStartFired = false;
     let silenceFired = false;
     let maxRmsSeen = 0;
+    let silencePaused = false;
 
     const tickId = setInterval(() => {
       analyser.getByteTimeDomainData(buf);
@@ -117,6 +124,8 @@ export async function startRecording(): Promise<Recorder> {
           }
         }
       }
+      // Don't fire silence-end while paused (used during AI TTS playback).
+      if (silencePaused) return;
       const elapsed = Date.now() - startedAt;
       // Auto-stop conditions:
       // 1. Heard speech AND silence for SILENCE_TIMEOUT_MS → normal end of turn
@@ -174,6 +183,18 @@ export async function startRecording(): Promise<Recorder> {
       onSpeechStart: (cb) => {
         speechStartCb = cb;
       },
+      pauseSilence: () => {
+        silencePaused = true;
+      },
+      resumeSilence: () => {
+        silencePaused = false;
+      },
+      resetSilenceState: () => {
+        lastVoiceAt = Date.now();
+        everSpoke = false;
+        silenceFired = false;
+        speechStartFired = false;
+      },
     };
   }
 
@@ -210,6 +231,7 @@ export async function startRecording(): Promise<Recorder> {
   let everSpoke = false;
   let silenceFired = false;
   let speechStartFired = false;
+  let silencePaused = false;
   rec.setOnRecordingStatusUpdate((status) => {
     const meter = (status as any).metering;
     if (typeof meter === "number") {
@@ -226,6 +248,8 @@ export async function startRecording(): Promise<Recorder> {
           }
         }
       }
+      // Don't fire silence-end while paused (used during AI TTS playback).
+      if (silencePaused) return;
       if (
         !silenceFired &&
         ((everSpoke &&
@@ -257,6 +281,18 @@ export async function startRecording(): Promise<Recorder> {
     },
     onSpeechStart: (cb) => {
       speechStartCb = cb;
+    },
+    pauseSilence: () => {
+      silencePaused = true;
+    },
+    resumeSilence: () => {
+      silencePaused = false;
+    },
+    resetSilenceState: () => {
+      lastVoiceAt = Date.now();
+      everSpoke = false;
+      silenceFired = false;
+      speechStartFired = false;
     },
   };
 }
