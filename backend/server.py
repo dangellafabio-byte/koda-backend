@@ -457,6 +457,10 @@ class TaccuinoSettings(BaseModel):
     tts_voice_id: str = "XrExE9yKIg1WjnnlVkGX"  # Matilda - warm female, good Italian
     tts_stability: float = 0.5
     tts_similarity_boost: float = 0.75
+    # Custom background — either a base64 data URI (user upload) or one of the
+    # preset names below ("aurora", "carta", "notturno", "sabbia", "marmo")
+    background: Optional[str] = None  # null | preset id | "data:image/...;base64,..."
+    background_dim: float = 0.55  # 0..1 dark overlay opacity over custom backgrounds
     domains: dict = Field(
         default_factory=lambda: {
             "soldi": True,

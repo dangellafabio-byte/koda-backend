@@ -14,9 +14,13 @@ import {
   KeyboardAvoidingView,
   Pressable,
   Keyboard,
+  Image,
+  ImageBackground,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
+import { LinearGradient } from "expo-linear-gradient";
 import {
   api,
   API_BASE,
@@ -36,6 +40,41 @@ import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
 
 type Status = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
+
+// === Background presets — gradients evocative of Taccuino Vivo identity
+type BgPreset = {
+  id: string;
+  name: string;
+  colors: [string, string, ...string[]];
+  start?: { x: number; y: number };
+  end?: { x: number; y: number };
+};
+const BG_PRESETS: BgPreset[] = [
+  { id: "aurora", name: "Aurora", colors: ["#0F0C29", "#302B63", "#24243E"] },
+  { id: "notturno", name: "Notturno", colors: ["#000000", "#1A1A2E", "#16213E"] },
+  { id: "carta", name: "Carta", colors: ["#F5E9D7", "#E8D5B7", "#D4B896"] },
+  { id: "alba", name: "Alba", colors: ["#FF9966", "#FF5E62", "#9D50BB"] },
+  { id: "marmo", name: "Marmo", colors: ["#1F1C2C", "#928DAB"] },
+  { id: "bosco", name: "Bosco", colors: ["#0B3C24", "#0F5132", "#1F2937"] },
+];
+
+// === Day separator helper
+function dayLabelFor(d: Date): string {
+  const today = new Date();
+  const yest = new Date();
+  yest.setDate(today.getDate() - 1);
+  const sameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+  if (sameDay(d, today)) return "Oggi";
+  if (sameDay(d, yest)) return "Ieri";
+  const days = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"];
+  const months = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
+  // Capitalize first letter
+  const dn = days[d.getDay()];
+  return `${dn[0].toUpperCase()}${dn.slice(1)} ${d.getDate()} ${months[d.getMonth()]}`;
+}
 
 const LANGUAGES = [
   { code: "it", label: "Italiano", emoji: "🇮🇹" },
@@ -144,6 +183,63 @@ export default function Taccuino() {
     try {
       await api.updateProfile({ settings: next.settings } as any);
     } catch {}
+  };
+
+  const saveBackground = async (value: string | null) => {
+    if (!profile) return;
+    const next = {
+      ...profile,
+      settings: { ...profile.settings, background: value } as any,
+    };
+    setProfile(next);
+    try {
+      await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+  };
+
+  const saveBackgroundDim = async (dim: number) => {
+    if (!profile) return;
+    const next = {
+      ...profile,
+      settings: { ...profile.settings, background_dim: dim } as any,
+    };
+    setProfile(next);
+    try {
+      await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+  };
+
+  const pickBackgroundFromGallery = async () => {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        setError("Per scegliere una foto serve il permesso galleria.");
+        setTimeout(() => setError(null), 5000);
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.6,
+        base64: true,
+        allowsEditing: false,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+      const a = result.assets[0];
+      // Prefer base64 (works cross-platform, persisted via API). Fallback to local URI on web.
+      let dataUri: string | null = null;
+      if (a.base64) {
+        const mime = a.mimeType || (a.uri.endsWith(".png") ? "image/png" : "image/jpeg");
+        dataUri = `data:${mime};base64,${a.base64}`;
+      } else if (a.uri) {
+        dataUri = a.uri;
+      }
+      if (dataUri) {
+        await saveBackground(dataUri);
+      }
+    } catch (e: any) {
+      setError("Non sono riuscito a caricare la foto.");
+      setTimeout(() => setError(null), 4000);
+    }
   };
 
   const sendTestNotification = async () => {
@@ -677,9 +773,32 @@ export default function Taccuino() {
   })();
 
   const aiPaused = profile && !profile.settings.ai_enabled;
+  const bgValue: string | null = (profile?.settings as any)?.background ?? null;
+  const bgDim: number = typeof (profile?.settings as any)?.background_dim === "number"
+    ? (profile?.settings as any).background_dim
+    : 0.55;
+  const bgPreset = bgValue && BG_PRESETS.find((p) => p.id === bgValue);
+  const isCustomImage = !!bgValue && (bgValue.startsWith("data:") || bgValue.startsWith("file:") || bgValue.startsWith("http"));
 
-  return (
-    <View style={[styles.screen, { paddingTop: insets.top }]}>
+  // === Build timeline w/ day separators
+  const timelineWithSeparators = useMemo(() => {
+    const out: Array<{ kind: "sep"; key: string; label: string } | { kind: "msg"; entry: TimelineEntry }> = [];
+    let lastDay = "";
+    for (const e of timeline) {
+      const d = new Date(e.timestamp);
+      const dayKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      if (dayKey !== lastDay) {
+        out.push({ kind: "sep", key: `sep-${dayKey}`, label: dayLabelFor(d) });
+        lastDay = dayKey;
+      }
+      out.push({ kind: "msg", entry: e });
+    }
+    return out;
+  }, [timeline]);
+
+  // Build the screen wrapper with optional background image / gradient
+  const screenInner = (
+    <View style={[styles.screen, { paddingTop: insets.top, backgroundColor: bgValue ? "transparent" : theme.bg }]}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
@@ -723,7 +842,17 @@ export default function Taccuino() {
             </Text>
           </View>
         ) : (
-          timeline.map((e) => <Bubble key={e.id} entry={e} onReplay={replayMessage} />)
+          timelineWithSeparators.map((it) =>
+            it.kind === "sep" ? (
+              <View key={it.key} style={styles.daySeparator}>
+                <View style={styles.daySepLine} />
+                <Text style={styles.daySepText}>{it.label}</Text>
+                <View style={styles.daySepLine} />
+              </View>
+            ) : (
+              <Bubble key={it.entry.id} entry={it.entry} onReplay={replayMessage} />
+            )
+          )
         )}
 
         {status === "thinking" && (
@@ -1094,6 +1223,82 @@ export default function Taccuino() {
 
             <View style={styles.divider} />
 
+            <Text style={styles.settingsSubtitle}>Sfondo</Text>
+            <Text style={styles.settingsHint}>
+              Personalizza con una tua foto o scegli un preset.
+            </Text>
+            <View style={styles.bgRow}>
+              <TouchableOpacity
+                onPress={() => saveBackground(null)}
+                style={[
+                  styles.bgChip,
+                  styles.bgChipPlain,
+                  !((profile?.settings as any)?.background) && styles.bgChipActive,
+                ]}
+                testID="bg-none"
+              >
+                <Ionicons name="ban-outline" size={16} color={theme.text} />
+                <Text style={styles.bgChipText}>Nessuno</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={pickBackgroundFromGallery}
+                style={[styles.bgChip, styles.bgChipUpload]}
+                testID="bg-upload"
+              >
+                <Ionicons name="image-outline" size={16} color={theme.primary} />
+                <Text style={[styles.bgChipText, { color: theme.primary, fontWeight: "700" }]}>
+                  {(profile?.settings as any)?.background?.startsWith?.("data:") ||
+                  (profile?.settings as any)?.background?.startsWith?.("file:") ||
+                  (profile?.settings as any)?.background?.startsWith?.("http")
+                    ? "Cambia foto…"
+                    : "Carica foto…"}
+                </Text>
+              </TouchableOpacity>
+              {BG_PRESETS.map((p) => {
+                const active = (profile?.settings as any)?.background === p.id;
+                return (
+                  <TouchableOpacity
+                    key={p.id}
+                    onPress={() => saveBackground(p.id)}
+                    style={[styles.bgChip, active && styles.bgChipActive]}
+                    testID={`bg-preset-${p.id}`}
+                  >
+                    <LinearGradient
+                      colors={p.colors as any}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={styles.bgSwatch}
+                    />
+                    <Text style={styles.bgChipText}>{p.name}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            {(profile?.settings as any)?.background ? (
+              <View style={styles.bgDimRow}>
+                <Text style={styles.bgDimLabel}>Scurisci sfondo</Text>
+                <View style={styles.bgDimCtrl}>
+                  {[0.2, 0.4, 0.55, 0.7, 0.85].map((v) => {
+                    const cur = typeof (profile?.settings as any)?.background_dim === "number"
+                      ? (profile?.settings as any).background_dim
+                      : 0.55;
+                    const active = Math.abs(cur - v) < 0.05;
+                    return (
+                      <TouchableOpacity
+                        key={v}
+                        onPress={() => saveBackgroundDim(v)}
+                        style={[styles.bgDimDot, active && styles.bgDimDotActive]}
+                      >
+                        <View style={[styles.bgDimDotInner, { backgroundColor: `rgba(0,0,0,${v})` }]} />
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : null}
+
+            <View style={styles.divider} />
+
             <Text style={styles.settingsSubtitle}>Modalità input</Text>
             <View style={styles.modeRow}>
               <TouchableOpacity
@@ -1343,6 +1548,32 @@ export default function Taccuino() {
       </Modal>
     </View>
   );
+
+  // Wrap the screen in a background image (custom upload) or gradient (preset),
+  // with a dark overlay for legibility. If no background is set, just return
+  // the plain inner view (uses theme.bg).
+  if (isCustomImage && bgValue) {
+    return (
+      <ImageBackground source={{ uri: bgValue }} style={{ flex: 1 }} resizeMode="cover">
+        <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { backgroundColor: `rgba(0,0,0,${bgDim})` }]} />
+        {screenInner}
+      </ImageBackground>
+    );
+  }
+  if (bgPreset) {
+    return (
+      <View style={{ flex: 1 }}>
+        <LinearGradient
+          colors={bgPreset.colors as any}
+          start={bgPreset.start || { x: 0, y: 0 }}
+          end={bgPreset.end || { x: 1, y: 1 }}
+          style={StyleSheet.absoluteFillObject}
+        />
+        {screenInner}
+      </View>
+    );
+  }
+  return screenInner;
 }
 
 // =============== Sub components ===============
@@ -1360,6 +1591,49 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
   );
 }
 
+// === MiniOrb — signature pulsing orb that brands the AI side of the chat
+function MiniOrb({ color = "#7C3AED" }: { color?: string }) {
+  const pulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 1800, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 1800, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+  const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1.08] });
+  const haloOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.25, 0.6] });
+  return (
+    <View style={{ width: 32, height: 32, alignItems: "center", justifyContent: "center", marginRight: 8, marginBottom: 2 }}>
+      <Animated.View
+        pointerEvents="none"
+        style={{
+          position: "absolute",
+          width: 32, height: 32, borderRadius: 999,
+          backgroundColor: color,
+          opacity: haloOpacity,
+          transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.4] }) }],
+          ...Platform.select({
+            ios: { shadowColor: color, shadowOpacity: 0.9, shadowRadius: 10, shadowOffset: { width: 0, height: 0 } },
+            android: { elevation: 0 },
+            default: { boxShadow: `0 0 14px ${color}` } as any,
+          }),
+        }}
+      />
+      <Animated.View
+        style={{
+          width: 14, height: 14, borderRadius: 999,
+          backgroundColor: color,
+          transform: [{ scale }],
+        }}
+      />
+    </View>
+  );
+}
+
 function Bubble({ entry, onReplay }: { entry: TimelineEntry; onReplay?: (e: TimelineEntry) => void }) {
   const { theme } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
@@ -1367,91 +1641,111 @@ function Bubble({ entry, onReplay }: { entry: TimelineEntry; onReplay?: (e: Time
   const tone = (entry.tone || "neutral") as keyof typeof theme.tone;
   const ts = theme.tone[tone] || theme.tone.neutral;
   const dom = entry.domain ? domainBadge[entry.domain as Domain] : null;
+  const [showTime, setShowTime] = useState(false);
 
-  const Wrapper: any = !isUser && onReplay ? Pressable : View;
-  const wrapperProps: any = !isUser && onReplay
-    ? {
-        onPress: () => onReplay(entry),
-        style: ({ pressed }: any) => [
-          isUser ? styles.bubbleUser : styles.bubbleAi,
-          !isUser && {
-            backgroundColor: ts.bg,
-            borderColor: ts.border,
-          },
-          pressed && { opacity: 0.78 },
-        ],
-        accessibilityRole: "button",
-        accessibilityLabel: "Tocca per riascoltare a voce",
-        testID: `replay-${entry.id}`,
-      }
-    : {
-        style: [
-          isUser ? styles.bubbleUser : styles.bubbleAi,
-          !isUser && {
-            backgroundColor: ts.bg,
-            borderColor: ts.border,
-          },
-        ],
-      };
+  const Wrapper: any = !isUser && onReplay ? Pressable : Pressable;
+  const wrapperProps: any = {
+    onPress: () => {
+      if (!isUser && onReplay) onReplay(entry);
+      else setShowTime((s) => !s);
+    },
+    onLongPress: () => setShowTime((s) => !s),
+    delayLongPress: 250,
+    style: ({ pressed }: any) => [
+      isUser ? styles.bubbleUser : styles.bubbleAi,
+      !isUser && {
+        backgroundColor: ts.bg,
+        borderColor: ts.border,
+      },
+      pressed && { opacity: 0.78 },
+    ],
+    accessibilityRole: "button",
+    accessibilityLabel: !isUser ? "Tocca per riascoltare a voce" : "Messaggio",
+    testID: !isUser ? `replay-${entry.id}` : undefined,
+  };
+
+  const userBubbleColors: [string, string] = [theme.userBubble, theme.primary];
 
   return (
     <View style={[styles.bubbleRow, isUser ? styles.bubbleRowR : styles.bubbleRowL]}>
-      <Wrapper {...wrapperProps}>
-        {!isUser && dom ? (
-          <View style={[styles.domainPill, { borderColor: dom.color }]}>
-            <Text style={styles.domainEmoji}>{dom.emoji}</Text>
-            <Text style={[styles.domainLabel, { color: dom.color }]}>
-              {dom.label}
-            </Text>
-          </View>
-        ) : null}
-        <Text style={isUser ? styles.bubbleUserText : styles.bubbleAiText}>
-          {entry.text}
-        </Text>
-        {!isUser && entry.extracted?.amount ? (
-          <Text style={styles.extractMeta}>
-            💶 {entry.extracted.amount}
-            {entry.extracted.currency ? ` ${entry.extracted.currency}` : ""}
-            {entry.extracted.item ? ` · ${entry.extracted.item}` : ""}
+      {!isUser ? <MiniOrb color={theme.primary} /> : null}
+      <View style={{ maxWidth: "82%" }}>
+        {isUser ? (
+          // User bubble: gradient with rounded tail-corner
+          <Pressable
+            onPress={() => setShowTime((s) => !s)}
+            onLongPress={() => setShowTime((s) => !s)}
+            delayLongPress={250}
+            style={({ pressed }) => [pressed && { opacity: 0.85 }]}
+          >
+            <LinearGradient
+              colors={userBubbleColors}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.bubbleUser}
+            >
+              <Text style={styles.bubbleUserText}>{entry.text}</Text>
+            </LinearGradient>
+          </Pressable>
+        ) : (
+          <Wrapper {...wrapperProps}>
+            {dom ? (
+              <View style={[styles.domainPill, { borderColor: dom.color }]}>
+                <Text style={styles.domainEmoji}>{dom.emoji}</Text>
+                <Text style={[styles.domainLabel, { color: dom.color }]}>
+                  {dom.label}
+                </Text>
+              </View>
+            ) : null}
+            <Text style={styles.bubbleAiText}>{entry.text}</Text>
+            {entry.extracted?.amount ? (
+              <Text style={styles.extractMeta}>
+                💶 {entry.extracted.amount}
+                {entry.extracted.currency ? ` ${entry.extracted.currency}` : ""}
+                {entry.extracted.item ? ` · ${entry.extracted.item}` : ""}
+              </Text>
+            ) : null}
+            {entry.actions && entry.actions.length > 0 ? (
+              <View style={styles.actionList}>
+                {entry.actions.map((a, idx) => {
+                  if (a.type !== "schedule_notification") return null;
+                  const when = a.when_iso ? new Date(a.when_iso) : null;
+                  const timeStr = when
+                    ? when.toLocaleString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        day: "2-digit",
+                        month: "2-digit",
+                      })
+                    : "—";
+                  return (
+                    <View key={idx} style={styles.actionPill}>
+                      <Text style={styles.actionEmoji}>🔔</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.actionTitle}>
+                          {a.title || "Promemoria"}
+                        </Text>
+                        <Text style={styles.actionSub}>
+                          {a.label || timeStr}
+                          {a.body ? ` · ${a.body}` : ""}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : null}
+          </Wrapper>
+        )}
+        {showTime ? (
+          <Text style={[styles.bubbleTime, isUser ? { textAlign: "right" } : { textAlign: "left" }]}>
+            {new Date(entry.timestamp).toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
           </Text>
         ) : null}
-        {!isUser && entry.actions && entry.actions.length > 0 ? (
-          <View style={styles.actionList}>
-            {entry.actions.map((a, idx) => {
-              if (a.type !== "schedule_notification") return null;
-              const when = a.when_iso ? new Date(a.when_iso) : null;
-              const timeStr = when
-                ? when.toLocaleString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    day: "2-digit",
-                    month: "2-digit",
-                  })
-                : "—";
-              return (
-                <View key={idx} style={styles.actionPill}>
-                  <Text style={styles.actionEmoji}>🔔</Text>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.actionTitle}>
-                      {a.title || "Promemoria"}
-                    </Text>
-                    <Text style={styles.actionSub}>
-                      {a.label || timeStr}
-                      {a.body ? ` · ${a.body}` : ""}
-                    </Text>
-                  </View>
-                </View>
-              );
-            })}
-          </View>
-        ) : null}
-      </Wrapper>
-      <Text style={styles.bubbleTime}>
-        {new Date(entry.timestamp).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        })}
-      </Text>
+      </View>
     </View>
   );
 }
@@ -1506,16 +1800,21 @@ const makeStyles = (t: any) => StyleSheet.create({
     lineHeight: 20,
   },
 
-  bubbleRow: { marginBottom: 12 },
-  bubbleRowL: { alignItems: "flex-start" },
-  bubbleRowR: { alignItems: "flex-end" },
+  bubbleRow: { marginBottom: 14, flexDirection: "row", alignItems: "flex-end" },
+  bubbleRowL: { justifyContent: "flex-start" },
+  bubbleRowR: { justifyContent: "flex-end" },
   bubbleUser: {
     backgroundColor: t.userBubble,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 18,
-    borderBottomRightRadius: 4,
-    maxWidth: "82%",
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    borderRadius: 22,
+    borderBottomRightRadius: 6,
+    maxWidth: "100%",
+    ...Platform.select({
+      ios: { shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 2 },
+      default: { boxShadow: "0 2px 6px rgba(0,0,0,0.12)" } as any,
+    }),
   },
   bubbleAi: {
     backgroundColor: t.aiBubbleBg,
@@ -1523,13 +1822,42 @@ const makeStyles = (t: any) => StyleSheet.create({
     borderColor: t.aiBubbleBorder,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    borderRadius: 18,
-    borderBottomLeftRadius: 4,
-    maxWidth: "82%",
+    borderRadius: 22,
+    borderBottomLeftRadius: 6,
+    maxWidth: "100%",
+    ...Platform.select({
+      ios: { shadowColor: t.primary, shadowOpacity: 0.18, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 1 },
+      default: { boxShadow: `0 2px 10px ${t.primary}33` } as any,
+    }),
   },
-  bubbleUserText: { color: t.userBubbleText, fontSize: 15, lineHeight: 21 },
+  bubbleUserText: { color: t.userBubbleText, fontSize: 15, lineHeight: 21, fontWeight: "500" },
   bubbleAiText: { color: t.aiBubbleText, fontSize: 15, lineHeight: 21 },
-  bubbleTime: { color: t.textDim, fontSize: 10, marginTop: 4, paddingHorizontal: 4 },
+  bubbleTime: { color: t.textDim, fontSize: 10, marginTop: 4, paddingHorizontal: 4, opacity: 0.7 },
+
+  // Day separator (Oggi / Ieri / Mercoledì 7 maggio)
+  daySeparator: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    marginVertical: 4,
+  },
+  daySepLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: t.divider,
+    opacity: 0.5,
+  },
+  daySepText: {
+    color: t.textMuted,
+    fontSize: 11,
+    fontWeight: "600",
+    letterSpacing: 0.8,
+    textTransform: "lowercase",
+    fontStyle: "italic",
+  },
 
   domainPill: {
     flexDirection: "row",
@@ -1862,6 +2190,54 @@ const makeStyles = (t: any) => StyleSheet.create({
   },
 
   modeRow: { flexDirection: "row", gap: 6, marginTop: 4 },
+
+  // === Background picker (sfondo)
+  bgRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
+  bgChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: t.border,
+    backgroundColor: t.surfaceAlt,
+  },
+  bgChipPlain: {},
+  bgChipUpload: {
+    borderColor: t.primary,
+    borderStyle: "dashed",
+  },
+  bgChipActive: {
+    borderColor: t.primary,
+    backgroundColor: t.primarySoftBg,
+  },
+  bgChipText: { color: t.text, fontSize: 11, fontWeight: "600" },
+  bgSwatch: {
+    width: 16, height: 16, borderRadius: 999,
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
+  },
+  bgDimRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 12,
+    paddingHorizontal: 4,
+  },
+  bgDimLabel: { color: t.textMuted, fontSize: 12, fontWeight: "600" },
+  bgDimCtrl: { flexDirection: "row", gap: 8 },
+  bgDimDot: {
+    width: 28, height: 28, borderRadius: 999,
+    borderWidth: 1.5, borderColor: t.border,
+    alignItems: "center", justifyContent: "center",
+    backgroundColor: t.surfaceAlt,
+  },
+  bgDimDotActive: { borderColor: t.primary },
+  bgDimDotInner: {
+    width: 18, height: 18, borderRadius: 999,
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
+  },
   modeBtn: {
     flex: 1,
     flexDirection: "row",

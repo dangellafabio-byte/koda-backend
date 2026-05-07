@@ -63,6 +63,8 @@ export type ProfileSettings = {
   day_start_hour?: number;
   night_start_hour?: number;
   conversation_mode?: boolean;
+  background?: string | null;       // null | preset id | "data:image/...;base64,..."
+  background_dim?: number;          // 0..1 dark overlay opacity
 };
 
 export type VoiceOption = {

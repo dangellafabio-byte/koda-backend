@@ -11,12 +11,13 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Detta la tua richiesta con la voce"
+        "NSMicrophoneUsageDescription": "Detta la tua richiesta con la voce",
+        "NSPhotoLibraryUsageDescription": "Scegli una foto come sfondo del Taccuino"
       }
     },
     "android": {
       "edgeToEdgeEnabled": true,
-      "permissions": ["RECORD_AUDIO", "POST_NOTIFICATIONS", "SCHEDULE_EXACT_ALARM"],
+      "permissions": ["RECORD_AUDIO", "POST_NOTIFICATIONS", "SCHEDULE_EXACT_ALARM", "READ_MEDIA_IMAGES"],
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000000"
