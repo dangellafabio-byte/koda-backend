@@ -253,13 +253,13 @@ export async function startRecording(): Promise<Recorder> {
       if (
         !silenceFired &&
         ((everSpoke &&
-          Date.now() - lastVoiceAt > 1200 &&
+          Date.now() - lastVoiceAt > 1500 &&
           Date.now() - startedAt > 600) ||
-          // Fallback: if no speech ever detected after 6.5s, force-stop anyway
+          // Fallback: if no speech ever detected after 7s, force-stop anyway
           // (native metering can be unreliable on some iOS versions / mics)
-          (!everSpoke && Date.now() - startedAt > 6500) ||
+          (!everSpoke && Date.now() - startedAt > 7000) ||
           // Hard cap
-          Date.now() - startedAt > 12000) &&
+          Date.now() - startedAt > 14000) &&
         silenceCb
       ) {
         silenceFired = true;
