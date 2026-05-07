@@ -155,13 +155,18 @@ function stopAllPlayback() {
 async function fetchTTSBytes(
   text: string,
   voiceId: string | null,
+  tone: Tone | null | undefined,
   signal: AbortSignal
 ): Promise<ArrayBuffer | null> {
   try {
     const r = await fetch(`${API_BASE}/tts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, voice_id: voiceId || undefined }),
+      body: JSON.stringify({
+        text,
+        voice_id: voiceId || undefined,
+        tone: tone || undefined,
+      }),
       signal,
     });
     if (!r.ok) return null;
@@ -203,13 +208,18 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 async function prepareTTSUrl(
   text: string,
   voiceId: string | null,
+  tone: Tone | null | undefined,
   signal: AbortSignal
 ): Promise<string | null> {
   try {
     const r = await fetch(`${API_BASE}/tts/prepare`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, voice_id: voiceId || undefined }),
+      body: JSON.stringify({
+        text,
+        voice_id: voiceId || undefined,
+        tone: tone || undefined,
+      }),
       signal,
     });
     if (!r.ok) return null;
@@ -509,7 +519,7 @@ export const SpeechMod = {
 
       if (Platform.OS === "web") {
         // Web: fetch bytes and play via Blob URL
-        const buf = await fetchTTSBytes(text, voiceArg, ac.signal);
+        const buf = await fetchTTSBytes(text, voiceArg, tone, ac.signal);
         if (cancelled()) {
           speakingNow = false;
           return;
@@ -521,7 +531,7 @@ export const SpeechMod = {
       } else {
         // Native (iOS/Android): prepare a URL and let Audio.Sound stream it.
         // This bypasses base64+FileSystem (which fails with -11800 on iOS).
-        const url = await prepareTTSUrl(text, voiceArg, ac.signal);
+        const url = await prepareTTSUrl(text, voiceArg, tone, ac.signal);
         if (cancelled()) {
           speakingNow = false;
           return;

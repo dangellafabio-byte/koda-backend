@@ -447,7 +447,7 @@ class TaccuinoSettings(BaseModel):
     ai_enabled: bool = True
     voice_response: bool = True
     full_access_mode: bool = False  # Future: bank/calendar/health
-    input_mode: str = "voice"  # "voice" | "text"
+    input_mode: str = "voice"  # "voice" | "text" | "both"
     conversation_mode: bool = False  # hands-free continuous conversation
     theme: str = "sistema"  # "sistema" | "auto-orario" | "notte" | "giorno" | "cielo" | "bosco" | "ciliegia"
     day_start_hour: int = 7   # used when theme = "auto-orario"
@@ -869,6 +869,53 @@ class TTSRequest(BaseModel):
     voice_id: Optional[str] = None
     stability: Optional[float] = None
     similarity_boost: Optional[float] = None
+    tone: Optional[str] = None  # "calm" | "warm" | "neutral" | "energetic" | "concerned" | "urgent"
+
+
+def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], similarity: Optional[float]) -> dict:
+    """Adapt ElevenLabs voice settings to the conversational tone.
+
+    - calm/concerned: higher stability (steadier), lower style
+    - energetic/urgent: lower stability (more expressive), higher style, faster
+    - neutral/warm: balanced
+
+    Speed is controlled via the `speed` field (0.7-1.2). Requires turbo model.
+    """
+    base_stability = 0.5 if stability is None else stability
+    base_similarity = 0.75 if similarity is None else similarity
+    style = 0.0
+    speed = 1.0
+    t = (tone or "neutral").lower()
+    if t == "calm":
+        base_stability = max(base_stability, 0.65)
+        speed = 0.92
+        style = 0.0
+    elif t == "concerned":
+        base_stability = max(base_stability, 0.6)
+        speed = 0.95
+        style = 0.05
+    elif t == "warm":
+        base_stability = max(base_stability, 0.55)
+        speed = 0.97
+        style = 0.1
+    elif t == "energetic":
+        base_stability = min(base_stability, 0.45)
+        speed = 1.08
+        style = 0.25
+    elif t == "urgent":
+        base_stability = min(base_stability, 0.4)
+        speed = 1.12
+        style = 0.35
+    else:  # neutral
+        speed = 1.0
+        style = 0.0
+    return {
+        "stability": base_stability,
+        "similarity_boost": base_similarity,
+        "style": style,
+        "speed": speed,
+        "use_speaker_boost": True,
+    }
 
 
 @api_router.get("/voices")
@@ -913,22 +960,18 @@ async def api_tts(req: TTSRequest):
         raise HTTPException(status_code=503, detail="ElevenLabs not configured")
 
     voice_id = req.voice_id or "XrExE9yKIg1WjnnlVkGX"
-    stability = req.stability if req.stability is not None else 0.5
-    similarity = req.similarity_boost if req.similarity_boost is not None else 0.75
+    voice_settings = _voice_settings_for_tone(req.tone, req.stability, req.similarity_boost)
 
     try:
         # Use the convert() method with streaming generator
+        # eleven_turbo_v2_5: supports `speed` parameter (0.7-1.2) — required
+        # for adaptive pacing based on conversational tone.
         audio_gen = client_el.text_to_speech.convert(
             text=text,
             voice_id=voice_id,
-            model_id="eleven_multilingual_v2",
+            model_id="eleven_turbo_v2_5",
             output_format="mp3_44100_128",
-            voice_settings={
-                "stability": stability,
-                "similarity_boost": similarity,
-                "style": 0.0,
-                "use_speaker_boost": True,
-            },
+            voice_settings=voice_settings,
         )
         audio_data = b""
         for chunk in audio_gen:
@@ -988,21 +1031,15 @@ async def api_tts_prepare(req: TTSRequest):
         raise HTTPException(status_code=503, detail="ElevenLabs not configured")
 
     voice_id = req.voice_id or "XrExE9yKIg1WjnnlVkGX"
-    stability = req.stability if req.stability is not None else 0.5
-    similarity = req.similarity_boost if req.similarity_boost is not None else 0.75
+    voice_settings = _voice_settings_for_tone(req.tone, req.stability, req.similarity_boost)
 
     try:
         audio_gen = client_el.text_to_speech.convert(
             text=text,
             voice_id=voice_id,
-            model_id="eleven_multilingual_v2",
+            model_id="eleven_turbo_v2_5",
             output_format="mp3_44100_128",
-            voice_settings={
-                "stability": stability,
-                "similarity_boost": similarity,
-                "style": 0.0,
-                "use_speaker_boost": True,
-            },
+            voice_settings=voice_settings,
         )
         audio_data = b""
         for chunk in audio_gen:

@@ -68,7 +68,11 @@ export default function Taccuino() {
   const [recapText, setRecapText] = useState<string | null>(null);
   const [showRecap, setShowRecap] = useState(false);
 
-  const inputMode = profile?.settings?.input_mode === "text" ? "text" : "voice";
+  const inputMode = (profile?.settings?.input_mode === "text"
+    ? "text"
+    : profile?.settings?.input_mode === "both"
+      ? "both"
+      : "voice") as "voice" | "text" | "both";
   const conversationOn = !!profile?.settings?.conversation_mode;
   // Tracks "we are inside an active hands-free conversation loop"
   const [convActive, setConvActive] = useState(false);
@@ -528,14 +532,14 @@ export default function Taccuino() {
     }
   };
 
-  const setInputMode = async (mode: "voice" | "text") => {
+  const setInputMode = async (mode: "voice" | "text" | "both") => {
     if (!profile) return;
     const next = { ...profile, settings: { ...profile.settings, input_mode: mode } };
     setProfile(next);
     try {
       await api.updateProfile({ settings: next.settings } as any);
     } catch {}
-    if (mode === "voice") {
+    if (mode === "voice" || mode === "both") {
       // pre-warm so first tap = direct recording
       prewarmMic().catch(() => {});
     }
@@ -604,6 +608,12 @@ export default function Taccuino() {
       case "thinking":
         return "Sto pensando...";
       case "speaking":
+        // In conversation mode, the mic is opened in parallel after 250ms,
+        // so the user CAN interrupt by talking. Make this discoverable in
+        // the UI label.
+        if (convActiveRef.current && recRef.current) {
+          return "Sto parlando — interrompimi pure";
+        }
         return "Sto parlando...";
       default:
         return "Premi e parla";
@@ -716,13 +726,13 @@ export default function Taccuino() {
                   {
                     opacity: breathe.interpolate({
                       inputRange: [0, 1],
-                      outputRange: [0.35, 0.7],
+                      outputRange: [0.25, 0.45],
                     }),
                     transform: [
                       {
                         scale: breathe.interpolate({
                           inputRange: [0, 1],
-                          outputRange: [1.0, 1.35],
+                          outputRange: [1.0, 1.15],
                         }),
                       },
                     ],
@@ -738,13 +748,13 @@ export default function Taccuino() {
                   {
                     opacity: breathe.interpolate({
                       inputRange: [0, 1],
-                      outputRange: [0.2, 0.45],
+                      outputRange: [0.12, 0.25],
                     }),
                     transform: [
                       {
                         scale: breathe.interpolate({
                           inputRange: [0, 1],
-                          outputRange: [1.1, 1.6],
+                          outputRange: [1.05, 1.25],
                         }),
                       },
                     ],
@@ -760,7 +770,7 @@ export default function Taccuino() {
                         pulse,
                         breathe.interpolate({
                           inputRange: [0, 1],
-                          outputRange: [0.86, 1.16],
+                          outputRange: [0.95, 1.07],
                         })
                       ),
                     },
@@ -795,6 +805,35 @@ export default function Taccuino() {
                 </Pressable>
               </Animated.View>
             </View>
+            {/* In "both" mode show a compact text input under the mic */}
+            {inputMode === "both" && (
+              <KeyboardAvoidingView
+                behavior={Platform.OS === "ios" ? "padding" : undefined}
+                style={{ width: "100%", marginTop: 18 }}
+              >
+                <View style={styles.textRow}>
+                  <TextInput
+                    value={textInput}
+                    onChangeText={setTextInput}
+                    placeholder="Oppure scrivi..."
+                    placeholderTextColor="#64748B"
+                    style={styles.textInput}
+                    onSubmitEditing={sendTextFromBox}
+                    returnKeyType="send"
+                    multiline
+                    testID="text-input-both"
+                  />
+                  <TouchableOpacity
+                    onPress={sendTextFromBox}
+                    style={[styles.sendBtn, !textInput.trim() && { opacity: 0.4 }]}
+                    disabled={!textInput.trim()}
+                    testID="send-btn-both"
+                  >
+                    <Ionicons name="arrow-up" size={20} color={theme.primaryText} />
+                  </TouchableOpacity>
+                </View>
+              </KeyboardAvoidingView>
+            )}
           </View>
         )}
       </View>
@@ -1031,7 +1070,37 @@ export default function Taccuino() {
                   Solo testo
                 </Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setInputMode("both" as any)}
+                style={[
+                  styles.modeBtn,
+                  inputMode === "both" && styles.modeBtnActive,
+                ]}
+                testID="mode-both"
+              >
+                <Ionicons
+                  name="apps-outline"
+                  size={18}
+                  color={inputMode === "both" ? theme.primaryText : theme.text}
+                />
+                <Text
+                  style={[
+                    styles.modeBtnText,
+                    inputMode === "both" && styles.modeBtnTextActive,
+                  ]}
+                >
+                  Voce + Testo
+                </Text>
+              </TouchableOpacity>
             </View>
+
+            <Text style={styles.settingsHint}>
+              {inputMode === "voice"
+                ? "Solo pulsante mic visibile."
+                : inputMode === "text"
+                  ? "Solo campo testo visibile."
+                  : "Pulsante mic + campo testo entrambi visibili."}
+            </Text>
 
             <View style={styles.divider} />
 

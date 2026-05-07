@@ -69,6 +69,13 @@ export async function startRecording(): Promise<Recorder> {
     let silenceCb: (() => void) | null = null;
     let speechStartCb: (() => void) | null = null;
     const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    // CRITICAL: AudioContext may be 'suspended' if the page is creating it
+    // outside a fresh user gesture (common when starting recording while AI
+    // TTS is playing — the AudioContext.state is 'suspended' and the analyser
+    // gives no readings, which silently kills barge-in detection).
+    if (audioCtx.state === "suspended") {
+      try { await audioCtx.resume(); } catch {}
+    }
     const source = audioCtx.createMediaStreamSource(stream);
     const analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;
@@ -77,7 +84,10 @@ export async function startRecording(): Promise<Recorder> {
     const startedAt = Date.now();
     let lastVoiceAt = Date.now();
     let everSpoke = false;
-    const SILENCE_DB_THRESHOLD = 0.022; // slightly more tolerant for quiet voices
+    // Lower threshold for better barge-in sensitivity, especially when AI
+    // TTS is also playing (browser AEC reduces the playback signal coming
+    // back through the mic — but we still need to detect quieter user speech).
+    const SILENCE_DB_THRESHOLD = 0.018;
     const SILENCE_TIMEOUT_MS = 1600;    // a bit longer pause to allow thinking mid-sentence
     const MIN_SPEECH_BEFORE_END_MS = 600;
     const MAX_RECORDING_MS = 25000;     // safety: max 25s per turn
