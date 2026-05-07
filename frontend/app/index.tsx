@@ -245,8 +245,15 @@ export default function Taccuino() {
         await SpeechMod.speak(text, { language: langTag, tone });
         // If conversation is still active, immediately open mic for next user turn
         if (convActiveRef.current) {
+          // CRITICAL: explicitly transition to "idle" before opening mic.
+          // startTalkInternal has special logic that PRESERVES "speaking" status
+          // (used during barge-in mode) — but we're past TTS now, so we want
+          // the normal "recording" flow. Without this reset, status stays
+          // stuck on "speaking" → user sees "Sto parlando" and thinks they
+          // can't talk → no audio captured.
+          setStatus("idle");
           // Small delay to let iOS audio session settle from playback to recording
-          await new Promise((r) => setTimeout(r, 150));
+          await new Promise((r) => setTimeout(r, 200));
           if (convActiveRef.current && !recRef.current) {
             startTalkInternal(true).catch(() => {});
           }
