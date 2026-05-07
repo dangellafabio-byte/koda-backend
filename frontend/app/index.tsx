@@ -391,6 +391,22 @@ export default function Taccuino() {
     setStatus("transcribing");
     try {
       const res = await current.stop();
+      // CRITICAL: switch the audio session out of "recording" mode IMMEDIATELY
+      // so that the AI's TTS playback can run unhindered. Without this, on
+      // iOS the session can stay in playAndRecord mode and Audio.Sound
+      // playback fails silently → user hears no AI voice.
+      if (Platform.OS !== "web") {
+        try {
+          const { Audio } = require("expo-av");
+          await Audio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: false,
+            shouldDuckAndroid: true,
+            playThroughEarpieceAndroid: false,
+          });
+        } catch {}
+      }
       if (!res) {
         setStatus("idle");
         return;
@@ -406,6 +422,14 @@ export default function Taccuino() {
       if (!txt) {
         setError("Non ho sentito nulla.");
         setStatus("idle");
+        // In conversation mode, immediately re-open mic so the loop continues
+        if (convActiveRef.current && profile?.settings?.input_mode !== "text") {
+          setTimeout(() => {
+            if (convActiveRef.current && !recRef.current) {
+              startTalkInternal(true).catch(() => {});
+            }
+          }, 250);
+        }
         return;
       }
       // Send to converse
