@@ -73,6 +73,8 @@ function pickVoice(lang: string): SpeechSynthesisVoice | undefined {
 
 /**
  * Unlock audio on first user gesture (needed for both web Speech and web <audio>).
+ * On Safari this MUST be called synchronously inside the first user gesture
+ * handler so the persistent <audio> element gets the "unlocked" status.
  */
 export async function unlockSpeech(): Promise<void> {
   if (Platform.OS !== "web") return;
@@ -86,12 +88,23 @@ export async function unlockSpeech(): Promise<void> {
       u.rate = 1;
       window.speechSynthesis.speak(u);
     }
-    // Unlock HTMLAudioElement too (autoplay policies)
+    // Eagerly create the persistent <audio> element and play a tiny silent
+    // burst so Safari marks it as "unlocked" — afterwards setting .src and
+    // calling .play() works without requiring a fresh user gesture each time.
     try {
-      const a = new Audio();
-      a.muted = true;
-      await a.play().catch(() => {});
-      a.pause();
+      const a = getWebAudioEl();
+      if (a) {
+        a.muted = true;
+        a.volume = 0;
+        // 1-second silent WAV (44100Hz mono PCM with zeros)
+        a.src =
+          "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
+        await a.play().catch(() => {});
+        try { a.pause(); } catch {}
+        try { a.currentTime = 0; } catch {}
+        a.muted = false;
+        a.volume = 1.0;
+      }
     } catch {}
     webUnlocked = true;
   } catch {
@@ -313,51 +326,86 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
   }
 }
 
+// Persistent <audio> element for web — Safari requires the audio element
+// to be reused (not recreated) for subsequent plays to work without
+// requiring a fresh user gesture each time.
+let webAudioEl: HTMLAudioElement | null = null;
+
+function getWebAudioEl(): HTMLAudioElement | null {
+  if (typeof Audio === "undefined") return null;
+  if (!webAudioEl) {
+    try {
+      webAudioEl = new Audio();
+      webAudioEl.preload = "auto";
+      // Inline playback on iOS Safari (avoid full-screen takeover)
+      (webAudioEl as any).playsInline = true;
+      webAudioEl.setAttribute("playsinline", "true");
+      webAudioEl.setAttribute("webkit-playsinline", "true");
+    } catch {
+      webAudioEl = null;
+    }
+  }
+  return webAudioEl;
+}
+
 async function playElevenLabsWeb(audioBuf: ArrayBuffer): Promise<boolean> {
   try {
+    const a = getWebAudioEl();
+    if (!a) return false;
     const blob = new Blob([audioBuf], { type: "audio/mpeg" });
     const url = URL.createObjectURL(blob);
-    const a = new Audio(url);
-    a.preload = "auto";
+    // Stop any ongoing playback on this element first
+    try { a.pause(); } catch {}
+    try { a.currentTime = 0; } catch {}
+    // Revoke previous blob URL if any
+    const prevUrl = a.src;
+    a.src = url;
+    a.muted = false;
+    a.volume = 1.0;
     currentWebAudio = a;
 
     return await new Promise<boolean>((resolve) => {
       let done = false;
       const cleanup = () => {
         try { URL.revokeObjectURL(url); } catch {}
+        if (prevUrl && prevUrl.startsWith("blob:")) {
+          try { URL.revokeObjectURL(prevUrl); } catch {}
+        }
         if (currentWebAudio === a) currentWebAudio = null;
       };
-      a.onended = () => {
+      const onEnded = () => {
         if (!done) {
           done = true;
+          a.removeEventListener("ended", onEnded);
+          a.removeEventListener("error", onError);
           cleanup();
           resolve(true);
         }
       };
-      a.onerror = () => {
+      const onError = () => {
         if (!done) {
           done = true;
+          a.removeEventListener("ended", onEnded);
+          a.removeEventListener("error", onError);
           cleanup();
           resolve(false);
         }
       };
-      a.onpause = () => {
-        // User-triggered pause (barge-in) is treated as end
-        if (!done && a.currentTime > 0 && !a.ended) {
-          done = true;
-          cleanup();
-          resolve(true);
-        }
-      };
-      a.play().catch(() => {
+      a.addEventListener("ended", onEnded);
+      a.addEventListener("error", onError);
+      a.play().catch((e) => {
+        console.warn("[speech] web audio play() blocked", e);
         if (!done) {
           done = true;
+          a.removeEventListener("ended", onEnded);
+          a.removeEventListener("error", onError);
           cleanup();
           resolve(false);
         }
       });
     });
-  } catch {
+  } catch (e) {
+    console.warn("[speech] playElevenLabsWeb error", e);
     return false;
   }
 }
