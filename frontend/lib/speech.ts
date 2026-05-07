@@ -236,6 +236,7 @@ async function playElevenLabsNative(audioBuf: ArrayBuffer): Promise<boolean> {
 
     return await new Promise<boolean>((resolve) => {
       let done = false;
+      let everPlayed = false;
       const cleanup = async () => {
         try { await sound.unloadAsync(); } catch {}
         if (currentSound === sound) currentSound = null;
@@ -245,11 +246,18 @@ async function playElevenLabsNative(audioBuf: ArrayBuffer): Promise<boolean> {
       };
       sound.setOnPlaybackStatusUpdate((status) => {
         if (!status.isLoaded) {
+          // Sound got unloaded. If we never started playing, this is a real
+          // failure (return false → caller may try fallback). If we DID play
+          // already, this is just the end / a stop call → success.
           if (!done) {
             done = true;
-            cleanup().finally(() => resolve(false));
+            const ok = everPlayed; // played at least a moment → treat as success
+            cleanup().finally(() => resolve(ok));
           }
           return;
+        }
+        if (status.isPlaying || (status.positionMillis ?? 0) > 0) {
+          everPlayed = true;
         }
         if (status.didJustFinish) {
           if (!done) {
