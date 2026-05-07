@@ -949,6 +949,96 @@ async def api_tts(req: TTSRequest):
     )
 
 
+# In-memory cache for TTS audio served via GET URL.
+# This avoids base64/data-URI playback issues on iOS Expo Go where
+# Audio.Sound.createAsync({uri: "file://..."}) fails with -11800 errors.
+_tts_audio_cache: dict[str, bytes] = {}
+_tts_cache_order: list[str] = []
+_TTS_CACHE_MAX = 50  # bound the cache size
+
+
+def _store_tts_audio(audio: bytes) -> str:
+    token = uuid.uuid4().hex
+    _tts_audio_cache[token] = audio
+    _tts_cache_order.append(token)
+    while len(_tts_cache_order) > _TTS_CACHE_MAX:
+        old = _tts_cache_order.pop(0)
+        _tts_audio_cache.pop(old, None)
+    return token
+
+
+@api_router.post("/tts/prepare")
+async def api_tts_prepare(req: TTSRequest):
+    """Generate TTS and return a token that can be used with GET /tts/audio/{token}.mp3.
+
+    This is the preferred path on mobile clients (Audio.Sound.createAsync on iOS
+    can fail loading audio from local file URIs after base64 decoding).
+    """
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty text")
+    if len(text) > 1500:
+        text = text[:1500]
+
+    client_el = _get_eleven_client()
+    if client_el is None:
+        raise HTTPException(status_code=503, detail="ElevenLabs not configured")
+
+    voice_id = req.voice_id or "XrExE9yKIg1WjnnlVkGX"
+    stability = req.stability if req.stability is not None else 0.5
+    similarity = req.similarity_boost if req.similarity_boost is not None else 0.75
+
+    try:
+        audio_gen = client_el.text_to_speech.convert(
+            text=text,
+            voice_id=voice_id,
+            model_id="eleven_multilingual_v2",
+            output_format="mp3_44100_128",
+            voice_settings={
+                "stability": stability,
+                "similarity_boost": similarity,
+                "style": 0.0,
+                "use_speaker_boost": True,
+            },
+        )
+        audio_data = b""
+        for chunk in audio_gen:
+            if chunk:
+                audio_data += chunk
+        if not audio_data:
+            raise HTTPException(status_code=500, detail="Empty TTS response")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"ElevenLabs TTS error (prepare): {e}")
+        raise HTTPException(status_code=500, detail=f"TTS error: {str(e)}")
+
+    token = _store_tts_audio(audio_data)
+    return {"token": token, "size": len(audio_data)}
+
+
+@api_router.get("/tts/audio/{token}.mp3")
+async def api_tts_audio(token: str):
+    """Serve previously prepared TTS audio. Audio is consumed (one-shot)."""
+    audio = _tts_audio_cache.pop(token, None)
+    if token in _tts_cache_order:
+        try:
+            _tts_cache_order.remove(token)
+        except ValueError:
+            pass
+    if audio is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return Response(
+        content=audio,
+        media_type="audio/mpeg",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Length": str(len(audio)),
+            "Accept-Ranges": "bytes",
+        },
+    )
+
+
 # ---------- Demo media (promo video / screenshots) ----------
 DEMO_FILES = {
     "mp4": ("compass_demo.mp4", "video/mp4"),

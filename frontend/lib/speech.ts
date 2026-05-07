@@ -181,8 +181,34 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return global.btoa ? global.btoa(binary) : "";
 }
 
-async function playElevenLabsNative(audioBuf: ArrayBuffer): Promise<boolean> {
-  let fileUri: string | null = null;
+/**
+ * Generate TTS on the backend and return a direct GET URL where Audio.Sound
+ * can stream the MP3. This bypasses base64 encoding and FileSystem writes,
+ * which on iOS Expo Go cause AVFoundationErrorDomain -11800 errors when
+ * Audio.Sound tries to load the resulting file.
+ */
+async function prepareTTSUrl(
+  text: string,
+  voiceId: string | null,
+  signal: AbortSignal
+): Promise<string | null> {
+  try {
+    const r = await fetch(`${API_BASE}/tts/prepare`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice_id: voiceId || undefined }),
+      signal,
+    });
+    if (!r.ok) return null;
+    const data = await r.json();
+    if (!data?.token) return null;
+    return `${API_BASE}/tts/audio/${data.token}.mp3`;
+  } catch {
+    return null;
+  }
+}
+
+async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
   try {
     // CRITICAL: switch audio session to playback mode so:
     // - hardware volume buttons control the playback volume (iOS)
@@ -197,113 +223,78 @@ async function playElevenLabsNative(audioBuf: ArrayBuffer): Promise<boolean> {
         playThroughEarpieceAndroid: false,
       });
       // Give iOS' AVAudioSession a tick to fully apply the new category
-      // before we try to load/play. Without this, the very first TTS after
-      // recording can fail silently and we'd fall back to expo-speech.
       await new Promise((r) => setTimeout(r, 60));
     } catch (e) {
       console.warn("[speech] setAudioModeAsync failed", e);
     }
 
-    // Encode bytes to base64
-    const b64 = arrayBufferToBase64(audioBuf);
-    if (!b64) {
-      console.warn("[speech] base64 encoding failed");
-      return false;
-    }
-
-    // Write MP3 bytes to a temporary file. Audio.Sound playback from a real file URI
-    // is far more reliable than a data: URI on both iOS and Android (data URIs often
-    // play silently or fail to load).
-    const dir = (FileSystem.cacheDirectory || FileSystem.documentDirectory || "") as string;
-    if (!dir) {
-      console.warn("[speech] no FileSystem dir");
-      return false;
-    }
-    fileUri = `${dir}taccuino_tts_${Date.now()}.mp3`;
-    try {
-      await FileSystem.writeAsStringAsync(fileUri, b64, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-    } catch (e) {
-      console.warn("[speech] writeAsStringAsync failed", e);
-      return false;
-    }
-
-    // Create + play
-    // CRITICAL iOS FIX: register the playback status callback as the 3rd
-    // parameter of createAsync (not via setOnPlaybackStatusUpdate after the
-    // fact). With shouldPlay:true + late callback registration, iOS misses
-    // every status event (isPlaying, didJustFinish) → Promise never resolves
-    // → caller falls back to expo-speech (robotic voice). Known expo-av bug.
-    let sound: Audio.Sound;
-    let resolvePromise: ((ok: boolean) => void) | null = null;
-    let done = false;
-    let everPlayed = false;
-    const cleanup = async () => {
-      try { await (sound as any)?.unloadAsync(); } catch {}
-      if (currentSound === sound) currentSound = null;
-      if (fileUri) {
-        try { await FileSystem.deleteAsync(fileUri, { idempotent: true }); } catch {}
-      }
-    };
-    const onStatus = (status: any) => {
-      if (!status.isLoaded) {
-        if (!done) {
-          done = true;
-          const ok = everPlayed;
-          cleanup().finally(() => resolvePromise && resolvePromise(ok));
-        }
-        return;
-      }
-      if (status.isPlaying || (status.positionMillis ?? 0) > 0) {
-        everPlayed = true;
-      }
-      if (status.didJustFinish) {
-        if (!done) {
-          done = true;
-          cleanup().finally(() => resolvePromise && resolvePromise(true));
-        }
-      }
-    };
-    try {
-      const created = await Audio.Sound.createAsync(
-        { uri: fileUri },
-        { shouldPlay: false, volume: 1.0 },
-        onStatus,
-      );
-      sound = created.sound;
-    } catch (e) {
-      console.warn("[speech] Audio.Sound.createAsync failed", e);
-      return false;
-    }
-    currentSound = sound;
-
-    // Now that the callback is registered, explicitly start playback.
-    // This guarantees iOS will fire status updates that we'll actually receive.
-    try {
-      await sound.playAsync();
-    } catch (e) {
-      console.warn("[speech] sound.playAsync failed", e);
-      try { await sound.unloadAsync(); } catch {}
-      currentSound = null;
-      return false;
-    }
-
     return await new Promise<boolean>((resolve) => {
-      resolvePromise = resolve;
-      // Safety timeout
-      setTimeout(() => {
+      let done = false;
+      let everPlayed = false;
+      let localSound: Audio.Sound | null = null;
+      const cleanup = async () => {
+        try { await localSound?.unloadAsync(); } catch {}
+        if (currentSound === localSound) currentSound = null;
+      };
+      const onStatus = (status: any) => {
+        if (!status.isLoaded) {
+          if (!done) {
+            done = true;
+            const ok = everPlayed;
+            cleanup().finally(() => resolve(ok));
+          }
+          return;
+        }
+        if (status.isPlaying || (status.positionMillis ?? 0) > 0) {
+          everPlayed = true;
+        }
+        if (status.didJustFinish) {
+          if (!done) {
+            done = true;
+            cleanup().finally(() => resolve(true));
+          }
+        }
+      };
+      const safetyTimer = setTimeout(() => {
         if (!done) {
           done = true;
           cleanup().finally(() => resolve(true));
         }
       }, 60000);
+
+      // CRITICAL iOS FIX: register the playback status callback as the 3rd
+      // parameter of createAsync (not via setOnPlaybackStatusUpdate after).
+      // Audio.Sound loads MP3 directly from HTTP URL — most reliable path on iOS.
+      Audio.Sound.createAsync(
+        { uri: audioUrl },
+        { shouldPlay: false, volume: 1.0 },
+        onStatus,
+      )
+        .then(async (created) => {
+          localSound = created.sound;
+          currentSound = localSound;
+          try {
+            await localSound.playAsync();
+          } catch (e) {
+            console.warn("[speech] playAsync failed", e);
+            if (!done) {
+              done = true;
+              clearTimeout(safetyTimer);
+              cleanup().finally(() => resolve(false));
+            }
+          }
+        })
+        .catch((e) => {
+          console.warn("[speech] createAsync failed (URL)", e);
+          if (!done) {
+            done = true;
+            clearTimeout(safetyTimer);
+            cleanup().finally(() => resolve(false));
+          }
+        });
     });
   } catch (e) {
-    console.warn("[speech] playElevenLabsNative outer error", e);
-    if (fileUri) {
-      try { await FileSystem.deleteAsync(fileUri, { idempotent: true }); } catch {}
-    }
+    console.warn("[speech] playElevenLabsNativeFromUrl outer error", e);
     return false;
   }
 }
@@ -451,30 +442,38 @@ export const SpeechMod = {
     // Try ElevenLabs first
     if (useEleven) {
       speakingNow = true;
-      const buf = await fetchTTSBytes(text, opts.voiceId ?? defaultVoiceId, ac.signal);
-      if (cancelled()) {
-        // User started a new speak()/stop() — bail silently, no fallback.
-        speakingNow = false;
-        return;
-      }
-      // Clear our abort handle if it's still ours (another call might have replaced it)
-      if (currentAbort === ac) currentAbort = null;
+      const voiceArg = opts.voiceId ?? defaultVoiceId;
+      let ok = false;
 
-      if (buf && buf.byteLength > 0) {
-        let ok = false;
-        if (Platform.OS === "web") {
-          ok = await playElevenLabsWeb(buf);
-        } else {
-          ok = await playElevenLabsNative(buf);
+      if (Platform.OS === "web") {
+        // Web: fetch bytes and play via Blob URL
+        const buf = await fetchTTSBytes(text, voiceArg, ac.signal);
+        if (cancelled()) {
+          speakingNow = false;
+          return;
         }
-        speakingNow = false;
-        if (cancelled()) return;
-        if (ok) return;
-        // ElevenLabs playback genuinely failed (not cancelled) → fallback below
+        if (currentAbort === ac) currentAbort = null;
+        if (buf && buf.byteLength > 0) {
+          ok = await playElevenLabsWeb(buf);
+        }
       } else {
-        speakingNow = false;
-        // fetch returned empty — could be a real failure, fall through to fallback
+        // Native (iOS/Android): prepare a URL and let Audio.Sound stream it.
+        // This bypasses base64+FileSystem (which fails with -11800 on iOS).
+        const url = await prepareTTSUrl(text, voiceArg, ac.signal);
+        if (cancelled()) {
+          speakingNow = false;
+          return;
+        }
+        if (currentAbort === ac) currentAbort = null;
+        if (url) {
+          ok = await playElevenLabsNativeFromUrl(url);
+        }
       }
+
+      speakingNow = false;
+      if (cancelled()) return;
+      if (ok) return;
+      // ElevenLabs playback genuinely failed (not cancelled) → fallback below
     }
 
     // If we were cancelled at any point, do NOT play the robotic fallback.
