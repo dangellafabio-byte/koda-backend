@@ -401,16 +401,32 @@ export const SpeechMod = {
     const tone = (opts.tone || "neutral") as Tone;
     const useEleven = opts.useElevenLabs !== false; // default ON
 
-    // Stop any existing playback before starting a new one
+    // Stop any existing playback before starting a new one. This also aborts
+    // any in-flight TTS fetch from a PREVIOUS speak() call, causing it to bail.
     stopAllPlayback();
+
+    // Each speak() call gets its OWN abort controller. If a later speak() call
+    // (or .stop()) aborts this one, we must NOT fall back to expo-speech —
+    // otherwise the user hears the robotic fallback OVERLAPPING with the new
+    // voice they just selected.
+    const ac = new AbortController();
+    currentAbort = ac;
+
+    // Helper: was this particular call cancelled?
+    const cancelled = () => ac.signal.aborted;
 
     // Try ElevenLabs first
     if (useEleven) {
       speakingNow = true;
-      const ac = new AbortController();
-      currentAbort = ac;
       const buf = await fetchTTSBytes(text, opts.voiceId ?? defaultVoiceId, ac.signal);
-      currentAbort = null;
+      if (cancelled()) {
+        // User started a new speak()/stop() — bail silently, no fallback.
+        speakingNow = false;
+        return;
+      }
+      // Clear our abort handle if it's still ours (another call might have replaced it)
+      if (currentAbort === ac) currentAbort = null;
+
       if (buf && buf.byteLength > 0) {
         let ok = false;
         if (Platform.OS === "web") {
@@ -419,15 +435,19 @@ export const SpeechMod = {
           ok = await playElevenLabsNative(buf);
         }
         speakingNow = false;
+        if (cancelled()) return;
         if (ok) return;
-        // else fall through to fallback
+        // ElevenLabs playback genuinely failed (not cancelled) → fallback below
       } else {
-        // network/TTS failed -> fallback
         speakingNow = false;
+        // fetch returned empty — could be a real failure, fall through to fallback
       }
     }
 
-    // Fallback to system TTS
+    // If we were cancelled at any point, do NOT play the robotic fallback.
+    if (cancelled()) return;
+
+    // Fallback to system TTS (only when not cancelled and ElevenLabs failed)
     await fallbackSpeak(text, lang, tone);
   },
 };
