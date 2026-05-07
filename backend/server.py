@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -952,6 +952,9 @@ async def api_tts(req: TTSRequest):
 # In-memory cache for TTS audio served via GET URL.
 # This avoids base64/data-URI playback issues on iOS Expo Go where
 # Audio.Sound.createAsync({uri: "file://..."}) fails with -11800 errors.
+# IMPORTANT: don't pop the audio on first GET — iOS AVPlayer often makes
+# multiple HTTP requests (HEAD + Range) for the same URL. We keep it in
+# memory until eviction (LRU max size, or natural restart).
 _tts_audio_cache: dict[str, bytes] = {}
 _tts_cache_order: list[str] = []
 _TTS_CACHE_MAX = 50  # bound the cache size
@@ -1018,22 +1021,56 @@ async def api_tts_prepare(req: TTSRequest):
 
 
 @api_router.get("/tts/audio/{token}.mp3")
-async def api_tts_audio(token: str):
-    """Serve previously prepared TTS audio. Audio is consumed (one-shot)."""
-    audio = _tts_audio_cache.pop(token, None)
-    if token in _tts_cache_order:
-        try:
-            _tts_cache_order.remove(token)
-        except ValueError:
-            pass
+async def api_tts_audio(token: str, request: Request):
+    """Serve previously prepared TTS audio.
+
+    IMPORTANT: do NOT pop the token on first GET — iOS AVPlayer often makes
+    multiple HTTP requests (HEAD + Range) and the audio must remain available
+    for all of them. We rely on the LRU cache to evict eventually.
+
+    Supports HTTP Range requests (required by iOS AVPlayer for proper
+    streaming playback).
+    """
+    audio = _tts_audio_cache.get(token)
     if audio is None:
         raise HTTPException(status_code=404, detail="Not found")
+
+    total = len(audio)
+    range_header = request.headers.get("range") or request.headers.get("Range")
+    if range_header and range_header.startswith("bytes="):
+        try:
+            r = range_header.replace("bytes=", "").strip()
+            start_s, _, end_s = r.partition("-")
+            start = int(start_s) if start_s else 0
+            end = int(end_s) if end_s else total - 1
+            if start < 0:
+                start = 0
+            if end >= total:
+                end = total - 1
+            if start > end:
+                raise ValueError("invalid range")
+            chunk = audio[start:end + 1]
+            return Response(
+                content=chunk,
+                status_code=206,
+                media_type="audio/mpeg",
+                headers={
+                    "Content-Range": f"bytes {start}-{end}/{total}",
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": str(len(chunk)),
+                    "Cache-Control": "no-store",
+                },
+            )
+        except Exception:
+            # Fall through to full response on malformed range
+            pass
+
     return Response(
         content=audio,
         media_type="audio/mpeg",
         headers={
             "Cache-Control": "no-store",
-            "Content-Length": str(len(audio)),
+            "Content-Length": str(total),
             "Accept-Ranges": "bytes",
         },
     )
