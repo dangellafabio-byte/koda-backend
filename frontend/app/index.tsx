@@ -406,16 +406,20 @@ export default function Taccuino() {
   };
 
   const onBigButton = () => {
-    // STOP press: terminate any active conversation loop
-    if (convActiveRef.current && (status === "speaking" || status === "thinking" || recRef.current)) {
-      // explicit STOP from the user
+    // While the user is RECORDING, the big button always means "stop recording
+    // and send the audio" — regardless of conversation_mode. The previous
+    // behavior (terminate the loop and CANCEL the recording) was confusing
+    // and discarded the audio, making it look like the AI didn't hear at all.
+    if (status === "recording" || recRef.current) {
+      stopTalk();
+      return;
+    }
+
+    // While AI is speaking/thinking AND we're in a conversation loop,
+    // the big button terminates the loop (otherwise the user has no way out).
+    if (convActiveRef.current && (status === "speaking" || status === "thinking")) {
       setConvActive(false);
       try { SpeechMod.stop(); } catch {}
-      if (recRef.current) {
-        // cancel ongoing recording without sending
-        try { recRef.current.cancel?.(); } catch {}
-        recRef.current = null;
-      }
       setStatus("idle");
       return;
     }
@@ -424,8 +428,6 @@ export default function Taccuino() {
       // Tap to start. If conversation_mode is on, turn the loop ON
       if (conversationOn) setConvActive(true);
       startTalk();
-    } else if (status === "recording") {
-      stopTalk();
     } else if (status === "speaking") {
       // Stop AI voice and immediately start recording — single tap interrupts and listens
       SpeechMod.stop();
@@ -1260,14 +1262,44 @@ export default function Taccuino() {
           <View style={styles.recapCard}>
             <View style={styles.settingsHeader}>
               <Text style={styles.settingsTitle}>Sunto al volo</Text>
-              <TouchableOpacity onPress={() => setShowRecap(false)}>
-                <Ionicons name="close" size={24} color={theme.text} />
-              </TouchableOpacity>
+              <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+                {recapText ? (
+                  <TouchableOpacity
+                    onPress={async () => {
+                      SpeechMod.stop();
+                      try {
+                        const lang = profile?.language === "it" ? "it-IT" : profile?.language || "it-IT";
+                        await SpeechMod.speak(recapText, { language: lang, tone: "warm" });
+                      } catch {}
+                    }}
+                    style={styles.recapPlayBtn}
+                    testID="recap-play"
+                  >
+                    <Ionicons name="volume-high" size={18} color={theme.primaryText} />
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity onPress={() => { SpeechMod.stop(); setShowRecap(false); }}>
+                  <Ionicons name="close" size={24} color={theme.text} />
+                </TouchableOpacity>
+              </View>
             </View>
             {recapText === null ? (
               <ActivityIndicator color={theme.primary} />
             ) : (
-              <Text style={styles.recapText}>{recapText}</Text>
+              <TouchableOpacity
+                onPress={async () => {
+                  SpeechMod.stop();
+                  try {
+                    const lang = profile?.language === "it" ? "it-IT" : profile?.language || "it-IT";
+                    await SpeechMod.speak(recapText, { language: lang, tone: "warm" });
+                  } catch {}
+                }}
+                activeOpacity={0.7}
+                testID="recap-text"
+              >
+                <Text style={styles.recapText}>{recapText}</Text>
+                <Text style={styles.recapHint}>Tocca per sentirlo a voce</Text>
+              </TouchableOpacity>
             )}
           </View>
         </View>
@@ -1974,5 +2006,14 @@ const makeStyles = (t: any) => StyleSheet.create({
     borderColor: t.border,
   },
   recapText: { color: t.text, fontSize: 15, lineHeight: 22 },
+  recapHint: { color: t.textDim, fontSize: 12, marginTop: 12, fontStyle: "italic" },
+  recapPlayBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 999,
+    backgroundColor: t.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
 });
 

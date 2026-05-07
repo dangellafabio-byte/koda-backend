@@ -130,11 +130,11 @@ function stopAllPlayback() {
     })();
   }
 
-  // Stop web <audio>
+  // Stop web <audio> — just pause, don't clear src (Safari throws an error
+  // event when src="" and may refuse subsequent plays on the same element).
   if (currentWebAudio) {
     try {
       currentWebAudio.pause();
-      currentWebAudio.src = "";
     } catch {}
     currentWebAudio = null;
   }
