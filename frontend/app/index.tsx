@@ -562,6 +562,17 @@ export default function Taccuino() {
     } catch {}
   };
 
+  // When settings closes, re-prime mic recording mode so the next press of
+  // the big button doesn't fail with "Microfono non disponibile" (after
+  // previewing voices the audio session is in playback-only mode).
+  const closeSettings = () => {
+    setShowSettings(false);
+    SpeechMod.stop();
+    if (profile?.settings?.input_mode !== "text") {
+      prewarmMic().catch(() => {});
+    }
+  };
+
   /**
    * Tap-on-voice-card handler: select the voice AND immediately play a short
    * preview using that voice. One gesture, no separate play button.
@@ -825,13 +836,13 @@ export default function Taccuino() {
         visible={showSettings}
         transparent
         animationType="slide"
-        onRequestClose={() => setShowSettings(false)}
+        onRequestClose={() => closeSettings()}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.settingsCard}>
             <View style={styles.settingsHeader}>
               <Text style={styles.settingsTitle}>Impostazioni</Text>
-              <TouchableOpacity onPress={() => setShowSettings(false)}>
+              <TouchableOpacity onPress={() => closeSettings()}>
                 <Ionicons name="close" size={24} color={theme.text} />
               </TouchableOpacity>
             </View>

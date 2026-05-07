@@ -187,27 +187,51 @@ async function playElevenLabsNative(audioBuf: ArrayBuffer): Promise<boolean> {
         shouldDuckAndroid: true,
         playThroughEarpieceAndroid: false,
       });
-    } catch {}
+      // Give iOS' AVAudioSession a tick to fully apply the new category
+      // before we try to load/play. Without this, the very first TTS after
+      // recording can fail silently and we'd fall back to expo-speech.
+      await new Promise((r) => setTimeout(r, 60));
+    } catch (e) {
+      console.warn("[speech] setAudioModeAsync failed", e);
+    }
 
     // Encode bytes to base64
     const b64 = arrayBufferToBase64(audioBuf);
-    if (!b64) return false;
+    if (!b64) {
+      console.warn("[speech] base64 encoding failed");
+      return false;
+    }
 
     // Write MP3 bytes to a temporary file. Audio.Sound playback from a real file URI
     // is far more reliable than a data: URI on both iOS and Android (data URIs often
     // play silently or fail to load).
     const dir = (FileSystem.cacheDirectory || FileSystem.documentDirectory || "") as string;
-    if (!dir) return false;
+    if (!dir) {
+      console.warn("[speech] no FileSystem dir");
+      return false;
+    }
     fileUri = `${dir}taccuino_tts_${Date.now()}.mp3`;
-    await FileSystem.writeAsStringAsync(fileUri, b64, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
+    try {
+      await FileSystem.writeAsStringAsync(fileUri, b64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+    } catch (e) {
+      console.warn("[speech] writeAsStringAsync failed", e);
+      return false;
+    }
 
     // Create + play
-    const { sound } = await Audio.Sound.createAsync(
-      { uri: fileUri },
-      { shouldPlay: true, volume: 1.0 },
-    );
+    let sound: Audio.Sound;
+    try {
+      const created = await Audio.Sound.createAsync(
+        { uri: fileUri },
+        { shouldPlay: true, volume: 1.0 },
+      );
+      sound = created.sound;
+    } catch (e) {
+      console.warn("[speech] Audio.Sound.createAsync failed", e);
+      return false;
+    }
     currentSound = sound;
 
     return await new Promise<boolean>((resolve) => {
@@ -243,6 +267,7 @@ async function playElevenLabsNative(audioBuf: ArrayBuffer): Promise<boolean> {
       }, 60000);
     });
   } catch (e) {
+    console.warn("[speech] playElevenLabsNative outer error", e);
     if (fileUri) {
       try { await FileSystem.deleteAsync(fileUri, { idempotent: true }); } catch {}
     }

@@ -157,14 +157,23 @@ export async function startRecording(): Promise<Recorder> {
   }
 
   // Native: use expo-av
-  if (!_nativeReady) {
+  // CRITICAL: always re-apply the recording-friendly audio mode here.
+  // After playing TTS (ElevenLabs preview / AI reply), the audio mode is
+  // switched to `playback` (allowsRecordingIOS: false). If we didn't reset
+  // it here, the next mic tap would fail with "Microfono non disponibile".
+  try {
     await Audio.requestPermissionsAsync();
+  } catch {}
+  try {
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: true,
       playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
     });
-    _nativeReady = true;
-  }
+  } catch {}
+  _nativeReady = true;
   const rec = new Audio.Recording();
   // Enable metering for silence detection
   await rec.prepareToRecordAsync({
