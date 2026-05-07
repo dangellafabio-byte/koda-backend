@@ -353,6 +353,16 @@ export default function Taccuino() {
         rec.onSilence(() => {
           if (recRef.current === rec) stopTalk();
         });
+        // ABSOLUTE safety net: if the analyser-based silence detection fails
+        // (e.g. Safari AudioContext stays suspended → no RMS readings →
+        // silence never detected), force-stop after 9 seconds. This guarantees
+        // hands-free conversation actually progresses even when audio analysis
+        // is broken on the device.
+        setTimeout(() => {
+          if (recRef.current === rec) {
+            stopTalk();
+          }
+        }, 9000);
       }
       if (rec.onSpeechStart) {
         rec.onSpeechStart(() => {
