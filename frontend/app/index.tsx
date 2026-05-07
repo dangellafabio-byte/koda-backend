@@ -27,6 +27,7 @@ import {
   Domain,
   Action,
   VoiceOption,
+  Tone,
 } from "../lib/api";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId } from "../lib/speech";
@@ -578,6 +579,22 @@ export default function Taccuino() {
   };
 
   /**
+   * Tap-on-AI-bubble handler: re-play the AI's message text via ElevenLabs.
+   * Stops any current playback first, then speaks using the user's chosen voice.
+   */
+  const replayMessage = async (entry: TimelineEntry) => {
+    if (!entry || entry.role !== "assistant" || !entry.text) return;
+    SpeechMod.stop();
+    try {
+      const langTag = profile?.language === "it" ? "it-IT" : profile?.language || "it-IT";
+      await SpeechMod.speak(entry.text, {
+        language: langTag,
+        tone: (entry.tone as Tone) || "neutral",
+      });
+    } catch {}
+  };
+
+  /**
    * Tap-on-voice-card handler: select the voice AND immediately play a short
    * preview using that voice. One gesture, no separate play button.
    */
@@ -667,7 +684,7 @@ export default function Taccuino() {
             </Text>
           </View>
         ) : (
-          timeline.map((e) => <Bubble key={e.id} entry={e} />)
+          timeline.map((e) => <Bubble key={e.id} entry={e} onReplay={replayMessage} />)
         )}
 
         {status === "thinking" && (
@@ -992,7 +1009,14 @@ export default function Taccuino() {
                     >
                       <Ionicons name="remove" size={18} color={theme.text} />
                     </TouchableOpacity>
-                    <Text style={styles.hourValue}>{String(dayStart).padStart(2, "0")}:00</Text>
+                    <Text
+                      style={styles.hourValue}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.7}
+                    >
+                      {String(dayStart).padStart(2, "0")}:00
+                    </Text>
                     <TouchableOpacity
                       onPress={() => saveHours(Math.min(23, dayStart + 1), nightStart)}
                       style={styles.hourBtn}
@@ -1010,7 +1034,14 @@ export default function Taccuino() {
                     >
                       <Ionicons name="remove" size={18} color={theme.text} />
                     </TouchableOpacity>
-                    <Text style={styles.hourValue}>{String(nightStart).padStart(2, "0")}:00</Text>
+                    <Text
+                      style={styles.hourValue}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.7}
+                    >
+                      {String(nightStart).padStart(2, "0")}:00
+                    </Text>
                     <TouchableOpacity
                       onPress={() => saveHours(dayStart, Math.min(23, nightStart + 1))}
                       style={styles.hourBtn}
@@ -1040,6 +1071,7 @@ export default function Taccuino() {
                   color={inputMode === "voice" ? theme.primaryText : theme.text}
                 />
                 <Text
+                  numberOfLines={1}
                   style={[
                     styles.modeBtnText,
                     inputMode === "voice" && styles.modeBtnTextActive,
@@ -1062,6 +1094,7 @@ export default function Taccuino() {
                   color={inputMode === "text" ? theme.primaryText : theme.text}
                 />
                 <Text
+                  numberOfLines={1}
                   style={[
                     styles.modeBtnText,
                     inputMode === "text" && styles.modeBtnTextActive,
@@ -1084,6 +1117,7 @@ export default function Taccuino() {
                   color={inputMode === "both" ? theme.primaryText : theme.text}
                 />
                 <Text
+                  numberOfLines={1}
                   style={[
                     styles.modeBtnText,
                     inputMode === "both" && styles.modeBtnTextActive,
@@ -1257,7 +1291,7 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
   );
 }
 
-function Bubble({ entry }: { entry: TimelineEntry }) {
+function Bubble({ entry, onReplay }: { entry: TimelineEntry; onReplay?: (e: TimelineEntry) => void }) {
   const { theme } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const isUser = entry.role === "user";
@@ -1265,17 +1299,35 @@ function Bubble({ entry }: { entry: TimelineEntry }) {
   const ts = theme.tone[tone] || theme.tone.neutral;
   const dom = entry.domain ? domainBadge[entry.domain as Domain] : null;
 
-  return (
-    <View style={[styles.bubbleRow, isUser ? styles.bubbleRowR : styles.bubbleRowL]}>
-      <View
-        style={[
+  const Wrapper: any = !isUser && onReplay ? Pressable : View;
+  const wrapperProps: any = !isUser && onReplay
+    ? {
+        onPress: () => onReplay(entry),
+        style: ({ pressed }: any) => [
           isUser ? styles.bubbleUser : styles.bubbleAi,
           !isUser && {
             backgroundColor: ts.bg,
             borderColor: ts.border,
           },
-        ]}
-      >
+          pressed && { opacity: 0.78 },
+        ],
+        accessibilityRole: "button",
+        accessibilityLabel: "Tocca per riascoltare a voce",
+        testID: `replay-${entry.id}`,
+      }
+    : {
+        style: [
+          isUser ? styles.bubbleUser : styles.bubbleAi,
+          !isUser && {
+            backgroundColor: ts.bg,
+            borderColor: ts.border,
+          },
+        ],
+      };
+
+  return (
+    <View style={[styles.bubbleRow, isUser ? styles.bubbleRowR : styles.bubbleRowL]}>
+      <Wrapper {...wrapperProps}>
         {!isUser && dom ? (
           <View style={[styles.domainPill, { borderColor: dom.color }]}>
             <Text style={styles.domainEmoji}>{dom.emoji}</Text>
@@ -1324,7 +1376,7 @@ function Bubble({ entry }: { entry: TimelineEntry }) {
             })}
           </View>
         ) : null}
-      </View>
+      </Wrapper>
       <Text style={styles.bubbleTime}>
         {new Date(entry.timestamp).toLocaleTimeString([], {
           hour: "2-digit",
@@ -1740,17 +1792,18 @@ const makeStyles = (t: any) => StyleSheet.create({
     transform: [{ translateX: 18 }],
   },
 
-  modeRow: { flexDirection: "row", gap: 10, marginTop: 4 },
+  modeRow: { flexDirection: "row", gap: 6, marginTop: 4 },
   modeBtn: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
+    gap: 4,
     backgroundColor: t.surfaceAlt,
     borderColor: t.border,
     borderWidth: 1,
     paddingVertical: 12,
+    paddingHorizontal: 4,
     borderRadius: 14,
   },
   modeBtnActive: {
@@ -1759,8 +1812,9 @@ const makeStyles = (t: any) => StyleSheet.create({
   },
   modeBtnText: {
     color: t.text,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "600",
+    flexShrink: 1,
   },
   modeBtnTextActive: {
     color: t.primaryText,
