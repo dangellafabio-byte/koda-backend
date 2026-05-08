@@ -258,6 +258,13 @@ export default function Taccuino() {
     try { await api.updateProfile({ settings: next.settings } as any); } catch {}
   };
 
+  const setBubbleStyle = async (style: "glass" | "solid") => {
+    if (!profile) return;
+    const next = { ...profile, settings: { ...profile.settings, bubble_style: style } as any };
+    setProfile(next);
+    try { await api.updateProfile({ settings: next.settings } as any); } catch {}
+  };
+
   const pickBackgroundFromGallery = async () => {
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -851,6 +858,11 @@ export default function Taccuino() {
     () => resolveBubbleColors((profile?.settings as any)?.bubble_color),
     [(profile?.settings as any)?.bubble_color]
   );
+  const bubbleStyle: "glass" | "solid" =
+    ((profile?.settings as any)?.bubble_style === "solid") ? "solid" : "glass";
+  // Text color uniform across both user & AI bubbles, derived from theme.
+  // Light themes (carta/aurora etc.) → dark text; dark themes → light text.
+  const textOnBubble = theme.text;
 
   // === Build timeline w/ day separators
   const timelineWithSeparators = useMemo(() => {
@@ -933,6 +945,8 @@ export default function Taccuino() {
                 onReplay={replayMessage}
                 aiAvatar={(profile?.settings as any)?.ai_avatar || null}
                 bubbleAccent={bubbleAccent}
+                bubbleStyle={bubbleStyle}
+                textOnBubble={textOnBubble}
               />
             )
           )
@@ -946,13 +960,17 @@ export default function Taccuino() {
             <View
               style={[
                 styles.bubbleAi,
-                { backgroundColor: bubbleAccent.soft, borderColor: bubbleAccent.color },
+                {
+                  backgroundColor: bubbleStyle === "solid" ? bubbleAccent.color : bubbleAccent.soft,
+                  borderColor: bubbleAccent.color,
+                  borderWidth: bubbleStyle === "glass" ? 1 : 0,
+                },
               ]}
             >
               <View style={{ flexDirection: "row", alignItems: "center", gap: 4, height: 18 }}>
-                <TypingDot delay={0} color={bubbleAccent.color} />
-                <TypingDot delay={150} color={bubbleAccent.color} />
-                <TypingDot delay={300} color={bubbleAccent.color} />
+                <TypingDot delay={0} color={textOnBubble} />
+                <TypingDot delay={150} color={textOnBubble} />
+                <TypingDot delay={300} color={textOnBubble} />
               </View>
             </View>
           </View>
@@ -1362,6 +1380,39 @@ export default function Taccuino() {
                   </TouchableOpacity>
                 ) : null}
               </View>
+            </View>
+
+            {/* Bubble style toggle: glass / solid */}
+            <Text style={[styles.settingsHint, { marginTop: 14 }]}>Stile bolla</Text>
+            <View style={styles.modeRow}>
+              <TouchableOpacity
+                onPress={() => setBubbleStyle("glass")}
+                style={[
+                  styles.modeBtn,
+                  bubbleStyle === "glass" && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
+                  { flex: 1 },
+                ]}
+                testID="bubble-style-glass"
+              >
+                <Ionicons name="water-outline" size={16} color={bubbleStyle === "glass" ? bubbleAccent.color : theme.text} />
+                <Text style={[styles.modeBtnText, bubbleStyle === "glass" && { color: bubbleAccent.color, fontWeight: "700" }]}>
+                  Vetro
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setBubbleStyle("solid")}
+                style={[
+                  styles.modeBtn,
+                  bubbleStyle === "solid" && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
+                  { flex: 1 },
+                ]}
+                testID="bubble-style-solid"
+              >
+                <Ionicons name="square" size={16} color={bubbleStyle === "solid" ? bubbleAccent.color : theme.text} />
+                <Text style={[styles.modeBtnText, bubbleStyle === "solid" && { color: bubbleAccent.color, fontWeight: "700" }]}>
+                  Solido
+                </Text>
+              </TouchableOpacity>
             </View>
 
             {/* Bubble color picker */}
@@ -1869,63 +1920,68 @@ function Bubble({
   onReplay,
   aiAvatar,
   bubbleAccent,
+  bubbleStyle,
+  textOnBubble,
 }: {
   entry: TimelineEntry;
   onReplay?: (e: TimelineEntry) => void;
   aiAvatar?: string | null;
   bubbleAccent: { color: string; soft: string };
+  bubbleStyle: "glass" | "solid";
+  textOnBubble: string; // theme-derived: dark on light themes, light on dark themes
 }) {
   const { theme } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const isUser = entry.role === "user";
   const [showTime, setShowTime] = useState(false);
 
-  const userBubbleColors: [string, string] = [theme.userBubble, bubbleAccent.color];
+  // Compute backgrounds for both bubbles based on chosen style.
+  // In SOLID mode both are opaque (block wallpaper for max readability).
+  // In GLASS mode both are translucent (wallpaper shows through subtly).
+  const aiBg = bubbleStyle === "solid" ? bubbleAccent.color : bubbleAccent.soft;
+  const userBg = bubbleStyle === "solid" ? theme.userBubble : theme.userBubble + "55";
+  const aiBorder = bubbleAccent.color;
+  const userBorder = bubbleStyle === "solid" ? "transparent" : theme.primary + "AA";
+
+  const wrapperPress = (cb: () => void) => ({
+    onPress: cb,
+    onLongPress: () => setShowTime((s) => !s),
+    delayLongPress: 250,
+  });
 
   return (
     <View style={[styles.bubbleRow, isUser ? styles.bubbleRowR : styles.bubbleRowL]}>
       {!isUser ? <AIAvatar photo={aiAvatar} color={bubbleAccent.color} /> : null}
       <View style={{ maxWidth: "82%" }}>
         {isUser ? (
-          // User bubble: gradient with rounded tail-corner
           <Pressable
-            onPress={() => setShowTime((s) => !s)}
-            onLongPress={() => setShowTime((s) => !s)}
-            delayLongPress={250}
-            style={({ pressed }) => [pressed && { opacity: 0.85 }]}
+            {...wrapperPress(() => setShowTime((s) => !s))}
+            style={({ pressed }) => [
+              styles.bubbleUser,
+              { backgroundColor: userBg, borderColor: userBorder, borderWidth: bubbleStyle === "glass" ? 1 : 0 },
+              pressed && { opacity: 0.85 },
+            ]}
           >
-            <LinearGradient
-              colors={userBubbleColors}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.bubbleUser}
-            >
-              <Text style={styles.bubbleUserText}>{entry.text}</Text>
-            </LinearGradient>
+            <Text style={[styles.bubbleUserText, { color: textOnBubble }]}>{entry.text}</Text>
           </Pressable>
         ) : (
           <Pressable
-            onPress={() => {
+            {...wrapperPress(() => {
               if (onReplay) onReplay(entry);
               else setShowTime((s) => !s);
-            }}
-            onLongPress={() => setShowTime((s) => !s)}
-            delayLongPress={250}
+            })}
             style={({ pressed }: any) => [
               styles.bubbleAi,
-              {
-                backgroundColor: bubbleAccent.soft,
-                borderColor: bubbleAccent.color,
-              },
+              { backgroundColor: aiBg, borderColor: aiBorder, borderWidth: bubbleStyle === "glass" ? 1 : 0 },
               pressed && { opacity: 0.78 },
             ]}
             accessibilityRole="button"
             accessibilityLabel="Tocca per ascoltare. Tocca di nuovo per fermare."
             testID={`replay-${entry.id}`}
           >
-            <Text style={styles.bubbleAiText}>{entry.text}</Text>
+            <Text style={[styles.bubbleAiText, { color: textOnBubble }]}>{entry.text}</Text>
             {entry.extracted?.amount ? (
-              <Text style={styles.extractMeta}>
+              <Text style={[styles.extractMeta, { color: textOnBubble, opacity: 0.85 }]}>
                 💶 {entry.extracted.amount}
                 {entry.extracted.currency ? ` ${entry.extracted.currency}` : ""}
                 {entry.extracted.item ? ` · ${entry.extracted.item}` : ""}
@@ -1938,22 +1994,16 @@ function Bubble({
                   const when = a.when_iso ? new Date(a.when_iso) : null;
                   const timeStr = when
                     ? when.toLocaleString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        day: "2-digit",
-                        month: "2-digit",
+                        hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit",
                       })
                     : "—";
                   return (
                     <View key={idx} style={styles.actionPill}>
                       <Text style={styles.actionEmoji}>🔔</Text>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.actionTitle}>
-                          {a.title || "Promemoria"}
-                        </Text>
-                        <Text style={styles.actionSub}>
-                          {a.label || timeStr}
-                          {a.body ? ` · ${a.body}` : ""}
+                        <Text style={[styles.actionTitle, { color: textOnBubble }]}>{a.title || "Promemoria"}</Text>
+                        <Text style={[styles.actionSub, { color: textOnBubble, opacity: 0.75 }]}>
+                          {a.label || timeStr}{a.body ? ` · ${a.body}` : ""}
                         </Text>
                       </View>
                     </View>
@@ -1965,10 +2015,7 @@ function Bubble({
         )}
         {showTime ? (
           <Text style={[styles.bubbleTime, isUser ? { textAlign: "right" } : { textAlign: "left" }]}>
-            {new Date(entry.timestamp).toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
+            {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </Text>
         ) : null}
       </View>

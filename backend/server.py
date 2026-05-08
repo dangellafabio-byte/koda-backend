@@ -467,6 +467,9 @@ class TaccuinoSettings(BaseModel):
     # Bubble accent color used for AI bubbles. Either a preset name ("viola",
     # "verde_acqua", "rosa", "ambra", "ghiaccio") or a custom hex string.
     bubble_color: str = "viola"
+    # Bubble visual style — "glass" (semi-transparent, wallpaper shows through)
+    # or "solid" (opaque, blocks the wallpaper for max readability).
+    bubble_style: str = "glass"
     domains: dict = Field(
         default_factory=lambda: {
             "soldi": True,
