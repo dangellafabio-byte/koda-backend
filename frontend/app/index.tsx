@@ -799,26 +799,28 @@ export default function Taccuino() {
   // Build the screen wrapper with optional background image / gradient
   const screenInner = (
     <View style={[styles.screen, { paddingTop: insets.top, backgroundColor: bgValue ? "transparent" : theme.bg }]}>
-      {/* Header */}
-      <View style={styles.header}>
+      {/* Header — ABSOLUTELY positioned + transparent. Messages scroll BEHIND
+          it freely. The pills only have an icon/text; no opaque background.
+          A subtle dark blur backdrop on each pill keeps icons readable. */}
+      <View style={styles.header} pointerEvents="box-none">
         <TouchableOpacity
-          style={[styles.headerBtn, bgValue && styles.headerBtnGlass]}
+          style={styles.headerBtn}
           onPress={askRecap}
           testID="recap-btn"
         >
-          <Ionicons name="reader-outline" size={18} color={bgValue ? "#FFFFFF" : theme.text} />
-          <Text style={[styles.headerBtnText, bgValue && { color: "#FFFFFF" }]}>Sunto</Text>
+          <Ionicons name="reader-outline" size={20} color="#FFFFFF" />
+          <Text style={styles.headerBtnText}>Sunto</Text>
         </TouchableOpacity>
-        <View style={styles.headerCenter}>
+        <View style={styles.headerCenter} pointerEvents="none">
           <View style={[styles.dot, aiPaused && { backgroundColor: "#94A3B8" }]} />
-          <Text style={[styles.headerTitle, bgValue && styles.headerTitleOnBg]}>Taccuino</Text>
+          <Text style={styles.headerTitle}>Taccuino</Text>
         </View>
         <TouchableOpacity
-          style={[styles.headerBtn, bgValue && styles.headerBtnGlass]}
+          style={styles.headerBtn}
           onPress={() => setShowSettings(true)}
           testID="settings-btn"
         >
-          <Ionicons name="settings-outline" size={18} color={bgValue ? "#FFFFFF" : theme.text} />
+          <Ionicons name="settings-outline" size={20} color="#FFFFFF" />
         </TouchableOpacity>
       </View>
 
@@ -898,37 +900,33 @@ export default function Taccuino() {
           </KeyboardAvoidingView>
         ) : (
           <View style={styles.bigBtnArea}>
-            <Text style={[styles.statusLabel, bgValue && styles.statusLabelOnBg]}>
+            <Text style={[styles.statusLabel, styles.statusLabelOnBg]}>
               {aiPaused ? "AI in pausa" : statusLabel}
             </Text>
             <View style={styles.bigBtnWrap}>
-              {/* Neon glow halo underneath — breathes wider than the button.
-                  When a custom background is set, hide the halo entirely so the
-                  wallpaper isn't covered by a giant lavender bloom. The button
-                  itself keeps its own subtle shadow. */}
-              {!bgValue ? (
-                <Animated.View
-                  pointerEvents="none"
-                  style={[
-                    styles.neonGlow,
-                    status === "recording" && { backgroundColor: "#EF4444" },
-                    {
-                      opacity: breathe.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [0.25, 0.45],
-                      }),
-                      transform: [
-                        {
-                          scale: breathe.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [1.0, 1.15],
-                          }),
-                        },
-                      ],
-                    },
-                  ]}
-                />
-              ) : null}
+              {/* Subtle breathing halo around the button — kept small enough
+                  not to cover the wallpaper. The big bloom version is gone. */}
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.neonGlow,
+                  status === "recording" && { backgroundColor: "#EF4444" },
+                  {
+                    opacity: breathe.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0.18, 0.32],
+                    }),
+                    transform: [
+                      {
+                        scale: breathe.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [1.0, 1.10],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              />
               {/* Secondary softer halo for added neon bleed.
                   Skip entirely when a custom background is set — its huge
                   boxShadow blanket covers the wallpaper. */}
@@ -1762,45 +1760,64 @@ function Bubble({ entry, onReplay }: { entry: TimelineEntry; onReplay?: (e: Time
 const makeStyles = (t: any) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: t.bg },
 
-  // Header
+  // Header — ABSOLUTELY positioned, transparent. Messages scroll behind it.
   header: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 14,
     paddingVertical: 10,
     gap: 10,
+    zIndex: 10,
   },
   headerCenter: { flex: 1, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
   dot: { width: 8, height: 8, borderRadius: 999, backgroundColor: t.success },
-  headerTitle: { color: t.text, fontWeight: "700", letterSpacing: 0.5, fontSize: 14 },
+  headerTitle: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    letterSpacing: 0.5,
+    fontSize: 14,
+    textShadowColor: "rgba(0,0,0,0.7)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  // Header buttons — totally transparent, no background, no border.
+  // Just the icon (and label for "Sunto") with a soft text shadow for legibility.
   headerBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: t.surfaceAlt,
-    borderColor: t.border,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
+    backgroundColor: "transparent",
+    paddingHorizontal: 4,
+    paddingVertical: 6,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOpacity: 0.6,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 1 },
+      },
+      android: { elevation: 0 },
+      default: { textShadow: "0 1px 4px rgba(0,0,0,0.7)" } as any,
+    }),
   },
-  // Glassmorphism variant — used when a custom background is set so the
-  // wallpaper shows through the header pills.
-  headerBtnGlass: {
-    backgroundColor: "rgba(0,0,0,0.35)",
-    borderColor: "rgba(255,255,255,0.18)",
-  },
-  headerBtnText: { color: t.text, fontSize: 12, fontWeight: "600" },
-  headerTitleOnBg: {
+  headerBtnText: {
     color: "#FFFFFF",
-    textShadowColor: "rgba(0,0,0,0.6)",
+    fontSize: 13,
+    fontWeight: "700",
+    textShadowColor: "rgba(0,0,0,0.7)",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 4,
   },
 
-  // Timeline
+  // Timeline — ScrollView extends FULL HEIGHT (no top/bottom bar squeezing it).
   timeline: { flex: 1 },
-  timelineContent: { paddingHorizontal: 16, paddingTop: 12 },
+  // Top padding so first message doesn't hide under the absolute header.
+  // Bottom padding handled inline (computed from insets + bottom bar height).
+  timelineContent: { paddingHorizontal: 16, paddingTop: 70 },
 
   emptyState: {
     alignItems: "center",
@@ -1925,10 +1942,13 @@ const makeStyles = (t: any) => StyleSheet.create({
     marginTop: 2,
   },
 
-  // Bottom bar — transparent so the background image is visible behind the
-  // microphone button. A soft gradient fade above it keeps the controls
-  // legible without hiding the wallpaper.
+  // Bottom bar — ALWAYS transparent and absolutely positioned. Messages can
+  // scroll behind it; the mic button just floats over the timeline.
   bottomBar: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
     paddingHorizontal: 20,
     backgroundColor: "transparent",
   },
@@ -1955,25 +1975,24 @@ const makeStyles = (t: any) => StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  // Soft neon glow underneath the button; absolutely positioned, breathes
+  // Soft neon glow underneath the button — kept tight (no big bloom anymore)
   neonGlow: {
     position: "absolute",
     width: 150,
     height: 150,
     borderRadius: 999,
     backgroundColor: t.primary,
-    // Use boxShadow (web) and shadowRadius (native) for sfumato/neon bleed
+    // Tighter shadows so the wallpaper isn't covered
     ...Platform.select({
       ios: {
         shadowColor: t.primary,
-        shadowOpacity: 1.0,
-        shadowRadius: 45,
+        shadowOpacity: 0.7,
+        shadowRadius: 18,
         shadowOffset: { width: 0, height: 0 },
       },
       android: { elevation: 0 },
       web: {
-        // large colored blur for the neon fade
-        boxShadow: `0 0 60px 20px ${t.primary}`,
+        boxShadow: `0 0 22px 4px ${t.primary}`,
       } as any,
     }),
   },
