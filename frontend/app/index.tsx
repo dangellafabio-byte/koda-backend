@@ -130,6 +130,7 @@ export default function Taccuino() {
   const breathe = useRef(new Animated.Value(0)).current;
   // Live meter value (dB) shown as debug visualization during recording
   const [meterDb, setMeterDb] = useState<number | null>(null);
+  const [meterThreshold, setMeterThreshold] = useState<number | null>(null);
 
   // Initial load
   useEffect(() => {
@@ -510,8 +511,11 @@ export default function Taccuino() {
       recRef.current = rec;
       // Wire live meter for debug visualization
       if (rec.onMeter) {
-        rec.onMeter((db: number) => {
-          if (recRef.current === rec) setMeterDb(db);
+        rec.onMeter((db: number, threshold?: number | null) => {
+          if (recRef.current === rec) {
+            setMeterDb(db);
+            if (typeof threshold === "number") setMeterThreshold(threshold);
+          }
         });
       }
       // Only mark "recording" if we're not currently in "speaking" (otherwise
@@ -556,6 +560,8 @@ export default function Taccuino() {
     if (!current) return;
     recRef.current = null;
     setStatus("transcribing");
+    setMeterDb(null);
+    setMeterThreshold(null);
     try {
       const res = await current.stop();
       // CRITICAL: switch the audio session out of "recording" mode IMMEDIATELY
@@ -1040,26 +1046,40 @@ export default function Taccuino() {
               {aiPaused ? "AI in pausa" : statusLabel}
             </Text>
             {/* Live meter visualizer — visible only during recording.
-                Helps debug when silence detection isn't firing. */}
+                Shows ADAPTIVE threshold (calibrated from ambient noise in
+                first 600ms). */}
             {status === "recording" && meterDb !== null ? (
               <View style={styles.meterWrap}>
                 <View style={styles.meterBar}>
-                  {/* Background: full -60..0 dB range */}
-                  {/* Threshold marker at -40 dB (VOICE_PRESENT_DB) */}
-                  <View style={[styles.meterThreshold, { left: `${Math.round(((-40 + 60) / 60) * 100)}%` }]} />
+                  {/* Threshold marker — DYNAMIC value from calibration.
+                      Until calibrated (first 600ms), no marker shown. */}
+                  {meterThreshold !== null ? (
+                    <View
+                      style={[
+                        styles.meterThreshold,
+                        { left: `${Math.max(0, Math.min(100, Math.round(((meterThreshold + 60) / 60) * 100)))}%` },
+                      ]}
+                    />
+                  ) : null}
                   {/* Fill: current meter value (clipped to range) */}
                   <View
                     style={[
                       styles.meterFill,
                       {
                         width: `${Math.max(0, Math.min(100, Math.round(((meterDb + 60) / 60) * 100)))}%`,
-                        backgroundColor: meterDb > -40 ? "#22C55E" : "#94A3B8",
+                        backgroundColor: meterThreshold !== null && meterDb > meterThreshold ? "#22C55E" : "#94A3B8",
                       },
                     ]}
                   />
                 </View>
                 <Text style={styles.meterLabel}>
-                  {meterDb.toFixed(0)} dB {meterDb > -40 ? "🟢 voce" : "⚪ silenzio"}
+                  {meterDb.toFixed(0)} dB{" "}
+                  {meterThreshold === null
+                    ? "⚙️ calibro…"
+                    : meterDb > meterThreshold
+                    ? "🟢 voce"
+                    : "⚪ silenzio"}
+                  {meterThreshold !== null ? `  ·  soglia ${meterThreshold.toFixed(0)} dB` : ""}
                 </Text>
               </View>
             ) : null}

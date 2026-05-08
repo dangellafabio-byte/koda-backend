@@ -10,7 +10,7 @@ export type Recorder = {
   /** Optional: register a callback fired the first time the user actually speaks (barge-in interrupt) */
   onSpeechStart?: (cb: () => void) => void;
   /** Optional: live meter callback (raw dB value, typically -160..0). For debug visualization. */
-  onMeter?: (cb: (dbValue: number) => void) => void;
+  onMeter?: (cb: (dbValue: number, voicePresentDb?: number | null) => void) => void;
   /** Pause silence-end detection (still records, still fires onSpeechStart). Used during AI TTS. */
   pauseSilence?: () => void;
   /** Resume silence-end detection. */
@@ -235,24 +235,43 @@ export async function startRecording(): Promise<Recorder> {
   let silenceFired = false;
   let speechStartFired = false;
   let silencePaused = false;
+
+  // === ADAPTIVE NOISE CALIBRATION ===
+  // For the first 600ms we sample ambient noise to set a DYNAMIC voice
+  // threshold = noise_floor + 8 dB. This way silence detection works in:
+  //  - quiet box (-65dB ambient → threshold -57)
+  //  - normal room (-50dB ambient → threshold -42)
+  //  - noisy environment (-35dB ambient → threshold -27)
+  const CALIBRATION_MS = 600;
+  const noiseSamples: number[] = [];
+  let dynamicVoicePresentDb: number | null = null;
+
   rec.setOnRecordingStatusUpdate((status) => {
     const meter = (status as any).metering;
     if (typeof meter === "number") {
-      // Expose live meter value to caller for debug visualization
       if (meterCb) {
-        try { meterCb(meter); } catch {}
+        try { meterCb(meter, dynamicVoicePresentDb); } catch {}
       }
-      // Two-tier thresholds — tuned for reliable hands-free conversation:
-      // - SPEECH_START_DB (-55): very sensitive, detects first whisper to mark
-      //   "the user is talking" (so we know to expect a silence-end later).
-      // - VOICE_PRESENT_DB (-40): STRICT. Only clearly-audible voice updates
-      //   `lastVoiceAt`. Ambient room hum, fan noise, distant TV — all below
-      //   -40dB — do NOT keep the recording alive. This is the key to making
-      //   silence fire reliably when the user actually stops speaking.
-      const SPEECH_START_DB = -55;
-      const VOICE_PRESENT_DB = -40;
+      const elapsed = Date.now() - startedAt;
+      // Phase 1: collect ambient noise samples without triggering anything
+      if (elapsed < CALIBRATION_MS) {
+        noiseSamples.push(meter);
+        return;
+      }
+      // Compute dynamic threshold once at end of calibration
+      if (dynamicVoicePresentDb === null) {
+        const sorted = [...noiseSamples].sort((a, b) => a - b);
+        // 80th percentile of samples = ambient floor (ignores transient peaks)
+        const idx = Math.max(0, Math.floor(sorted.length * 0.8));
+        const ambient = sorted[idx] ?? -55;
+        // Threshold: ambient + 8 dB margin, clamped to safe range
+        dynamicVoicePresentDb = Math.max(-55, Math.min(-25, ambient + 8));
+      }
+      const VOICE_PRESENT_DB = dynamicVoicePresentDb;
+      // SPEECH_START always 5dB below VOICE_PRESENT (catches first whisper)
+      const SPEECH_START_DB = VOICE_PRESENT_DB - 5;
 
-      if (meter > SPEECH_START_DB && Date.now() - startedAt > 250) {
+      if (meter > SPEECH_START_DB && elapsed > 250) {
         if (!everSpoke) {
           everSpoke = true;
           if (!speechStartFired && speechStartCb) {
@@ -261,22 +280,17 @@ export async function startRecording(): Promise<Recorder> {
           }
         }
       }
-      // Update lastVoiceAt only when the meter is loud enough to be REAL speech
-      // (not just background noise), so the silence timer can elapse correctly.
       if (meter > VOICE_PRESENT_DB) {
         lastVoiceAt = Date.now();
       }
-      // Don't fire silence-end while paused (used during AI TTS playback).
       if (silencePaused) return;
       if (
         !silenceFired &&
         ((everSpoke &&
           Date.now() - lastVoiceAt > 1200 &&
-          Date.now() - startedAt > 600) ||
-          // Fallback: if no speech ever detected after 10s, force-stop anyway
-          (!everSpoke && Date.now() - startedAt > 10000) ||
-          // Hard cap: 45s — generous but not infinite
-          Date.now() - startedAt > 45000) &&
+          elapsed > 800) ||
+          (!everSpoke && elapsed > 10000) ||
+          elapsed > 45000) &&
         silenceCb
       ) {
         silenceFired = true;
