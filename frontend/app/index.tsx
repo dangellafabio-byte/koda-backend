@@ -1904,12 +1904,12 @@ const makeStyles = (t: any) => StyleSheet.create({
     marginTop: 2,
   },
 
-  // Bottom bar
+  // Bottom bar — transparent so the background image is visible behind the
+  // microphone button. A soft gradient fade above it keeps the controls
+  // legible without hiding the wallpaper.
   bottomBar: {
     paddingHorizontal: 20,
-    backgroundColor: t.bg,
-    borderTopWidth: 1,
-    borderTopColor: t.divider,
+    backgroundColor: "transparent",
   },
   errorText: { color: t.danger, fontSize: 12, textAlign: "center", marginTop: 8 },
   bigBtnArea: { alignItems: "center", paddingTop: 20, justifyContent: "center" },
