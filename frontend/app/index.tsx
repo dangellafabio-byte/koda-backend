@@ -802,23 +802,23 @@ export default function Taccuino() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
-          style={styles.headerBtn}
+          style={[styles.headerBtn, bgValue && styles.headerBtnGlass]}
           onPress={askRecap}
           testID="recap-btn"
         >
-          <Ionicons name="reader-outline" size={18} color={theme.text} />
-          <Text style={styles.headerBtnText}>Sunto</Text>
+          <Ionicons name="reader-outline" size={18} color={bgValue ? "#FFFFFF" : theme.text} />
+          <Text style={[styles.headerBtnText, bgValue && { color: "#FFFFFF" }]}>Sunto</Text>
         </TouchableOpacity>
         <View style={styles.headerCenter}>
           <View style={[styles.dot, aiPaused && { backgroundColor: "#94A3B8" }]} />
-          <Text style={styles.headerTitle}>Taccuino</Text>
+          <Text style={[styles.headerTitle, bgValue && styles.headerTitleOnBg]}>Taccuino</Text>
         </View>
         <TouchableOpacity
-          style={styles.headerBtn}
+          style={[styles.headerBtn, bgValue && styles.headerBtnGlass]}
           onPress={() => setShowSettings(true)}
           testID="settings-btn"
         >
-          <Ionicons name="settings-outline" size={18} color={theme.text} />
+          <Ionicons name="settings-outline" size={18} color={bgValue ? "#FFFFFF" : theme.text} />
         </TouchableOpacity>
       </View>
 
@@ -898,54 +898,63 @@ export default function Taccuino() {
           </KeyboardAvoidingView>
         ) : (
           <View style={styles.bigBtnArea}>
-            <Text style={styles.statusLabel}>
+            <Text style={[styles.statusLabel, bgValue && styles.statusLabelOnBg]}>
               {aiPaused ? "AI in pausa" : statusLabel}
             </Text>
             <View style={styles.bigBtnWrap}>
-              {/* Neon glow halo underneath — breathes wider than the button */}
-              <Animated.View
-                pointerEvents="none"
-                style={[
-                  styles.neonGlow,
-                  status === "recording" && { backgroundColor: "#EF4444" },
-                  {
-                    opacity: breathe.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0.25, 0.45],
-                    }),
-                    transform: [
-                      {
-                        scale: breathe.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [1.0, 1.15],
-                        }),
-                      },
-                    ],
-                  },
-                ]}
-              />
-              {/* Secondary softer halo for added neon bleed */}
-              <Animated.View
-                pointerEvents="none"
-                style={[
-                  styles.neonGlowSoft,
-                  status === "recording" && { backgroundColor: "#EF4444" },
-                  {
-                    opacity: breathe.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0.12, 0.25],
-                    }),
-                    transform: [
-                      {
-                        scale: breathe.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [1.05, 1.25],
-                        }),
-                      },
-                    ],
-                  },
-                ]}
-              />
+              {/* Neon glow halo underneath — breathes wider than the button.
+                  When a custom background is set, hide the halo entirely so the
+                  wallpaper isn't covered by a giant lavender bloom. The button
+                  itself keeps its own subtle shadow. */}
+              {!bgValue ? (
+                <Animated.View
+                  pointerEvents="none"
+                  style={[
+                    styles.neonGlow,
+                    status === "recording" && { backgroundColor: "#EF4444" },
+                    {
+                      opacity: breathe.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.25, 0.45],
+                      }),
+                      transform: [
+                        {
+                          scale: breathe.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [1.0, 1.15],
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                />
+              ) : null}
+              {/* Secondary softer halo for added neon bleed.
+                  Skip entirely when a custom background is set — its huge
+                  boxShadow blanket covers the wallpaper. */}
+              {!bgValue ? (
+                <Animated.View
+                  pointerEvents="none"
+                  style={[
+                    styles.neonGlowSoft,
+                    status === "recording" && { backgroundColor: "#EF4444" },
+                    {
+                      opacity: breathe.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.12, 0.25],
+                      }),
+                      transform: [
+                        {
+                          scale: breathe.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [1.05, 1.25],
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                />
+              ) : null}
               {/* The actual button — clean, no outer rings. Breathes (scale) + mic-pulse */}
               <Animated.View
                 style={{
@@ -1775,7 +1784,19 @@ const makeStyles = (t: any) => StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 999,
   },
+  // Glassmorphism variant — used when a custom background is set so the
+  // wallpaper shows through the header pills.
+  headerBtnGlass: {
+    backgroundColor: "rgba(0,0,0,0.35)",
+    borderColor: "rgba(255,255,255,0.18)",
+  },
   headerBtnText: { color: t.text, fontSize: 12, fontWeight: "600" },
+  headerTitleOnBg: {
+    color: "#FFFFFF",
+    textShadowColor: "rgba(0,0,0,0.6)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
 
   // Timeline
   timeline: { flex: 1 },
@@ -1919,6 +1940,14 @@ const makeStyles = (t: any) => StyleSheet.create({
     fontWeight: "500",
     marginBottom: 18,
     letterSpacing: 0.3,
+  },
+  // When a custom background is set, give the status label a small dark
+  // outline so it remains readable on light wallpapers.
+  statusLabelOnBg: {
+    color: "#FFFFFF",
+    textShadowColor: "rgba(0,0,0,0.65)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
   bigBtnWrap: {
     width: 160,
