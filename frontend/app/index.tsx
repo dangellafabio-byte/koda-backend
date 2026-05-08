@@ -803,7 +803,7 @@ export default function Taccuino() {
           it freely. The pills only have an icon/text; no opaque background.
           A subtle dark blur backdrop on each pill keeps icons readable. */}
       <View
-        style={[styles.header, { top: insets.top + 4 }]}
+        style={[styles.header, { top: insets.top + 12 }]}
         pointerEvents="box-none"
       >
         <TouchableOpacity
