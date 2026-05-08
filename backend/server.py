@@ -255,17 +255,31 @@ async def transcribe(audio: UploadFile = File(...), language: str = Form("it")):
                 break
 
         stt = OpenAISpeechToText(api_key=EMERGENT_LLM_KEY)
+        # Italian-specific prompt to guide Whisper towards correct spelling
+        # of common Italian words (sports, brand names, anglicisms used in Italian).
+        # The prompt is used as biasing context — it's NOT a system instruction.
+        whisper_prompt = (
+            "Conversazione informale in italiano. Sport: boxe, calcio, tennis, padel, "
+            "yoga, palestra. Cibo: pasta, pizza, espresso, caffè, brioche, cornetto. "
+            "Tecnologia: smartphone, app, password, email, file, WiFi. "
+            "Lavoro, soldi, spese, banca. Famiglia, mamma, papà, fratello, sorella. "
+            "Numeri e orari naturali (es: alle sette e mezza, fra dieci minuti)."
+        ) if (language or "it").startswith("it") else None
+
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(data)
             tmp.flush()
             tmp.seek(0)
             with open(tmp.name, "rb") as f:
-                response = await stt.transcribe(
-                    file=f,
-                    model="whisper-1",
-                    response_format="json",
-                    language=language or "it",
-                )
+                kwargs: dict = {
+                    "file": f,
+                    "model": "whisper-1",
+                    "response_format": "json",
+                    "language": language or "it",
+                }
+                if whisper_prompt:
+                    kwargs["prompt"] = whisper_prompt
+                response = await stt.transcribe(**kwargs)
         return {"text": _clean_whisper_output(getattr(response, "text", "") or "")}
     except HTTPException:
         raise

@@ -9,6 +9,8 @@ export type Recorder = {
   onSilence?: (cb: () => void) => void;
   /** Optional: register a callback fired the first time the user actually speaks (barge-in interrupt) */
   onSpeechStart?: (cb: () => void) => void;
+  /** Optional: live meter callback (raw dB value, typically -160..0). For debug visualization. */
+  onMeter?: (cb: (dbValue: number) => void) => void;
   /** Pause silence-end detection (still records, still fires onSpeechStart). Used during AI TTS. */
   pauseSilence?: () => void;
   /** Resume silence-end detection. */
@@ -226,6 +228,7 @@ export async function startRecording(): Promise<Recorder> {
 
   let silenceCb: (() => void) | null = null;
   let speechStartCb: (() => void) | null = null;
+  let meterCb: ((dbValue: number) => void) | null = null;
   const startedAt = Date.now();
   let lastVoiceAt = Date.now();
   let everSpoke = false;
@@ -235,6 +238,10 @@ export async function startRecording(): Promise<Recorder> {
   rec.setOnRecordingStatusUpdate((status) => {
     const meter = (status as any).metering;
     if (typeof meter === "number") {
+      // Expose live meter value to caller for debug visualization
+      if (meterCb) {
+        try { meterCb(meter); } catch {}
+      }
       // Two-tier thresholds — tuned for reliable hands-free conversation:
       // - SPEECH_START_DB (-55): very sensitive, detects first whisper to mark
       //   "the user is talking" (so we know to expect a silence-end later).
@@ -291,6 +298,9 @@ export async function startRecording(): Promise<Recorder> {
     },
     onSpeechStart: (cb) => {
       speechStartCb = cb;
+    },
+    onMeter: (cb) => {
+      meterCb = cb;
     },
     pauseSilence: () => {
       silencePaused = true;

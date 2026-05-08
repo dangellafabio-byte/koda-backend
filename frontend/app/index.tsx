@@ -128,6 +128,8 @@ export default function Taccuino() {
   const scrollRef = useRef<ScrollView>(null);
   const pulse = useRef(new Animated.Value(1)).current;
   const breathe = useRef(new Animated.Value(0)).current;
+  // Live meter value (dB) shown as debug visualization during recording
+  const [meterDb, setMeterDb] = useState<number | null>(null);
 
   // Initial load
   useEffect(() => {
@@ -506,6 +508,12 @@ export default function Taccuino() {
       }
       const rec = await startRecording();
       recRef.current = rec;
+      // Wire live meter for debug visualization
+      if (rec.onMeter) {
+        rec.onMeter((db: number) => {
+          if (recRef.current === rec) setMeterDb(db);
+        });
+      }
       // Only mark "recording" if we're not currently in "speaking" (otherwise
       // the speaking status is correct — barge-in detector will swap it).
       if (status !== "speaking") setStatus("recording");
@@ -1031,6 +1039,30 @@ export default function Taccuino() {
             <Text style={[styles.statusLabel, styles.statusLabelOnBg]}>
               {aiPaused ? "AI in pausa" : statusLabel}
             </Text>
+            {/* Live meter visualizer — visible only during recording.
+                Helps debug when silence detection isn't firing. */}
+            {status === "recording" && meterDb !== null ? (
+              <View style={styles.meterWrap}>
+                <View style={styles.meterBar}>
+                  {/* Background: full -60..0 dB range */}
+                  {/* Threshold marker at -40 dB (VOICE_PRESENT_DB) */}
+                  <View style={[styles.meterThreshold, { left: `${Math.round(((-40 + 60) / 60) * 100)}%` }]} />
+                  {/* Fill: current meter value (clipped to range) */}
+                  <View
+                    style={[
+                      styles.meterFill,
+                      {
+                        width: `${Math.max(0, Math.min(100, Math.round(((meterDb + 60) / 60) * 100)))}%`,
+                        backgroundColor: meterDb > -40 ? "#22C55E" : "#94A3B8",
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.meterLabel}>
+                  {meterDb.toFixed(0)} dB {meterDb > -40 ? "🟢 voce" : "⚪ silenzio"}
+                </Text>
+              </View>
+            ) : null}
             <View style={styles.bigBtnWrap}>
               {/* Subtle breathing halo around the button — kept small enough
                   not to cover the wallpaper. The big bloom version is gone. */}
@@ -2562,6 +2594,43 @@ const makeStyles = (t: any) => StyleSheet.create({
   },
 
   modeRow: { flexDirection: "row", gap: 6, marginTop: 4 },
+
+  // Live meter visualization (debug)
+  meterWrap: {
+    width: 220,
+    alignItems: "center",
+    marginBottom: 12,
+    gap: 4,
+  },
+  meterBar: {
+    width: "100%",
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    overflow: "hidden",
+    position: "relative",
+  },
+  meterFill: {
+    height: "100%",
+    borderRadius: 999,
+  },
+  meterThreshold: {
+    position: "absolute",
+    top: -2,
+    width: 2,
+    height: 12,
+    backgroundColor: "#FFFFFF",
+    opacity: 0.9,
+  },
+  meterLabel: {
+    color: "#FFFFFF",
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+    textShadowColor: "rgba(0,0,0,0.7)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
 
   // Avatar picker (AI photo)
   avatarRow: { flexDirection: "row", alignItems: "center", gap: 14, marginTop: 8 },
