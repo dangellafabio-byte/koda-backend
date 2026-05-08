@@ -238,11 +238,12 @@ export async function startRecording(): Promise<Recorder> {
       // Two-tier thresholds — CRITICAL for reliable hands-free conversation:
       // - SPEECH_START_DB (-55): very sensitive, detects first whisper to mark
       //   "the user is talking" (so we know to expect a silence-end later).
-      // - VOICE_PRESENT_DB (-42): only meter values ABOVE -42 dB count as
-      //   "still speaking now". This ignores ambient noise / room hum, so
-      //   `lastVoiceAt` doesn't keep refreshing forever and silence DOES fire.
+      // - VOICE_PRESENT_DB (-48): only meter values ABOVE -48 dB count as
+      //   "still speaking now". Tightening to -48 (was -42) makes it more
+      //   inclusive — captures normal-distance speech while still ignoring
+      //   quiet room hum (~-60dB).
       const SPEECH_START_DB = -55;
-      const VOICE_PRESENT_DB = -42;
+      const VOICE_PRESENT_DB = -48;
 
       if (meter > SPEECH_START_DB && Date.now() - startedAt > 250) {
         if (!everSpoke) {
@@ -263,7 +264,7 @@ export async function startRecording(): Promise<Recorder> {
       if (
         !silenceFired &&
         ((everSpoke &&
-          Date.now() - lastVoiceAt > 1800 &&
+          Date.now() - lastVoiceAt > 1500 &&
           Date.now() - startedAt > 600) ||
           // Fallback: if no speech ever detected after 12s, force-stop anyway
           (!everSpoke && Date.now() - startedAt > 12000) ||
