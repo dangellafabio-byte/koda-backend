@@ -418,7 +418,7 @@ export default function Taccuino() {
         setProfile(res.profile);
         // Execute any actions (notifications, etc.) requested by the AI
         runActions(res.ai_entry.actions || []);
-        await speakIfEnabled(res.ai_entry.text, res.ai_entry.tone || "neutral");
+        await speakIfEnabled(res.ai_entry.voice_text || res.ai_entry.text, res.ai_entry.tone || "neutral");
       } catch (e: any) {
         setError("Ops, qualcosa non funziona. Riprova.");
         setStatus("idle");
@@ -722,7 +722,7 @@ export default function Taccuino() {
       const langTag = profile?.language === "it" ? "it-IT" : profile?.language || "it-IT";
       // Make sure audio is unlocked on web (required by Safari for play())
       await unlockSpeech();
-      await SpeechMod.speak(entry.text, {
+      await SpeechMod.speak(entry.voice_text || entry.text, {
         language: langTag,
         tone: (entry.tone as Tone) || "neutral",
       });

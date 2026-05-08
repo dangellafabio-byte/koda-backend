@@ -40,7 +40,8 @@ export type Action = {
 export type TimelineEntry = {
   id: string;
   role: "user" | "ai";
-  text: string;
+  text: string;            // Clean text for chat display (audio tags stripped)
+  voice_text?: string | null; // AI replies: text with [audio tags] for ElevenLabs v3 TTS
   tone?: Tone | null;
   domain?: Domain | null;
   extracted?: ExtractedFact | null;

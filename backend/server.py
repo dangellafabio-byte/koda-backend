@@ -517,7 +517,8 @@ class Action(BaseModel):
 class TimelineEntry(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     role: str  # "user" | "ai"
-    text: str
+    text: str  # CLEAN version for chat display (audio tags stripped)
+    voice_text: Optional[str] = None  # AI replies: full text WITH audio tags for TTS
     tone: Optional[str] = None  # neutral | calm | energetic | concerned | urgent | warm
     domain: Optional[str] = None
     extracted: Optional[ExtractedFact] = None
@@ -604,6 +605,37 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"- Mai finire con 'Fammi sapere se ti serve altro' o frasi da customer service\n"
         f"- Mai elenchi puntati o numerati nelle risposte vocali\n"
         f"- Mai più di 2 frasi salvo che l'utente chieda esplicitamente un riassunto/spiegazione lunga\n"
+        f"\n"
+        f"=== AUDIO TAG (FONDAMENTALE) ===\n"
+        f"Il tuo testo viene parlato da una voce molto espressiva (ElevenLabs v3). "
+        f"Per dare emozione VERA alla voce, inserisci nel testo TAG vocali tra parentesi quadre. "
+        f"La voce le interpreta e cambia tono, respiro, intonazione. NON sono visibili all'utente "
+        f"(le rimuoviamo prima di mostrare il testo in chat), servono SOLO alla voce.\n"
+        f"\n"
+        f"REGOLE TAG:\n"
+        f"1. Ogni risposta DEVE contenere almeno 1 tag emotiva all'inizio (di solito) — sceglila in base al sentimento giusto del momento.\n"
+        f"2. Puoi inserirne 1-3 in totale, distribuite naturalmente (es. una iniziale + una nel mezzo).\n"
+        f"3. NON usare più di 3 tag — diventano troppo enfatiche.\n"
+        f"4. Le tag DEVONO essere in inglese (l'engine le riconosce in inglese): vedi lista qui sotto.\n"
+        f"\n"
+        f"TAG EMOTIVE (scegli in base al senso):\n"
+        f"  Positive/calde: [warm], [softly], [gently], [smiling], [laughs softly], [chuckles], [pleased], [excited], [happy], [delighted]\n"
+        f"  Empatia/dolore condiviso: [sympathetic], [concerned], [sad], [softly], [sighs], [exhales]\n"
+        f"  Curiosità/sorpresa: [curious], [surprised], [intrigued], [thoughtful]\n"
+        f"  Rilassato/intimo: [whispers], [softly], [tenderly], [reassuring]\n"
+        f"  Energia/entusiasmo: [excited], [cheerful], [enthusiastic]\n"
+        f"  Serietà/preoccupazione: [serious], [thoughtful], [concerned], [hesitant]\n"
+        f"  Pause/respiri: [pause], [short pause], [sighs], [exhales], [breathes]\n"
+        f"\n"
+        f"ESEMPI DI USO CORRETTO:\n"
+        f"- Utente racconta giornata pesante → '[sympathetic] Eh… ti capisco. [softly] Giornata dura, eh?'\n"
+        f"- Utente dà buona notizia → '[delighted] Oh che bella! [smiling] Sono contento per te.'\n"
+        f"- Domanda curiosa/interessata → '[curious] Ah sì? Raccontami un po'.'\n"
+        f"- Conferma promemoria → '[warm] Ok, fra dieci minuti te lo ricordo.'\n"
+        f"- Stress dell'utente → '[concerned] Mhm. [softly] Respira un attimo, ci siamo.'\n"
+        f"- Battuta leggera → '[laughs softly] Eh, succede anche ai migliori.'\n"
+        f"\n"
+        f"=== FINE AUDIO TAG ===\n"
         f"\n"
         f"COME PARLARE:\n"
         f"- Tono caldo ma asciutto, come un amico fidato al telefono.\n"
@@ -760,7 +792,10 @@ async def api_converse(req: ConverseRequest):
         raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")
 
     data = extract_json(raw or "") or {}
-    reply_text = (data.get("reply") or "").strip() or "..."
+    raw_reply = (data.get("reply") or "").strip() or "..."
+    # Separate the version with audio tags (for TTS) from the cleaned version (for chat display)
+    voice_text_full = raw_reply
+    reply_text = _strip_audio_tags(raw_reply)
     tone = (data.get("tone") or "neutral").lower()
     domain = data.get("domain")
     extracted_raw = data.get("extracted")
@@ -789,6 +824,7 @@ async def api_converse(req: ConverseRequest):
     ai_entry = TimelineEntry(
         role="ai",
         text=reply_text,
+        voice_text=voice_text_full if voice_text_full != reply_text else None,
         tone=tone if tone in {"calm", "energetic", "concerned", "urgent", "warm", "neutral"} else "neutral",
         domain=domain if domain in {"soldi", "tempo", "spesa", "salute", "lavoro", "casa", "altro"} else None,
         extracted=extracted_obj,
@@ -903,40 +939,41 @@ class TTSRequest(BaseModel):
 def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], similarity: Optional[float]) -> dict:
     """Adapt ElevenLabs voice settings to the conversational tone.
 
-    - calm/concerned: higher stability (steadier), lower style
-    - energetic/urgent: lower stability (more expressive), higher style, faster
-    - neutral/warm: balanced
-
-    Speed is controlled via the `speed` field (0.7-1.2). Requires turbo model.
+    Defaults are intentionally tuned for EXPRESSIVE delivery:
+    - stability ~0.25-0.45 (lower = more emotional variation; closer to natural human range)
+    - style ~0.4-0.7 (higher = more emphasis on the voice's expressive style)
+    Audio tags inline (e.g. [sospira], [ride], [sussurrando]) drive the actual
+    emotional inflection — supported only by `eleven_v3`. v2_5 / turbo ignore them.
     """
-    base_stability = 0.5 if stability is None else stability
+    base_stability = 0.32 if stability is None else stability
     base_similarity = 0.75 if similarity is None else similarity
-    style = 0.0
+    style = 0.45
     speed = 1.0
     t = (tone or "neutral").lower()
     if t == "calm":
-        base_stability = max(base_stability, 0.65)
-        speed = 0.92
-        style = 0.0
-    elif t == "concerned":
-        base_stability = max(base_stability, 0.6)
+        base_stability = 0.45
         speed = 0.95
-        style = 0.05
-    elif t == "warm":
-        base_stability = max(base_stability, 0.55)
-        speed = 0.97
-        style = 0.1
-    elif t == "energetic":
-        base_stability = min(base_stability, 0.45)
-        speed = 1.08
-        style = 0.25
-    elif t == "urgent":
-        base_stability = min(base_stability, 0.4)
-        speed = 1.12
         style = 0.35
+    elif t == "concerned":
+        base_stability = 0.35
+        speed = 0.95
+        style = 0.5
+    elif t == "warm":
+        base_stability = 0.30
+        speed = 0.98
+        style = 0.55
+    elif t == "energetic":
+        base_stability = 0.20
+        speed = 1.06
+        style = 0.7
+    elif t == "urgent":
+        base_stability = 0.18
+        speed = 1.10
+        style = 0.75
     else:  # neutral
+        base_stability = 0.32
         speed = 1.0
-        style = 0.0
+        style = 0.4
     return {
         "stability": base_stability,
         "similarity_boost": base_similarity,
@@ -944,6 +981,27 @@ def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], si
         "speed": speed,
         "use_speaker_boost": True,
     }
+
+
+# Common ElevenLabs v3 audio tags (Italian + English) we ALLOW the LLM to use.
+# Both languages work with v3; Italian feels more natural in our prompt.
+_AUDIO_TAG_RE = re.compile(r"\[[a-zA-ZàèéìòùÀÈÉÌÒÙ /,'_-]{1,40}\]")
+
+
+def _strip_audio_tags(text: str) -> str:
+    """Remove [audio tags] from text — used for chat-bubble display."""
+    if not text:
+        return text
+    cleaned = _AUDIO_TAG_RE.sub("", text)
+    # Collapse double spaces created by removal
+    cleaned = re.sub(r"  +", " ", cleaned).strip()
+    # Also strip leading punctuation glue like " ,"
+    cleaned = re.sub(r"\s+([,.;!?])", r"\1", cleaned)
+    return cleaned
+
+
+def _has_audio_tags(text: str) -> bool:
+    return bool(_AUDIO_TAG_RE.search(text or ""))
 
 
 @api_router.get("/voices")
@@ -991,20 +1049,40 @@ async def api_tts(req: TTSRequest):
     voice_settings = _voice_settings_for_tone(req.tone, req.stability, req.similarity_boost)
 
     try:
-        # Use the convert() method with streaming generator
-        # eleven_turbo_v2_5: supports `speed` parameter (0.7-1.2) — required
-        # for adaptive pacing based on conversational tone.
-        audio_gen = client_el.text_to_speech.convert(
-            text=text,
-            voice_id=voice_id,
-            model_id="eleven_turbo_v2_5",
-            output_format="mp3_44100_128",
-            voice_settings=voice_settings,
-        )
-        audio_data = b""
-        for chunk in audio_gen:
-            if chunk:
-                audio_data += chunk
+        # Use eleven_v3 if the text contains audio tags ([sospira], [ride], etc.)
+        # — only v3 honors them. Fallback to turbo_v2_5 for plain text (faster).
+        use_v3 = _has_audio_tags(text)
+        model = "eleven_v3" if use_v3 else "eleven_turbo_v2_5"
+        try:
+            audio_gen = client_el.text_to_speech.convert(
+                text=text,
+                voice_id=voice_id,
+                model_id=model,
+                output_format="mp3_44100_128",
+                voice_settings=voice_settings,
+            )
+            audio_data = b""
+            for chunk in audio_gen:
+                if chunk:
+                    audio_data += chunk
+        except Exception as model_err:
+            # If v3 fails (entitlement / outage) fall back: strip tags and retry with turbo
+            if use_v3:
+                logger.warning(f"eleven_v3 failed, falling back to turbo: {model_err}")
+                clean = _strip_audio_tags(text)
+                audio_gen = client_el.text_to_speech.convert(
+                    text=clean or text,
+                    voice_id=voice_id,
+                    model_id="eleven_turbo_v2_5",
+                    output_format="mp3_44100_128",
+                    voice_settings=voice_settings,
+                )
+                audio_data = b""
+                for chunk in audio_gen:
+                    if chunk:
+                        audio_data += chunk
+            else:
+                raise
         if not audio_data:
             raise HTTPException(status_code=500, detail="Empty TTS response")
     except HTTPException:
@@ -1062,17 +1140,37 @@ async def api_tts_prepare(req: TTSRequest):
     voice_settings = _voice_settings_for_tone(req.tone, req.stability, req.similarity_boost)
 
     try:
-        audio_gen = client_el.text_to_speech.convert(
-            text=text,
-            voice_id=voice_id,
-            model_id="eleven_turbo_v2_5",
-            output_format="mp3_44100_128",
-            voice_settings=voice_settings,
-        )
-        audio_data = b""
-        for chunk in audio_gen:
-            if chunk:
-                audio_data += chunk
+        use_v3 = _has_audio_tags(text)
+        model = "eleven_v3" if use_v3 else "eleven_turbo_v2_5"
+        try:
+            audio_gen = client_el.text_to_speech.convert(
+                text=text,
+                voice_id=voice_id,
+                model_id=model,
+                output_format="mp3_44100_128",
+                voice_settings=voice_settings,
+            )
+            audio_data = b""
+            for chunk in audio_gen:
+                if chunk:
+                    audio_data += chunk
+        except Exception as model_err:
+            if use_v3:
+                logger.warning(f"eleven_v3 failed, falling back to turbo: {model_err}")
+                clean = _strip_audio_tags(text)
+                audio_gen = client_el.text_to_speech.convert(
+                    text=clean or text,
+                    voice_id=voice_id,
+                    model_id="eleven_turbo_v2_5",
+                    output_format="mp3_44100_128",
+                    voice_settings=voice_settings,
+                )
+                audio_data = b""
+                for chunk in audio_gen:
+                    if chunk:
+                        audio_data += chunk
+            else:
+                raise
         if not audio_data:
             raise HTTPException(status_code=500, detail="Empty TTS response")
     except HTTPException:
