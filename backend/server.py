@@ -470,6 +470,9 @@ class TaccuinoSettings(BaseModel):
     # Bubble visual style — "glass" (semi-transparent, wallpaper shows through)
     # or "solid" (opaque, blocks the wallpaper for max readability).
     bubble_style: str = "glass"
+    # Text size scale for chat bubbles. 1.0 = default. Range 0.85 - 1.4.
+    # Discrete options exposed in UI: piccolo (0.85), normale (1.0), grande (1.15), molto grande (1.35)
+    text_size: float = 1.0
     domains: dict = Field(
         default_factory=lambda: {
             "soldi": True,

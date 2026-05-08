@@ -265,6 +265,13 @@ export default function Taccuino() {
     try { await api.updateProfile({ settings: next.settings } as any); } catch {}
   };
 
+  const setTextSize = async (size: number) => {
+    if (!profile) return;
+    const next = { ...profile, settings: { ...profile.settings, text_size: size } as any };
+    setProfile(next);
+    try { await api.updateProfile({ settings: next.settings } as any); } catch {}
+  };
+
   const pickBackgroundFromGallery = async () => {
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -860,6 +867,10 @@ export default function Taccuino() {
   );
   const bubbleStyle: "glass" | "solid" =
     ((profile?.settings as any)?.bubble_style === "solid") ? "solid" : "glass";
+  const textSize: number = (() => {
+    const v = (profile?.settings as any)?.text_size;
+    return typeof v === "number" && v >= 0.7 && v <= 1.6 ? v : 1.0;
+  })();
   // Text color uniform across both user & AI bubbles, derived from theme.
   // Light themes (carta/aurora etc.) → dark text; dark themes → light text.
   const textOnBubble = theme.text;
@@ -947,6 +958,7 @@ export default function Taccuino() {
                 bubbleAccent={bubbleAccent}
                 bubbleStyle={bubbleStyle}
                 textOnBubble={textOnBubble}
+                textSize={textSize}
               />
             )
           )
@@ -954,7 +966,10 @@ export default function Taccuino() {
 
         {/* Typing/speaking indicator on the LEFT (like WhatsApp) — appears
             when AI is thinking, transcribing, or actively speaking. */}
-        {(status === "thinking" || status === "transcribing" || status === "speaking") && (
+        {/* Typing indicator on the LEFT (like WhatsApp) — appears ONLY while
+            AI is processing (thinking) or transcribing user audio. NOT during
+            "speaking" (the AI message is already in the timeline at that point). */}
+        {(status === "thinking" || status === "transcribing") && (
           <View style={[styles.bubbleRow, styles.bubbleRowL]}>
             <AIAvatar photo={(profile?.settings as any)?.ai_avatar || null} color={bubbleAccent.color} />
             <View
@@ -1380,6 +1395,45 @@ export default function Taccuino() {
                   </TouchableOpacity>
                 ) : null}
               </View>
+            </View>
+
+            {/* Text size selector — 4 levels for accessibility */}
+            <Text style={[styles.settingsHint, { marginTop: 14 }]}>Dimensione testo</Text>
+            <View style={styles.modeRow}>
+              {[
+                { v: 0.85, label: "A", name: "Piccolo" },
+                { v: 1.0,  label: "A", name: "Normale" },
+                { v: 1.15, label: "A", name: "Grande" },
+                { v: 1.35, label: "A", name: "Molto grande" },
+              ].map(({ v, label, name }) => {
+                const active = Math.abs(textSize - v) < 0.02;
+                return (
+                  <TouchableOpacity
+                    key={v}
+                    onPress={() => setTextSize(v)}
+                    style={[
+                      styles.modeBtn,
+                      { flex: 1, flexDirection: "column", paddingVertical: 8 },
+                      active && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
+                    ]}
+                    testID={`text-size-${v}`}
+                  >
+                    <Text
+                      style={{
+                        color: active ? bubbleAccent.color : theme.text,
+                        fontSize: 12 * v,
+                        fontWeight: "800",
+                        lineHeight: 14 * v,
+                      }}
+                    >
+                      {label}
+                    </Text>
+                    <Text style={[styles.modeBtnText, { fontSize: 9, marginTop: 2 }, active && { color: bubbleAccent.color }]}>
+                      {name}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
 
             {/* Bubble style toggle: glass / solid */}
@@ -1922,13 +1976,15 @@ function Bubble({
   bubbleAccent,
   bubbleStyle,
   textOnBubble,
+  textSize,
 }: {
   entry: TimelineEntry;
   onReplay?: (e: TimelineEntry) => void;
   aiAvatar?: string | null;
   bubbleAccent: { color: string; soft: string };
   bubbleStyle: "glass" | "solid";
-  textOnBubble: string; // theme-derived: dark on light themes, light on dark themes
+  textOnBubble: string;
+  textSize: number; // scale multiplier (e.g. 0.85 / 1.0 / 1.15 / 1.35)
 }) {
   const { theme } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
@@ -1962,7 +2018,7 @@ function Bubble({
               pressed && { opacity: 0.85 },
             ]}
           >
-            <Text style={[styles.bubbleUserText, { color: textOnBubble }]}>{entry.text}</Text>
+            <Text style={[styles.bubbleUserText, { color: textOnBubble, fontSize: 15 * textSize, lineHeight: 21 * textSize }]}>{entry.text}</Text>
           </Pressable>
         ) : (
           <Pressable
@@ -1979,7 +2035,7 @@ function Bubble({
             accessibilityLabel="Tocca per ascoltare. Tocca di nuovo per fermare."
             testID={`replay-${entry.id}`}
           >
-            <Text style={[styles.bubbleAiText, { color: textOnBubble }]}>{entry.text}</Text>
+            <Text style={[styles.bubbleAiText, { color: textOnBubble, fontSize: 15 * textSize, lineHeight: 21 * textSize }]}>{entry.text}</Text>
             {entry.extracted?.amount ? (
               <Text style={[styles.extractMeta, { color: textOnBubble, opacity: 0.85 }]}>
                 💶 {entry.extracted.amount}

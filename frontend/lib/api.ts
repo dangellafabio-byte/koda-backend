@@ -69,6 +69,7 @@ export type ProfileSettings = {
   ai_avatar?: string | null;        // Custom photo for AI avatar (base64 data URI)
   bubble_color?: string;            // "viola" | "verde_acqua" | "rosa" | "ambra" | "ghiaccio" | hex
   bubble_style?: "glass" | "solid"; // visual style applied to BOTH user and AI bubbles
+  text_size?: number;               // 0.85 | 1.0 | 1.15 | 1.35
 };
 
 export type VoiceOption = {
