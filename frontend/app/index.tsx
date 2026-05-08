@@ -798,7 +798,7 @@ export default function Taccuino() {
 
   // Build the screen wrapper with optional background image / gradient
   const screenInner = (
-    <View style={[styles.screen, { paddingTop: insets.top, backgroundColor: bgValue ? "transparent" : theme.bg }]}>
+    <View style={[styles.screen, { backgroundColor: bgValue ? "transparent" : theme.bg }]}>
       {/* Header — ABSOLUTELY positioned + transparent. Messages scroll BEHIND
           it freely. The pills only have an icon/text; no opaque background.
           A subtle dark blur backdrop on each pill keeps icons readable. */}
@@ -1764,9 +1764,11 @@ const makeStyles = (t: any) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: t.bg },
 
   // Header — ABSOLUTELY positioned, transparent. Messages scroll behind it.
+  // NOTE: `top` is set INLINE in the JSX (using Math.max(insets.top + 16, 70))
+  // — never put `top: 0` here, it conflicts with the inline override and
+  // some RN/Expo Go versions don't merge it correctly.
   header: {
     position: "absolute",
-    top: 0,
     left: 0,
     right: 0,
     flexDirection: "row",
