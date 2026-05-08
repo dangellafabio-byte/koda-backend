@@ -803,7 +803,7 @@ export default function Taccuino() {
           it freely. The pills only have an icon/text; no opaque background.
           A subtle dark blur backdrop on each pill keeps icons readable. */}
       <View
-        style={[styles.header, { top: Math.max(insets.top, 50) + 8 }]}
+        style={[styles.header, { top: Math.max(insets.top + 16, 70) }]}
         pointerEvents="box-none"
       >
         <TouchableOpacity
@@ -831,7 +831,7 @@ export default function Taccuino() {
       <ScrollView
         ref={scrollRef}
         style={styles.timeline}
-        contentContainerStyle={[styles.timelineContent, { paddingTop: insets.top + 60, paddingBottom: 220 + insets.bottom }]}
+        contentContainerStyle={[styles.timelineContent, { paddingTop: Math.max(insets.top + 70, 130), paddingBottom: 220 + insets.bottom }]}
         showsVerticalScrollIndicator={false}
         testID="timeline"
       >
