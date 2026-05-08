@@ -235,12 +235,17 @@ export async function startRecording(): Promise<Recorder> {
   rec.setOnRecordingStatusUpdate((status) => {
     const meter = (status as any).metering;
     if (typeof meter === "number") {
-      // metering values are in dB (typically -160..0).
-      // Threshold -50dB catches even quieter speech / users far from mic
-      // (was -45 — tightened to -50 for better sensitivity).
-      if (meter > -50) {
-        lastVoiceAt = Date.now();
-        if (Date.now() - startedAt > 250) {
+      // Two-tier thresholds — CRITICAL for reliable hands-free conversation:
+      // - SPEECH_START_DB (-55): very sensitive, detects first whisper to mark
+      //   "the user is talking" (so we know to expect a silence-end later).
+      // - VOICE_PRESENT_DB (-42): only meter values ABOVE -42 dB count as
+      //   "still speaking now". This ignores ambient noise / room hum, so
+      //   `lastVoiceAt` doesn't keep refreshing forever and silence DOES fire.
+      const SPEECH_START_DB = -55;
+      const VOICE_PRESENT_DB = -42;
+
+      if (meter > SPEECH_START_DB && Date.now() - startedAt > 250) {
+        if (!everSpoke) {
           everSpoke = true;
           if (!speechStartFired && speechStartCb) {
             speechStartFired = true;
@@ -248,15 +253,19 @@ export async function startRecording(): Promise<Recorder> {
           }
         }
       }
+      // Update lastVoiceAt only when the meter is loud enough to be REAL speech
+      // (not just background noise), so the silence timer can elapse correctly.
+      if (meter > VOICE_PRESENT_DB) {
+        lastVoiceAt = Date.now();
+      }
       // Don't fire silence-end while paused (used during AI TTS playback).
       if (silencePaused) return;
       if (
         !silenceFired &&
         ((everSpoke &&
-          Date.now() - lastVoiceAt > 2200 &&
+          Date.now() - lastVoiceAt > 1800 &&
           Date.now() - startedAt > 600) ||
           // Fallback: if no speech ever detected after 12s, force-stop anyway
-          // (native metering can be unreliable on some iOS versions / mics)
           (!everSpoke && Date.now() - startedAt > 12000) ||
           // Hard cap: 60s — gives plenty of room for long thoughts/stories
           Date.now() - startedAt > 60000) &&

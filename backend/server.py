@@ -606,35 +606,55 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"- Mai elenchi puntati o numerati nelle risposte vocali\n"
         f"- Mai più di 2 frasi salvo che l'utente chieda esplicitamente un riassunto/spiegazione lunga\n"
         f"\n"
-        f"=== AUDIO TAG (FONDAMENTALE) ===\n"
-        f"Il tuo testo viene parlato da una voce molto espressiva (ElevenLabs v3). "
-        f"Per dare emozione VERA alla voce, inserisci nel testo TAG vocali tra parentesi quadre. "
-        f"La voce le interpreta e cambia tono, respiro, intonazione. NON sono visibili all'utente "
-        f"(le rimuoviamo prima di mostrare il testo in chat), servono SOLO alla voce.\n"
+        f"=== AUDIO TAG (FONDAMENTALE — REGOLA NON NEGOZIABILE) ===\n"
+        f"Il tuo testo viene parlato da una voce ULTRA-ESPRESSIVA (ElevenLabs v3) "
+        f"che cambia DAVVERO tono, respiro, intonazione, intensità, sussurro, riso, "
+        f"tristezza vera. Per attivarla DEVI inserire TAG vocali tra parentesi quadre. "
+        f"Le tag sono INVISIBILI all'utente in chat — servono SOLO alla voce.\n"
         f"\n"
-        f"REGOLE TAG:\n"
-        f"1. Ogni risposta DEVE contenere almeno 1 tag emotiva all'inizio (di solito) — sceglila in base al sentimento giusto del momento.\n"
-        f"2. Puoi inserirne 1-3 in totale, distribuite naturalmente (es. una iniziale + una nel mezzo).\n"
-        f"3. NON usare più di 3 tag — diventano troppo enfatiche.\n"
-        f"4. Le tag DEVONO essere in inglese (l'engine le riconosce in inglese): vedi lista qui sotto.\n"
+        f"REGOLE OBBLIGATORIE TAG (non sono opzionali):\n"
+        f"1. OGNI risposta DEVE iniziare con una tag emotiva forte (mai senza).\n"
+        f"2. Inserisci 2-4 TAG totali in ogni risposta (anche risposte brevissime ne hanno almeno 2).\n"
+        f"3. Mescola: tag emotiva + tag di respiro/pausa per realismo umano.\n"
+        f"4. Le tag DEVONO essere in INGLESE (l'engine le riconosce solo in inglese).\n"
+        f"5. NON dire le tag a parole — vanno SOLO tra [parentesi quadre].\n"
         f"\n"
-        f"TAG EMOTIVE (scegli in base al senso):\n"
-        f"  Positive/calde: [warm], [softly], [gently], [smiling], [laughs softly], [chuckles], [pleased], [excited], [happy], [delighted]\n"
-        f"  Empatia/dolore condiviso: [sympathetic], [concerned], [sad], [softly], [sighs], [exhales]\n"
-        f"  Curiosità/sorpresa: [curious], [surprised], [intrigued], [thoughtful]\n"
-        f"  Rilassato/intimo: [whispers], [softly], [tenderly], [reassuring]\n"
-        f"  Energia/entusiasmo: [excited], [cheerful], [enthusiastic]\n"
-        f"  Serietà/preoccupazione: [serious], [thoughtful], [concerned], [hesitant]\n"
-        f"  Pause/respiri: [pause], [short pause], [sighs], [exhales], [breathes]\n"
+        f"COME SCEGLIERE TAG (mappa emotiva esatta):\n"
+        f"  Utente triste/stanco/sfogo  → [sympathetic][softly] + [sighs] o [exhales] nel mezzo\n"
+        f"  Utente buona notizia/orgoglio → [delighted][warmly] + [smiling] o [laughs softly]\n"
+        f"  Utente preoccupato/ansia    → [concerned][gently] + [reassuring] o [soft]\n"
+        f"  Utente curioso/dubbi        → [curious][thoughtful] + [intrigued]\n"
+        f"  Utente sereno/normale       → [warm][gentle] + [smiling] leggero\n"
+        f"  Utente entusiasta/euforico   → [excited][cheerful] + [enthusiastic]\n"
+        f"  Utente intimo/personale     → [tenderly][softly] + [whispers]\n"
+        f"  Utente arrabbiato/frustrato → [calm][gentle] + [reassuring][soft]\n"
+        f"  Battuta leggera             → [laughs softly] + [warmly] + [chuckles]\n"
+        f"  Conferma promemoria         → [warmly][gentle] + [reassuring]\n"
+        f"  Sorpresa positiva           → [surprised][delighted] + [smiling]\n"
         f"\n"
-        f"ESEMPI DI USO CORRETTO:\n"
-        f"- Utente racconta giornata pesante → '[sympathetic] Eh… ti capisco. [softly] Giornata dura, eh?'\n"
-        f"- Utente dà buona notizia → '[delighted] Oh che bella! [smiling] Sono contento per te.'\n"
-        f"- Domanda curiosa/interessata → '[curious] Ah sì? Raccontami un po'.'\n"
-        f"- Conferma promemoria → '[warm] Ok, fra dieci minuti te lo ricordo.'\n"
-        f"- Stress dell'utente → '[concerned] Mhm. [softly] Respira un attimo, ci siamo.'\n"
-        f"- Battuta leggera → '[laughs softly] Eh, succede anche ai migliori.'\n"
+        f"INTENSIFICATORI DA USARE LIBERAMENTE:\n"
+        f"  [whispers] [whispering] = abbassa MOLTO la voce, intimo\n"
+        f"  [sighs deeply] = sospiro profondo\n"
+        f"  [laughs softly] [giggles] = risatina leggera\n"
+        f"  [pause] [short pause] = attimo di silenzio (USALO spesso per realismo)\n"
+        f"  [softly] [gently] [tenderly] = volume basso, delicato\n"
+        f"  [warmly] = tono caldo, sorridente\n"
         f"\n"
+        f"ESEMPI BUONI (copia QUESTO stile):\n"
+        f"- Utente: 'Sono stanchissimo' → '[sympathetic] Eh… [sighs] ti sento proprio provato. [softly] Vuoi raccontarmi un attimo?'\n"
+        f"- Utente: 'Promozione al lavoro!' → '[delighted] Oh che bella! [laughs softly] Davvero? [warmly] Sono contento per te.'\n"
+        f"- Utente: 'Mi hanno mollato' → '[concerned] Mhm. [pause] [softly] Mi dispiace tanto. [gently] Come stai adesso?'\n"
+        f"- Utente: 'Ricordami fra 5 minuti la pasta' → '[warmly] Ok. [smiling] Fra cinque minuti te lo dico io.'\n"
+        f"- Utente: 'Sto morendo di stress' → '[concerned] [softly] Mhm… [pause] [gently] respira un attimo. Ci siamo.'\n"
+        f"- Utente: 'Ho bisogno di parlare' → '[tenderly] [softly] Ci sono. [pause] Dimmi tutto.'\n"
+        f"\n"
+        f"ESEMPI CATTIVI (NON FARE COSÌ):\n"
+        f"- 'Ok, te lo ricordo.' (zero tag → BOCCIATO)\n"
+        f"- '[neutral] Ok.' (tag piatta → BOCCIATO, usa SEMPRE tag emotive)\n"
+        f"- 'Mi sento [sad] per te.' (tag dentro frase normale → BOCCIATO)\n"
+        f"\n"
+        f"REGOLA FINALE: se ti scordi le tag, l'utente non sente NESSUNA emozione. "
+        f"È come parlare con un robot. Quindi metti SEMPRE almeno 2 tag.\n"
         f"=== FINE AUDIO TAG ===\n"
         f"\n"
         f"COME PARLARE:\n"
@@ -939,41 +959,44 @@ class TTSRequest(BaseModel):
 def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], similarity: Optional[float]) -> dict:
     """Adapt ElevenLabs voice settings to the conversational tone.
 
-    Defaults are intentionally tuned for EXPRESSIVE delivery:
-    - stability ~0.25-0.45 (lower = more emotional variation; closer to natural human range)
-    - style ~0.4-0.7 (higher = more emphasis on the voice's expressive style)
-    Audio tags inline (e.g. [sospira], [ride], [sussurrando]) drive the actual
-    emotional inflection — supported only by `eleven_v3`. v2_5 / turbo ignore them.
+    DRAMATIC EMPATHY MODE:
+    - Stability VERY low (0.05-0.25) — voice is allowed to swing emotionally,
+      whisper, sigh, laugh, get quiet or intense.
+    - Style VERY high (0.65-0.95) — accentuates the voice's expressive personality.
+    - Combined with eleven_v3 audio tags inline, this produces near-human emotion.
+
+    Note: very low stability can occasionally produce minor artifacts (slight
+    quiver). That's the trade-off for true emotional expressivity.
     """
-    base_stability = 0.32 if stability is None else stability
-    base_similarity = 0.75 if similarity is None else similarity
-    style = 0.45
+    base_stability = 0.15 if stability is None else stability
+    base_similarity = 0.78 if similarity is None else similarity
+    style = 0.75
     speed = 1.0
     t = (tone or "neutral").lower()
     if t == "calm":
-        base_stability = 0.45
-        speed = 0.95
-        style = 0.35
+        base_stability = 0.25
+        speed = 0.93
+        style = 0.65
     elif t == "concerned":
-        base_stability = 0.35
-        speed = 0.95
-        style = 0.5
+        base_stability = 0.12
+        speed = 0.92
+        style = 0.85
     elif t == "warm":
-        base_stability = 0.30
-        speed = 0.98
-        style = 0.55
+        base_stability = 0.13
+        speed = 0.96
+        style = 0.85
     elif t == "energetic":
-        base_stability = 0.20
+        base_stability = 0.08
         speed = 1.06
-        style = 0.7
+        style = 0.95
     elif t == "urgent":
-        base_stability = 0.18
+        base_stability = 0.06
         speed = 1.10
-        style = 0.75
+        style = 0.95
     else:  # neutral
-        base_stability = 0.32
+        base_stability = 0.18
         speed = 1.0
-        style = 0.4
+        style = 0.7
     return {
         "stability": base_stability,
         "similarity_boost": base_similarity,
