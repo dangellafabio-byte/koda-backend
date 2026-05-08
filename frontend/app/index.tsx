@@ -38,6 +38,7 @@ import { SpeechMod, unlockSpeech, setDefaultVoiceId } from "../lib/speech";
 import { scheduleAt } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
+import Orb, { OrbTone } from "../components/Orb";
 
 type Status = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 
@@ -879,6 +880,15 @@ export default function Taccuino() {
     () => resolveBubbleColors((profile?.settings as any)?.bubble_color),
     [(profile?.settings as any)?.bubble_color]
   );
+  // Last AI tone — used to color the Orb during "speaking" state so the
+  // visual matches the emotional tone of the AI reply (warm/calm/concerned…).
+  const lastAiTone: OrbTone | null = useMemo(() => {
+    for (let i = timeline.length - 1; i >= 0; i--) {
+      const e = timeline[i];
+      if (e.role === "ai" && e.tone) return e.tone as OrbTone;
+    }
+    return null;
+  }, [timeline]);
   const bubbleStyle: "glass" | "solid" =
     ((profile?.settings as any)?.bubble_style === "solid") ? "solid" : "glass";
   const textSize: number = (() => {
@@ -946,10 +956,17 @@ export default function Taccuino() {
       >
         {timeline.length === 0 ? (
           <View style={styles.emptyState}>
-            <View style={{ marginBottom: 16 }}>
-              <AppIcon size={96} />
+            <View style={{ marginBottom: 24 }}>
+              <Orb
+                status={status}
+                meterDb={meterDb}
+                meterThreshold={meterThreshold}
+                tone={lastAiTone}
+                size={220}
+                avatarUri={(profile?.settings as any)?.ai_avatar || null}
+              />
             </View>
-            <Text style={styles.emptyTitle}>Il tuo Taccuino è vuoto</Text>
+            <Text style={styles.emptyTitle}>Ciao, sono qui</Text>
             <Text style={styles.emptyText}>
               Premi il cerchio in basso e raccontami qualcosa: una spesa,
               un impegno, qualunque cosa. Ricorderò io per te.
@@ -1084,56 +1101,22 @@ export default function Taccuino() {
               </View>
             ) : null}
             <View style={styles.bigBtnWrap}>
-              {/* Subtle breathing halo around the button — kept small enough
-                  not to cover the wallpaper. The big bloom version is gone. */}
-              <Animated.View
-                pointerEvents="none"
-                style={[
-                  styles.neonGlow,
-                  status === "recording" && { backgroundColor: "#EF4444" },
-                  {
-                    opacity: breathe.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0.18, 0.32],
-                    }),
-                    transform: [
-                      {
-                        scale: breathe.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [1.0, 1.10],
-                        }),
-                      },
-                    ],
-                  },
-                ]}
-              />
-              {/* Secondary softer halo for added neon bleed.
-                  Skip entirely when a custom background is set — its huge
-                  boxShadow blanket covers the wallpaper. */}
-              {!bgValue ? (
-                <Animated.View
-                  pointerEvents="none"
-                  style={[
-                    styles.neonGlowSoft,
-                    status === "recording" && { backgroundColor: "#EF4444" },
-                    {
-                      opacity: breathe.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [0.12, 0.25],
-                      }),
-                      transform: [
-                        {
-                          scale: breathe.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [1.05, 1.25],
-                          }),
-                        },
-                      ],
-                    },
-                  ]}
+              {/* Coda's presence — the Orb sits behind the mic button and
+                  visualises her live state: breathing at idle, pulsing with
+                  the user's voice while recording, shimmering while thinking,
+                  glowing rhythmically while speaking. The mic button stays
+                  fully tappable on top. */}
+              <View style={styles.orbBehindBtn} pointerEvents="none">
+                <Orb
+                  status={status}
+                  meterDb={meterDb}
+                  meterThreshold={meterThreshold}
+                  tone={lastAiTone}
+                  size={200}
                 />
-              ) : null}
-              {/* The actual button — clean, no outer rings. Breathes (scale) + mic-pulse */}
+              </View>
+              {/* The actual button — clean, sits on top of the Orb's aura.
+                  Breathes (scale) + mic-pulse handled by `pulse` ref. */}
               <Animated.View
                 style={{
                   transform: [
@@ -2346,8 +2329,19 @@ const makeStyles = (t: any) => StyleSheet.create({
     textShadowRadius: 4,
   },
   bigBtnWrap: {
-    width: 160,
-    height: 160,
+    width: 200,
+    height: 200,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  // Orb sits behind the mic button — pointer-events none so the button stays
+  // tappable. Centered absolute fill, the Orb itself is sized via prop.
+  orbBehindBtn: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     alignItems: "center",
     justifyContent: "center",
   },

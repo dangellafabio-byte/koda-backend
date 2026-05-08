@@ -350,3 +350,167 @@ agent_communication:
       AppCard accetta prop opzionale onShare e mostra pulsante; index.tsx e saved.tsx wired-up.
       Nessuna nuova dipendenza nativa: usa Share di react-native + expo-clipboard (già installato).
       Frontend testato visivamente: bundling OK, UI carica correttamente.
+
+
+## CLEANUP LEGACY APP COMPASS + ORB COMPONENT (2026-05-08)
+
+backend:
+  - task: "server.py: rimosso codice legacy App Compass (~310 righe morte)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Rimossi: modelli RecommendRequest/AppItem/RecommendResponse/Favorite/HistoryItem/Category,
+          CATEGORIES list, FEATURED_ROTATION, SYSTEM_PROMPT App Compass, endpoints /categories,
+          /featured-app, /recommend (ora 410 deprecated stub), /history (3), /favorites (3),
+          /demo/{fmt}, /demo-screen/* (riferivano DEMO_DIR mai definito = endpoint rotti),
+          import FileResponse non più usato, helper clean_doc inutilizzato.
+          File da 1367 → 1054 righe. Tutti gli endpoint Taccuino (/profile, /timeline, /converse,
+          /transcribe, /tts/*, /voices, /recap) restano intatti. Endpoint root ora ritorna
+          "Taccuino Vivo API". Riavvio backend OK, "Application startup complete".
+          Verifiche curl manuali: /api/ → 200 "Taccuino Vivo API"; /api/profile, /api/timeline,
+          /api/voices → 200; /api/categories → 404; /api/recommend → 410.
+      - working: true
+        agent: "testing"
+        comment: |
+          FULL backend regression suite passed (17/17) via /app/backend_test.py against the
+          public URL https://app-finder-408.preview.emergentagent.com/api.
+
+          WORKING ENDPOINTS (200/206 OK):
+            ✅ GET    /api/                                      → 200 {"message":"Taccuino Vivo API","status":"ok"}
+            ✅ GET    /api/profile                               → 200 (id="me")
+            ✅ PUT    /api/profile {"name":"Marco"}              → 200 (name persisted)
+            ✅ GET    /api/timeline?limit=5                      → 200 (list)
+            ✅ POST   /api/converse {"text":"ciao, come stai?"} → 200 (user_entry+ai_entry+profile, ai_entry has non-empty text and tone)
+            ✅ GET    /api/recap?period=today                    → 200 ({"recap":"...","period":"today"})
+            ✅ GET    /api/voices                                → 200 (all 8 curated voices present: Matilda, Sarah, Charlotte, Jessica, Liam, Charlie, Callum, Daniel; enabled=true)
+            ✅ POST   /api/tts/prepare {text:"ciao",voice_id:"XrExE9yKIg1WjnnlVkGX"} → 200 ({"token":"...","size":>0})
+            ✅ GET    /api/tts/audio/{token}.mp3                 → 200 audio/mpeg + Accept-Ranges
+            ✅ GET    /api/tts/audio/{token}.mp3 Range:bytes=0-100 → 206 audio/mpeg + Content-Range bytes 0-100/N
+
+          REMOVED LEGACY ENDPOINTS (correct error codes, NO 500):
+            ✅ GET    /api/categories    → 404
+            ✅ GET    /api/featured-app  → 404
+            ✅ POST   /api/recommend     → 410 Gone
+            ✅ GET    /api/favorites     → 404
+            ✅ GET    /api/history       → 404
+            ✅ GET    /api/demo/mp4      → 404
+
+          INPUT VALIDATION:
+            ✅ POST /api/transcribe with empty audio body → 400 "Empty audio"
+
+          BACKEND LOGS DURING TEST RUN: clean. No 500 / NameError / ImportError emitted
+          during the suite. (Pre-cleanup historical NameError entries for RecommendResponse
+          and Category remain in the log file but the server has fully restarted past them
+          — "Application startup complete" — and no requests during testing produced
+          5xx responses.)
+
+          ELEVENLABS NOTE (NOT a regression): logs show recurring
+          "Failed to fetch custom voices: ... missing_permissions: voices_read" warnings.
+          This is a known limitation of the current API key — the curated 8-voice list
+          is still returned correctly, and TTS synthesis itself works (200 OK + valid MP3).
+          No action required from cleanup standpoint.
+
+          CONCLUSION: legacy cleanup did NOT break anything. All Taccuino endpoints fully
+          operational, all removed endpoints return correct 404/410 codes (never 500).
+
+frontend:
+  - task: "Orb component: presenza visiva centrale (cuore di Coda)"
+    implemented: true
+    working: "NA"
+    file: "frontend/components/Orb.tsx, frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Creato componente <Orb /> in components/Orb.tsx (~290 righe, self-contained).
+          Differenzia Taccuino Vivo da una chat normale dando a "Coda" un corpo visivo:
+          - 4 stati: idle (respiro 3s lento), recording (outer halo segue dB voce con
+            attack 90ms), thinking (shimmer rotante 2.2s), speaking (pulsazione ritmica
+            380/520ms colorata in base al tone dell'AI: warm/calm/concerned/...).
+          - 4 layer concentrici: outer halo (gradient soft), shimmer thinking, mid ring,
+            core (avatar utente o gradient), spark (highlight bianco off-center).
+          - Colore dinamico per tone: warm=ambra, calm=blu, concerned=arancio, urgent=rosso,
+            energetic=verde, neutral=viola.
+          - Performance: solo Animated nativo + LinearGradient (niente SVG, niente deps extra),
+            useNativeDriver: true ovunque possibile.
+
+          Integrazione in index.tsx:
+          1. Import: aggiunto `import Orb, { OrbTone } from "../components/Orb"`.
+          2. Empty state: sostituito <AppIcon size={96}> con <Orb size={220}> grande e
+             respirante. Testo aggiornato da "Il tuo Taccuino è vuoto" a "Ciao, sono qui".
+          3. Bottom area: Orb 200x200 inserito DIETRO il pulsante mic (orbBehindBtn style,
+             absolute fill, pointerEvents="none"). Il pulsante mic resta tappabile sopra.
+             Le vecchie neonGlow/neonGlowSoft (decorazioni shadow base) rimosse — l'Orb le
+             sostituisce con feedback molto più ricco.
+          4. lastAiTone derivato dal timeline (ultimo tone AI) → passato all'Orb così
+             quando Coda parla l'aura si tinge col colore emotivo del tono.
+
+          Bug fix durante integrazione: import path inizialmente errato "../../components/Orb"
+          (risolveva a /app/components/Orb), corretto in "../components/Orb" (→
+          /app/frontend/components/Orb).
+
+          Verifica visiva: screenshot mobile 390x844 mostra l'aura calda gialla che respira
+          attorno al pulsante mic verde — Coda ora ha presenza, non è più "un pulsante".
+  - task: "PRD.md riscritto per Taccuino Vivo (era App Compass legacy)"
+    implemented: true
+    working: "NA"
+    file: "memory/PRD.md"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          PRD precedente descriveva ancora il vecchio progetto "App Compass" (consigliatore
+          di app), ormai irrilevante. Riscritto da zero per riflettere Taccuino Vivo:
+          vision (assistente voice-first single-timeline), differenziatori (NON una chat),
+          MVP esistente (conversazione vocale continua, calibrazione adattiva noise,
+          ElevenLabs v3 + audio tags, timeline unica, personalizzazione visiva),
+          architettura, stack, roadmap (Orb, refactor index.tsx, riconoscimento genere,
+          VAD vero, wake-word, integrazioni dati), 5 principi di design.
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Pulizia legacy + nuovo concept visivo (Orb).
+
+      BACKEND CLEANUP: server.py ridotto da 1367→1054 righe rimuovendo l'intero stack
+      del vecchio progetto "App Compass" (modelli Recommend/Favorite/History/Category,
+      CATEGORIES static, FEATURED_ROTATION, prompt SYSTEM, endpoints /recommend,
+      /favorites, /history, /categories, /featured-app, /demo). Endpoint Taccuino
+      tutti intatti.
+
+      ORB COMPONENT: nuovo cuore visivo che differenzia da una chat. Coda ha ora un
+      "corpo" pulsante che respira a riposo, segue la voce dell'utente quando registra
+      (instant feedback dB), shimmer-rotante quando pensa, e pulsa col colore del tone
+      emotivo quando parla. Sostituisce le vecchie shadow-based glow attorno al mic
+      con qualcosa di vivo. Empty state ora ha l'Orb grande 220px invece di un'icona
+      statica.
+
+      Test richiesti al backend: verificare che dopo la pulizia tutti gli endpoint
+      Taccuino rispondano correttamente:
+        - GET /api/ (root)
+        - GET /api/profile, PUT /api/profile, DELETE /api/profile
+        - GET /api/timeline, DELETE /api/timeline
+        - POST /api/converse (con un breve text input)
+        - GET /api/recap?period=today
+        - GET /api/voices
+        - POST /api/transcribe (con un piccolo audio file di test)
+        - POST /api/tts/prepare + GET /api/tts/audio/{token}.mp3
+      E confermare che gli endpoint legacy ritornino 404/410 come atteso:
+        - GET /api/categories → 404
+        - GET /api/featured-app → 404
+        - POST /api/recommend → 410
+        - GET /api/favorites → 404
+        - GET /api/history → 404
