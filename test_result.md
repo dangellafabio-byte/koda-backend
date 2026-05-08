@@ -514,3 +514,104 @@ agent_communication:
         - POST /api/recommend → 410
         - GET /api/favorites → 404
         - GET /api/history → 404
+
+
+## ORB 2.0 + DIARIO AESTHETIC (2026-05-08, late)
+
+frontend:
+  - task: "Orb 2.0 — drift organico, scroll-peek, warmth, dim, palette ora-del-giorno"
+    implemented: true
+    working: "NA"
+    file: "frontend/components/Orb.tsx, frontend/lib/useOrbAmbient.ts, frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Orb evoluto da "alone respirante" a "Ombra Luminosa" — presenza vera con
+          umori. Nuovi prop: palette (override colori da useOrbAmbient), warmth (0..1
+          boost halo), dim (0..1 fade per inattività), scrollPeek (-100..100 lean
+          orizzontale verso direzione scroll), drift (random walk interno ±6% size,
+          loop infinito phase-offset X/Y).
+
+          Nuovo hook lib/useOrbAmbient.ts (~110 righe) — DERIVED VALUE puro, niente
+          AsyncStorage:
+            - warmth = somma esponenziale messaggi ultime 24h con half-life 3h, sat 12
+            - dim = staircase su età ultimo messaggio (0 <1h, 0.2 <3h, 0.4 <6h, 0.55
+              <12h, 0.7 oltre)
+            - palette = 6 fasce orarie: alba (5-7), mattino (7-11), giorno (11-17),
+              tramonto (17-20), sera (20-23), notte (23-5). Ogni fascia ha una
+              tripletta [outer, mid, core] calibrata emotivamente.
+          Re-tick interno ogni 60s per aggiornare palette+warmth+dim senza re-render
+          su ogni keystroke.
+
+          Integrazione index.tsx:
+            - import useOrbAmbient + ambient = useOrbAmbient(timeline)
+            - state scrollPeek smoothato (lerp 0.6 + decay 350ms)
+            - onTimelineScroll callback collegato a ScrollView con scrollEventThrottle 32
+            - ambient.palette/warmth/dim/scrollPeek passati a entrambi gli Orb
+              (empty state 220px e dietro il mic 200px).
+
+          Verifica visiva: screenshot mobile mostra l'aura in palette giorno (ambra),
+          orb shifted leggermente (drift), bolle alternate ruotate (vedi sotto).
+
+  - task: "Diario aesthetic: font Caveat per testo AI + bolle leggermente ruotate"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Aggiunto @expo-google-fonts/caveat + expo-font (yarn). Caricamento async
+          via useFonts({Caveat_400Regular, Caveat_500Medium}); aiFontFamily passato
+          come prop a Bubble e applicato SOLO al testo AI (user resta system).
+          Bumped fontSize+lineHeight ×1.25 quando Caveat è attivo perché visivamente
+          siede più piccolo allo stesso nominal-size.
+
+          Bolle: nuova rotazione deterministica per id entry, ±1.2° max, AI bias
+          negativo, user bias positivo → conversazione "appoggiata su un tavolo" non
+          "allineata su griglia rigida". Hash semplice (mul-31) sull'id per
+          riproducibilità tra re-render.
+
+          NB: su web preview Caveat non si carica (limitazione expo-font web nei
+          tunnel sandboxed) → font cade su system. Su Expo Go iPhone i font Google
+          si caricano correttamente al primo run. Lasciato come accettato — la
+          rotazione bolle visibile compensa l'effetto diario nel preview.
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Sessione "tutto" parte 1: Orb 2.0 + Diario aesthetic.
+
+      ORB 2.0: l'Orb non è più solo un alone che respira → è una **presenza con
+      umori**. Drift organico continuo (random walk soft), peek che segue lo scroll
+      della timeline (Coda "guarda" cosa stai leggendo), warmth crescente con le
+      interazioni (più parli, più brilla, half-life 3h), dim con inattività (dopo
+      ore di silenzio si fioca senza scomparire — sta aspettando), palette
+      ora-del-giorno (6 fasce: alba ambra-pesca, giorno viola sereno, tramonto
+      ambra-fucsia, sera blu-indaco, notte viola profondo). Tutto derivato puro da
+      timeline + Date.now(), zero persistenza extra.
+
+      DIARIO: bolle ruotate ±1.2° deterministicamente per id (AI bias negativo, user
+      positivo) → conversazione "appoggiata su un tavolo". Font Caveat per testo AI
+      (caricamento async via @expo-google-fonts/caveat) → quando carica le risposte
+      di Coda sembrano scritte a mano. User text resta system per contrasto.
+
+      In sospeso per la prossima sessione (utente ha detto "tutto"):
+      - Check-in proattivo: backend endpoint /checkin/generate (Claude legge
+        memory_summary + ora → genera notifica personalizzata) + scheduler frontend
+        locale (1-2/giorno opt-in, evita ore già occupate, cancella se già parlato)
+        + UI opt-in granulare (mai/mattina/sera/entrambi).
+      - Side-by-Side fuso: l'ultima bolla AI persistente che si rimpicciolisce e si
+        scioglie nell'Orb dopo 30s di silenzio. Solo dopo che Orb 2.0 è stabile.
+
+      Nessun test backend richiesto in questa sessione (nessuna modifica al
+      backend). Frontend testing: rimando alla verifica utente sull'iPhone vero
+      visto il limite font-su-web del preview.
+

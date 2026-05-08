@@ -39,6 +39,31 @@ type OrbProps = {
   size?: number;
   /** Optional user-uploaded avatar shown inside the core (replaces gradient core). */
   avatarUri?: string | null;
+  /**
+   * Custom palette [outer, mid, core] that overrides the tone palette.
+   * Used for time-of-day ambient tinting from useOrbAmbient.
+   */
+  palette?: [string, string, string] | null;
+  /**
+   * Warmth (0..1): how brightly Coda shines based on recent interactions.
+   * Boosts halo opacity & size. From useOrbAmbient.
+   */
+  warmth?: number;
+  /**
+   * Dim (0..1): reduces global Orb opacity when the user has been silent
+   * for a long time — Coda is "waiting", not absent. From useOrbAmbient.
+   */
+  dim?: number;
+  /**
+   * Live scroll offset of the timeline (delta in px since last render).
+   * The Orb peeks slightly toward the direction of scroll. ±60 typical.
+   */
+  scrollPeek?: number;
+  /**
+   * If true, enable the gentle organic drift on X/Y axes (the Orb feels
+   * slightly alive even when nothing happens). Default true.
+   */
+  drift?: boolean;
 };
 
 // === Color palettes per tone (used when speaking; idle uses warm by default) ===
@@ -61,6 +86,11 @@ export default function Orb({
   tone,
   size = 220,
   avatarUri,
+  palette: customPalette,
+  warmth = 0,
+  dim = 0,
+  scrollPeek = 0,
+  drift = true,
 }: OrbProps) {
   // Three independent breathing values, slightly offset → richer organic feel
   const breath1 = useRef(new Animated.Value(0)).current; // outer halo
@@ -72,6 +102,15 @@ export default function Orb({
   const meterAmp = useRef(new Animated.Value(0)).current;
   // Speaking pulse intensity
   const speakPulse = useRef(new Animated.Value(0)).current;
+  // Organic drift on X/Y axes — random walk around the centre
+  const driftX = useRef(new Animated.Value(0)).current;
+  const driftY = useRef(new Animated.Value(0)).current;
+  // Smooth scroll-peek tilt (the Orb leans slightly toward the scroll direction)
+  const peek = useRef(new Animated.Value(0)).current;
+  // Smooth warmth value (avoid jitter when timeline updates)
+  const warmthAnim = useRef(new Animated.Value(0)).current;
+  // Smooth dim value
+  const dimAnim = useRef(new Animated.Value(0)).current;
 
   // === Always-on: gentle breathing (3s cycle, three offset waves) ===
   useEffect(() => {
@@ -186,30 +225,95 @@ export default function Orb({
     }).start();
   }, [status, meterDb, meterThreshold, meterAmp]);
 
+  // === Organic drift — random walk on X/Y so the Orb feels alive even at idle.
+  // Each leg picks a fresh random target within [-driftAmount, +driftAmount]
+  // and easings to it over 4-7 seconds; loops indefinitely.
+  useEffect(() => {
+    if (!drift) return;
+    const driftAmount = size * 0.06; // gentle: ±6% of orb size
+    let stop = false;
+    const step = (val: Animated.Value) => {
+      if (stop) return;
+      const target = (Math.random() * 2 - 1) * driftAmount;
+      const dur = 4000 + Math.random() * 3000;
+      Animated.timing(val, {
+        toValue: target,
+        duration: dur,
+        easing: Easing.inOut(Easing.sin),
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (finished) step(val);
+      });
+    };
+    step(driftX);
+    // Phase-offset Y so the motion isn't a perfect line
+    setTimeout(() => step(driftY), 1700);
+    return () => {
+      stop = true;
+    };
+  }, [drift, size, driftX, driftY]);
+
+  // === Scroll-peek — Orb leans slightly toward the scroll direction ===
+  useEffect(() => {
+    // scrollPeek is provided by parent as a (small) numeric offset. We clamp
+    // and smoothly animate towards it so quick scroll bursts don't jolt.
+    const target = Math.max(-1, Math.min(1, scrollPeek / 80));
+    Animated.timing(peek, {
+      toValue: target,
+      duration: 220,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  }, [scrollPeek, peek]);
+
+  // === Smooth warmth / dim transitions ===
+  useEffect(() => {
+    Animated.timing(warmthAnim, {
+      toValue: warmth,
+      duration: 800,
+      useNativeDriver: true,
+    }).start();
+  }, [warmth, warmthAnim]);
+  useEffect(() => {
+    Animated.timing(dimAnim, {
+      toValue: dim,
+      duration: 1200,
+      useNativeDriver: true,
+    }).start();
+  }, [dim, dimAnim]);
+
   // === Color selection ===
   const colors: [string, string, string] = useMemo(() => {
+    // Speaking state always wins — must reflect the AI's emotional tone
     if (status === "speaking" && tone && TONE_COLORS[tone]) {
       return TONE_COLORS[tone];
     }
-    // Idle/recording/thinking → calm warm aura
+    // Otherwise, use the time-of-day palette if provided
+    if (customPalette) return customPalette;
     return DEFAULT_COLORS;
-  }, [status, tone]);
+  }, [status, tone, customPalette]);
 
   // === Derived animated styles ===
-  // Outer halo: combines breathing + (mic amplitude when recording) + (speak pulse when speaking)
+  // Outer halo: combines breathing + (mic amplitude when recording) + (speak pulse when speaking) + warmth
   const haloScale = Animated.add(
     Animated.add(
-      breath1.interpolate({ inputRange: [0, 1], outputRange: [1.0, 1.06] }),
-      meterAmp.interpolate({ inputRange: [0, 1], outputRange: [0, 0.22] })
+      Animated.add(
+        breath1.interpolate({ inputRange: [0, 1], outputRange: [1.0, 1.06] }),
+        meterAmp.interpolate({ inputRange: [0, 1], outputRange: [0, 0.22] })
+      ),
+      speakPulse.interpolate({ inputRange: [0, 1], outputRange: [0, 0.14] })
     ),
-    speakPulse.interpolate({ inputRange: [0, 1], outputRange: [0, 0.14] })
+    warmthAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 0.08] })
   );
   const haloOpacity = Animated.add(
-    breath1.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.55] }),
     Animated.add(
-      meterAmp.interpolate({ inputRange: [0, 1], outputRange: [0, 0.35] }),
-      speakPulse.interpolate({ inputRange: [0, 1], outputRange: [0, 0.25] })
-    )
+      breath1.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.5] }),
+      Animated.add(
+        meterAmp.interpolate({ inputRange: [0, 1], outputRange: [0, 0.35] }),
+        speakPulse.interpolate({ inputRange: [0, 1], outputRange: [0, 0.25] })
+      )
+    ),
+    warmthAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 0.2] })
   );
 
   const midScale = Animated.add(
@@ -240,13 +344,36 @@ export default function Orb({
   const coreSize = size * 0.46;
   const shimmerSize = size * 0.92;
 
+  // Container-level transform: drift (random walk) + scroll-peek (lean toward scroll)
+  const containerTranslateX = Animated.add(
+    driftX,
+    peek.interpolate({ inputRange: [-1, 1], outputRange: [-size * 0.04, size * 0.04] })
+  );
+  const containerTranslateY = Animated.add(
+    driftY,
+    peek.interpolate({ inputRange: [-1, 1], outputRange: [size * 0.02, -size * 0.02] })
+  );
+  // Container opacity: 1 - dim. dim=0.7 → opacity 0.3 (very faded but not gone)
+  const containerOpacity = dimAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 0.25],
+  });
+
   return (
-    <View
+    <Animated.View
       style={[
         styles.container,
-        { width: size, height: size },
+        {
+          width: size,
+          height: size,
+          opacity: containerOpacity,
+          transform: [
+            { translateX: containerTranslateX },
+            { translateY: containerTranslateY },
+          ],
+          pointerEvents: "none",
+        },
       ]}
-      pointerEvents="none"
     >
       {/* Outer halo — soft glow that breathes & reacts to voice */}
       <Animated.View
@@ -376,7 +503,7 @@ export default function Orb({
           },
         ]}
       />
-    </View>
+    </Animated.View>
   );
 }
 

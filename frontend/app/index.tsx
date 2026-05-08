@@ -39,6 +39,8 @@ import { scheduleAt } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
+import { useOrbAmbient } from "../lib/useOrbAmbient";
+import { useFonts, Caveat_400Regular, Caveat_500Medium } from "@expo-google-fonts/caveat";
 
 type Status = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 
@@ -889,6 +891,37 @@ export default function Taccuino() {
     }
     return null;
   }, [timeline]);
+
+  // === Orb Ambient — derives warmth, dim and time-of-day palette purely
+  //     from the timeline + current hour. No persistent state needed.
+  const ambient = useOrbAmbient(timeline);
+
+  // Live scroll-peek: tracks scroll velocity so the Orb leans toward the
+  // direction of recent scrolling (then gently returns to centre).
+  const [scrollPeek, setScrollPeek] = useState(0);
+  const lastScrollY = useRef(0);
+  const scrollDecayTimer = useRef<any>(null);
+  const onTimelineScroll = useCallback((e: any) => {
+    const y = e?.nativeEvent?.contentOffset?.y ?? 0;
+    const delta = y - lastScrollY.current;
+    lastScrollY.current = y;
+    // Coda peeks UP when user scrolls up (looking back), DOWN when scrolling down
+    setScrollPeek((prev) => {
+      const next = prev * 0.6 + delta * 1.4;
+      return Math.max(-100, Math.min(100, next));
+    });
+    if (scrollDecayTimer.current) clearTimeout(scrollDecayTimer.current);
+    scrollDecayTimer.current = setTimeout(() => setScrollPeek(0), 350);
+  }, []);
+
+  // === Caveat handwritten font — used for AI replies to evoke "diary
+  //     written together with a friend". User text stays system-default
+  //     (more neutral, like a clean note).
+  const [fontsLoaded] = useFonts({
+    Caveat_400Regular,
+    Caveat_500Medium,
+  });
+  const aiFontFamily = fontsLoaded ? "Caveat_500Medium" : undefined;
   const bubbleStyle: "glass" | "solid" =
     ((profile?.settings as any)?.bubble_style === "solid") ? "solid" : "glass";
   const textSize: number = (() => {
@@ -953,6 +986,8 @@ export default function Taccuino() {
         contentContainerStyle={[styles.timelineContent, { paddingTop: Math.max(insets.top + 70, 130), paddingBottom: 220 + insets.bottom }]}
         showsVerticalScrollIndicator={false}
         testID="timeline"
+        onScroll={onTimelineScroll}
+        scrollEventThrottle={32}
       >
         {timeline.length === 0 ? (
           <View style={styles.emptyState}>
@@ -964,6 +999,10 @@ export default function Taccuino() {
                 tone={lastAiTone}
                 size={220}
                 avatarUri={(profile?.settings as any)?.ai_avatar || null}
+                palette={ambient.palette}
+                warmth={ambient.warmth}
+                dim={ambient.dim}
+                scrollPeek={scrollPeek}
               />
             </View>
             <Text style={styles.emptyTitle}>Ciao, sono qui</Text>
@@ -990,6 +1029,7 @@ export default function Taccuino() {
                 bubbleStyle={bubbleStyle}
                 textOnBubble={textOnBubble}
                 textSize={textSize}
+                aiFontFamily={aiFontFamily}
               />
             )
           )
@@ -1113,6 +1153,10 @@ export default function Taccuino() {
                   meterThreshold={meterThreshold}
                   tone={lastAiTone}
                   size={200}
+                  palette={ambient.palette}
+                  warmth={ambient.warmth}
+                  dim={ambient.dim}
+                  scrollPeek={scrollPeek}
                 />
               </View>
               {/* The actual button — clean, sits on top of the Orb's aura.
@@ -2012,6 +2056,7 @@ function Bubble({
   bubbleStyle,
   textOnBubble,
   textSize,
+  aiFontFamily,
 }: {
   entry: TimelineEntry;
   onReplay?: (e: TimelineEntry) => void;
@@ -2020,6 +2065,12 @@ function Bubble({
   bubbleStyle: "glass" | "solid";
   textOnBubble: string;
   textSize: number; // scale multiplier (e.g. 0.85 / 1.0 / 1.15 / 1.35)
+  /**
+   * Optional handwritten font (Caveat) loaded async. When ready, AI replies
+   * use it to evoke "scritto a mano da un amico", while the user's text
+   * stays system-default. If not loaded yet, both fall back to system.
+   */
+  aiFontFamily?: string;
 }) {
   const { theme } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
@@ -2034,6 +2085,27 @@ function Bubble({
   const aiBorder = bubbleAccent.color;
   const userBorder = bubbleStyle === "solid" ? "transparent" : theme.primary + "AA";
 
+  // === Diary aesthetic: each bubble is rotated by a tiny, deterministic
+  //     amount derived from the entry id. Looks like the bubble was *placed*
+  //     on a table, not aligned by a grid. AI tilts opposite of user so the
+  //     conversation feels alternating.
+  const rot = useMemo(() => {
+    const seed = entry.id || entry.timestamp || "0";
+    let h = 0;
+    for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+    // ±1.2° max — subtle, not gimmicky
+    const base = ((h % 200) - 100) / 100; // -1..1
+    const deg = base * 1.2;
+    // Bias direction by role so AI vs user lean opposite ways
+    return isUser ? Math.abs(deg) : -Math.abs(deg);
+  }, [entry.id, entry.timestamp, isUser]);
+
+  // Handwritten font ONLY for AI text. User text stays system (clean).
+  const aiTextFontProps = aiFontFamily ? { fontFamily: aiFontFamily } : null;
+  // Caveat sits visually larger at the same nominal size — bump line-height
+  // a bit so descenders breathe.
+  const aiTextSizeMultiplier = aiFontFamily ? 1.25 : 1;
+
   const wrapperPress = (cb: () => void) => ({
     onPress: cb,
     onLongPress: () => setShowTime((s) => !s),
@@ -2041,7 +2113,13 @@ function Bubble({
   });
 
   return (
-    <View style={[styles.bubbleRow, isUser ? styles.bubbleRowR : styles.bubbleRowL]}>
+    <View
+      style={[
+        styles.bubbleRow,
+        isUser ? styles.bubbleRowR : styles.bubbleRowL,
+        { transform: [{ rotate: `${rot}deg` }] },
+      ]}
+    >
       {!isUser ? <AIAvatar photo={aiAvatar} color={bubbleAccent.color} /> : null}
       <View style={{ maxWidth: "82%" }}>
         {isUser ? (
@@ -2070,7 +2148,15 @@ function Bubble({
             accessibilityLabel="Tocca per ascoltare. Tocca di nuovo per fermare."
             testID={`replay-${entry.id}`}
           >
-            <Text style={[styles.bubbleAiText, { color: textOnBubble, fontSize: 15 * textSize, lineHeight: 21 * textSize }]}>{entry.text}</Text>
+            <Text
+              style={[
+                styles.bubbleAiText,
+                { color: textOnBubble, fontSize: 15 * textSize * aiTextSizeMultiplier, lineHeight: 21 * textSize * aiTextSizeMultiplier },
+                aiTextFontProps,
+              ]}
+            >
+              {entry.text}
+            </Text>
             {entry.extracted?.amount ? (
               <Text style={[styles.extractMeta, { color: textOnBubble, opacity: 0.85 }]}>
                 💶 {entry.extracted.amount}
