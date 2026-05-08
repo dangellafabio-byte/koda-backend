@@ -209,6 +209,55 @@ export default function Taccuino() {
     } catch {}
   };
 
+  const pickAiAvatar = async () => {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        setError("Per scegliere una foto serve il permesso galleria.");
+        setTimeout(() => setError(null), 5000);
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.7,
+        base64: true,
+        allowsEditing: true,
+        aspect: [1, 1],
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+      const a = result.assets[0];
+      let dataUri: string | null = null;
+      if (a.base64) {
+        const mime = a.mimeType || (a.uri.endsWith(".png") ? "image/png" : "image/jpeg");
+        dataUri = `data:${mime};base64,${a.base64}`;
+      } else if (a.uri) {
+        dataUri = a.uri;
+      }
+      if (dataUri && profile) {
+        const next = { ...profile, settings: { ...profile.settings, ai_avatar: dataUri } as any };
+        setProfile(next);
+        try { await api.updateProfile({ settings: next.settings } as any); } catch {}
+      }
+    } catch {
+      setError("Non sono riuscito a caricare la foto.");
+      setTimeout(() => setError(null), 4000);
+    }
+  };
+
+  const removeAiAvatar = async () => {
+    if (!profile) return;
+    const next = { ...profile, settings: { ...profile.settings, ai_avatar: null } as any };
+    setProfile(next);
+    try { await api.updateProfile({ settings: next.settings } as any); } catch {}
+  };
+
+  const setBubbleColor = async (key: string) => {
+    if (!profile) return;
+    const next = { ...profile, settings: { ...profile.settings, bubble_color: key } as any };
+    setProfile(next);
+    try { await api.updateProfile({ settings: next.settings } as any); } catch {}
+  };
+
   const pickBackgroundFromGallery = async () => {
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -712,21 +761,40 @@ export default function Taccuino() {
   };
 
   /**
-   * Tap-on-AI-bubble handler: re-play the AI's message text via ElevenLabs.
-   * Stops any current playback first, then speaks using the user's chosen voice.
+   * Tap-on-AI-bubble handler: TOGGLE play/stop the AI's message via voice.
+   *  - 1st tap on a bubble → start speaking that message
+   *  - 2nd tap on the SAME bubble (while speaking) → stop the voice
+   *  - Tap on a DIFFERENT bubble → stop current, start new
    */
+  const playingMsgIdRef = useRef<string | null>(null);
+  const [playingMsgId, setPlayingMsgId] = useState<string | null>(null);
+
   const replayMessage = async (entry: TimelineEntry) => {
     if (!entry || entry.role === "user" || !entry.text) return;
+    // If THIS bubble is currently playing → toggle stop
+    if (playingMsgIdRef.current === entry.id) {
+      SpeechMod.stop();
+      playingMsgIdRef.current = null;
+      setPlayingMsgId(null);
+      return;
+    }
+    // Otherwise stop whatever's playing and start the new one
     SpeechMod.stop();
+    playingMsgIdRef.current = entry.id;
+    setPlayingMsgId(entry.id);
     try {
       const langTag = profile?.language === "it" ? "it-IT" : profile?.language || "it-IT";
-      // Make sure audio is unlocked on web (required by Safari for play())
       await unlockSpeech();
       await SpeechMod.speak(entry.voice_text || entry.text, {
         language: langTag,
         tone: (entry.tone as Tone) || "neutral",
       });
     } catch {}
+    // When speech finishes naturally, clear the marker
+    if (playingMsgIdRef.current === entry.id) {
+      playingMsgIdRef.current = null;
+      setPlayingMsgId(null);
+    }
   };
 
   /**
@@ -779,6 +847,10 @@ export default function Taccuino() {
     : 0.55;
   const bgPreset = bgValue && BG_PRESETS.find((p) => p.id === bgValue);
   const isCustomImage = !!bgValue && (bgValue.startsWith("data:") || bgValue.startsWith("file:") || bgValue.startsWith("http"));
+  const bubbleAccent = useMemo(
+    () => resolveBubbleColors((profile?.settings as any)?.bubble_color),
+    [(profile?.settings as any)?.bubble_color]
+  );
 
   // === Build timeline w/ day separators
   const timelineWithSeparators = useMemo(() => {
@@ -855,14 +927,34 @@ export default function Taccuino() {
                 <View style={styles.daySepLine} />
               </View>
             ) : (
-              <Bubble key={it.entry.id} entry={it.entry} onReplay={replayMessage} />
+              <Bubble
+                key={it.entry.id}
+                entry={it.entry}
+                onReplay={replayMessage}
+                aiAvatar={(profile?.settings as any)?.ai_avatar || null}
+                bubbleAccent={bubbleAccent}
+              />
             )
           )
         )}
 
-        {status === "thinking" && (
-          <View style={[styles.bubbleAi, { alignSelf: "flex-end" }]}>
-            <ActivityIndicator size="small" color={theme.primary} />
+        {/* Typing/speaking indicator on the LEFT (like WhatsApp) — appears
+            when AI is thinking, transcribing, or actively speaking. */}
+        {(status === "thinking" || status === "transcribing" || status === "speaking") && (
+          <View style={[styles.bubbleRow, styles.bubbleRowL]}>
+            <AIAvatar photo={(profile?.settings as any)?.ai_avatar || null} color={bubbleAccent.color} />
+            <View
+              style={[
+                styles.bubbleAi,
+                { backgroundColor: bubbleAccent.soft, borderColor: bubbleAccent.color },
+              ]}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 4, height: 18 }}>
+                <TypingDot delay={0} color={bubbleAccent.color} />
+                <TypingDot delay={150} color={bubbleAccent.color} />
+                <TypingDot delay={300} color={bubbleAccent.color} />
+              </View>
+            </View>
           </View>
         )}
       </ScrollView>
@@ -1230,6 +1322,66 @@ export default function Taccuino() {
                 </View>
               </View>
             ) : null}
+
+            <View style={styles.divider} />
+
+            <Text style={styles.settingsSubtitle}>Aspetto chat</Text>
+            <Text style={styles.settingsHint}>
+              Personalizza l'avatar dell'assistente e il colore delle bolle.
+            </Text>
+
+            {/* AI Avatar */}
+            <View style={styles.avatarRow}>
+              <TouchableOpacity onPress={pickAiAvatar} style={styles.avatarPickBtn}>
+                {(profile?.settings as any)?.ai_avatar ? (
+                  <Image
+                    source={{ uri: (profile?.settings as any).ai_avatar }}
+                    style={styles.avatarPickImg}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View style={[styles.avatarPickImg, { alignItems: "center", justifyContent: "center", backgroundColor: bubbleAccent.color + "30" }]}>
+                    <Ionicons name="person-circle-outline" size={42} color={bubbleAccent.color} />
+                  </View>
+                )}
+                <View style={styles.avatarEditBadge}>
+                  <Ionicons name="camera" size={14} color="#fff" />
+                </View>
+              </TouchableOpacity>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingsHint}>
+                  {(profile?.settings as any)?.ai_avatar
+                    ? "Avatar personalizzato"
+                    : "Tocca per scegliere una foto"}
+                </Text>
+                {(profile?.settings as any)?.ai_avatar ? (
+                  <TouchableOpacity onPress={removeAiAvatar}>
+                    <Text style={[styles.settingsHint, { color: theme.danger, marginTop: 4 }]}>
+                      Rimuovi avatar
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </View>
+
+            {/* Bubble color picker */}
+            <Text style={[styles.settingsHint, { marginTop: 14 }]}>Colore bolla AI</Text>
+            <View style={styles.bgRow}>
+              {Object.entries(BUBBLE_PRESETS).map(([key, val]) => {
+                const active = ((profile?.settings as any)?.bubble_color || "viola") === key;
+                return (
+                  <TouchableOpacity
+                    key={key}
+                    onPress={() => setBubbleColor(key)}
+                    style={[styles.bgChip, active && { borderColor: val.color, backgroundColor: val.color + "30" }]}
+                    testID={`bubble-color-${key}`}
+                  >
+                    <View style={[styles.bgSwatch, { backgroundColor: val.color }]} />
+                    <Text style={styles.bgChipText}>{val.name}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
 
             <View style={styles.divider} />
 
@@ -1601,6 +1753,74 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
   );
 }
 
+// Map of preset bubble accent colors. User can pick one in Settings, or use
+// any custom hex via the same field.
+const BUBBLE_PRESETS: Record<string, { name: string; color: string; soft: string }> = {
+  viola:        { name: "Viola",       color: "#7C3AED", soft: "rgba(124,58,237,0.18)" },
+  verde_acqua:  { name: "Verde acqua", color: "#14B8A6", soft: "rgba(20,184,166,0.18)" },
+  rosa:         { name: "Rosa",        color: "#EC4899", soft: "rgba(236,72,153,0.18)" },
+  ambra:        { name: "Ambra",       color: "#F59E0B", soft: "rgba(245,158,11,0.18)" },
+  ghiaccio:     { name: "Ghiaccio",    color: "#3B82F6", soft: "rgba(59,130,246,0.18)" },
+};
+
+function resolveBubbleColors(
+  bubbleColor: string | undefined
+): { color: string; soft: string } {
+  const key = bubbleColor || "viola";
+  if (BUBBLE_PRESETS[key]) return BUBBLE_PRESETS[key];
+  // Custom hex: derive a soft variant
+  if (typeof key === "string" && key.startsWith("#")) {
+    return { color: key, soft: key + "30" };
+  }
+  return BUBBLE_PRESETS.viola;
+}
+
+// === AIAvatar — round avatar shown next to AI bubbles. Uses a user-uploaded
+// photo (data URI) when set, otherwise falls back to the pulsing MiniOrb.
+function AIAvatar({ photo, color, size = 36 }: { photo?: string | null; color: string; size?: number }) {
+  if (photo) {
+    return (
+      <View
+        style={{
+          width: size, height: size, borderRadius: 999,
+          overflow: "hidden", marginRight: 8, marginBottom: 2,
+          borderWidth: 1.5, borderColor: color,
+          backgroundColor: "#000",
+        }}
+      >
+        <Image source={{ uri: photo }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+      </View>
+    );
+  }
+  return <MiniOrb color={color} />;
+}
+
+// === TypingDot — animated dot for "AI sta scrivendo" indicator
+function TypingDot({ delay, color }: { delay: number; color: string }) {
+  const v = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.delay(delay),
+        Animated.timing(v, { toValue: 1, duration: 350, useNativeDriver: true }),
+        Animated.timing(v, { toValue: 0, duration: 350, useNativeDriver: true }),
+        Animated.delay(150),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [v, delay]);
+  return (
+    <Animated.View
+      style={{
+        width: 7, height: 7, borderRadius: 999, backgroundColor: color,
+        opacity: v.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }),
+        transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [2, -2] }) }],
+      }}
+    />
+  );
+}
+
 // === MiniOrb — signature pulsing orb that brands the AI side of the chat
 function MiniOrb({ color = "#7C3AED" }: { color?: string }) {
   const pulse = useRef(new Animated.Value(0)).current;
@@ -1644,41 +1864,27 @@ function MiniOrb({ color = "#7C3AED" }: { color?: string }) {
   );
 }
 
-function Bubble({ entry, onReplay }: { entry: TimelineEntry; onReplay?: (e: TimelineEntry) => void }) {
+function Bubble({
+  entry,
+  onReplay,
+  aiAvatar,
+  bubbleAccent,
+}: {
+  entry: TimelineEntry;
+  onReplay?: (e: TimelineEntry) => void;
+  aiAvatar?: string | null;
+  bubbleAccent: { color: string; soft: string };
+}) {
   const { theme } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const isUser = entry.role === "user";
-  const tone = (entry.tone || "neutral") as keyof typeof theme.tone;
-  const ts = theme.tone[tone] || theme.tone.neutral;
-  const dom = entry.domain ? domainBadge[entry.domain as Domain] : null;
   const [showTime, setShowTime] = useState(false);
 
-  const Wrapper: any = !isUser && onReplay ? Pressable : Pressable;
-  const wrapperProps: any = {
-    onPress: () => {
-      if (!isUser && onReplay) onReplay(entry);
-      else setShowTime((s) => !s);
-    },
-    onLongPress: () => setShowTime((s) => !s),
-    delayLongPress: 250,
-    style: ({ pressed }: any) => [
-      isUser ? styles.bubbleUser : styles.bubbleAi,
-      !isUser && {
-        backgroundColor: ts.bg,
-        borderColor: ts.border,
-      },
-      pressed && { opacity: 0.78 },
-    ],
-    accessibilityRole: "button",
-    accessibilityLabel: !isUser ? "Tocca per riascoltare a voce" : "Messaggio",
-    testID: !isUser ? `replay-${entry.id}` : undefined,
-  };
-
-  const userBubbleColors: [string, string] = [theme.userBubble, theme.primary];
+  const userBubbleColors: [string, string] = [theme.userBubble, bubbleAccent.color];
 
   return (
     <View style={[styles.bubbleRow, isUser ? styles.bubbleRowR : styles.bubbleRowL]}>
-      {!isUser ? <MiniOrb color={theme.primary} /> : null}
+      {!isUser ? <AIAvatar photo={aiAvatar} color={bubbleAccent.color} /> : null}
       <View style={{ maxWidth: "82%" }}>
         {isUser ? (
           // User bubble: gradient with rounded tail-corner
@@ -1698,15 +1904,25 @@ function Bubble({ entry, onReplay }: { entry: TimelineEntry; onReplay?: (e: Time
             </LinearGradient>
           </Pressable>
         ) : (
-          <Wrapper {...wrapperProps}>
-            {dom ? (
-              <View style={[styles.domainPill, { borderColor: dom.color }]}>
-                <Text style={styles.domainEmoji}>{dom.emoji}</Text>
-                <Text style={[styles.domainLabel, { color: dom.color }]}>
-                  {dom.label}
-                </Text>
-              </View>
-            ) : null}
+          <Pressable
+            onPress={() => {
+              if (onReplay) onReplay(entry);
+              else setShowTime((s) => !s);
+            }}
+            onLongPress={() => setShowTime((s) => !s)}
+            delayLongPress={250}
+            style={({ pressed }: any) => [
+              styles.bubbleAi,
+              {
+                backgroundColor: bubbleAccent.soft,
+                borderColor: bubbleAccent.color,
+              },
+              pressed && { opacity: 0.78 },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Tocca per ascoltare. Tocca di nuovo per fermare."
+            testID={`replay-${entry.id}`}
+          >
             <Text style={styles.bubbleAiText}>{entry.text}</Text>
             {entry.extracted?.amount ? (
               <Text style={styles.extractMeta}>
@@ -1745,7 +1961,7 @@ function Bubble({ entry, onReplay }: { entry: TimelineEntry; onReplay?: (e: Time
                 })}
               </View>
             ) : null}
-          </Wrapper>
+          </Pressable>
         )}
         {showTime ? (
           <Text style={[styles.bubbleTime, isUser ? { textAlign: "right" } : { textAlign: "left" }]}>
@@ -2243,6 +2459,27 @@ const makeStyles = (t: any) => StyleSheet.create({
   },
 
   modeRow: { flexDirection: "row", gap: 6, marginTop: 4 },
+
+  // Avatar picker (AI photo)
+  avatarRow: { flexDirection: "row", alignItems: "center", gap: 14, marginTop: 8 },
+  avatarPickBtn: { width: 64, height: 64, position: "relative" },
+  avatarPickImg: {
+    width: 64, height: 64, borderRadius: 999,
+    borderWidth: 2, borderColor: t.primary,
+  },
+  avatarEditBadge: {
+    position: "absolute",
+    right: -2,
+    bottom: -2,
+    width: 22,
+    height: 22,
+    borderRadius: 999,
+    backgroundColor: t.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: t.surface,
+  },
 
   // === Background picker (sfondo)
   bgRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },

@@ -461,6 +461,12 @@ class TaccuinoSettings(BaseModel):
     # preset names below ("aurora", "carta", "notturno", "sabbia", "marmo")
     background: Optional[str] = None  # null | preset id | "data:image/...;base64,..."
     background_dim: float = 0.55  # 0..1 dark overlay opacity over custom backgrounds
+    # Avatar shown next to AI bubbles. Either base64 data URI (user-uploaded photo)
+    # or null (fallback to default pulsing orb).
+    ai_avatar: Optional[str] = None
+    # Bubble accent color used for AI bubbles. Either a preset name ("viola",
+    # "verde_acqua", "rosa", "ambra", "ghiaccio") or a custom hex string.
+    bubble_color: str = "viola"
     domains: dict = Field(
         default_factory=lambda: {
             "soldi": True,

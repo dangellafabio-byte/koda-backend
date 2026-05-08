@@ -66,6 +66,8 @@ export type ProfileSettings = {
   conversation_mode?: boolean;
   background?: string | null;       // null | preset id | "data:image/...;base64,..."
   background_dim?: number;          // 0..1 dark overlay opacity
+  ai_avatar?: string | null;        // Custom photo for AI avatar (base64 data URI)
+  bubble_color?: string;            // "viola" | "verde_acqua" | "rosa" | "ambra" | "ghiaccio" | hex
 };
 
 export type VoiceOption = {
