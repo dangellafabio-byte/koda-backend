@@ -802,7 +802,10 @@ export default function Taccuino() {
       {/* Header — ABSOLUTELY positioned + transparent. Messages scroll BEHIND
           it freely. The pills only have an icon/text; no opaque background.
           A subtle dark blur backdrop on each pill keeps icons readable. */}
-      <View style={styles.header} pointerEvents="box-none">
+      <View
+        style={[styles.header, { top: insets.top + 4 }]}
+        pointerEvents="box-none"
+      >
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={askRecap}
@@ -828,7 +831,7 @@ export default function Taccuino() {
       <ScrollView
         ref={scrollRef}
         style={styles.timeline}
-        contentContainerStyle={[styles.timelineContent, { paddingBottom: 220 + insets.bottom }]}
+        contentContainerStyle={[styles.timelineContent, { paddingTop: insets.top + 60, paddingBottom: 220 + insets.bottom }]}
         showsVerticalScrollIndicator={false}
         testID="timeline"
       >
