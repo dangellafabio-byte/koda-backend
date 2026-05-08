@@ -235,15 +235,15 @@ export async function startRecording(): Promise<Recorder> {
   rec.setOnRecordingStatusUpdate((status) => {
     const meter = (status as any).metering;
     if (typeof meter === "number") {
-      // Two-tier thresholds — CRITICAL for reliable hands-free conversation:
+      // Two-tier thresholds — tuned for reliable hands-free conversation:
       // - SPEECH_START_DB (-55): very sensitive, detects first whisper to mark
       //   "the user is talking" (so we know to expect a silence-end later).
-      // - VOICE_PRESENT_DB (-48): only meter values ABOVE -48 dB count as
-      //   "still speaking now". Tightening to -48 (was -42) makes it more
-      //   inclusive — captures normal-distance speech while still ignoring
-      //   quiet room hum (~-60dB).
+      // - VOICE_PRESENT_DB (-40): STRICT. Only clearly-audible voice updates
+      //   `lastVoiceAt`. Ambient room hum, fan noise, distant TV — all below
+      //   -40dB — do NOT keep the recording alive. This is the key to making
+      //   silence fire reliably when the user actually stops speaking.
       const SPEECH_START_DB = -55;
-      const VOICE_PRESENT_DB = -48;
+      const VOICE_PRESENT_DB = -40;
 
       if (meter > SPEECH_START_DB && Date.now() - startedAt > 250) {
         if (!everSpoke) {
@@ -264,12 +264,12 @@ export async function startRecording(): Promise<Recorder> {
       if (
         !silenceFired &&
         ((everSpoke &&
-          Date.now() - lastVoiceAt > 1500 &&
+          Date.now() - lastVoiceAt > 1200 &&
           Date.now() - startedAt > 600) ||
-          // Fallback: if no speech ever detected after 12s, force-stop anyway
-          (!everSpoke && Date.now() - startedAt > 12000) ||
-          // Hard cap: 60s — gives plenty of room for long thoughts/stories
-          Date.now() - startedAt > 60000) &&
+          // Fallback: if no speech ever detected after 10s, force-stop anyway
+          (!everSpoke && Date.now() - startedAt > 10000) ||
+          // Hard cap: 45s — generous but not infinite
+          Date.now() - startedAt > 45000) &&
         silenceCb
       ) {
         silenceFired = true;
