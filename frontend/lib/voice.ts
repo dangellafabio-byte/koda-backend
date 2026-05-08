@@ -237,12 +237,15 @@ export async function startRecording(): Promise<Recorder> {
   let silencePaused = false;
 
   // === ADAPTIVE NOISE CALIBRATION ===
-  // For the first 600ms we sample ambient noise to set a DYNAMIC voice
-  // threshold = noise_floor + 8 dB. This way silence detection works in:
-  //  - quiet box (-65dB ambient → threshold -57)
-  //  - normal room (-50dB ambient → threshold -42)
-  //  - noisy environment (-35dB ambient → threshold -27)
-  const CALIBRATION_MS = 600;
+  // For the first 800ms we sample ambient noise to set a DYNAMIC voice
+  // threshold = noise_floor (90th percentile) + 12 dB margin.
+  // The 12dB margin means the user's voice (close to mic) MUST be clearly
+  // louder than ambient sources (TV at 1.5m, fan, distant chatter).
+  // - quiet box (-65dB ambient → threshold -53)
+  //   normal room (-50dB ambient → threshold -38)
+  //   TV at 1.5m (-40dB ambient → threshold -28) — only close voice counts
+  //   loud cafe (-30dB ambient → threshold -18)
+  const CALIBRATION_MS = 800;
   const noiseSamples: number[] = [];
   let dynamicVoicePresentDb: number | null = null;
 
@@ -261,11 +264,14 @@ export async function startRecording(): Promise<Recorder> {
       // Compute dynamic threshold once at end of calibration
       if (dynamicVoicePresentDb === null) {
         const sorted = [...noiseSamples].sort((a, b) => a - b);
-        // 80th percentile of samples = ambient floor (ignores transient peaks)
-        const idx = Math.max(0, Math.floor(sorted.length * 0.8));
+        // 90th percentile of samples = ambient floor (catches most TV peaks)
+        const idx = Math.max(0, Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9)));
         const ambient = sorted[idx] ?? -55;
-        // Threshold: ambient + 8 dB margin, clamped to safe range
-        dynamicVoicePresentDb = Math.max(-55, Math.min(-25, ambient + 8));
+        // Threshold: ambient + 12 dB margin (was 8). The bigger margin
+        // ensures the user's close-to-mic voice clearly stands out from
+        // ambient sources like TVs at 1.5m, fans, distant chatter.
+        // Clamped to safe range [-55, -20].
+        dynamicVoicePresentDb = Math.max(-55, Math.min(-20, ambient + 12));
       }
       const VOICE_PRESENT_DB = dynamicVoicePresentDb;
       // SPEECH_START always 5dB below VOICE_PRESENT (catches first whisper)
