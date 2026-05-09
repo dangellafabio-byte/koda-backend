@@ -1037,3 +1037,77 @@ agent_communication:
 
       Nessuna modifica backend → nessun test backend richiesto.
 
+
+
+## DUE MODALITÀ — Voce Zen (default) + Lettura via Swipe (2026-05-09)
+
+frontend:
+  - task: "Pager horizontale: pagina 0 = Voce Zen, pagina 1 = Lettura"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Su richiesta utente — separato il prodotto in due modalità ben
+          distinte invece di mescolare blob+timeline:
+
+          PAGINA 0 (default = "voce zen"):
+            - SOLO la macchia organica centrale grande (size = min(78% width, 360px))
+            - Avatar utente al centro se caricato
+            - Status text sotto ("Premi e parla" / "Sto ascoltando" / etc.)
+            - Hint piccolo "← scorri per leggere" se c'è una timeline (altrimenti
+              nascosto perché senza nulla da leggere è inutile)
+            - NIENTE timeline, NIENTE bolle. Solo presenza.
+            - Macchia tappabile direttamente (Pressable hitSlop=30) per
+              avviare/fermare ascolto.
+
+          PAGINA 1 (swipe verso destra):
+            - Timeline scrollabile con bolle (font Caveat per AI, rotazioni leggere)
+            - Macchia piccola in basso (size 210) che resta tappabile
+
+          Implementazione: <ScrollView horizontal pagingEnabled> wrappa entrambe
+          le pagine, ognuna con width = useWindowDimensions().width (con
+          fallback a Dimensions.get + 390 per primo render web).
+          onMomentumScrollEnd aggiorna setViewMode("voice"|"reading") in base
+          a Math.round(x/w). Ref pagerRef per scroll programmatico futuro
+          (es. tornare a voce dopo X secondi di idle).
+
+          Bug fix durante l'edit: due `</View>` mancanti per chiudere
+          correttamente sia la bottomBar che la pagina 1 prima della
+          chiusura del pager ScrollView. Risolto inserendo entrambi i
+          tag prima di </ScrollView>.
+
+          Verifica visiva: screenshot mobile mostra esattamente il design
+          richiesto — sfondo scuro, ⚙ + 📋 Sunto, macchia centrale grande
+          con avatar, "Premi e parla" + "← scorri per leggere".
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Iterazione finale: utente vuole DUE modalità chiaramente separate.
+      Modalità voce = home page principale, SOLO macchia, niente testi
+      (come parlare con qualcuno guardando in faccia, non leggendo chat).
+      Modalità lettura = swipe orizzontale per vedere i messaggi in
+      formato diario.
+
+      Implementato con horizontal ScrollView pagingEnabled + 2 viste full-
+      width. La modalità voce è pagina 0 (default). La macchia è grande
+      (size dinamica fino a 360px in base alla viewport) ed è il tap
+      target principale. Niente più header con titolo Taccuino, niente
+      visualizer dB, niente bolle visibili in voce mode.
+
+      Gli endpoint di backend sono intoccati. Frontend bundle compila
+      pulito dopo fix del JSX closing tag mismatch.
+
+      Da testare su iPhone dall'utente:
+        - Home aperta = vede solo la macchia + 2 icone? ✓
+        - Tap sulla macchia = avvia ascolto + macchia diventa verde? ✓
+        - Swipe verso sinistra = appare timeline + macchia piccola? ✓
+        - Swipe verso destra = torna alla voce zen? ✓
+        - NeonBorder ai bordi durante recording verde / speaking ambra? ✓
+

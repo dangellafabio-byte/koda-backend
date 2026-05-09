@@ -16,6 +16,8 @@ import {
   Keyboard,
   Image,
   ImageBackground,
+  useWindowDimensions,
+  Dimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -132,6 +134,12 @@ export default function Taccuino() {
 
   const recRef = useRef<Recorder | null>(null);
   const scrollRef = useRef<ScrollView>(null);
+  // Pager horizontale: pagina 0 = voce zen, pagina 1 = lettura.
+  const pagerRef = useRef<ScrollView>(null);
+  const [viewMode, setViewMode] = useState<"voice" | "reading">("voice");
+  const dimensions = useWindowDimensions();
+  // Use window width with sensible fallback (Dimensions.get) for first render
+  const windowWidth = dimensions.width || Dimensions.get("window").width || 390;
   const pulse = useRef(new Animated.Value(1)).current;
   const breathe = useRef(new Animated.Value(0)).current;
   // Live meter value (dB) shown as debug visualization during recording
@@ -1092,7 +1100,84 @@ export default function Taccuino() {
         </TouchableOpacity>
       </View>
 
-      {/* Timeline */}
+      {/* === HORIZONTAL PAGER: Voce (zen) | Lettura (timeline) ===
+          Pagina 0 = SOLO la macchia centrale grande, niente testi, come
+          parlare con qualcuno guardandoti negli occhi.
+          Pagina 1 = la timeline (modalità lettura) con la macchia piccola.
+          Lo swipe orizzontale switch tra le due. */}
+      <ScrollView
+        ref={pagerRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        onMomentumScrollEnd={(e) => {
+          const x = e.nativeEvent.contentOffset.x;
+          const w = e.nativeEvent.layoutMeasurement.width || windowWidth;
+          setViewMode(Math.round(x / w) === 0 ? "voice" : "reading");
+        }}
+        style={{ flex: 1 }}
+        contentContainerStyle={{ flexGrow: 1 }}
+        decelerationRate="fast"
+      >
+        {/* === PAGE 0: VOICE ZEN MODE ============================ */}
+        <View style={{ width: windowWidth, flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <View style={{ alignItems: "center", justifyContent: "center", flex: 1, gap: 18, paddingHorizontal: 24 }}>
+            <Pressable
+              onPress={onBigButton}
+              disabled={status === "transcribing" || status === "thinking"}
+              hitSlop={30}
+              style={({ pressed }) => [
+                { alignItems: "center", justifyContent: "center" },
+                pressed && { opacity: 0.85 },
+              ]}
+              testID="big-btn-voice"
+            >
+              <Animated.View
+                style={{
+                  transform: [
+                    {
+                      scale: Animated.multiply(
+                        pulse,
+                        breathe.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.07] })
+                      ),
+                    },
+                  ],
+                }}
+              >
+                <OrganicBlob
+                  status={status}
+                  meterDb={meterDb}
+                  meterThreshold={meterThreshold}
+                  tone={lastAiTone}
+                  size={Math.min(windowWidth * 0.78, 360)}
+                  avatarUri={(profile?.settings as any)?.ai_avatar || null}
+                  palette={ambient.palette}
+                  warmth={ambient.warmth}
+                  dim={ambient.dim}
+                />
+              </Animated.View>
+              {(status === "transcribing" || status === "thinking") && (
+                <View style={styles.blobOverlay} pointerEvents="none">
+                  <ActivityIndicator color="#FFFFFFEE" size="large" />
+                </View>
+              )}
+            </Pressable>
+            <Text style={[styles.statusLabel, styles.statusLabelOnBg, { fontSize: 16, marginTop: 8 }]}>
+              {aiPaused ? "AI in pausa" : statusLabel}
+            </Text>
+            {/* Hint swipe — solo se ci sono messaggi (altrimenti non ha senso
+                far promettere "scorri per leggere" se non c'è nulla da leggere) */}
+            {timeline.length > 0 ? (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, opacity: 0.5, marginTop: 6 }}>
+                <Ionicons name="chevron-back" size={14} color="#FFFFFF" />
+                <Text style={{ color: "#FFFFFF", fontSize: 12 }}>scorri per leggere</Text>
+              </View>
+            ) : null}
+          </View>
+        </View>
+
+        {/* === PAGE 1: READING MODE (timeline) =================== */}
+        <View style={{ width: windowWidth, flex: 1 }}>
       <ScrollView
         ref={scrollRef}
         style={styles.timeline}
@@ -1292,7 +1377,9 @@ export default function Taccuino() {
             )}
           </View>
         )}
-      </View>
+        </View>
+        </View>
+      </ScrollView>
 
       {/* Onboarding modal */}
       <Modal visible={showOnboarding} transparent animationType="fade">
