@@ -17,7 +17,12 @@
     },
     "android": {
       "edgeToEdgeEnabled": true,
-      "permissions": ["RECORD_AUDIO", "POST_NOTIFICATIONS", "SCHEDULE_EXACT_ALARM", "READ_MEDIA_IMAGES"],
+      "permissions": [
+        "RECORD_AUDIO",
+        "POST_NOTIFICATIONS",
+        "SCHEDULE_EXACT_ALARM",
+        "READ_MEDIA_IMAGES"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000000"
@@ -46,7 +51,8 @@
           "color": "#FBBF24",
           "defaultChannel": "weekly-app"
         }
-      ]
+      ],
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true

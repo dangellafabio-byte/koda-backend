@@ -70,6 +70,18 @@ export type ProfileSettings = {
   bubble_color?: string;            // "viola" | "verde_acqua" | "rosa" | "ambra" | "ghiaccio" | hex
   bubble_style?: "glass" | "solid"; // visual style applied to BOTH user and AI bubbles
   text_size?: number;               // 0.85 | 1.0 | 1.15 | 1.35
+  // === Proactive Check-in (Coda reaches out without you asking) ===
+  checkin_mode?: "off" | "morning" | "evening" | "both";
+  checkin_morning_time?: string;    // local "HH:MM" e.g. "08:30"
+  checkin_evening_time?: string;    // local "HH:MM" e.g. "21:30"
+};
+
+export type CheckinResponse = {
+  title: string;
+  body: string;
+  voice_text: string;
+  tone: Tone;
+  slot: "morning" | "evening";
 };
 
 export type VoiceOption = {
@@ -134,6 +146,12 @@ export const api = {
 
   listVoices: () =>
     jsonReq<{ voices: VoiceOption[]; enabled: boolean }>("/voices"),
+
+  generateCheckin: (slot: "morning" | "evening", local_hour: number) =>
+    jsonReq<CheckinResponse>("/checkin/generate", {
+      method: "POST",
+      body: JSON.stringify({ slot, local_hour }),
+    }),
 };
 
 // Tone -> color/icon map (UI helper)

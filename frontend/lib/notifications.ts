@@ -266,4 +266,151 @@ export async function cancelScheduled(id: string): Promise<void> {
   } catch {}
 }
 
+// =============================================================
+// PROACTIVE CHECK-IN SCHEDULER
+// =============================================================
+// Identifiers we use so we can update/cancel idempotently.
+const CHECKIN_IDS = {
+  morning: "taccuino-checkin-morning",
+  evening: "taccuino-checkin-evening",
+} as const;
+
+export type CheckinSlot = "morning" | "evening";
+
+/**
+ * Parse a "HH:MM" string into hour/minute. Defensive: returns sane defaults.
+ */
+function parseHHMM(s: string | undefined, fallback: [number, number]): [number, number] {
+  if (!s) return fallback;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(s.trim());
+  if (!m) return fallback;
+  const h = Math.max(0, Math.min(23, parseInt(m[1], 10)));
+  const mm = Math.max(0, Math.min(59, parseInt(m[2], 10)));
+  return [h, mm];
+}
+
+/**
+ * Compute the next Date in the future at a given local hour:minute.
+ * If today's slot is already past, return tomorrow's slot.
+ */
+function nextOccurrenceAt(hour: number, minute: number): Date {
+  const now = new Date();
+  const target = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    hour,
+    minute,
+    0,
+    0
+  );
+  if (target.getTime() <= now.getTime() + 30_000) {
+    target.setDate(target.getDate() + 1);
+  }
+  return target;
+}
+
+/**
+ * Schedule one check-in at the requested local hour. Idempotent — calling
+ * twice for the same slot replaces the previous one.
+ *
+ * The notification carries the *generated* title/body from the backend in
+ * the visible content, plus the full voice_text + tone in the `data` payload
+ * so the index screen can pick them up on tap and have Coda speak them.
+ */
+export async function scheduleCheckin(args: {
+  slot: CheckinSlot;
+  hhmm: string;
+  title: string;
+  body: string;
+  voiceText: string;
+  tone: string;
+}): Promise<string | null> {
+  if (Platform.OS === "web") return null;
+  if (!Device.isDevice) return null;
+
+  try {
+    const granted = await requestNotificationsPermission();
+    if (!granted) return null;
+
+    const id = CHECKIN_IDS[args.slot];
+    // Always cancel the old one first (it might be at a different hour now).
+    try {
+      await Notifications.cancelScheduledNotificationAsync(id);
+    } catch {}
+
+    const [hour, minute] = parseHHMM(
+      args.hhmm,
+      args.slot === "morning" ? [8, 30] : [21, 30]
+    );
+    const when = nextOccurrenceAt(hour, minute);
+
+    await Notifications.scheduleNotificationAsync({
+      identifier: id,
+      content: {
+        title: args.title,
+        body: args.body,
+        sound: "default",
+        data: {
+          type: "checkin",
+          slot: args.slot,
+          voice_text: args.voiceText,
+          tone: args.tone,
+          generated_at: Date.now(),
+        },
+      },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.DATE,
+        date: when,
+      } as any,
+    });
+    return id;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Cancel both check-in slots — used when the user disables them.
+ */
+export async function cancelAllCheckins(): Promise<void> {
+  try {
+    await Notifications.cancelScheduledNotificationAsync(CHECKIN_IDS.morning);
+  } catch {}
+  try {
+    await Notifications.cancelScheduledNotificationAsync(CHECKIN_IDS.evening);
+  } catch {}
+}
+
+/**
+ * Cancel a single check-in (e.g. user just talked to Coda within the last
+ * few hours, so the upcoming one feels redundant).
+ */
+export async function cancelCheckin(slot: CheckinSlot): Promise<void> {
+  try {
+    await Notifications.cancelScheduledNotificationAsync(CHECKIN_IDS[slot]);
+  } catch {}
+}
+
+/**
+ * Returns identifiers of currently scheduled check-ins (handy for the
+ * caller to know if it should re-generate fresh content for the next one).
+ */
+export async function listScheduledCheckins(): Promise<{
+  morning: boolean;
+  evening: boolean;
+}> {
+  if (Platform.OS === "web") return { morning: false, evening: false };
+  try {
+    const all = await Notifications.getAllScheduledNotificationsAsync();
+    const ids = new Set(all.map((n) => n.identifier));
+    return {
+      morning: ids.has(CHECKIN_IDS.morning),
+      evening: ids.has(CHECKIN_IDS.evening),
+    };
+  } catch {
+    return { morning: false, evening: false };
+  }
+}
+
 export const NOTIF_KEYS = { ASKED_KEY, SCHEDULED_KEY };

@@ -218,6 +218,11 @@ class TaccuinoSettings(BaseModel):
     # Text size scale for chat bubbles. 1.0 = default. Range 0.85 - 1.4.
     # Discrete options exposed in UI: piccolo (0.85), normale (1.0), grande (1.15), molto grande (1.35)
     text_size: float = 1.0
+    # === Proactive Check-in (Coda reaches out without you asking) ===
+    # checkin_mode: "off" | "morning" | "evening" | "both"
+    checkin_mode: str = "off"
+    checkin_morning_time: str = "08:30"   # local "HH:MM"
+    checkin_evening_time: str = "21:30"   # local "HH:MM"
     domains: dict = Field(
         default_factory=lambda: {
             "soldi": True,
@@ -677,6 +682,126 @@ async def api_recap(period: str = "today"):
         logger.error(f"recap error: {e}")
         raise HTTPException(status_code=500, detail="Recap generation failed")
     return {"recap": (out or "").strip(), "period": period}
+
+
+# ============================================================
+# PROACTIVE CHECK-IN — Coda reaches out without being asked.
+# Generates a short personal message based on the user's memory
+# and recent timeline. Frontend schedules a local notification
+# at the user-chosen morning/evening slot.
+# ============================================================
+
+class CheckinRequest(BaseModel):
+    slot: str = "morning"  # "morning" | "evening"
+    local_hour: int = 9     # user's local hour (0..23) at the moment of generation
+    # Optional override: user can request a different language/tone hint
+    language: Optional[str] = None
+
+
+class CheckinResponse(BaseModel):
+    title: str            # short, shown as notification title
+    body: str             # 1-2 sentence preview shown in the notification body
+    voice_text: str       # full message Coda will speak when the user opens the app
+    tone: str = "warm"    # used for Orb tinting on tap
+    slot: str = "morning"
+
+
+@api_router.post("/checkin/generate", response_model=CheckinResponse)
+async def api_checkin_generate(req: CheckinRequest):
+    """Ask Claude to compose a personalised check-in for the user.
+    The frontend will schedule a LOCAL notification for the chosen slot, so
+    no remote push is needed and nothing personal leaves the device beyond
+    this one short LLM call.
+    """
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=500, detail="LLM key not configured")
+
+    profile = await get_or_create_profile()
+    lang = (req.language or profile.language or "it").lower()
+    lang_name = {
+        "it": "italiano", "en": "english", "es": "español",
+        "fr": "français", "de": "deutsch",
+    }.get(lang, "italiano")
+
+    # Pull the most recent N timeline entries to give Claude fresh context.
+    docs = await db.taccuino_timeline.find({}, {"_id": 0}).sort("timestamp", -1).to_list(8)
+    docs.reverse()
+    recent = [TimelineEntry(**d) for d in docs]
+    last_lines = "\n".join(
+        f"- {'Utente' if e.role == 'user' else 'Coda'}: {e.text[:140]}"
+        for e in recent
+    ) or "(nessun messaggio recente)"
+
+    name = profile.name or ""
+    memory = (profile.memory_summary or "").strip()
+    confidence = _confidence_phase(profile.confidence_level)
+
+    slot_hint = {
+        "morning": "È mattina. Coda si rivolge all'utente per primo, come farebbe un amico vicino — un saluto caldo, un riferimento concreto a qualcosa che l'utente ha detto di recente o a un impegno della giornata, e una domanda aperta breve.",
+        "evening": "È sera. Coda chiude la giornata insieme all'utente — riprende qualcosa di concreto della giornata, chiede com'è andata, oppure offre una piccola parola di conforto se l'umore degli ultimi messaggi era basso.",
+    }.get(req.slot, "Coda si fa sentire spontaneamente con un messaggio breve.")
+
+    sys = (
+        f"Sei \"Coda\", un'assistente di vita molto empatica che si rivolge all'utente "
+        f"di sua iniziativa. {slot_hint} "
+        f"L'utente si chiama \"{name or 'amico'}\". Scrivi in {lang_name} naturale, "
+        "come parlerebbe un'amica/o stretto: caldo, breve, MAI plasticoso. NON elenchi puntati, "
+        "NON 'Spero stia bene', NON formule da bot. "
+        f"Fase relazionale corrente: {confidence} (regola tono di confidenza di conseguenza). "
+        "Se la memoria indica un momento difficile recente, sii delicat*. "
+        "Se invece la memoria parla di cose belle, sii leggera e curiosa. "
+        "Riferisci a UN dettaglio concreto della memoria o dei messaggi (es. una persona, un impegno, "
+        "un appuntamento, una spesa) se ce n'è uno utile. Altrimenti tienila generica ma personale.\n\n"
+        "Output JSON puro con questa forma esatta:\n"
+        "{\n"
+        '  "title": "max 32 caratteri, titolo della notifica (es. \\"Buongiorno\\" o \\"Allora?\\")",\n'
+        '  "body": "1-2 frasi anteprima della notifica, max 90 caratteri",\n'
+        '  "voice_text": "il messaggio completo che Coda dirà ad alta voce quando l\'utente apre l\'app — '
+        'puoi usare audio tags ElevenLabs v3 come [warmly], [softly], [sighs], [whispers] dove emotivamente '
+        'sensato. Resta intorno alle 1-3 frasi.",\n'
+        '  "tone": "warm | calm | concerned | energetic"\n'
+        "}\n"
+        "NIENTE testo fuori dal JSON, NIENTE markdown."
+    )
+
+    user_payload = (
+        f"Memoria su di me che hai costruito finora:\n{memory or '(ancora vuota)'}\n\n"
+        f"Ultimi messaggi nostri:\n{last_lines}\n\n"
+        f"Ora locale dell'utente: {req.local_hour:02d}:00\n"
+        f"Slot richiesto: {req.slot}"
+    )
+
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=str(uuid.uuid4()),
+            system_message=sys,
+        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        raw = await chat.send_message(UserMessage(text=user_payload))
+    except Exception as e:
+        logger.error(f"checkin LLM error: {e}")
+        raise HTTPException(status_code=500, detail="Check-in generation failed")
+
+    data = extract_json(raw or "") or {}
+    title = (data.get("title") or "").strip() or ("Buongiorno" if req.slot == "morning" else "Sono qui")
+    body = (data.get("body") or "").strip() or "Allora, come va?"
+    voice_text = (data.get("voice_text") or "").strip() or body
+    tone = (data.get("tone") or "warm").strip().lower()
+    if tone not in {"warm", "calm", "concerned", "energetic", "neutral", "urgent"}:
+        tone = "warm"
+
+    # Light safety: trim runaways
+    title = title[:48]
+    body = body[:160]
+    voice_text = voice_text[:600]
+
+    return CheckinResponse(
+        title=title,
+        body=body,
+        voice_text=voice_text,
+        tone=tone,
+        slot=req.slot,
+    )
 
 
 # ---------- ElevenLabs TTS ----------

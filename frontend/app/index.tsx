@@ -35,7 +35,7 @@ import {
 } from "../lib/api";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId } from "../lib/speech";
-import { scheduleAt } from "../lib/notifications";
+import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
@@ -770,6 +770,119 @@ export default function Taccuino() {
     })();
   }, []);
 
+  // === Proactive Check-in scheduling ===========================
+  // When profile loads (or its checkin settings change), reconcile the
+  // scheduled local notifications:
+  //   - "off"     → cancel any pending check-in
+  //   - "morning" → ensure morning slot is scheduled with fresh AI text
+  //   - "evening" → ensure evening slot is scheduled
+  //   - "both"    → both
+  // The actual content is generated server-side via /checkin/generate so
+  // each notification feels personal (uses memory + last messages).
+  const lastCheckinSyncRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!profile) return;
+    const mode = (profile.settings as any)?.checkin_mode || "off";
+    const morningTime = (profile.settings as any)?.checkin_morning_time || "08:30";
+    const eveningTime = (profile.settings as any)?.checkin_evening_time || "21:30";
+    // Skip resync if nothing relevant changed (avoids hitting the LLM on
+    // every render when other settings are tweaked).
+    const sig = `${mode}|${morningTime}|${eveningTime}`;
+    if (lastCheckinSyncRef.current === sig) return;
+    lastCheckinSyncRef.current = sig;
+
+    (async () => {
+      if (mode === "off") {
+        await cancelAllCheckins();
+        return;
+      }
+      const localHour = new Date().getHours();
+      const wantMorning = mode === "morning" || mode === "both";
+      const wantEvening = mode === "evening" || mode === "both";
+
+      // Cancel slots that aren't wanted anymore
+      if (!wantMorning) await cancelCheckin("morning");
+      if (!wantEvening) await cancelCheckin("evening");
+
+      // Schedule the wanted slots — generate fresh content for each
+      const slots: Array<["morning" | "evening", string]> = [];
+      if (wantMorning) slots.push(["morning", morningTime]);
+      if (wantEvening) slots.push(["evening", eveningTime]);
+      for (const [slot, hhmm] of slots) {
+        try {
+          const c = await api.generateCheckin(slot, localHour);
+          await scheduleCheckin({
+            slot,
+            hhmm,
+            title: c.title,
+            body: c.body,
+            voiceText: c.voice_text,
+            tone: c.tone,
+          });
+        } catch (e) {
+          // Don't break the app if the LLM hiccups — silently skip; it'll
+          // retry next time the user opens the app or changes a setting.
+        }
+      }
+    })();
+  }, [profile?.settings?.checkin_mode, profile?.settings?.checkin_morning_time, profile?.settings?.checkin_evening_time, profile?.id]);
+
+  // === Tap-on-checkin-notification handler =====================
+  // When the user taps a check-in notification, the app foregrounds; we
+  // pick up the payload (voice_text, tone) and have Coda speak it
+  // immediately as if she's greeting the user upon entering.
+  useEffect(() => {
+    let mounted = true;
+    const handlePayload = (payload: any) => {
+      try {
+        if (!mounted || !payload) return;
+        if (payload.type !== "checkin") return;
+        const voiceText: string = String(payload.voice_text || "").trim();
+        if (!voiceText) return;
+        // Slight delay so the unlock + UI are ready before TTS fires
+        setTimeout(() => {
+          unlockSpeech();
+          SpeechMod.speak(voiceText, {
+            language: profile?.language || "it-IT",
+            tone: (payload.tone as Tone) || "warm",
+          });
+        }, 500);
+      } catch {}
+    };
+
+    // Cold-start case: the app was killed and the user tapped the notif
+    let cancelled = false;
+    (async () => {
+      try {
+        // @ts-ignore — getLastNotificationResponseAsync may not exist on web
+        const NotifMod = require("expo-notifications");
+        const last = await NotifMod.getLastNotificationResponseAsync?.();
+        if (cancelled) return;
+        const data = last?.notification?.request?.content?.data;
+        if (data) handlePayload(data);
+      } catch {}
+    })();
+
+    // Hot case: user taps notification while app is in background
+    let sub: any = null;
+    try {
+      // @ts-ignore
+      const NotifMod = require("expo-notifications");
+      sub = NotifMod.addNotificationResponseReceivedListener?.((resp: any) => {
+        const data = resp?.notification?.request?.content?.data;
+        if (data) handlePayload(data);
+      });
+    } catch {}
+
+    return () => {
+      mounted = false;
+      cancelled = true;
+      try {
+        sub?.remove?.();
+      } catch {}
+    };
+  }, [profile?.language]);
+
   const setVoice = async (voiceId: string) => {
     if (!profile) return;
     const next = { ...profile, settings: { ...profile.settings, tts_voice_id: voiceId } };
@@ -1325,6 +1438,100 @@ export default function Taccuino() {
                 on={!!profile?.settings.conversation_mode}
                 onToggle={toggleConversation}
               />
+            </View>
+
+            {/* === Proactive Check-in opt-in ============================
+                Coda raggiunge l'utente di sua iniziativa la mattina e/o la
+                sera con una piccola frase personale. Niente push remoto:
+                tutto via notifica locale + LLM call al momento di scheduling. */}
+            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 10 }]}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingLabel}>💌 Coda mi scrive</Text>
+                  <Text style={styles.settingHint}>
+                    Quando vuoi, ti faccio un piccolo check-in di mia iniziativa.
+                  </Text>
+                </View>
+              </View>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {([
+                  { id: "off", label: "Mai", emoji: "🚫" },
+                  { id: "morning", label: "Mattina", emoji: "🌅" },
+                  { id: "evening", label: "Sera", emoji: "🌙" },
+                  { id: "both", label: "Entrambi", emoji: "✨" },
+                ] as const).map((opt) => {
+                  const cur = (profile?.settings as any)?.checkin_mode || "off";
+                  const active = cur === opt.id;
+                  return (
+                    <TouchableOpacity
+                      key={opt.id}
+                      onPress={async () => {
+                        if (!profile) return;
+                        const nextSettings = { ...profile.settings, checkin_mode: opt.id } as any;
+                        setProfile({ ...profile, settings: nextSettings });
+                        try {
+                          await api.updateProfile({ settings: nextSettings });
+                        } catch {}
+                      }}
+                      style={[
+                        styles.modeBtn,
+                        { paddingHorizontal: 12, paddingVertical: 8, flexDirection: "row", alignItems: "center", gap: 6 },
+                        active && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
+                      ]}
+                    >
+                      <Text style={{ fontSize: 14 }}>{opt.emoji}</Text>
+                      <Text style={[styles.modeBtnText, active && { color: bubbleAccent.color, fontWeight: "700" }]}>
+                        {opt.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              {((profile?.settings as any)?.checkin_mode || "off") !== "off" ? (
+                <View style={{ flexDirection: "row", gap: 12, marginTop: 4 }}>
+                  {(["morning", "evening"] as const).filter((s) => {
+                    const m = (profile?.settings as any)?.checkin_mode;
+                    return m === "both" || m === s;
+                  }).map((slot) => {
+                    const key = slot === "morning" ? "checkin_morning_time" : "checkin_evening_time";
+                    const def = slot === "morning" ? "08:30" : "21:30";
+                    const cur = (profile?.settings as any)?.[key] || def;
+                    return (
+                      <View key={slot} style={{ flex: 1 }}>
+                        <Text style={[styles.settingHint, { marginBottom: 4, fontSize: 11 }]}>
+                          {slot === "morning" ? "🌅 Mattina" : "🌙 Sera"}
+                        </Text>
+                        <TextInput
+                          value={cur}
+                          onChangeText={(txt) => {
+                            if (!profile) return;
+                            const nextSettings = { ...profile.settings, [key]: txt } as any;
+                            setProfile({ ...profile, settings: nextSettings });
+                          }}
+                          onBlur={async () => {
+                            if (!profile) return;
+                            const v = String((profile.settings as any)[key] || def).trim();
+                            const ok = /^\d{1,2}:\d{2}$/.test(v);
+                            const nextSettings = { ...profile.settings, [key]: ok ? v : def } as any;
+                            setProfile({ ...profile, settings: nextSettings });
+                            try {
+                              await api.updateProfile({ settings: nextSettings });
+                            } catch {}
+                          }}
+                          placeholder={def}
+                          placeholderTextColor={theme.muted}
+                          style={[styles.input, { paddingVertical: 8, fontSize: 15 }]}
+                          keyboardType="numbers-and-punctuation"
+                          maxLength={5}
+                        />
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : null}
+              <Text style={[styles.settingHint, { fontSize: 11, marginTop: 2, fontStyle: "italic" }]}>
+                Le notifiche sono locali — niente esce dal telefono se non al momento di generare la frase.
+              </Text>
             </View>
 
             <View style={styles.divider} />

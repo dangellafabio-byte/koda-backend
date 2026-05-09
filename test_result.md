@@ -615,3 +615,213 @@ agent_communication:
       backend). Frontend testing: rimando alla verifica utente sull'iPhone vero
       visto il limite font-su-web del preview.
 
+
+
+
+## CHECK-IN PROATTIVO (2026-05-09)
+
+backend:
+  - task: "POST /api/checkin/generate: Claude genera notifica personalizzata"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Aggiunto endpoint POST /api/checkin/generate {slot: "morning"|"evening", local_hour: int}
+          → CheckinResponse {title, body, voice_text (con audio tags ElevenLabs v3),
+          tone, slot}.
+
+          Logica: legge profile.memory_summary + ultimi 8 messaggi timeline + nome
+          utente → Claude Sonnet 4.5 con prompt focalizzato per messaggio empatico
+          breve da AMICA (non bot), riferito a 1 dettaglio concreto se disponibile.
+          Tono adattivo basato su confidence_phase. Output JSON parsing con guard
+          rails: title<=48 chars, body<=160, voice_text<=600, tone validato contro
+          enum {warm, calm, concerned, energetic, neutral, urgent}.
+
+          TaccuinoSettings esteso con: checkin_mode (off|morning|evening|both),
+          checkin_morning_time ("08:30"), checkin_evening_time ("21:30").
+
+          Verifica manuale curl:
+            POST /api/checkin/generate {"slot":"morning","local_hour":9}
+            → 200 {"title":"Ehi Marco, buongiorno",
+                   "body":"Come va stamattina? Hai riposato un po'?",
+                   "voice_text":"[warmly] Ehi Marco, buongiorno. [softly] Come va...",
+                   "tone":"warm","slot":"morning"}
+          Audio tags v3 ([warmly], [softly]) inclusi naturalmente. Riferimento
+          al nome dal profilo presente.
+      - working: true
+        agent: "testing"
+        comment: |
+          Backend tests executed via /app/backend_test_checkin.py against
+          https://app-finder-408.preview.emergentagent.com/api. 14/15 PASS.
+          NO 500 / NameError / AttributeError in backend logs during the run.
+
+          POST /api/checkin/generate — happy paths: ALL PASS
+            ✅ slot=morning, local_hour=9 → 200, title/body/voice_text/tone(=warm)/slot ok.
+              voice_text contains audio tags: TRUE
+              sample voice_text: "[warmly] Ehi Marco, buongiorno… tutto ok stamattina?
+              [softly] So che hai ritmi pesanti, 12 ore al giorno… come ti senti
+              oggi? Hai dormito un po', almeno?"
+            ✅ slot=evening, local_hour=21 → 200, slot=evening, stylistically
+              different (closing-of-day tone). sample voice_text:
+              "[softly] Ehi Marco… come è andata oggi? [pause] So che lavori
+              tanto, dodici ore sono pesanti… [warmly] Spero tu sia riuscito
+              a staccare un po', magari anche solo a fine giornata."
+            ⚠️ slot=morning, language=en → 200 (no crash), BUT the LLM still
+              produced Italian text:
+                "[warmly] Ehi Marco… buongiorno. [softly] Come ti senti
+                stamattina? Hai dormito almeno un po'..."
+              Status code matches the spec (200), and `req.language` is read
+              correctly server-side (verified in code path), so the field is
+              wired through. However the system prompt is Italian-heavy and
+              the recent timeline + memory_summary are Italian, so Claude
+              ignored the `Scrivi in english` directive. CONSIDER strengthening
+              the prompt: e.g. lead the system prompt with
+              `RESPOND ENTIRELY IN <lang_name>. Do NOT use Italian.`
+              and translate the slot_hint by language as well. Marked as
+              minor (endpoint never 500s) but worth fixing for true i18n.
+
+          POST /api/checkin/generate — robustness: ALL PASS
+            ✅ slot=noon, local_hour=12 → 200 (endpoint permissive, returns
+              sensible lunch-time content; no 500).
+            ✅ {} (empty body) → 200, defaults to slot=morning.
+            ✅ slot=morning, local_hour=99 → 200, no crash.
+
+          Profile schema extension: ALL PASS
+            ✅ GET /api/profile shows checkin_mode/checkin_morning_time/
+              checkin_evening_time (defaults match the Pydantic model:
+              "off" / "08:30" / "21:30" on a fresh profile; on the existing
+              profile the previously-PUT values were observed).
+            ✅ PUT /api/profile {settings:{...,checkin_mode:"both",
+              checkin_morning_time:"07:15", checkin_evening_time:"22:45"}}
+              → 200 with new values reflected.
+            ✅ GET /api/profile after PUT — values persisted.
+
+          Regression on Taccuino endpoints: ALL PASS
+            ✅ GET /api/ → 200 {"message":"Taccuino Vivo API","status":"ok"}
+            ✅ POST /api/converse {"text":"ciao"} → 200, user_entry+ai_entry+
+              profile, ai_entry has non-empty text and tone.
+            ✅ GET /api/timeline → 200, list of entries.
+            ✅ GET /api/voices → 200, 8 curated voices, enabled=True.
+            ✅ GET /api/recap?period=today → 200, recap string returned.
+            ✅ POST /api/transcribe with empty audio → 400 "Empty audio".
+
+          Backend log review: only the existing benign warning
+          "Failed to fetch custom voices: missing_permissions: voices_read"
+          (pre-existing ElevenLabs API key limitation, not caused by this
+          change). NO 5xx, NO uncaught exceptions, NO regression.
+
+          CONCLUSION: /api/checkin/generate is fully functional. Audio tags
+          v3 are produced naturally, name/memory references appear, evening
+          and morning produce stylistically different outputs, and all
+          regression endpoints remain 100% green. The only minor observation
+          is the English-language directive being overridden by the
+          Italian-heavy system prompt — this is a prompt-engineering tweak,
+          not a backend bug.
+
+frontend:
+  - task: "Notification scheduler check-in (lib/notifications.ts)"
+    implemented: true
+    working: "NA"
+    file: "frontend/lib/notifications.ts, frontend/lib/api.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          api.ts: aggiunti tipi CheckinResponse + funzione generateCheckin(slot, hour).
+          notifications.ts: 4 nuove funzioni:
+            - scheduleCheckin({slot,hhmm,title,body,voiceText,tone}) → schedula
+              UNA notifica locale al prossimo HH:MM (oggi se futuro, altrimenti
+              domani). Idempotente per slot. Payload contiene voice_text+tone in
+              data per il tap-handler.
+            - cancelAllCheckins() / cancelCheckin(slot) → cleanup quando l'utente
+              cambia preferenze.
+            - listScheduledCheckins() → introspection.
+          Identificatori fissi: "taccuino-checkin-morning"/"taccuino-checkin-evening".
+          Web: gracefully no-op (Expo Go web non supporta scheduledNotifications
+          locali serie).
+
+  - task: "Wiring index.tsx: scheduling on profile load + tap-on-notif → speak"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          1) useEffect riconciliazione check-in: triggered da profile?.settings
+             .checkin_mode/morning_time/evening_time. Signature dedup per evitare
+             risync inutili. Per ogni slot abilitato chiama api.generateCheckin
+             e poi scheduleCheckin con il content fresco. Slot non più voluti
+             → cancellati.
+          2) useEffect tap-handler: usa expo-notifications
+             addNotificationResponseReceivedListener (hot tap) +
+             getLastNotificationResponseAsync (cold-start tap). Quando il payload
+             ha type="checkin", dopo 500ms unlock + SpeechMod.speak(voice_text,
+             {tone}) → Coda PARLA appena apri, come se ti stesse chiamando.
+
+  - task: "Settings UI: sezione opt-in '💌 Coda mi scrive'"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Nuovo blocco nel modal Impostazioni subito dopo "Modalità conversazione":
+          - 4 pillole: Mai 🚫 / Mattina 🌅 / Sera 🌙 / Entrambi ✨ (radio-style
+            con accent color quando attivo).
+          - Quando non Off: 1-2 TextInput "HH:MM" (mattina e/o sera) per regolare
+            l'orario. Validate on blur (regex \d{1,2}:\d{2}, fallback al default).
+          - Disclaimer privacy in italics: "Le notifiche sono locali — niente
+            esce dal telefono se non al momento di generare la frase."
+          Persistenza via api.updateProfile({settings}) onPress/onBlur.
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Sessione "tutto" parte 2: Check-in proattivo (la feature che davvero
+      trasforma Taccuino da tool a compagno).
+
+      Architettura: zero push remoto. Tutto LOCALE. Frontend chiama una volta
+      l'endpoint backend per generare la frase personalizzata via Claude (legge
+      memory_summary + ultimi messaggi → JSON con title/body/voice_text con
+      audio tags ElevenLabs/tone). Quel payload viene incartato in una
+      scheduleNotificationAsync con trigger DATE al prossimo HH:MM scelto
+      dall'utente. Quando l'utente tocca la notifica, l'app si apre e
+      addNotificationResponseReceivedListener triggera SpeechMod.speak col
+      voice_text — Coda ti saluta DAVVERO ad alta voce, non con un push muto.
+
+      Privacy/Battery: niente background tasks, niente foreground service,
+      niente token push. La notifica vive sul device. L'unico round-trip al
+      backend è UNA chiamata LLM al momento dello scheduling (mattina o sera).
+
+      Test richiesti al backend testing agent:
+        - POST /api/checkin/generate con {"slot":"morning","local_hour":9}
+          → atteso 200 con title/body/voice_text/tone non vuoti, slot="morning"
+        - POST /api/checkin/generate con {"slot":"evening","local_hour":21}
+          → atteso 200 con tono adattato (può essere warm o concerned se
+          memoria della giornata negativa, neutral altrimenti)
+        - POST /api/checkin/generate con slot invalido (es. "noon") → l'endpoint
+          accetta qualunque stringa ma slot_hint defaulta a un saluto generico,
+          confermare 200 risposta sensata
+        - Verificare che PUT /api/profile con settings inclusi
+          {checkin_mode:"both", checkin_morning_time:"07:00",
+          checkin_evening_time:"22:30"} venga persistito (GET /api/profile
+          mostra i nuovi campi)
+        - Confermare che gli altri endpoint Taccuino (converse/transcribe/recap/
+          tts/voices/timeline) NON sono stati toccati e funzionano come prima.
