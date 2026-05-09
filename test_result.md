@@ -825,3 +825,130 @@ agent_communication:
           mostra i nuovi campi)
         - Confermare che gli altri endpoint Taccuino (converse/transcribe/recap/
           tts/voices/timeline) NON sono stati toccati e funzionano come prima.
+
+
+## RIVOLUZIONE MINIMALISTA — OrganicBlob + Zen Header (2026-05-09)
+
+frontend:
+  - task: "OrganicBlob: macchia organica morphing al posto dell'Orb circolare"
+    implemented: true
+    working: "NA"
+    file: "frontend/components/OrganicBlob.tsx, frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Su richiesta utente — direzione visiva radicalmente cambiata da
+          "alone respirante simmetrico" a "macchia organica vivente". Nuovo
+          componente OrganicBlob (~280 righe) con SVG path morphing reale:
+          - 8 punti di controllo lungo un cerchio ognuno con radius animato
+            indipendentemente (sin oscillation + jitter texture-dependent)
+          - Path Bezier C-segments per smoothing
+          - 3 texture mood-driven (texture inferita dal tone AI):
+              • morbida   → tone warm/calm/neutral, 15fps morph, ampiezza 0.13,
+                jitter 0.02 → forma fluida da nuvoletta confortante
+              • vibrante  → tone energetic/urgent, 22fps morph, ampiezza 0.22,
+                jitter 0.06 → deformazioni rapide elettriche
+              • solida    → tone concerned, 9fps morph, ampiezza 0.07, jitter 0
+                → pietra calda, contorno più stabile per impegni seri
+          - Drift X/Y autonomo (random walk ±8% size, 4.5-8s loop)
+          - Reagisce a dB voce (recording asymmetric ripple su radii pari)
+          - Pulsazione speaking + warmth/dim ereditati da useOrbAmbient
+          - Avatar utente opzionale dentro la macchia (sostituisce il core
+            gradient)
+          Installato react-native-svg@15.15.4 (yarn).
+
+          Sostituito Orb in entrambi i call sites di index.tsx:
+            - Empty state: <OrganicBlob size={260}> grande + greeting
+              "Ehi {nome}, sono qui." (matcha esattamente il mockup utente)
+            - Dietro pulsante mic: <OrganicBlob size={170}>
+
+          File Orb.tsx mantenuto per ora (può tornare utile / non rimosso per
+          non rompere altri eventuali punti d'uso futuri).
+
+  - task: "Header zen: solo ⚙ a sinistra e 📋 Sunto a destra"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Header drasticamente semplificato per l'estetica zen voluta:
+          rimossi titolo "Taccuino", dot status, layout 3-pezzi sostituito
+          da {⚙ settings | (vuoto) | 📋 Sunto}. Niente più branding visibile,
+          la macchia è il prodotto.
+
+          Empty state: testo aggiornato da "Il tuo Taccuino è vuoto" /
+          "Ciao, sono qui" → "Ehi {nome}, sono qui." con sotto "Parlami
+          a voce — sono qui ad ascoltarti." (matcha esattamente il
+          mockup di riferimento dell'utente).
+
+  - task: "Pulsante mic ridotto 130→72px per non coprire la macchia"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Big mic button ridotto da 130x130 a 72x72 (lo stile bigBtn).
+          Shadow proporzionalmente ridotta. Il blob 170px sotto ora si vede
+          ai lati del pulsante invece di essere completamente coperto.
+
+  - task: "Sfondi: 6→3 (Notturno, Aurora, Carta)"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "low"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          BG_PRESETS ridotto da 6 (aurora/notturno/carta/alba/marmo/bosco) a
+          3 essenziali: Notturno (zen scuro default), Aurora (viola intimo
+          per macchia gialla calda), Carta (caldo diurno chiaro). Filosofia:
+          meno opzioni = meno friction.
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Sessione "rivoluzione minimalista" — l'utente ha mostrato 2 mockup
+      (uno di Gemini con concept "macchia organica con 3 texture mood",
+      uno di stato finale dell'app desiderato) e ha chiesto un cambio
+      radicale: "voglio vedere solo la macchia, le 2 icone (settings +
+      sunto), niente altro".
+
+      Cosa è stato fatto:
+        ✅ Nuovo OrganicBlob con SVG path morphing reale (8 control points,
+           3 texture mood-driven, drift autonomo, reactive a voce)
+        ✅ Header zen ridotto a 2 icone
+        ✅ Empty state matcha il mockup ("Ehi Marco, sono qui.")
+        ✅ Pulsante mic rimpicciolito 130→72px
+        ✅ Sfondi ridotti 6→3
+        ✅ Bundle Metro compila pulito, screenshot conferma layout zen
+
+      In sospeso ancora dalla richiesta utente:
+        - 🟡 Wake-word "Coda" (no tap) → richiede dev build (Picovoice
+          Porcupine), Expo Go non basta. Workaround corrente: tap sul
+          pulsante mic piccolo
+        - 🟡 Test su iPhone reale per verificare il blob morphing in performance
+          nativa (su web il loop setTimeout è meno fluido)
+        - 🟡 Settings: rimuovere ulteriori opzioni nascondendo le "Avanzate"
+          dietro un sub-menu (per ora ho lasciato tutte le altre setting
+          accessibili — è un cleanup successivo)
+
+      Nessuna modifica al backend in questa sessione → no test backend
+      richiesti.
+

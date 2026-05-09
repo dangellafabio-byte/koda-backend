@@ -39,6 +39,7 @@ import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from ".
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
+import OrganicBlob from "../components/OrganicBlob";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
 import { useFonts, Caveat_400Regular, Caveat_500Medium } from "@expo-google-fonts/caveat";
 
@@ -53,12 +54,13 @@ type BgPreset = {
   end?: { x: number; y: number };
 };
 const BG_PRESETS: BgPreset[] = [
-  { id: "aurora", name: "Aurora", colors: ["#0F0C29", "#302B63", "#24243E"] },
+  // Solo 3 sfondi essenziali — meno scelte, meno friction.
+  // 1. Notturno: scuro silenzioso (default per chi vuole zen totale)
   { id: "notturno", name: "Notturno", colors: ["#000000", "#1A1A2E", "#16213E"] },
+  // 2. Aurora: viola intimo (perfetto per la macchia gialla calda)
+  { id: "aurora", name: "Aurora", colors: ["#0F0C29", "#302B63", "#24243E"] },
+  // 3. Carta: caldo / diurno per chi preferisce sfondo chiaro
   { id: "carta", name: "Carta", colors: ["#F5E9D7", "#E8D5B7", "#D4B896"] },
-  { id: "alba", name: "Alba", colors: ["#FF9966", "#FF5E62", "#9D50BB"] },
-  { id: "marmo", name: "Marmo", colors: ["#1F1C2C", "#928DAB"] },
-  { id: "bosco", name: "Bosco", colors: ["#0B3C24", "#0F5132", "#1F2937"] },
 ];
 
 // === Day separator helper
@@ -1064,13 +1066,21 @@ export default function Taccuino() {
   // Build the screen wrapper with optional background image / gradient
   const screenInner = (
     <View style={[styles.screen, { backgroundColor: bgValue ? "transparent" : theme.bg }]}>
-      {/* Header — ABSOLUTELY positioned + transparent. Messages scroll BEHIND
-          it freely. The pills only have an icon/text; no opaque background.
-          A subtle dark blur backdrop on each pill keeps icons readable. */}
+      {/* Header — minimal, zen. Solo ⚙ a sinistra e 📋 Sunto a destra.
+          Niente titolo, niente dot status, niente notifiche visibili.
+          La macchia ti dice già tutto quello che serve sapere. */}
       <View
         style={[styles.header, { top: Math.max(insets.top + 16, 70) }]}
         pointerEvents="box-none"
       >
+        <TouchableOpacity
+          style={styles.headerBtn}
+          onPress={() => setShowSettings(true)}
+          testID="settings-btn"
+        >
+          <Ionicons name="settings-outline" size={22} color="#FFFFFF" />
+        </TouchableOpacity>
+        <View style={styles.headerCenter} pointerEvents="none" />
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={askRecap}
@@ -1078,17 +1088,6 @@ export default function Taccuino() {
         >
           <Ionicons name="reader-outline" size={20} color="#FFFFFF" />
           <Text style={styles.headerBtnText}>Sunto</Text>
-        </TouchableOpacity>
-        <View style={styles.headerCenter} pointerEvents="none">
-          <View style={[styles.dot, aiPaused && { backgroundColor: "#94A3B8" }]} />
-          <Text style={styles.headerTitle}>Taccuino</Text>
-        </View>
-        <TouchableOpacity
-          style={styles.headerBtn}
-          onPress={() => setShowSettings(true)}
-          testID="settings-btn"
-        >
-          <Ionicons name="settings-outline" size={20} color="#FFFFFF" />
         </TouchableOpacity>
       </View>
 
@@ -1105,23 +1104,23 @@ export default function Taccuino() {
         {timeline.length === 0 ? (
           <View style={styles.emptyState}>
             <View style={{ marginBottom: 24 }}>
-              <Orb
+              <OrganicBlob
                 status={status}
                 meterDb={meterDb}
                 meterThreshold={meterThreshold}
                 tone={lastAiTone}
-                size={220}
+                size={260}
                 avatarUri={(profile?.settings as any)?.ai_avatar || null}
                 palette={ambient.palette}
                 warmth={ambient.warmth}
                 dim={ambient.dim}
-                scrollPeek={scrollPeek}
               />
             </View>
-            <Text style={styles.emptyTitle}>Ciao, sono qui</Text>
+            <Text style={styles.emptyTitle}>
+              {profile?.name ? `Ehi ${profile.name}, sono qui.` : "Sono qui."}
+            </Text>
             <Text style={styles.emptyText}>
-              Premi il cerchio in basso e raccontami qualcosa: una spesa,
-              un impegno, qualunque cosa. Ricorderò io per te.
+              Parlami a voce — sono qui ad ascoltarti.
             </Text>
           </View>
         ) : (
@@ -1260,16 +1259,15 @@ export default function Taccuino() {
                   glowing rhythmically while speaking. The mic button stays
                   fully tappable on top. */}
               <View style={styles.orbBehindBtn} pointerEvents="none">
-                <Orb
+                <OrganicBlob
                   status={status}
                   meterDb={meterDb}
                   meterThreshold={meterThreshold}
                   tone={lastAiTone}
-                  size={200}
+                  size={170}
                   palette={ambient.palette}
                   warmth={ambient.warmth}
                   dim={ambient.dim}
-                  scrollPeek={scrollPeek}
                 />
               </View>
               {/* The actual button — clean, sits on top of the Orb's aura.
@@ -2679,8 +2677,8 @@ const makeStyles = (t: any) => StyleSheet.create({
     }),
   },
   bigBtn: {
-    width: 130,
-    height: 130,
+    width: 72,
+    height: 72,
     borderRadius: 999,
     backgroundColor: t.primary,
     alignItems: "center",
@@ -2688,13 +2686,13 @@ const makeStyles = (t: any) => StyleSheet.create({
     ...Platform.select({
       ios: {
         shadowColor: t.primary,
-        shadowOpacity: 0.8,
-        shadowRadius: 24,
+        shadowOpacity: 0.6,
+        shadowRadius: 14,
         shadowOffset: { width: 0, height: 0 },
       },
-      android: { elevation: 10 },
+      android: { elevation: 8 },
       web: {
-        boxShadow: `0 0 30px 4px ${t.primary}`,
+        boxShadow: `0 0 18px 2px ${t.primary}`,
       } as any,
     }),
   },
