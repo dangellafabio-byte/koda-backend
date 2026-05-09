@@ -133,7 +133,15 @@ export default function OrganicBlob({
 
   // === Color resolution
   const colors: [string, string, string] = useMemo(() => {
+    // RECORDING wins over everything else — verde brillante per dire
+    // chiaramente "ti sto ascoltando, parla". Niente pulsanti, è la
+    // macchia stessa il segnale.
+    if (status === "recording") return ["#86EFAC", "#22C55E", "#15803D"];
+    // THINKING → viola sereno (Coda sta riflettendo)
+    if (status === "thinking") return ["#C4B5FD", "#8B5CF6", "#6D28D9"];
+    // SPEAKING → palette dal tone emotivo dell'AI
     if (status === "speaking" && tone && TONE_COLORS[tone]) return TONE_COLORS[tone];
+    // IDLE → ambient ora-del-giorno (default warm)
     if (customPalette) return customPalette;
     return TEXTURE_COLORS[texture];
   }, [status, tone, customPalette, texture]);

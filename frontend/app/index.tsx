@@ -40,6 +40,7 @@ import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
 import OrganicBlob from "../components/OrganicBlob";
+import NeonBorder from "../components/NeonBorder";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
 import { useFonts, Caveat_400Regular, Caveat_500Medium } from "@expo-google-fonts/caveat";
 
@@ -1214,64 +1215,20 @@ export default function Taccuino() {
             <Text style={[styles.statusLabel, styles.statusLabelOnBg]}>
               {aiPaused ? "AI in pausa" : statusLabel}
             </Text>
-            {/* Live meter visualizer — visible only during recording.
-                Shows ADAPTIVE threshold (calibrated from ambient noise in
-                first 600ms). */}
-            {status === "recording" && meterDb !== null ? (
-              <View style={styles.meterWrap}>
-                <View style={styles.meterBar}>
-                  {/* Threshold marker — DYNAMIC value from calibration.
-                      Until calibrated (first 600ms), no marker shown. */}
-                  {meterThreshold !== null ? (
-                    <View
-                      style={[
-                        styles.meterThreshold,
-                        { left: `${Math.max(0, Math.min(100, Math.round(((meterThreshold + 60) / 60) * 100)))}%` },
-                      ]}
-                    />
-                  ) : null}
-                  {/* Fill: current meter value (clipped to range) */}
-                  <View
-                    style={[
-                      styles.meterFill,
-                      {
-                        width: `${Math.max(0, Math.min(100, Math.round(((meterDb + 60) / 60) * 100)))}%`,
-                        backgroundColor: meterThreshold !== null && meterDb > meterThreshold ? "#22C55E" : "#94A3B8",
-                      },
-                    ]}
-                  />
-                </View>
-                <Text style={styles.meterLabel}>
-                  {meterDb.toFixed(0)} dB{" "}
-                  {meterThreshold === null
-                    ? "⚙️ calibro…"
-                    : meterDb > meterThreshold
-                    ? "🟢 voce"
-                    : "⚪ silenzio"}
-                  {meterThreshold !== null ? `  ·  soglia ${meterThreshold.toFixed(0)} dB` : ""}
-                </Text>
-              </View>
-            ) : null}
-            <View style={styles.bigBtnWrap}>
-              {/* Coda's presence — the Orb sits behind the mic button and
-                  visualises her live state: breathing at idle, pulsing with
-                  the user's voice while recording, shimmering while thinking,
-                  glowing rhythmically while speaking. The mic button stays
-                  fully tappable on top. */}
-              <View style={styles.orbBehindBtn} pointerEvents="none">
-                <OrganicBlob
-                  status={status}
-                  meterDb={meterDb}
-                  meterThreshold={meterThreshold}
-                  tone={lastAiTone}
-                  size={170}
-                  palette={ambient.palette}
-                  warmth={ambient.warmth}
-                  dim={ambient.dim}
-                />
-              </View>
-              {/* The actual button — clean, sits on top of the Orb's aura.
-                  Breathes (scale) + mic-pulse handled by `pulse` ref. */}
+            {/* La macchia È il pulsante. Tap su di lei → avvia/ferma ascolto.
+                Niente più cerchio verde gigante: la macchia stessa diventa
+                verde quando ti sta ascoltando. Il NeonBorder sui bordi dello
+                schermo dà il feedback periferico (vedi anche se non guardi). */}
+            <Pressable
+              onPress={onBigButton}
+              disabled={status === "transcribing" || status === "thinking"}
+              style={({ pressed }) => [
+                styles.blobTap,
+                pressed && { opacity: 0.85 },
+              ]}
+              testID="big-btn"
+              hitSlop={20}
+            >
               <Animated.View
                 style={{
                   transform: [
@@ -1287,34 +1244,23 @@ export default function Taccuino() {
                   ],
                 }}
               >
-                <Pressable
-                  onPress={onBigButton}
-                  disabled={status === "transcribing" || status === "thinking"}
-                  style={({ pressed }) => [
-                    styles.bigBtn,
-                    status === "recording" && styles.bigBtnRec,
-                    pressed && { opacity: 0.88 },
-                  ]}
-                  testID="big-btn"
-                >
-                  {status === "transcribing" || status === "thinking" ? (
-                    <ActivityIndicator color={theme.primaryText} size="large" />
-                  ) : (
-                    <Ionicons
-                      name={
-                        status === "recording"
-                          ? "stop"
-                          : status === "speaking"
-                            ? "volume-high"
-                            : "mic"
-                      }
-                      size={54}
-                      color={theme.primaryText}
-                    />
-                  )}
-                </Pressable>
+                <OrganicBlob
+                  status={status}
+                  meterDb={meterDb}
+                  meterThreshold={meterThreshold}
+                  tone={lastAiTone}
+                  size={210}
+                  palette={ambient.palette}
+                  warmth={ambient.warmth}
+                  dim={ambient.dim}
+                />
               </Animated.View>
-            </View>
+              {(status === "transcribing" || status === "thinking") && (
+                <View style={styles.blobOverlay} pointerEvents="none">
+                  <ActivityIndicator color="#FFFFFFEE" size="large" />
+                </View>
+              )}
+            </Pressable>
             {/* In "both" mode show a compact text input under the mic */}
             {inputMode === "both" && (
               <KeyboardAvoidingView
@@ -2097,6 +2043,13 @@ export default function Taccuino() {
           </View>
         </View>
       </Modal>
+
+      {/* NeonBorder — feedback periferico ai bordi dello schermo.
+          Verde pulsante = ti sto ascoltando, parla.
+          Viola tenue = sto pensando.
+          Ambra = sto parlando io.
+          Idle = invisibile (zero distrazione). */}
+      <NeonBorder status={status as any} />
     </View>
   );
 
@@ -2604,6 +2557,20 @@ const makeStyles = (t: any) => StyleSheet.create({
   },
   errorText: { color: t.danger, fontSize: 12, textAlign: "center", marginTop: 8 },
   bigBtnArea: { alignItems: "center", paddingTop: 20, justifyContent: "center" },
+  blobTap: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 6,
+  },
+  blobOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   statusLabel: {
     color: t.textDim,
     fontSize: 13,

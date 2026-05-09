@@ -952,3 +952,88 @@ agent_communication:
       Nessuna modifica al backend in questa sessione → no test backend
       richiesti.
 
+
+
+## RIVOLUZIONE MINIMALISTA — Phase 2: Pulsante via, Macchia È il Pulsante (2026-05-09)
+
+frontend:
+  - task: "Rimosso pulsante mic gigante: la macchia stessa è tap target"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Su richiesta esplicita utente — eliminato completamente il
+          bigBtn/bigBtnRec/bigBtnWrap/orbBehindBtn pattern: niente più
+          cerchio verde-rosso da premere. Il blob organico stesso è ora il
+          tap target (Pressable wrappa direttamente <OrganicBlob>), con
+          hitSlop=20 per generosità tattile.
+
+          Rimosso anche: il visualizer dB rectangle (meterWrap/meterBar/
+          meterFill/meterThreshold/meterLabel) — ridondante ora che il blob
+          stesso pulsa con la voce. Mantenuto solo il piccolo "Premi e parla"
+          come hint testuale.
+
+          Stato visivo del blob ora ESPLICITO sui colori (cambio nuovo in
+          OrganicBlob.tsx): recording = verde brillante (#22C55E gradient),
+          thinking = viola tenue (#A78BFA gradient), speaking = palette tone
+          AI, idle = ambient ora-del-giorno.
+
+  - task: "NeonBorder: feedback periferico ai bordi dello schermo"
+    implemented: true
+    working: "NA"
+    file: "frontend/components/NeonBorder.tsx, frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Nuovo componente NeonBorder (~135 righe) — 4 LinearGradient absolute
+          sui bordi dello schermo (top/bottom/left/right) con gradient
+          mid→colore→mid che svanisce verso il centro. Pulsa con loop
+          Animated 1100ms (recording, frequenza più rapida) / 900ms (speaking)
+          / 1800ms (thinking). Idle = invisibile (fade=0).
+
+          Colori per stato: recording=#22C55E verde, thinking=#A78BFA viola,
+          speaking=#F59E0B ambra. PointerEvents none → non blocca tap sotto.
+          Montato come ULTIMO figlio dello screenInner così è sempre on top
+          ma non interferisce con interazioni.
+
+          Effetto: anche se l'utente non guarda direttamente la macchia (es.
+          sta parlando guardando via, sta tenendo il telefono al fianco),
+          il bordo periferico verde lampeggiante gli dice "ti sto
+          ascoltando" senza dover guardare.
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Iterazione: utente ha chiesto rimozione totale del pulsante. "Voglio
+      solo la macchia, è lei che cambia colore + un neon contorno schermo".
+      Implementato esattamente questo:
+
+        1. Big mic button → SPARITO. La macchia stessa è cliccabile (hitSlop
+           generoso). Il visualizer dB rettangolare → SPARITO (ridondante).
+        2. Macchia cambia colore in modo ESPLICITO per stato:
+           - idle      → palette ora-del-giorno (warm idle)
+           - recording → VERDE brillante (#22C55E)
+           - thinking  → viola tenue (#A78BFA)
+           - speaking  → palette tone AI (warm/calm/concerned/...)
+        3. NeonBorder ai bordi dello schermo che pulsa con la stessa logica
+           colori — feedback periferico anche se non guardi la macchia.
+           Idle = invisibile, recording = verde 1.1Hz, thinking = viola
+           lento, speaking = ambra 1.1Hz.
+
+      Verifica visiva: screenshot conferma layout zen finale —
+      solo ⚙ + 📋 Sunto in alto, bolle conversazione (con Caveat font +
+      rotazioni leggere), "Premi e parla", e la macchia organica viola
+      in basso. Nessun pulsante. Esattamente come da mockup utente.
+
+      Nessuna modifica backend → nessun test backend richiesto.
+
