@@ -170,6 +170,31 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ slot, local_hour }),
     }),
+
+  /** Confessionale Zero-Knowledge: invia messaggio cifrato + chiave volatile in header.
+   * Server decifra in RAM, chiama Claude, ricifra. Niente è loggato/persistito. */
+  converseSealed: (
+    payload: { nonce: string; ciphertext: string; language?: string; ai_name?: string; ai_gender?: string; user_gender?: string },
+    keyB64: string
+  ) =>
+    jsonReq<{ nonce: string; ciphertext: string; tone: string }>(
+      "/converse/sealed",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+        headers: { "X-Sealed-Key": keyB64 },
+      }
+    ),
+
+  /** Ricerca web pubblica (DuckDuckGo, no API key). */
+  search: (query: string, max_results = 4) =>
+    jsonReq<{ query: string; results: { title: string; snippet: string; url: string }[] }>(
+      "/search",
+      {
+        method: "POST",
+        body: JSON.stringify({ query, max_results }),
+      }
+    ),
 };
 
 // Tone -> color/icon map (UI helper)

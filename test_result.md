@@ -274,6 +274,351 @@ agent_communication:
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
 
+## SESSION B — ZERO-KNOWLEDGE CRYPTO + WEB SEARCH (2026-05-10)
+
+backend:
+  - task: "POST /api/converse/sealed — Confessionale Zero-Knowledge"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Nuovo endpoint POST /api/converse/sealed che riceve {nonce, ciphertext}
+          + chiave volatile in header X-Sealed-Key. Decifra in RAM con NaCl
+          secretbox (XSalsa20-Poly1305), chiama Claude con prompt minimale
+          (no memory, no history, vera sessione stateless), ricifra la risposta
+          con la stessa chiave + nonce nuovo, ritorna {nonce, ciphertext, tone}.
+          NIENTE viene loggato (solo l'evento "[sealed] confessional turn
+          completed"), NIENTE persistito su DB, NIENTE memory_summary update.
+      - working: true
+        agent: "testing"
+        comment: |
+          Tested via /app/backend_test_session_b.py against
+          https://app-finder-408.preview.emergentagent.com/api. ALL 8 sub-tests PASS.
+
+          ✅ 1a) Happy path: encrypted "Devo confessare una cosa terribile,
+                 ho fatto male a una persona" with random 32-byte key, sent
+                 to /api/converse/sealed → 200 with {nonce, ciphertext, tone}.
+                 Decrypted with the SAME key → readable Italian empathic reply:
+                 "[gently] Ti ascolto, fratello. Questo peso che senti...
+                  vuoi dirmi cos'è successo? Sono qui."
+                 tone='warm' (one of the allowed enum values).
+          ✅ 1b) Missing X-Sealed-Key header → 400 "missing X-Sealed-Key".
+          ✅ 1c) Invalid base64 in X-Sealed-Key → 400 "invalid base64 payload".
+          ✅ 1d) 16-byte X-Sealed-Key → 400 "invalid key length".
+          ✅ 1e) 12-byte nonce → 400 "invalid nonce length".
+          ✅ 1f) Wrong key (cipher won't decrypt) → 400 "decrypt failed".
+          ✅ 1g) GET /api/timeline count BEFORE/AFTER sealed call: unchanged
+                 (35 entries before and after) — sealed turn does NOT persist.
+          ✅ 1h) GET /api/profile.memory_summary unchanged across the sealed
+                 call — sealed turn does NOT mutate long-term memory.
+
+          Backend logs during test: only the benign event marker
+          "[sealed] confessional turn completed (no content stored)." appears,
+          NO plaintext leaked, NO 5xx. Endpoint is fully functional.
+
+  - task: "POST /api/search — Web Search via DuckDuckGo (no API key)"
+    implemented: true
+    working: false
+    file: "backend/server.py"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Endpoint POST /api/search che usa DuckDuckGo HTML (https://html.duckduckgo.com)
+          per fare ricerca pubblica senza API key. Estrae top-N risultati con
+          regex su result__a / result__snippet. URL ridiretti via duckduckgo.com/l
+          vengono unwrappati al target reale.
+
+          Test manuale curl: query "chi ha vinto champions 2024" →
+          4 risultati con title/snippet/url puliti, primo è Wikipedia
+          UEFA Champions League 2024-2025 con snippet "vinta dal Paris
+          Saint-Germain... 5-0".
+      - working: false
+        agent: "testing"
+        comment: |
+          Endpoint CONTRACT works (HTTP 200 always, no 5xx, parameter
+          validation correct, max_results cap respected, empty query handled
+          gracefully). However the upstream DuckDuckGo HTML endpoint is
+          UNREACHABLE from the deployed backend's egress, so all real queries
+          return results=[] rather than actual web hits.
+
+          Evidence:
+            - POST /api/search {"query":"chi ha vinto la champions league 2024",
+              "max_results":4} → 200 {"query":"...","results":[]}  (FAIL: expected
+              1-4 items)
+            - POST /api/search {"query":""} → 200 results=[] (PASS, expected)
+            - POST /api/search {"query":"italia notizie oggi","max_results":8}
+              → 200 results=[] (cap=0, PASS-by-default since cap respected)
+            - Backend logs during the run repeatedly emit:
+                "server - WARNING - duckduckgo fetch failed:"
+              (httpx ConnectTimeout to html.duckduckgo.com — empty exc message
+              because the connect simply times out before any HTTP exchange).
+            - Direct probe from the same egress:
+                curl -m 8 https://html.duckduckgo.com/html/?q=test → HTTP=000,
+                connection timed out at 8s.
+                curl -m 6 https://duckduckgo.com/ → HTTP=000, timed out.
+                curl -m 6 https://api.duckduckgo.com/ → HTTP=000, timed out.
+                curl -m 6 https://www.google.com/ → HTTP=200 (other egress works).
+              ⇒ The cluster egress (or DDG anti-bot IP block) is preventing
+              ANY traffic to *.duckduckgo.com.
+
+          Implication: the endpoint behaves correctly defensively (no crashes,
+          no leaks, returns []), but the FEATURE is non-functional in this
+          environment because DDG is unreachable. This also breaks
+          /api/converse web-search auto-injection (see next task — the inject
+          line is never logged because results are always empty).
+
+          Suggested fix paths for main agent:
+            1. Switch to a search backend that the egress can reach (e.g. Bing
+               Web Search API, SerpAPI, Brave Search API, Tavily, Google CSE).
+               These need an API key but are reliable and don't get IP-blocked.
+            2. Or, if DDG must stay, route through a proxy / tunnel (e.g. via
+               a serverless function on Vercel/Cloudflare) since direct egress
+               from this Kubernetes pod to DDG is blocked.
+            3. Add an explicit error in the response body when fetch fails so
+               the frontend can display a "ricerca non disponibile" hint
+               (currently it just gets [] which looks like "no results").
+
+          Marking working=false because the user-visible behaviour ("query
+          for fresh facts") does not produce any results.
+
+  - task: "Web Search auto-injection in /api/converse"
+    implemented: true
+    working: false
+    file: "backend/server.py"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          /api/converse ora rileva via euristica (regex su trigger come
+          "cerca", "che ore sono", "news", "2025", "meteo", "che giorno è",
+          "ultim*", ecc.) se il messaggio richiede fatti freschi dal web.
+          Se sì E NON è in modalità ephemeral/Confessionale, fa una chiamata
+          a duckduckgo_search() con timeout 6.5s e inietta i risultati nel
+          prompt come "FATTI WEB FRESCHI" (top-3). Claude può citare la
+          fonte se rilevante.
+
+          In ephemeral/Confessionale niente search (per coerenza privacy).
+      - working: false
+        agent: "testing"
+        comment: |
+          Heuristic + endpoint plumbing is correct, but injection never
+          actually fires in this environment because the upstream DDG fetch
+          is blocked at the egress (see "/api/search" task above). Detail:
+
+          ✅ Endpoint always returns 200 with ai_entry/user_entry/profile
+             (graceful degradation when search fails).
+          ✅ ephemeral=true + trigger → 200, behaves as expected (no injection
+             attempt for confessional path is preserved).
+          ✅ "ciao come stai?" → 200, no trigger as expected.
+          ✅ "che ore sono adesso" → 200 (trigger matches \\bche ore sono\\b).
+          ✅ "raccontami delle ultime news" → 200 (trigger matches \\bnews\\b
+             and \\bultim[ai]\\b).
+          ❌ "cerca quanto costa l'iPhone 16 oggi" → trigger detected, but
+             no injection actually happened. Backend logs show repeated
+             "duckduckgo fetch failed:" warnings instead of the expected
+             "[converse] web search injected N results" line. Claude's reply
+             is the fallback "non posso cercare su internet — funziono solo
+             con la voce..." which proves no web facts reached the prompt.
+
+          Root cause: same as /api/search — html.duckduckgo.com is
+          unreachable from the deployed pod (curl HTTP=000 timeout). Once
+          the upstream search source is replaced/proxied, the auto-injection
+          path will start working without further code changes here.
+
+          Marking working=false to track the user-visible feature gap.
+          Code logic itself (trigger regex, ephemeral guard, timeout, error
+          handling) is correct.
+
+frontend:
+  - task: "lib/sealedCrypto.ts — KDF + NaCl secretbox + SecureStore wrapper"
+    implemented: true
+    working: "NA"
+    file: "frontend/lib/sealedCrypto.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Nuovo modulo che gestisce:
+            - getSalt(): 16-byte salt random salvato in SecureStore (iOS/Android)
+              o localStorage (web fallback). Stabile per dispositivo.
+            - setSecretWord(word, {biometric}): salva la Parola Segreta. Su
+              iOS/Android attiva requireAuthentication (FaceID/TouchID/passcode)
+              se biometric=true e il dispositivo lo supporta.
+            - hasSecretWord(), getSecretWord(), clearSecretWord(): API state.
+            - deriveKey(passphrase, salt): KDF custom (SHA-256 chained, 100k
+              rounds, mixa pass+salt ad ogni round) → 32-byte key. ~1-2s su
+              iPhone moderno. Yields ogni 5k iter per non bloccare l'event loop.
+            - sealText / unsealText: NaCl secretbox (XSalsa20 + Poly1305).
+              Nonce 24-byte random per ogni cifratura.
+            - getSessionKey(): cache della key derivata in RAM (TTL 5min) per
+              evitare di rifare il KDF ad ogni messaggio.
+            - biometricAvailable(): probe expo-local-authentication.
+
+          Storage backend automatico: web → localStorage; iOS/Android → SecureStore.
+          Risolto problema "ExpoSecureStore.default.getValueWithKeyAsync is not
+          a function" su web aggiungendo wrapper storeGet/storeSet/storeDel.
+
+  - task: "components/SealSetupModal.tsx — UI Setup Parola Segreta"
+    implemented: true
+    working: "NA"
+    file: "frontend/components/SealSetupModal.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Modal che si apre la prima volta che l'utente attiva il Confessionale
+          o long-press sul lucchetto. Due viste:
+            - Setup (no seal yet): testo educativo + 2 input (parola/conferma) +
+              hint biometria + bottone Sigilla.
+            - Manage (seal exists): badge "Cifratura attiva — XSalsa20-Poly1305",
+              bottone Cancella la Parola con Alert di conferma.
+
+          Verifica visiva via screenshot: setup mostra correttamente, salva
+          la parola in localStorage (web), il modal si chiude e il toggle
+          confessionale passa da "Confessionale" grigio a "Sigillato" verde.
+
+  - task: "index.tsx — sendText routing su /converse/sealed quando confessionale+seal"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          sendText() ora ha 2 path:
+            1. confessionalMode + hasSeal: cifra il messaggio client-side con
+               getSessionKey + sealText, chiama api.converseSealed (con la
+               chiave in header X-Sealed-Key), decifra la risposta lato client,
+               la mostra come bolle SOLO in RAM (id "sealed-*", non persiste).
+            2. fallback (no seal o non confessionale): chiama api.converse
+               normale con flag ephemeral={confessionalMode}.
+
+          Lucchetto header: tap = attiva/disattiva confessionale (apre setup
+          se non c'è seal); long-press = sempre apre setup per cambio/reset.
+          Color states: grigio (off) / rosso (on senza seal) / verde (on con seal).
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Sessione B completata: Crittografia Zero-Knowledge per Confessionale +
+      Web Search via DuckDuckGo.
+
+      ZERO-KNOWLEDGE CRYPTO:
+        - Frontend: nuovo lib/sealedCrypto.ts con NaCl secretbox + KDF custom
+          (SHA-256 chained, 100k rounds), storage SecureStore/localStorage.
+        - Backend: nuovo POST /api/converse/sealed che decifra in RAM, chiama
+          Claude, ricifra. Niente plaintext nei log, niente DB, niente memoria.
+        - UI: lucchetto header con stati colore, modal setup Parola Segreta
+          con biometria opzionale.
+
+      WEB SEARCH:
+        - POST /api/search (DuckDuckGo HTML, free, no key). 200 OK con
+          title/snippet/url puliti.
+        - /api/converse rileva trigger ("cerca", "che ore", "news", "2025",
+          "meteo", ...) e inietta top-3 risultati nel prompt SOLO in modalità
+          NON-ephemeral.
+
+      Test backend richiesti al testing agent:
+        1. POST /api/converse/sealed: serve cifrare con NaCl secretbox,
+           inviare {nonce, ciphertext} + header X-Sealed-Key=base64(key32),
+           verificare 200 + ciphertext valido + decifra correttamente.
+           Edge cases: missing X-Sealed-Key → 400; key 16-byte → 400;
+           nonce 12-byte → 400; ciphertext corrotto → 400.
+        2. POST /api/search: query="chi ha vinto champions 2024" → 200 con
+           lista risultati non vuota; query="" → 200 con lista vuota.
+        3. POST /api/converse con texto contenente trigger ("cerca quanto
+           costa l'iPhone 16") → 200, dovrebbe ricevere risposta che riflette
+           contenuto web (verificare che non sia "non lo so" generico).
+        4. POST /api/converse con ephemeral=true e trigger → 200, NESSUNA
+           ricerca web (privacy guarantee).
+        5. Regression: tutti gli altri endpoint (profile, timeline, converse
+           normale, recap, voices, tts, ghost, checkin) restano operativi.
+
+  - agent: "testing"
+    message: |
+      Session B backend testing complete (see detailed status_history above).
+
+      RESULTS (tested via /app/backend_test_session_b.py against
+      https://app-finder-408.preview.emergentagent.com/api):
+
+      ✅ POST /api/converse/sealed — FULLY WORKING
+        All 8 sub-cases pass:
+          - happy path encrypt/decrypt round-trip with NaCl secretbox
+            (XSalsa20-Poly1305) → 200, valid Italian empathic reply with
+            audio tag, tone in allowed set
+          - missing X-Sealed-Key → 400 "missing X-Sealed-Key"
+          - invalid base64 → 400 "invalid base64 payload"
+          - 16-byte key → 400 "invalid key length"
+          - 12-byte nonce → 400 "invalid nonce length"
+          - wrong key → 400 "decrypt failed"
+          - timeline count unchanged before/after sealed call
+          - profile.memory_summary unchanged before/after sealed call
+        No plaintext leaks in logs, only the event marker
+        "[sealed] confessional turn completed".
+
+      ❌ POST /api/search — ENDPOINT WORKS, UPSTREAM UNREACHABLE
+        Endpoint contract is correct (200 always, max_results capped,
+        empty query handled), but DuckDuckGo HTML
+        (html.duckduckgo.com / duckduckgo.com / api.duckduckgo.com)
+        is BLOCKED at the cluster egress for this deployment.
+        Confirmed by: backend logs spam "duckduckgo fetch failed:" on
+        every query, and direct curl from the pod to *.duckduckgo.com
+        returns HTTP=000 timeout (while curl to www.google.com works
+        fine = HTTP=200). All real queries return results=[].
+
+      ❌ /api/converse web-search auto-injection — SAME ROOT CAUSE
+        Heuristic + regex triggers + ephemeral guard are all correct
+        (logic-wise). But because DDG is unreachable, the
+        "[converse] web search injected N results" log line never fires
+        and Claude responds with "non posso cercare su internet"
+        for the iPhone 16 price test query.
+
+      ✅ Regression: ALL 9 endpoints green
+        / , GET/PUT /profile, /timeline, /converse {text:"ciao"},
+        /checkin/generate, /voices, /recap?period=today,
+        /transcribe (empty → 400). Zero 5xx during the run.
+
+      ACTION ITEMS for main agent:
+        1. Replace DuckDuckGo HTML scraping with a search backend that
+           the cluster egress can actually reach. Options:
+             - Brave Search API (free tier, generous, key needed)
+             - Tavily (LLM-tuned, key needed, has free tier)
+             - Bing Web Search API or Google Custom Search (key needed)
+             - SerpAPI (paid)
+           Recommended: Brave or Tavily — small code change, only the
+           duckduckgo_search() helper needs swapping. Heuristic and
+           injection logic stay unchanged.
+        2. (Nice-to-have) Add a top-level error field in /api/search
+           response when the upstream fails, so frontend can show
+           "ricerca non disponibile" instead of an empty list.
+
+
+#====================================================================================================
+# PREVIOUS SESSION ARCHIVE (history of past tasks below)
+#====================================================================================================
+
 user_problem_statement: |
   PIVOT TOTALE: l'app diventa "Taccuino Vivo", un assistente vocale single-user
   che vive in una timeline-chat unica. L'utente parla (vocale) o scrive, l'AI

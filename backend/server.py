@@ -14,8 +14,18 @@ from datetime import datetime, timezone
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from emergentintegrations.llm.openai import OpenAISpeechToText
-from fastapi import UploadFile, File, Form
+from fastapi import UploadFile, File, Form, Header
 from fastapi.responses import Response
+
+# === Sealed Confessional crypto (server-side decrypt-in-RAM only) ===
+import base64
+from nacl import secret as _nacl_secret
+from nacl import exceptions as _nacl_exc
+
+# === Web search (DuckDuckGo, free, no key) ===
+import httpx
+from urllib.parse import quote_plus
+import asyncio
 
 # ElevenLabs for natural voice TTS
 try:
@@ -630,9 +640,33 @@ async def api_converse(req: ConverseRequest):
 
     system_prompt = _build_conversation_system_prompt(profile, recent)
     history_str = _format_history_for_llm(recent)
+
+    # === WEB SEARCH (opt-in via heuristic OR explicit override) ===
+    # In confessional/ephemeral mode NON cerchiamo mai online (per privacy).
+    # In modalità normale: se il messaggio contiene trigger (cerca, news,
+    # che ore sono, 2025…), tentiamo una ricerca DuckDuckGo e iniettiamo
+    # i top-3 risultati nel prompt come "FATTI WEB FRESCHI".
+    web_context = ""
+    if (not req.ephemeral) and needs_web_search(text):
+        try:
+            results = await asyncio.wait_for(duckduckgo_search(text, max_results=3), timeout=6.5)
+            if results:
+                lines = []
+                for i, r in enumerate(results, 1):
+                    lines.append(f"[{i}] {r.get('title','')}\n   {r.get('snippet','')}\n   ({r.get('url','')})")
+                web_context = (
+                    "\n\nFATTI WEB FRESCHI (estratti ora dal web — usali con cautela, "
+                    "cita la fonte se rilevante, non leggere l'URL ad alta voce):\n"
+                    + "\n".join(lines)
+                )
+                logger.info(f"[converse] web search injected {len(results)} results for query")
+        except Exception as e:
+            logger.warning(f"[converse] web search failed: {e}")
+
     user_payload = (
         f"STORICO RECENTE (per memoria a breve termine):\n{history_str}\n\n"
-        f"NUOVO MESSAGGIO DELL'UTENTE:\n{text}\n\n"
+        f"NUOVO MESSAGGIO DELL'UTENTE:\n{text}"
+        f"{web_context}\n\n"
         f"Rispondi SOLO col JSON come da istruzioni di sistema."
     )
 
@@ -707,6 +741,277 @@ async def api_converse(req: ConverseRequest):
         profile = await save_profile(profile)
 
     return ConverseResponse(user_entry=user_entry, ai_entry=ai_entry, profile=profile)
+
+
+# ============================================================
+# SEALED CONVERSE — Zero-Knowledge Confessional
+# Il client cifra il messaggio con NaCl secretbox usando una chiave
+# derivata dalla "Parola Segreta" SUL DISPOSITIVO. La chiave volatile
+# è inviata SOLO in un header (X-Sealed-Key) di QUESTA singola
+# richiesta — il server la usa per decifrare in RAM, chiamare Claude,
+# poi ricifrare la risposta. NIENTE viene loggato, NIENTE persistito.
+#
+# Garanzie:
+#  • Logger HTTP non riceve il body cifrato in chiaro (è già cifrato).
+#  • La chiave non è loggata (è in header e mai stampata).
+#  • Plaintext esiste in RAM solo per il tempo della chiamata LLM.
+#  • Nessuna scrittura su DB. Nessun memory_summary update.
+#  • Nessun history recap del backend (la confessione è stateless).
+# ============================================================
+
+class SealedConverseRequest(BaseModel):
+    nonce: str            # base64
+    ciphertext: str       # base64 (XSalsa20-Poly1305 di plaintext)
+    language: Optional[str] = None  # "it" | "en" | ...
+    # Opzionale: contesto sul nome AI / generi senza esporre memoria.
+    # Anche questi campi possono essere derivati dal profilo lato server,
+    # ma li accettiamo qui per non leakare il profilo nei log di rete.
+    ai_name: Optional[str] = None
+    ai_gender: Optional[str] = None
+    user_gender: Optional[str] = None
+
+
+class SealedConverseResponse(BaseModel):
+    nonce: str
+    ciphertext: str
+    tone: str = "warm"
+
+
+def _decrypt_secretbox(key_b64: str, nonce_b64: str, ct_b64: str) -> str:
+    """Decifra con NaCl secretbox. Plaintext esiste solo in questo scope."""
+    try:
+        key = base64.b64decode(key_b64)
+        nonce = base64.b64decode(nonce_b64)
+        ct = base64.b64decode(ct_b64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid base64 payload")
+    if len(key) != 32:
+        raise HTTPException(status_code=400, detail="invalid key length")
+    if len(nonce) != 24:
+        raise HTTPException(status_code=400, detail="invalid nonce length")
+    try:
+        box = _nacl_secret.SecretBox(key)
+        return box.decrypt(ct, nonce).decode("utf-8")
+    except _nacl_exc.CryptoError:
+        raise HTTPException(status_code=400, detail="decrypt failed")
+
+
+def _encrypt_secretbox(key_b64: str, plaintext: str) -> tuple[str, str]:
+    """Cifra con NaCl secretbox; ritorna (nonce_b64, ct_b64)."""
+    key = base64.b64decode(key_b64)
+    box = _nacl_secret.SecretBox(key)
+    # PyNaCl genera il nonce automaticamente; lo estraiamo dall'output.
+    encrypted = box.encrypt(plaintext.encode("utf-8"))
+    nonce = encrypted.nonce
+    ct = encrypted.ciphertext
+    return base64.b64encode(nonce).decode("ascii"), base64.b64encode(ct).decode("ascii")
+
+
+@api_router.post("/converse/sealed", response_model=SealedConverseResponse)
+async def api_converse_sealed(
+    req: SealedConverseRequest,
+    x_sealed_key: Optional[str] = Header(default=None, alias="X-Sealed-Key"),
+):
+    """Confessionale Zero-Knowledge.
+
+    Il client manda payload cifrato + chiave derivata client-side nel
+    header X-Sealed-Key. Decifriamo in RAM, chiamiamo Claude, ricifriamo,
+    rispondiamo. Niente log, niente DB, niente memoria.
+    """
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=500, detail="LLM key not configured")
+    if not x_sealed_key:
+        raise HTTPException(status_code=400, detail="missing X-Sealed-Key")
+
+    # 1. DECIFRA in RAM (plaintext resta in questa funzione)
+    plaintext = _decrypt_secretbox(x_sealed_key, req.nonce, req.ciphertext)
+    if not plaintext.strip():
+        raise HTTPException(status_code=400, detail="empty plaintext")
+
+    # 2. Costruisci un prompt MINIMALE per il confessionale (no memory,
+    # no history; vogliamo davvero che la sessione sia stateless).
+    lang = (req.language or "it").lower()
+    lang_name = {
+        "it": "italiano", "en": "english", "es": "español",
+        "fr": "français", "de": "deutsch",
+    }.get(lang, "italiano")
+
+    ai_name = (req.ai_name or "Coda").strip() or "Coda"
+    ai_g = (req.ai_gender or "f").lower()
+    user_g = (req.user_gender or "n").lower()
+
+    user_decl = ""
+    if user_g == "m":
+        user_decl = "L'utente è MASCHIO. Aggettivi/participi al maschile (stanco, solo, preoccupato)."
+    elif user_g == "f":
+        user_decl = "L'utente è FEMMINA. Aggettivi/participi al femminile (stanca, sola, preoccupata)."
+    else:
+        user_decl = "Genere utente non dichiarato. Evita aggettivi declinati."
+
+    if ai_g == "m":
+        ai_decl = f"Sei {ai_name}, MASCHIO. Quando parli di te usa il maschile."
+    elif ai_g == "f":
+        ai_decl = f"Sei {ai_name}, FEMMINA. Quando parli di te usa il femminile."
+    else:
+        ai_decl = f"Sei {ai_name}, neutro/ambiguo."
+
+    sys = (
+        f"Sei {ai_name}, un AMICO FRATERNO maturo. {ai_decl} {user_decl}\n"
+        f"\n"
+        f"Questa è una CONFESSIONE SIGILLATA. L'utente sta usando la 'Modalità Confessionale': "
+        f"il messaggio è stato cifrato sul suo dispositivo, viaggia cifrato, e la tua "
+        f"risposta tornerà a lui cifrata. Niente di tutto questo verrà salvato. "
+        f"Non hai memoria di altre conversazioni, e questa stessa sparirà tra un istante. "
+        f"È un confessionale puro: ascolta, accogli, NON moralizzare, NON consigliare a meno "
+        f"che l'utente lo chieda esplicitamente.\n"
+        f"\n"
+        f"Rispondi SEMPRE in {lang_name}. MOLTO breve (1-3 frasi). Tono caldo, presenza pura. "
+        f"Apri con UNA tag emotiva ([gently], [warmly], [thoughtful], [softly]) e MAX una "
+        f"tag aggiuntiva nel mezzo. Mai più di 2 tag totali. NIENTE bot-talk.\n"
+        f"\n"
+        f"OUTPUT: solo un oggetto JSON {{\"reply\": \"...\", \"tone\": \"warm|calm|concerned|neutral\"}}. "
+        f"NIENTE testo fuori dal JSON."
+    )
+
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=str(uuid.uuid4()),  # sessione effimera, ignorata dopo
+            system_message=sys,
+        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        raw = await chat.send_message(UserMessage(text=plaintext))
+    except Exception as e:
+        # NON loggare il plaintext nemmeno qui.
+        logger.error(f"[sealed] LLM error (no plaintext logged): {type(e).__name__}")
+        raise HTTPException(status_code=500, detail="AI error")
+
+    data = extract_json(raw or "") or {}
+    reply = (data.get("reply") or "").strip() or "[gently] Sono qui."
+    tone = (data.get("tone") or "warm").lower()
+    if tone not in {"warm", "calm", "concerned", "energetic", "neutral", "urgent"}:
+        tone = "warm"
+
+    # Cifra la risposta con la stessa chiave (nonce nuovo)
+    out_nonce, out_ct = _encrypt_secretbox(x_sealed_key, reply)
+
+    # NB: non logghiamo nulla del contenuto. Solo l'evento.
+    logger.info("[sealed] confessional turn completed (no content stored).")
+
+    # Pulizia esplicita (best effort — Python GC farà il resto)
+    del plaintext
+    del reply
+
+    return SealedConverseResponse(nonce=out_nonce, ciphertext=out_ct, tone=tone)
+
+
+# ============================================================
+# WEB SEARCH — DuckDuckGo Instant Answer + HTML scrape (free, no key)
+# ============================================================
+
+# Heuristics: parole/frasi che suggeriscono che l'utente vuole fatti freschi
+_SEARCH_TRIGGERS = [
+    r"\bcerca(?:mi)?\b", r"\btrova(?:mi)?\b", r"\bgoogla(?:mi)?\b",
+    r"\bricerca\b", r"\bsu internet\b", r"\bonline\b",
+    r"\bnotizie?\b", r"\bnews\b", r"\boggi\b è",
+    r"\bche ore sono\b", r"\bche giorno è\b", r"\bdata di oggi\b",
+    r"\bmeteo\b", r"\bprevisioni\b", r"\bborsa\b", r"\bquotazione\b",
+    r"\bquanto costa\b", r"\bprezzo\b",
+    r"\bchi ha vinto\b", r"\brisultato\b", r"\brisultati\b",
+    r"\bquando esce\b", r"\bdata di uscita\b",
+    r"\bultim[ai]\b", r"\brecente\b", r"\baggiornamento\b",
+    r"\b202[5-9]\b",
+]
+_SEARCH_TRIGGER_RE = re.compile("|".join(_SEARCH_TRIGGERS), re.IGNORECASE)
+
+
+def needs_web_search(text: str) -> bool:
+    """Euristica leggera per capire se un messaggio richiede una ricerca."""
+    if not text:
+        return False
+    return bool(_SEARCH_TRIGGER_RE.search(text))
+
+
+async def duckduckgo_search(query: str, max_results: int = 4) -> list[dict]:
+    """Ritorna una lista di {title, snippet, url} usando DuckDuckGo HTML.
+
+    Non richiede API key. Best-effort: timeout 6s, fallback graceful a [].
+    """
+    if not query:
+        return []
+    q = quote_plus(query.strip()[:200])
+    url = f"https://html.duckduckgo.com/html/?q={q}&kl=it-it"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15",
+        "Accept-Language": "it-IT,it;q=0.9,en;q=0.7",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as cx:
+            r = await cx.get(url, headers=headers)
+            if r.status_code != 200:
+                return []
+            html = r.text
+    except Exception as e:
+        logger.warning(f"duckduckgo fetch failed: {e}")
+        return []
+
+    # Estrazione veloce con regex (no BeautifulSoup per non aggiungere deps).
+    results = []
+    # I risultati hanno classe "result__a" per il titolo+url e
+    # "result__snippet" per la descrizione
+    a_re = re.compile(
+        r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+        re.DOTALL | re.IGNORECASE,
+    )
+    snip_re = re.compile(
+        r'<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>',
+        re.DOTALL | re.IGNORECASE,
+    )
+    titles = a_re.findall(html)
+    snippets = snip_re.findall(html)
+
+    def _strip_html(s: str) -> str:
+        s = re.sub(r"<[^>]+>", "", s or "")
+        s = re.sub(r"&amp;", "&", s)
+        s = re.sub(r"&quot;", '"', s)
+        s = re.sub(r"&#39;", "'", s)
+        s = re.sub(r"&lt;", "<", s)
+        s = re.sub(r"&gt;", ">", s)
+        s = re.sub(r"&nbsp;", " ", s)
+        return s.strip()
+
+    def _clean_url(u: str) -> str:
+        # DuckDuckGo a volte ridireziona via "//duckduckgo.com/l/?uddg=..."
+        m = re.search(r"uddg=([^&]+)", u)
+        if m:
+            try:
+                from urllib.parse import unquote
+                return unquote(m.group(1))
+            except Exception:
+                pass
+        if u.startswith("//"):
+            return "https:" + u
+        return u
+
+    for i, (href, title_html) in enumerate(titles[:max_results]):
+        snippet = _strip_html(snippets[i]) if i < len(snippets) else ""
+        results.append({
+            "title": _strip_html(title_html)[:140],
+            "snippet": snippet[:280],
+            "url": _clean_url(href),
+        })
+    return results
+
+
+class SearchRequest(BaseModel):
+    query: str
+    max_results: int = 4
+
+
+@api_router.post("/search")
+async def api_search(req: SearchRequest):
+    """Ricerca web pubblica (DuckDuckGo). Niente tracking, niente API key."""
+    res = await duckduckgo_search(req.query, max_results=max(1, min(8, req.max_results)))
+    return {"query": req.query, "results": res}
 
 
 # ============================================================

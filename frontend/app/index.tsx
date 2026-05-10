@@ -44,8 +44,21 @@ import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
 import OrganicBlob from "../components/OrganicBlob";
 import NeonBorder from "../components/NeonBorder";
+import SealSetupModal from "../components/SealSetupModal";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
 import { useFonts, Caveat_400Regular, Caveat_500Medium } from "@expo-google-fonts/caveat";
+// === Zero-Knowledge Confessional crypto ===
+import {
+  hasSecretWord,
+  getSessionKey,
+  forgetSessionKey,
+  setSecretWord,
+  clearSecretWord,
+  sealText,
+  unsealText,
+  keyToBase64,
+  biometricAvailable,
+} from "../lib/sealedCrypto";
 
 type Status = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 
@@ -119,6 +132,26 @@ export default function Taccuino() {
   // entrano nel memory_summary di lungo periodo, e a fine sessione (chiusura
   // app o toggle off) spariscono dalla RAM.
   const [confessionalMode, setConfessionalMode] = useState(false);
+  // === Zero-Knowledge: Parola Segreta (Sigillo) ===
+  // Se l'utente ha impostato una Parola Segreta, in modalità Confessionale
+  // il messaggio viene cifrato sul dispositivo e inviato a /converse/sealed.
+  // Senza Parola Segreta, fallback a ephemeral (no DB ma backend vede testo).
+  const [hasSeal, setHasSeal] = useState<boolean>(false);
+  const [showSealSetup, setShowSealSetup] = useState(false);
+  const [sealUnlocking, setSealUnlocking] = useState(false);
+  // Re-check seal availability on mount + after any setup/clear.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const has = await hasSecretWord();
+        if (!cancelled) setHasSeal(has);
+      } catch {}
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [recapText, setRecapText] = useState<string | null>(null);
   const [showRecap, setShowRecap] = useState(false);
@@ -496,6 +529,50 @@ export default function Taccuino() {
       setTimeline((prev) => [...prev, optimistic]);
       setStatus("thinking");
       try {
+        // === SEALED FLOW (Zero-Knowledge Confessionale) ===
+        // Se siamo in confessionale e l'utente ha impostato la Parola Segreta,
+        // cifriamo il messaggio CLIENT-SIDE e chiamiamo /converse/sealed.
+        if (confessionalMode && hasSeal) {
+          const key = await getSessionKey({ biometric: true });
+          if (!key) {
+            throw new Error("Parola Segreta non sbloccata");
+          }
+          const sealed = await sealText(txt, key);
+          const resp = await api.converseSealed(
+            {
+              nonce: sealed.nonce,
+              ciphertext: sealed.ciphertext,
+              language: profile?.language || "it",
+              ai_name: profile?.ai_name || "Coda",
+              ai_gender: profile?.ai_gender || "f",
+              user_gender: profile?.user_gender || "n",
+            },
+            keyToBase64(key)
+          );
+          // Decifra la risposta lato client
+          const reply = unsealText({ nonce: resp.nonce, ciphertext: resp.ciphertext }, key) || "";
+          // Strip audio tags per chat display (regex rapido)
+          const clean = reply.replace(/\[[a-zA-Zàèéìòùç '_,/-]{1,40}\]/g, "").replace(/  +/g, " ").trim();
+          const aiEntry: TimelineEntry = {
+            id: `sealed-${Date.now()}`,
+            role: "ai",
+            text: clean || "(silenzio sigillato)",
+            voice_text: reply,
+            tone: (resp.tone as Tone) || "warm",
+            timestamp: new Date().toISOString(),
+          };
+          const userEntry: TimelineEntry = {
+            ...optimistic,
+            id: `sealed-u-${Date.now()}`,
+          };
+          setTimeline((prev) => {
+            const filtered = prev.filter((e) => e.id !== optimistic.id);
+            return [...filtered, userEntry, aiEntry];
+          });
+          await speakIfEnabled(reply, aiEntry.tone || "warm");
+          return;
+        }
+        // === STANDARD FLOW (con o senza ephemeral) ===
         const res = await api.converse(txt, undefined, { ephemeral: confessionalMode });
         // Replace optimistic with real, then add AI entry
         setTimeline((prev) => {
@@ -507,13 +584,18 @@ export default function Taccuino() {
         runActions(res.ai_entry.actions || []);
         await speakIfEnabled(res.ai_entry.voice_text || res.ai_entry.text, res.ai_entry.tone || "neutral");
       } catch (e: any) {
-        setError("Ops, qualcosa non funziona. Riprova.");
+        const msg = String(e?.message || "");
+        if (msg.includes("Parola Segreta")) {
+          setError("Parola Segreta non sbloccata. Tocca il lucchetto per riprovare.");
+        } else {
+          setError("Ops, qualcosa non funziona. Riprova.");
+        }
         setStatus("idle");
         // Remove optimistic
         setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
       }
     },
-    [speakIfEnabled, runActions]
+    [speakIfEnabled, runActions, confessionalMode, hasSeal, profile]
   );
 
   // Push-to-talk (or hands-free)
@@ -1137,22 +1219,53 @@ export default function Taccuino() {
               styles.confessionalToggle,
               confessionalMode && styles.confessionalToggleOn,
             ]}
-            onPress={() => setConfessionalMode((m) => !m)}
+            onPress={async () => {
+              if (!confessionalMode) {
+                // Stiamo per ATTIVARE il confessionale.
+                // Se l'utente non ha ancora una Parola Segreta, mostra il setup.
+                const has = await hasSecretWord();
+                setHasSeal(has);
+                if (!has) {
+                  setShowSealSetup(true);
+                  return;
+                }
+              } else {
+                // Disattivando il confessionale, dimentica la chiave volatile.
+                forgetSessionKey();
+              }
+              setConfessionalMode((m) => !m);
+            }}
+            onLongPress={() => {
+              // Long-press: gestione Parola Segreta (cambio/cancellazione)
+              setShowSealSetup(true);
+            }}
             hitSlop={10}
             testID="confessional-toggle"
           >
             <Ionicons
               name={confessionalMode ? "lock-closed" : "lock-open-outline"}
               size={16}
-              color={confessionalMode ? "#FCA5A5" : "#FFFFFFCC"}
+              color={
+                confessionalMode
+                  ? hasSeal
+                    ? "#34D399"
+                    : "#FCA5A5"
+                  : "#FFFFFFCC"
+              }
             />
             <Text
               style={[
                 styles.confessionalToggleText,
-                confessionalMode && { color: "#FCA5A5" },
+                confessionalMode && {
+                  color: hasSeal ? "#34D399" : "#FCA5A5",
+                },
               ]}
             >
-              {confessionalMode ? "Confessionale" : "Confessionale"}
+              {confessionalMode
+                ? hasSeal
+                  ? "Sigillato"
+                  : "Confessionale"
+                : "Confessionale"}
             </Text>
           </TouchableOpacity>
         </View>
@@ -2300,6 +2413,28 @@ export default function Taccuino() {
           </View>
         </View>
       </Modal>
+
+      {/* Seal Setup Modal — Parola Segreta per Confessionale Zero-Knowledge */}
+      <SealSetupModal
+        visible={showSealSetup}
+        hasSeal={hasSeal}
+        confessionalActive={confessionalMode}
+        onClose={() => setShowSealSetup(false)}
+        onSaved={() => {
+          setHasSeal(true);
+          setShowSealSetup(false);
+          // Una volta impostata la parola, attiva subito il confessionale.
+          setConfessionalMode(true);
+        }}
+        onCleared={() => {
+          setHasSeal(false);
+          forgetSessionKey();
+          setShowSealSetup(false);
+          // Se era attivo il confessionale, lascia attivo (fallback a ephemeral).
+        }}
+        styles={styles}
+        theme={theme}
+      />
 
       {/* NeonBorder — feedback periferico ai bordi dello schermo.
           Verde pulsante = ti sto ascoltando, parla.
