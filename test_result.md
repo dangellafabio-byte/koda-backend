@@ -322,13 +322,13 @@ backend:
           "[sealed] confessional turn completed (no content stored)." appears,
           NO plaintext leaked, NO 5xx. Endpoint is fully functional.
 
-  - task: "POST /api/search — Web Search via DuckDuckGo (no API key)"
+  - task: "POST /api/search — Web Search via Wikipedia REST API (no API key)"
     implemented: true
-    working: false
+    working: true
     file: "backend/server.py"
-    stuck_count: 1
+    stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: "NA"
         agent: "main"
@@ -390,14 +390,22 @@ backend:
 
           Marking working=false because the user-visible behaviour ("query
           for fresh facts") does not produce any results.
+      - working: true
+        agent: "testing"
+        comment: |
+          RETEST after fix (2026-05-10): Wikipedia REST API now used in
+          place of DuckDuckGo HTML scraping (it.wikipedia.org +
+          en.wikipedia.org). Egress is reachable, search now returns
+          real results. See companion task "POST /api/search — Wikipedia
+          retest (post-DDG swap)" for full details. Marking working=true.
 
   - task: "Web Search auto-injection in /api/converse"
     implemented: true
-    working: false
+    working: true
     file: "backend/server.py"
-    stuck_count: 1
+    stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: "NA"
         agent: "main"
@@ -441,6 +449,85 @@ backend:
           Marking working=false to track the user-visible feature gap.
           Code logic itself (trigger regex, ephemeral guard, timeout, error
           handling) is correct.
+      - working: true
+        agent: "testing"
+        comment: |
+          RETEST after Wikipedia-REST swap (2026-05-10): web search auto-injection
+          NOW WORKS end-to-end. Tested via /app/backend_test_search_retest.py.
+
+          ✅ POST /api/converse {"text":"cerca cos'è la UEFA Champions League"}
+             → 200, ai_entry.text references Wikipedia content (matched
+             keywords: champions, calci, europ, competiz, club).
+             Backend log shows the expected line:
+                "[converse] web search injected 3 results for query"
+             confirming injection actually happened.
+          ✅ POST /api/converse {"text":"ciao come stai?"} → 200, no
+             trigger fired, no "[converse] web search injected" log line
+             during this request (verified via backend logs: only ONE
+             injection log line across the full retest run, attributed
+             to the UEFA query).
+          ✅ POST /api/converse {"text":"cerca cos'è la UEFA Champions League",
+             "ephemeral": true} → 200, ephemeral guard prevented injection
+             (no extra inject log line emitted for this call). Privacy
+             guarantee preserved.
+
+          Code logic + upstream now both functional. Marking working=true.
+
+  - task: "POST /api/search — Wikipedia retest (post-DDG swap)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          RETEST after Wikipedia-REST swap (2026-05-10) via
+          /app/backend_test_search_retest.py against
+          https://app-finder-408.preview.emergentagent.com/api. ALL 4
+          /api/search sub-cases PASS:
+
+          ✅ {"query":"Champions League 2024 vincitore","max_results":3}
+             → 200 with 3 results. First item:
+               title="UEFA Champions League 2024-2025"
+               snippet="La UEFA Champions League 2024-2025 è stata la
+                        70ª edizione della Champions Leagu..."
+               url=https://it.wikipedia.org/wiki/UEFA_Champions_League_2024-2025
+             All items have non-empty title, real Italian snippet from
+             Wikipedia, and url starting with https://it.wikipedia.org/wiki/.
+          ✅ {"query":"Italia Repubblica","max_results":2} → 200 with
+             2 results, first title="Presidente della Repubblica Italiana".
+          ✅ {"query":""} → 200 results=[] (empty input handled).
+          ✅ {"query":"ajksdhflakjsdhflkjasdf nonsense xyzqqq"} → 200
+             results=[] (no Wikipedia match → graceful empty list).
+
+          Endpoint is fully functional from the cluster egress —
+          Wikipedia REST API (it.wikipedia.org / en.wikipedia.org) is
+          reachable and the swap from DuckDuckGo HTML scraping resolved
+          the previous egress blockage. No 5xx in backend logs.
+
+  - task: "Smoke regression after Wikipedia swap"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Smoke regression in same retest run (2026-05-10):
+          ✅ POST /api/converse/sealed (happy path) → 200 with valid
+             encrypted reply; client-side NaCl decrypt succeeds, tone="warm",
+             reply text len=88 ("[gently] Sono qui, e questo spazio è tutto
+             tuo. Vuoi dirmi cosa senti in questo momento?").
+          ✅ GET /api/profile → 200.
+          ✅ POST /api/converse {"text":"ciao"} → 200 with non-empty
+             ai_entry.text.
+          All previously-passing endpoints remain green.
 
 frontend:
   - task: "lib/sealedCrypto.ts — KDF + NaCl secretbox + SecureStore wrapper"
@@ -2000,3 +2087,46 @@ agent_communication:
       Profile + regression endpoints all green.
 
       No issues found. Test artifact: /app/backend_test_scatola.py.
+
+
+## RETEST: Web Search via Wikipedia REST API (2026-05-10, late)
+
+agent_communication:
+  - agent: "testing"
+    message: |
+      RETEST after main agent's fix (DuckDuckGo HTML scraping replaced
+      with Wikipedia REST API on it.wikipedia.org + en.wikipedia.org).
+      Test artifact: /app/backend_test_search_retest.py.
+
+      RESULT: 10/10 PASS, 0 FAIL.
+
+      ✅ POST /api/search — 4/4 sub-cases pass:
+         - "Champions League 2024 vincitore" max_results=3 → 200 with 3
+           Italian-Wikipedia results (first item: UEFA Champions League
+           2024-2025, real Italian extract, https://it.wikipedia.org/wiki/...).
+         - "Italia Repubblica" max_results=2 → 200 with 2 results.
+         - empty query → 200 results=[].
+         - nonsense query → 200 results=[] (graceful no-match).
+
+      ✅ POST /api/converse web-search auto-injection — 3/3 pass:
+         - "cerca cos'è la UEFA Champions League" → 200, ai_entry.text
+           references Wikipedia content (matched: champions, calci,
+           europ, competiz, club). Backend log shows the expected line
+           "[converse] web search injected 3 results for query".
+         - "ciao come stai?" → 200, no trigger (no inject log line).
+         - same UEFA query with ephemeral=true → 200, ephemeral guard
+           prevented injection (no inject log line for this call;
+           only ONE inject log line emitted across the entire run,
+           attributed to the non-ephemeral UEFA query).
+
+      ✅ Smoke regression — 3/3 pass:
+         - POST /api/converse/sealed (NaCl secretbox round-trip) → 200,
+           decrypted reply readable, tone="warm".
+         - GET /api/profile → 200.
+         - POST /api/converse {"text":"ciao"} → 200 with ai_entry.text.
+
+      Backend logs clean (no 5xx, no DDG-fetch warnings during the run,
+      only the expected single "[converse] web search injected" line +
+      LiteLLM info logs). Both /api/search and converse-with-web are
+      now WORKING and have been marked needs_retesting=false in
+      test_result.md.

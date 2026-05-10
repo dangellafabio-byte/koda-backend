@@ -932,74 +932,81 @@ def needs_web_search(text: str) -> bool:
 
 
 async def duckduckgo_search(query: str, max_results: int = 4) -> list[dict]:
-    """Ritorna una lista di {title, snippet, url} usando DuckDuckGo HTML.
+    """Ricerca pubblica usando Wikipedia REST API (it + en) come fallback al
+    DuckDuckGo HTML che è bloccato dall'egress firewall del cluster.
 
-    Non richiede API key. Best-effort: timeout 6s, fallback graceful a [].
+    Wikipedia non copre tutti i casi (notizie in tempo reale, prezzi, meteo)
+    ma è gratuita, sempre raggiungibile e ha contenuti enciclopedici di
+    qualità. Per fatti freschi serve un'API a pagamento (Brave/Tavily).
+
+    Strategy:
+      1. Cerca via Wikipedia opensearch/search API in italiano.
+      2. Per ogni hit, fetch il summary REST per ottenere extract pulito.
+      3. Ritorna {title, snippet, url}.
     """
     if not query:
         return []
-    q = quote_plus(query.strip()[:200])
-    url = f"https://html.duckduckgo.com/html/?q={q}&kl=it-it"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15",
-        "Accept-Language": "it-IT,it;q=0.9,en;q=0.7",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as cx:
-            r = await cx.get(url, headers=headers)
-            if r.status_code != 200:
-                return []
-            html = r.text
-    except Exception as e:
-        logger.warning(f"duckduckgo fetch failed: {e}")
-        return []
+    q = (query.strip() or "")[:200]
+    ua = "AmicoFraternoApp/1.0 (https://lamico.app; contact@lamico.app)"
+    headers = {"User-Agent": ua, "Accept": "application/json"}
 
-    # Estrazione veloce con regex (no BeautifulSoup per non aggiungere deps).
-    results = []
-    # I risultati hanno classe "result__a" per il titolo+url e
-    # "result__snippet" per la descrizione
-    a_re = re.compile(
-        r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
-        re.DOTALL | re.IGNORECASE,
-    )
-    snip_re = re.compile(
-        r'<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>',
-        re.DOTALL | re.IGNORECASE,
-    )
-    titles = a_re.findall(html)
-    snippets = snip_re.findall(html)
+    results: list[dict] = []
+    # Provo prima Wikipedia in italiano, poi inglese se l'italiano è vuoto.
+    for lang in ("it", "en"):
+        try:
+            async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as cx:
+                # 1) Search API
+                sr = await cx.get(
+                    f"https://{lang}.wikipedia.org/w/api.php",
+                    params={
+                        "action": "query",
+                        "list": "search",
+                        "srsearch": q,
+                        "format": "json",
+                        "srlimit": max_results,
+                        "utf8": 1,
+                    },
+                    headers=headers,
+                )
+                if sr.status_code != 200:
+                    continue
+                data = sr.json()
+                hits = (data.get("query") or {}).get("search") or []
+                if not hits:
+                    continue
 
-    def _strip_html(s: str) -> str:
-        s = re.sub(r"<[^>]+>", "", s or "")
-        s = re.sub(r"&amp;", "&", s)
-        s = re.sub(r"&quot;", '"', s)
-        s = re.sub(r"&#39;", "'", s)
-        s = re.sub(r"&lt;", "<", s)
-        s = re.sub(r"&gt;", ">", s)
-        s = re.sub(r"&nbsp;", " ", s)
-        return s.strip()
+                # 2) Per ogni hit ottieni l'extract dal REST summary
+                for h in hits[:max_results]:
+                    title = h.get("title") or ""
+                    snippet = re.sub(r"<[^>]+>", "", h.get("snippet") or "").strip()
+                    page_url = f"https://{lang}.wikipedia.org/wiki/{quote_plus(title.replace(' ', '_'))}"
+                    # Best-effort: arricchisci con summary
+                    try:
+                        summ = await cx.get(
+                            f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{quote_plus(title.replace(' ', '_'))}",
+                            headers=headers,
+                        )
+                        if summ.status_code == 200:
+                            sd = summ.json()
+                            extract = (sd.get("extract") or "").strip()
+                            if extract:
+                                snippet = extract
+                            url2 = ((sd.get("content_urls") or {}).get("desktop") or {}).get("page") or page_url
+                            page_url = url2
+                    except Exception:
+                        pass
+                    results.append({
+                        "title": title[:140],
+                        "snippet": snippet[:280],
+                        "url": page_url,
+                    })
+                if results:
+                    break  # abbiamo risultati in questa lingua, basta
+        except Exception as e:
+            logger.warning(f"wiki search fetch failed ({lang}): {e}")
+            continue
 
-    def _clean_url(u: str) -> str:
-        # DuckDuckGo a volte ridireziona via "//duckduckgo.com/l/?uddg=..."
-        m = re.search(r"uddg=([^&]+)", u)
-        if m:
-            try:
-                from urllib.parse import unquote
-                return unquote(m.group(1))
-            except Exception:
-                pass
-        if u.startswith("//"):
-            return "https:" + u
-        return u
-
-    for i, (href, title_html) in enumerate(titles[:max_results]):
-        snippet = _strip_html(snippets[i]) if i < len(snippets) else ""
-        results.append({
-            "title": _strip_html(title_html)[:140],
-            "snippet": snippet[:280],
-            "url": _clean_url(href),
-        })
-    return results
+    return results[:max_results]
 
 
 class SearchRequest(BaseModel):
