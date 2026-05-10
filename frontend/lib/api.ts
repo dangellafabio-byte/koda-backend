@@ -97,6 +97,10 @@ export type Profile = {
   language: string;
   onboarded: boolean;
   name?: string | null;
+  // L'Amico Fraterno: identità AI + generi per declinazione lingua
+  ai_name?: string;       // default "Coda" — UNICA variabile di identità modificabile
+  ai_gender?: "m" | "f" | "n";  // default "f"
+  user_gender?: "m" | "f" | "n"; // default "n"
   confidence_level: number;
   total_messages: number;
   settings: ProfileSettings;

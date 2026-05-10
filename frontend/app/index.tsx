@@ -1206,7 +1206,7 @@ export default function Taccuino() {
               {profile?.name ? `Ehi ${profile.name}, sono qui.` : "Sono qui."}
             </Text>
             <Text style={styles.emptyText}>
-              Parlami a voce — sono qui ad ascoltarti.
+              Tutto quello che mi dici resta tra noi.{"\n"}Parla — ti ascolto.
             </Text>
           </View>
         ) : (
@@ -1434,6 +1434,123 @@ export default function Taccuino() {
               contentContainerStyle={{ paddingBottom: 6 }}
               showsVerticalScrollIndicator={true}
             >
+
+            {/* === IDENTITÀ — L'Amico Fraterno =======================
+                L'unica variabile di identità modificabile è il NOME dell'amico.
+                Sesso utente + sesso AI servono per declinare aggettivi e
+                participi (es. "sei stanco/a") in modo corretto. */}
+            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>Identità</Text>
+
+            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8 }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>Come chiami l'amico/a</Text>
+                <Text style={styles.settingHint}>
+                  Il nome con cui ti rivolgi a me. Default: Coda.
+                </Text>
+              </View>
+              <TextInput
+                value={profile?.ai_name || "Coda"}
+                onChangeText={(txt) => {
+                  if (!profile) return;
+                  setProfile({ ...profile, ai_name: txt });
+                }}
+                onBlur={async () => {
+                  if (!profile) return;
+                  const v = (profile.ai_name || "").trim();
+                  const final = v.length > 0 ? v.slice(0, 24) : "Coda";
+                  setProfile({ ...profile, ai_name: final });
+                  try {
+                    await api.updateProfile({ ai_name: final });
+                  } catch {}
+                }}
+                placeholder="Coda"
+                placeholderTextColor={theme.muted}
+                style={[styles.input, { paddingVertical: 8, fontSize: 15 }]}
+                maxLength={24}
+                autoCapitalize="words"
+              />
+            </View>
+
+            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8 }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>Tu sei…</Text>
+                <Text style={styles.settingHint}>
+                  Mi serve per parlarti correttamente (es. "sei stanco" / "sei stanca").
+                </Text>
+              </View>
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                {([
+                  { id: "m", label: "Uomo" },
+                  { id: "f", label: "Donna" },
+                  { id: "n", label: "Preferisco neutro" },
+                ] as const).map((opt) => {
+                  const active = (profile?.user_gender || "n") === opt.id;
+                  return (
+                    <TouchableOpacity
+                      key={opt.id}
+                      onPress={async () => {
+                        if (!profile) return;
+                        setProfile({ ...profile, user_gender: opt.id });
+                        try {
+                          await api.updateProfile({ user_gender: opt.id });
+                        } catch {}
+                      }}
+                      style={[
+                        styles.modeBtn,
+                        { paddingHorizontal: 12, paddingVertical: 8 },
+                        active && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
+                      ]}
+                    >
+                      <Text style={[styles.modeBtnText, active && { color: bubbleAccent.color, fontWeight: "700" }]}>
+                        {opt.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
+            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8 }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>{profile?.ai_name || "Coda"} è…</Text>
+                <Text style={styles.settingHint}>
+                  Definisce come si esprime di sé (es. "sono qui per te" maschile o femminile).
+                </Text>
+              </View>
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                {([
+                  { id: "f", label: "Femmina" },
+                  { id: "m", label: "Maschio" },
+                  { id: "n", label: "Neutro" },
+                ] as const).map((opt) => {
+                  const active = (profile?.ai_gender || "f") === opt.id;
+                  return (
+                    <TouchableOpacity
+                      key={opt.id}
+                      onPress={async () => {
+                        if (!profile) return;
+                        setProfile({ ...profile, ai_gender: opt.id });
+                        try {
+                          await api.updateProfile({ ai_gender: opt.id });
+                        } catch {}
+                      }}
+                      style={[
+                        styles.modeBtn,
+                        { paddingHorizontal: 12, paddingVertical: 8 },
+                        active && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
+                      ]}
+                    >
+                      <Text style={[styles.modeBtnText, active && { color: bubbleAccent.color, fontWeight: "700" }]}>
+                        {opt.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
+            <View style={styles.divider} />
+            <Text style={styles.settingsSubtitle}>Comportamento</Text>
 
             <View style={styles.settingRow}>
               <View style={{ flex: 1 }}>

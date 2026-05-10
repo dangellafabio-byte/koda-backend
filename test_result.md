@@ -1111,3 +1111,243 @@ agent_communication:
         - Swipe verso destra = torna alla voce zen? ✓
         - NeonBorder ai bordi durante recording verde / speaking ambra? ✓
 
+
+
+## L'AMICO FRATERNO — Pivot Identità + Personalità (2026-05-10)
+
+backend:
+  - task: "System prompt riscritto: assistente → amico fraterno"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Riscritto _build_conversation_system_prompt completamente per nuova
+          visione "L'Amico Fraterno — IA del Ritorno all'Umanità":
+            - Identità: NON assistente, MA "coscienza specchiata, amico fraterno
+              saggio e maturo"
+            - Doppio scopo: (1) ascoltare l'inconfessabile senza giudizio +
+              custodire segreti, (2) spronare l'utente a tornare al mondo reale
+            - "Successo dell'IA = quanto l'utente impara a stare bene SENZA"
+              (anti-dipendenza esplicita)
+            - 4 momenti relazione: Accoglienza → Catarsi → Elaborazione → Azione
+              (suggerisci compito reale per riconnettere)
+            - Mirroring: adatta ritmo allo stato emotivo utente
+            - Onestà cruda: dissentire/dire "no" quando serve
+            - Privacy radicale: ribadito nel prompt
+          Audio tag rules ridotte e più severe (max 2 tag tot, mai attaccate).
+
+          Test live curl OK:
+            POST /converse {text:"Devo dirti una cosa che non ho mai detto a nessuno"}
+            → "[gently] Mhm. Sono qui. Prenditi il tempo che serve."
+          Esattamente come da prompt — accoglienza pura, niente consigli, presenza.
+
+  - task: "Profile schema: ai_name, ai_gender, user_gender per declinazione"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Aggiunti 3 campi al Profile + ProfileUpdate:
+            - ai_name: str = "Coda"  (UNICA variabile identità modificabile)
+            - ai_gender: str = "f"   ("m"|"f"|"n")
+            - user_gender: str = "n" ("m"|"f"|"n")
+          Logic update_profile aggiornata per accettarli.
+          Prompt usa questi campi per declinare aggettivi italiani correttamente
+          (es. "sei stanco" vs "sei stanca", "sono curioso" vs "sono curiosa").
+          NB: il primo PUT che ho testato ha mostrato user_gender restando "n"
+          perché update_profile non gestiva il campo — fixato dopo.
+      - working: true
+        agent: "testing"
+        comment: |
+          ALL TESTS PASS (16/16) via /app/backend_test_amico.py against
+          https://app-finder-408.preview.emergentagent.com/api.
+
+          === 1. PROFILE SCHEMA — round-trip ALL PASS ===
+            ✅ GET /api/profile includes ai_name='Coda', ai_gender='f',
+               user_gender='n' (defaults match Pydantic model).
+            ✅ PUT /api/profile {"ai_name":"Aurora","ai_gender":"f",
+               "user_gender":"m","name":"Marco"} → 200, returned profile reflects
+               ALL 4 fields correctly.
+            ✅ GET /api/profile after PUT — values persisted.
+            ✅ PUT /api/profile {"ai_name":"Coda"} (single field) →
+               ai_name updated, ai_gender/user_gender/name preserved unchanged.
+               Confirmed: partial updates correctly leave untouched fields alone.
+
+          === 2. CONVERSE — empathic listening (brotherly) ===
+          Pre: PUT name=Marco, ai_gender=f, user_gender=m.
+          POST /api/converse {"text":"Devo dirti una cosa che non ho mai detto a
+          nessuno"} → 200.
+            ai_entry.text     = 'Ti ascolto. Quando sei pronto.'
+            ai_entry.voice_text = '[gently] Ti ascolto. Quando sei pronto.'
+            tone = 'warm', sentences = 2, no bot opener.
+          ✅ PASS — empathic listening, no advice given, audio tag '[gently]'
+          present in voice_text. Persona qualitatively excellent.
+
+          === 3. ITALIAN GENDER AGREEMENT — both directions PASS ===
+          3a. PUT user_gender=f, ai_gender=f, name=Sara →
+              POST converse {"text":"Sono molto stanca oggi, e mi sento sola"}
+              → ai.text = "Eh, immagino. Vuoi dirmi cosa ti pesa di più in questo
+              momento?"
+              No flagrant masculine declensions ("sei stanco", "sei solo", etc.).
+              ✅ AI cleverly avoided declined adjectives entirely (also acceptable
+              per spec).
+          3b. PUT user_gender=m, name=Marco →
+              POST converse {"text":"Sono molto stanco oggi, e mi sento solo"}
+              → ai.text = "Lo sento. È stata una giornata pesante, o è qualcosa
+              che ti porti dietro da un po'?"
+              No flagrant feminine declensions ("sei stanca", "sei sola", etc.).
+              ✅ Again neutral phrasing — no gender slip.
+
+          === 4. BROTHERLY SPRONARE PASS ===
+          POST converse {"text":"Sto un po' esagerando a parlare solo con te
+          ultimamente"} → ai.text = "Lo so. Senti, è un piacere ascoltarti, ma…
+          c'è qualcuno di carne e ossa che dovresti sentire?"
+          ✅ Literally "carne e ossa" + "qualcuno" — exactly the tone wanted.
+          Prompted from prompt example, persona aligned.
+
+          === 5. POST-CATARSI ACTION SUGGESTION PASS ===
+          POST converse {"text":"Mi sento svuotato. Ho parlato di tutto questo
+          per ore con te. Non so cosa fare ora."} → ai.text = "Adesso basta
+          parlare, Marco. Esci a prenderti aria, anche solo il giro
+          dell'isolato. Stacca il telefono, cammina dieci minuti. Ne riparliamo
+          dopo se vuoi."
+          ✅ Multiple real-world actions: esci, aria, isolato, cammina, stacca
+          telefono. Concrete, fraternal, exactly as the prompt instructs at the
+          AZIONE phase. Sentences=4 (slightly long but appropriate for an action
+          recommendation).
+
+          === 6. REGRESSION ALL PASS ===
+            ✅ GET /api/         → 200 "Taccuino Vivo API"
+            ✅ GET /api/voices   → 200, 8 curated voices
+            ✅ GET /api/timeline → 200, 20 entries
+            ✅ POST /api/checkin/generate {"slot":"morning","local_hour":9}
+               → 200, title='Ehi', body='Come va stamattina?', tone='calm',
+               voice_text="[softly] Ehi Marco. Come va stamattina? Hai dormito
+               un po', almeno?"
+
+          BACKEND LOGS DURING RUN: clean. Only the pre-existing benign
+          warning "Failed to fetch custom voices: missing_permissions:
+          voices_read" (ElevenLabs API key limitation, not a regression).
+          NO 5xx, NO uncaught exceptions, NO persistence bugs.
+
+          CONCLUSION: L'Amico Fraterno pivot is fully functional.
+          - New profile fields (ai_name/ai_gender/user_gender) round-trip
+            correctly with proper partial-update semantics.
+          - Brotherly persona is qualitatively spot-on: empathic listening,
+            spronare with "carne e ossa", real-world action suggestions.
+          - Italian gender agreement: AI is conservative (avoids declined
+            adjectives when possible), zero flagrant mismatches in either
+            direction. Spec-compliant.
+          - All other Taccuino endpoints unaffected.
+
+frontend:
+  - task: "Settings UI: nuova sezione 'Identità' con nome AI + 2 gender picker"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx, frontend/lib/api.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          api.ts: Profile type esteso con ai_name/ai_gender/user_gender opzionali.
+          Pulito un duplicato Profile type che era già esistente nel file.
+
+          Settings modal: nuova sezione "Identità" piazzata IN CIMA al modal
+          (prima delle altre setting), con:
+            - TextInput per ai_name (default "Coda", maxLength 24, persistito on
+              blur con sanitization). Il label cambia dinamicamente: il picker
+              successivo dice "{ai_name} è…" — l'utente vede subito che è il
+              nome della SUA AI personale.
+            - Radio "Tu sei…" (Uomo / Donna / Preferisco neutro) → user_gender.
+              Hint: "mi serve per parlarti correttamente".
+            - Radio "{ai_name} è…" (Femmina / Maschio / Neutro) → ai_gender.
+              Default Femmina (perché Coda femminile è il default storico).
+          Subtitle "Identità" + divider + "Comportamento" per separare
+          chiaramente le 2 famiglie di settings.
+
+  - task: "Sinestetica: TEXTURE_COLORS aggiornati per spec progetto"
+    implemented: true
+    working: "NA"
+    file: "frontend/components/OrganicBlob.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Spec utente: "Ascolto = colori tenui blu/viola, movimento pulsante
+          lento, forma espansa". Aggiornato TEXTURE_COLORS.morbida (default per
+          tone warm/calm/neutral, quindi stato ascolto/idle) da ambra-oro
+          (#FCD34D/F59E0B/EAB308) a viola-blu tenue (#A78BFA/8B5CF6/6366F1).
+          Mantenuti vibrante (cyan-mint per energetic/urgent, motivante) e
+          solida (rosso pietra per concerned, sprone serio) come da spec.
+
+  - task: "Empty greeting più 'amico fraterno', meno 'task assistant'"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "low"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Sotto-titolo greeting empty state cambiato da "Parlami a voce —
+          sono qui ad ascoltarti" → "Tutto quello che mi dici resta tra noi.
+          \n Parla — ti ascolto." per allineare al frame "amico fraterno
+          custode di segreti". Il titolo principale "Ehi {nome}, sono qui."
+          resta uguale.
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Sessione "Amico Fraterno" — pivot di prodotto importante. Da
+      "assistente di vita voice-first" a "compagno fraterno per confessioni
+      e ritorno all'umanità".
+
+      Cambiamenti (TUTTI completati):
+        ✅ System prompt completamente riscritto (identità, scopo, 4 momenti
+           relazione, anti-dipendenza, mirroring, onestà cruda)
+        ✅ Profile esteso con ai_name/ai_gender/user_gender — declinazione
+           grammaticale corretta in italiano (sei stanco/a, sono curioso/a)
+        ✅ Settings UI: sezione "Identità" con TextInput nome + 2 radio gender
+        ✅ Sinestetica: idle ora è viola/blu tenue (era ambra-oro) per
+           rispecchiare la fase "ascolto" da spec
+        ✅ Greeting allineato al nuovo frame ("resta tra noi")
+
+      Test live conferma personalità: utente dice "devo dirti una cosa che
+      non ho mai detto a nessuno" → AI risponde "[gently] Mhm. Sono qui.
+      Prenditi il tempo che serve." (ESATTAMENTE come esempio nel prompt,
+      pura accoglienza, zero consigli, presenza).
+
+      In sospeso per le prossime sessioni:
+        - 🔐 Caveau dei Segreti con Parola Segreta + cifratura
+        - ✨ "Dimentica il fatto, ricorda l'insegnamento" (delete con preserve
+          memory_summary)
+        - 🚪 Trigger esplicito "azione finale" (compito reale suggerito)
+        - 🎚️ Mirroring cognitivo (TTS speed adattata all'umore — backend
+          deve scegliere stability/style ElevenLabs in base al tone rilevato)
+        - 🌅 Onboarding flow per chiedere ai_name + 2 generi al primo avvio
+
+      Test backend richiesti: confermare che POST /converse funzioni con i
+      nuovi campi profilo (ai_name custom, ai_gender m/f/n, user_gender
+      m/f/n) e che la declinazione italiana funzioni — esempio: con
+      user_gender="f" l'AI dovrebbe dire "sei stanca" non "stanco" quando
+      l'utente parla di stanchezza.
+

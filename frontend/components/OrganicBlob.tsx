@@ -60,9 +60,10 @@ function textureFromTone(tone: BlobTone | null | undefined): BlobTexture {
 
 // === Color palettes per texture
 const TEXTURE_COLORS: Record<BlobTexture, [string, string, string]> = {
-  morbida: ["#FCD34D", "#F59E0B", "#EAB308"],   // golden warmth (like the ref mockup)
-  vibrante: ["#86EFAC", "#22D3EE", "#06B6D4"],  // electric cyan-mint
-  solida: ["#FCA5A5", "#F87171", "#DC2626"],    // grounded red — pietra calda
+  // Spec "Sinestetica": Ascolto = colori tenui blu/viola
+  morbida: ["#A78BFA", "#8B5CF6", "#6366F1"],   // viola/blu tenue (ascolto)
+  vibrante: ["#86EFAC", "#22D3EE", "#06B6D4"],  // electric cyan-mint (motivante)
+  solida: ["#FCA5A5", "#F87171", "#DC2626"],    // grounded red — pietra calda (sprone serio)
 };
 
 const TONE_COLORS: Record<BlobTone, [string, string, string]> = {
