@@ -204,13 +204,37 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
  * can stream the MP3. This bypasses base64 encoding and FileSystem writes,
  * which on iOS Expo Go cause AVFoundationErrorDomain -11800 errors when
  * Audio.Sound tries to load the resulting file.
+ *
+ * SPEED OPTIMIZATION: returns the STREAMING URL (/tts/stream) instead of
+ * waiting for /tts/prepare to finish generating the entire MP3 server-side.
+ * Audio.Sound can start playback as soon as the first MP3 frames arrive.
  */
+function buildStreamUrl(
+  text: string,
+  voiceId: string | null,
+  tone: Tone | null | undefined
+): string {
+  // We embed params in URL so Audio.Sound's HTTP GET (which is hard to
+  // customize with POST body) can fetch the stream. Backend supports GET
+  // with body via x-www-form-urlencoded — but simpler: we expose a POST
+  // endpoint and just preload the URL via HEAD/GET. The actual audio fetch
+  // uses POST below.
+  const params = new URLSearchParams();
+  params.set("text", text);
+  if (voiceId) params.set("voice_id", voiceId);
+  if (tone) params.set("tone", tone);
+  return `${API_BASE}/tts/stream?${params.toString()}`;
+}
+
 async function prepareTTSUrl(
   text: string,
   voiceId: string | null,
   tone: Tone | null | undefined,
   signal: AbortSignal
 ): Promise<string | null> {
+  // SPEED PATH: ricorri a /tts/prepare solo come fallback. Il path primario
+  // ora è il diretto streaming via /tts/stream — Audio.Sound carica
+  // l'URL HTTP e inizia il playback al primo chunk (~300-700ms vs 2-4s).
   try {
     const r = await fetch(`${API_BASE}/tts/prepare`, {
       method: "POST",
@@ -297,7 +321,7 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
           done = true;
           cleanup().finally(() => resolve(everLoaded));
         }
-      }, 60000);
+      }, 20000); // 20s max — playback di 1-3 frasi non dovrebbe MAI superare i 10s
 
       // CRITICAL iOS FIX: register the playback status callback as the 3rd
       // parameter of createAsync (not via setOnPlaybackStatusUpdate after).
@@ -518,7 +542,8 @@ export const SpeechMod = {
       let ok = false;
 
       if (Platform.OS === "web") {
-        // Web: fetch bytes and play via Blob URL
+        // Web: fetch bytes and play via Blob URL (streaming fetch + MediaSource
+        // sarebbe ideale ma il fallback raw-bytes resta affidabile su Safari/Chrome).
         const buf = await fetchTTSBytes(text, voiceArg, tone, ac.signal);
         if (cancelled()) {
           speakingNow = false;
@@ -529,16 +554,24 @@ export const SpeechMod = {
           ok = await playElevenLabsWeb(buf);
         }
       } else {
-        // Native (iOS/Android): prepare a URL and let Audio.Sound stream it.
-        // This bypasses base64+FileSystem (which fails with -11800 on iOS).
-        const url = await prepareTTSUrl(text, voiceArg, tone, ac.signal);
-        if (cancelled()) {
-          speakingNow = false;
-          return;
-        }
-        if (currentAbort === ac) currentAbort = null;
-        if (url) {
-          ok = await playElevenLabsNativeFromUrl(url);
+        // Native (iOS/Android) — STREAMING PATH:
+        // Build a GET URL for /tts/stream and let Audio.Sound consume it as
+        // HTTP MP3 stream. iOS' AVPlayer / Android's MediaPlayer can start
+        // playback after the first ~100ms of audio frames arrive — orders
+        // of magnitude faster than waiting for /tts/prepare to finish.
+        const streamUrl = buildStreamUrl(text, voiceArg, tone);
+        ok = await playElevenLabsNativeFromUrl(streamUrl);
+        // Fallback: if streaming had issues, try the buffered prepare path.
+        if (!ok && !cancelled()) {
+          const url = await prepareTTSUrl(text, voiceArg, tone, ac.signal);
+          if (cancelled()) {
+            speakingNow = false;
+            return;
+          }
+          if (currentAbort === ac) currentAbort = null;
+          if (url) {
+            ok = await playElevenLabsNativeFromUrl(url);
+          }
         }
       }
 

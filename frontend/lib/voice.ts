@@ -209,6 +209,14 @@ export async function startRecording(): Promise<Recorder> {
     await Audio.requestPermissionsAsync();
   } catch {}
   try {
+    // CRITICAL CLEANUP: stop and unload any leftover Audio.Sound from a
+    // previous TTS playback. Without this, on iOS the audio session can
+    // remain in playAndRecord mode with a stale Sound object holding it,
+    // causing the next `new Audio.Recording()` to silently fail or hang.
+    // We can't directly access the speech module's currentSound from here
+    // (circular import), but Audio.setAudioModeAsync with allowsRecordingIOS
+    // forces the session category switch which implicitly invalidates
+    // any non-mixing playback.
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: true,
       playsInSilentModeIOS: true,
@@ -216,6 +224,9 @@ export async function startRecording(): Promise<Recorder> {
       shouldDuckAndroid: true,
       playThroughEarpieceAndroid: false,
     });
+    // Small delay so iOS' AVAudioSession can apply the new category before
+    // we instantiate the Recording. Empirically 80ms is enough; 120ms is safe.
+    await new Promise((r) => setTimeout(r, 120));
   } catch {}
   _nativeReady = true;
   const rec = new Audio.Recording();

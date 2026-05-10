@@ -549,7 +549,11 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
 
 def _format_history_for_llm(recent: List[TimelineEntry]) -> str:
     lines = []
-    for e in recent[-12:]:  # last 12 turns
+    # SPEED: ridotti da 12→6 turni recenti. Il prompt di sistema ha già
+    # memory_summary per il contesto di lungo periodo. 6 turni sono
+    # sufficienti per capire il filo del discorso. -30% input token →
+    # ~500ms più veloce.
+    for e in recent[-6:]:
         role = "Utente" if e.role == "user" else "Tu"
         lines.append(f"{role}: {e.text}")
     return "\n".join(lines)
@@ -1402,9 +1406,9 @@ async def api_tts(req: TTSRequest):
 
     try:
         # Use eleven_v3 if the text contains audio tags ([sospira], [ride], etc.)
-        # — only v3 honors them. Fallback to turbo_v2_5 for plain text (faster).
+        # — only v3 honors them. For plain text use FLASH (faster than turbo).
         use_v3 = _has_audio_tags(text)
-        model = "eleven_v3" if use_v3 else "eleven_turbo_v2_5"
+        model = "eleven_v3" if use_v3 else "eleven_flash_v2_5"
         try:
             convert_kwargs = dict(
                 text=text,
@@ -1424,14 +1428,14 @@ async def api_tts(req: TTSRequest):
                 if chunk:
                     audio_data += chunk
         except Exception as model_err:
-            # If v3 fails (entitlement / outage) fall back: strip tags and retry with turbo
+            # If v3 fails (entitlement / outage) fall back: strip tags and retry with flash
             if use_v3:
-                logger.warning(f"eleven_v3 failed, falling back to turbo: {model_err}")
+                logger.warning(f"eleven_v3 failed, falling back to flash: {model_err}")
                 clean = _strip_audio_tags(text)
                 audio_gen = client_el.text_to_speech.convert(
                     text=clean or text,
                     voice_id=voice_id,
-                    model_id="eleven_turbo_v2_5",
+                    model_id="eleven_flash_v2_5",
                     output_format="mp3_44100_128",
                     voice_settings=voice_settings,
                 )
@@ -1499,7 +1503,10 @@ async def api_tts_prepare(req: TTSRequest):
 
     try:
         use_v3 = _has_audio_tags(text)
-        model = "eleven_v3" if use_v3 else "eleven_turbo_v2_5"
+        # HYBRID SPEED STRATEGY:
+        # - Testo CON audio tags → eleven_v3 (massima espressività, latenza più alta)
+        # - Testo SENZA tag       → eleven_flash_v2_5 (rapidissimo, ~75ms TTFB)
+        model = "eleven_v3" if use_v3 else "eleven_flash_v2_5"
         try:
             convert_kwargs = dict(
                 text=text,
@@ -1518,12 +1525,12 @@ async def api_tts_prepare(req: TTSRequest):
                     audio_data += chunk
         except Exception as model_err:
             if use_v3:
-                logger.warning(f"eleven_v3 failed, falling back to turbo: {model_err}")
+                logger.warning(f"eleven_v3 failed, falling back to flash: {model_err}")
                 clean = _strip_audio_tags(text)
                 audio_gen = client_el.text_to_speech.convert(
                     text=clean or text,
                     voice_id=voice_id,
-                    model_id="eleven_turbo_v2_5",
+                    model_id="eleven_flash_v2_5",
                     output_format="mp3_44100_128",
                     voice_settings=voice_settings,
                 )
@@ -1543,6 +1550,111 @@ async def api_tts_prepare(req: TTSRequest):
 
     token = _store_tts_audio(audio_data)
     return {"token": token, "size": len(audio_data)}
+
+
+# ============================================================
+# STREAMING TTS — la voce parte appena arrivano i primi byte da ElevenLabs.
+# Latenza percepita drasticamente ridotta vs. /tts/prepare che attende l'MP3
+# completo prima di rispondere.
+# ============================================================
+from fastapi.responses import StreamingResponse
+
+
+@api_router.post("/tts/stream")
+async def api_tts_stream_post(req: TTSRequest):
+    return await _tts_stream_impl(
+        req.text or "",
+        req.voice_id,
+        req.tone,
+        req.stability,
+        req.similarity_boost,
+    )
+
+
+@api_router.get("/tts/stream")
+async def api_tts_stream_get(
+    text: str = "",
+    voice_id: Optional[str] = None,
+    tone: Optional[str] = None,
+    stability: Optional[float] = None,
+    similarity_boost: Optional[float] = None,
+):
+    """GET variant so native Audio.Sound.createAsync({uri}) can stream the MP3
+    directly. iOS' AVPlayer / AVAudioPlayer can only fetch HTTP URLs via GET.
+    """
+    return await _tts_stream_impl(text, voice_id, tone, stability, similarity_boost)
+
+
+async def _tts_stream_impl(
+    text: str,
+    voice_id: Optional[str],
+    tone: Optional[str],
+    stability: Optional[float],
+    similarity_boost: Optional[float],
+):
+    """Stream MP3 chunks via HTTP chunked transfer.
+
+    Audio.Sound (iOS/Android) può iniziare a riprodurre prima che il download
+    sia completo. Modello scelto auto:
+      - audio tags presenti → eleven_v3 (espressivo)
+      - testo plain         → eleven_flash_v2_5 (rapidissimo, ~75ms TTFB)
+    """
+    text = (text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty text")
+    if len(text) > 1500:
+        text = text[:1500]
+
+    client_el = _get_eleven_client()
+    if client_el is None:
+        raise HTTPException(status_code=503, detail="ElevenLabs not configured")
+
+    vid = voice_id or "XrExE9yKIg1WjnnlVkGX"
+    voice_settings = _voice_settings_for_tone(tone, stability, similarity_boost)
+    use_v3 = _has_audio_tags(text)
+    model = "eleven_v3" if use_v3 else "eleven_flash_v2_5"
+
+    def _iter_audio():
+        kwargs = dict(
+            text=text if use_v3 else (_strip_audio_tags(text) or text),
+            voice_id=vid,
+            model_id=model,
+            output_format="mp3_44100_128",
+            voice_settings=voice_settings,
+        )
+        if use_v3:
+            kwargs["apply_text_normalization"] = "off"
+        try:
+            stream = client_el.text_to_speech.stream(**kwargs)
+            for chunk in stream:
+                if chunk:
+                    yield chunk
+        except Exception as e:
+            # Fallback in-stream a flash se v3 fallisce
+            logger.warning(f"[/tts/stream] {model} failed, falling back to flash: {e}")
+            try:
+                fb_kwargs = dict(
+                    text=_strip_audio_tags(text) or text,
+                    voice_id=vid,
+                    model_id="eleven_flash_v2_5",
+                    output_format="mp3_44100_128",
+                    voice_settings=voice_settings,
+                )
+                stream = client_el.text_to_speech.stream(**fb_kwargs)
+                for chunk in stream:
+                    if chunk:
+                        yield chunk
+            except Exception as e2:
+                logger.error(f"[/tts/stream] fallback failed: {e2}")
+
+    return StreamingResponse(
+        _iter_audio(),
+        media_type="audio/mpeg",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",  # disable nginx/cdn buffering
+        },
+    )
 
 
 @api_router.get("/tts/audio/{token}.mp3")

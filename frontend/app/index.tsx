@@ -437,6 +437,35 @@ export default function Taccuino() {
     }, 80);
   }, [timeline.length]);
 
+  // === STATE WATCHDOG ===
+  // Se la macchina a stati rimane in recording/transcribing/thinking/speaking
+  // per più del massimo ragionevole, la ripristiniamo a "idle". Evita
+  // i freeze in cui il microfono "ascolta" all'infinito o il blob resta
+  // grigio in "penso" senza mai sbloccarsi.
+  useEffect(() => {
+    if (status === "idle") return;
+    const max: Record<string, number> = {
+      recording: 45_000,    // 45s di registrazione max
+      transcribing: 20_000, // 20s STT max
+      thinking: 25_000,     // 25s LLM max (con web search)
+      speaking: 60_000,     // 60s playback max
+    };
+    const ms = max[status] || 30_000;
+    const t = setTimeout(() => {
+      console.warn(`[watchdog] status '${status}' stuck for ${ms}ms — forcing reset`);
+      try {
+        SpeechMod.stop();
+      } catch {}
+      try {
+        recRef.current?.stop().catch(() => {});
+      } catch {}
+      recRef.current = null;
+      setStatus("idle");
+      setError("Si è bloccato un attimo, riprova pure.");
+    }, ms);
+    return () => clearTimeout(t);
+  }, [status]);
+
   const speakIfEnabled = useCallback(
     async (text: string, tone: TimelineEntry["tone"]) => {
       if (!profile?.settings.voice_response) {
@@ -609,6 +638,22 @@ export default function Taccuino() {
       // to actually start speaking before barging in.
       if (status !== "speaking") {
         SpeechMod.stop();
+      }
+      // CRITICAL FREEZE FIX: ensure any leftover audio session is fully
+      // released before starting a new recording. Without this, after a
+      // few turns the recording fails to start silently and the blob
+      // appears "stuck listening".
+      if (Platform.OS !== "web" && status !== "speaking") {
+        try {
+          const { Audio } = require("expo-av");
+          // Brief switch to non-recording mode first (forces any leftover
+          // playback session to release), then immediately back to recording.
+          await Audio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+            playsInSilentModeIOS: true,
+          });
+          await new Promise((r) => setTimeout(r, 30));
+        } catch {}
       }
       const rec = await startRecording();
       recRef.current = rec;
