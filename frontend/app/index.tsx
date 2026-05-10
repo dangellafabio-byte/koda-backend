@@ -729,7 +729,19 @@ export default function Taccuino() {
         } catch {}
       }
       if (!res) {
+        // La registrazione non aveva voce reale (sotto soglia / troppo
+        // breve). Non disturbiamo Whisper con audio fittizio; mostriamo un
+        // feedback gentile e in conversation mode riapriamo il mic.
+        setError("Non ti ho sentito bene 👂");
+        setTimeout(() => setError(null), 2500);
         setStatus("idle");
+        if (convActiveRef.current && profile?.settings?.input_mode !== "text") {
+          setTimeout(() => {
+            if (convActiveRef.current && !recRef.current) {
+              startTalkInternal(true).catch(() => {});
+            }
+          }, 600);
+        }
         return;
       }
       const fd = buildFormData(res);

@@ -92,19 +92,20 @@ export async function startRecording(): Promise<Recorder> {
     const startedAt = Date.now();
     let lastVoiceAt = Date.now();
     let everSpoke = false;
-    // Lower threshold for better barge-in sensitivity, especially when AI
-    // TTS is also playing (browser AEC reduces the playback signal coming
-    // back through the mic — but we still need to detect quieter user speech).
-    const SILENCE_DB_THRESHOLD = 0.008;   // very tolerant — picks up quieter speech
-    const SILENCE_TIMEOUT_MS = 2200;      // tolerates natural mid-sentence pauses
+    // Higher threshold = meno falsi positivi su respiri/sussurri/rumore di
+    // tastiera. L'utente deve parlare con voce CHIARA (non sussurrata).
+    const SILENCE_DB_THRESHOLD = 0.025;   // alza la soglia: era 0.008 (troppo sensibile)
+    const SILENCE_TIMEOUT_MS = 1600;      // chiusura turno più rapida
     const MIN_SPEECH_BEFORE_END_MS = 500;
     const MAX_RECORDING_MS = 60000;       // safety: 60s per turn (long thoughts ok)
-    const NO_SPEECH_FALLBACK_MS = 12000;  // if no speech detected at all in 12s,
-                                          // force stop (analyser may be broken)
+    const NO_SPEECH_FALLBACK_MS = 8000;   // se nessuna voce in 8s, chiudi
+    const MIN_CUMULATIVE_VOICE_MS = 500;  // serve almeno 500ms cumulativi di voce
     let speechStartFired = false;
     let silenceFired = false;
     let maxRmsSeen = 0;
     let silencePaused = false;
+    let cumulativeVoiceMs = 0;
+    let lastTickAt = Date.now();
 
     const tickId = setInterval(() => {
       analyser.getByteTimeDomainData(buf);
@@ -116,9 +117,13 @@ export async function startRecording(): Promise<Recorder> {
       }
       const rms = Math.sqrt(sum / buf.length);
       if (rms > maxRmsSeen) maxRmsSeen = rms;
+      const nowT = Date.now();
+      const delta = Math.min(200, nowT - lastTickAt);
+      lastTickAt = nowT;
       if (rms > SILENCE_DB_THRESHOLD) {
-        lastVoiceAt = Date.now();
-        if (Date.now() - startedAt > 150) {
+        cumulativeVoiceMs += delta;
+        lastVoiceAt = nowT;
+        if (nowT - startedAt > 200 && cumulativeVoiceMs >= MIN_CUMULATIVE_VOICE_MS) {
           everSpoke = true;
           if (!speechStartFired && speechStartCb) {
             speechStartFired = true;
@@ -156,6 +161,14 @@ export async function startRecording(): Promise<Recorder> {
             const blob = new Blob(chunks, { type: mime });
             stream.getTracks().forEach((t) => t.stop());
             try { clearInterval(tickId); audioCtx.close().catch(() => {}); } catch {}
+            // GUARDIA: se l'utente non ha mai parlato chiaramente, non
+            // inviamo audio al server (eviterà allucinazioni Whisper su
+            // breath/clic/silenzio).
+            const totalMs = Date.now() - startedAt;
+            if (totalMs < 700 || !everSpoke || cumulativeVoiceMs < MIN_CUMULATIVE_VOICE_MS) {
+              resolve(null);
+              return;
+            }
             resolve({
               blob,
               mime,
@@ -249,16 +262,23 @@ export async function startRecording(): Promise<Recorder> {
 
   // === ADAPTIVE NOISE CALIBRATION ===
   // For the first 800ms we sample ambient noise to set a DYNAMIC voice
-  // threshold = noise_floor (90th percentile) + 12 dB margin.
-  // The 12dB margin means the user's voice (close to mic) MUST be clearly
-  // louder than ambient sources (TV at 1.5m, fan, distant chatter).
-  // - quiet box (-65dB ambient → threshold -53)
-  //   normal room (-50dB ambient → threshold -38)
-  //   TV at 1.5m (-40dB ambient → threshold -28) — only close voice counts
-  //   loud cafe (-30dB ambient → threshold -18)
+  // threshold = noise_floor (90th percentile) + 18 dB margin.
+  // The 18dB margin (was 12) means the user's voice (close to mic) MUST be
+  // CLEARLY louder than ambient sources (TV, fan, distant chatter, breathing).
+  // Plus we ENFORCE a hard floor at -28dB → even in a perfectly silent room
+  // the threshold won't drop below -28dB, so whispers / breath / tiny pops
+  // won't trigger recording.
+  // - quiet box (-65dB ambient → threshold -28 forzato dal floor)
+  //   normal room (-50dB ambient → threshold -32)
+  //   TV at 1.5m (-40dB ambient → threshold -22)
+  //   loud cafe (-30dB ambient → threshold -12)
   const CALIBRATION_MS = 800;
   const noiseSamples: number[] = [];
   let dynamicVoicePresentDb: number | null = null;
+  // Per evitare di chiudere il turno per micro-tagli, conteggiamo solo lo
+  // speech "consistente": almeno 500ms cumulativi di voce sopra soglia.
+  let cumulativeVoiceMs = 0;
+  let lastTickAt = Date.now();
 
   rec.setOnRecordingStatusUpdate((status) => {
     const meter = (status as any).metering;
@@ -277,18 +297,30 @@ export async function startRecording(): Promise<Recorder> {
         const sorted = [...noiseSamples].sort((a, b) => a - b);
         // 90th percentile of samples = ambient floor (catches most TV peaks)
         const idx = Math.max(0, Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9)));
-        const ambient = sorted[idx] ?? -55;
-        // Threshold: ambient + 12 dB margin (was 8). The bigger margin
-        // ensures the user's close-to-mic voice clearly stands out from
-        // ambient sources like TVs at 1.5m, fans, distant chatter.
-        // Clamped to safe range [-55, -20].
-        dynamicVoicePresentDb = Math.max(-55, Math.min(-20, ambient + 12));
+        const ambient = sorted[idx] ?? -45;
+        // Threshold = ambient + 18 dB (was 12), but NEVER below -28 dB.
+        // Il floor -28 garantisce che in stanze silenziose il sistema NON
+        // si attivi su sussurri / respiri / clic. È più stringente, ma
+        // l'utente vuole che parli normalmente, non sussurrando.
+        // Clamped to safe range [-28, -10].
+        dynamicVoicePresentDb = Math.max(-28, Math.min(-10, ambient + 18));
       }
       const VOICE_PRESENT_DB = dynamicVoicePresentDb;
-      // SPEECH_START always 5dB below VOICE_PRESENT (catches first whisper)
-      const SPEECH_START_DB = VOICE_PRESENT_DB - 5;
+      // SPEECH_START sopra VOICE_PRESENT (richiede voce CHIARA per iniziare
+      // a registrare, non più "primo sussurro" che catturava breath / pop).
+      const SPEECH_START_DB = VOICE_PRESENT_DB + 2;
 
-      if (meter > SPEECH_START_DB && elapsed > 250) {
+      // Aggiorna tempo cumulativo di voce sopra soglia. Ci serve per non
+      // accettare un singolo picco rumoroso come "ha parlato" — pretendiamo
+      // almeno 500ms di voce continua (cumulativa) sopra threshold.
+      const now = Date.now();
+      const delta = Math.min(200, now - lastTickAt);
+      lastTickAt = now;
+      if (meter > VOICE_PRESENT_DB) {
+        cumulativeVoiceMs += delta;
+      }
+
+      if (meter > SPEECH_START_DB && elapsed > 250 && cumulativeVoiceMs >= 500) {
         if (!everSpoke) {
           everSpoke = true;
           if (!speechStartFired && speechStartCb) {
@@ -304,9 +336,9 @@ export async function startRecording(): Promise<Recorder> {
       if (
         !silenceFired &&
         ((everSpoke &&
-          Date.now() - lastVoiceAt > 1200 &&
+          Date.now() - lastVoiceAt > 900 &&
           elapsed > 800) ||
-          (!everSpoke && elapsed > 10000) ||
+          (!everSpoke && elapsed > 8000) ||
           elapsed > 45000) &&
         silenceCb
       ) {
@@ -319,6 +351,13 @@ export async function startRecording(): Promise<Recorder> {
     stop: async () => {
       try { await rec.stopAndUnloadAsync(); } catch {}
       const uri = rec.getURI() || undefined;
+      // GUARDIA FINALE: se la registrazione è troppo corta o l'utente non ha
+      // MAI superato la soglia di voce continua, NON inviamo audio fittizio
+      // al server. Ritorniamo null così il chiamante mostra "non ho sentito".
+      const totalMs = Date.now() - startedAt;
+      if (totalMs < 700 || !everSpoke || cumulativeVoiceMs < 500) {
+        return null;
+      }
       return { uri, mime: "audio/m4a", filename: "audio.m4a" };
     },
     cancel: async () => {
