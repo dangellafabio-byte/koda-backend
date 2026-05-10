@@ -135,15 +135,29 @@ export const api = {
     jsonReq<TimelineEntry[]>(`/timeline?limit=${limit}`),
   clearTimeline: () => jsonReq<{ ok: boolean }>("/timeline", { method: "DELETE" }),
 
-  converse: (text: string, audio_duration_ms?: number) =>
+  converse: (text: string, audio_duration_ms?: number, opts?: { ephemeral?: boolean }) =>
     jsonReq<{
       user_entry: TimelineEntry;
       ai_entry: TimelineEntry;
       profile: Profile;
     }>("/converse", {
       method: "POST",
-      body: JSON.stringify({ text, audio_duration_ms }),
+      body: JSON.stringify({
+        text,
+        audio_duration_ms,
+        ephemeral: !!opts?.ephemeral,
+      }),
     }),
+
+  /** "Dimentica il fatto, ricorda l'insegnamento". */
+  ghost: (entry_id: string, preserve_lesson: boolean = true) =>
+    jsonReq<{ ok: boolean; lesson_preserved: boolean; lesson: string | null }>(
+      "/ghost",
+      {
+        method: "POST",
+        body: JSON.stringify({ entry_id, preserve_lesson }),
+      }
+    ),
 
   recap: (period: "today" | "week" = "today") =>
     jsonReq<{ recap: string; period: string }>(`/recap?period=${period}`),

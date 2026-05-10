@@ -18,6 +18,7 @@ import {
   ImageBackground,
   useWindowDimensions,
   Dimensions,
+  Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -112,6 +113,12 @@ export default function Taccuino() {
   const [textInput, setTextInput] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  // === MODALITÀ CONFESSIONALE ===
+  // Quando true, /converse viene chiamato con ephemeral=true: il messaggio
+  // dell'utente E la risposta dell'AI NON vengono salvati su MongoDB, NON
+  // entrano nel memory_summary di lungo periodo, e a fine sessione (chiusura
+  // app o toggle off) spariscono dalla RAM.
+  const [confessionalMode, setConfessionalMode] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recapText, setRecapText] = useState<string | null>(null);
   const [showRecap, setShowRecap] = useState(false);
@@ -489,7 +496,7 @@ export default function Taccuino() {
       setTimeline((prev) => [...prev, optimistic]);
       setStatus("thinking");
       try {
-        const res = await api.converse(txt);
+        const res = await api.converse(txt, undefined, { ephemeral: confessionalMode });
         // Replace optimistic with real, then add AI entry
         setTimeline((prev) => {
           const filtered = prev.filter((e) => e.id !== optimistic.id);
@@ -952,6 +959,35 @@ export default function Taccuino() {
     }
   };
 
+  // === GHOST handler ("Dimentica il fatto, ricorda l'insegnamento")
+  // Long-press su una bolla → conferma → POST /api/ghost.
+  // Il backend cancella l'entry dal DB, e (se è user message significativo)
+  // estrae 1 frase di insegnamento da Claude per fonderla nel memory_summary.
+  // Localmente rimuoviamo subito la bolla per feedback istantaneo, e
+  // ricarichiamo il profilo se è arrivato un nuovo lesson nel memory_summary.
+  const ghostMessage = useCallback(async (entry: TimelineEntry) => {
+    if (!entry?.id) return;
+    // Optimistic UI: rimuovi subito la bolla
+    setTimeline((prev) => prev.filter((e) => e.id !== entry.id));
+    try {
+      const res = await api.ghost(entry.id, true);
+      // Se è stato preservato un insegnamento, ricarica il profilo per
+      // sincronizzare il memory_summary (e mostrare confidence aggiornata).
+      if (res?.lesson_preserved && profile?.id) {
+        try {
+          const fresh = await api.getProfile();
+          setProfile(fresh);
+        } catch {}
+      }
+    } catch (e) {
+      // Rollback se il delete fallisce: ricarica timeline
+      try {
+        const tl = await api.getTimeline(200);
+        setTimeline(tl);
+      } catch {}
+    }
+  }, [profile?.id]);
+
   /**
    * Tap-on-voice-card handler: select the voice AND immediately play a short
    * preview using that voice. One gesture, no separate play button.
@@ -1089,7 +1125,37 @@ export default function Taccuino() {
         >
           <Ionicons name="settings-outline" size={22} color="#FFFFFF" />
         </TouchableOpacity>
-        <View style={styles.headerCenter} pointerEvents="none" />
+        <View style={styles.headerCenter} pointerEvents="box-none">
+          {/* === Lucchetto Confessionale ===
+              Toggle one-tap nel cuore dell'header. Quando attivo:
+                - blob si scurisce (forma nucleica dark)
+                - i messaggi NON vengono salvati su DB
+                - la memoria di lungo periodo NON viene aggiornata
+                - a sessione chiusa tutto svanisce dalla RAM */}
+          <TouchableOpacity
+            style={[
+              styles.confessionalToggle,
+              confessionalMode && styles.confessionalToggleOn,
+            ]}
+            onPress={() => setConfessionalMode((m) => !m)}
+            hitSlop={10}
+            testID="confessional-toggle"
+          >
+            <Ionicons
+              name={confessionalMode ? "lock-closed" : "lock-open-outline"}
+              size={16}
+              color={confessionalMode ? "#FCA5A5" : "#FFFFFFCC"}
+            />
+            <Text
+              style={[
+                styles.confessionalToggleText,
+                confessionalMode && { color: "#FCA5A5" },
+              ]}
+            >
+              {confessionalMode ? "Confessionale" : "Confessionale"}
+            </Text>
+          </TouchableOpacity>
+        </View>
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={askRecap}
@@ -1150,10 +1216,10 @@ export default function Taccuino() {
                   meterThreshold={meterThreshold}
                   tone={lastAiTone}
                   size={Math.min(windowWidth * 0.78, 360)}
-                  avatarUri={(profile?.settings as any)?.ai_avatar || null}
-                  palette={ambient.palette}
-                  warmth={ambient.warmth}
+                  palette={confessionalMode ? ["#1F2937", "#374151", "#0B0B0F"] : ambient.palette}
+                  warmth={confessionalMode ? 0 : ambient.warmth}
                   dim={ambient.dim}
+                  texture={confessionalMode ? "solida" : null}
                 />
               </Animated.View>
               {(status === "transcribing" || status === "thinking") && (
@@ -1222,6 +1288,7 @@ export default function Taccuino() {
                 key={it.entry.id}
                 entry={it.entry}
                 onReplay={replayMessage}
+                onGhost={ghostMessage}
                 aiAvatar={(profile?.settings as any)?.ai_avatar || null}
                 bubbleAccent={bubbleAccent}
                 bubbleStyle={bubbleStyle}
@@ -1335,9 +1402,10 @@ export default function Taccuino() {
                   meterThreshold={meterThreshold}
                   tone={lastAiTone}
                   size={210}
-                  palette={ambient.palette}
-                  warmth={ambient.warmth}
+                  palette={confessionalMode ? ["#1F2937", "#374151", "#0B0B0F"] : ambient.palette}
+                  warmth={confessionalMode ? 0 : ambient.warmth}
                   dim={ambient.dim}
+                  texture={confessionalMode ? "solida" : null}
                 />
               </Animated.View>
               {(status === "transcribing" || status === "thinking") && (
@@ -1794,42 +1862,12 @@ export default function Taccuino() {
 
             <Text style={styles.settingsSubtitle}>Aspetto chat</Text>
             <Text style={styles.settingsHint}>
-              Personalizza l'avatar dell'assistente e il colore delle bolle.
+              Personalizza il colore delle bolle e la dimensione del testo.
             </Text>
 
-            {/* AI Avatar */}
-            <View style={styles.avatarRow}>
-              <TouchableOpacity onPress={pickAiAvatar} style={styles.avatarPickBtn}>
-                {(profile?.settings as any)?.ai_avatar ? (
-                  <Image
-                    source={{ uri: (profile?.settings as any).ai_avatar }}
-                    style={styles.avatarPickImg}
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <View style={[styles.avatarPickImg, { alignItems: "center", justifyContent: "center", backgroundColor: bubbleAccent.color + "30" }]}>
-                    <Ionicons name="person-circle-outline" size={42} color={bubbleAccent.color} />
-                  </View>
-                )}
-                <View style={styles.avatarEditBadge}>
-                  <Ionicons name="camera" size={14} color="#fff" />
-                </View>
-              </TouchableOpacity>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingsHint}>
-                  {(profile?.settings as any)?.ai_avatar
-                    ? "Avatar personalizzato"
-                    : "Tocca per scegliere una foto"}
-                </Text>
-                {(profile?.settings as any)?.ai_avatar ? (
-                  <TouchableOpacity onPress={removeAiAvatar}>
-                    <Text style={[styles.settingsHint, { color: theme.danger, marginTop: 4 }]}>
-                      Rimuovi avatar
-                    </Text>
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-            </View>
+            {/* AI Avatar — RIMOSSO per richiesta esplicita utente.
+                L'identità visiva è SOLO la macchia organica. Niente foto,
+                niente personalizzazioni che distraggano dalla presenza. */}
 
             {/* Text size selector — 4 levels for accessibility */}
             <Text style={[styles.settingsHint, { marginTop: 14 }]}>Dimensione testo</Text>
@@ -2189,6 +2227,21 @@ export default function Taccuino() {
             <Text style={styles.dangerHint}>
               Reset completo: profilo, taccuino e ogni ricordo.
             </Text>
+
+            {/* === PROMESSA DI FERRO ===
+                Una clausola tecnica chiara visibile in app — non marketing.
+                Spiega esattamente cosa succede quando confessi, quando ghosti,
+                e quando spegni la modalità Confessionale. */}
+            <View style={styles.divider} />
+            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>🛡️ Promessa di Ferro</Text>
+            <View style={styles.promessaBox}>
+              <Text style={styles.promessaText}>
+                Quello che mi dici è una scatola nera emotiva. La tua voce è un soffio nel vento: io la sento, la custodisco, ma nessuno potrà mai catturarla.{"\n"}{"\n"}
+                <Text style={{ fontWeight: "700" }}>🔓 Modalità normale:</Text> i nostri scambi sono salvati in modo cifrato, usati SOLO per farmi crescere come tuo amico. Mai per addestrare modelli di terzi.{"\n"}{"\n"}
+                <Text style={{ fontWeight: "700" }}>🔒 Modalità Confessionale:</Text> niente viene salvato. Né messaggi, né memoria di lungo periodo. A sessione chiusa, tutto svanisce.{"\n"}{"\n"}
+                <Text style={{ fontWeight: "700" }}>👻 Pulsante Ghost (tieni premuto un messaggio):</Text> dimentico il fatto, ma trattengo l'insegnamento. Il dato grezzo viene cancellato dal server.
+              </Text>
+            </View>
             </ScrollView>
           </View>
         </View>
@@ -2413,6 +2466,7 @@ function MiniOrb({ color = "#7C3AED" }: { color?: string }) {
 function Bubble({
   entry,
   onReplay,
+  onGhost,
   aiAvatar,
   bubbleAccent,
   bubbleStyle,
@@ -2422,6 +2476,8 @@ function Bubble({
 }: {
   entry: TimelineEntry;
   onReplay?: (e: TimelineEntry) => void;
+  /** Long-press handler for "Ghost" / "Dimentica questo". */
+  onGhost?: (e: TimelineEntry) => void;
   aiAvatar?: string | null;
   bubbleAccent: { color: string; soft: string };
   bubbleStyle: "glass" | "solid";
@@ -2470,8 +2526,33 @@ function Bubble({
 
   const wrapperPress = (cb: () => void) => ({
     onPress: cb,
-    onLongPress: () => setShowTime((s) => !s),
-    delayLongPress: 250,
+    onLongPress: () => {
+      // === Long-press → menu Ghost (Dimentica) o orario.
+      //     Su tutte le entry permettiamo di "ghostare" il fatto: viene
+      //     cancellato dal server e l'insegnamento viene preservato in
+      //     memory_summary (vedi POST /api/ghost). Sull'AI consente di
+      //     cancellare la sua risposta (utile per riformulare).
+      if (onGhost) {
+        Alert.alert(
+          isUser ? "Questo messaggio" : "Risposta di Coda",
+          isUser
+            ? "Vuoi che dimentichi questo fatto? Cancellerò il messaggio dal server. Se ha valore, terrò solo l'insegnamento nella memoria."
+            : "Vuoi cancellare questa risposta?",
+          [
+            { text: "Mostra orario", onPress: () => setShowTime((s) => !s) },
+            {
+              text: "Dimentica",
+              style: "destructive",
+              onPress: () => onGhost(entry),
+            },
+            { text: "Annulla", style: "cancel" },
+          ]
+        );
+      } else {
+        setShowTime((s) => !s);
+      }
+    },
+    delayLongPress: 350,
   });
 
   return (
@@ -2581,6 +2662,28 @@ const makeStyles = (t: any) => StyleSheet.create({
     zIndex: 10,
   },
   headerCenter: { flex: 1, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
+  // === Toggle Confessionale (lucchetto al centro dell'header) ===
+  confessionalToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.15)",
+  },
+  confessionalToggleOn: {
+    backgroundColor: "rgba(60,0,0,0.5)",
+    borderColor: "#FCA5A5",
+  },
+  confessionalToggleText: {
+    color: "#FFFFFFCC",
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.3,
+  },
   dot: { width: 8, height: 8, borderRadius: 999, backgroundColor: t.success },
   headerTitle: {
     color: "#FFFFFF",
@@ -3047,6 +3150,21 @@ const makeStyles = (t: any) => StyleSheet.create({
     fontSize: 11,
     textAlign: "center",
     marginTop: 6,
+  },
+  // === Promessa di Ferro: clausola di privacy in app ===
+  promessaBox: {
+    backgroundColor: "rgba(15, 23, 42, 0.45)",
+    borderRadius: 14,
+    padding: 14,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: "rgba(252,165,165,0.25)",
+  },
+  promessaText: {
+    color: t.primaryText,
+    fontSize: 13,
+    lineHeight: 19,
+    opacity: 0.92,
   },
 
   toggle: {

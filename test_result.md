@@ -1351,3 +1351,307 @@ agent_communication:
       user_gender="f" l'AI dovrebbe dire "sei stanca" non "stanco" quando
       l'utente parla di stanchezza.
 
+
+
+## SCATOLA NERA EMOTIVA — Confessionale + Ghost + Promessa di Ferro (2026-05-10 pm)
+
+backend:
+  - task: "ConverseRequest.ephemeral: messaggi confessionali NON salvati"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          ConverseRequest esteso con `ephemeral: bool = False`. Quando true:
+          - user_entry NON inserito su MongoDB
+          - ai_entry NON inserito
+          - profile.total_messages NON incrementato (confidence non sale sui segreti)
+          - memory_summary NON aggiornato
+          - profile NON salvato
+          La risposta ConverseResponse contiene comunque user_entry+ai_entry per
+          il render in RAM client. A sessione chiusa svaniscono.
+          Test live curl: POST /converse {ephemeral:true} → 200, conversazione
+          riuscita ("Mhm. Sono qui. Prenditi il tempo."), poi GET /timeline
+          → 0 nuove entry (preservate solo le precedenti non-ephemeral).
+
+  - task: "POST /api/ghost: 'Dimentica il fatto, ricorda l'insegnamento'"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Nuovo endpoint POST /api/ghost {entry_id, preserve_lesson:true}.
+          Logica:
+            1. Trova l'entry → 404 se non esiste
+            2. Se preserve_lesson e LLM key disponibile: chiama Claude con
+               prompt focalizzato per estrarre UNA frase di insegnamento
+               (max 120 char) SENZA ripetere il fatto specifico.
+            3. Cancella l'entry da DB (delete_one)
+            4. Se ottenuto un lesson valido: append al memory_summary del
+               profile (con stesso pattern \"\\n- {lesson}\") + truncate
+               4000 char + save_profile
+          Risposta: {ok, lesson_preserved, lesson}.
+
+          Test live curl con confessione \"Ho mentito a mia madre, mi sento in colpa\":
+          → ghost ritorna {ok:true, lesson_preserved:true,
+            lesson:\"Prova disagio nel mentire alle figure genitoriali e
+            tende a portare sensi di colpa per periodi prolungati\"}.
+          ESATTAMENTE come da spec utente: il fatto specifico sparisce,
+          il pattern emotivo resta nel memory_summary.
+
+frontend:
+  - task: "Avatar UI rimosso da Settings — solo macchia, nessuna foto"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Rimosso interamente il blocco UI di upload avatar (avatarRow,
+          avatarPickBtn, avatarPickImg, avatarEditBadge) dalla sezione
+          'Aspetto chat'. Anche aiAvatar prop tolto dalle 2 invocazioni
+          OrganicBlob in voice mode + reading mode. Settings hint
+          aggiornato a 'Personalizza il colore delle bolle e la dimensione
+          del testo'. Identità visiva = SOLO la macchia.
+
+  - task: "Toggle '🔒 Confessionale' nell'header centrale"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Aggiunto state confessionalMode + toggle pillola al centro
+          dell'header tra ⚙ e 📋. Quando attivo:
+          - Background pillola rosso scuro (rgba(60,0,0,0.5))
+          - Bordo #FCA5A5
+          - Icon: lock-closed
+          - Text color: #FCA5A5
+          OrganicBlob in entrambe le pagine (voice 360px + reading 210px)
+          riceve override quando confessionalMode:
+          - palette = ['#1F2937','#374151','#0B0B0F'] (forma nucleica scura)
+          - warmth = 0 (niente halo caldo)
+          - texture = 'solida' (forma più stabile, contorno definito)
+          api.converse() chiamato con {ephemeral: confessionalMode}.
+          Verifica visiva: screenshot ON = blob nero+nucleus bianco,
+          OFF = blob ambra warm. Spec Sinestetica rispettata.
+
+  - task: "Ghost button: long-press bolla → 'Dimentica' con preserve lesson"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx, frontend/lib/api.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          api.ts: nuova funzione api.ghost(entry_id, preserve_lesson=true).
+          index.tsx:
+            - ghostMessage callback: optimistic UI rimuove la bolla, poi
+              chiama api.ghost; se lesson_preserved ricarica il profilo per
+              sync memory_summary; rollback ricarica timeline se delete fallisce.
+            - Bubble props estesi con onGhost callback opzionale.
+            - wrapperPress.onLongPress aggiornato per mostrare
+              Alert.alert con 3 opzioni: 'Mostra orario', 'Dimentica' (destructive),
+              'Annulla'. Testo personalizzato: 'Vuoi che dimentichi questo
+              fatto? Cancellerò il messaggio dal server. Se ha valore,
+              terrò solo l'insegnamento nella memoria.'
+            - Bubble call site passa onGhost={ghostMessage}.
+          Import Alert aggiunto da react-native.
+
+  - task: "Promessa di Ferro: clausola privacy in app (Settings)"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Nuova sezione finale del modal Impostazioni (sotto 'Distruggi tutto'):
+          subtitle '🛡️ Promessa di Ferro' + box (sfondo dark blu, bordo rosa
+          chiaro tenue) con 4 paragrafi:
+            - Frase manifesto: 'La tua voce è un soffio nel vento: io la
+              sento, la custodisco, ma nessuno potrà mai catturarla.'
+            - 🔓 Modalità normale: cifrato server-side, no training terzi
+            - 🔒 Modalità Confessionale: niente salvato, svanisce a chiusura
+            - 👻 Pulsante Ghost: dimentico fatto, trattengo insegnamento
+          Stili: promessaBox + promessaText.
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Sessione 'Scatola Nera Emotiva'. Implementati i 5 punti dell'opzione D
+      (ibrido cloud + scatola nera) decisi con l'utente:
+
+      1. ✅ Avatar UI rimosso — solo macchia
+      2. ✅ Modalità Confessionale (toggle header) — ephemeral end-to-end:
+         backend salta tutti i save, blob diventa nero nucleare
+      3. ✅ Ghost button (long-press bolla) — cancella fatto, preserva
+         insegnamento via Claude
+      4. ✅ Promessa di Ferro visibile in Settings — clausola tecnica chiara
+      5. ✅ 'Distruggi tutto' (api.clearTimeline) era già esistente ed è
+         visibile nelle Settings
+
+      Test backend live curl tutti OK:
+        - /converse {ephemeral:true} → 200, niente in DB
+        - /ghost → 200, lesson estratto correttamente: 'Prova disagio
+          nel mentire alle figure genitoriali...'
+
+      Test frontend visivo: Confessionale ON = blob nero+spark bianco
+      (forma nucleica spec Sinestetica), Confessionale OFF = blob ambra warm.
+
+      Test richiesti backend agent: confermare /converse?ephemeral=true
+      non scrive in MongoDB e profile.total_messages non aumenta;
+      /ghost cancella entry e popola memory_summary correttamente;
+      retro-compatibilità (ephemeral mancante = false default).
+
+      In sospeso prossima sessione (Sessione B):
+        - 🔐 Zero-Knowledge Encryption con Parola Segreta + libsodium
+        - 🌐 Web search Claude tool integration (l'utente ha chiesto ricerca
+          immediata sul web come parte del 'meglio dei due mondi')
+
+
+
+## SCATOLA NERA EMOTIVA — Backend testing (2026-05-10, testing agent)
+
+backend:
+  - task: "Ephemeral mode + Ghost endpoint (Scatola Nera Emotiva)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          ALL 24/24 backend tests PASS via /app/backend_test_scatola.py against
+          https://app-finder-408.preview.emergentagent.com/api.
+
+          === 1. EPHEMERAL MODE — leaves NO trace ===
+            ✅ POST /api/converse {"text":"Una confessione segreta...","ephemeral":true}
+               → 200, returns user_entry+ai_entry+profile. AI reply: "Mhm. Sono qui.
+               Prenditi il tempo che ti serve."
+            ✅ profile.total_messages in response = baseline (184 → 184, NO increment)
+            ✅ profile.memory_summary in response unchanged (4000 chars, byte-identical)
+            ✅ GET /api/timeline count UNCHANGED (31 → 31). Both user_entry.id and
+               ai_entry.id from the ephemeral response are absent from the timeline.
+            ✅ GET /api/profile (fresh fetch) — total_messages=184, memory_summary
+               byte-identical to baseline. ZERO leak into persistent storage.
+
+          === 2. NON-EPHEMERAL still persists (regression) ===
+            ✅ POST /api/converse {"text":"Questo invece resta nel taccuino"} (no
+               ephemeral field) → 200.
+            ✅ Timeline count increased by exactly 2 (31 → 33).
+            ✅ profile.total_messages incremented by exactly 1 (184 → 185).
+            Default ephemeral=false works correctly.
+
+          === 3. GHOST — happy path (preserve_lesson=true) ===
+            Seeded: POST /api/converse {"text":"Ho rubato 20 euro a mio fratello
+            quando ero piccolo"} → user_entry.id captured.
+            ✅ POST /api/ghost {"entry_id":"<id>","preserve_lesson":true} → 200,
+               body = {"ok":true,"lesson_preserved":true,
+                       "lesson":"Può commettere piccoli torti in famiglia spinto da
+                       impulsi momentanei o bisogni non espressi."}
+            ✅ Extracted lesson is a clean 1-sentence pattern (NOT a verbatim
+               repeat of the fact) — exactly per spec.
+            ✅ Ghosted entry id is GONE from GET /api/timeline.
+            ✅ GET /api/profile.memory_summary now ENDS with the extracted lesson:
+               "...— Può commettere piccoli torti in famiglia spinto da impulsi
+               momentanei o bisogni non espressi."
+               Lesson appended with proper "\n- " separator.
+
+          === 4. GHOST — preserve_lesson=false ===
+            ✅ POST /api/ghost {"entry_id":"<id>","preserve_lesson":false} → 200,
+               body = {"ok":true,"lesson_preserved":false,"lesson":null}.
+            ✅ Entry GONE from timeline.
+            ✅ memory_summary BYTE-IDENTICAL to baseline (no LLM call made).
+
+          === 5. GHOST — error handling ===
+            ✅ Unknown entry_id "non-esiste-12345" → 404 {"detail":"Entry non trovata"}.
+            ✅ Empty body {} → 422 Pydantic validation error
+               (msg="Field required", loc=["body","entry_id"]).
+
+          === 6. PROFILE schema regression ===
+            ✅ GET /api/profile returns ai_name="Coda", ai_gender="f",
+               user_gender="m" (preserved from prior session).
+            ✅ PUT /api/profile {"ai_name":"Aurora","ai_gender":"f",
+               "user_gender":"m"} → 200, all 3 fields reflected in response.
+            ✅ GET /api/profile after PUT — values persisted.
+
+          === 7. Light regression on other endpoints ===
+            ✅ GET /api/                                   → 200 "Taccuino Vivo API"
+            ✅ GET /api/voices                             → 200, 8 curated voices, enabled=true
+            ✅ POST /api/checkin/generate {slot:morning, local_hour:9}
+               → 200 {title:"Ehi", body, voice_text:"[softly] Ehi Marco, buongiorno.
+                 Come ti svegli stamattina? Dopo ieri sera, come stai?", tone:"warm",
+                 slot:"morning"}
+
+          BACKEND LOGS DURING RUN: clean. Two LiteLLM Claude calls succeeded
+          (one for the ghost lesson extraction, one for non-ephemeral converse).
+          NO 5xx errors. NO uncaught exceptions. Only pre-existing benign
+          ElevenLabs voices_read 401 warning (unrelated, known).
+
+          QUALITATIVE NOTES:
+          - Ephemeral mode is implemented EXACTLY as spec: even though the LLM
+            still receives the recent timeline as context (for reply quality),
+            the new confession is never persisted, so it cannot bleed into
+            future conversations. counters and memory frozen in ephemeral.
+          - Ghost lesson extraction by Claude is excellent — produces a
+            generalised pattern statement, not a re-statement of the fact.
+            Properly truncated at 200 chars, properly merged via "\n- "
+            separator into memory_summary, no leakage of raw text.
+
+          CONCLUSION: Scatola Nera Emotiva backend is fully functional and
+          spec-compliant. Privacy guarantees verified end-to-end.
+
+agent_communication:
+  - agent: "testing"
+    message: |
+      ✅ Scatola Nera Emotiva backend: 24/24 PASS.
+
+      EPHEMERAL: zero-leak verified end-to-end. Timeline count, total_messages,
+      memory_summary all byte-identical before/after an ephemeral converse.
+      The user_entry.id/ai_entry.id returned in the response do NOT exist
+      in the timeline collection.
+
+      GHOST happy path: Claude returns a proper lesson sentence. Sample
+      observed: input "Ho rubato 20 euro a mio fratello quando ero piccolo"
+      → lesson "Può commettere piccoli torti in famiglia spinto da impulsi
+      momentanei o bisogni non espressi." (94 chars, generalised pattern,
+      no verbatim repetition of the fact). Lesson is appended to
+      memory_summary with proper "\n- " separator and the raw entry is
+      deleted from timeline.
+
+      GHOST preserve_lesson=false: entry deleted, memory_summary BYTE-
+      identical, no LLM call made. Correct skip-path.
+
+      ERROR cases: 404 on unknown id, 422 on missing entry_id field.
+
+      Profile + regression endpoints all green.
+
+      No issues found. Test artifact: /app/backend_test_scatola.py.

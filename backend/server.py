@@ -302,12 +302,26 @@ class TimelineEntry(BaseModel):
 class ConverseRequest(BaseModel):
     text: str
     audio_duration_ms: Optional[int] = None
+    # === MODALITÀ CONFESSIONALE ===
+    # Quando True: NON viene salvato in DB persistente, NON incluso nel
+    # memory_summary, NON incluso negli ultimi messaggi del prompt. Vive
+    # solo nella risposta corrente (e in RAM client). Per inconfessabili.
+    ephemeral: bool = False
 
 
 class ConverseResponse(BaseModel):
     user_entry: TimelineEntry
     ai_entry: TimelineEntry
     profile: Profile
+
+
+class GhostRequest(BaseModel):
+    """'Dimentica il fatto, ricorda l'insegnamento'.
+    Cancella DEFINITIVAMENTE un'entry dalla timeline; opzionalmente chiede
+    a Claude di estrarre l'insegnamento e fonderlo nel memory_summary
+    prima di cancellare il dato grezzo."""
+    entry_id: str
+    preserve_lesson: bool = True
 
 
 # Helpers
@@ -600,11 +614,16 @@ async def api_converse(req: ConverseRequest):
         await db.taccuino_timeline.insert_one(ai_entry.model_dump())
         return ConverseResponse(user_entry=user_entry, ai_entry=ai_entry, profile=profile)
 
-    # Save user message immediately
+    # Save user message immediately — UNLESS in EPHEMERAL/Confessionale mode.
+    # In confessionale: niente DB, niente memoria di lungo periodo, l'entry
+    # vive solo nel response e nello state RAM del client.
     user_entry = TimelineEntry(role="user", text=text, audio_duration_ms=req.audio_duration_ms)
-    await db.taccuino_timeline.insert_one(user_entry.model_dump())
+    if not req.ephemeral:
+        await db.taccuino_timeline.insert_one(user_entry.model_dump())
 
-    # Load recent context
+    # Load recent context — anche in ephemeral usiamo il context recente per
+    # la qualità della risposta, ma la NUOVA confessione non finirà nel
+    # contesto futuro perché non viene salvata.
     recent_docs = await db.taccuino_timeline.find({}, {"_id": 0}).sort("timestamp", -1).to_list(20)
     recent_docs.reverse()
     recent = [TimelineEntry(**d) for d in recent_docs]
@@ -668,21 +687,81 @@ async def api_converse(req: ConverseRequest):
         extracted=extracted_obj,
         actions=parsed_actions,
     )
-    await db.taccuino_timeline.insert_one(ai_entry.model_dump())
+    if not req.ephemeral:
+        await db.taccuino_timeline.insert_one(ai_entry.model_dump())
 
-    # Update profile counters & memory
-    profile.total_messages += 1
-    profile.confidence_level = min(100, profile.confidence_level + 1)
-    if memory_update and memory_update.lower() not in {"null", "none", ""}:
+    # Update profile counters & memory ONLY in normal mode.
+    # In ephemeral/Confessionale: niente memory_summary update — il fatto
+    # è una confessione che non lascia traccia. Il counter total_messages
+    # comunque non si aggiorna così la confidence non cresce sui segreti.
+    if not req.ephemeral:
+        profile.total_messages += 1
+        profile.confidence_level = min(100, profile.confidence_level + 1)
+        if memory_update and memory_update.lower() not in {"null", "none", ""}:
+            sep = "\n- " if profile.memory_summary else "- "
+            new_mem = (profile.memory_summary or "") + sep + memory_update
+            # Truncate to keep it reasonable
+            if len(new_mem) > 4000:
+                new_mem = new_mem[-4000:]
+            profile.memory_summary = new_mem
+        profile = await save_profile(profile)
+
+    return ConverseResponse(user_entry=user_entry, ai_entry=ai_entry, profile=profile)
+
+
+# ============================================================
+# GHOST — "Dimentica il fatto, ricorda l'insegnamento"
+# Cancella DEFINITIVAMENTE un fatto specifico, opzionalmente preservando
+# l'insegnamento estratto da Claude nel memory_summary.
+# ============================================================
+@api_router.post("/ghost")
+async def api_ghost(req: GhostRequest):
+    """Cancella un'entry e (opzionalmente) preserva l'insegnamento."""
+    # Trova l'entry da cancellare
+    target = await db.taccuino_timeline.find_one({"id": req.entry_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="Entry non trovata")
+
+    # Estrai eventualmente l'insegnamento prima di cancellare
+    lesson = None
+    if req.preserve_lesson and EMERGENT_LLM_KEY:
+        try:
+            entry = TimelineEntry(**target)
+            sys = (
+                "Dato un evento/confessione dell'utente, estrai in UNA SOLA FRASE "
+                "(max 120 caratteri) l'INSEGNAMENTO o il pattern emotivo da preservare "
+                "nella memoria a lungo termine, SENZA ripetere il fatto specifico. "
+                "Esempio: input 'Ho mentito a mia madre sulla relazione' → output "
+                "'Tende a evitare lo scontro con la madre quando si tratta di scelte "
+                "intime'. Rispondi SOLO con la frase, niente prefissi tipo 'Insegnamento:'. "
+                "Se non c'è nulla di significativo da imparare, rispondi NULL."
+            )
+            chat = LlmChat(
+                api_key=EMERGENT_LLM_KEY,
+                session_id=str(uuid.uuid4()),
+                system_message=sys,
+            ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+            raw = await chat.send_message(UserMessage(text=entry.text[:1500]))
+            cand = (raw or "").strip().strip('"').strip()
+            if cand and cand.upper() not in {"NULL", "NONE"}:
+                lesson = cand[:200]
+        except Exception as e:
+            logger.warning(f"ghost lesson extraction failed: {e}")
+
+    # Cancella l'entry
+    await db.taccuino_timeline.delete_one({"id": req.entry_id})
+
+    # Se abbiamo un insegnamento, fondilo nel memory_summary
+    if lesson:
+        profile = await get_or_create_profile()
         sep = "\n- " if profile.memory_summary else "- "
-        new_mem = (profile.memory_summary or "") + sep + memory_update
-        # Truncate to keep it reasonable
+        new_mem = (profile.memory_summary or "") + sep + lesson
         if len(new_mem) > 4000:
             new_mem = new_mem[-4000:]
         profile.memory_summary = new_mem
-    profile = await save_profile(profile)
+        await save_profile(profile)
 
-    return ConverseResponse(user_entry=user_entry, ai_entry=ai_entry, profile=profile)
+    return {"ok": True, "lesson_preserved": bool(lesson), "lesson": lesson}
 
 
 @api_router.get("/recap")
