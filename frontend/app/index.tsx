@@ -44,6 +44,7 @@ import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
 import OrganicBlob from "../components/OrganicBlob";
 import NeonBorder from "../components/NeonBorder";
+import RadialGlow from "../components/RadialGlow";
 import SealSetupModal from "../components/SealSetupModal";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
 import { useFonts, Caveat_400Regular, Caveat_500Medium } from "@expo-google-fonts/caveat";
@@ -627,10 +628,99 @@ export default function Taccuino() {
     [speakIfEnabled, runActions, confessionalMode, hasSeal, profile]
   );
 
+  // === CODA CONSAPEVOLE ===
+  // Rileva trascrizioni vuote/sospette/allucinazioni di Whisper e fa parlare
+  // Coda con frasi varie invece di stallare silenziosamente.
+  const emptyTurnsRef = useRef(0); // n. vuoti consecutivi nel loop conversazione
+  const lastAwarenessIdx = useRef(-1);
+
+  // Frasi varie per "non ho sentito" — ruotiamo per non sembrare un bot
+  const awarenessLinesNoAudio = [
+    "[gently] Scusa, non ti ho sentito bene. Puoi ripetere?",
+    "[softly] Eh, non ho capito — c'è un po' di rumore qui?",
+    "[warmly] Aspetta, riprova — non sono riuscita a sentirti.",
+    "[thoughtful] Mmh, ho sentito solo silenzio. Dimmi pure.",
+    "[gently] Ti sento appena. Avvicinati o riprova quando puoi.",
+  ];
+  const awarenessLinesGarbled = [
+    "[thoughtful] Ho sentito qualcosa ma non chiaro — puoi ripetere?",
+    "[gently] Mi sembra che ci sia rumore. Riprova quando puoi.",
+    "[softly] Non sono sicura di aver capito — dimmi di nuovo?",
+  ];
+  const awarenessLinesPartial = (what: string) => [
+    `[thoughtful] Ho sentito solo "${what}" — è quello che hai detto?`,
+    `[gently] Mi è arrivato solo "${what}". Era così o ho perso qualcosa?`,
+  ];
+  const awarenessLoopExit = [
+    "[warmly] Sono qui, ma non ti sento. Tocca quando sei pronto.",
+    "[gently] Ti aspetto — tocca quando vuoi parlare.",
+    "[softly] Resto in attesa. Tocca per riprendere.",
+  ];
+
+  function pickLine(lines: string[]): string {
+    let idx = Math.floor(Math.random() * lines.length);
+    // Evita di ripetere la stessa subito
+    if (idx === lastAwarenessIdx.current && lines.length > 1) {
+      idx = (idx + 1) % lines.length;
+    }
+    lastAwarenessIdx.current = idx;
+    return lines[idx];
+  }
+
+  // Pattern noti di allucinazioni Whisper su audio rumoroso/vuoto
+  const WHISPER_HALLUCINATIONS = [
+    /^[\s\.,!?…]*$/,                            // solo punteggiatura/spazi
+    /sottotitoli.{0,30}q-?t?-?s?-?s/i,           // "Sottotitoli e revisione a cura di Q-T-S-S"
+    /sottotitoli.{0,30}cura di/i,
+    /grazie per l'?\s*attenzione/i,
+    /grazie per aver guardato/i,
+    /\[\s*musica\s*\]/i,
+    /^(\.{2,}|…+)$/,                              // solo puntini
+    /^(eh|uhm|mmh|ah|oh|boh){1,3}[\s\.\?]*$/i,    // SOLO interiezioni (no contenuto)
+  ];
+
+  function classifyTranscript(txt: string): "ok" | "empty" | "garbled" | "partial" {
+    const t = (txt || "").trim();
+    if (!t) return "empty";
+    for (const re of WHISPER_HALLUCINATIONS) {
+      if (re.test(t)) return "garbled";
+    }
+    // Se è davvero molto corto (1-2 parole) e non è un saluto rapido
+    const words = t.split(/\s+/).filter(Boolean);
+    if (words.length <= 2 && t.length <= 8) {
+      const fastReplies = /^(s[ìi]|no|ok|ciao|certo|forse|bene|male|aiuto)[\s\.\?!]*$/i;
+      if (!fastReplies.test(t)) return "partial";
+    }
+    return "ok";
+  }
+
+  async function speakAwareness(text: string) {
+    // Strip audio tags per chat display
+    const clean = text.replace(/\[[a-zA-Zàèéìòùç '_,/-]{1,40}\]/g, "").replace(/  +/g, " ").trim();
+    setTimeline((prev) => [
+      ...prev,
+      {
+        id: `aware-${Date.now()}`,
+        role: "ai",
+        text: clean,
+        voice_text: text,
+        tone: "warm",
+        timestamp: new Date().toISOString(),
+      },
+    ]);
+    setStatus("speaking");
+    try {
+      await SpeechMod.speak(text, { language: "it-IT", tone: "warm" });
+    } catch {}
+    setStatus("idle");
+  }
+
   // Push-to-talk (or hands-free)
   const startTalkInternal = async (autoStopOnSilence: boolean) => {
     if (status !== "idle" && status !== "speaking") return;
     setError(null);
+    // Reset contatore "vuoti" quando l'utente attiva manualmente (non in loop)
+    if (!convActiveRef.current) emptyTurnsRef.current = 0;
     // Unlock speech engine on first user interaction (web only)
     unlockSpeech().catch(() => {});
     try {
@@ -729,19 +819,34 @@ export default function Taccuino() {
         } catch {}
       }
       if (!res) {
-        // La registrazione non aveva voce reale (sotto soglia / troppo
-        // breve). Non disturbiamo Whisper con audio fittizio; mostriamo un
-        // feedback gentile e in conversation mode riapriamo il mic.
+        // Audio scartato dalla guardia client-side (no vera voce continua).
+        // In conversation mode: contiamo il "vuoto". Dopo 2 vuoti, esci.
+        if (convActiveRef.current) {
+          emptyTurnsRef.current += 1;
+          if (emptyTurnsRef.current >= 2) {
+            // ANTI-LOOP: due vuoti di fila → Coda parla e esce dal loop
+            setConvActive(false);
+            emptyTurnsRef.current = 0;
+            await speakAwareness(pickLine(awarenessLoopExit));
+            return;
+          }
+          // Primo vuoto: feedback breve e riapri
+          setError("Non ti ho sentito 👂");
+          setTimeout(() => setError(null), 2000);
+          setStatus("idle");
+          if (profile?.settings?.input_mode !== "text") {
+            setTimeout(() => {
+              if (convActiveRef.current && !recRef.current) {
+                startTalkInternal(true).catch(() => {});
+              }
+            }, 600);
+          }
+          return;
+        }
+        // Non in conversation mode → solo feedback breve, no parlato
         setError("Non ti ho sentito bene 👂");
         setTimeout(() => setError(null), 2500);
         setStatus("idle");
-        if (convActiveRef.current && profile?.settings?.input_mode !== "text") {
-          setTimeout(() => {
-            if (convActiveRef.current && !recRef.current) {
-              startTalkInternal(true).catch(() => {});
-            }
-          }, 600);
-        }
         return;
       }
       const fd = buildFormData(res);
@@ -752,19 +857,34 @@ export default function Taccuino() {
       if (!r.ok) throw new Error("transcribe");
       const data = await r.json();
       const txt = (data.text || "").trim();
-      if (!txt) {
-        setError("Non ho sentito nulla.");
-        setStatus("idle");
-        // In conversation mode, immediately re-open mic so the loop continues
+      const cls = classifyTranscript(txt);
+      if (cls !== "ok") {
+        // CODA CONSAPEVOLE: spiegale all'utente cosa è successo
+        if (convActiveRef.current) emptyTurnsRef.current += 1;
+        let line: string;
+        if (cls === "empty") line = pickLine(awarenessLinesNoAudio);
+        else if (cls === "garbled") line = pickLine(awarenessLinesGarbled);
+        else /* partial */ line = pickLine(awarenessLinesPartial(txt));
+        // Se siamo già al 2° vuoto consecutivo, esci dal loop con la frase apposita
+        if (convActiveRef.current && emptyTurnsRef.current >= 2) {
+          setConvActive(false);
+          emptyTurnsRef.current = 0;
+          await speakAwareness(pickLine(awarenessLoopExit));
+          return;
+        }
+        await speakAwareness(line);
+        // Se ancora in conv mode, riapri mic dopo la frase
         if (convActiveRef.current && profile?.settings?.input_mode !== "text") {
           setTimeout(() => {
             if (convActiveRef.current && !recRef.current) {
               startTalkInternal(true).catch(() => {});
             }
-          }, 250);
+          }, 350);
         }
         return;
       }
+      // Trascrizione OK → reset contatore vuoti e procedi
+      emptyTurnsRef.current = 0;
       // Send to converse
       await sendText(txt);
     } catch (e) {
@@ -2493,12 +2613,12 @@ export default function Taccuino() {
         theme={theme}
       />
 
-      {/* NeonBorder — feedback periferico ai bordi dello schermo.
-          Verde pulsante = ti sto ascoltando, parla.
-          Viola tenue = sto pensando.
-          Ambra = sto parlando io.
-          Idle = invisibile (zero distrazione). */}
-      <NeonBorder status={status as any} />
+      {/* RadialGlow — alone radiale che parte dal blob (centro schermo)
+          e si propaga verso i bordi. Coerente coi 3 colori del blob:
+            🟡 Ambra      = idle/recording  (tocca a te / ti ascolto)
+            💧 Verde acqua = thinking        (sto pensando)
+            💜 Magenta    = speaking        (sto parlando io) */}
+      <RadialGlow status={status as any} />
     </View>
   );
 

@@ -133,19 +133,27 @@ export default function OrganicBlob({
   const texture: BlobTexture = textureOverride || textureFromTone(tone);
 
   // === Color resolution
+  // SISTEMA 3 COLORI COERENTI per stato (richiesta utente):
+  //  🟡 AMBRA caldo  → idle/recording  ("tocca a te" / "ti ascolto")
+  //  💧 VERDE ACQUA  → thinking         ("sto pensando, non parlare")
+  //  💜 MAGENTA-VIOLA → speaking        ("sto parlando, ascolta")
   const colors: [string, string, string] = useMemo(() => {
-    // RECORDING wins over everything else — verde brillante per dire
-    // chiaramente "ti sto ascoltando, parla". Niente pulsanti, è la
-    // macchia stessa il segnale.
-    if (status === "recording") return ["#86EFAC", "#22C55E", "#15803D"];
-    // THINKING → viola sereno (Coda sta riflettendo)
-    if (status === "thinking") return ["#C4B5FD", "#8B5CF6", "#6D28D9"];
-    // SPEAKING → palette dal tone emotivo dell'AI
-    if (status === "speaking" && tone && TONE_COLORS[tone]) return TONE_COLORS[tone];
-    // IDLE → ambient ora-del-giorno (default warm)
+    if (status === "recording") {
+      // AMBRA leggermente più viva = "ti sto ascoltando ATTIVAMENTE"
+      return ["#FCD34D", "#FBBF24", "#D97706"];
+    }
+    if (status === "thinking") {
+      // VERDE ACQUA = elaborazione
+      return ["#5EEAD4", "#2DD4BF", "#0D9488"];
+    }
+    if (status === "speaking") {
+      // MAGENTA-VIOLA = Coda parla
+      return ["#DDD6FE", "#A78BFA", "#7C3AED"];
+    }
+    // IDLE → AMBRA tenue, stessa famiglia di recording per coerenza
     if (customPalette) return customPalette;
-    return TEXTURE_COLORS[texture];
-  }, [status, tone, customPalette, texture]);
+    return ["#FDE68A", "#FCD34D", "#F59E0B"];
+  }, [status, customPalette]);
 
   // === Blob deformation: 8 radius values that morph independently.
   //     We re-render the SVG path on each tick using JS state (60fps not
