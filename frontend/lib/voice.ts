@@ -260,23 +260,25 @@ export async function startRecording(): Promise<Recorder> {
   let speechStartFired = false;
   let silencePaused = false;
 
-  // === ADAPTIVE NOISE CALIBRATION ===
-  // For the first 800ms we sample ambient noise to set a DYNAMIC voice
-  // threshold = noise_floor (90th percentile) + 18 dB margin.
-  // The 18dB margin (was 12) means the user's voice (close to mic) MUST be
-  // CLEARLY louder than ambient sources (TV, fan, distant chatter, breathing).
-  // Plus we ENFORCE a hard floor at -28dB → even in a perfectly silent room
-  // the threshold won't drop below -28dB, so whispers / breath / tiny pops
-  // won't trigger recording.
-  // - quiet box (-65dB ambient → threshold -28 forzato dal floor)
-  //   normal room (-50dB ambient → threshold -32)
-  //   TV at 1.5m (-40dB ambient → threshold -22)
-  //   loud cafe (-30dB ambient → threshold -12)
+  // === ADAPTIVE NOISE CALIBRATION (v2: discrimina voce ravvicinata da TV/rumore stazionario) ===
+  // Strategia:
+  //  1. Stimiamo il "rumore di fondo" usando la MEDIANA dei campioni (50° percentile),
+  //     non il 90°. Così se la TV è accesa stimi il suo livello "tipico", non i picchi.
+  //  2. Aggiungiamo +10 dB di margine (era +18 → troppo restrittivo in presenza di TV).
+  //  3. Floor minimo a -32 dB (era -28) per non perdere voce a distanza normale dal mic.
+  //  4. Inoltre: BURST DETECTION → se il campione corrente supera la mediana mobile
+  //     di almeno 14 dB, è quasi certamente un attacco vocale (la TV è più piatta).
+  //     Questo cattura la voce anche quando l'utente non urla.
+  //  5. Calibrazione CONTINUA: ogni 4s rifacciamo la stima sulla finestra recente, così
+  //     ci adattiamo al rumore del furgone che cambia (dossi, autostrada, fermo).
   const CALIBRATION_MS = 800;
-  const noiseSamples: number[] = [];
+  const RECALIB_INTERVAL_MS = 4000;
+  const noiseSamples: number[] = [];        // tutti i sample della calibrazione iniziale
+  const rollingSamples: number[] = [];      // ultimi 2-3s per re-calibrazione continua
   let dynamicVoicePresentDb: number | null = null;
+  let lastRecalibAt = 0;
   // Per evitare di chiudere il turno per micro-tagli, conteggiamo solo lo
-  // speech "consistente": almeno 500ms cumulativi di voce sopra soglia.
+  // speech "consistente": almeno 300ms cumulativi di voce sopra soglia (era 500).
   let cumulativeVoiceMs = 0;
   let lastTickAt = Date.now();
 
@@ -293,34 +295,59 @@ export async function startRecording(): Promise<Recorder> {
         return;
       }
       // Compute dynamic threshold once at end of calibration
+      const median = (arr: number[]): number => {
+        if (arr.length === 0) return -45;
+        const s = [...arr].sort((a, b) => a - b);
+        const m = Math.floor(s.length / 2);
+        return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+      };
       if (dynamicVoicePresentDb === null) {
-        const sorted = [...noiseSamples].sort((a, b) => a - b);
-        // 90th percentile of samples = ambient floor (catches most TV peaks)
-        const idx = Math.max(0, Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9)));
-        const ambient = sorted[idx] ?? -45;
-        // Threshold = ambient + 18 dB (was 12), but NEVER below -28 dB.
-        // Il floor -28 garantisce che in stanze silenziose il sistema NON
-        // si attivi su sussurri / respiri / clic. È più stringente, ma
-        // l'utente vuole che parli normalmente, non sussurrando.
-        // Clamped to safe range [-28, -10].
-        dynamicVoicePresentDb = Math.max(-28, Math.min(-10, ambient + 18));
+        // MEDIANA dei sample (50° percentile) = rumore "tipico" della stanza,
+        // robusto sia in silenzio che con TV. NOT 90° percentile (che era
+        // troppo aggressivo: catturava i picchi della TV come "ambient").
+        const ambient = median(noiseSamples);
+        // Threshold = ambient + 10 dB margine. Floor -32, cap -12.
+        dynamicVoicePresentDb = Math.max(-32, Math.min(-12, ambient + 10));
+      }
+      const now = Date.now();
+      // === CALIBRAZIONE CONTINUA ===
+      // Manteniamo una rolling window degli ultimi ~3s di sample (escludendo
+      // quelli con voce per non auto-alzare la soglia mentre parli).
+      // Ogni RECALIB_INTERVAL_MS rifacciamo la mediana → si adatta al furgone.
+      rollingSamples.push(meter);
+      if (rollingSamples.length > 60) rollingSamples.shift(); // ~3s a 20Hz
+      if (now - lastRecalibAt > RECALIB_INTERVAL_MS && rollingSamples.length >= 30) {
+        // Stima del nuovo ambient: mediana SOLO dei campioni "non-vocali"
+        // (sotto la soglia corrente + 4 dB) per non inquinare con la voce.
+        const quiet = rollingSamples.filter((v) => v < (dynamicVoicePresentDb! + 4));
+        if (quiet.length >= 15) {
+          const newAmbient = median(quiet);
+          const newThr = Math.max(-32, Math.min(-12, newAmbient + 10));
+          // Smoothing: 70% nuovo, 30% vecchio, per evitare salti bruschi
+          dynamicVoicePresentDb = Math.round(newThr * 0.7 + dynamicVoicePresentDb! * 0.3);
+        }
+        lastRecalibAt = now;
       }
       const VOICE_PRESENT_DB = dynamicVoicePresentDb;
-      // SPEECH_START sopra VOICE_PRESENT (richiede voce CHIARA per iniziare
-      // a registrare, non più "primo sussurro" che catturava breath / pop).
+      // SPEECH_START sopra VOICE_PRESENT di +2 dB (voce minima utile)
       const SPEECH_START_DB = VOICE_PRESENT_DB + 2;
+      // BURST DETECTION: se il meter SUPERA la mediana mobile di +14 dB,
+      // è quasi certamente un attacco vocale (la TV non ha attacchi così bruschi).
+      // Cattura la voce anche se l'ambient stimato è alto (es. TV accesa).
+      const rollingMedian = rollingSamples.length >= 20 ? median(rollingSamples) : -45;
+      const isBurst = meter > rollingMedian + 14;
 
-      // Aggiorna tempo cumulativo di voce sopra soglia. Ci serve per non
-      // accettare un singolo picco rumoroso come "ha parlato" — pretendiamo
-      // almeno 500ms di voce continua (cumulativa) sopra threshold.
-      const now = Date.now();
+      // Aggiorna tempo cumulativo di voce sopra soglia.
       const delta = Math.min(200, now - lastTickAt);
       lastTickAt = now;
-      if (meter > VOICE_PRESENT_DB) {
+      // "Voce presente" = sopra soglia OPPURE burst rilevato.
+      const voicePresent = meter > VOICE_PRESENT_DB || isBurst;
+      if (voicePresent) {
         cumulativeVoiceMs += delta;
       }
 
-      if (meter > SPEECH_START_DB && elapsed > 250 && cumulativeVoiceMs >= 500) {
+      // everSpoke richiede 300ms cumulativi (era 500 → ridotto per TV/furgone).
+      if ((meter > SPEECH_START_DB || isBurst) && elapsed > 250 && cumulativeVoiceMs >= 300) {
         if (!everSpoke) {
           everSpoke = true;
           if (!speechStartFired && speechStartCb) {
@@ -355,7 +382,7 @@ export async function startRecording(): Promise<Recorder> {
       // MAI superato la soglia di voce continua, NON inviamo audio fittizio
       // al server. Ritorniamo null così il chiamante mostra "non ho sentito".
       const totalMs = Date.now() - startedAt;
-      if (totalMs < 700 || !everSpoke || cumulativeVoiceMs < 500) {
+      if (totalMs < 600 || !everSpoke || cumulativeVoiceMs < 300) {
         return null;
       }
       return { uri, mime: "audio/m4a", filename: "audio.m4a" };
