@@ -284,8 +284,11 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
         try { await localSound?.unloadAsync(); } catch {}
         if (currentSound === localSound) currentSound = null;
       };
+      let unloadFalseAt = 0;       // istante in cui isLoaded è diventato false
+      let bufferingGraceMs = 2500; // tolleriamo fino a 2.5s di "buffering" prima di terminare
       const onStatus = (status: any) => {
         if (status.isLoaded) {
+          unloadFalseAt = 0; // reset: caricato di nuovo, niente buffer underrun
           everLoaded = true;
           if (status.isPlaying || (status.positionMillis ?? 0) > 0) {
             everPlayed = true;
@@ -305,15 +308,29 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
           return;
         }
         // status.isLoaded === false.
-        // CRITICAL: while the sound is still loading (initial state from
-        // createAsync), iOS sends isLoaded:false multiple times. Don't treat
-        // those as failures or we'd return false and the caller would play
-        // the robotic fallback OVER the actually-loading ElevenLabs audio
-        // (overlap bug). Only treat unload as terminal if we'd been loaded.
-        if (everLoaded && !done) {
-          done = true;
-          const ok = everPlayed;
-          cleanup().finally(() => resolve(ok));
+        // CRITICAL: durante lo STREAMING MP3 (endpoint /tts/stream), AVPlayer
+        // può brevemente segnalare isLoaded:false ai cambi di chunk o buffer
+        // underrun → NON terminare subito (causava "Coda si ferma mentre parla").
+        //
+        // Strategia: appena vediamo il primo unload registriamo il timestamp.
+        // Se entro 2.5s torniamo isLoaded:true → era solo buffer.
+        // Se NO → consideriamolo terminato.
+        //
+        // Durante il caricamento iniziale (everLoaded ancora false) ignoriamo
+        // come prima (è normale che createAsync emetta isLoaded:false più volte).
+        if (!everLoaded) return;
+        if (unloadFalseAt === 0) {
+          unloadFalseAt = Date.now();
+          // Programma un check tra bufferingGraceMs: se ancora non caricato → done
+          setTimeout(() => {
+            if (done) return;
+            // Se nel frattempo è tornato isLoaded:true, unloadFalseAt sarebbe stato resettato a 0
+            if (unloadFalseAt > 0 && Date.now() - unloadFalseAt >= bufferingGraceMs) {
+              done = true;
+              const ok = everPlayed;
+              cleanup().finally(() => resolve(ok));
+            }
+          }, bufferingGraceMs + 50);
         }
       };
       const safetyTimer = setTimeout(() => {
@@ -321,7 +338,7 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
           done = true;
           cleanup().finally(() => resolve(everLoaded));
         }
-      }, 20000); // 20s max — playback di 1-3 frasi non dovrebbe MAI superare i 10s
+      }, 30000); // 30s max — risposte lunghe (80 parole) durano ~12-15s
 
       // CRITICAL iOS FIX: register the playback status callback as the 3rd
       // parameter of createAsync (not via setOnPlaybackStatusUpdate after).
