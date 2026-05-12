@@ -778,15 +778,15 @@ export default function Taccuino() {
   }
 
   // Pattern noti di allucinazioni Whisper su audio rumoroso/vuoto
+  // SOLO i pattern CHIARAMENTE allucinati. Tutto il resto → manda a Coda.
   const WHISPER_HALLUCINATIONS = [
     /^[\s\.,!?…]*$/,                            // solo punteggiatura/spazi
     /sottotitoli.{0,30}q-?t?-?s?-?s/i,           // "Sottotitoli e revisione a cura di Q-T-S-S"
     /sottotitoli.{0,30}cura di/i,
     /grazie per l'?\s*attenzione/i,
     /grazie per aver guardato/i,
-    /\[\s*musica\s*\]/i,
+    /^[\s]*\[\s*musica\s*\][\s]*$/i,             // SOLO [musica] da sola
     /^(\.{2,}|…+)$/,                              // solo puntini
-    /^(eh|uhm|mmh|ah|oh|boh){1,3}[\s\.\?]*$/i,    // SOLO interiezioni (no contenuto)
   ];
 
   function classifyTranscript(txt: string): "ok" | "empty" | "garbled" | "partial" {
@@ -795,12 +795,9 @@ export default function Taccuino() {
     for (const re of WHISPER_HALLUCINATIONS) {
       if (re.test(t)) return "garbled";
     }
-    // Se è davvero molto corto (1-2 parole) e non è un saluto rapido
-    const words = t.split(/\s+/).filter(Boolean);
-    if (words.length <= 2 && t.length <= 8) {
-      const fastReplies = /^(s[ìi]|no|ok|ciao|certo|forse|bene|male|aiuto)[\s\.\?!]*$/i;
-      if (!fastReplies.test(t)) return "partial";
-    }
+    // SOPPRESSA la classificazione "partial" — anche 1-2 parole brevi sono
+    // valide (es: "sì", "no", "okay", "ahah", "mmh sì"). Whisper trascrive
+    // solo se ha sentito qualcosa di concreto, e Claude sa gestire input brevi.
     return "ok";
   }
 
@@ -930,17 +927,17 @@ export default function Taccuino() {
       }
       if (!res) {
         // Audio scartato dalla guardia client-side (no vera voce continua).
-        // In conversation mode: contiamo il "vuoto". Dopo 2 vuoti, esci.
+        // In conversation mode: contiamo il "vuoto". Dopo 4 vuoti, esci.
         if (convActiveRef.current) {
           emptyTurnsRef.current += 1;
-          if (emptyTurnsRef.current >= 2) {
-            // ANTI-LOOP: due vuoti di fila → Coda parla e esce dal loop
+          if (emptyTurnsRef.current >= 4) {
+            // ANTI-LOOP: 4 vuoti di fila → Coda parla e esce dal loop
             setConvActive(false);
             emptyTurnsRef.current = 0;
             await speakAwareness(pickLine(awarenessLoopExit));
             return;
           }
-          // Primo vuoto: feedback breve e riapri
+          // Vuoto: feedback breve e riapri
           setError("Non ti ho sentito 👂");
           setTimeout(() => setError(null), 2000);
           setStatus("idle");
@@ -973,10 +970,9 @@ export default function Taccuino() {
         if (convActiveRef.current) emptyTurnsRef.current += 1;
         let line: string;
         if (cls === "empty") line = pickLine(awarenessLinesNoAudio);
-        else if (cls === "garbled") line = pickLine(awarenessLinesGarbled);
-        else /* partial */ line = pickLine(awarenessLinesPartial(txt));
-        // Se siamo già al 2° vuoto consecutivo, esci dal loop con la frase apposita
-        if (convActiveRef.current && emptyTurnsRef.current >= 2) {
+        else /* garbled */ line = pickLine(awarenessLinesGarbled);
+        // Se ancora più tollerante: 4 vuoti consecutivi prima di uscire
+        if (convActiveRef.current && emptyTurnsRef.current >= 4) {
           setConvActive(false);
           emptyTurnsRef.current = 0;
           await speakAwareness(pickLine(awarenessLoopExit));
