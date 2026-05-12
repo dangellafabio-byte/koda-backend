@@ -26,6 +26,15 @@ let currentWebAudio: HTMLAudioElement | null = null;
 // Abort controller for in-flight TTS network requests (so stop() cancels them too).
 let currentAbort: AbortController | null = null;
 
+// FIX 1 (RCA): module-level handles for the stall-watcher interval and
+// safety timer dell'attuale playback. Senza questi puntatori, ogni speak()
+// creava setInterval/setTimeout che restavano vivi anche dopo che il
+// playback era finito o era stato interrotto da stopAllPlayback() →
+// "zombie intervals" che dopo 2-3 turni corrompevano la audio session
+// iOS chiamando stopAsync su Sound già unloaded → app freezata.
+let activeStallWatcher: ReturnType<typeof setInterval> | null = null;
+let activeSafetyTimer: ReturnType<typeof setTimeout> | null = null;
+
 // Configurable per-call voice id (can be overriden via speak() opts).
 let defaultVoiceId: string | null = null;
 
@@ -114,19 +123,50 @@ export async function unlockSpeech(): Promise<void> {
 
 // ---------- Utility: stop everything ----------
 function stopAllPlayback() {
+  // FIX 1 (RCA): clear PRIMA gli zombie intervals. Senza questo, l'interval
+  // del playback precedente sopravviveva e dopo 2-3 turni la audio session
+  // iOS si corrompeva (zombie chiamavano stopAsync su Sound già unloaded).
+  if (activeStallWatcher) {
+    try { clearInterval(activeStallWatcher); } catch {}
+    activeStallWatcher = null;
+  }
+  if (activeSafetyTimer) {
+    try { clearTimeout(activeSafetyTimer); } catch {}
+    activeSafetyTimer = null;
+  }
+
   // Stop in-flight TTS request
   try {
     currentAbort?.abort();
   } catch {}
   currentAbort = null;
 
-  // Stop native Sound
+  // Stop native Sound — FIX 3 (RCA): fire-and-forget MA con fallback session reset
+  // se l'unload fallisce, per evitare di lasciare la session iOS wedged.
   if (currentSound) {
     const s = currentSound;
     currentSound = null;
     (async () => {
+      let unloadOk = false;
       try { await s.stopAsync(); } catch {}
-      try { await s.unloadAsync(); } catch {}
+      try {
+        await s.unloadAsync();
+        unloadOk = true;
+      } catch {}
+      // FIX 3: se l'unload fallisce, forziamo il reset della audio session
+      // iOS al category 'playback' permissivo — altrimenti la prossima
+      // Audio.Recording/Audio.Sound resta wedged.
+      if (!unloadOk && Platform.OS !== "web") {
+        try {
+          await Audio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: false,
+            shouldDuckAndroid: true,
+            playThroughEarpieceAndroid: false,
+          });
+        } catch {}
+      }
     })();
   }
 
@@ -313,6 +353,9 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
           if (status.didJustFinish) {
             if (!done) {
               done = true;
+              // FIX 1: pulizia esplicita timer/interval anche su naturale fine
+              if (activeStallWatcher) { try { clearInterval(activeStallWatcher); } catch {}; activeStallWatcher = null; }
+              if (activeSafetyTimer) { try { clearTimeout(activeSafetyTimer); } catch {}; activeSafetyTimer = null; }
               cleanup().finally(() => resolve(true));
             }
             return;
@@ -320,6 +363,8 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
           if (status.error && !done) {
             console.warn("[speech] playback error", status.error);
             done = true;
+            if (activeStallWatcher) { try { clearInterval(activeStallWatcher); } catch {}; activeStallWatcher = null; }
+            if (activeSafetyTimer) { try { clearTimeout(activeSafetyTimer); } catch {}; activeSafetyTimer = null; }
             cleanup().finally(() => resolve(everPlayed));
           }
         }
@@ -328,18 +373,26 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
       };
 
       // Stallo-watcher: ogni 1s controlla se la posizione è progredita.
-      // Se non c'è progresso per >12s DOPO aver iniziato a suonare,
-      // consideriamo terminato (probabilmente lo stream è finito senza
-      // emettere didJustFinish — comportamento occasionale di AVPlayer).
+      // FIX 4 (RCA): SELF-DESTRUCT check — se currentSound non è più il
+      // nostro localSound, siamo un interval orfano (un nuovo speak() è
+      // partito). Smettiamo immediatamente di girare per evitare di
+      // corrompere la audio session iOS.
       const stallWatcher = setInterval(() => {
+        if (currentSound !== localSound) {
+          clearInterval(stallWatcher);
+          if (activeStallWatcher === stallWatcher) activeStallWatcher = null;
+          return;
+        }
         if (done) {
           clearInterval(stallWatcher);
+          if (activeStallWatcher === stallWatcher) activeStallWatcher = null;
           return;
         }
         if (!everPlayed) return; // non ha mai suonato → safetyTimer gestirà
         const stalled = Date.now() - lastProgressAt;
         if (stalled > 12000) {
           clearInterval(stallWatcher);
+          if (activeStallWatcher === stallWatcher) activeStallWatcher = null;
           if (!done) {
             done = true;
             console.warn(`[speech] stalled ${stalled}ms after position ${lastPositionMs}ms — assuming complete`);
@@ -347,14 +400,20 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
           }
         }
       }, 1000);
+      // FIX 1: registriamo l'interval come "attivo" (modulo-livello) così
+      // stopAllPlayback() può clearIntervalarlo se un altro speak() lo sostituisce.
+      activeStallWatcher = stallWatcher;
 
       const safetyTimer = setTimeout(() => {
         clearInterval(stallWatcher);
+        if (activeStallWatcher === stallWatcher) activeStallWatcher = null;
+        if (activeSafetyTimer === safetyTimer) activeSafetyTimer = null;
         if (!done) {
           done = true;
           cleanup().finally(() => resolve(everLoaded));
         }
       }, 45000); // 45s max — risposte lunghe (~120 parole, ~20s di audio)
+      activeSafetyTimer = safetyTimer;
 
       // CRITICAL iOS FIX: register the playback status callback as the 3rd
       // parameter of createAsync (not via setOnPlaybackStatusUpdate after).

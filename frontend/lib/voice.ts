@@ -214,22 +214,25 @@ export async function startRecording(): Promise<Recorder> {
   }
 
   // Native: use expo-av
-  // CRITICAL: always re-apply the recording-friendly audio mode here.
-  // After playing TTS (ElevenLabs preview / AI reply), the audio mode is
-  // switched to `playback` (allowsRecordingIOS: false). If we didn't reset
-  // it here, the next mic tap would fail with "Microfono non disponibile".
+  // FIX 2 (RCA): DOPPIA commutazione della audio session per forzare iOS
+  // a rilasciare qualunque sessione playback wedged dal turno precedente.
+  // Senza questa danza, dopo 2-3 turni l'AVAudioSession resta in stato
+  // corrotto → metering callbacks non arrivano mai → app freezata.
   try {
     await Audio.requestPermissionsAsync();
   } catch {}
   try {
-    // CRITICAL CLEANUP: stop and unload any leftover Audio.Sound from a
-    // previous TTS playback. Without this, on iOS the audio session can
-    // remain in playAndRecord mode with a stale Sound object holding it,
-    // causing the next `new Audio.Recording()` to silently fail or hang.
-    // We can't directly access the speech module's currentSound from here
-    // (circular import), but Audio.setAudioModeAsync with allowsRecordingIOS
-    // forces the session category switch which implicitly invalidates
-    // any non-mixing playback.
+    // STEP 1: forziamo "playback only" → iOS rilascia ogni record session.
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
+    });
+    await new Promise((r) => setTimeout(r, 80));
+    // STEP 2: passiamo a playAndRecord (record-ready) — adesso iOS deve
+    // creare una NUOVA session pulita, non riusare quella sporca.
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: true,
       playsInSilentModeIOS: true,
@@ -237,9 +240,7 @@ export async function startRecording(): Promise<Recorder> {
       shouldDuckAndroid: true,
       playThroughEarpieceAndroid: false,
     });
-    // Small delay so iOS' AVAudioSession can apply the new category before
-    // we instantiate the Recording. Empirically 80ms is enough; 120ms is safe.
-    await new Promise((r) => setTimeout(r, 120));
+    await new Promise((r) => setTimeout(r, 150));
   } catch {}
   _nativeReady = true;
   const rec = new Audio.Recording();
