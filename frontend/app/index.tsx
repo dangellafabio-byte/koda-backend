@@ -118,6 +118,24 @@ function detectDeviceLang(): string {
   return "it";
 }
 
+// Mappa nomi italiani → HEX per i comandi vocali "cambia colore in [nome]"
+const NAMED_COLORS: Record<string, string> = {
+  rosso: "#EF4444", red: "#EF4444",
+  blu: "#3B82F6", blue: "#3B82F6",
+  giallo: "#FACC15", yellow: "#FACC15",
+  verde: "#22C55E", green: "#22C55E",
+  rosa: "#EC4899", pink: "#EC4899",
+  viola: "#8B5CF6", purple: "#8B5CF6",
+  arancione: "#F97316", orange: "#F97316",
+  azzurro: "#38BDF8", celeste: "#7DD3FC",
+  nero: "#1F2937", black: "#1F2937",
+  bianco: "#F3F4F6", white: "#F3F4F6",
+  marrone: "#92400E", brown: "#92400E",
+  ambra: "#FBBF24", magenta: "#D946EF",
+  turchese: "#14B8A6", oro: "#FBBF24", argento: "#D1D5DB",
+  fucsia: "#E11D48", lilla: "#C4B5FD", indaco: "#6366F1",
+};
+
 export default function Taccuino() {
   const insets = useSafeAreaInsets();
   const { theme, themeName, setThemeName, setHours, dayStart, nightStart } = useTheme();
@@ -584,6 +602,17 @@ export default function Taccuino() {
             patch.settings = { ...(profile?.settings || {}), summary_freq: value };
           } else if (key === "theme" && typeof value === "string") {
             patch.settings = { ...(profile?.settings || {}), theme: value };
+          } else if ((key === "color_recording" || key === "color_speaking" || key === "color_thinking" || key === "color_idle") && typeof value === "string") {
+            // Salva il colore dello stato nella mappa profile.style_preferences.palette
+            const stateKey = key.replace("color_", ""); // "recording" | "speaking" | ...
+            const hex = value.startsWith("#") ? value : (NAMED_COLORS[value.toLowerCase()] || null);
+            if (hex) {
+              const currentPal = (profile?.style_preferences || {})?.palette || {};
+              patch.style_preferences = {
+                ...(profile?.style_preferences || {}),
+                palette: { ...currentPal, [stateKey]: hex },
+              };
+            }
           } else if (key === "ghost_last" && value === true) {
             // Ghost the last user message (recent one in timeline)
             const lastUser = [...timeline].reverse().find((e) => e.role === "user");
@@ -1589,7 +1618,7 @@ export default function Taccuino() {
                   meterThreshold={meterThreshold}
                   tone={lastAiTone}
                   size={Math.min(windowWidth * 0.78, 360)}
-                  palette={confessionalMode ? ["#1F2937", "#374151", "#0B0B0F"] : ambient.palette}
+                  palette={confessionalMode ? ["#1F2937", "#374151", "#0B0B0F"] : null}
                   warmth={confessionalMode ? 0 : ambient.warmth}
                   dim={ambient.dim}
                   texture={confessionalMode ? "solida" : null}
@@ -1636,7 +1665,7 @@ export default function Taccuino() {
                 tone={lastAiTone}
                 size={260}
                 avatarUri={(profile?.settings as any)?.ai_avatar || null}
-                palette={ambient.palette}
+                palette={null}
                 warmth={ambient.warmth}
                 dim={ambient.dim}
               />
@@ -1775,7 +1804,7 @@ export default function Taccuino() {
                   meterThreshold={meterThreshold}
                   tone={lastAiTone}
                   size={210}
-                  palette={confessionalMode ? ["#1F2937", "#374151", "#0B0B0F"] : ambient.palette}
+                  palette={confessionalMode ? ["#1F2937", "#374151", "#0B0B0F"] : null}
                   warmth={confessionalMode ? 0 : ambient.warmth}
                   dim={ambient.dim}
                   texture={confessionalMode ? "solida" : null}

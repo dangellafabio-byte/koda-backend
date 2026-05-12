@@ -133,26 +133,31 @@ export default function OrganicBlob({
   const texture: BlobTexture = textureOverride || textureFromTone(tone);
 
   // === Color resolution
-  // SISTEMA 3 COLORI COERENTI per stato (richiesta utente):
-  //  🟡 AMBRA caldo  → idle/recording  ("tocca a te" / "ti ascolto")
-  //  💧 VERDE ACQUA  → thinking         ("sto pensando, non parlare")
-  //  💜 MAGENTA-VIOLA → speaking        ("sto parlando, ascolta")
+  // SISTEMA 3 COLORI PRIMARI (richiesta utente):
+  //  🔴 ROSSO       → recording  (parli TU)
+  //  🟡 GIALLO      → thinking   (Coda elabora)
+  //  🔵 BLU         → speaking   (parla CODA)
+  //  ⚪ BIANCO/grigio → idle      (standby neutro)
+  //
+  // Sono FISSI per coerenza visiva. L'utente può cambiarli a voce
+  // ("cambia il colore quando parlo io in verde") → il customPalette
+  // viene passato come override dal main.
   const colors: [string, string, string] = useMemo(() => {
     if (status === "recording") {
-      // AMBRA leggermente più viva = "ti sto ascoltando ATTIVAMENTE"
-      return ["#FCD34D", "#FBBF24", "#D97706"];
+      // ROSSO viva = "ti sto ascoltando, parli tu"
+      return ["#FCA5A5", "#EF4444", "#B91C1C"];
     }
     if (status === "thinking") {
-      // VERDE ACQUA = elaborazione
-      return ["#5EEAD4", "#2DD4BF", "#0D9488"];
+      // GIALLO sole = "sto elaborando"
+      return ["#FDE68A", "#FACC15", "#CA8A04"];
     }
     if (status === "speaking") {
-      // MAGENTA-VIOLA = Coda parla
-      return ["#DDD6FE", "#A78BFA", "#7C3AED"];
+      // BLU = "sto parlando io"
+      return ["#93C5FD", "#3B82F6", "#1D4ED8"];
     }
-    // IDLE → AMBRA tenue, stessa famiglia di recording per coerenza
+    // IDLE → BIANCO neutro / grigio chiaro (standby)
     if (customPalette) return customPalette;
-    return ["#FDE68A", "#FCD34D", "#F59E0B"];
+    return ["#F3F4F6", "#E5E7EB", "#D1D5DB"];
   }, [status, customPalette]);
 
   // === Blob deformation: 8 radius values that morph independently.
@@ -168,12 +173,42 @@ export default function OrganicBlob({
 
   // Pick the morph rate based on texture: morbida = slow, vibrante = fast, solida = very slow
   const morphConfig = useMemo(() => {
-    switch (texture) {
-      case "vibrante": return { fps: 22, amplitude: 0.22, freq: 0.020 };
-      case "solida":   return { fps: 9,  amplitude: 0.07, freq: 0.005 };
-      default:         return { fps: 15, amplitude: 0.13, freq: 0.010 }; // morbida
+    // SPEAKING → simula corde vocali: alta frequenza + ampiezza più ampia.
+    // Sovrapposizione di onde porta a un'oscillazione "parlato-like".
+    if (status === "speaking") {
+      return { fps: 28, amplitude: 0.18, freq: 0.045, speech: true };
     }
-  }, [texture]);
+    if (status === "recording") {
+      return { fps: 20, amplitude: 0.16, freq: 0.028, speech: false };
+    }
+    switch (texture) {
+      case "vibrante": return { fps: 22, amplitude: 0.22, freq: 0.020, speech: false };
+      case "solida":   return { fps: 9,  amplitude: 0.07, freq: 0.005, speech: false };
+      default:         return { fps: 15, amplitude: 0.13, freq: 0.010, speech: false }; // morbida
+    }
+  }, [texture, status]);
+
+  // === Speech burst envelope — simula la cadenza vocale (sillabe + pause)
+  // Quando speaking: ogni 80-180ms partono dei "burst" che aumentano
+  // temporaneamente l'amplitude del morph, dando la sensazione che il blob
+  // stia parlando davvero (modulazione "consonante-vocale-pausa").
+  const speechBurstRef = useRef<number>(1);
+  useEffect(() => {
+    if (status !== "speaking") {
+      speechBurstRef.current = 1;
+      return;
+    }
+    let cancelled = false;
+    const next = () => {
+      if (cancelled) return;
+      // Random burst level: 0.6 (pausa breve) .. 1.6 (sillaba forte)
+      speechBurstRef.current = 0.6 + Math.random() * 1.0;
+      const dur = 80 + Math.random() * 140;
+      setTimeout(next, dur);
+    };
+    next();
+    return () => { cancelled = true; };
+  }, [status]);
 
   // Drive the morph loop
   useEffect(() => {
@@ -182,11 +217,17 @@ export default function OrganicBlob({
     const tick = () => {
       if (!running) return;
       // Each radius oscillates around 1.0 with its own phase + a random walk
+      const burst = morphConfig.speech ? speechBurstRef.current : 1;
       const next = phases.current.map((ph, i) => {
         // Update the phase forward — speed scales with morphConfig.freq
         phases.current[i] = ph + morphConfig.freq * (12 + Math.random() * 6);
-        // Sin-based oscillation, amplitude scaled per texture
-        const osc = Math.sin(phases.current[i]) * morphConfig.amplitude;
+        // Sin-based oscillation, amplitude scaled per texture × burst
+        const osc = Math.sin(phases.current[i]) * morphConfig.amplitude * burst;
+        // Speech additional high-frequency tremor (vocal cords ~80-200Hz collapsed
+        // to a low-freq visual proxy ~6-10Hz)
+        const tremor = morphConfig.speech
+          ? Math.sin(phases.current[i] * 3.2 + i * 0.7) * 0.04 * burst
+          : 0;
         // Tiny random jitter (more for vibrante, none for solida)
         const jitter =
           texture === "vibrante"
@@ -194,7 +235,7 @@ export default function OrganicBlob({
             : texture === "morbida"
             ? (Math.random() - 0.5) * 0.02
             : 0;
-        return 1 + osc + jitter;
+        return 1 + osc + tremor + jitter;
       });
       setRadii(next);
       raf = setTimeout(tick, 1000 / morphConfig.fps);

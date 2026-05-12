@@ -20,17 +20,17 @@ import Svg, { Defs, RadialGradient, Stop, Rect } from "react-native-svg";
 export type GlowStatus = "idle" | "recording" | "thinking" | "speaking";
 
 const STATE_COLORS: Record<GlowStatus, string> = {
-  idle: "#FCD34D",       // ambra tenue
-  recording: "#FBBF24",  // ambra viva
-  thinking: "#2DD4BF",   // verde acqua
-  speaking: "#A78BFA",   // magenta-viola
+  idle: "#E5E7EB",       // BIANCO/grigio neutro
+  recording: "#EF4444",  // 🔴 ROSSO (parli tu)
+  thinking: "#FACC15",   // 🟡 GIALLO (Coda elabora)
+  speaking: "#3B82F6",   // 🔵 BLU (parla Coda)
 };
 
 // Opacità centrale (vicino al blob) in base allo stato
 const STATE_OPACITY: Record<GlowStatus, number> = {
-  idle: 0.10,
-  recording: 0.45,
-  thinking: 0.40,
+  idle: 0.08,
+  recording: 0.50,
+  thinking: 0.42,
   speaking: 0.55,
 };
 
@@ -57,31 +57,50 @@ export default function RadialGlow({
     }).start();
   }, [targetOpacity, opacityAnim]);
 
-  // Pulsazione lenta (respiro) — più rapida quando sta succedendo qualcosa
+  // Pulsazione: per "speaking" simuliamo la cadenza vocale con bursts
+  // rapidi e random (sillabe). Per gli altri stati, respiro regolare.
   useEffect(() => {
-    const cycleMs =
-      status === "recording" ? 1400 :
-      status === "thinking" ? 1100 :
-      status === "speaking" ? 900 :
-      3000;
-    const anim = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: cycleMs / 2,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: false,
-        }),
-        Animated.timing(pulse, {
-          toValue: 0,
-          duration: cycleMs / 2,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: false,
-        }),
-      ])
-    );
-    anim.start();
-    return () => anim.stop();
+    if (status !== "speaking") {
+      const cycleMs =
+        status === "recording" ? 1400 :
+        status === "thinking" ? 1100 :
+        3000;
+      const anim = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulse, {
+            toValue: 1,
+            duration: cycleMs / 2,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: false,
+          }),
+          Animated.timing(pulse, {
+            toValue: 0,
+            duration: cycleMs / 2,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: false,
+          }),
+        ])
+      );
+      anim.start();
+      return () => anim.stop();
+    }
+    // SPEAKING → bursts random (sillabe), durata 80-180ms ciascuno
+    let cancelled = false;
+    const burst = () => {
+      if (cancelled) return;
+      const target = 0.3 + Math.random() * 0.7;
+      const dur = 70 + Math.random() * 120;
+      Animated.timing(pulse, {
+        toValue: target,
+        duration: dur,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: false,
+      }).start(() => {
+        if (!cancelled) burst();
+      });
+    };
+    burst();
+    return () => { cancelled = true; };
   }, [status, pulse]);
 
   // Calcolo opacity finale come (base × (0.7..1.0) del pulse)
