@@ -467,21 +467,33 @@ export default function Taccuino() {
   useEffect(() => {
     if (status === "idle") return;
     const max: Record<string, number> = {
-      recording: 45_000,    // 45s di registrazione max
+      // Ridotto da 45→20s: con il fallback interno di voice.ts (60s hard cap,
+      // 12s pre-speech, 1.5s post-speech) un turno legittimo dura <15s.
+      // 20s lascia margine per blocchi reali senza UX penosa.
+      recording: 20_000,
       transcribing: 20_000, // 20s STT max
       thinking: 25_000,     // 25s LLM max (con web search)
-      speaking: 60_000,     // 60s playback max
+      speaking: 60_000,     // 60s playback max (lunghi)
     };
     const ms = max[status] || 30_000;
-    const t = setTimeout(() => {
+    const t = setTimeout(async () => {
       console.warn(`[watchdog] status '${status}' stuck for ${ms}ms — forcing reset`);
       try {
         SpeechMod.stop();
       } catch {}
-      try {
-        recRef.current?.stop().catch(() => {});
-      } catch {}
-      recRef.current = null;
+      // Aspettiamo l'unload completo (fino a 3s) per evitare di lasciare
+      // la sessione audio in playAndRecord — la prossima registrazione
+      // ne risentirebbe.
+      const cur = recRef.current;
+      if (cur) {
+        try {
+          await Promise.race([
+            cur.stop(),
+            new Promise((r) => setTimeout(r, 3000)),
+          ]);
+        } catch {}
+        recRef.current = null;
+      }
       setStatus("idle");
       setError("Si è bloccato un attimo, riprova pure.");
     }, ms);
@@ -831,16 +843,19 @@ export default function Taccuino() {
     // Unlock speech engine on first user interaction (web only)
     unlockSpeech().catch(() => {});
     try {
-      // If AI is currently speaking, don't kill TTS yet — wait for the user
-      // to actually start speaking before barging in.
-      if (status !== "speaking") {
+      // FIX 4 (RCA): controlliamo `SpeechMod.isSpeaking()` direttamente,
+      // non lo stato React (che può essere stantio). Se il TTS sta
+      // ancora suonando, NON dobbiamo fermarlo né cambiare l'audio
+      // session: la sua naturale conclusione gestirà già la transizione.
+      const ttsPlaying = SpeechMod.isSpeaking();
+      if (status !== "speaking" && !ttsPlaying) {
         SpeechMod.stop();
       }
       // CRITICAL FREEZE FIX: ensure any leftover audio session is fully
       // released before starting a new recording. Without this, after a
       // few turns the recording fails to start silently and the blob
       // appears "stuck listening".
-      if (Platform.OS !== "web" && status !== "speaking") {
+      if (Platform.OS !== "web" && status !== "speaking" && !ttsPlaying) {
         try {
           const { Audio } = require("expo-av");
           // Brief switch to non-recording mode first (forces any leftover
@@ -903,12 +918,19 @@ export default function Taccuino() {
     // stale-closure bugs when called from the silence-detection callback)
     const current = recRef.current;
     if (!current) return;
-    recRef.current = null;
+    // FIX 2 (RCA): NON azzeriamo recRef.current PRIMA dell'await.
+    // Prima nullavamo subito, ma se current.stop() lancia/blocca, la
+    // sessione audio iOS resta in playAndRecord → la prossima registrazione
+    // fallisce silenziosamente ("stuck recording" persistente).
+    // Lo azzeriamo SOLO dopo che l'unload è andato a buon fine (o fallito
+    // in modo controllato — voice.ts in tal caso forza setAudioModeAsync).
     setStatus("transcribing");
     setMeterDb(null);
     setMeterThreshold(null);
     try {
       const res = await current.stop();
+      // Ora possiamo liberare il ref: l'audio session è stata rilasciata.
+      if (recRef.current === current) recRef.current = null;
       // CRITICAL: switch the audio session out of "recording" mode IMMEDIATELY
       // so that the AI's TTS playback can run unhindered. Without this, on
       // iOS the session can stay in playAndRecord mode and Audio.Sound
@@ -994,6 +1016,9 @@ export default function Taccuino() {
       // Send to converse
       await sendText(txt);
     } catch (e) {
+      // FIX 2 (RCA): assicuriamoci che recRef sia nullato anche in caso
+      // d'errore, altrimenti lo stato resta "stuck" sul prossimo tap.
+      if (recRef.current === current) recRef.current = null;
       setError("Errore nella trascrizione.");
       setStatus("idle");
     }

@@ -252,7 +252,7 @@ export async function startRecording(): Promise<Recorder> {
 
   let silenceCb: (() => void) | null = null;
   let speechStartCb: (() => void) | null = null;
-  let meterCb: ((dbValue: number) => void) | null = null;
+  let meterCb: ((dbValue: number, voicePresentDb?: number | null) => void) | null = null;
   const startedAt = Date.now();
   let lastVoiceAt = Date.now();
   let everSpoke = false;
@@ -260,30 +260,39 @@ export async function startRecording(): Promise<Recorder> {
   let speechStartFired = false;
   let silencePaused = false;
 
-  // === APPROCCIO PERMISSIVO (v3): facciamo decidere Whisper ===
+  // === APPROCCIO PERMISSIVO (v4): Whisper-first + fallback robusto ===
   //
-  // ABBANDONATO il VAD aggressivo (mediana + burst + cumulative) che escludeva
-  // troppa voce reale in ambienti rumorosi. Whisper è MOLTO più robusto al
-  // rumore di qualsiasi nostra euristica a soglia. Quindi:
-  //
-  //  1. Calibriamo l'ambient nei primi 600ms (più rapido)
-  //  2. Soglia ULTRA-PERMISSIVA: ambient + 5 dB (era +10), floor -42 (era -32)
-  //  3. Niente burst detection (causava troppi falsi positivi su click/tap)
-  //  4. Niente cumulative voice requirement (50ms di voce = "ha parlato")
-  //  5. Manteniamo il silence detector ma con timeout più lunghi (1500ms)
-  //  6. **Mandiamo SEMPRE l'audio a Whisper** se la registrazione è ≥1s
-  //     → Whisper decide se c'è speech reale; se non c'è, ritorna stringa vuota
-  //     o allucinazione → il classifier client la cattura comunque
-  //
-  // Questo elimina i "non ti ho sentito" quando in realtà avevi parlato ma
-  // sotto la soglia per via del rumore di fondo.
+  // 1. Calibriamo l'ambient nei primi 600ms
+  // 2. Soglia ULTRA-PERMISSIVA: ambient + 5 dB (floor -42, cap -15)
+  // 3. Silence timeout 1500ms dopo voce, 12s pre-speech, 60s max
+  // 4. **FALLBACK CRITICO**: se metering è undefined (alcuni device iOS/Android
+  //    non lo emettono mai), usiamo un secondo timer setInterval che basa
+  //    la chiusura SOLO sull'elapsed time. Previene lo "stuck recording".
   const CALIBRATION_MS = 600;
   const noiseSamples: number[] = [];
   let dynamicVoicePresentDb: number | null = null;
+  let lastStatusUpdateAt = Date.now();
+  let everSawMetering = false;
+
+  const fireSilenceIfNeeded = () => {
+    if (silenceFired || silencePaused || !silenceCb) return;
+    const elapsed = Date.now() - startedAt;
+    const sinceLastVoice = Date.now() - lastVoiceAt;
+    if (
+      (everSpoke && sinceLastVoice > 1500 && elapsed > 1000) ||
+      (!everSpoke && elapsed > 12000) ||
+      elapsed > 60000
+    ) {
+      silenceFired = true;
+      try { silenceCb(); } catch {}
+    }
+  };
 
   rec.setOnRecordingStatusUpdate((status) => {
+    lastStatusUpdateAt = Date.now();
     const meter = (status as any).metering;
     if (typeof meter === "number") {
+      everSawMetering = true;
       if (meterCb) {
         try { meterCb(meter, dynamicVoicePresentDb); } catch {}
       }
@@ -298,47 +307,78 @@ export async function startRecording(): Promise<Recorder> {
         const sorted = [...noiseSamples].sort((a, b) => a - b);
         const m = Math.floor(sorted.length / 2);
         const ambient = sorted.length ? (sorted.length % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2) : -50;
-        // Threshold ULTRA-PERMISSIVO: ambient + 5 dB. Floor -42, cap -15.
         dynamicVoicePresentDb = Math.max(-42, Math.min(-15, ambient + 5));
       }
       const VOICE_PRESENT_DB = dynamicVoicePresentDb;
 
       if (meter > VOICE_PRESENT_DB) {
         lastVoiceAt = Date.now();
-        if (elapsed > 200) {
-          if (!everSpoke) {
-            everSpoke = true;
-            if (!speechStartFired && speechStartCb) {
-              speechStartFired = true;
-              try { speechStartCb(); } catch {}
-            }
+        if (elapsed > 200 && !everSpoke) {
+          everSpoke = true;
+          if (!speechStartFired && speechStartCb) {
+            speechStartFired = true;
+            try { speechStartCb(); } catch {}
           }
         }
       }
-      if (silencePaused) return;
-      // Silence timeouts più TOLLERANTI: 1500ms dopo voce (era 900),
-      // 12s prima del primo speech (era 8s), 60s massimo (era 45s).
-      if (
-        !silenceFired &&
-        ((everSpoke &&
-          Date.now() - lastVoiceAt > 1500 &&
-          elapsed > 1000) ||
-          (!everSpoke && elapsed > 12000) ||
-          elapsed > 60000) &&
-        silenceCb
-      ) {
-        silenceFired = true;
-        try { silenceCb(); } catch {}
-      }
+      fireSilenceIfNeeded();
     }
   });
+
+  // === FALLBACK TIMER (CRITICAL) ===
+  // Se metering non arriva mai (alcune build iOS/Android), o smette di
+  // arrivare per >2s, fallback: chiudiamo il turno SOLO via elapsed time.
+  // Senza questo, il microfono resta aperto fino a quando il watchdog di
+  // index.tsx (45s) non lo termina → "stuck recording" classico.
+  const fallbackTickId = setInterval(() => {
+    const elapsed = Date.now() - startedAt;
+    const sinceStatus = Date.now() - lastStatusUpdateAt;
+
+    // Caso A: metering non è MAI arrivato. Probabilmente il device non lo emette.
+    // Dopo i 600ms di calibration, assumiamo che chi parla lo faccia entro 10s,
+    // poi chiudi. Se nessun feedback dopo 10s totali, chiudi comunque.
+    if (!everSawMetering && elapsed > 10000 && !silenceFired && silenceCb) {
+      silenceFired = true;
+      try { silenceCb(); } catch {}
+      return;
+    }
+    // Caso B: metering arrivava ma è bloccato da >3s (stream callback morto)
+    // → forziamo lo stesso fireSilenceIfNeeded col tempo elapsed
+    if (everSawMetering && sinceStatus > 3000) {
+      fireSilenceIfNeeded();
+    }
+    // Caso C: hard cap assoluto a 60s (gemello del check nello status update)
+    if (elapsed > 60000 && !silenceFired && silenceCb) {
+      silenceFired = true;
+      try { silenceCb(); } catch {}
+    }
+  }, 500);
   return {
     stop: async () => {
-      try { await rec.stopAndUnloadAsync(); } catch {}
+      try { clearInterval(fallbackTickId); } catch {}
+      let unloaded = false;
+      try {
+        await rec.stopAndUnloadAsync();
+        unloaded = true;
+      } catch {}
+      // FIX 5: se l'unload è fallito, forziamo comunque il reset del
+      // session audio in modalità playback. Senza questo, su iOS la
+      // sessione resta in playAndRecord e la prossima registrazione
+      // fallisce silenziosamente → "stuck recording" persistente.
+      if (!unloaded) {
+        try {
+          await Audio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: false,
+            shouldDuckAndroid: true,
+            playThroughEarpieceAndroid: false,
+          });
+        } catch {}
+      }
       const uri = rec.getURI() || undefined;
       // GUARDIA MINIMALE: scartiamo SOLO se la registrazione è troppo
-      // breve (<800ms). Tutto il resto passa a Whisper — che decide
-      // molto meglio di noi se c'è davvero voce.
+      // breve (<800ms). Tutto il resto passa a Whisper.
       const totalMs = Date.now() - startedAt;
       if (totalMs < 800) {
         return null;
@@ -346,7 +386,14 @@ export async function startRecording(): Promise<Recorder> {
       return { uri, mime: "audio/m4a", filename: "audio.m4a" };
     },
     cancel: async () => {
+      try { clearInterval(fallbackTickId); } catch {}
       try { await rec.stopAndUnloadAsync(); } catch {}
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+        });
+      } catch {}
     },
     onSilence: (cb) => {
       silenceCb = cb;

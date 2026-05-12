@@ -1,3 +1,99 @@
+## FIX MICROFONO STUCK + VOCE TAGLIATA (2026-06 — RCA-driven)
+
+frontend:
+  - task: "voice.ts: fallback timer per metering undefined (FIX P0 stuck recording)"
+    implemented: true
+    working: "NA"
+    file: "frontend/lib/voice.ts"
+    stuck_count: 0
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          RCA (troubleshoot_agent): la silence detection viveva interamente
+          dentro setOnRecordingStatusUpdate, ma su alcuni device iOS il campo
+          `metering` può essere undefined nonostante isMeteringEnabled:true.
+          In quel caso il blocco veniva saltato → nessun silenceCb → microfono
+          stuck fino al watchdog 45s.
+          Fix: aggiunto `fallbackTickId` setInterval(500ms) che traccia
+          lastStatusUpdateAt + everSawMetering, e chiude:
+            - 10s se metering MAI arrivato
+            - via fireSilenceIfNeeded se metering è bloccato >3s
+            - hard cap 60s comunque
+
+  - task: "voice.ts: setAudioModeAsync di fallback se stopAndUnloadAsync fallisce"
+    implemented: true
+    working: "NA"
+    file: "frontend/lib/voice.ts"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Se stopAndUnloadAsync throwa, la session iOS resta in playAndRecord
+          → la prossima Recording fallisce silenziosamente. Ora se l'unload
+          non riesce forziamo setAudioModeAsync(allowsRecordingIOS:false).
+
+  - task: "speech.ts: rimosso 2.5s grace, didJustFinish è UNICA via di success (FIX P1 voce tagliata)"
+    implemented: true
+    working: "NA"
+    file: "frontend/lib/speech.ts"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          RCA: il setTimeout 2.5s su isLoaded:false terminava il playback
+          durante normali buffer underrun MP3 → "voce tagliata mid-sentence".
+          Fix: didJustFinish è ora l'UNICA via di completamento OK.
+          isLoaded:false viene SEMPRE trattato come buffering.
+          Aggiunto stall-watcher che chiude SOLO se positionMillis non
+          progredisce per >12s dopo che ha iniziato a suonare.
+          safetyTimer aumentato 30→45s.
+
+  - task: "index.tsx: recRef.current = null DOPO await su current.stop()"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Prima nullavamo recRef PRIMA dell'await. Se stop() hangava la
+          sessione audio iOS restava in record mode → "stuck recording"
+          persistente. Ora rilasciamo il ref SOLO dopo l'unload completo
+          (o dopo che voice.ts ha forzato setAudioModeAsync).
+
+  - task: "index.tsx: SpeechMod.isSpeaking() al posto di status==='speaking'"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          startTalkInternal ora controlla SpeechMod.isSpeaking() (verità
+          live) invece dello stato React (possibile stale). Evita di
+          interrompere il TTS quando si attiva il loop conversazionale.
+
+  - task: "index.tsx: watchdog recording 45→20s + await su stop()"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Watchdog recording ridotto da 45s a 20s (col fallback voice.ts
+          un turno legittimo dura <15s). Ora awaita stop() con Promise.race
+          fino a 3s per garantire la release della session audio.
+
+
 ## ELEVENLABS — FIX RIPRODUZIONE AUDIO + VOLUME iPhone + UX (2026-05-07 v2)
 
 frontend:

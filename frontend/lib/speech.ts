@@ -280,17 +280,34 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
       let everPlayed = false;
       let everLoaded = false;
       let localSound: Audio.Sound | null = null;
+      let lastProgressAt = Date.now();
+      let lastPositionMs = 0;
       const cleanup = async () => {
         try { await localSound?.unloadAsync(); } catch {}
         if (currentSound === localSound) currentSound = null;
       };
-      let unloadFalseAt = 0;       // istante in cui isLoaded è diventato false
-      let bufferingGraceMs = 2500; // tolleriamo fino a 2.5s di "buffering" prima di terminare
+
+      // FIX 3+6 (RCA): rimosso il setTimeout 2.5s che terminava il playback
+      // ad ogni `isLoaded:false`. Cause vere di "cutoff mid-sentence":
+      //   - AVPlayer su iOS emette isLoaded:false durante normali buffer
+      //     underrun o cambi di chunk MP3, NON sono eventi terminali.
+      //   - Il vero segnale di fine è SEMPRE `didJustFinish: true`.
+      //
+      // Nuova strategia:
+      //   - `didJustFinish: true` → completato con successo (UNICA via)
+      //   - `status.error` su un sound già caricato → errore reale → termina
+      //   - Stallo: se posizione non avanza per >12s E lo stream sembra
+      //     terminato (isLoaded:false persistente) → consideriamo terminato
+      //   - safetyTimer 45s come ultimo guardrail
       const onStatus = (status: any) => {
         if (status.isLoaded) {
-          unloadFalseAt = 0; // reset: caricato di nuovo, niente buffer underrun
           everLoaded = true;
-          if (status.isPlaying || (status.positionMillis ?? 0) > 0) {
+          const pos = status.positionMillis ?? 0;
+          if (pos > lastPositionMs) {
+            lastPositionMs = pos;
+            lastProgressAt = Date.now();
+          }
+          if (status.isPlaying || pos > 0) {
             everPlayed = true;
           }
           if (status.didJustFinish) {
@@ -298,47 +315,46 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
               done = true;
               cleanup().finally(() => resolve(true));
             }
+            return;
           }
-          // Surface real playback errors
-          if (status.error && everLoaded && !done) {
+          if (status.error && !done) {
             console.warn("[speech] playback error", status.error);
             done = true;
             cleanup().finally(() => resolve(everPlayed));
           }
+        }
+        // isLoaded:false → NON terminiamo. Lasciamo a safetyTimer/stallWatch
+        // il compito di chiudere se è davvero finito o bloccato.
+      };
+
+      // Stallo-watcher: ogni 1s controlla se la posizione è progredita.
+      // Se non c'è progresso per >12s DOPO aver iniziato a suonare,
+      // consideriamo terminato (probabilmente lo stream è finito senza
+      // emettere didJustFinish — comportamento occasionale di AVPlayer).
+      const stallWatcher = setInterval(() => {
+        if (done) {
+          clearInterval(stallWatcher);
           return;
         }
-        // status.isLoaded === false.
-        // CRITICAL: durante lo STREAMING MP3 (endpoint /tts/stream), AVPlayer
-        // può brevemente segnalare isLoaded:false ai cambi di chunk o buffer
-        // underrun → NON terminare subito (causava "Coda si ferma mentre parla").
-        //
-        // Strategia: appena vediamo il primo unload registriamo il timestamp.
-        // Se entro 2.5s torniamo isLoaded:true → era solo buffer.
-        // Se NO → consideriamolo terminato.
-        //
-        // Durante il caricamento iniziale (everLoaded ancora false) ignoriamo
-        // come prima (è normale che createAsync emetta isLoaded:false più volte).
-        if (!everLoaded) return;
-        if (unloadFalseAt === 0) {
-          unloadFalseAt = Date.now();
-          // Programma un check tra bufferingGraceMs: se ancora non caricato → done
-          setTimeout(() => {
-            if (done) return;
-            // Se nel frattempo è tornato isLoaded:true, unloadFalseAt sarebbe stato resettato a 0
-            if (unloadFalseAt > 0 && Date.now() - unloadFalseAt >= bufferingGraceMs) {
-              done = true;
-              const ok = everPlayed;
-              cleanup().finally(() => resolve(ok));
-            }
-          }, bufferingGraceMs + 50);
+        if (!everPlayed) return; // non ha mai suonato → safetyTimer gestirà
+        const stalled = Date.now() - lastProgressAt;
+        if (stalled > 12000) {
+          clearInterval(stallWatcher);
+          if (!done) {
+            done = true;
+            console.warn(`[speech] stalled ${stalled}ms after position ${lastPositionMs}ms — assuming complete`);
+            cleanup().finally(() => resolve(true));
+          }
         }
-      };
+      }, 1000);
+
       const safetyTimer = setTimeout(() => {
+        clearInterval(stallWatcher);
         if (!done) {
           done = true;
           cleanup().finally(() => resolve(everLoaded));
         }
-      }, 30000); // 30s max — risposte lunghe (80 parole) durano ~12-15s
+      }, 45000); // 45s max — risposte lunghe (~120 parole, ~20s di audio)
 
       // CRITICAL iOS FIX: register the playback status callback as the 3rd
       // parameter of createAsync (not via setOnPlaybackStatusUpdate after).
@@ -358,6 +374,7 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
             if (!done) {
               done = true;
               clearTimeout(safetyTimer);
+              clearInterval(stallWatcher);
               cleanup().finally(() => resolve(false));
             }
           }
@@ -367,6 +384,7 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
           if (!done) {
             done = true;
             clearTimeout(safetyTimer);
+            clearInterval(stallWatcher);
             cleanup().finally(() => resolve(false));
           }
         });
