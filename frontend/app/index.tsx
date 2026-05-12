@@ -461,29 +461,38 @@ export default function Taccuino() {
 
   // === STATE WATCHDOG ===
   // Se la macchina a stati rimane in recording/transcribing/thinking/speaking
-  // per più del massimo ragionevole, la ripristiniamo a "idle". Evita
-  // i freeze in cui il microfono "ascolta" all'infinito o il blob resta
-  // grigio in "penso" senza mai sbloccarsi.
+  // per più del massimo ragionevole, la ripristiniamo. CRITICO: in stato
+  // "recording" NON scartiamo l'audio — chiamiamo stopTalk() che lo
+  // processa via Whisper. Senza questa logica il watchdog faceva sembrare
+  // che l'AI "non rispondesse mai" (audio buttato via).
   useEffect(() => {
     if (status === "idle") return;
     const max: Record<string, number> = {
-      // Ridotto da 45→20s: con il fallback interno di voice.ts (60s hard cap,
-      // 12s pre-speech, 1.5s post-speech) un turno legittimo dura <15s.
-      // 20s lascia margine per blocchi reali senza UX penosa.
-      recording: 20_000,
-      transcribing: 20_000, // 20s STT max
+      // 18s recording: oltre questo limite preferiamo SEMPRE stoppare e
+      // mandare a Whisper l'audio raccolto fino a quel momento, invece
+      // di scartarlo. L'utente vedrà la risposta o un feedback di "non
+      // ti ho sentito" — mai un silenzio inspiegabile.
+      recording: 18_000,
+      transcribing: 25_000, // 25s STT max
       thinking: 25_000,     // 25s LLM max (con web search)
       speaking: 60_000,     // 60s playback max (lunghi)
     };
     const ms = max[status] || 30_000;
     const t = setTimeout(async () => {
-      console.warn(`[watchdog] status '${status}' stuck for ${ms}ms — forcing reset`);
-      try {
-        SpeechMod.stop();
-      } catch {}
-      // Aspettiamo l'unload completo (fino a 3s) per evitare di lasciare
-      // la sessione audio in playAndRecord — la prossima registrazione
-      // ne risentirebbe.
+      console.warn(`[watchdog] status '${status}' stuck for ${ms}ms`);
+      if (status === "recording" && recRef.current) {
+        // FIX: NON scartiamo l'audio. Lo processiamo via stopTalk → Whisper.
+        // L'utente avrà o una risposta vera, o un feedback "Non ti ho sentito"
+        // — mai un buco di silenzio che fa pensare "l'app non funziona".
+        console.warn(`[watchdog] forcing stopTalk to process audio`);
+        try { await stopTalk(); } catch (e) {
+          console.warn("[watchdog] stopTalk failed", e);
+          setStatus("idle");
+        }
+        return;
+      }
+      // Per altri stati (transcribing/thinking/speaking) reset duro:
+      try { SpeechMod.stop(); } catch {}
       const cur = recRef.current;
       if (cur) {
         try {
@@ -498,6 +507,7 @@ export default function Taccuino() {
       setError("Si è bloccato un attimo, riprova pure.");
     }, ms);
     return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
   const speakIfEnabled = useCallback(
