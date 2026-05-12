@@ -288,13 +288,17 @@ class ExtractedFact(BaseModel):
 
 class Action(BaseModel):
     """An action the AI requests the client to actually perform."""
-    type: str  # "schedule_notification" | "cancel_notification" (extensible)
+    type: str  # "schedule_notification" | "cancel_notification" | "config"
     when_iso: Optional[str] = None  # ISO 8601 absolute timestamp (UTC) of the trigger
     title: Optional[str] = None
     body: Optional[str] = None
     identifier: Optional[str] = None  # for cancel
     label: Optional[str] = None  # human-friendly description (e.g. "tra 1 minuto")
+    # === CONFIG (Coda configura se stessa via voce) ===
+    key: Optional[str] = None   # es. "ai_name", "user_gender", "brevity", ...
+    value: Optional[object] = None  # stringa / bool / numero secondo la key
 
+    model_config = {"extra": "allow"}  # accetta campi extra non noti senza errore
 
 class TimelineEntry(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -536,10 +540,70 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         # AZIONI
         # ============================================================
         f"AZIONI ESEGUIBILI (campo 'actions'):\n"
+        f"\n"
+        f"== A) PROMEMORIA / TIMER ==\n"
         f"Quando l'utente chiede di RICORDARGLI, SVEGLIARLO, IMPOSTARE TIMER/PROMEMORIA tra X minuti/ore, "
-        f"DEVI restituire 'schedule_notification' nell'array 'actions'. Calcola TU when_iso (UTC ISO 8601) "
-        f"sommando tempo richiesto a 'DATA E ORA ATTUALI'.\n"
-        f"NON inventare azioni se l'utente non le chiede.\n"
+        f"restituisci 'schedule_notification'. Calcola TU when_iso (UTC ISO 8601) "
+        f"sommando il tempo richiesto a 'DATA E ORA ATTUALI'.\n"
+        f"\n"
+        f"== B) CONFIGURAZIONE VOCALE (l'app non ha pannello impostazioni — TUTTO si chiede a te) ==\n"
+        f"Riconosci queste richieste e restituisci la action corrispondente. NON serve confermare prima: "
+        f"applica e annuncia nella 'reply' (es: 'Fatto, ora mi chiamo Luna.').\n"
+        f"\n"
+        f"INTENT → ACTION:\n"
+        f'  • "chiamati X" / "il tuo nome è X" / "ti chiamerò X"\n'
+        f'      → {{ "type": "config", "key": "ai_name", "value": "X" }}\n'
+        f'  • "sii donna" / "sii maschio" / "sii neutra/o"\n'
+        f'      → {{ "type": "config", "key": "ai_gender", "value": "f|m|n" }}\n'
+        f'  • "da ora sono donna" / "sono un uomo" / "preferisco neutro"\n'
+        f'      → {{ "type": "config", "key": "user_gender", "value": "f|m|n" }}\n'
+        f'  • "chiamami X" / "il mio nome è X" (cambia il TUO nome utente)\n'
+        f'      → {{ "type": "config", "key": "user_name", "value": "X" }}\n'
+        f'  • "sii più breve" / "rispondi più corto"\n'
+        f'      → {{ "type": "config", "key": "brevity", "value": "short" }}\n'
+        f'  • "sii più dettagliata" / "rispondi più lungo"\n'
+        f'      → {{ "type": "config", "key": "brevity", "value": "detailed" }}\n'
+        f'  • "smetti di darmi del tesoro" / "non chiamarmi caro/a / amore"\n'
+        f'      → {{ "type": "config", "key": "no_pet_names", "value": true }}\n'
+        f'  • "parla più piano" / "rallenta"\n'
+        f'      → {{ "type": "config", "key": "speech_speed", "value": "slow" }}\n'
+        f'  • "parla più veloce"\n'
+        f'      → {{ "type": "config", "key": "speech_speed", "value": "fast" }}\n'
+        f'  • "tono più caldo" / "più diretto" / "più dolce"\n'
+        f'      → {{ "type": "config", "key": "tone_pref", "value": "warm|direct|sweet" }}\n'
+        f'  • "attiva confessionale" / "modalità confessione"\n'
+        f'      → {{ "type": "config", "key": "confessional", "value": true }}\n'
+        f'  • "disattiva confessionale" / "esci dalla confessione"\n'
+        f'      → {{ "type": "config", "key": "confessional", "value": false }}\n'
+        f'  • "spegni le notifiche" / "non disturbarmi"\n'
+        f'      → {{ "type": "config", "key": "notifications", "value": false }}\n'
+        f'  • "riattiva notifiche"\n'
+        f'      → {{ "type": "config", "key": "notifications", "value": true }}\n'
+        f'  • "dimmi buongiorno alle X" / "check-in alle X"\n'
+        f'      → {{ "type": "config", "key": "checkin_morning", "value": "HH:MM" }}\n'
+        f'  • "dimmi buonanotte alle X"\n'
+        f'      → {{ "type": "config", "key": "checkin_evening", "value": "HH:MM" }}\n'
+        f'  • "mandami il riassunto stasera" / "mai" / "settimanale"\n'
+        f'      → {{ "type": "config", "key": "summary_freq", "value": "daily|weekly|none" }}\n'
+        f'  • "tema scuro" / "tema chiaro" / "tema zen"\n'
+        f'      → {{ "type": "config", "key": "theme", "value": "dark|light|zen" }}\n'
+        f'  • "cambia voce" / "fammi sentire le voci"\n'
+        f'      → {{ "type": "config", "key": "list_voices", "value": true }} (l\'app mostrerà le opzioni)\n'
+        f'  • "dimentica l\'ultima cosa" / "ghosta questo"\n'
+        f'      → {{ "type": "config", "key": "ghost_last", "value": true }}\n'
+        f'  • "dimentica tutto quello che sai su X"\n'
+        f'      → {{ "type": "config", "key": "ghost_topic", "value": "X" }}\n'
+        f'  • "cancella tutta la cronologia" (PERICOLOSO)\n'
+        f'      → NON eseguire subito. Rispondi chiedendo conferma esplicita: "Sei sicur{("o" if user_g=="m" else "a" if user_g=="f" else "o/a")}? Ripeti \'sì cancella tutto\' per confermare."\n'
+        f'      → SOLO se l\'utente risponde "sì cancella tutto" → {{ "type": "config", "key": "reset_history", "value": "CONFIRMED" }}\n'
+        f'\n'
+        f"COSE CHE NON PUOI FARE → dillo gentilmente. Esempi di richieste oltre le tue capacità:\n"
+        f"  - cambiare lo sfondo con un'immagine personale (richiede upload)\n"
+        f"  - impostare API key di terzi (es. ElevenLabs personale)\n"
+        f"  - cose hardware (es. 'accendi la luce')\n"
+        f"  → rispondi tipo: 'Eh, questo non posso. Quello che NON faccio io richiede un tocco manuale — ma per ora non c'è nemmeno il pannello. Dimmelo e ti spiego come.'\n"
+        f"\n"
+        f"NON inventare azioni se l'utente non le chiede. Per richieste ambigue chiedi conferma.\n"
         f"\n"
         f"FORMATO DI RISPOSTA: Devi SEMPRE rispondere con un oggetto JSON valido (e SOLO quello, senza testo prima/dopo) così:\n"
         f"{{\n"
@@ -547,7 +611,7 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f'  "tone": "calm | energetic | concerned | urgent | warm | neutral",\n'
         f'  "domain": "soldi | tempo | spesa | salute | lavoro | casa | altro | null",\n'
         f'  "extracted": {{ "domain": "...", "intent": "...", "amount": 12.5, "currency": "EUR", "item": "...", "when": "...", "flags": ["..."] }} or null,\n'
-        f'  "actions": [{{ "type": "schedule_notification", "when_iso": "2026-05-06T13:35:00Z", "title": "Promemoria", "body": "Chiama la mamma", "label": "tra 1 minuto" }}],\n'
+        f'  "actions": [{{ "type": "schedule_notification", "when_iso": "...", "title": "...", "body": "...", "label": "..." }}],\n'
         f'  "memory_update": "una breve frase da aggiungere alla memoria di lungo periodo, oppure null se nulla di rilevante"\n'
         f"}}\n"
         f"\n"
@@ -1032,6 +1096,45 @@ async def api_search(req: SearchRequest):
     """Ricerca web pubblica (DuckDuckGo). Niente tracking, niente API key."""
     res = await duckduckgo_search(req.query, max_results=max(1, min(8, req.max_results)))
     return {"query": req.query, "results": res}
+
+
+# ============================================================
+# GHOST TOPIC — "Dimentica tutto quello che sai su X"
+# Rimuove dal memory_summary tutte le frasi che mentioneano il topic.
+# ============================================================
+@api_router.post("/ghost/topic")
+async def api_ghost_topic(req: dict):
+    topic = (req.get("topic") or "").strip()
+    if not topic or len(topic) > 80:
+        raise HTTPException(status_code=400, detail="topic missing or too long")
+    profile = await get_or_create_profile()
+    current = (profile.memory_summary or "").strip()
+    if not current:
+        return {"removed_chars": 0, "memory_summary": ""}
+    # Splittiamo per linee / frasi e teniamo solo quelle che NON menzionano il topic
+    parts = re.split(r"(?<=[\.\n])\s+", current)
+    topic_re = re.compile(re.escape(topic), re.IGNORECASE)
+    kept = [p for p in parts if not topic_re.search(p)]
+    new_mem = " ".join(kept).strip()
+    await db.taccuino_profile.update_one(
+        {"id": profile.id}, {"$set": {"memory_summary": new_mem, "updated_at": datetime.now(timezone.utc)}}
+    )
+    return {"removed_chars": len(current) - len(new_mem), "memory_summary": new_mem}
+
+
+# ============================================================
+# RESET HISTORY — Cancella TUTTA la cronologia e la memoria.
+# Solo chiamabile dopo doppia conferma vocale ("sì cancella tutto").
+# ============================================================
+@api_router.post("/reset_history")
+async def api_reset_history():
+    await db.taccuino_timeline.delete_many({})
+    profile = await get_or_create_profile()
+    await db.taccuino_profile.update_one(
+        {"id": profile.id},
+        {"$set": {"memory_summary": "", "updated_at": datetime.now(timezone.utc)}},
+    )
+    return {"status": "ok"}
 
 
 # ============================================================

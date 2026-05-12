@@ -46,6 +46,7 @@ import OrganicBlob from "../components/OrganicBlob";
 import NeonBorder from "../components/NeonBorder";
 import RadialGlow from "../components/RadialGlow";
 import SealSetupModal from "../components/SealSetupModal";
+import InfoModal from "../components/InfoModal";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
 import { useFonts, Caveat_400Regular, Caveat_500Medium } from "@expo-google-fonts/caveat";
 // === Zero-Knowledge Confessional crypto ===
@@ -127,6 +128,8 @@ export default function Taccuino() {
   const [textInput, setTextInput] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
+  const [showVoicePicker, setShowVoicePicker] = useState(false);
   // === MODALITÀ CONFESSIONALE ===
   // Quando true, /converse viene chiamato con ephemeral=true: il messaggio
   // dell'utente E la risposta dell'AI NON vengono salvati su MongoDB, NON
@@ -531,18 +534,96 @@ export default function Taccuino() {
             id: a.identifier || undefined,
           });
           if (!id) {
-            // Inform user gently (probably permission denied)
             setError(
               "Non riesco a impostare la notifica: serve il permesso 🔔. Aprila dalle impostazioni del telefono."
             );
             setTimeout(() => setError(null), 6000);
           }
         }
+        // === CONFIG ACTION (Coda configura se stessa via voce) ===
+        else if ((a as any).type === "config") {
+          const key = (a as any).key as string;
+          const value = (a as any).value;
+          if (!key) continue;
+          // Mappa key → patch profile
+          const patch: any = {};
+          if (key === "ai_name" && typeof value === "string") {
+            patch.ai_name = value.slice(0, 30);
+          } else if (key === "ai_gender" && (value === "m" || value === "f" || value === "n")) {
+            patch.ai_gender = value;
+          } else if (key === "user_gender" && (value === "m" || value === "f" || value === "n")) {
+            patch.user_gender = value;
+          } else if (key === "user_name" && typeof value === "string") {
+            patch.name = value.slice(0, 30);
+          } else if (key === "brevity" && (value === "short" || value === "detailed")) {
+            patch.style_preferences = { ...(profile?.style_preferences || {}), brevity: value };
+          } else if (key === "no_pet_names" && typeof value === "boolean") {
+            patch.style_preferences = { ...(profile?.style_preferences || {}), no_pet_names: value };
+          } else if (key === "speech_speed" && (value === "slow" || value === "fast" || value === "normal")) {
+            patch.style_preferences = { ...(profile?.style_preferences || {}), speech_speed: value };
+          } else if (key === "tone_pref" && typeof value === "string") {
+            patch.style_preferences = { ...(profile?.style_preferences || {}), tone_pref: value };
+          } else if (key === "confessional" && typeof value === "boolean") {
+            // Toggle confessional ON/OFF immediately (no setup if no seal needed for off)
+            if (value && !hasSeal) {
+              setShowSealSetup(true);
+            } else {
+              if (!value) forgetSessionKey();
+              setConfessionalMode(value);
+            }
+          } else if (key === "notifications" && typeof value === "boolean") {
+            patch.settings = { ...(profile?.settings || {}), notifications_enabled: value };
+            if (!value) {
+              try { await cancelAllCheckins(); } catch {}
+            }
+          } else if (key === "checkin_morning" && typeof value === "string") {
+            patch.settings = { ...(profile?.settings || {}), checkin_morning: value };
+          } else if (key === "checkin_evening" && typeof value === "string") {
+            patch.settings = { ...(profile?.settings || {}), checkin_evening: value };
+          } else if (key === "summary_freq" && typeof value === "string") {
+            patch.settings = { ...(profile?.settings || {}), summary_freq: value };
+          } else if (key === "theme" && typeof value === "string") {
+            patch.settings = { ...(profile?.settings || {}), theme: value };
+          } else if (key === "ghost_last" && value === true) {
+            // Ghost the last user message (recent one in timeline)
+            const lastUser = [...timeline].reverse().find((e) => e.role === "user");
+            if (lastUser?.id && !lastUser.id.startsWith("local-")) {
+              try {
+                await api.ghost(lastUser.id);
+                setTimeline((prev) => prev.filter((e) => e.id !== lastUser.id));
+              } catch (e) { console.warn("ghost last failed", e); }
+            }
+          } else if (key === "ghost_topic" && typeof value === "string") {
+            // Server-side topic ghost (richiede endpoint /ghost?topic=...)
+            // Per ora: best-effort, rimuove dal memory_summary lato server
+            try {
+              await fetch(`${API_BASE}/ghost/topic`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ topic: value }),
+              });
+            } catch (e) { console.warn("ghost topic failed", e); }
+          } else if (key === "reset_history" && value === "CONFIRMED") {
+            try {
+              await fetch(`${API_BASE}/reset_history`, { method: "POST" });
+              setTimeline([]);
+            } catch (e) { console.warn("reset history failed", e); }
+          } else if (key === "list_voices" && value === true) {
+            setShowVoicePicker(true);
+          }
+          // Applica la patch al profilo se c'è qualcosa
+          if (Object.keys(patch).length > 0) {
+            try {
+              const updated = await api.updateProfile(patch);
+              setProfile(updated);
+            } catch (e) { console.warn("config patch failed", e); }
+          }
+        }
       } catch (e) {
         console.warn("action exec error", e);
       }
     }
-  }, []);
+  }, [profile, hasSeal, timeline]);
 
   const sendText = useCallback(
     async (text: string) => {
@@ -1379,10 +1460,12 @@ export default function Taccuino() {
       >
         <TouchableOpacity
           style={styles.headerBtn}
-          onPress={() => setShowSettings(true)}
-          testID="settings-btn"
+          onPress={() => setShowInfo(true)}
+          onLongPress={() => setShowSettings(true)}
+          delayLongPress={1200}
+          testID="info-btn"
         >
-          <Ionicons name="settings-outline" size={22} color="#FFFFFF" />
+          <Ionicons name="information-circle-outline" size={24} color="#FFFFFF" />
         </TouchableOpacity>
         <View style={styles.headerCenter} pointerEvents="box-none">
           {/* === Lucchetto Confessionale ===
@@ -2590,6 +2673,14 @@ export default function Taccuino() {
           </View>
         </View>
       </Modal>
+
+      {/* InfoModal — esempi dei comandi vocali che puoi chiedere a Coda */}
+      <InfoModal
+        visible={showInfo}
+        onClose={() => setShowInfo(false)}
+        aiName={profile?.ai_name || "Coda"}
+        theme={theme}
+      />
 
       {/* Seal Setup Modal — Parola Segreta per Confessionale Zero-Knowledge */}
       <SealSetupModal
