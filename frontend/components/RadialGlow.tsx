@@ -17,25 +17,29 @@ import React, { useEffect, useRef, useState } from "react";
 import { View, StyleSheet, Animated, Easing, Dimensions } from "react-native";
 import Svg, { Defs, RadialGradient, Stop, Rect } from "react-native-svg";
 
-export type GlowStatus = "idle" | "recording" | "thinking" | "speaking";
+export type GlowStatus = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 
 const STATE_COLORS: Record<GlowStatus, string> = {
-  idle: "#E5E7EB",       // BIANCO/grigio neutro
-  recording: "#EF4444",  // 🔴 ROSSO (parli tu)
-  thinking: "#FACC15",   // 🟡 GIALLO (Coda elabora)
-  speaking: "#3B82F6",   // 🔵 BLU (parla Coda)
+  idle: "#E5E7EB",         // BIANCO/grigio neutro
+  recording: "#EF4444",    // 🔴 ROSSO (parli tu)
+  transcribing: "#F59E0B", // ARANCIONE (transizione: tuo audio in elaborazione, ponte tra rosso e giallo)
+  thinking: "#FACC15",     // 🟡 GIALLO (Coda elabora)
+  speaking: "#3B82F6",     // 🔵 BLU (parla Coda)
 };
 
 // Opacità centrale (vicino al blob) in base allo stato
 const STATE_OPACITY: Record<GlowStatus, number> = {
   idle: 0.08,
   recording: 0.50,
+  transcribing: 0.45,
   thinking: 0.42,
   speaking: 0.55,
 };
 
 // === RGB interpolation helpers (transizioni colore graduali)
-function hexToRgb(hex: string): [number, number, number] {
+function hexToRgb(hex: string | undefined | null): [number, number, number] {
+  // Difensivo: se hex è null/undefined/non-string, ritorniamo bianco/grigio.
+  if (!hex || typeof hex !== "string") return [229, 231, 235]; // #E5E7EB
   const h = hex.replace("#", "");
   const v = h.length === 3
     ? h.split("").map((c) => parseInt(c + c, 16))

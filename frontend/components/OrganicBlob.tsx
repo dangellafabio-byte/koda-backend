@@ -76,7 +76,9 @@ const TONE_COLORS: Record<BlobTone, [string, string, string]> = {
 };
 
 // === RGB color interpolation helpers (per transizioni colore graduali)
-function hexToRgb(hex: string): [number, number, number] {
+function hexToRgb(hex: string | undefined | null): [number, number, number] {
+  // Difensivo: se hex è null/undefined/non-string, ritorniamo grigio chiaro.
+  if (!hex || typeof hex !== "string") return [229, 231, 235];
   const h = hex.replace("#", "");
   const v = h.length === 3
     ? h.split("").map((c) => parseInt(c + c, 16))
