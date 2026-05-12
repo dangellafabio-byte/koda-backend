@@ -75,6 +75,31 @@ const TONE_COLORS: Record<BlobTone, [string, string, string]> = {
   urgent: ["#FCA5A5", "#F87171", "#EF4444"],
 };
 
+// === RGB color interpolation helpers (per transizioni colore graduali)
+function hexToRgb(hex: string): [number, number, number] {
+  const h = hex.replace("#", "");
+  const v = h.length === 3
+    ? h.split("").map((c) => parseInt(c + c, 16))
+    : [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  return [v[0] || 0, v[1] || 0, v[2] || 0];
+}
+function rgbToHex(r: number, g: number, b: number): string {
+  const toHex = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+function lerpColor(a: string, b: string, t: number): string {
+  const [r1, g1, b1] = hexToRgb(a);
+  const [r2, g2, b2] = hexToRgb(b);
+  return rgbToHex(r1 + (r2 - r1) * t, g1 + (g2 - g1) * t, b1 + (b2 - b1) * t);
+}
+function lerpPalette(
+  a: [string, string, string],
+  b: [string, string, string],
+  t: number
+): [string, string, string] {
+  return [lerpColor(a[0], b[0], t), lerpColor(a[1], b[1], t), lerpColor(a[2], b[2], t)];
+}
+
 // === Blob path generator
 //
 // Builds a smooth closed path via 8 control points on a circle. Each point
@@ -133,32 +158,56 @@ export default function OrganicBlob({
   const texture: BlobTexture = textureOverride || textureFromTone(tone);
 
   // === Color resolution
-  // SISTEMA 3 COLORI PRIMARI (richiesta utente):
+  // SISTEMA 3 COLORI PRIMARI:
   //  🔴 ROSSO       → recording  (parli TU)
   //  🟡 GIALLO      → thinking   (Coda elabora)
   //  🔵 BLU         → speaking   (parla CODA)
   //  ⚪ BIANCO/grigio → idle      (standby neutro)
   //
-  // Sono FISSI per coerenza visiva. L'utente può cambiarli a voce
-  // ("cambia il colore quando parlo io in verde") → il customPalette
-  // viene passato come override dal main.
-  const colors: [string, string, string] = useMemo(() => {
-    if (status === "recording") {
-      // ROSSO viva = "ti sto ascoltando, parli tu"
-      return ["#FCA5A5", "#EF4444", "#B91C1C"];
-    }
-    if (status === "thinking") {
-      // GIALLO sole = "sto elaborando"
-      return ["#FDE68A", "#FACC15", "#CA8A04"];
-    }
-    if (status === "speaking") {
-      // BLU = "sto parlando io"
-      return ["#93C5FD", "#3B82F6", "#1D4ED8"];
-    }
-    // IDLE → BIANCO neutro / grigio chiaro (standby)
+  // TARGET = il colore che dovrebbe avere ADESSO in base allo stato.
+  // L'utente può sovrascrivere via comando vocale → customPalette.
+  const targetColors: [string, string, string] = useMemo(() => {
+    if (status === "recording") return ["#FCA5A5", "#EF4444", "#B91C1C"]; // ROSSO
+    if (status === "thinking") return ["#FDE68A", "#FACC15", "#CA8A04"];  // GIALLO
+    if (status === "speaking") return ["#93C5FD", "#3B82F6", "#1D4ED8"];  // BLU
     if (customPalette) return customPalette;
-    return ["#F3F4F6", "#E5E7EB", "#D1D5DB"];
+    return ["#F3F4F6", "#E5E7EB", "#D1D5DB"]; // BIANCO neutro
   }, [status, customPalette]);
+
+  // === TRANSIZIONE COLORE GRADUALE ===
+  // Mantieni il colore "visualizzato" che si interpola verso targetColors
+  // in 700ms con ease-out. Niente più "pam pam".
+  const [colors, setDisplayColors] = useState<[string, string, string]>(targetColors);
+  const fromRef = useRef<[string, string, string]>(targetColors);
+  const animStartRef = useRef<number>(0);
+  const targetRef = useRef<[string, string, string]>(targetColors);
+
+  useEffect(() => {
+    // Se il target non è cambiato, niente da fare
+    if (
+      targetRef.current[0] === targetColors[0] &&
+      targetRef.current[1] === targetColors[1] &&
+      targetRef.current[2] === targetColors[2]
+    ) return;
+    fromRef.current = colors; // parti da quello attualmente mostrato
+    targetRef.current = targetColors;
+    animStartRef.current = Date.now();
+    const DUR = 700; // ms
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
+      const elapsed = Date.now() - animStartRef.current;
+      const t = Math.min(1, elapsed / DUR);
+      // Ease-out cubica (parte veloce, rallenta)
+      const eased = 1 - Math.pow(1 - t, 3);
+      setDisplayColors(lerpPalette(fromRef.current, targetRef.current, eased));
+      if (t < 1) {
+        requestAnimationFrame(tick);
+      }
+    };
+    requestAnimationFrame(tick);
+    return () => { cancelled = true; };
+  }, [targetColors]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // === Blob deformation: 8 radius values that morph independently.
   //     We re-render the SVG path on each tick using JS state (60fps not

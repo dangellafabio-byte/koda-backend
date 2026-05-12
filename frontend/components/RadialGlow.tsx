@@ -13,7 +13,7 @@
  * Implementazione: SVG fullscreen con un RadialGradient centrato.
  * Pulsa via Animated opacity (battito lento, calmo).
  */
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { View, StyleSheet, Animated, Easing, Dimensions } from "react-native";
 import Svg, { Defs, RadialGradient, Stop, Rect } from "react-native-svg";
 
@@ -34,6 +34,24 @@ const STATE_OPACITY: Record<GlowStatus, number> = {
   speaking: 0.55,
 };
 
+// === RGB interpolation helpers (transizioni colore graduali)
+function hexToRgb(hex: string): [number, number, number] {
+  const h = hex.replace("#", "");
+  const v = h.length === 3
+    ? h.split("").map((c) => parseInt(c + c, 16))
+    : [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  return [v[0] || 0, v[1] || 0, v[2] || 0];
+}
+function rgbToHex(r: number, g: number, b: number): string {
+  const toHex = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+function lerpColor(a: string, b: string, t: number): string {
+  const [r1, g1, b1] = hexToRgb(a);
+  const [r2, g2, b2] = hexToRgb(b);
+  return rgbToHex(r1 + (r2 - r1) * t, g1 + (g2 - g1) * t, b1 + (b2 - b1) * t);
+}
+
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
 export default function RadialGlow({
@@ -41,11 +59,36 @@ export default function RadialGlow({
 }: {
   status: GlowStatus;
 }) {
-  const color = STATE_COLORS[status];
+  const targetColor = STATE_COLORS[status];
   const targetOpacity = STATE_OPACITY[status];
 
   const opacityAnim = useRef(new Animated.Value(0)).current;
   const pulse = useRef(new Animated.Value(0)).current;
+
+  // === TRANSIZIONE COLORE GRADUALE (700ms ease-out) ===
+  const [color, setColor] = useState<string>(targetColor);
+  const fromColorRef = useRef<string>(targetColor);
+  const targetColorRef = useRef<string>(targetColor);
+  const animStartRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (targetColorRef.current === targetColor) return;
+    fromColorRef.current = color;
+    targetColorRef.current = targetColor;
+    animStartRef.current = Date.now();
+    const DUR = 700;
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
+      const elapsed = Date.now() - animStartRef.current;
+      const t = Math.min(1, elapsed / DUR);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setColor(lerpColor(fromColorRef.current, targetColorRef.current, eased));
+      if (t < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    return () => { cancelled = true; };
+  }, [targetColor]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fade verso il target opacity allo stato corrente
   useEffect(() => {
