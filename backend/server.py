@@ -763,7 +763,7 @@ async def api_converse(req: ConverseRequest):
             api_key=EMERGENT_LLM_KEY,
             session_id=str(uuid.uuid4()),
             system_message=system_prompt,
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        ).with_model("anthropic", "claude-haiku-4-5-20251001")  # HAIKU 4.5 = ~2× più veloce, near-frontier intelligence
         msg = UserMessage(text=user_payload)
         raw = await chat.send_message(msg)
     except Exception as e:
@@ -1107,6 +1107,123 @@ async def api_search(req: SearchRequest):
     """Ricerca web pubblica (DuckDuckGo). Niente tracking, niente API key."""
     res = await duckduckgo_search(req.query, max_results=max(1, min(8, req.max_results)))
     return {"query": req.query, "results": res}
+
+
+# ============================================================
+# ALEXA SKILL BRIDGE
+# Endpoint per integrazione con Amazon Alexa: l'utente parla all'Echo,
+# l'Echo invoca uno Skill custom che POSTa qui, noi rispondiamo nel
+# formato Alexa Response → Echo legge la risposta a voce.
+#
+# Configurazione lato Amazon Developer Console:
+#  1. Crea uno Skill "Custom" → invocation name: "amico fraterno" (o "coda")
+#  2. Endpoint HTTPS → questa URL: https://YOUR_DOMAIN/api/alexa
+#  3. Slot: AMAZON.SearchQuery (per catturare frase libera)
+#  4. Intent "TalkIntent" con sample: "dì a coda {query}", "chiedi a coda {query}",
+#     "{query}" (per FollowUpIntent)
+# ============================================================
+
+class AlexaRequest(BaseModel):
+    """Modello permissivo: Alexa manda JSON complesso, prendiamo solo quel che ci serve."""
+    version: Optional[str] = None
+    session: Optional[dict] = None
+    request: Optional[dict] = None
+    context: Optional[dict] = None
+
+    model_config = {"extra": "allow"}
+
+
+def _alexa_response(speech: str, end_session: bool = False, reprompt: Optional[str] = None) -> dict:
+    """Costruisce una risposta JSON nel formato Alexa Response."""
+    resp = {
+        "version": "1.0",
+        "response": {
+            "outputSpeech": {"type": "PlainText", "text": speech[:7900]},  # Alexa max 8k chars
+            "shouldEndSession": end_session,
+        },
+    }
+    if reprompt and not end_session:
+        resp["response"]["reprompt"] = {
+            "outputSpeech": {"type": "PlainText", "text": reprompt[:7900]}
+        }
+    return resp
+
+
+@api_router.post("/alexa")
+async def api_alexa(req: AlexaRequest):
+    """Bridge Alexa → backend converse.
+
+    Tipi di request Alexa:
+      - LaunchRequest: utente ha aperto lo Skill ("Alexa, apri Coda")
+      - IntentRequest: utente ha detto qualcosa dentro lo Skill
+      - SessionEndedRequest: chiusura
+    """
+    request_data = req.request or {}
+    rtype = request_data.get("type", "")
+
+    if rtype == "LaunchRequest":
+        return _alexa_response(
+            "Ciao, sono qui. Cosa mi vuoi dire?",
+            end_session=False,
+            reprompt="Ti ascolto. Puoi dirmi quello che vuoi, sono qui.",
+        )
+
+    if rtype == "SessionEndedRequest":
+        return {"version": "1.0", "response": {"shouldEndSession": True}}
+
+    if rtype == "IntentRequest":
+        intent = request_data.get("intent") or {}
+        intent_name = intent.get("name", "")
+        slots = intent.get("slots") or {}
+
+        # Built-in: Stop/Cancel
+        if intent_name in ("AMAZON.StopIntent", "AMAZON.CancelIntent"):
+            return _alexa_response("Va bene, a dopo. Sono qui se hai bisogno.", end_session=True)
+        if intent_name == "AMAZON.HelpIntent":
+            return _alexa_response(
+                "Sono il tuo amico Coda. Dimmi pure quello che ti passa per la testa — come stai, cosa pensi, qualunque cosa. Ti rispondo.",
+                end_session=False,
+                reprompt="Ti ascolto.",
+            )
+
+        # Estrai il testo libero (slot AMAZON.SearchQuery)
+        # Cerchiamo in vari slot comuni: "query", "phrase", "utterance"
+        text = ""
+        for slot_name in ("query", "phrase", "utterance", "input"):
+            slot = slots.get(slot_name)
+            if slot and isinstance(slot, dict):
+                val = slot.get("value")
+                if val:
+                    text = str(val).strip()
+                    break
+        if not text and intent_name == "TalkIntent":
+            text = "ciao"  # fallback se Alexa non ha catturato slot
+
+        if not text:
+            return _alexa_response(
+                "Scusa, non ti ho capito. Riprova?",
+                end_session=False,
+                reprompt="Dimmi pure.",
+            )
+
+        # Chiama la stessa logica di /converse (stesso pipeline: memoria, ghost, web search…)
+        try:
+            conv_req = ConverseRequest(text=text, ephemeral=False)
+            res = await api_converse(conv_req)
+            ai_text = res.ai_entry.text or "Sono qui."
+            # Strip audio tags (Alexa non li interpreta)
+            clean = re.sub(r"\[[a-zA-Zàèéìòùç '_,/-]{1,40}\]", "", ai_text).strip()
+            clean = re.sub(r"\s+", " ", clean)
+            return _alexa_response(clean, end_session=False, reprompt="Continua pure, ti ascolto.")
+        except Exception as e:
+            logger.error(f"[alexa] converse error: {e}")
+            return _alexa_response(
+                "Ho avuto un piccolo problema, riprova tra un attimo.",
+                end_session=False,
+            )
+
+    # Fallback
+    return _alexa_response("Sono qui, dimmi.", end_session=False)
 
 
 # ============================================================
