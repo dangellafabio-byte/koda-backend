@@ -125,19 +125,30 @@ export async function startRecording(): Promise<Recorder> {
   }
 
   // ============ NATIVE (iOS/Android) — expo-audio ============
-  // FIX Expo Go: check del permesso CORRENTE prima di richiederlo.
-  // Su Expo Go, requestRecordingPermissionsAsync a volte ritorna granted:false
-  // anche se iOS ha già concesso il permesso a livello sistema.
+  // BUG NOTO expo-audio + Expo Go: getRecordingPermissionsAsync e
+  // requestRecordingPermissionsAsync ritornano sempre granted:false anche
+  // quando iOS ha concesso il permesso. Workaround: SKIP del check
+  // permessi → provo a registrare direttamente. Se il permesso manca
+  // davvero, iOS blocca con errore specifico nel try/catch.
+  // (In dev build vera, expo-audio gestirà i permessi nativamente.)
   if (!_nativePermissionGranted) {
-    const existing = await AudioModule.getRecordingPermissionsAsync();
-    if (existing.granted) {
-      _nativePermissionGranted = true;
-    } else {
-      const requested = await AudioModule.requestRecordingPermissionsAsync();
-      if (!requested.granted) {
-        throw new Error("Permesso microfono negato — controlla Impostazioni iOS > Expo Go > Microfono");
+    try {
+      const existing = await AudioModule.getRecordingPermissionsAsync();
+      if (existing.granted) {
+        _nativePermissionGranted = true;
+      } else {
+        // Richiediamo, ma NON consideriamo fatale se Expo Go ritorna granted:false
+        const requested = await AudioModule.requestRecordingPermissionsAsync();
+        if (requested.granted) {
+          _nativePermissionGranted = true;
+        }
+        // Se ancora false → procediamo lo stesso. Su Expo Go è un falso
+        // negativo. Su un device dove il permesso manca davvero, fallirà
+        // nel new AudioRecorder qui sotto con errore catturabile.
       }
-      _nativePermissionGranted = true;
+    } catch {
+      // Anche getRecordingPermissionsAsync può lanciare → ignoriamo e
+      // tentiamo di registrare comunque.
     }
   }
 
