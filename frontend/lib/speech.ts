@@ -648,24 +648,23 @@ export const SpeechMod = {
           ok = await playElevenLabsWeb(buf);
         }
       } else {
-        // Native (iOS/Android) — STREAMING PATH:
-        // Build a GET URL for /tts/stream and let Audio.Sound consume it as
-        // HTTP MP3 stream. iOS' AVPlayer / Android's MediaPlayer can start
-        // playback after the first ~100ms of audio frames arrive — orders
-        // of magnitude faster than waiting for /tts/prepare to finish.
-        const streamUrl = buildStreamUrl(text, voiceArg, tone);
-        ok = await playElevenLabsNativeFromUrl(streamUrl);
-        // Fallback: if streaming had issues, try the buffered prepare path.
+        // Native (iOS/Android) — PREPARED FILE PATH (più affidabile dello streaming).
+        // Lo streaming MP3 su iOS AVPlayer causava 3x GET requests (Range)
+        // e race condition con buffer underrun. Il file completo aggiunge
+        // ~400-800ms di latenza iniziale ma elimina TUTTI questi bug.
+        const url = await prepareTTSUrl(text, voiceArg, tone, ac.signal);
+        if (cancelled()) {
+          speakingNow = false;
+          return;
+        }
+        if (currentAbort === ac) currentAbort = null;
+        if (url) {
+          ok = await playElevenLabsNativeFromUrl(url);
+        }
+        // Ultima risorsa: prova lo streaming come fallback se prepare fallisce
         if (!ok && !cancelled()) {
-          const url = await prepareTTSUrl(text, voiceArg, tone, ac.signal);
-          if (cancelled()) {
-            speakingNow = false;
-            return;
-          }
-          if (currentAbort === ac) currentAbort = null;
-          if (url) {
-            ok = await playElevenLabsNativeFromUrl(url);
-          }
+          const streamUrl = buildStreamUrl(text, voiceArg, tone);
+          ok = await playElevenLabsNativeFromUrl(streamUrl);
         }
       }
 

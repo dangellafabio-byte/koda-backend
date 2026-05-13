@@ -1,42 +1,40 @@
-// Voice recording helpers for web + native
+// Voice recording — minimal & robust (TAP-TO-TALK MODEL)
+//
+// PHILOSOPHY: nessun VAD client-side, nessun "smart silence detection".
+// L'utente preme per parlare e ripreme per inviare. Modello WhatsApp.
+// Questo elimina TUTTA la categoria di bug di "metering undefined",
+// "soglia ambient sbagliata", "stuck recording".
+//
+// Eventualmente, in futuro, l'hands-free vero arriverà tramite Deepgram
+// streaming server-side. Ma per ora: semplicità = affidabilità.
 import { Platform } from "react-native";
 import { Audio } from "expo-av";
 
 export type Recorder = {
   stop: () => Promise<{ uri?: string; blob?: Blob; mime: string; filename: string } | null>;
   cancel: () => Promise<void>;
-  /** Optional: register a callback fired when the user has been silent for ~1.5s after speaking */
+  /** Deprecated stubs — mantenuti per compat con index.tsx, ma no-op. */
   onSilence?: (cb: () => void) => void;
-  /** Optional: register a callback fired the first time the user actually speaks (barge-in interrupt) */
   onSpeechStart?: (cb: () => void) => void;
-  /** Optional: live meter callback (raw dB value, typically -160..0). For debug visualization. */
   onMeter?: (cb: (dbValue: number, voicePresentDb?: number | null) => void) => void;
-  /** Pause silence-end detection (still records, still fires onSpeechStart). Used during AI TTS. */
   pauseSilence?: () => void;
-  /** Resume silence-end detection. */
   resumeSilence?: () => void;
-  /** Reset everSpoke + lastVoiceAt → "now". Use after TTS ends so the user's turn starts fresh. */
   resetSilenceState?: () => void;
 };
 
 let _webPermissionAsked = false;
 let _nativeReady = false;
 
-/**
- * Pre-warm microphone permission so the first real tap goes straight to recording.
- * Call once after onboarding / app load.
- */
+/** Pre-warm microphone permission (chiamato all'avvio app). */
 export async function prewarmMic(): Promise<boolean> {
   try {
     if (Platform.OS === "web") {
-      // Touch the API to trigger permission prompt early, then immediately stop tracks
       if (_webPermissionAsked) return true;
       _webPermissionAsked = true;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach((t) => t.stop());
       return true;
     }
-    // Native
     if (_nativeReady) return true;
     const perm = await Audio.requestPermissionsAsync();
     if (perm.status !== "granted") return false;
@@ -52,8 +50,8 @@ export async function prewarmMic(): Promise<boolean> {
 }
 
 export async function startRecording(): Promise<Recorder> {
+  // ============ WEB ============
   if (Platform.OS === "web") {
-    // Web: use MediaRecorder + AnalyserNode for silence detection
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
@@ -71,88 +69,7 @@ export async function startRecording(): Promise<Recorder> {
       if (e.data.size > 0) chunks.push(e.data);
     };
     mr.start();
-
-    // ===== Silence detection =====
-    // RMS volume sampled every ~90ms; if below threshold for >1.6s after we heard speech, fire onSilence
-    let silenceCb: (() => void) | null = null;
-    let speechStartCb: (() => void) | null = null;
-    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    // CRITICAL: AudioContext may be 'suspended' if the page is creating it
-    // outside a fresh user gesture (common when starting recording while AI
-    // TTS is playing — the AudioContext.state is 'suspended' and the analyser
-    // gives no readings, which silently kills barge-in detection).
-    if (audioCtx.state === "suspended") {
-      try { await audioCtx.resume(); } catch {}
-    }
-    const source = audioCtx.createMediaStreamSource(stream);
-    const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 1024;
-    source.connect(analyser);
-    const buf = new Uint8Array(analyser.fftSize);
     const startedAt = Date.now();
-    let lastVoiceAt = Date.now();
-    let everSpoke = false;
-    // Higher threshold = meno falsi positivi su respiri/sussurri/rumore di
-    // tastiera. L'utente deve parlare con voce CHIARA (non sussurrata).
-    const SILENCE_DB_THRESHOLD = 0.025;   // alza la soglia: era 0.008 (troppo sensibile)
-    const SILENCE_TIMEOUT_MS = 1600;      // chiusura turno più rapida
-    const MIN_SPEECH_BEFORE_END_MS = 500;
-    const MAX_RECORDING_MS = 60000;       // safety: 60s per turn (long thoughts ok)
-    const NO_SPEECH_FALLBACK_MS = 8000;   // se nessuna voce in 8s, chiudi
-    const MIN_CUMULATIVE_VOICE_MS = 500;  // serve almeno 500ms cumulativi di voce
-    let speechStartFired = false;
-    let silenceFired = false;
-    let maxRmsSeen = 0;
-    let silencePaused = false;
-    let cumulativeVoiceMs = 0;
-    let lastTickAt = Date.now();
-
-    const tickId = setInterval(() => {
-      analyser.getByteTimeDomainData(buf);
-      // compute RMS
-      let sum = 0;
-      for (let i = 0; i < buf.length; i++) {
-        const v = (buf[i] - 128) / 128;
-        sum += v * v;
-      }
-      const rms = Math.sqrt(sum / buf.length);
-      if (rms > maxRmsSeen) maxRmsSeen = rms;
-      const nowT = Date.now();
-      const delta = Math.min(200, nowT - lastTickAt);
-      lastTickAt = nowT;
-      if (rms > SILENCE_DB_THRESHOLD) {
-        cumulativeVoiceMs += delta;
-        lastVoiceAt = nowT;
-        if (nowT - startedAt > 200 && cumulativeVoiceMs >= MIN_CUMULATIVE_VOICE_MS) {
-          everSpoke = true;
-          if (!speechStartFired && speechStartCb) {
-            speechStartFired = true;
-            try { speechStartCb(); } catch {}
-          }
-        }
-      }
-      // Don't fire silence-end while paused (used during AI TTS playback).
-      if (silencePaused) return;
-      const elapsed = Date.now() - startedAt;
-      // Auto-stop conditions:
-      // 1. Heard speech AND silence for SILENCE_TIMEOUT_MS → normal end of turn
-      // 2. NO speech detected at all after NO_SPEECH_FALLBACK_MS → analyser
-      //    likely broken (Safari AudioContext issues), force stop with whatever
-      //    audio we captured so the user doesn't hang forever
-      // 3. Hard cap MAX_RECORDING_MS → safety
-      if (
-        !silenceFired &&
-        silenceCb &&
-        ((everSpoke &&
-          Date.now() - lastVoiceAt > SILENCE_TIMEOUT_MS &&
-          elapsed > MIN_SPEECH_BEFORE_END_MS) ||
-          (!everSpoke && elapsed > NO_SPEECH_FALLBACK_MS) ||
-          elapsed > MAX_RECORDING_MS)
-      ) {
-        silenceFired = true;
-        try { silenceCb(); } catch {}
-      }
-    }, 90);
 
     return {
       stop: () =>
@@ -160,12 +77,9 @@ export async function startRecording(): Promise<Recorder> {
           mr.onstop = () => {
             const blob = new Blob(chunks, { type: mime });
             stream.getTracks().forEach((t) => t.stop());
-            try { clearInterval(tickId); audioCtx.close().catch(() => {}); } catch {}
-            // GUARDIA: se l'utente non ha mai parlato chiaramente, non
-            // inviamo audio al server (eviterà allucinazioni Whisper su
-            // breath/clic/silenzio).
             const totalMs = Date.now() - startedAt;
-            if (totalMs < 700 || !everSpoke || cumulativeVoiceMs < MIN_CUMULATIVE_VOICE_MS) {
+            // Solo guardia: scartiamo registrazioni <500ms (tap accidentale).
+            if (totalMs < 500) {
               resolve(null);
               return;
             }
@@ -179,7 +93,6 @@ export async function startRecording(): Promise<Recorder> {
           else {
             const blob = new Blob(chunks, { type: mime });
             stream.getTracks().forEach((t) => t.stop());
-            try { clearInterval(tickId); audioCtx.close().catch(() => {}); } catch {}
             resolve({
               blob,
               mime,
@@ -190,39 +103,25 @@ export async function startRecording(): Promise<Recorder> {
       cancel: async () => {
         try { mr.stop(); } catch {}
         stream.getTracks().forEach((t) => t.stop());
-        try { clearInterval(tickId); audioCtx.close().catch(() => {}); } catch {}
       },
-      onSilence: (cb) => {
-        silenceCb = cb;
-      },
-      onSpeechStart: (cb) => {
-        speechStartCb = cb;
-      },
-      pauseSilence: () => {
-        silencePaused = true;
-      },
-      resumeSilence: () => {
-        silencePaused = false;
-      },
-      resetSilenceState: () => {
-        lastVoiceAt = Date.now();
-        everSpoke = false;
-        silenceFired = false;
-        speechStartFired = false;
-      },
+      // No-op stubs per compat
+      onSilence: () => {},
+      onSpeechStart: () => {},
+      onMeter: () => {},
+      pauseSilence: () => {},
+      resumeSilence: () => {},
+      resetSilenceState: () => {},
     };
   }
 
-  // Native: use expo-av
-  // FIX 2 (RCA): DOPPIA commutazione della audio session per forzare iOS
-  // a rilasciare qualunque sessione playback wedged dal turno precedente.
-  // Senza questa danza, dopo 2-3 turni l'AVAudioSession resta in stato
-  // corrotto → metering callbacks non arrivano mai → app freezata.
+  // ============ NATIVE (iOS/Android) ============
   try {
     await Audio.requestPermissionsAsync();
   } catch {}
+
+  // DOPPIA commutazione audio session per forzare iOS a rilasciare
+  // qualunque sessione playback wedged dal turno precedente.
   try {
-    // STEP 1: forziamo "playback only" → iOS rilascia ogni record session.
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: false,
       playsInSilentModeIOS: true,
@@ -231,8 +130,6 @@ export async function startRecording(): Promise<Recorder> {
       playThroughEarpieceAndroid: false,
     });
     await new Promise((r) => setTimeout(r, 80));
-    // STEP 2: passiamo a playAndRecord (record-ready) — adesso iOS deve
-    // creare una NUOVA session pulita, non riusare quella sporca.
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: true,
       playsInSilentModeIOS: true,
@@ -243,129 +140,20 @@ export async function startRecording(): Promise<Recorder> {
     await new Promise((r) => setTimeout(r, 150));
   } catch {}
   _nativeReady = true;
+
   const rec = new Audio.Recording();
-  // Enable metering for silence detection
-  await rec.prepareToRecordAsync({
-    ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
-    isMeteringEnabled: true,
-  } as any);
+  await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
   await rec.startAsync();
-
-  let silenceCb: (() => void) | null = null;
-  let speechStartCb: (() => void) | null = null;
-  let meterCb: ((dbValue: number, voicePresentDb?: number | null) => void) | null = null;
   const startedAt = Date.now();
-  let lastVoiceAt = Date.now();
-  let everSpoke = false;
-  let silenceFired = false;
-  let speechStartFired = false;
-  let silencePaused = false;
 
-  // === APPROCCIO PERMISSIVO (v4): Whisper-first + fallback robusto ===
-  //
-  // 1. Calibriamo l'ambient nei primi 600ms
-  // 2. Soglia ULTRA-PERMISSIVA: ambient + 5 dB (floor -42, cap -15)
-  // 3. Silence timeout 1500ms dopo voce, 12s pre-speech, 60s max
-  // 4. **FALLBACK CRITICO**: se metering è undefined (alcuni device iOS/Android
-  //    non lo emettono mai), usiamo un secondo timer setInterval che basa
-  //    la chiusura SOLO sull'elapsed time. Previene lo "stuck recording".
-  const CALIBRATION_MS = 600;
-  const noiseSamples: number[] = [];
-  let dynamicVoicePresentDb: number | null = null;
-  let lastStatusUpdateAt = Date.now();
-  let everSawMetering = false;
-
-  const fireSilenceIfNeeded = () => {
-    if (silenceFired || silencePaused || !silenceCb) return;
-    const elapsed = Date.now() - startedAt;
-    const sinceLastVoice = Date.now() - lastVoiceAt;
-    if (
-      (everSpoke && sinceLastVoice > 1500 && elapsed > 1000) ||
-      (!everSpoke && elapsed > 12000) ||
-      elapsed > 60000
-    ) {
-      silenceFired = true;
-      try { silenceCb(); } catch {}
-    }
-  };
-
-  rec.setOnRecordingStatusUpdate((status) => {
-    lastStatusUpdateAt = Date.now();
-    const meter = (status as any).metering;
-    if (typeof meter === "number") {
-      everSawMetering = true;
-      if (meterCb) {
-        try { meterCb(meter, dynamicVoicePresentDb); } catch {}
-      }
-      const elapsed = Date.now() - startedAt;
-      // Phase 1: collect ambient noise samples
-      if (elapsed < CALIBRATION_MS) {
-        noiseSamples.push(meter);
-        return;
-      }
-      // Compute dynamic threshold once at end of calibration
-      if (dynamicVoicePresentDb === null) {
-        const sorted = [...noiseSamples].sort((a, b) => a - b);
-        const m = Math.floor(sorted.length / 2);
-        const ambient = sorted.length ? (sorted.length % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2) : -50;
-        dynamicVoicePresentDb = Math.max(-42, Math.min(-15, ambient + 5));
-      }
-      const VOICE_PRESENT_DB = dynamicVoicePresentDb;
-
-      if (meter > VOICE_PRESENT_DB) {
-        lastVoiceAt = Date.now();
-        if (elapsed > 200 && !everSpoke) {
-          everSpoke = true;
-          if (!speechStartFired && speechStartCb) {
-            speechStartFired = true;
-            try { speechStartCb(); } catch {}
-          }
-        }
-      }
-      fireSilenceIfNeeded();
-    }
-  });
-
-  // === FALLBACK TIMER (CRITICAL) ===
-  // Se metering non arriva mai (alcune build iOS/Android), o smette di
-  // arrivare per >2s, fallback: chiudiamo il turno SOLO via elapsed time.
-  // Senza questo, il microfono resta aperto fino a quando il watchdog di
-  // index.tsx (45s) non lo termina → "stuck recording" classico.
-  const fallbackTickId = setInterval(() => {
-    const elapsed = Date.now() - startedAt;
-    const sinceStatus = Date.now() - lastStatusUpdateAt;
-
-    // Caso A: metering non è MAI arrivato. Probabilmente il device non lo emette.
-    // Dopo i 600ms di calibration, assumiamo che chi parla lo faccia entro 10s,
-    // poi chiudi. Se nessun feedback dopo 10s totali, chiudi comunque.
-    if (!everSawMetering && elapsed > 10000 && !silenceFired && silenceCb) {
-      silenceFired = true;
-      try { silenceCb(); } catch {}
-      return;
-    }
-    // Caso B: metering arrivava ma è bloccato da >3s (stream callback morto)
-    // → forziamo lo stesso fireSilenceIfNeeded col tempo elapsed
-    if (everSawMetering && sinceStatus > 3000) {
-      fireSilenceIfNeeded();
-    }
-    // Caso C: hard cap assoluto a 60s (gemello del check nello status update)
-    if (elapsed > 60000 && !silenceFired && silenceCb) {
-      silenceFired = true;
-      try { silenceCb(); } catch {}
-    }
-  }, 500);
   return {
     stop: async () => {
-      try { clearInterval(fallbackTickId); } catch {}
       let unloaded = false;
       try {
         await rec.stopAndUnloadAsync();
         unloaded = true;
       } catch {}
-      // FIX 5: se l'unload è fallito, forziamo comunque il reset del
-      // session audio in modalità playback. Senza questo, su iOS la
-      // sessione resta in playAndRecord e la prossima registrazione
-      // fallisce silenziosamente → "stuck recording" persistente.
+      // Se l'unload fallisce, forziamo comunque la commutazione a playback.
       if (!unloaded) {
         try {
           await Audio.setAudioModeAsync({
@@ -378,16 +166,14 @@ export async function startRecording(): Promise<Recorder> {
         } catch {}
       }
       const uri = rec.getURI() || undefined;
-      // GUARDIA MINIMALE: scartiamo SOLO se la registrazione è troppo
-      // breve (<800ms). Tutto il resto passa a Whisper.
       const totalMs = Date.now() - startedAt;
-      if (totalMs < 800) {
+      // Tap accidentale (<500ms) → scartiamo.
+      if (totalMs < 500) {
         return null;
       }
       return { uri, mime: "audio/m4a", filename: "audio.m4a" };
     },
     cancel: async () => {
-      try { clearInterval(fallbackTickId); } catch {}
       try { await rec.stopAndUnloadAsync(); } catch {}
       try {
         await Audio.setAudioModeAsync({
@@ -396,27 +182,13 @@ export async function startRecording(): Promise<Recorder> {
         });
       } catch {}
     },
-    onSilence: (cb) => {
-      silenceCb = cb;
-    },
-    onSpeechStart: (cb) => {
-      speechStartCb = cb;
-    },
-    onMeter: (cb) => {
-      meterCb = cb;
-    },
-    pauseSilence: () => {
-      silencePaused = true;
-    },
-    resumeSilence: () => {
-      silencePaused = false;
-    },
-    resetSilenceState: () => {
-      lastVoiceAt = Date.now();
-      everSpoke = false;
-      silenceFired = false;
-      speechStartFired = false;
-    },
+    // No-op stubs per compatibilità con index.tsx esistente
+    onSilence: () => {},
+    onSpeechStart: () => {},
+    onMeter: () => {},
+    pauseSilence: () => {},
+    resumeSilence: () => {},
+    resetSilenceState: () => {},
   };
 }
 
@@ -431,7 +203,6 @@ export function buildFormData(result: {
   if (result.blob) {
     fd.append("audio", result.blob, result.filename);
   } else if (result.uri) {
-    // React Native file upload
     // @ts-ignore
     fd.append("audio", {
       uri: result.uri,

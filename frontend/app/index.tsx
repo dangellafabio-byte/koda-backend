@@ -513,44 +513,16 @@ export default function Taccuino() {
   const speakIfEnabled = useCallback(
     async (text: string, tone: TimelineEntry["tone"]) => {
       if (!profile?.settings.voice_response) {
-        // Voice response disabled — but if conversation is active, still reopen mic
-        if (convActiveRef.current && profile?.settings?.input_mode !== "text") {
-          startTalkInternal(true).catch(() => {});
-        }
+        // PIANO A: auto-reopen del mic disabilitato. L'utente tappa per parlare.
         return;
       }
       const lang = profile?.language || "it";
       const langTag = lang === "it" ? "it-IT" : lang === "en" ? "en-US" : lang;
 
-      // CONVERSATION LOOP (simplified): no parallel mic during TTS — that was
-      // causing the AI's own voice to bleed into the mic and trigger silence
-      // detection on the AI's voice instead of the user's. Now strictly
-      // sequential: AI speaks → AI finishes → mic opens for the user.
-      // Voice barge-in is replaced by tap-to-interrupt (handled in onBigButton:
-      // tapping during "speaking" stops TTS and opens the mic immediately).
-      if (convActiveRef.current && profile?.settings?.input_mode !== "text") {
-        setStatus("speaking");
-        // Speak and WAIT for it to finish before opening the mic
-        await SpeechMod.speak(text, { language: langTag, tone });
-        // If conversation is still active, immediately open mic for next user turn
-        if (convActiveRef.current) {
-          // CRITICAL: explicitly transition to "idle" before opening mic.
-          // startTalkInternal has special logic that PRESERVES "speaking" status
-          // (used during barge-in mode) — but we're past TTS now, so we want
-          // the normal "recording" flow. Without this reset, status stays
-          // stuck on "speaking" → user sees "Sto parlando" and thinks they
-          // can't talk → no audio captured.
-          setStatus("idle");
-          // Small delay to let iOS audio session settle from playback to recording
-          await new Promise((r) => setTimeout(r, 200));
-          if (convActiveRef.current && !recRef.current) {
-            startTalkInternal(true).catch(() => {});
-          }
-        }
-        return;
-      }
-
-      // NORMAL (non-conversation) mode: speak then go idle
+      // PIANO A: SEMPRE modalità sequenziale push-to-talk.
+      // L'AI parla → finisce → torna idle → l'utente tappa per parlare.
+      // Il conversation_mode hands-free è disabilitato (causa di freeze su iOS).
+      // Arriverà nella Fase 4 con Deepgram + dev build.
       setStatus("speaking");
       await SpeechMod.speak(text, { language: langTag, tone });
       setStatus("idle");
@@ -919,8 +891,11 @@ export default function Taccuino() {
   };
 
   const startTalk = async () => {
-    const wantHandsFree = !!profile?.settings?.conversation_mode;
-    return startTalkInternal(wantHandsFree);
+    // PIANO A (semplificazione): conversation_mode auto-loop DISABILITATO.
+    // Causa principale dei freeze/crash su iOS. Modello tap-to-talk puro.
+    // L'utente preme per iniziare, ripreme per inviare. Modello WhatsApp.
+    // Il conversation hands-free REALE arriverà nella Fase 4 con Deepgram.
+    return startTalkInternal(false);
   };
 
   const stopTalk = async () => {
