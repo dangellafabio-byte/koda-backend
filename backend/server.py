@@ -136,6 +136,83 @@ async def transcribe(audio: UploadFile = File(...), language: str = Form("it")):
         raise HTTPException(status_code=500, detail=f"Transcribe error: {str(e)}")
 
 
+# ============ DEEPGRAM NOVA-3 TRANSCRIPTION (Phase 4 — Step 1) ============
+# Drop-in più veloce e accurato di Whisper per l'italiano.
+# Stessa interfaccia (multipart file + language) → ritorna {"text": ...}
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
+
+@api_router.post("/transcribe-deepgram")
+async def transcribe_deepgram(audio: UploadFile = File(...), language: str = Form("it")):
+    """
+    Trascrizione via Deepgram Nova-3 (più veloce e accurato di Whisper).
+    Ritorna il MEDESIMO formato di /transcribe per compat: {"text": "..."}.
+    """
+    if not DEEPGRAM_API_KEY:
+        raise HTTPException(status_code=500, detail="Deepgram key not configured")
+    try:
+        data = await audio.read()
+        if len(data) == 0:
+            raise HTTPException(status_code=400, detail="Empty audio")
+
+        # Determina il mimetype dal nome file
+        name = (audio.filename or "").lower()
+        mimetype = "audio/mp4"  # default per .m4a iOS
+        if name.endswith(".webm"):
+            mimetype = "audio/webm"
+        elif name.endswith(".wav"):
+            mimetype = "audio/wav"
+        elif name.endswith(".mp3"):
+            mimetype = "audio/mpeg"
+        elif name.endswith(".ogg"):
+            mimetype = "audio/ogg"
+
+        # Chiamiamo Deepgram via HTTP REST (no SDK per ridurre dipendenze pesanti)
+        # Nova-3 supporta italiano dal 2025. Parametri ottimizzati per chitchat.
+        import httpx
+        params = {
+            "model": "nova-3",
+            "language": language or "it",
+            "smart_format": "true",
+            "punctuate": "true",
+            "filler_words": "false",   # rimuove "uhm", "ehm" automaticamente
+        }
+        headers = {
+            "Authorization": f"Token {DEEPGRAM_API_KEY}",
+            "Content-Type": mimetype,
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                "https://api.deepgram.com/v1/listen",
+                params=params,
+                content=data,
+                headers=headers,
+            )
+        if r.status_code != 200:
+            logger.error(f"Deepgram error {r.status_code}: {r.text[:300]}")
+            # Fallback a Whisper se Deepgram fallisce
+            raise HTTPException(status_code=502, detail=f"Deepgram error {r.status_code}")
+        payload = r.json()
+        transcript = ""
+        try:
+            transcript = (
+                payload.get("results", {})
+                .get("channels", [{}])[0]
+                .get("alternatives", [{}])[0]
+                .get("transcript", "")
+                or ""
+            )
+        except Exception:
+            transcript = ""
+        # Riusiamo il pulitore di Whisper per rimuovere comuni junk strings
+        return {"text": _clean_whisper_output(transcript.strip())}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Deepgram transcribe error: {e}")
+        raise HTTPException(status_code=500, detail=f"Deepgram transcribe error: {str(e)}")
+
+
+
 # Common Whisper hallucinations on silent / unintelligible audio.
 # These strings appear because Whisper was trained on a lot of YouTube subtitles.
 _WHISPER_HALLUCINATIONS = [

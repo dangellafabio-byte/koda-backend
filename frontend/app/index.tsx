@@ -964,10 +964,21 @@ export default function Taccuino() {
         return;
       }
       const fd = buildFormData(res);
-      const r = await fetch(`${API_BASE}/transcribe`, {
+      // Fase 4 Step 1: usiamo Deepgram Nova-3 (più veloce e accurato di Whisper).
+      // Fallback automatico a /transcribe (Whisper) se Deepgram fallisce.
+      let r = await fetch(`${API_BASE}/transcribe-deepgram`, {
         method: "POST",
         body: fd,
       });
+      if (!r.ok) {
+        console.warn(`[transcribe] Deepgram failed (${r.status}), fallback to Whisper`);
+        // Ricreo FormData perché il body è già stato consumato
+        const fd2 = buildFormData(res);
+        r = await fetch(`${API_BASE}/transcribe`, {
+          method: "POST",
+          body: fd2,
+        });
+      }
       if (!r.ok) throw new Error("transcribe");
       const data = await r.json();
       const txt = (data.text || "").trim();

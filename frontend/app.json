@@ -53,7 +53,13 @@
         }
       ],
       "expo-font",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "L'app usa il microfono per ascoltare la tua voce"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

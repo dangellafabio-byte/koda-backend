@@ -1,3 +1,71 @@
+## FASE 4 STEP 1 — Migrazione expo-audio + Deepgram Nova-3 (2026-06)
+
+backend:
+  - task: "Endpoint /api/transcribe-deepgram (Nova-3, italiano)"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Aggiunto endpoint POST /api/transcribe-deepgram che usa Deepgram REST
+          API (model=nova-3, smart_format, punctuate). Ritorna {"text": "..."}
+          stesso formato di /transcribe per compat. DEEPGRAM_API_KEY in .env.
+
+frontend:
+  - task: "Migrazione voice.ts da expo-av a expo-audio"
+    implemented: true
+    working: "NA"
+    file: "frontend/lib/voice.ts"
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Riscritto completamente con expo-audio (AudioRecorder API moderna).
+          expo-av causava session leak/wedge su iOS dopo 2-3 turni.
+          expo-audio ha gestione interna della AVAudioSession molto più
+          affidabile. Mantenuto modello tap-to-talk puro.
+
+  - task: "Migrazione speech.ts da Audio.Sound a expo-audio AudioPlayer"
+    implemented: true
+    working: "NA"
+    file: "frontend/lib/speech.ts"
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          createAudioPlayer + addListener("playbackStatusUpdate") al posto
+          di Audio.Sound.createAsync + setOnPlaybackStatusUpdate.
+          stopAllPlayback usa player.remove() che libera completamente la
+          session iOS — punto chiave del miglioramento.
+
+  - task: "Client switch a /api/transcribe-deepgram con fallback Whisper"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Prima chiama Deepgram Nova-3 (sub-secondo, accurato). Se fallisce
+          fallback automatico a /transcribe (Whisper). Risultati gestiti
+          identicamente — drop-in replacement trasparente.
+
+  - task: "app.json: aggiunto plugin expo-audio con microphonePermission"
+    implemented: true
+    working: "NA"
+    file: "frontend/app.json"
+    needs_retesting: true
+
+
 ## FIX MICROFONO STUCK + VOCE TAGLIATA (2026-06 — RCA-driven)
 
 frontend:

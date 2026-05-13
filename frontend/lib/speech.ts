@@ -9,7 +9,11 @@
  * utterance (supports barge-in).
  */
 import * as Speech from "expo-speech";
-import { Audio } from "expo-av";
+import {
+  createAudioPlayer,
+  setAudioModeAsync,
+  type AudioPlayer,
+} from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 import { Platform } from "react-native";
 import type { Tone } from "./api";
@@ -19,8 +23,9 @@ let speakingNow = false;
 let webUnlocked = false;
 let cachedVoices: SpeechSynthesisVoice[] = [];
 
-// Currently playing native Sound instance (so we can stop it mid-speech).
-let currentSound: Audio.Sound | null = null;
+// Currently playing native AudioPlayer (expo-audio). Used so we can interrupt
+// it mid-speech (barge-in) e per cleanup pulito.
+let currentPlayer: AudioPlayer | null = null;
 // Currently playing web <audio> element (for barge-in).
 let currentWebAudio: HTMLAudioElement | null = null;
 // Abort controller for in-flight TTS network requests (so stop() cancels them too).
@@ -123,9 +128,7 @@ export async function unlockSpeech(): Promise<void> {
 
 // ---------- Utility: stop everything ----------
 function stopAllPlayback() {
-  // FIX 1 (RCA): clear PRIMA gli zombie intervals. Senza questo, l'interval
-  // del playback precedente sopravviveva e dopo 2-3 turni la audio session
-  // iOS si corrompeva (zombie chiamavano stopAsync su Sound già unloaded).
+  // Clear zombie intervals/timer
   if (activeStallWatcher) {
     try { clearInterval(activeStallWatcher); } catch {}
     activeStallWatcher = null;
@@ -141,37 +144,17 @@ function stopAllPlayback() {
   } catch {}
   currentAbort = null;
 
-  // Stop native Sound — FIX 3 (RCA): fire-and-forget MA con fallback session reset
-  // se l'unload fallisce, per evitare di lasciare la session iOS wedged.
-  if (currentSound) {
-    const s = currentSound;
-    currentSound = null;
-    (async () => {
-      let unloadOk = false;
-      try { await s.stopAsync(); } catch {}
-      try {
-        await s.unloadAsync();
-        unloadOk = true;
-      } catch {}
-      // FIX 3: se l'unload fallisce, forziamo il reset della audio session
-      // iOS al category 'playback' permissivo — altrimenti la prossima
-      // Audio.Recording/Audio.Sound resta wedged.
-      if (!unloadOk && Platform.OS !== "web") {
-        try {
-          await Audio.setAudioModeAsync({
-            allowsRecordingIOS: false,
-            playsInSilentModeIOS: true,
-            staysActiveInBackground: false,
-            shouldDuckAndroid: true,
-            playThroughEarpieceAndroid: false,
-          });
-        } catch {}
-      }
-    })();
+  // Stop native AudioPlayer (expo-audio)
+  if (currentPlayer) {
+    const p = currentPlayer;
+    currentPlayer = null;
+    try { p.pause(); } catch {}
+    // remove() libera completamente la session audio iOS — punto chiave
+    // del perché expo-audio è migliore di expo-av.
+    try { p.remove(); } catch {}
   }
 
-  // Stop web <audio> — just pause, don't clear src (Safari throws an error
-  // event when src="" and may refuse subsequent plays on the same element).
+  // Stop web <audio>
   if (currentWebAudio) {
     try {
       currentWebAudio.pause();
@@ -297,20 +280,15 @@ async function prepareTTSUrl(
 
 async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
   try {
-    // CRITICAL: switch audio session to playback mode so:
-    // - hardware volume buttons control the playback volume (iOS)
-    // - audio routes through the main speaker (not earpiece on Android)
-    // - audio plays even with the silent switch on (iOS)
+    // expo-audio: setAudioModeAsync gestisce internamente la AVAudioSession
+    // in modo molto più affidabile di expo-av. Niente più session wedge.
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: false,
+        shouldRouteThroughEarpiece: false,
+        shouldPlayInBackground: false,
       });
-      // Give iOS' AVAudioSession a tick to fully apply the new category
-      await new Promise((r) => setTimeout(r, 60));
     } catch (e) {
       console.warn("[speech] setAudioModeAsync failed", e);
     }
@@ -319,44 +297,37 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
       let done = false;
       let everPlayed = false;
       let everLoaded = false;
-      let localSound: Audio.Sound | null = null;
+      let localPlayer: AudioPlayer | null = null;
       let lastProgressAt = Date.now();
-      let lastPositionMs = 0;
-      const cleanup = async () => {
-        try { await localSound?.unloadAsync(); } catch {}
-        if (currentSound === localSound) currentSound = null;
+      let lastPositionSec = 0;
+      let statusSub: { remove: () => void } | null = null;
+      const cleanup = () => {
+        try { statusSub?.remove(); } catch {}
+        try { localPlayer?.pause(); } catch {}
+        try { localPlayer?.remove(); } catch {}
+        if (currentPlayer === localPlayer) currentPlayer = null;
       };
 
-      // FIX 3+6 (RCA): rimosso il setTimeout 2.5s che terminava il playback
-      // ad ogni `isLoaded:false`. Cause vere di "cutoff mid-sentence":
-      //   - AVPlayer su iOS emette isLoaded:false durante normali buffer
-      //     underrun o cambi di chunk MP3, NON sono eventi terminali.
-      //   - Il vero segnale di fine è SEMPRE `didJustFinish: true`.
-      //
-      // Nuova strategia:
-      //   - `didJustFinish: true` → completato con successo (UNICA via)
-      //   - `status.error` su un sound già caricato → errore reale → termina
-      //   - Stallo: se posizione non avanza per >12s E lo stream sembra
-      //     terminato (isLoaded:false persistente) → consideriamo terminato
-      //   - safetyTimer 45s come ultimo guardrail
+      // Handler eventi: didJustFinish è l'UNICA via di completamento OK.
+      // expo-audio fornisce un payload chiaro AudioStatus con didJustFinish.
       const onStatus = (status: any) => {
-        if (status.isLoaded) {
+        if (status?.isLoaded) {
           everLoaded = true;
-          const pos = status.positionMillis ?? 0;
-          if (pos > lastPositionMs) {
-            lastPositionMs = pos;
+          const pos = typeof status.currentTime === "number" ? status.currentTime : 0;
+          if (pos > lastPositionSec) {
+            lastPositionSec = pos;
             lastProgressAt = Date.now();
           }
-          if (status.isPlaying || pos > 0) {
+          if (status.playing || pos > 0) {
             everPlayed = true;
           }
           if (status.didJustFinish) {
             if (!done) {
               done = true;
-              // FIX 1: pulizia esplicita timer/interval anche su naturale fine
               if (activeStallWatcher) { try { clearInterval(activeStallWatcher); } catch {}; activeStallWatcher = null; }
               if (activeSafetyTimer) { try { clearTimeout(activeSafetyTimer); } catch {}; activeSafetyTimer = null; }
-              cleanup().finally(() => resolve(true));
+              cleanup();
+              resolve(true);
             }
             return;
           }
@@ -365,20 +336,15 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
             done = true;
             if (activeStallWatcher) { try { clearInterval(activeStallWatcher); } catch {}; activeStallWatcher = null; }
             if (activeSafetyTimer) { try { clearTimeout(activeSafetyTimer); } catch {}; activeSafetyTimer = null; }
-            cleanup().finally(() => resolve(everPlayed));
+            cleanup();
+            resolve(everPlayed);
           }
         }
-        // isLoaded:false → NON terminiamo. Lasciamo a safetyTimer/stallWatch
-        // il compito di chiudere se è davvero finito o bloccato.
       };
 
-      // Stallo-watcher: ogni 1s controlla se la posizione è progredita.
-      // FIX 4 (RCA): SELF-DESTRUCT check — se currentSound non è più il
-      // nostro localSound, siamo un interval orfano (un nuovo speak() è
-      // partito). Smettiamo immediatamente di girare per evitare di
-      // corrompere la audio session iOS.
+      // Stall-watcher: chiude solo se davvero bloccato per >12s
       const stallWatcher = setInterval(() => {
-        if (currentSound !== localSound) {
+        if (currentPlayer !== localPlayer) {
           clearInterval(stallWatcher);
           if (activeStallWatcher === stallWatcher) activeStallWatcher = null;
           return;
@@ -388,20 +354,19 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
           if (activeStallWatcher === stallWatcher) activeStallWatcher = null;
           return;
         }
-        if (!everPlayed) return; // non ha mai suonato → safetyTimer gestirà
+        if (!everPlayed) return;
         const stalled = Date.now() - lastProgressAt;
         if (stalled > 12000) {
           clearInterval(stallWatcher);
           if (activeStallWatcher === stallWatcher) activeStallWatcher = null;
           if (!done) {
             done = true;
-            console.warn(`[speech] stalled ${stalled}ms after position ${lastPositionMs}ms — assuming complete`);
-            cleanup().finally(() => resolve(true));
+            console.warn(`[speech] stalled ${stalled}ms after position ${lastPositionSec}s — assuming complete`);
+            cleanup();
+            resolve(true);
           }
         }
       }, 1000);
-      // FIX 1: registriamo l'interval come "attivo" (modulo-livello) così
-      // stopAllPlayback() può clearIntervalarlo se un altro speak() lo sostituisce.
       activeStallWatcher = stallWatcher;
 
       const safetyTimer = setTimeout(() => {
@@ -410,43 +375,28 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
         if (activeSafetyTimer === safetyTimer) activeSafetyTimer = null;
         if (!done) {
           done = true;
-          cleanup().finally(() => resolve(everLoaded));
+          cleanup();
+          resolve(everLoaded);
         }
-      }, 45000); // 45s max — risposte lunghe (~120 parole, ~20s di audio)
+      }, 45000);
       activeSafetyTimer = safetyTimer;
 
-      // CRITICAL iOS FIX: register the playback status callback as the 3rd
-      // parameter of createAsync (not via setOnPlaybackStatusUpdate after).
-      // Audio.Sound loads MP3 directly from HTTP URL — most reliable path on iOS.
-      Audio.Sound.createAsync(
-        { uri: audioUrl },
-        { shouldPlay: false, volume: 1.0 },
-        onStatus,
-      )
-        .then(async (created) => {
-          localSound = created.sound;
-          currentSound = localSound;
-          try {
-            await localSound.playAsync();
-          } catch (e) {
-            console.warn("[speech] playAsync failed", e);
-            if (!done) {
-              done = true;
-              clearTimeout(safetyTimer);
-              clearInterval(stallWatcher);
-              cleanup().finally(() => resolve(false));
-            }
-          }
-        })
-        .catch((e) => {
-          console.warn("[speech] createAsync failed (URL)", e);
-          if (!done) {
-            done = true;
-            clearTimeout(safetyTimer);
-            clearInterval(stallWatcher);
-            cleanup().finally(() => resolve(false));
-          }
-        });
+      // Crea il player expo-audio
+      try {
+        localPlayer = createAudioPlayer({ uri: audioUrl });
+        currentPlayer = localPlayer;
+        statusSub = localPlayer.addListener("playbackStatusUpdate", onStatus);
+        localPlayer.play();
+      } catch (e) {
+        console.warn("[speech] createAudioPlayer failed", e);
+        if (!done) {
+          done = true;
+          clearTimeout(safetyTimer);
+          clearInterval(stallWatcher);
+          cleanup();
+          resolve(false);
+        }
+      }
     });
   } catch (e) {
     console.warn("[speech] playElevenLabsNativeFromUrl outer error", e);
