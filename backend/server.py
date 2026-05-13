@@ -860,6 +860,13 @@ async def api_converse(req: ConverseRequest):
     extracted_raw = data.get("extracted")
     memory_update = (data.get("memory_update") or "").strip()
     actions_raw = data.get("actions") or []
+    # DEBUG: log delle actions per capire cosa Claude restituisce.
+    # In particolare per il cambio tema dove l'utente diceva "non funziona".
+    try:
+        if "tema" in (user_text or "").lower() or "theme" in (user_text or "").lower():
+            logger.info(f"[DEBUG TEMA] user='{user_text}' actions={actions_raw} reply='{reply_text[:120]}'")
+    except Exception:
+        pass
 
     extracted_obj = None
     if isinstance(extracted_raw, dict):
@@ -879,6 +886,36 @@ async def api_converse(req: ConverseRequest):
                 )
             except Exception:
                 continue
+
+    # === SAFETY NET (Haiku a volte si dimentica le actions) ===
+    # Parser server-side per richieste tema/colore comuni. Se l'utente
+    # ha detto chiaramente "cambia tema scuro" ma Claude non ha emesso
+    # l'action, la generiamo noi qui. Garantisce che il cambio AVVENGA
+    # SEMPRE, indipendentemente da come Claude formatta la risposta.
+    try:
+        utxt = (user_text or "").lower()
+        has_theme_action = any(
+            (a.type == "config" and getattr(a, "key", None) == "theme") for a in parsed_actions
+        )
+        if not has_theme_action and "tema" in utxt:
+            theme_map = [
+                (["scuro", "scura", "notte", "buio", "nero"], "notte"),
+                (["chiaro", "chiara", "giorno", "luce", "bianco"], "giorno"),
+                (["cielo", "azzurro", "blu", "celeste"], "cielo"),
+                (["bosco", "verde", "foresta"], "bosco"),
+                (["ciliegia", "rosa", "rosso", "rossa"], "ciliegia"),
+                (["sistema", "automatico", "automatica", "default"], "sistema"),
+                (["auto orario", "auto-orario", "ora", "orario"], "auto-orario"),
+            ]
+            for keywords, theme_val in theme_map:
+                if any(k in utxt for k in keywords):
+                    parsed_actions.append(
+                        Action(type="config", key="theme", value=theme_val)
+                    )
+                    logger.info(f"[SAFETY NET TEMA] auto-injected theme='{theme_val}' from user_text='{user_text}'")
+                    break
+    except Exception as e:
+        logger.warning(f"[SAFETY NET TEMA] error: {e}")
 
     ai_entry = TimelineEntry(
         role="ai",
