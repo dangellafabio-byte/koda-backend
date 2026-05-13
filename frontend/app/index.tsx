@@ -595,7 +595,32 @@ export default function Taccuino() {
           } else if (key === "summary_freq" && typeof value === "string") {
             patch.settings = { ...(profile?.settings || {}), summary_freq: value };
           } else if (key === "theme" && typeof value === "string") {
-            patch.settings = { ...(profile?.settings || {}), theme: value };
+            // Mapping legacy: se Claude ritorna i vecchi alias inglesi,
+            // li traduciamo nei nomi italiani veri usati dal ThemeProvider.
+            const themeAlias: Record<string, ThemeName> = {
+              dark: "notte",
+              scuro: "notte",
+              notte: "notte",
+              light: "giorno",
+              chiaro: "giorno",
+              giorno: "giorno",
+              zen: "sistema",
+              sistema: "sistema",
+              automatico: "sistema",
+              "auto-orario": "auto-orario",
+              auto: "auto-orario",
+              cielo: "cielo",
+              azzurro: "cielo",
+              bosco: "bosco",
+              verde: "bosco",
+              ciliegia: "ciliegia",
+              rosa: "ciliegia",
+            };
+            const mapped = themeAlias[value.toLowerCase()] || (value as ThemeName);
+            patch.settings = { ...(profile?.settings || {}), theme: mapped };
+            // CRITICO: applichiamo subito il tema al ThemeProvider locale
+            // altrimenti il salvataggio nel DB non si vede mai a schermo.
+            try { setThemeName(mapped as ThemeName); } catch {}
           } else if ((key === "color_recording" || key === "color_speaking" || key === "color_thinking" || key === "color_idle") && typeof value === "string") {
             // Salva il colore dello stato nella mappa profile.style_preferences.palette
             const stateKey = key.replace("color_", ""); // "recording" | "speaking" | ...
