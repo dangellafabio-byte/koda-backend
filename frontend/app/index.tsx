@@ -839,12 +839,12 @@ export default function Taccuino() {
       // appears "stuck listening".
       if (Platform.OS !== "web" && status !== "speaking" && !ttsPlaying) {
         try {
-          const { Audio } = require("expo-av");
+          const { setAudioModeAsync } = require("expo-audio");
           // Brief switch to non-recording mode first (forces any leftover
           // playback session to release), then immediately back to recording.
-          await Audio.setAudioModeAsync({
-            allowsRecordingIOS: false,
-            playsInSilentModeIOS: true,
+          await setAudioModeAsync({
+            allowsRecording: false,
+            playsInSilentMode: true,
           });
           await new Promise((r) => setTimeout(r, 30));
         } catch {}
@@ -922,13 +922,12 @@ export default function Taccuino() {
       // playback fails silently → user hears no AI voice.
       if (Platform.OS !== "web") {
         try {
-          const { Audio } = require("expo-av");
-          await Audio.setAudioModeAsync({
-            allowsRecordingIOS: false,
-            playsInSilentModeIOS: true,
-            staysActiveInBackground: false,
-            shouldDuckAndroid: true,
-            playThroughEarpieceAndroid: false,
+          const { setAudioModeAsync } = require("expo-audio");
+          await setAudioModeAsync({
+            allowsRecording: false,
+            playsInSilentMode: true,
+            shouldRouteThroughEarpiece: false,
+            shouldPlayInBackground: false,
           });
         } catch {}
       }
