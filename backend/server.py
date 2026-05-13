@@ -337,6 +337,9 @@ class Profile(BaseModel):
     confidence_level: int = 0  # 0-100, slowly grows
     total_messages: int = 0
     settings: TaccuinoSettings = Field(default_factory=TaccuinoSettings)
+    # Personalizzazioni stilistiche (palette colori blob, avatar, ecc.)
+    # Salvato come dict aperto per consentire estensioni future senza migrazioni.
+    style_preferences: Dict[str, Any] = Field(default_factory=dict)
     memory_summary: str = ""  # Periodically updated narrative about the user
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -350,6 +353,7 @@ class ProfileUpdate(BaseModel):
     user_gender: Optional[str] = None
     onboarded: Optional[bool] = None
     settings: Optional[TaccuinoSettings] = None
+    style_preferences: Optional[Dict[str, Any]] = None
 
 
 class ExtractedFact(BaseModel):
