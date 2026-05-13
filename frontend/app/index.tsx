@@ -1659,6 +1659,7 @@ export default function Taccuino() {
                   tone={lastAiTone}
                   size={Math.min(windowWidth * 0.78, 360)}
                   palette={confessionalMode ? ["#1F2937", "#374151", "#0B0B0F"] : null}
+                  statePalettes={(profile?.style_preferences as any)?.palette || null}
                   warmth={confessionalMode ? 0 : ambient.warmth}
                   dim={ambient.dim}
                   texture={confessionalMode ? "solida" : null}
@@ -1706,6 +1707,7 @@ export default function Taccuino() {
                 size={260}
                 avatarUri={(profile?.settings as any)?.ai_avatar || null}
                 palette={null}
+                statePalettes={(profile?.style_preferences as any)?.palette || null}
                 warmth={ambient.warmth}
                 dim={ambient.dim}
               />

@@ -40,6 +40,14 @@ type Props = {
   avatarUri?: string | null;
   /** Custom palette [outer, mid, core] — overrides tone-derived */
   palette?: [string, string, string] | null;
+  /** Mappa colore singolo HEX per stato — sovrascrive i default rosso/giallo/blu/bianco.
+   *  Da ognuno deriviamo automaticamente la triade (chiaro, medio, scuro). */
+  statePalettes?: {
+    recording?: string | null;
+    speaking?: string | null;
+    thinking?: string | null;
+    idle?: string | null;
+  } | null;
   /** Warmth 0..1 from useOrbAmbient — boosts intensity */
   warmth?: number;
   /** Dim 0..1 — fades the blob when user is silent for a long time */
@@ -56,6 +64,23 @@ function textureFromTone(tone: BlobTone | null | undefined): BlobTexture {
   if (tone === "energetic" || tone === "urgent") return "vibrante";
   if (tone === "concerned") return "solida";
   return "morbida"; // warm, calm, neutral
+}
+
+/** Da un singolo HEX deriva la triade [chiaro, medio, scuro] usata dal blob. */
+function deriveTriad(hex: string): [string, string, string] | null {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
+  if (!m) return null;
+  const r = parseInt(m[1].slice(0, 2), 16);
+  const g = parseInt(m[1].slice(2, 4), 16);
+  const b = parseInt(m[1].slice(4, 6), 16);
+  const lighten = (v: number) => Math.min(255, Math.round(v + (255 - v) * 0.45));
+  const darken = (v: number) => Math.max(0, Math.round(v * 0.6));
+  const toHex = (v: number) => v.toString(16).padStart(2, "0");
+  return [
+    `#${toHex(lighten(r))}${toHex(lighten(g))}${toHex(lighten(b))}`,
+    `#${toHex(r)}${toHex(g)}${toHex(b)}`,
+    `#${toHex(darken(r))}${toHex(darken(g))}${toHex(darken(b))}`,
+  ];
 }
 
 // === Color palettes per texture
@@ -151,6 +176,7 @@ export default function OrganicBlob({
   size = 240,
   avatarUri,
   palette: customPalette,
+  statePalettes,
   warmth = 0,
   dim = 0,
   drift = true,
@@ -160,21 +186,37 @@ export default function OrganicBlob({
   const texture: BlobTexture = textureOverride || textureFromTone(tone);
 
   // === Color resolution
-  // SISTEMA 3 COLORI PRIMARI:
+  // SISTEMA 4 COLORI DI STATO:
   //  🔴 ROSSO       → recording  (parli TU)
   //  🟡 GIALLO      → thinking   (Coda elabora)
   //  🔵 BLU         → speaking   (parla CODA)
   //  ⚪ BIANCO/grigio → idle      (standby neutro)
   //
-  // TARGET = il colore che dovrebbe avere ADESSO in base allo stato.
-  // L'utente può sovrascrivere via comando vocale → customPalette.
+  // L'utente può sovrascrivere OGNI singolo stato via comando vocale →
+  // statePalettes={recording, speaking, thinking, idle}. Da un singolo HEX
+  // deriviamo automaticamente la triade chiaro/medio/scuro.
   const targetColors: [string, string, string] = useMemo(() => {
-    if (status === "recording") return ["#FCA5A5", "#EF4444", "#B91C1C"]; // ROSSO
-    if (status === "thinking") return ["#FDE68A", "#FACC15", "#CA8A04"];  // GIALLO
-    if (status === "speaking") return ["#93C5FD", "#3B82F6", "#1D4ED8"];  // BLU
+    // Helper: prende override hex per uno stato e lo trasforma in triade
+    const overrideFor = (k: "recording" | "speaking" | "thinking" | "idle") => {
+      const hex = statePalettes?.[k];
+      if (hex && typeof hex === "string") {
+        const triad = deriveTriad(hex);
+        if (triad) return triad;
+      }
+      return null;
+    };
+    if (status === "recording") {
+      return overrideFor("recording") || ["#FCA5A5", "#EF4444", "#B91C1C"]; // ROSSO
+    }
+    if (status === "thinking") {
+      return overrideFor("thinking") || ["#FDE68A", "#FACC15", "#CA8A04"]; // GIALLO
+    }
+    if (status === "speaking") {
+      return overrideFor("speaking") || ["#93C5FD", "#3B82F6", "#1D4ED8"]; // BLU
+    }
     if (customPalette) return customPalette;
-    return ["#F3F4F6", "#E5E7EB", "#D1D5DB"]; // BIANCO neutro
-  }, [status, customPalette]);
+    return overrideFor("idle") || ["#F3F4F6", "#E5E7EB", "#D1D5DB"]; // BIANCO neutro
+  }, [status, customPalette, statePalettes]);
 
   // === TRANSIZIONE COLORE GRADUALE ===
   // Mantieni il colore "visualizzato" che si interpola verso targetColors
