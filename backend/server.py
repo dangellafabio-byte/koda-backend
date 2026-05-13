@@ -671,17 +671,11 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f'      → {{ "type": "config", "key": "theme", "value": "notte|giorno|cielo|bosco|ciliegia|sistema|auto-orario" }}\n'
         f'      I VALORI VALIDI sono ESATTAMENTE: notte, giorno, cielo, bosco, ciliegia, sistema, auto-orario.\n'
         f'      MAI usare "dark", "light", "zen" o altri valori inglesi.\n'
-        f'  • "il colore quando parlo io [verde/blu/rosa/...]" (cambia ROSSO default)\n'
-        f'      → {{ "type": "config", "key": "color_recording", "value": "#HEX|name" }}\n'
-        f'  • "il colore quando parli tu [...]" (cambia BLU default)\n'
-        f'      → {{ "type": "config", "key": "color_speaking", "value": "#HEX|name" }}\n'
-        f'  • "il colore quando pensi [...]" (cambia GIALLO default)\n'
-        f'      → {{ "type": "config", "key": "color_thinking", "value": "#HEX|name" }}\n'
-        f'  • "il colore di standby [...]" (cambia BIANCO default)\n'
-        f'      → {{ "type": "config", "key": "color_idle", "value": "#HEX|name" }}\n'
-        f'     [Mappa nomi italiani comuni a HEX. Es: rosso #EF4444, blu #3B82F6, '
-        f'giallo #FACC15, verde #22C55E, rosa #EC4899, viola #8B5CF6, arancione #F97316, '
-        f'azzurro #38BDF8, nero #1F2937, bianco #F3F4F6, marrone #92400E.]\n'
+        f'  • ⚠️ CAMBIO COLORE BLOB (recording/speaking/thinking/idle) → TEMPORANEAMENTE NON DISPONIBILE.\n'
+        f'      Se l\'utente chiede di cambiare un colore del blob, RISPONDI ONESTAMENTE che adesso\n'
+        f'      non puoi farlo. NON inventare di averlo fatto. NON emettere actions color_*.\n'
+        f'      Esempio: "Mi spiace Fabio, cambiare i colori del blob non è ancora pronto come funzione.\n'
+        f'      Te lo dirò quando potrò farlo davvero." (1 frase, niente actions JSON per il colore.)\n'
         f'  • "cambia voce" / "fammi sentire le voci"\n'
         f'      → {{ "type": "config", "key": "list_voices", "value": true }} (l\'app mostrerà le opzioni)\n'
         f'  • "dimentica l\'ultima cosa" / "ghosta questo"\n'
@@ -934,67 +928,11 @@ async def api_converse(req: ConverseRequest):
     except Exception as e:
         logger.warning(f"[SAFETY NET TEMA] error: {e}")
 
-    # === SAFETY NET COLORI BLOB ===
-    # Parser server-side per richieste di cambio colore del blob.
-    # 4 stati: recording (default rosso) / speaking (blu) / thinking (giallo) / idle (bianco)
-    try:
-        utxt = (text or "").lower()
-        # Mappa colori italiani → HEX
-        color_hex_map = {
-            "rosso": "#EF4444", "rossa": "#EF4444",
-            "blu": "#3B82F6",
-            "giallo": "#FACC15", "gialla": "#FACC15",
-            "verde": "#22C55E",
-            "rosa": "#EC4899",
-            "viola": "#8B5CF6",
-            "arancione": "#F97316", "arancio": "#F97316",
-            "azzurro": "#38BDF8", "azzurra": "#38BDF8",
-            "nero": "#1F2937", "nera": "#1F2937",
-            "bianco": "#F3F4F6", "bianca": "#F3F4F6",
-            "marrone": "#92400E",
-            "oro": "#FCD34D", "dorato": "#FCD34D",
-            "argento": "#9CA3AF", "argentato": "#9CA3AF",
-            "celeste": "#7DD3FC",
-            "fucsia": "#D946EF",
-            "lilla": "#C4B5FD",
-            "turchese": "#14B8A6",
-        }
-        found_color_name = None
-        found_hex = None
-        for cname, chex in color_hex_map.items():
-            if cname in utxt:
-                found_color_name = cname
-                found_hex = chex
-                break
-
-        existing_color_keys = [getattr(a, "key", "") for a in parsed_actions]
-        already_has_color = any(k in existing_color_keys for k in ["color_recording", "color_speaking", "color_thinking", "color_idle"])
-
-        if found_hex and not already_has_color:
-            target_key = None
-            if any(k in utxt for k in ["quando parlo io", "registro", "registrazione", "io parlo", "il mio colore", "quando registro"]):
-                target_key = "color_recording"
-            elif any(k in utxt for k in ["quando parli tu", "quando parla", "quando rispondi", "il tuo colore", "quando dice", "quando risponde"]):
-                target_key = "color_speaking"
-            elif any(k in utxt for k in ["quando pensi", "quando pensa", "thinking", "elabora", "elaborazione"]):
-                target_key = "color_thinking"
-            elif any(k in utxt for k in ["standby", "riposo", "idle", "fermo", "neutro"]):
-                target_key = "color_idle"
-            elif any(k in utxt for k in ["blob", "cerchio", "bolla", "palla"]) and any(
-                k in utxt for k in ["colore", "cover", "sfondo", "diventa", "cambia"]
-            ):
-                target_key = "color_idle"
-
-            if target_key:
-                parsed_actions.append(
-                    Action(type="config", key=target_key, value=found_hex)
-                )
-                logger.info(
-                    f"[SAFETY NET COLORE] auto-injected {target_key}='{found_hex}' "
-                    f"(colore='{found_color_name}') from text='{text}'"
-                )
-    except Exception as e:
-        logger.warning(f"[SAFETY NET COLORE] error: {e}")
+    # === SAFETY NET COLORI BLOB — DISABILITATO ===
+    # La feature di cambio colore blob via voce è temporaneamente disabilitata
+    # (sarà riattivata nella dev build con tutto l'audio stack nuovo).
+    # Adesso quando l'utente chiede colore, l'AI lo dice onestamente nel reply.
+    pass
 
     ai_entry = TimelineEntry(
         role="ai",
