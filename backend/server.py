@@ -751,6 +751,19 @@ async def api_update_profile(update: ProfileUpdate):
         p.onboarded = update.onboarded
     if update.settings is not None:
         p.settings = update.settings
+    if update.style_preferences is not None:
+        # Merge profondo: nuovi valori sovrascrivono quelli esistenti senza
+        # cancellare le altre chiavi (es. cambiare solo "recording" lascia
+        # invariati gli altri stati).
+        existing = dict(p.style_preferences or {})
+        for k, v in update.style_preferences.items():
+            if isinstance(v, dict) and isinstance(existing.get(k), dict):
+                # merge un livello (es. palette: {recording: X, idle: Y})
+                merged = {**existing[k], **v}
+                existing[k] = merged
+            else:
+                existing[k] = v
+        p.style_preferences = existing
     return await save_profile(p)
 
 
