@@ -38,9 +38,16 @@ export async function prewarmMic(): Promise<boolean> {
       return true;
     }
     if (_nativePermissionGranted) return true;
-    const status = await AudioModule.requestRecordingPermissionsAsync();
-    if (!status.granted) return false;
-    _nativePermissionGranted = true;
+    // FIX Expo Go: controlla prima lo stato CORRENTE prima di richiedere.
+    // Expo Go a volte mostra "negato" anche se iOS l'ha già concesso.
+    const existing = await AudioModule.getRecordingPermissionsAsync();
+    if (existing.granted) {
+      _nativePermissionGranted = true;
+    } else {
+      const requested = await AudioModule.requestRecordingPermissionsAsync();
+      if (!requested.granted) return false;
+      _nativePermissionGranted = true;
+    }
     // Modalità audio iniziale: playback (per ascoltare TTS).
     await setAudioModeAsync({
       playsInSilentMode: true,
@@ -118,12 +125,21 @@ export async function startRecording(): Promise<Recorder> {
   }
 
   // ============ NATIVE (iOS/Android) — expo-audio ============
-  // Permessi
-  const status = await AudioModule.requestRecordingPermissionsAsync();
-  if (!status.granted) {
-    throw new Error("Permesso microfono negato");
+  // FIX Expo Go: check del permesso CORRENTE prima di richiederlo.
+  // Su Expo Go, requestRecordingPermissionsAsync a volte ritorna granted:false
+  // anche se iOS ha già concesso il permesso a livello sistema.
+  if (!_nativePermissionGranted) {
+    const existing = await AudioModule.getRecordingPermissionsAsync();
+    if (existing.granted) {
+      _nativePermissionGranted = true;
+    } else {
+      const requested = await AudioModule.requestRecordingPermissionsAsync();
+      if (!requested.granted) {
+        throw new Error("Permesso microfono negato — controlla Impostazioni iOS > Expo Go > Microfono");
+      }
+      _nativePermissionGranted = true;
+    }
   }
-  _nativePermissionGranted = true;
 
   // Modalità audio: passa a "recording mode". expo-audio gestisce internamente
   // la AVAudioSession iOS in modo MOLTO più affidabile di expo-av.
