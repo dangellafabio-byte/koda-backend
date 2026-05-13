@@ -9,11 +9,7 @@
  * utterance (supports barge-in).
  */
 import * as Speech from "expo-speech";
-import {
-  createAudioPlayer,
-  setAudioModeAsync,
-  type AudioPlayer,
-} from "expo-audio";
+import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system/legacy";
 import { Platform } from "react-native";
 import type { Tone } from "./api";
@@ -23,20 +19,17 @@ let speakingNow = false;
 let webUnlocked = false;
 let cachedVoices: SpeechSynthesisVoice[] = [];
 
-// Currently playing native AudioPlayer (expo-audio). Used so we can interrupt
-// it mid-speech (barge-in) e per cleanup pulito.
-let currentPlayer: AudioPlayer | null = null;
+// Currently playing native Sound instance (so we can stop it mid-speech).
+let currentSound: Audio.Sound | null = null;
 // Currently playing web <audio> element (for barge-in).
 let currentWebAudio: HTMLAudioElement | null = null;
 // Abort controller for in-flight TTS network requests (so stop() cancels them too).
 let currentAbort: AbortController | null = null;
 
-// FIX 1 (RCA): module-level handles for the stall-watcher interval and
-// safety timer dell'attuale playback. Senza questi puntatori, ogni speak()
-// creava setInterval/setTimeout che restavano vivi anche dopo che il
-// playback era finito o era stato interrotto da stopAllPlayback() →
-// "zombie intervals" che dopo 2-3 turni corrompevano la audio session
-// iOS chiamando stopAsync su Sound già unloaded → app freezata.
+// Module-level handles per stallWatcher/safetyTimer per evitare zombie intervals.
+// Senza questi puntatori, ogni speak() creava setInterval/setTimeout che restavano
+// vivi anche dopo che il playback era finito o era stato interrotto, corrompendo
+// la audio session iOS.
 let activeStallWatcher: ReturnType<typeof setInterval> | null = null;
 let activeSafetyTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -144,14 +137,26 @@ function stopAllPlayback() {
   } catch {}
   currentAbort = null;
 
-  // Stop native AudioPlayer (expo-audio)
-  if (currentPlayer) {
-    const p = currentPlayer;
-    currentPlayer = null;
-    try { p.pause(); } catch {}
-    // remove() libera completamente la session audio iOS — punto chiave
-    // del perché expo-audio è migliore di expo-av.
-    try { p.remove(); } catch {}
+  // Stop native Sound (expo-av) — fire-and-forget con fallback session reset.
+  if (currentSound) {
+    const s = currentSound;
+    currentSound = null;
+    (async () => {
+      let unloadOk = false;
+      try { await s.stopAsync(); } catch {}
+      try { await s.unloadAsync(); unloadOk = true; } catch {}
+      if (!unloadOk && Platform.OS !== "web") {
+        try {
+          await Audio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: false,
+            shouldDuckAndroid: true,
+            playThroughEarpieceAndroid: false,
+          });
+        } catch {}
+      }
+    })();
   }
 
   // Stop web <audio>
@@ -280,15 +285,16 @@ async function prepareTTSUrl(
 
 async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
   try {
-    // expo-audio: setAudioModeAsync gestisce internamente la AVAudioSession
-    // in modo molto più affidabile di expo-av. Niente più session wedge.
+    // expo-av: switch audio session to playback mode.
     try {
-      await setAudioModeAsync({
-        playsInSilentMode: true,
-        allowsRecording: false,
-        shouldRouteThroughEarpiece: false,
-        shouldPlayInBackground: false,
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
       });
+      await new Promise((r) => setTimeout(r, 60));
     } catch (e) {
       console.warn("[speech] setAudioModeAsync failed", e);
     }
@@ -297,28 +303,24 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
       let done = false;
       let everPlayed = false;
       let everLoaded = false;
-      let localPlayer: AudioPlayer | null = null;
+      let localSound: Audio.Sound | null = null;
       let lastProgressAt = Date.now();
-      let lastPositionSec = 0;
-      let statusSub: { remove: () => void } | null = null;
-      const cleanup = () => {
-        try { statusSub?.remove(); } catch {}
-        try { localPlayer?.pause(); } catch {}
-        try { localPlayer?.remove(); } catch {}
-        if (currentPlayer === localPlayer) currentPlayer = null;
+      let lastPositionMs = 0;
+      const cleanup = async () => {
+        try { await localSound?.unloadAsync(); } catch {}
+        if (currentSound === localSound) currentSound = null;
       };
 
       // Handler eventi: didJustFinish è l'UNICA via di completamento OK.
-      // expo-audio fornisce un payload chiaro AudioStatus con didJustFinish.
       const onStatus = (status: any) => {
         if (status?.isLoaded) {
           everLoaded = true;
-          const pos = typeof status.currentTime === "number" ? status.currentTime : 0;
-          if (pos > lastPositionSec) {
-            lastPositionSec = pos;
+          const pos = status.positionMillis ?? 0;
+          if (pos > lastPositionMs) {
+            lastPositionMs = pos;
             lastProgressAt = Date.now();
           }
-          if (status.playing || pos > 0) {
+          if (status.isPlaying || pos > 0) {
             everPlayed = true;
           }
           if (status.didJustFinish) {
@@ -326,8 +328,7 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
               done = true;
               if (activeStallWatcher) { try { clearInterval(activeStallWatcher); } catch {}; activeStallWatcher = null; }
               if (activeSafetyTimer) { try { clearTimeout(activeSafetyTimer); } catch {}; activeSafetyTimer = null; }
-              cleanup();
-              resolve(true);
+              cleanup().finally(() => resolve(true));
             }
             return;
           }
@@ -336,15 +337,14 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
             done = true;
             if (activeStallWatcher) { try { clearInterval(activeStallWatcher); } catch {}; activeStallWatcher = null; }
             if (activeSafetyTimer) { try { clearTimeout(activeSafetyTimer); } catch {}; activeSafetyTimer = null; }
-            cleanup();
-            resolve(everPlayed);
+            cleanup().finally(() => resolve(everPlayed));
           }
         }
       };
 
       // Stall-watcher: chiude solo se davvero bloccato per >12s
       const stallWatcher = setInterval(() => {
-        if (currentPlayer !== localPlayer) {
+        if (currentSound !== localSound) {
           clearInterval(stallWatcher);
           if (activeStallWatcher === stallWatcher) activeStallWatcher = null;
           return;
@@ -361,9 +361,8 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
           if (activeStallWatcher === stallWatcher) activeStallWatcher = null;
           if (!done) {
             done = true;
-            console.warn(`[speech] stalled ${stalled}ms after position ${lastPositionSec}s — assuming complete`);
-            cleanup();
-            resolve(true);
+            console.warn(`[speech] stalled ${stalled}ms after position ${lastPositionMs}ms — assuming complete`);
+            cleanup().finally(() => resolve(true));
           }
         }
       }, 1000);
@@ -375,28 +374,41 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
         if (activeSafetyTimer === safetyTimer) activeSafetyTimer = null;
         if (!done) {
           done = true;
-          cleanup();
-          resolve(everLoaded);
+          cleanup().finally(() => resolve(everLoaded));
         }
       }, 45000);
       activeSafetyTimer = safetyTimer;
 
-      // Crea il player expo-audio
-      try {
-        localPlayer = createAudioPlayer({ uri: audioUrl });
-        currentPlayer = localPlayer;
-        statusSub = localPlayer.addListener("playbackStatusUpdate", onStatus);
-        localPlayer.play();
-      } catch (e) {
-        console.warn("[speech] createAudioPlayer failed", e);
-        if (!done) {
-          done = true;
-          clearTimeout(safetyTimer);
-          clearInterval(stallWatcher);
-          cleanup();
-          resolve(false);
-        }
-      }
+      // Crea il sound expo-av con onStatus callback
+      Audio.Sound.createAsync(
+        { uri: audioUrl },
+        { shouldPlay: false, volume: 1.0 },
+        onStatus,
+      )
+        .then(async (created) => {
+          localSound = created.sound;
+          currentSound = localSound;
+          try {
+            await localSound.playAsync();
+          } catch (e) {
+            console.warn("[speech] playAsync failed", e);
+            if (!done) {
+              done = true;
+              clearTimeout(safetyTimer);
+              clearInterval(stallWatcher);
+              cleanup().finally(() => resolve(false));
+            }
+          }
+        })
+        .catch((e) => {
+          console.warn("[speech] createAsync failed", e);
+          if (!done) {
+            done = true;
+            clearTimeout(safetyTimer);
+            clearInterval(stallWatcher);
+            cleanup().finally(() => resolve(false));
+          }
+        });
     });
   } catch (e) {
     console.warn("[speech] playElevenLabsNativeFromUrl outer error", e);

@@ -1,21 +1,13 @@
-// Voice recording via expo-audio (moderno, stabile).
-// expo-av era deprecato e causava session leak su iOS dopo 2-3 turni.
-// expo-audio ha un'API completamente nuova: hook-based + lifecycle gestito da Expo.
-//
-// MODELLO: tap-to-talk puro. Niente VAD, niente magia. L'utente preme per
-// iniziare, ripreme per inviare. Affidabile al 100%.
+// Voice recording — back to expo-av per compatibilità Expo Go.
+// expo-audio non funziona affidabilmente in Expo Go (permessi bug).
+// Manteniamo Deepgram come endpoint backend (4x più veloce di Whisper).
+// MODELLO: tap-to-talk puro. Niente VAD lato client.
 import { Platform } from "react-native";
-import {
-  AudioModule,
-  AudioRecorder,
-  RecordingPresets,
-  setAudioModeAsync,
-} from "expo-audio";
+import { Audio } from "expo-av";
 
 export type Recorder = {
   stop: () => Promise<{ uri?: string; blob?: Blob; mime: string; filename: string } | null>;
   cancel: () => Promise<void>;
-  /** Stub no-op per compat con index.tsx esistente */
   onSilence?: (cb: () => void) => void;
   onSpeechStart?: (cb: () => void) => void;
   onMeter?: (cb: (dbValue: number, voicePresentDb?: number | null) => void) => void;
@@ -25,9 +17,8 @@ export type Recorder = {
 };
 
 let _webPermissionAsked = false;
-let _nativePermissionGranted = false;
+let _nativeReady = false;
 
-/** Pre-warm microphone permission (chiamato all'avvio app). */
 export async function prewarmMic(): Promise<boolean> {
   try {
     if (Platform.OS === "web") {
@@ -37,24 +28,16 @@ export async function prewarmMic(): Promise<boolean> {
       stream.getTracks().forEach((t) => t.stop());
       return true;
     }
-    if (_nativePermissionGranted) return true;
-    // FIX Expo Go: controlla prima lo stato CORRENTE prima di richiedere.
-    // Expo Go a volte mostra "negato" anche se iOS l'ha già concesso.
-    const existing = await AudioModule.getRecordingPermissionsAsync();
-    if (existing.granted) {
-      _nativePermissionGranted = true;
-    } else {
-      const requested = await AudioModule.requestRecordingPermissionsAsync();
-      if (!requested.granted) return false;
-      _nativePermissionGranted = true;
-    }
-    // Modalità audio iniziale: playback (per ascoltare TTS).
-    await setAudioModeAsync({
-      playsInSilentMode: true,
-      allowsRecording: false,
-      shouldRouteThroughEarpiece: false,
-      shouldPlayInBackground: false,
+    if (_nativeReady) return true;
+    try { await Audio.requestPermissionsAsync(); } catch {}
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: true,
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
     });
+    _nativeReady = true;
     return true;
   } catch {
     return false;
@@ -124,66 +107,56 @@ export async function startRecording(): Promise<Recorder> {
     };
   }
 
-  // ============ NATIVE (iOS/Android) — expo-audio ============
-  // BUG NOTO expo-audio + Expo Go: getRecordingPermissionsAsync e
-  // requestRecordingPermissionsAsync ritornano sempre granted:false anche
-  // quando iOS ha concesso il permesso. Workaround: SKIP del check
-  // permessi → provo a registrare direttamente. Se il permesso manca
-  // davvero, iOS blocca con errore specifico nel try/catch.
-  // (In dev build vera, expo-audio gestirà i permessi nativamente.)
-  if (!_nativePermissionGranted) {
-    try {
-      const existing = await AudioModule.getRecordingPermissionsAsync();
-      if (existing.granted) {
-        _nativePermissionGranted = true;
-      } else {
-        // Richiediamo, ma NON consideriamo fatale se Expo Go ritorna granted:false
-        const requested = await AudioModule.requestRecordingPermissionsAsync();
-        if (requested.granted) {
-          _nativePermissionGranted = true;
-        }
-        // Se ancora false → procediamo lo stesso. Su Expo Go è un falso
-        // negativo. Su un device dove il permesso manca davvero, fallirà
-        // nel new AudioRecorder qui sotto con errore catturabile.
-      }
-    } catch {
-      // Anche getRecordingPermissionsAsync può lanciare → ignoriamo e
-      // tentiamo di registrare comunque.
-    }
-  }
+  // ============ NATIVE — expo-av ============
+  // Permessi: non blocchiamo se request restituisce false (potrebbe essere già concesso).
+  try { await Audio.requestPermissionsAsync(); } catch {}
 
-  // Modalità audio: passa a "recording mode". expo-audio gestisce internamente
-  // la AVAudioSession iOS in modo MOLTO più affidabile di expo-av.
-  await setAudioModeAsync({
-    playsInSilentMode: true,
-    allowsRecording: true,
-    shouldRouteThroughEarpiece: false,
-    shouldPlayInBackground: false,
-  });
+  // Doppia commutazione audio session: forza iOS a rilasciare qualunque
+  // sessione playback wedged dal turno precedente.
+  try {
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
+    });
+    await new Promise((r) => setTimeout(r, 80));
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: true,
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
+    });
+    await new Promise((r) => setTimeout(r, 150));
+  } catch {}
+  _nativeReady = true;
 
-  // Crea il recorder con preset HIGH_QUALITY (16kHz mono = perfetto per STT)
-  const recorder = new AudioRecorder(RecordingPresets.HIGH_QUALITY);
-  await recorder.prepareToRecordAsync();
-  recorder.record();
+  const rec = new Audio.Recording();
+  await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+  await rec.startAsync();
   const startedAt = Date.now();
 
   return {
     stop: async () => {
+      let unloaded = false;
       try {
-        await recorder.stop();
-      } catch (e) {
-        // Anche se stop fallisce, tentiamo di leggere l'URI comunque
-      }
-      // Torna a modalità playback per il TTS
-      try {
-        await setAudioModeAsync({
-          playsInSilentMode: true,
-          allowsRecording: false,
-          shouldRouteThroughEarpiece: false,
-          shouldPlayInBackground: false,
-        });
+        await rec.stopAndUnloadAsync();
+        unloaded = true;
       } catch {}
-      const uri = recorder.uri || undefined;
+      if (!unloaded) {
+        try {
+          await Audio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: false,
+            shouldDuckAndroid: true,
+            playThroughEarpieceAndroid: false,
+          });
+        } catch {}
+      }
+      const uri = rec.getURI() || undefined;
       const totalMs = Date.now() - startedAt;
       if (totalMs < 500) {
         return null;
@@ -191,11 +164,11 @@ export async function startRecording(): Promise<Recorder> {
       return { uri, mime: "audio/m4a", filename: "audio.m4a" };
     },
     cancel: async () => {
-      try { await recorder.stop(); } catch {}
+      try { await rec.stopAndUnloadAsync(); } catch {}
       try {
-        await setAudioModeAsync({
-          playsInSilentMode: true,
-          allowsRecording: false,
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
         });
       } catch {}
     },
