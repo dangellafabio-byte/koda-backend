@@ -196,6 +196,15 @@ export default function OrganicBlob({
   // statePalettes={recording, speaking, thinking, idle}. Da un singolo HEX
   // deriviamo automaticamente la triade chiaro/medio/scuro.
   const targetColors: [string, string, string] = useMemo(() => {
+    // Debug visibile nei log Metro per capire se statePalettes arriva.
+    if (statePalettes && typeof console !== "undefined") {
+      console.log(
+        "[OrganicBlob] statePalettes:",
+        JSON.stringify(statePalettes),
+        "| status:",
+        status
+      );
+    }
     // Helper: prende override hex per uno stato e lo trasforma in triade
     const overrideFor = (k: "recording" | "speaking" | "thinking" | "idle") => {
       const hex = statePalettes?.[k];
