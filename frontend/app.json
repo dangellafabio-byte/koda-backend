@@ -1,21 +1,23 @@
 {
   "expo": {
-    "name": "frontend",
-    "slug": "frontend",
+    "name": "L'Amico Fraterno",
+    "slug": "lamico-fraterno",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "frontend",
+    "scheme": "lamicofraterno",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.lamicofraterno.app",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Detta la tua richiesta con la voce",
-        "NSPhotoLibraryUsageDescription": "Scegli una foto come sfondo del Taccuino"
+        "NSMicrophoneUsageDescription": "Per ascoltare la tua voce con Coda",
+        "NSPhotoLibraryUsageDescription": "Per scegliere immagini di sfondo"
       }
     },
     "android": {
+      "package": "com.lamicofraterno.app",
       "edgeToEdgeEnabled": true,
       "permissions": [
         "RECORD_AUDIO",
@@ -53,7 +55,13 @@
         }
       ],
       "expo-font",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Per ascoltare la tua voce con Coda"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
