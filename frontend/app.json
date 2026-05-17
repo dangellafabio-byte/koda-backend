@@ -23,7 +23,9 @@
         "RECORD_AUDIO",
         "POST_NOTIFICATIONS",
         "SCHEDULE_EXACT_ALARM",
-        "READ_MEDIA_IMAGES"
+        "READ_MEDIA_IMAGES",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
@@ -65,6 +67,13 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "5fbe8309-3108-4d11-8d53-4457df08d919"
+      }
+    },
+    "owner": "fabiod.laboratory"
   }
 }
