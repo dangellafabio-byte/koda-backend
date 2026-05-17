@@ -1,16 +1,24 @@
 /**
- * Taccuino Vivo — Speech (TTS) module.
+ * L'Amico Fraterno — Speech (TTS) module.
  *
- * - Primary: ElevenLabs via backend `/api/tts` (natural Italian voice).
+ * Migrated from expo-av → expo-audio (SDK 54).
+ * Public API (`SpeechMod`, `unlockSpeech`, `setDefaultVoiceId`) is unchanged.
+ *
+ * Why the migration:
+ *  - expo-av's `Audio.Sound` would occasionally hold onto the AVAudioSession
+ *    after `unloadAsync()`, blocking subsequent recordings (the "mic frozen
+ *    after a few turns" bug).
+ *  - expo-audio's SharedObject system tears down AVPlayer + AVAudioSession
+ *    deterministically when `player.remove()` is called.
+ *
+ * - Primary: ElevenLabs via backend `/api/tts/*` (natural Italian voice).
  * - Fallback: expo-speech / Web Speech API (robotic but always works).
- *
- * The `speak()` function is the single entry point; callers just await it.
- * Callers can call `SpeechMod.stop()` at any time to cut off the current
- * utterance (supports barge-in).
  */
 import * as Speech from "expo-speech";
-import { Audio } from "expo-av";
-import * as FileSystem from "expo-file-system/legacy";
+import {
+  createAudioPlayer,
+  setAudioModeAsync,
+} from "expo-audio";
 import { Platform } from "react-native";
 import type { Tone } from "./api";
 import { API_BASE } from "./api";
@@ -19,17 +27,17 @@ let speakingNow = false;
 let webUnlocked = false;
 let cachedVoices: SpeechSynthesisVoice[] = [];
 
-// Currently playing native Sound instance (so we can stop it mid-speech).
-let currentSound: Audio.Sound | null = null;
+// Currently playing native AudioPlayer instance (so we can stop it mid-speech).
+// `any` because the official `AudioPlayer` class is exported as a type but the
+// constructor we call lives behind `createAudioPlayer()`.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let currentPlayer: any = null;
 // Currently playing web <audio> element (for barge-in).
 let currentWebAudio: HTMLAudioElement | null = null;
 // Abort controller for in-flight TTS network requests (so stop() cancels them too).
 let currentAbort: AbortController | null = null;
 
 // Module-level handles per stallWatcher/safetyTimer per evitare zombie intervals.
-// Senza questi puntatori, ogni speak() creava setInterval/setTimeout che restavano
-// vivi anche dopo che il playback era finito o era stato interrotto, corrompendo
-// la audio session iOS.
 let activeStallWatcher: ReturnType<typeof setInterval> | null = null;
 let activeSafetyTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -79,9 +87,7 @@ function pickVoice(lang: string): SpeechSynthesisVoice | undefined {
 }
 
 /**
- * Unlock audio on first user gesture (needed for both web Speech and web <audio>).
- * On Safari this MUST be called synchronously inside the first user gesture
- * handler so the persistent <audio> element gets the "unlocked" status.
+ * Unlock audio on first user gesture (needed for web Speech and web <audio>).
  */
 export async function unlockSpeech(): Promise<void> {
   if (Platform.OS !== "web") return;
@@ -95,15 +101,11 @@ export async function unlockSpeech(): Promise<void> {
       u.rate = 1;
       window.speechSynthesis.speak(u);
     }
-    // Eagerly create the persistent <audio> element and play a tiny silent
-    // burst so Safari marks it as "unlocked" — afterwards setting .src and
-    // calling .play() works without requiring a fresh user gesture each time.
     try {
       const a = getWebAudioEl();
       if (a) {
         a.muted = true;
         a.volume = 0;
-        // 1-second silent WAV (44100Hz mono PCM with zeros)
         a.src =
           "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
         await a.play().catch(() => {});
@@ -137,26 +139,17 @@ function stopAllPlayback() {
   } catch {}
   currentAbort = null;
 
-  // Stop native Sound (expo-av) — fire-and-forget con fallback session reset.
-  if (currentSound) {
-    const s = currentSound;
-    currentSound = null;
-    (async () => {
-      let unloadOk = false;
-      try { await s.stopAsync(); } catch {}
-      try { await s.unloadAsync(); unloadOk = true; } catch {}
-      if (!unloadOk && Platform.OS !== "web") {
-        try {
-          await Audio.setAudioModeAsync({
-            allowsRecordingIOS: false,
-            playsInSilentModeIOS: true,
-            staysActiveInBackground: false,
-            shouldDuckAndroid: true,
-            playThroughEarpieceAndroid: false,
-          });
-        } catch {}
-      }
-    })();
+  // Stop native AudioPlayer (expo-audio) — fire-and-forget.
+  if (currentPlayer) {
+    const p = currentPlayer;
+    currentPlayer = null;
+    try {
+      p.pause?.();
+    } catch {}
+    // `remove()` releases the SharedObject and tears down the AVPlayer.
+    try {
+      p.remove?.();
+    } catch {}
   }
 
   // Stop web <audio>
@@ -204,49 +197,11 @@ async function fetchTTSBytes(
   }
 }
 
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  // Fast path: TextDecoder + btoa (works on iOS / Hermes; ~20x faster than
-  // the chunked apply approach below)
-  try {
-    if (typeof TextDecoder !== "undefined" && typeof btoa !== "undefined") {
-      const decoder = new TextDecoder("latin1");
-      const binary = decoder.decode(new Uint8Array(buffer));
-      return btoa(binary);
-    }
-  } catch {}
-  // Fallback: chunked String.fromCharCode (slower but always works)
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  const chunkSize = 0x4000; // 16k — safer than 32k on some JS engines
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    // @ts-ignore
-    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)));
-  }
-  if (typeof btoa !== "undefined") return btoa(binary);
-  // @ts-ignore
-  return global.btoa ? global.btoa(binary) : "";
-}
-
-/**
- * Generate TTS on the backend and return a direct GET URL where Audio.Sound
- * can stream the MP3. This bypasses base64 encoding and FileSystem writes,
- * which on iOS Expo Go cause AVFoundationErrorDomain -11800 errors when
- * Audio.Sound tries to load the resulting file.
- *
- * SPEED OPTIMIZATION: returns the STREAMING URL (/tts/stream) instead of
- * waiting for /tts/prepare to finish generating the entire MP3 server-side.
- * Audio.Sound can start playback as soon as the first MP3 frames arrive.
- */
 function buildStreamUrl(
   text: string,
   voiceId: string | null,
   tone: Tone | null | undefined
 ): string {
-  // We embed params in URL so Audio.Sound's HTTP GET (which is hard to
-  // customize with POST body) can fetch the stream. Backend supports GET
-  // with body via x-www-form-urlencoded — but simpler: we expose a POST
-  // endpoint and just preload the URL via HEAD/GET. The actual audio fetch
-  // uses POST below.
   const params = new URLSearchParams();
   params.set("text", text);
   if (voiceId) params.set("voice_id", voiceId);
@@ -260,9 +215,6 @@ async function prepareTTSUrl(
   tone: Tone | null | undefined,
   signal: AbortSignal
 ): Promise<string | null> {
-  // SPEED PATH: ricorri a /tts/prepare solo come fallback. Il path primario
-  // ora è il diretto streaming via /tts/stream — Audio.Sound carica
-  // l'URL HTTP e inizia il playback al primo chunk (~300-700ms vs 2-4s).
   try {
     const r = await fetch(`${API_BASE}/tts/prepare`, {
       method: "POST",
@@ -284,71 +236,75 @@ async function prepareTTSUrl(
 }
 
 async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
+  // 1. Switch the audio session into PLAYBACK mode (recording=false).
   try {
-    // expo-av: switch audio session to playback mode.
+    await setAudioModeAsync({
+      allowsRecording: false,
+      playsInSilentMode: true,
+      interruptionMode: "duckOthers",
+      shouldPlayInBackground: false,
+      shouldRouteThroughEarpiece: false,
+    });
+  } catch (e) {
+    console.warn("[speech] setAudioModeAsync(playback) failed", e);
+  }
+
+  return await new Promise<boolean>((resolve) => {
+    let done = false;
+    let everPlayed = false;
+    let everLoaded = false;
+    let lastProgressAt = Date.now();
+    let lastPositionSec = 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let player: any = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let subscription: any = null;
+
+    const cleanup = () => {
+      try { subscription?.remove?.(); } catch {}
+      subscription = null;
+      if (player && currentPlayer === player) currentPlayer = null;
+      try { player?.pause?.(); } catch {}
+      try { player?.remove?.(); } catch {}
+      player = null;
+    };
+
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      if (activeStallWatcher) { try { clearInterval(activeStallWatcher); } catch {}; activeStallWatcher = null; }
+      if (activeSafetyTimer) { try { clearTimeout(activeSafetyTimer); } catch {}; activeSafetyTimer = null; }
+      cleanup();
+      resolve(ok);
+    };
+
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
-      });
-      await new Promise((r) => setTimeout(r, 60));
-    } catch (e) {
-      console.warn("[speech] setAudioModeAsync failed", e);
-    }
+      // createAudioPlayer accepts an AudioSource (URI string OR {uri:'...'}).
+      // Passing the bare URL keeps things simple and lets the native player
+      // stream MP3 chunks as they arrive.
+      player = createAudioPlayer(audioUrl, { updateInterval: 250 });
+      currentPlayer = player;
 
-    return await new Promise<boolean>((resolve) => {
-      let done = false;
-      let everPlayed = false;
-      let everLoaded = false;
-      let localSound: Audio.Sound | null = null;
-      let lastProgressAt = Date.now();
-      let lastPositionMs = 0;
-      const cleanup = async () => {
-        try { await localSound?.unloadAsync(); } catch {}
-        if (currentSound === localSound) currentSound = null;
-      };
-
-      // Handler eventi: didJustFinish è l'UNICA via di completamento OK.
-      const onStatus = (status: any) => {
+      subscription = player.addListener("playbackStatusUpdate", (status: any) => {
         if (status?.isLoaded) {
           everLoaded = true;
-          const pos = status.positionMillis ?? 0;
-          if (pos > lastPositionMs) {
-            lastPositionMs = pos;
+          const pos = status.currentTime ?? 0;
+          if (pos > lastPositionSec) {
+            lastPositionSec = pos;
             lastProgressAt = Date.now();
           }
-          if (status.isPlaying || pos > 0) {
+          if (status.playing || pos > 0) {
             everPlayed = true;
           }
           if (status.didJustFinish) {
-            if (!done) {
-              done = true;
-              if (activeStallWatcher) { try { clearInterval(activeStallWatcher); } catch {}; activeStallWatcher = null; }
-              if (activeSafetyTimer) { try { clearTimeout(activeSafetyTimer); } catch {}; activeSafetyTimer = null; }
-              cleanup().finally(() => resolve(true));
-            }
+            finish(true);
             return;
           }
-          if (status.error && !done) {
-            console.warn("[speech] playback error", status.error);
-            done = true;
-            if (activeStallWatcher) { try { clearInterval(activeStallWatcher); } catch {}; activeStallWatcher = null; }
-            if (activeSafetyTimer) { try { clearTimeout(activeSafetyTimer); } catch {}; activeSafetyTimer = null; }
-            cleanup().finally(() => resolve(everPlayed));
-          }
         }
-      };
+      });
 
-      // Stall-watcher: chiude solo se davvero bloccato per >12s
+      // Stall-watcher: chiude solo se davvero bloccato per >12s dopo l'inizio
       const stallWatcher = setInterval(() => {
-        if (currentSound !== localSound) {
-          clearInterval(stallWatcher);
-          if (activeStallWatcher === stallWatcher) activeStallWatcher = null;
-          return;
-        }
         if (done) {
           clearInterval(stallWatcher);
           if (activeStallWatcher === stallWatcher) activeStallWatcher = null;
@@ -359,11 +315,8 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
         if (stalled > 12000) {
           clearInterval(stallWatcher);
           if (activeStallWatcher === stallWatcher) activeStallWatcher = null;
-          if (!done) {
-            done = true;
-            console.warn(`[speech] stalled ${stalled}ms after position ${lastPositionMs}ms — assuming complete`);
-            cleanup().finally(() => resolve(true));
-          }
+          console.warn(`[speech] stalled ${stalled}ms after position ${lastPositionSec}s — assuming complete`);
+          finish(true);
         }
       }, 1000);
       activeStallWatcher = stallWatcher;
@@ -372,48 +325,23 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
         clearInterval(stallWatcher);
         if (activeStallWatcher === stallWatcher) activeStallWatcher = null;
         if (activeSafetyTimer === safetyTimer) activeSafetyTimer = null;
-        if (!done) {
-          done = true;
-          cleanup().finally(() => resolve(everLoaded));
-        }
+        finish(everLoaded);
       }, 45000);
       activeSafetyTimer = safetyTimer;
 
-      // Crea il sound expo-av con onStatus callback
-      Audio.Sound.createAsync(
-        { uri: audioUrl },
-        { shouldPlay: false, volume: 1.0 },
-        onStatus,
-      )
-        .then(async (created) => {
-          localSound = created.sound;
-          currentSound = localSound;
-          try {
-            await localSound.playAsync();
-          } catch (e) {
-            console.warn("[speech] playAsync failed", e);
-            if (!done) {
-              done = true;
-              clearTimeout(safetyTimer);
-              clearInterval(stallWatcher);
-              cleanup().finally(() => resolve(false));
-            }
-          }
-        })
-        .catch((e) => {
-          console.warn("[speech] createAsync failed", e);
-          if (!done) {
-            done = true;
-            clearTimeout(safetyTimer);
-            clearInterval(stallWatcher);
-            cleanup().finally(() => resolve(false));
-          }
-        });
-    });
-  } catch (e) {
-    console.warn("[speech] playElevenLabsNativeFromUrl outer error", e);
-    return false;
-  }
+      // Kick off playback. expo-audio AudioPlayer starts buffering on creation
+      // and we explicitly call play() to begin output.
+      try {
+        player.play();
+      } catch (e) {
+        console.warn("[speech] player.play() threw", e);
+        finish(false);
+      }
+    } catch (e) {
+      console.warn("[speech] createAudioPlayer failed", e);
+      finish(false);
+    }
+  });
 }
 
 // Persistent <audio> element for web — Safari requires the audio element
@@ -427,7 +355,6 @@ function getWebAudioEl(): HTMLAudioElement | null {
     try {
       webAudioEl = new Audio();
       webAudioEl.preload = "auto";
-      // Inline playback on iOS Safari (avoid full-screen takeover)
       (webAudioEl as any).playsInline = true;
       webAudioEl.setAttribute("playsinline", "true");
       webAudioEl.setAttribute("webkit-playsinline", "true");
@@ -444,10 +371,8 @@ async function playElevenLabsWeb(audioBuf: ArrayBuffer): Promise<boolean> {
     if (!a) return false;
     const blob = new Blob([audioBuf], { type: "audio/mpeg" });
     const url = URL.createObjectURL(blob);
-    // Stop any ongoing playback on this element first
     try { a.pause(); } catch {}
     try { a.currentTime = 0; } catch {}
-    // Revoke previous blob URL if any
     const prevUrl = a.src;
     a.src = url;
     a.muted = false;
@@ -577,29 +502,18 @@ export const SpeechMod = {
     const tone = (opts.tone || "neutral") as Tone;
     const useEleven = opts.useElevenLabs !== false; // default ON
 
-    // Stop any existing playback before starting a new one. This also aborts
-    // any in-flight TTS fetch from a PREVIOUS speak() call, causing it to bail.
     stopAllPlayback();
 
-    // Each speak() call gets its OWN abort controller. If a later speak() call
-    // (or .stop()) aborts this one, we must NOT fall back to expo-speech —
-    // otherwise the user hears the robotic fallback OVERLAPPING with the new
-    // voice they just selected.
     const ac = new AbortController();
     currentAbort = ac;
-
-    // Helper: was this particular call cancelled?
     const cancelled = () => ac.signal.aborted;
 
-    // Try ElevenLabs first
     if (useEleven) {
       speakingNow = true;
       const voiceArg = opts.voiceId ?? defaultVoiceId;
       let ok = false;
 
       if (Platform.OS === "web") {
-        // Web: fetch bytes and play via Blob URL (streaming fetch + MediaSource
-        // sarebbe ideale ma il fallback raw-bytes resta affidabile su Safari/Chrome).
         const buf = await fetchTTSBytes(text, voiceArg, tone, ac.signal);
         if (cancelled()) {
           speakingNow = false;
@@ -610,10 +524,8 @@ export const SpeechMod = {
           ok = await playElevenLabsWeb(buf);
         }
       } else {
-        // Native (iOS/Android) — PREPARED FILE PATH (più affidabile dello streaming).
-        // Lo streaming MP3 su iOS AVPlayer causava 3x GET requests (Range)
-        // e race condition con buffer underrun. Il file completo aggiunge
-        // ~400-800ms di latenza iniziale ma elimina TUTTI questi bug.
+        // Native (iOS/Android) — Prepared-file path is primary (more reliable
+        // than naked streaming through AVPlayer on iOS).
         const url = await prepareTTSUrl(text, voiceArg, tone, ac.signal);
         if (cancelled()) {
           speakingNow = false;
@@ -623,7 +535,7 @@ export const SpeechMod = {
         if (url) {
           ok = await playElevenLabsNativeFromUrl(url);
         }
-        // Ultima risorsa: prova lo streaming come fallback se prepare fallisce
+        // Last resort: try streaming if prepare failed.
         if (!ok && !cancelled()) {
           const streamUrl = buildStreamUrl(text, voiceArg, tone);
           ok = await playElevenLabsNativeFromUrl(streamUrl);
@@ -633,13 +545,9 @@ export const SpeechMod = {
       speakingNow = false;
       if (cancelled()) return;
       if (ok) return;
-      // ElevenLabs playback genuinely failed (not cancelled) → fallback below
     }
 
-    // If we were cancelled at any point, do NOT play the robotic fallback.
     if (cancelled()) return;
-
-    // Fallback to system TTS (only when not cancelled and ElevenLabs failed)
     await fallbackSpeak(text, lang, tone);
   },
 };
