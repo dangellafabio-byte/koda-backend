@@ -13,7 +13,8 @@
       "bundleIdentifier": "com.lamicofraterno.app",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Per ascoltare la tua voce con Coda",
-        "NSPhotoLibraryUsageDescription": "Per scegliere immagini di sfondo"
+        "NSPhotoLibraryUsageDescription": "Per scegliere immagini di sfondo",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -49,13 +50,6 @@
         }
       ],
       "expo-web-browser",
-      [
-        "expo-notifications",
-        {
-          "color": "#FBBF24",
-          "defaultChannel": "weekly-app"
-        }
-      ],
       "expo-font",
       "expo-secure-store",
       [
