@@ -176,9 +176,28 @@ export async function startRecording(): Promise<Recorder> {
     ...platformSub,
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const recorder: any = new (AudioModule as any).AudioRecorder(platformOptions);
-  await recorder.prepareToRecordAsync();
-  recorder.record();
+  let recorder: any;
+  try {
+    recorder = new (AudioModule as any).AudioRecorder(platformOptions);
+    console.log("[voice] AudioRecorder created, id=", recorder?.id);
+  } catch (e) {
+    console.warn("[voice] AudioRecorder constructor threw:", e);
+    throw e;
+  }
+  try {
+    await recorder.prepareToRecordAsync();
+    console.log("[voice] prepareToRecordAsync OK, canRecord=", recorder.getStatus?.()?.canRecord);
+  } catch (e) {
+    console.warn("[voice] prepareToRecordAsync failed:", e);
+    throw e;
+  }
+  try {
+    recorder.record();
+    console.log("[voice] record() called, isRecording=", recorder.isRecording);
+  } catch (e) {
+    console.warn("[voice] record() threw:", e);
+    throw e;
+  }
   const startedAt = Date.now();
 
   let stopped = false;
