@@ -153,40 +153,30 @@ export async function startRecording(): Promise<Recorder> {
   _nativeReady = true;
 
   // 3. Create recorder + prepare + start.
-  //    expo-audio's `AudioRecorder` constructor expects the options ALREADY
-  //    flattened to platform-specific shape (the `useAudioRecorder` hook does
-  //    this internally via the private `createRecordingOptions()` helper).
-  //    If you pass the raw `RecordingPresets.HIGH_QUALITY` (which has nested
-  //    `ios`/`android`/`web` sub-objects), the native side gets an incomplete
-  //    config and `recorder.uri` ends up null after `stop()` → upstream sees
-  //    a discarded recording and bounces back to idle.
-  //
-  //    We flatten inline here to avoid importing from the private internals.
-  const preset: any = RecordingPresets.HIGH_QUALITY;
-  const platformSub =
-    Platform.OS === "ios" ? preset.ios :
-    Platform.OS === "android" ? preset.android :
-    preset.web || {};
-  const platformOptions = {
-    extension: preset.extension,
-    sampleRate: preset.sampleRate,
-    numberOfChannels: preset.numberOfChannels,
-    bitRate: preset.bitRate,
-    isMeteringEnabled: false,
-    ...platformSub,
-  };
+  //    expo-audio SDK 54: the canonical imperative pattern is
+  //      (a) `new AudioRecorder({})` with EMPTY options, then
+  //      (b) `await recorder.prepareToRecordAsync(RecordingPresets.X)` with
+  //          the preset — the prototype shim in ExpoAudio.js intercepts this
+  //          call and runs `createRecordingOptions()` to flatten the nested
+  //          `ios:{...}`/`android:{...}` keys before passing to native.
+  //    Passing the preset to the constructor (as we did initially) silently
+  //    discarded the platform-specific keys and produced a recorder that
+  //    looked "ready" but never wrote a file → `recorder.uri = null`.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let recorder: any;
   try {
-    recorder = new (AudioModule as any).AudioRecorder(platformOptions);
+    recorder = new (AudioModule as any).AudioRecorder({});
     console.log("[voice] AudioRecorder created, id=", recorder?.id);
   } catch (e) {
     console.warn("[voice] AudioRecorder constructor threw:", e);
     throw e;
   }
   try {
-    await recorder.prepareToRecordAsync();
-    console.log("[voice] prepareToRecordAsync OK, canRecord=", recorder.getStatus?.()?.canRecord);
+    await recorder.prepareToRecordAsync(RecordingPresets.HIGH_QUALITY);
+    console.log(
+      "[voice] prepareToRecordAsync OK, canRecord=",
+      recorder.getStatus?.()?.canRecord,
+    );
   } catch (e) {
     console.warn("[voice] prepareToRecordAsync failed:", e);
     throw e;
