@@ -207,10 +207,11 @@ export async function startRecording(): Promise<Recorder> {
 
   return {
     stop: async () => {
+      console.log("[voice] stop() ENTER");
       await safeStop();
       const uri: string | null = recorder.uri || null;
       const totalMs = Date.now() - startedAt;
-      console.log(`[voice] stop() → uri=${uri ? "OK" : "NULL"} ms=${totalMs}`);
+      console.log(`[voice] stop() → uri=${uri ? "OK ("+uri.length+" chars)" : "NULL"} ms=${totalMs} isRecording=${recorder.isRecording}`);
       if (totalMs < 500 || !uri) {
         return null;
       }
