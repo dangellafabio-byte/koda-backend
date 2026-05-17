@@ -153,14 +153,30 @@ export async function startRecording(): Promise<Recorder> {
   _nativeReady = true;
 
   // 3. Create recorder + prepare + start.
-  //    expo-audio AudioRecorder uses an imperative-style class. We instantiate
-  //    it via AudioModule.AudioRecorder (the constructor exported from the
-  //    module — using `new` on the type-only export from index.ts is not
-  //    valid TypeScript).
+  //    expo-audio's `AudioRecorder` constructor expects the options ALREADY
+  //    flattened to platform-specific shape (the `useAudioRecorder` hook does
+  //    this internally via the private `createRecordingOptions()` helper).
+  //    If you pass the raw `RecordingPresets.HIGH_QUALITY` (which has nested
+  //    `ios`/`android`/`web` sub-objects), the native side gets an incomplete
+  //    config and `recorder.uri` ends up null after `stop()` → upstream sees
+  //    a discarded recording and bounces back to idle.
+  //
+  //    We flatten inline here to avoid importing from the private internals.
+  const preset: any = RecordingPresets.HIGH_QUALITY;
+  const platformSub =
+    Platform.OS === "ios" ? preset.ios :
+    Platform.OS === "android" ? preset.android :
+    preset.web || {};
+  const platformOptions = {
+    extension: preset.extension,
+    sampleRate: preset.sampleRate,
+    numberOfChannels: preset.numberOfChannels,
+    bitRate: preset.bitRate,
+    isMeteringEnabled: false,
+    ...platformSub,
+  };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const recorder: any = new (AudioModule as any).AudioRecorder(
-    RecordingPresets.HIGH_QUALITY
-  );
+  const recorder: any = new (AudioModule as any).AudioRecorder(platformOptions);
   await recorder.prepareToRecordAsync();
   recorder.record();
   const startedAt = Date.now();
@@ -185,6 +201,7 @@ export async function startRecording(): Promise<Recorder> {
       await safeStop();
       const uri: string | null = recorder.uri || null;
       const totalMs = Date.now() - startedAt;
+      console.log(`[voice] stop() → uri=${uri ? "OK" : "NULL"} ms=${totalMs}`);
       if (totalMs < 500 || !uri) {
         return null;
       }
