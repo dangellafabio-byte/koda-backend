@@ -187,8 +187,12 @@ export default function Taccuino() {
       setProfile(p);
     } catch {}
   }, []);
-  /** Riapri la presentazione di Koda (back-door: long-press eclissi 3s). */
+  /** Riapri la presentazione di Koda (back-door: long-press eclissi 1.5s). */
   const reopenKodaIntro = useCallback(async () => {
+    try {
+      const { Alert } = require("react-native");
+      Alert.alert("Riapro la presentazione…");
+    } catch {}
     try {
       await SecureStore.deleteItemAsync("koda_intro_seen");
     } catch {}
