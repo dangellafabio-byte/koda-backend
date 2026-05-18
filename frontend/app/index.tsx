@@ -1633,20 +1633,15 @@ export default function Taccuino() {
   // Build the screen wrapper with optional background image / gradient
   const screenInner = (
     <View style={[styles.screen, { backgroundColor: bgValue ? "transparent" : theme.bg }]}>
-      {/* Header — minimal, zen. Solo ⚙ a sinistra e 📋 Sunto a destra.
-          Niente titolo, niente dot status, niente notifiche visibili.
-          La macchia ti dice già tutto quello che serve sapere. */}
+      {/* Header — totalmente zen. Solo il lucchetto confessionale al centro.
+          Niente info, niente sunto, niente impostazioni: tutto si chiede
+          direttamente a Koda con la voce. L'eclissi È l'interfaccia. */}
       <View
         style={[styles.header, { top: Math.max(insets.top + 16, 70) }]}
         pointerEvents="box-none"
       >
-        <TouchableOpacity
-          style={styles.headerBtn}
-          onPress={() => setShowInfo(true)}
-          testID="info-btn"
-        >
-          <Ionicons name="information-circle-outline" size={24} color="#FFFFFF" />
-        </TouchableOpacity>
+        {/* Slot sinistro vuoto — spazio per centrare il lucchetto */}
+        <View style={styles.headerBtn} pointerEvents="none" />
         <View style={styles.headerCenter} pointerEvents="box-none">
           {/* === Lucchetto Confessionale ===
               Toggle one-tap nel cuore dell'header. Quando attivo:
@@ -1709,14 +1704,8 @@ export default function Taccuino() {
             </Text>
           </TouchableOpacity>
         </View>
-        <TouchableOpacity
-          style={styles.headerBtn}
-          onPress={askRecap}
-          testID="recap-btn"
-        >
-          <Ionicons name="reader-outline" size={20} color="#FFFFFF" />
-          <Text style={styles.headerBtnText}>Sunto</Text>
-        </TouchableOpacity>
+        {/* Slot destro vuoto — il sunto si chiede a Koda direttamente ("Fammi un sunto") */}
+        <View style={styles.headerBtn} pointerEvents="none" />
       </View>
 
       {/* === HORIZONTAL PAGER: Voce (zen) | Lettura (timeline) ===
