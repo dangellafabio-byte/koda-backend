@@ -57,6 +57,8 @@ type Props = {
   voices?: Array<{ voice_id: string; name: string; labels?: any }>;
   /** Chiamata quando l'utente completa o salta */
   onDone: (result: KodaIntroResult) => void;
+  /** Optional: chiamata quando l'utente preme la X per uscire senza salvare. */
+  onCancel?: () => void;
 };
 
 // ====== 3 frasi per il voiceprint enrollment ======
@@ -87,7 +89,7 @@ const KODA_LINES: Record<number, string> = {
 };
 
 // ====== Componente principale ======
-export default function KodaIntro({ voices = [], onDone }: Props) {
+export default function KodaIntro({ voices = [], onDone, onCancel }: Props) {
   const [step, setStep] = useState(0);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const { width } = Dimensions.get("window");
@@ -617,6 +619,22 @@ export default function KodaIntro({ voices = [], onDone }: Props) {
         style={{ flex: 1 }}
       >
         <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
+          {/* Pulsante X di chiusura (solo se è stata fornita la callback onCancel).
+              Permette di uscire da KodaIntro senza completare tutti i 10 step,
+              utile se l'utente ha toccato l'icona ⋯ per errore. */}
+          {onCancel && (
+            <Pressable
+              style={styles.closeBtn}
+              onPress={() => {
+                try { SpeechMod.stop(); } catch {}
+                onCancel();
+              }}
+              hitSlop={16}
+              testID="koda-intro-close"
+            >
+              <Ionicons name="close" size={26} color="rgba(255,255,255,0.7)" />
+            </Pressable>
+          )}
           {/* Top: step indicator */}
           <View style={styles.stepDots}>
             {Array.from({ length: 10 }).map((_, i) => (
@@ -732,6 +750,17 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     paddingHorizontal: 20,
+  },
+  closeBtn: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 10,
   },
   stepDots: {
     flexDirection: "row",

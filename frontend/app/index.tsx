@@ -187,17 +187,21 @@ export default function Taccuino() {
       setProfile(p);
     } catch {}
   }, []);
-  /** Riapri la presentazione di Koda (back-door: long-press nell'angolo header). */
+  /** Riapri la presentazione di Koda (back-door: tap sull'icona ⋯ in alto a destra). */
   const reopenKodaIntro = useCallback(async () => {
-    console.log("[reopenKodaIntro] tap received, opening KodaIntro");
     try {
       await SecureStore.deleteItemAsync("koda_intro_seen");
-      console.log("[reopenKodaIntro] SecureStore cleared");
-    } catch (e) {
-      console.warn("[reopenKodaIntro] SecureStore error:", e);
-    }
+    } catch {}
     setShowColorIntro(true);
-    console.log("[reopenKodaIntro] setShowColorIntro(true) called");
+  }, []);
+  /** Esci da KodaIntro senza salvare nulla (tap su X).
+   *  Marca comunque `koda_intro_seen=1` così al prossimo avvio non riappare. */
+  const cancelKodaIntro = useCallback(async () => {
+    try { SpeechMod.stop(); } catch {}
+    setShowColorIntro(false);
+    try {
+      await SecureStore.setItemAsync("koda_intro_seen", "1");
+    } catch {}
   }, []);
   const [showSettings, setShowSettings] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
@@ -1714,15 +1718,11 @@ export default function Taccuino() {
           </TouchableOpacity>
         </View>
         {/* Slot destro: icona "tre puntini" semi-trasparente per aprire KodaIntro.
-            Discreta (white@40%) per non rompere l'estetica zen ma visibile e
+            Discreta (white@55%) per non rompere l'estetica zen ma visibile e
             ovvia. Single tap → riapre la presentazione di Koda (settings vocali). */}
         <TouchableOpacity
           style={[styles.headerBtn, { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" }]}
-          onPress={() => {
-            console.log("[icon-tap] ⋯ pressed, calling reopenKodaIntro");
-            Alert.alert("Debug", "Tap rilevato. Apro KodaIntro...");
-            reopenKodaIntro();
-          }}
+          onPress={reopenKodaIntro}
           hitSlop={20}
           testID="koda-intro-reopen"
         >
@@ -2901,7 +2901,7 @@ export default function Taccuino() {
   // altra schermata. Quando l'utente la termina (o la salta), viene
   // persistito il flag `koda_intro_seen=1` in SecureStore.
   if (showColorIntro === true) {
-    return <KodaIntro voices={voiceList} onDone={dismissColorIntro} />;
+    return <KodaIntro voices={voiceList} onDone={dismissColorIntro} onCancel={cancelKodaIntro} />;
   }
   if (isCustomImage && bgValue) {
     return (
