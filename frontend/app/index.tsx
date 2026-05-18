@@ -733,6 +733,55 @@ export default function Taccuino() {
           await speakIfEnabled(reply, aiEntry.tone || "warm");
           return;
         }
+        // === FAST STREAMING FLOW (Step 2b — Fase 4) ===
+        // Quando NON siamo in confessionale e la voce è abilitata, usiamo il
+        // nuovo endpoint /api/converse-stream-audio che fa tutto in un colpo:
+        //   STT-result → Claude(streaming) → ElevenLabs(streaming per frase)
+        //                                  → MP3 chunks → AVPlayer
+        // TTFB tipico ~100-300ms (vs ~5-8s del flusso "classic" /converse +
+        // /tts/prepare). Il testo della risposta viene salvato server-side;
+        // dopo la fine del playback rifresciamo la timeline per la chat.
+        const useFastPath = !confessionalMode && (profile?.settings.voice_response !== false);
+        if (useFastPath) {
+          try {
+            const streamUrl =
+              `${API_BASE}/converse-stream-audio?text=${encodeURIComponent(txt)}` +
+              (confessionalMode ? `&ephemeral=true` : "");
+            // L'audio parte essenzialmente subito → passiamo a "speaking" e
+            // saltiamo la fase "thinking" (era 3-5s di stallo visivo).
+            setStatus("speaking");
+            const ok = await SpeechMod.playFromUrl(streamUrl);
+            // Refresh della timeline (il backend ha salvato user+ai entries).
+            try {
+              const tl = await api.getTimeline(200);
+              setTimeline(tl);
+              // Esegui le azioni dell'ultima ai_entry (theme, ecc.).
+              const lastAi = [...tl].reverse().find((e) => e.role === "ai");
+              if (lastAi?.actions?.length) {
+                runActions(lastAi.actions);
+              }
+            } catch (e) {
+              console.warn("[sendText] timeline refresh after stream failed:", e);
+            }
+            // Refresh profile (counters + memory_summary)
+            try {
+              const p = await api.getProfile();
+              setProfile(p);
+            } catch {}
+            setStatus("idle");
+            // Se il playback è fallito, mostriamo errore (l'audio NON c'è stato).
+            if (!ok) {
+              setError("La voce non è partita — l'audio non è arrivato.");
+              setTimeout(() => setError(null), 3000);
+            }
+            return;
+          } catch (e: any) {
+            // Fallback al flusso classico — non perdiamo il messaggio dell'utente.
+            console.warn("[sendText] fast streaming path failed, falling back to /converse:", e);
+            setStatus("thinking");
+            // ↓ continua con il blocco `api.converse` standard sotto
+          }
+        }
         // === STANDARD FLOW (con o senza ephemeral) ===
         const res = await api.converse(txt, undefined, { ephemeral: confessionalMode });
         // Replace optimistic with real, then add AI entry

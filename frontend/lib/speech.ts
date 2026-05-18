@@ -493,6 +493,49 @@ export const SpeechMod = {
   setDefaultVoiceId(id: string | null | undefined) {
     setDefaultVoiceId(id);
   },
+  /**
+   * Play an already-generated audio stream from a URL (e.g. the new
+   * /api/converse-stream-audio endpoint). Bypasses ElevenLabs/text logic —
+   * just hands the URL to the platform audio player.
+   *
+   * Returns true on successful playback to end, false on error/cancel.
+   */
+  async playFromUrl(url: string): Promise<boolean> {
+    if (!url) return false;
+    stopAllPlayback();
+    speakingNow = true;
+    const ac = new AbortController();
+    currentAbort = ac;
+    try {
+      if (Platform.OS === "web") {
+        // Fetch as bytes then play (we already have a helper for that).
+        try {
+          const r = await fetch(url, { signal: ac.signal });
+          if (!r.ok) {
+            speakingNow = false;
+            return false;
+          }
+          const buf = await r.arrayBuffer();
+          if (ac.signal.aborted) {
+            speakingNow = false;
+            return false;
+          }
+          const ok = await playElevenLabsWeb(buf);
+          speakingNow = false;
+          return ok;
+        } catch {
+          speakingNow = false;
+          return false;
+        }
+      }
+      // Native: hand URL to AVPlayer-backed expo-audio AudioPlayer.
+      const ok = await playElevenLabsNativeFromUrl(url);
+      speakingNow = false;
+      return ok;
+    } finally {
+      if (currentAbort === ac) currentAbort = null;
+    }
+  },
   async speak(
     text: string,
     opts: { language?: string; tone?: Tone | null; voiceId?: string | null; useElevenLabs?: boolean } = {}

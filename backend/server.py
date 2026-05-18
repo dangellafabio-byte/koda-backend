@@ -2087,6 +2087,440 @@ async def api_tts_audio(token: str, request: Request):
     )
 
 
+# ============================================================
+# CONVERSE-STREAM-AUDIO — Step 2b (Fase 4): sub-2s end-to-end latency
+#
+# Pipeline:
+#   user text → Claude(streaming, JSON output) → incremental "reply" extractor
+#             → sentence buffer → ElevenLabs streaming TTS per-sentence
+#             → MP3 chunks piped to HTTP chunked response
+#
+# Net effect: the user hears the AI begin speaking ~1.0–1.5s after the request
+# arrives, instead of ~5–8s with the legacy /api/converse + /api/tts/* flow.
+#
+# The AI text response is still saved to MongoDB at the END of the stream
+# (we have the full Claude output by then). The client should refresh the
+# timeline view AFTER audio playback completes.
+# ============================================================
+
+import litellm  # noqa: E402  (kept here to avoid affecting cold-start of unrelated endpoints)
+
+
+class _ReplyExtractor:
+    """Pulls the value of the `reply` field from a streaming JSON object,
+    character by character. Robust to chunked input — call `feed(chunk)` as
+    new JSON text arrives, get back the new reply chars produced.
+
+    Assumes the system prompt instructs Claude to emit `reply` as the FIRST
+    field of the JSON object (it does — see _build_conversation_system_prompt).
+    """
+
+    def __init__(self):
+        self.buf = ""
+        self.cursor = 0          # index in self.buf consumed so far
+        self.mode = "header"     # header → string → done
+        self.escape = False
+
+    def feed(self, chunk: str) -> str:
+        self.buf += chunk
+        out_chars: List[str] = []
+        while self.cursor < len(self.buf):
+            if self.mode == "header":
+                # Look for the literal `"reply"` token.
+                idx = self.buf.find('"reply"', self.cursor)
+                if idx < 0:
+                    # Token not yet visible — fast-forward cursor past tail
+                    # that can't possibly contain `"reply"` (keep last 7 chars).
+                    self.cursor = max(self.cursor, len(self.buf) - 7)
+                    break
+                # Move past `"reply"` and any whitespace + colon + whitespace.
+                k = idx + len('"reply"')
+                while k < len(self.buf) and self.buf[k] in ' \t\r\n':
+                    k += 1
+                if k >= len(self.buf):
+                    self.cursor = idx  # stay parked, await more chars
+                    break
+                if self.buf[k] != ':':
+                    # False match (e.g. occurs inside another value). Skip past it.
+                    self.cursor = idx + 1
+                    continue
+                k += 1
+                while k < len(self.buf) and self.buf[k] in ' \t\r\n':
+                    k += 1
+                if k >= len(self.buf):
+                    self.cursor = idx
+                    break
+                if self.buf[k] == '"':
+                    # Found the opening quote of the reply string.
+                    self.cursor = k + 1
+                    self.mode = "string"
+                    continue
+                # reply is null / number / something else — bail out.
+                self.mode = "done"
+                self.cursor = k
+                continue
+
+            elif self.mode == "string":
+                ch = self.buf[self.cursor]
+                if self.escape:
+                    if   ch == 'n':  out_chars.append('\n')
+                    elif ch == 't':  out_chars.append('\t')
+                    elif ch == 'r':  out_chars.append('\r')
+                    elif ch == '"':  out_chars.append('"')
+                    elif ch == '\\': out_chars.append('\\')
+                    elif ch == '/':  out_chars.append('/')
+                    elif ch == 'u':
+                        # \uXXXX — need 4 hex digits after the 'u'.
+                        if self.cursor + 4 < len(self.buf):
+                            try:
+                                code = int(self.buf[self.cursor + 1:self.cursor + 5], 16)
+                                out_chars.append(chr(code))
+                                self.cursor += 4
+                            except ValueError:
+                                out_chars.append('?')
+                        else:
+                            # Need more bytes — rewind to before the backslash.
+                            self.escape = True
+                            break
+                    else:
+                        out_chars.append(ch)
+                    self.escape = False
+                    self.cursor += 1
+                elif ch == '\\':
+                    self.escape = True
+                    self.cursor += 1
+                elif ch == '"':
+                    # End of reply string.
+                    self.mode = "done"
+                    self.cursor += 1
+                else:
+                    out_chars.append(ch)
+                    self.cursor += 1
+
+            else:  # done
+                break
+        return ''.join(out_chars)
+
+    @property
+    def full_buffer(self) -> str:
+        return self.buf
+
+    @property
+    def reply_finished(self) -> bool:
+        return self.mode == "done"
+
+
+# Sentence boundary regex: terminator (. ! ? or … or newline) followed by
+# whitespace or end-of-buffer. We avoid splitting on common abbreviations
+# (e.g. "Sig.", "es.") — Italian usage is rare in conversational replies but
+# we still apply a light heuristic: don't split if preceded by 1 lowercase letter.
+_SENTENCE_RE = re.compile(r'(?<![A-Za-z])(?:[.!?…]+|[.!?])(?:["\)\]\s]|$)')
+
+
+def _pop_first_sentence(buf: str) -> tuple[str, str]:
+    """If `buf` contains at least one complete sentence followed by space/newline,
+    returns (first_sentence, remainder). Otherwise returns ("", buf).
+    """
+    m = _SENTENCE_RE.search(buf)
+    if not m:
+        return ("", buf)
+    end = m.end()
+    sentence = buf[:end].strip()
+    rest = buf[end:]
+    if len(sentence) < 2:
+        # Too short — keep accumulating
+        return ("", buf)
+    return (sentence, rest)
+
+
+async def _stream_tts_for_sentence(
+    client_el,
+    sentence: str,
+    voice_id: str,
+    voice_settings: dict,
+    model_id: str = "eleven_flash_v2_5",
+):
+    """Async generator that yields MP3 byte chunks for one sentence.
+
+    Bridges ElevenLabs' SYNC streaming generator into asyncio land via a
+    background thread + asyncio.Queue.
+    """
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+    SENTINEL = b"__END__"
+
+    def producer():
+        try:
+            kwargs = dict(
+                text=sentence,
+                voice_id=voice_id,
+                model_id=model_id,
+                output_format="mp3_44100_128",
+                voice_settings=voice_settings,
+            )
+            stream = client_el.text_to_speech.stream(**kwargs)
+            for chunk in stream:
+                if chunk:
+                    asyncio.run_coroutine_threadsafe(queue.put(chunk), loop).result()
+        except Exception as e:
+            logger.warning(f"[converse-stream-audio] TTS sentence stream error: {e}")
+        finally:
+            asyncio.run_coroutine_threadsafe(queue.put(SENTINEL), loop).result()
+
+    thread_task = loop.run_in_executor(None, producer)
+    try:
+        while True:
+            item = await queue.get()
+            if item is SENTINEL:
+                break
+            yield item
+    finally:
+        # Wait for the producer to finish so we don't leak the thread.
+        try:
+            await thread_task
+        except Exception:
+            pass
+
+
+@api_router.post("/converse-stream-audio")
+async def api_converse_stream_audio(req: ConverseRequest):
+    """End-to-end voice pipeline endpoint (POST variant).
+
+    Returns an audio/mpeg HTTP chunked response. The AI text reply + metadata
+    (tone, actions, etc.) are persisted to MongoDB during the stream; the
+    client should fetch /api/timeline after audio playback to refresh the chat.
+    """
+    return await _converse_stream_audio_impl(req)
+
+
+@api_router.get("/converse-stream-audio")
+async def api_converse_stream_audio_get(
+    text: str = "",
+    audio_duration_ms: Optional[int] = None,
+    ephemeral: bool = False,
+):
+    """GET variant — needed because expo-audio's AVPlayer (iOS) can only
+    fetch HTTP URLs via GET. The frontend passes the transcript via query
+    string. Body is kept short (~100-300 chars typical) so URL length is fine.
+    """
+    req = ConverseRequest(text=text, audio_duration_ms=audio_duration_ms, ephemeral=ephemeral)
+    return await _converse_stream_audio_impl(req)
+
+
+async def _converse_stream_audio_impl(req: ConverseRequest):
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=500, detail="LLM key not configured")
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty message")
+
+    client_el = _get_eleven_client()
+    if client_el is None:
+        raise HTTPException(status_code=503, detail="ElevenLabs not configured")
+
+    profile = await get_or_create_profile()
+
+    # Same context-building as /api/converse — see comments there for rationale.
+    user_entry = TimelineEntry(role="user", text=text, audio_duration_ms=req.audio_duration_ms)
+    if not req.ephemeral:
+        await db.taccuino_timeline.insert_one(user_entry.model_dump())
+
+    recent_docs = await db.taccuino_timeline.find({}, {"_id": 0}).sort("timestamp", -1).to_list(20)
+    recent_docs.reverse()
+    recent = [TimelineEntry(**d) for d in recent_docs]
+
+    system_prompt = _build_conversation_system_prompt(profile, recent)
+    history_str = _format_history_for_llm(recent)
+
+    # Skip web search in voice-streaming mode for now (adds 6s, defeats the goal).
+    # Web-search heavy queries should fall back to legacy /api/converse client-side.
+    user_payload = (
+        f"STORICO RECENTE (per memoria a breve termine):\n{history_str}\n\n"
+        f"NUOVO MESSAGGIO DELL'UTENTE:\n{text}\n\n"
+        f"Rispondi SOLO col JSON come da istruzioni di sistema. "
+        f"IMPORTANTISSIMO: il campo \"reply\" DEVE essere il PRIMO campo del JSON."
+    )
+
+    # Voice config for ElevenLabs.
+    # `req` doesn't carry voice_id/tone explicitly — we default to the same
+    # voice used by /api/tts. The client passes the voice via /api/profile.
+    voice_id = profile.settings.voice_id or "XrExE9yKIg1WjnnlVkGX" if hasattr(profile.settings, "voice_id") else "XrExE9yKIg1WjnnlVkGX"
+
+    async def audio_pipeline():
+        extractor = _ReplyExtractor()
+        sentence_buf = ""
+        full_reply_chars: List[str] = []
+        # Capture metadata for post-stream persistence
+        captured = {"tone": "neutral", "domain": None, "actions": [], "memory_update": "", "extracted": None}
+
+        try:
+            stream = await litellm.acompletion(
+                model='openai/claude-haiku-4-5-20251001',
+                messages=[
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_payload},
+                ],
+                stream=True,
+                api_key=EMERGENT_LLM_KEY,
+                api_base='https://integrations.emergentagent.com/llm',
+                max_tokens=600,
+            )
+
+            async for chunk in stream:
+                try:
+                    piece = chunk.choices[0].delta.content or ''
+                except (AttributeError, IndexError):
+                    piece = ''
+                if not piece:
+                    continue
+
+                new_chars = extractor.feed(piece)
+                if new_chars:
+                    sentence_buf += new_chars
+                    full_reply_chars.append(new_chars)
+
+                    # Drain any complete sentences from the buffer.
+                    while True:
+                        sent, rest = _pop_first_sentence(sentence_buf)
+                        if not sent:
+                            break
+                        sentence_buf = rest
+                        clean = _strip_audio_tags(sent) or sent
+                        if clean.strip():
+                            # Determine tone heuristic from partial reply (still neutral here).
+                            vs = _voice_settings_for_tone(captured["tone"], None, None)
+                            async for audio_chunk in _stream_tts_for_sentence(
+                                client_el, clean, voice_id, vs
+                            ):
+                                yield audio_chunk
+
+                # If the reply has closed AND we have leftover text, break early
+                if extractor.reply_finished:
+                    break
+
+            # Flush trailing partial sentence (no terminator) as final TTS call.
+            tail = sentence_buf.strip()
+            if tail:
+                clean = _strip_audio_tags(tail) or tail
+                vs = _voice_settings_for_tone(captured["tone"], None, None)
+                async for audio_chunk in _stream_tts_for_sentence(
+                    client_el, clean, voice_id, vs
+                ):
+                    yield audio_chunk
+
+        except Exception as e:
+            logger.error(f"[converse-stream-audio] Claude streaming error: {e}")
+            # Fall back to a single short TTS message so the user hears SOMETHING.
+            fallback = "Ah, qualcosa è andato storto. Riproviamo tra un attimo."
+            try:
+                async for audio_chunk in _stream_tts_for_sentence(
+                    client_el, fallback, voice_id, _voice_settings_for_tone("warm", None, None)
+                ):
+                    yield audio_chunk
+            except Exception:
+                pass
+            return
+
+        # === Post-stream: parse full JSON for metadata, persist to MongoDB. ===
+        full_reply = ''.join(full_reply_chars).strip() or "..."
+        try:
+            data = extract_json(extractor.full_buffer) or {}
+        except Exception:
+            data = {}
+
+        tone = (data.get("tone") or "neutral").lower()
+        if tone not in {"calm", "energetic", "concerned", "urgent", "warm", "neutral"}:
+            tone = "neutral"
+        domain = data.get("domain")
+        if domain not in {"soldi", "tempo", "spesa", "salute", "lavoro", "casa", "altro"}:
+            domain = None
+
+        extracted_obj = None
+        extracted_raw = data.get("extracted")
+        if isinstance(extracted_raw, dict):
+            try:
+                extracted_obj = ExtractedFact(**{k: v for k, v in extracted_raw.items() if k in ExtractedFact.model_fields})
+            except Exception:
+                extracted_obj = None
+
+        parsed_actions: List[Action] = []
+        actions_raw = data.get("actions") or []
+        if isinstance(actions_raw, list):
+            for a in actions_raw:
+                if not isinstance(a, dict):
+                    continue
+                try:
+                    parsed_actions.append(Action(**{k: v for k, v in a.items() if k in Action.model_fields}))
+                except Exception:
+                    continue
+
+        # SAFETY NET tema/theme (copied verbatim from /api/converse).
+        try:
+            utxt = (text or "").lower()
+            has_theme_action = any(
+                (a.type == "config" and getattr(a, "key", None) == "theme") for a in parsed_actions
+            )
+            if not has_theme_action and "tema" in utxt:
+                theme_map = [
+                    (["scuro", "scura", "notte", "buio", "nero"], "notte"),
+                    (["chiaro", "chiara", "giorno", "luce", "bianco"], "giorno"),
+                    (["cielo", "azzurro", "blu", "celeste"], "cielo"),
+                    (["bosco", "verde", "foresta"], "bosco"),
+                    (["ciliegia", "rosa", "rosso", "rossa"], "ciliegia"),
+                    (["sistema", "automatico", "automatica", "default"], "sistema"),
+                    (["auto orario", "auto-orario", "ora", "orario"], "auto-orario"),
+                ]
+                for keywords, theme_val in theme_map:
+                    if any(k in utxt for k in keywords):
+                        parsed_actions.append(Action(type="config", key="theme", value=theme_val))
+                        logger.info(f"[SAFETY NET TEMA stream] auto-injected theme='{theme_val}' from text='{text}'")
+                        break
+        except Exception as e:
+            logger.warning(f"[SAFETY NET TEMA stream] error: {e}")
+
+        # Reply text with audio tags stripped for chat display.
+        voice_text_full = full_reply
+        reply_text = _strip_audio_tags(full_reply)
+        memory_update = (data.get("memory_update") or "").strip()
+
+        ai_entry = TimelineEntry(
+            role="ai",
+            text=reply_text,
+            voice_text=voice_text_full if voice_text_full != reply_text else None,
+            tone=tone,
+            domain=domain,
+            extracted=extracted_obj,
+            actions=parsed_actions,
+        )
+        if not req.ephemeral:
+            try:
+                await db.taccuino_timeline.insert_one(ai_entry.model_dump())
+            except Exception as e:
+                logger.error(f"[converse-stream-audio] Mongo insert AI entry failed: {e}")
+
+            try:
+                profile.total_messages += 1
+                profile.confidence_level = min(100, profile.confidence_level + 1)
+                if memory_update and memory_update.lower() not in {"null", "none", ""}:
+                    sep = "\n- " if profile.memory_summary else "- "
+                    new_mem = (profile.memory_summary or "") + sep + memory_update
+                    if len(new_mem) > 4000:
+                        new_mem = new_mem[-4000:]
+                    profile.memory_summary = new_mem
+                await save_profile(profile)
+            except Exception as e:
+                logger.warning(f"[converse-stream-audio] profile update failed: {e}")
+
+    return StreamingResponse(
+        audio_pipeline(),
+        media_type="audio/mpeg",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 # Include the router
 app.include_router(api_router)
 
