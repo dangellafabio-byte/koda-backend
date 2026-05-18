@@ -845,9 +845,24 @@ export default function Taccuino() {
               return;
             }
             // Refresh della timeline (il backend ha salvato user+ai entries).
+            // IMPORTANTE: i messaggi confessionali (flag `confessional:true`)
+            // NON sono mai persistiti sul server (ephemeral/sealed). Se
+            // sovrascriviamo lo state con `tl` perdiamo gli entry confessionali
+            // creati prima in questa sessione. Quindi facciamo un MERGE che
+            // preserva gli entry locali confessionali, ordinati per timestamp.
             try {
               const tl = await api.getTimeline(200);
-              setTimeline(tl);
+              setTimeline((prev) => {
+                const localConfessional = prev.filter((e) => e.confessional);
+                if (localConfessional.length === 0) return tl;
+                const merged = [...tl, ...localConfessional];
+                merged.sort(
+                  (a, b) =>
+                    new Date(a.timestamp).getTime() -
+                    new Date(b.timestamp).getTime()
+                );
+                return merged;
+              });
               // Esegui le azioni dell'ultima ai_entry (theme, ecc.).
               const lastAi = [...tl].reverse().find((e) => e.role === "ai");
               if (lastAi?.actions?.length) {
