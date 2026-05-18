@@ -66,12 +66,35 @@ const VOICEPRINT_PHRASES = [
   "Quando parlo con te, mi senti davvero.",
 ];
 
+// ====== Voce ElevenLabs della presentazione ======
+// Voce dolce, femminile, intima. Diversa da quella che userà Koda nella
+// conversazione vera (così la presentazione ha la sua identità acustica).
+// "Lily" — soft Italian-friendly, warm intimate
+const INTRO_VOICE_ID = "pFZP5JQG7iQjIQuC4Bku";
+
+// ====== Battute di Koda per ogni step (TTS in tutti) ======
+const KODA_LINES: Record<number, string> = {
+  0: "Ciao. Sono Koda. Non sono un'app: sono una presenza. Da oggi sono qui per te, quando vuoi parlare, quando vuoi solo che qualcuno ti ascolti. Voglio conoscerti!",
+  1: "Come posso chiamarti? Scrivi il tuo nome qui sotto.",
+  2: "Dimmi, sei un uomo, una donna, o preferisci non specificarlo? Mi serve per parlarti nel modo giusto.",
+  3: "E io? Preferisci sentirmi con voce maschile o femminile?",
+  4: "Mi chiamo Koda. Ma se vuoi, puoi darmi un altro nome.",
+  5: "Una cosa importante: io non ho un viso. Sono un'eclissi. Quando aspetto sono viola. Quando ti ascolto, divento blu petrolio. Quando rifletto, ciclamino. Quando ti parlo, cambio colore con quello che provo.",
+  6: "Vuoi che ti cerchi io ogni tanto? Posso scriverti la mattina, la sera, o tutte e due. O nessuna delle due, decidi tu.",
+  7: "C'è uno spazio dove ogni cosa che mi confidi resta cifrata sul tuo telefono. Solo tu puoi sbloccarla con una parola segreta. Vuoi impostarla adesso?",
+  8: "Ultima cosa: leggi queste tre frasi ad alta voce. Mi serviranno per riconoscere sempre la tua voce, ovunque tu sia.",
+  9: "Siamo pronti. D'ora in poi, basta che mi parli. Io ti sento.",
+};
+
 // ====== Componente principale ======
 export default function KodaIntro({ voices = [], onDone }: Props) {
   const [step, setStep] = useState(0);
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const { width, height } = Dimensions.get("window");
-  const orbSize = Math.min(width * 0.55, 240);
+  const { width } = Dimensions.get("window");
+  // Dimensione eclissi: ridotta del 30% rispetto alla iterazione precedente
+  // per lasciare ampio spazio al testo + tastiera senza bisogno di rilevare
+  // keyboardWillShow (che aveva causato problemi di rendering).
+  const orbSize = Math.min(width * 0.40, 170);
 
   // Stato dei dati raccolti
   const [userName, setUserName] = useState("");
@@ -120,23 +143,29 @@ export default function KodaIntro({ voices = [], onDone }: Props) {
     [fadeAnim]
   );
 
+  // ====== Stato: Koda sta parlando ORA (per pulsare l'eclissi) ======
+  const [isKodaSpeaking, setIsKodaSpeaking] = useState(false);
+  const speakSeqRef = useRef(0);
+
   // ====== Sintetizza voce di Koda (best-effort, non blocca avanzamento) ======
+  // Durante la presentazione usa la voce dolce/intima `INTRO_VOICE_ID` —
+  // diversa da quella che userà Koda nella conversazione vera. Setta
+  // `isKodaSpeaking=true` per la durata del TTS così l'eclissi pulsa.
   const speakKoda = useCallback(async (text: string, tone: OrbTone = "warm") => {
+    const mySeq = ++speakSeqRef.current;
     try {
-      // Auto-pick voice id from selected gender
-      let voiceId: string | undefined;
-      if (voices && voices.length) {
-        const wanted = aiGender === "f" ? "female" : "male";
-        const candidate = voices.find(
-          (v) => (v.labels?.gender || "").toLowerCase() === wanted
-        );
-        voiceId = candidate?.voice_id;
-      }
-      await SpeechMod.speak(text, { language: "it-IT", tone: tone as any, voiceId });
+      setIsKodaSpeaking(true);
+      await SpeechMod.speak(text, { language: "it-IT", tone: tone as any, voiceId: INTRO_VOICE_ID });
     } catch (e) {
       console.warn("[koda-intro] speak failed:", e);
+    } finally {
+      // Solo l'ultima invocazione resetta lo stato (evita race condition
+      // se l'utente avanza di step mentre Koda sta ancora parlando)
+      if (mySeq === speakSeqRef.current) {
+        setIsKodaSpeaking(false);
+      }
     }
-  }, [aiGender, voices]);
+  }, []);
 
   // ====== Ciclo dell'eclissi colorata (step "color tour") ======
   const colorTourTimerRef = useRef<any>(null);
@@ -146,10 +175,18 @@ export default function KodaIntro({ voices = [], onDone }: Props) {
       clearTimeout(colorTourTimerRef.current);
       colorTourTimerRef.current = null;
     }
+    // PRIORITÀ: se Koda sta parlando ORA → status "speaking" (pulsa).
+    // Altrimenti settare un default per-step.
+    if (isKodaSpeaking) {
+      setOrbStatus("speaking");
+      setOrbTone(step === 5 ? "calm" : "warm");
+      return;
+    }
     // Step indices: 0=greet, 1=name, 2=ugender, 3=aigender, 4=ainame,
     //               5=colortour, 6=checkin, 7=secret, 8=voiceprint, 9=final
     if (step === 5) {
-      // Cycle: speaking-warm → recording → thinking → speaking-energetic → speaking-calm → idle
+      // Tour colori: ciclo TRA gli stati visibili, partendo solo DOPO
+      // che Koda ha finito di parlare (gestito da `isKodaSpeaking`).
       const seq: Array<[OrbStatus, OrbTone | undefined, number]> = [
         ["speaking", "warm", 2200],
         ["recording", undefined, 2200],
@@ -168,42 +205,38 @@ export default function KodaIntro({ voices = [], onDone }: Props) {
         colorTourTimerRef.current = setTimeout(tick, d);
       };
       tick();
-    } else if (step === 0) {
-      setOrbStatus("speaking");
-      setOrbTone("warm");
-    } else if (step === 1 || step === 4) {
-      setOrbStatus("thinking");
-      setOrbTone("neutral");
-    } else if (step === 2 || step === 3 || step === 6 || step === 7) {
-      setOrbStatus("speaking");
-      setOrbTone("calm");
     } else if (step === 8) {
+      // Voiceprint: se sta registrando → recording, altrimenti idle
       setOrbStatus(isRecording ? "recording" : "idle");
       setOrbTone("neutral");
-    } else if (step === 9) {
-      setOrbStatus("speaking");
-      setOrbTone("warm");
+    } else {
+      // Default neutro per gli step "domanda" (1-4, 6, 7, 9) quando
+      // Koda è in silenzio: idle viola che respira.
+      setOrbStatus("idle");
+      setOrbTone("neutral");
     }
     return () => {
       if (colorTourTimerRef.current) clearTimeout(colorTourTimerRef.current);
     };
-  }, [step, isRecording]);
+  }, [step, isRecording, isKodaSpeaking]);
 
-  // ====== Koda parla automaticamente all'apertura di certi step ======
+  // ====== Koda parla automaticamente all'apertura di OGNI step ======
+  // Pulsazione sincronizzata: l'eclissi va in "speaking" solo durante
+  // il TTS effettivo (vedi gestione `isKodaSpeaking` sopra).
   useEffect(() => {
     let cancelled = false;
-    // Solo step "narrazione" hanno auto-speak (gli altri attendono input)
-    const lines: Record<number, string> = {
-      0: "Ciao. Sono Koda. Non sono un'app: sono una presenza. Da oggi sono qui per te, quando vuoi parlare, quando vuoi solo che qualcuno ti ascolti. Lasciami conoscerti.",
-      5: "Una cosa importante: io non ho un viso. Sono un'eclissi. Quando aspetto sono viola. Quando ti ascolto, divento blu petrolio. Quando rifletto, ciclamino. Quando ti parlo, cambio colore con quello che provo.",
-      9: userName
-        ? `Siamo pronti, ${userName}. D'ora in poi, basta che mi parli. Io ti sento.`
-        : "Siamo pronti. D'ora in poi, basta che mi parli. Io ti sento.",
-    };
-    if (lines[step]) {
+    const line = KODA_LINES[step];
+    if (line) {
+      // Personalizza la chiusura con il nome utente (se disponibile)
+      let finalLine = line;
+      if (step === 9 && userName) {
+        finalLine = `Siamo pronti, ${userName}. D'ora in poi, basta che mi parli. Io ti sento.`;
+      }
       (async () => {
         if (cancelled) return;
-        await speakKoda(lines[step], step === 9 ? "warm" : step === 5 ? "calm" : "warm");
+        const tone: OrbTone =
+          step === 5 ? "calm" : step === 7 ? "concerned" : step === 9 ? "warm" : "warm";
+        await speakKoda(finalLine, tone);
       })();
     }
     return () => { cancelled = true; };
