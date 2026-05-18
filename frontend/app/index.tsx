@@ -3144,14 +3144,16 @@ function Bubble({
   // Compute backgrounds for both bubbles based on chosen style.
   // In SOLID mode both are opaque (block wallpaper for max readability).
   // In GLASS mode both are translucent (wallpaper shows through subtly).
-  // === CONFESSIONALE: override viola per bubble create dentro confessionale.
-  //     Quando il toggle confessionale è ON, queste bubble appaiono in viola
-  //     "ametista" così l'utente le riconosce a colpo d'occhio come
-  //     contenuto protetto. Quando il toggle è OFF, queste bubble non sono
-  //     proprio renderizzate (filtrate via in timelineWithSeparators). */
+  // === CONFESSIONALE: override colore "ceralacca" per bubble create dentro
+  //     confessionale. Quando il toggle confessionale è ON, queste bubble
+  //     appaiono nel rosso-bordeaux della ceralacca con cui si sigillavano
+  //     le lettere segrete — caldo, intimo, immediatamente riconoscibile
+  //     come "contenuto sigillato/segreto". Quando il toggle è OFF, queste
+  //     bubble non sono proprio renderizzate (filtrate in
+  //     timelineWithSeparators). */
   const isConfessional = !!entry.confessional;
-  const confessionalColor = "#A78BFA"; // amethyst — viola luminoso ma sobrio
-  const confessionalSoft = "#A78BFA33"; // 20% alpha glass
+  const confessionalColor = "#8B3A4A"; // sealing-wax burgundy
+  const confessionalSoft = "#8B3A4A33"; // 20% alpha glass
   const aiBg = isConfessional
     ? (bubbleStyle === "solid" ? confessionalColor : confessionalSoft)
     : (bubbleStyle === "solid" ? bubbleAccent.color : bubbleAccent.soft);
