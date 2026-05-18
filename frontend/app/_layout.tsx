@@ -3,9 +3,15 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { View, StyleSheet, Platform } from "react-native";
+import * as SplashScreen from "expo-splash-screen";
 import { scheduleWeeklyAppNotification } from "../lib/notifications";
 import { ThemeProvider, useTheme, ThemeName } from "../lib/theme";
 import { api } from "../lib/api";
+
+// Trattiene lo splash screen finché l'app non è davvero pronta (profile
+// caricato, theme inizializzato). SENZA QUESTO, lo splash NERO resta
+// visibile in eterno e l'utente vede solo "schermo nero".
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 function ThemedShell({ children }: { children: React.ReactNode }) {
   const { theme } = useTheme();
@@ -30,6 +36,11 @@ export default function RootLayout() {
       }, 1500);
       // not blocking init
     }
+    // Safety net: dopo 5s nascondi comunque lo splash, anche se profile/theme
+    // sono lentissimi. Non vogliamo MAI lasciare l'utente con schermo nero.
+    const splashSafety = setTimeout(() => {
+      SplashScreen.hideAsync().catch(() => {});
+    }, 5000);
     (async () => {
       try {
         const p = await api.getProfile();
@@ -39,6 +50,9 @@ export default function RootLayout() {
         if (typeof p.settings?.night_start_hour === "number") setNightStart(p.settings.night_start_hour);
       } catch {}
       setReady(true);
+      // Nascondi lo splash screen NERO una volta che il theme è inizializzato.
+      // SENZA QUESTO, l'utente vede schermo nero per sempre.
+      SplashScreen.hideAsync().catch(() => {});
     })();
   }, []);
 
