@@ -2886,16 +2886,13 @@ export default function Taccuino() {
   // Wrap the screen in a background image (custom upload) or gradient (preset),
   // with a dark overlay for legibility. If no background is set, just return
   // the plain inner view (uses theme.bg).
-  // === COLOR INTRO ===
-  // Al primo avvio, mostra il tour dei colori dell'Eclissi PRIMA di
-  // qualsiasi altra schermata. Quando l'utente lo termina (o lo salta),
-  // viene persistito il flag e non si vede più.
-  // === COLOR INTRO (TEMPORANEAMENTE DISATTIVATO per debug schermo nero) ===
-  // Ritorniamo SEMPRE false così l'app salta KodaIntro e va direttamente
-  // alla pagina principale. Se la pagina principale carica → KodaIntro è
-  // il bug. Se è ancora nera → bug altrove.
+  // === KODA INTRO ===
+  // Al primo avvio, e on-demand tramite l'icona ⋯ in alto a destra,
+  // mostra la presentazione conversazionale di Koda PRIMA di qualsiasi
+  // altra schermata. Quando l'utente la termina (o la salta), viene
+  // persistito il flag `koda_intro_seen=1` in SecureStore.
   if (showColorIntro === true) {
-    // return <KodaIntro voices={voiceList} onDone={dismissColorIntro} />;
+    return <KodaIntro voices={voiceList} onDone={dismissColorIntro} />;
   }
   if (isCustomImage && bgValue) {
     return (
