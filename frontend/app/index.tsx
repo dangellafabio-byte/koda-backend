@@ -815,10 +815,32 @@ export default function Taccuino() {
             // SOLO quando l'audio comincia davvero a suonare — così l'eclissi
             // non vibra mentre è ancora silenziosa (era confusing).
             setStatus("thinking");
+            // Watchdog: se entro 30s NON si è ancora passati a "speaking",
+            // significa che il backend è bloccato (timeout Claude, hang, ecc.).
+            // Senza questo, l'app resta sullo spinner per sempre (vedi
+            // screenshot utente). Quando scatta, mostra errore e torna idle.
+            let watchdogTriggered = false;
+            let speakingStarted = false;
+            const watchdog = setTimeout(() => {
+              if (!speakingStarted) {
+                watchdogTriggered = true;
+                try { SpeechMod.stop(); } catch {}
+                setStatus("idle");
+                setError("Koda ci sta mettendo troppo. Riprova tra un attimo.");
+                setTimeout(() => setError(null), 4000);
+              }
+            }, 30000);
             const ok = await SpeechMod.playFromUrl(streamUrl, () => {
               // L'audio è iniziato → ora ha senso vibrare.
+              speakingStarted = true;
+              clearTimeout(watchdog);
               setStatus("speaking");
             });
+            clearTimeout(watchdog);
+            // Se il watchdog ha già gestito (timeout), non sovrascrivere lo stato.
+            if (watchdogTriggered) {
+              return;
+            }
             // Refresh della timeline (il backend ha salvato user+ai entries).
             try {
               const tl = await api.getTimeline(200);

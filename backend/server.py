@@ -2486,6 +2486,7 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
                 api_key=EMERGENT_LLM_KEY,
                 api_base='https://integrations.emergentagent.com/llm',
                 max_tokens=600,
+                timeout=25,  # CRITICO: senza timeout, una chiamata Claude bloccata pianta tutto il worker FastAPI e l'app va in schermo nero/spinner infinito.
             )
 
             async for chunk in stream:
