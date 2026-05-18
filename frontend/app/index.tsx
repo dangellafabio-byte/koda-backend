@@ -187,41 +187,36 @@ export default function Taccuino() {
       setProfile(p);
     } catch {}
   }, []);
-  /** Riapri la presentazione di Koda (back-door: long-press 1s sull'eclissi). */
+  /** Riapri la presentazione di Koda (back-door: tieni premuto 800ms sull'eclissi). */
   const reopenKodaIntro = useCallback(async () => {
     try {
       await SecureStore.deleteItemAsync("koda_intro_seen");
     } catch {}
     setShowColorIntro(true);
   }, []);
-  // Long-press manuale via onPressIn/onPressOut + timer. Più affidabile
-  // del onLongPress di Pressable quando dentro un ScrollView orizzontale
-  // (il pager intercetta i micro-movimenti e cancella onLongPress).
-  const longPressTimerRef = useRef<any>(null);
-  const longPressFiredRef = useRef(false);
+  // Long-press robusto: misuriamo il tempo tra onPressIn e onPress.
+  // Niente timer (i ScrollView orizzontali genitori cancellano onPressOut
+  // su micro-movimento → timer addio). Solo onPressIn registra il momento,
+  // onPress al rilascio decide: <800ms = tap, ≥800ms = long-press.
+  const pressedAtRef = useRef<number>(0);
   const beginEclipseLongPress = useCallback(() => {
-    longPressFiredRef.current = false;
-    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-    longPressTimerRef.current = setTimeout(() => {
-      longPressFiredRef.current = true;
-      reopenKodaIntro();
-    }, 1000);
-  }, [reopenKodaIntro]);
-  const cancelEclipseLongPress = useCallback(() => {
-    if (longPressTimerRef.current) {
-      clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
+    pressedAtRef.current = Date.now();
   }, []);
-  // Wrap onBigButton: salta il tap se è scattato il long-press.
+  const cancelEclipseLongPress = useCallback(() => {
+    // Non facciamo nulla qui — la decisione avviene su onPress (rilascio).
+  }, []);
   const onBigButtonGuarded = useCallback(() => {
-    if (longPressFiredRef.current) {
-      longPressFiredRef.current = false;
-      return; // long-press ha già aperto KodaIntro, non startare recording
+    const elapsed = Date.now() - (pressedAtRef.current || 0);
+    pressedAtRef.current = 0;
+    if (elapsed >= 800) {
+      // Long-press → riapri la presentazione di Koda
+      reopenKodaIntro();
+      return;
     }
+    // Tap normale → comportamento standard (registrazione, ecc.)
     onBigButton();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [reopenKodaIntro]);
   const [showSettings, setShowSettings] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [showVoicePicker, setShowVoicePicker] = useState(false);
