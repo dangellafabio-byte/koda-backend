@@ -293,7 +293,7 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
           // Step 3 — Push playback position to voiceWaveform so the blob
           // can pulse in sync with the actual audio playhead.
           try {
-            voiceWaveform.notifyPlaybackTime(pos, !!status.playing);
+            voiceWaveform.notifyPlaybackTime(pos, !!status.playing, typeof status.duration === "number" ? status.duration : undefined);
           } catch {}
           if (pos > lastPositionSec) {
             lastPositionSec = pos;

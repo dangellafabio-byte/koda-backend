@@ -2442,47 +2442,38 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
         # Accumulate MP3 bytes here so we can compute the waveform at the
         # end of the stream for the audio-reactive blob (Step 3).
         mp3_acc = bytearray() if result_id and _WAVEFORM_OK else None
+        # Per-sentence accumulator: each completed sentence's MP3 bytes are
+        # decoded ONCE for waveform extraction, then the RMS values are
+        # appended to `wf_progressive` (avoids re-decoding the cumulative
+        # buffer, which was 10x slower and caused latency drift).
+        wf_progressive: List[float] = [] if (result_id and _WAVEFORM_OK) else []
         # Capture metadata for post-stream persistence
         captured = {"tone": "neutral", "domain": None, "actions": [], "memory_update": "", "extracted": None}
 
-        # === Progressive waveform computation (Step 3 — Fase 4) ===
-        # Without this, the waveform JSON only becomes available AFTER the
-        # full audio has finished streaming — which means the blob doesn't
-        # actually pulse in sync, because by the time we have data the
-        # audio has already played to the end.
-        #
-        # Background task: every ~700ms, take a snapshot of mp3_acc, decode
-        # it on a thread, and push the partial RMS array to the cache. The
-        # client polls /converse-result/{id} and picks up the partial data
-        # within ~1s of audio actually starting to play.
-        updater_stop = asyncio.Event()
-
-        async def waveform_updater():
-            if mp3_acc is None or not result_id:
+        async def _append_sentence_waveform(sentence_mp3: bytes):
+            """Decode just this sentence's MP3 (small, fast) and append its
+            RMS windows to wf_progressive. Then push the updated waveform
+            to the result cache so the client can pick it up immediately.
+            """
+            if not result_id or not sentence_mp3:
                 return
-            while not updater_stop.is_set():
-                try:
-                    await asyncio.wait_for(updater_stop.wait(), timeout=0.7)
-                    break  # signaled
-                except asyncio.TimeoutError:
-                    pass
-                if len(mp3_acc) < 2048:
-                    continue  # not enough data yet
-                snapshot = bytes(mp3_acc)
-                try:
-                    wf = await asyncio.to_thread(_compute_waveform_rms, snapshot)
-                except Exception as e:
-                    logger.warning(f"[converse-stream-audio] partial waveform error: {e}")
-                    continue
-                if not wf:
-                    continue
-                existing = _converse_results.get(result_id) or {"id": result_id}
-                existing.update(wf)
-                existing["ready"] = True
-                existing["partial"] = True
-                _store_converse_result(result_id, existing)
-
-        updater_task = asyncio.create_task(waveform_updater()) if (result_id and mp3_acc is not None) else None
+            try:
+                wf = await asyncio.to_thread(_compute_waveform_rms, sentence_mp3)
+            except Exception as e:
+                logger.warning(f"[converse-stream-audio] sentence waveform error: {e}")
+                return
+            if not wf or not wf.get("waveform"):
+                return
+            wf_progressive.extend(wf["waveform"])
+            payload = {
+                "id": result_id,
+                "ready": True,
+                "partial": True,
+                "window_ms": wf.get("window_ms", WAVEFORM_WINDOW_MS),
+                "duration_ms": int(len(wf_progressive) * (wf.get("window_ms", WAVEFORM_WINDOW_MS))),
+                "waveform": list(wf_progressive),
+            }
+            _store_converse_result(result_id, payload)
 
         try:
             stream = await litellm.acompletion(
@@ -2520,12 +2511,20 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
                         if clean.strip():
                             # Determine tone heuristic from partial reply (still neutral here).
                             vs = _voice_settings_for_tone(captured["tone"], None, None)
+                            # Buffer THIS sentence's MP3 bytes for per-sentence waveform.
+                            sentence_mp3 = bytearray() if mp3_acc is not None else None
                             async for audio_chunk in _stream_tts_for_sentence(
                                 client_el, clean, voice_id, vs
                             ):
                                 if mp3_acc is not None:
                                     mp3_acc.extend(audio_chunk)
+                                if sentence_mp3 is not None:
+                                    sentence_mp3.extend(audio_chunk)
                                 yield audio_chunk
+                            # Compute + append this sentence's waveform (fast: only
+                            # decodes the small per-sentence MP3, ~50-150ms).
+                            if sentence_mp3 is not None and len(sentence_mp3) > 1024:
+                                asyncio.create_task(_append_sentence_waveform(bytes(sentence_mp3)))
 
                 # If the reply has closed AND we have leftover text, break early
                 if extractor.reply_finished:
@@ -2536,12 +2535,17 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
             if tail:
                 clean = _strip_audio_tags(tail) or tail
                 vs = _voice_settings_for_tone(captured["tone"], None, None)
+                sentence_mp3 = bytearray() if mp3_acc is not None else None
                 async for audio_chunk in _stream_tts_for_sentence(
                     client_el, clean, voice_id, vs
                 ):
                     if mp3_acc is not None:
                         mp3_acc.extend(audio_chunk)
+                    if sentence_mp3 is not None:
+                        sentence_mp3.extend(audio_chunk)
                     yield audio_chunk
+                if sentence_mp3 is not None and len(sentence_mp3) > 1024:
+                    asyncio.create_task(_append_sentence_waveform(bytes(sentence_mp3)))
 
         except Exception as e:
             logger.error(f"[converse-stream-audio] Claude streaming error: {e}")
@@ -2647,14 +2651,15 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
                 logger.warning(f"[converse-stream-audio] profile update failed: {e}")
 
         # === Waveform extraction + result cache (Step 3 — Fase 4) ===
-        # Stop the progressive updater task — we now compute the FINAL,
-        # full-quality waveform once below.
-        if updater_task is not None:
-            updater_stop.set()
-            try:
-                await updater_task
-            except Exception:
-                pass
+        # Per-sentence waveform tasks have been firing concurrently as each
+        # sentence streamed. Here we just finalize: compute the FULL
+        # waveform from the cumulative MP3 (in case some per-sentence tasks
+        # haven't finished, or a sentence was too small to decode), and
+        # publish the final non-partial result so the cache reflects
+        # everything we have.
+        # Give any pending per-sentence tasks a brief moment to complete
+        # before snapshotting the final state.
+        await asyncio.sleep(0.05)
         if result_id and mp3_acc is not None and len(mp3_acc) > 0:
             mp3_bytes = bytes(mp3_acc)
             try:

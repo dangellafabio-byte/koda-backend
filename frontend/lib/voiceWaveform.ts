@@ -30,6 +30,7 @@ let currentId: string | null = null;
 // Last reported AVPlayer position + when we received it.
 let lastPlaybackSec = 0;
 let lastPlaybackAtMs = 0;
+let lastDurationSec = 0;  // total audio duration as reported by AVPlayer
 let isPlaying = false;
 
 /** Generate a 32-char random hex UUID without external deps. */
@@ -69,12 +70,20 @@ export function clear(): void {
 /**
  * Called by speech.ts on every `playbackStatusUpdate` event from the
  * AudioPlayer. Lets us know precisely where the audio playhead is.
+ *
+ * `durationSec` (optional): the AVPlayer's reported total audio duration.
+ * Used for fraction-based waveform indexing (more robust than time-based,
+ * because per-sentence MP3 concatenation can yield a server-side waveform
+ * whose nominal duration doesn't match the real playback duration).
  */
-export function notifyPlaybackTime(positionSec: number, playing: boolean): void {
+export function notifyPlaybackTime(positionSec: number, playing: boolean, durationSec?: number): void {
   if (typeof positionSec !== "number" || positionSec < 0) return;
   lastPlaybackSec = positionSec;
   lastPlaybackAtMs = Date.now();
   isPlaying = playing;
+  if (typeof durationSec === "number" && durationSec > 0.1 && isFinite(durationSec)) {
+    lastDurationSec = durationSec;
+  }
 }
 
 /**
@@ -149,10 +158,23 @@ export function getCurrentAmplitude(): number | null {
   if (lastPlaybackAtMs === 0) return null;  // no playback time received yet
   // Interpolate playback time forward since the last status update.
   const sinceUpdateMs = Date.now() - lastPlaybackAtMs;
-  const effectiveMs = lastPlaybackSec * 1000 + (isPlaying ? sinceUpdateMs : 0);
-  if (effectiveMs < 0) return 0;
-  if (effectiveMs > current.durationMs + 200) return null; // past the end
-  const idx = Math.floor(effectiveMs / current.windowMs);
+  const effectiveSec = lastPlaybackSec + (isPlaying ? sinceUpdateMs / 1000 : 0);
+  if (effectiveSec < 0) return 0;
+
+  // === FRACTION-BASED INDEXING ===
+  // Server-side waveform duration (nominal) is computed by summing per-sentence
+  // MP3 durations as reported by pydub. This can drift from the real AVPlayer
+  // duration (concatenated MP3 frames are sometimes counted weirdly). We use
+  // the AVPlayer's reported duration (lastDurationSec) as the SOURCE OF TRUTH
+  // and map [0..1] playback fraction → waveform[0..length].
+  // Fallback to time-based indexing if duration isn't known yet.
+  let idx: number;
+  if (lastDurationSec > 0.1) {
+    const fraction = Math.max(0, Math.min(1, effectiveSec / lastDurationSec));
+    idx = Math.floor(fraction * current.values.length);
+  } else {
+    idx = Math.floor((effectiveSec * 1000) / current.windowMs);
+  }
   if (idx < 0 || idx >= current.values.length) return null;
   const raw = current.values[idx];
   // Map [0..0.30] → [0..1], clip; gentle curve for low-end emphasis.
