@@ -28,6 +28,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Keyboard,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -91,7 +92,24 @@ export default function KodaIntro({ voices = [], onDone }: Props) {
   const [step, setStep] = useState(0);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const { width, height } = Dimensions.get("window");
-  const orbSize = Math.min(width * 0.55, 240);
+  // === Keyboard awareness ===
+  // Quando la tastiera è aperta sull'iPhone, lo spazio verticale disponibile
+  // si dimezza. Senza fare nulla, l'eclissi grande "spinge" tutto il resto
+  // fuori schermo (titolo + input). Soluzione: rilevare lo stato della
+  // tastiera e ridurre drasticamente la dimensione dell'eclissi.
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  useEffect(() => {
+    const showEv = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEv = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const s1 = Keyboard.addListener(showEv, () => setKeyboardVisible(true));
+    const s2 = Keyboard.addListener(hideEv, () => setKeyboardVisible(false));
+    return () => { s1.remove(); s2.remove(); };
+  }, []);
+  // Eclissi: 55% width quando tastiera chiusa, 28% quando aperta (compatta
+  // ma sempre visibile come "presenza" emotiva del momento).
+  const orbSize = keyboardVisible
+    ? Math.min(width * 0.28, 110)
+    : Math.min(width * 0.55, 240);
 
   // Stato dei dati raccolti
   const [userName, setUserName] = useState("");
@@ -628,7 +646,12 @@ export default function KodaIntro({ voices = [], onDone }: Props) {
           </View>
 
           {/* Eclissi centrale */}
-          <Animated.View style={[styles.orbWrap, { opacity: fadeAnim }]}>
+          <Animated.View
+            style={[
+              styles.orbWrap,
+              { opacity: fadeAnim, paddingVertical: keyboardVisible ? 4 : 16 },
+            ]}
+          >
             <EclipseOrb
               status={orbStatus}
               tone={orbTone}
