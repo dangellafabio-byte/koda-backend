@@ -2881,8 +2881,12 @@ export default function Taccuino() {
   // Al primo avvio, mostra il tour dei colori dell'Eclissi PRIMA di
   // qualsiasi altra schermata. Quando l'utente lo termina (o lo salta),
   // viene persistito il flag e non si vede più.
+  // === COLOR INTRO (TEMPORANEAMENTE DISATTIVATO per debug schermo nero) ===
+  // Ritorniamo SEMPRE false così l'app salta KodaIntro e va direttamente
+  // alla pagina principale. Se la pagina principale carica → KodaIntro è
+  // il bug. Se è ancora nera → bug altrove.
   if (showColorIntro === true) {
-    return <KodaIntro voices={voiceList} onDone={dismissColorIntro} />;
+    // return <KodaIntro voices={voiceList} onDone={dismissColorIntro} />;
   }
   if (isCustomImage && bgValue) {
     return (
