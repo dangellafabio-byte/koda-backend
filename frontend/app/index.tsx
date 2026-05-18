@@ -216,20 +216,25 @@ export default function Taccuino() {
   const eclipseGesture = useMemo(() => {
     const longPress = Gesture.LongPress()
       .minDuration(600)
-      .maxDistance(25)
+      .maxDistance(40)
+      .runOnJS(true)
       .onStart(() => {
-        runOnJS(reopenKodaIntroRef.current)();
+        reopenKodaIntroRef.current();
       });
     const tap = Gesture.Tap()
       .maxDuration(500)
-      .maxDistance(15)
+      .runOnJS(true)
       .onEnd((_e, success) => {
         if (!success) return;
         if (isPressDisabledRef.current) return;
-        runOnJS(onBigButtonRef.current)();
+        onBigButtonRef.current();
       });
-    // Exclusive: se entrambi sono pronti, il long-press vince.
-    return Gesture.Exclusive(longPress, tap);
+    // Race: il primo gesture che si riconosce vince.
+    // Tap si riconosce sul rilascio (entro 500ms) → tap rapido = vince subito.
+    // LongPress si riconosce a 600ms di pressione continua → hold = vince lui.
+    // (Exclusive non andava bene: avrebbe aspettato il fallimento di longPress
+    //  prima di provare il tap, perdendo i tap rapidi.)
+    return Gesture.Race(tap, longPress);
   }, []);
   const [showSettings, setShowSettings] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
