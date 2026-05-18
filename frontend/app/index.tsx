@@ -1711,12 +1711,14 @@ export default function Taccuino() {
         {/* Slot destro: area invisibile long-press → riapre KodaIntro.
             È FUORI dal pager ScrollView, quindi i gesture non vengono
             mai cancellati. Toccando una volta non succede nulla; tieni
-            premuto ~600ms per aprire la presentazione di Koda. */}
+            premuto ~600ms per aprire la presentazione di Koda.
+            DIMENSIONI ESPLICITE: senza minWidth/minHeight `headerBtn`
+            collassa a pochi pixel (headerCenter ha flex:1 e mangia tutto). */}
         <Pressable
-          style={styles.headerBtn}
+          style={[styles.headerBtn, { minWidth: 60, minHeight: 44 }]}
           onLongPress={reopenKodaIntro}
           delayLongPress={600}
-          hitSlop={10}
+          hitSlop={20}
           testID="koda-intro-reopen"
         />
       </View>
