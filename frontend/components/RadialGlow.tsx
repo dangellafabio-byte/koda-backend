@@ -20,21 +20,20 @@ import Svg, { Defs, RadialGradient, Stop, Rect } from "react-native-svg";
 export type GlowStatus = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 
 const STATE_COLORS: Record<GlowStatus, string> = {
-  idle: "#7C3AED",         // VIOLA profondo (presenza)
-  recording: "#0E7C7B",    // BLU PETROLIO (ti ascolto)
-  transcribing: "#BE185D", // CICLAMINO (ponte pensiero/trascrizione)
-  thinking: "#BE185D",     // CICLAMINO (sto pensando)
-  speaking: "#7C3AED",     // VIOLA — viene comunque override dal blob, qui è solo base
+  idle: "#E5E7EB",         // BIANCO/grigio neutro
+  recording: "#EF4444",    // 🔴 ROSSO (parli tu)
+  transcribing: "#F59E0B", // ARANCIONE (transizione: tuo audio in elaborazione, ponte tra rosso e giallo)
+  thinking: "#FACC15",     // 🟡 GIALLO (Coda elabora)
+  speaking: "#3B82F6",     // 🔵 BLU (parla Coda)
 };
 
-// Opacità centrale (vicino al blob) in base allo stato — ridotte per
-// non competere visivamente con i colori dell'Eclissi al centro.
+// Opacità centrale (vicino al blob) in base allo stato
 const STATE_OPACITY: Record<GlowStatus, number> = {
-  idle: 0.05,
-  recording: 0.30,
-  transcribing: 0.28,
-  thinking: 0.28,
-  speaking: 0.20,
+  idle: 0.08,
+  recording: 0.50,
+  transcribing: 0.45,
+  thinking: 0.42,
+  speaking: 0.55,
 };
 
 // === RGB interpolation helpers (transizioni colore graduali)

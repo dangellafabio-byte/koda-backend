@@ -38,13 +38,12 @@ import {
 } from "../lib/api";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId } from "../lib/speech";
+import * as vw from "../lib/voiceWaveform";
 import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
-import EclipseOrb from "../components/EclipseOrb";
-import KodaIntro from "../components/KodaIntro";
-import * as SecureStore from "expo-secure-store";
+import OrganicBlob from "../components/OrganicBlob";
 import NeonBorder from "../components/NeonBorder";
 import RadialGlow from "../components/RadialGlow";
 import SealSetupModal from "../components/SealSetupModal";
@@ -147,53 +146,6 @@ export default function Taccuino() {
   const [status, setStatus] = useState<Status>("idle");
   const [textInput, setTextInput] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
-  // === KODA INTRO ===
-  // Presentazione conversazionale di Koda al primo avvio. Sostituisce
-  // sia il vecchio onboarding modale che il tutorial colori. Koda si
-  // presenta in prima persona, chiede tutte le info che gli servono
-  // (nome, gender, voce, check-in, parola segreta, voiceprint) e poi
-  // si congeda. Persistito in SecureStore con `koda_intro_seen=1`.
-  // `null` = ancora da verificare; `true` = mostra; `false` = nascondi.
-  const [showColorIntro, setShowColorIntro] = useState<boolean | null>(null);
-  const [voiceList, setVoiceList] = useState<Array<any>>([]);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const seen = await SecureStore.getItemAsync("koda_intro_seen");
-        if (!cancelled) setShowColorIntro(seen !== "1");
-      } catch {
-        if (!cancelled) setShowColorIntro(false);
-      }
-      // Carica le voci ElevenLabs disponibili per la scelta automatica
-      try {
-        const r = await fetch(`${API_BASE}/voices`);
-        if (r.ok) {
-          const v = await r.json();
-          if (!cancelled && Array.isArray(v)) setVoiceList(v);
-        }
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, []);
-  const dismissColorIntro = useCallback(async () => {
-    setShowColorIntro(false);
-    try {
-      await SecureStore.setItemAsync("koda_intro_seen", "1");
-    } catch {}
-    // Refresh profile dopo che Koda ha salvato i dati
-    try {
-      const p = await api.getProfile();
-      setProfile(p);
-    } catch {}
-  }, []);
-  /** Riapri la presentazione di Koda (back-door: long-press eclissi 3s). */
-  const reopenKodaIntro = useCallback(async () => {
-    try {
-      await SecureStore.deleteItemAsync("koda_intro_seen");
-    } catch {}
-    setShowColorIntro(true);
-  }, []);
   const [showSettings, setShowSettings] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [showVoicePicker, setShowVoicePicker] = useState(false);
@@ -782,34 +734,36 @@ export default function Taccuino() {
           await speakIfEnabled(reply, aiEntry.tone || "warm");
           return;
         }
-        // === FAST STREAMING FLOW ===
-        // Quando NON siamo in confessionale e la voce è abilitata, usiamo
-        // l'endpoint /api/converse-stream-audio che fa tutto in un colpo:
+        // === FAST STREAMING FLOW (Step 2b + Step 3 — Fase 4) ===
+        // Quando NON siamo in confessionale e la voce è abilitata, usiamo il
+        // nuovo endpoint /api/converse-stream-audio che fa tutto in un colpo:
         //   STT-result → Claude(streaming) → ElevenLabs(streaming per frase)
         //                                  → MP3 chunks → AVPlayer
-        // TTFB tipico ~100-300ms. Il testo della risposta viene salvato
-        // server-side; dopo la fine del playback rifresciamo la timeline.
+        // TTFB tipico ~100-300ms (vs ~5-8s del flusso "classic" /converse +
+        // /tts/prepare). Il testo della risposta viene salvato server-side;
+        // dopo la fine del playback rifresciamo la timeline per la chat.
         //
-        // Il visual è ora `EclipseOrb`: aurora procedurale guidata dal
-        // `tone` semantico della risposta, NON dall'ampiezza audio
-        // (approccio precedente con waveform server-side abbandonato:
-        // troppi anelli di sync, effetto "macchinoso").
+        // Step 3 — blob audio-reactive: passiamo un ID client che il server
+        // usa come chiave per memorizzare la waveform RMS dell'audio. Mentre
+        // l'audio è in playback, il modulo `voiceWaveform` polla questo ID e
+        // OrganicBlob legge l'ampiezza in tempo reale per pulsare in sync.
         const useFastPath = !confessionalMode && (profile?.settings.voice_response !== false);
         if (useFastPath) {
           try {
-            const reqId = Math.random().toString(36).slice(2, 18);
+            const reqId = vw.newId();
             const streamUrl =
               `${API_BASE}/converse-stream-audio?text=${encodeURIComponent(txt)}&id=${reqId}` +
               (confessionalMode ? `&ephemeral=true` : "");
-            // Durante TTFB (300-800ms) mostriamo "thinking" (eclissi ciclamino,
-            // flicker). Lo switch a "speaking" (vibrazione organica) avviene
-            // SOLO quando l'audio comincia davvero a suonare — così l'eclissi
-            // non vibra mentre è ancora silenziosa (era confusing).
-            setStatus("thinking");
-            const ok = await SpeechMod.playFromUrl(streamUrl, () => {
-              // L'audio è iniziato → ora ha senso vibrare.
-              setStatus("speaking");
-            });
+            // L'audio parte essenzialmente subito → passiamo a "speaking" e
+            // saltiamo la fase "thinking" (era 3-5s di stallo visivo).
+            setStatus("speaking");
+            // Marca l'inizio del playback e fetcha la waveform in parallelo.
+            vw.markPlaybackStart(reqId);
+            // Fire-and-forget: la waveform "arriva" entro ~1s ed entra
+            // automaticamente in gioco senza bloccare il playback.
+            vw.fetchAndAttach(reqId).catch(() => {});
+            const ok = await SpeechMod.playFromUrl(streamUrl);
+            vw.clear();
             // Refresh della timeline (il backend ha salvato user+ai entries).
             try {
               const tl = await api.getTimeline(200);
@@ -837,6 +791,7 @@ export default function Taccuino() {
           } catch (e: any) {
             // Fallback al flusso classico — non perdiamo il messaggio dell'utente.
             console.warn("[sendText] fast streaming path failed, falling back to /converse:", e);
+            vw.clear();
             setStatus("thinking");
             // ↓ continua con il blocco `api.converse` standard sotto
           }
@@ -1633,15 +1588,22 @@ export default function Taccuino() {
   // Build the screen wrapper with optional background image / gradient
   const screenInner = (
     <View style={[styles.screen, { backgroundColor: bgValue ? "transparent" : theme.bg }]}>
-      {/* Header — totalmente zen. Solo il lucchetto confessionale al centro.
-          Niente info, niente sunto, niente impostazioni: tutto si chiede
-          direttamente a Koda con la voce. L'eclissi È l'interfaccia. */}
+      {/* Header — minimal, zen. Solo ⚙ a sinistra e 📋 Sunto a destra.
+          Niente titolo, niente dot status, niente notifiche visibili.
+          La macchia ti dice già tutto quello che serve sapere. */}
       <View
         style={[styles.header, { top: Math.max(insets.top + 16, 70) }]}
         pointerEvents="box-none"
       >
-        {/* Slot sinistro vuoto — spazio per centrare il lucchetto */}
-        <View style={styles.headerBtn} pointerEvents="none" />
+        <TouchableOpacity
+          style={styles.headerBtn}
+          onPress={() => setShowInfo(true)}
+          onLongPress={() => setShowSettings(true)}
+          delayLongPress={1200}
+          testID="info-btn"
+        >
+          <Ionicons name="information-circle-outline" size={24} color="#FFFFFF" />
+        </TouchableOpacity>
         <View style={styles.headerCenter} pointerEvents="box-none">
           {/* === Lucchetto Confessionale ===
               Toggle one-tap nel cuore dell'header. Quando attivo:
@@ -1704,8 +1666,14 @@ export default function Taccuino() {
             </Text>
           </TouchableOpacity>
         </View>
-        {/* Slot destro vuoto — il sunto si chiede a Koda direttamente ("Fammi un sunto") */}
-        <View style={styles.headerBtn} pointerEvents="none" />
+        <TouchableOpacity
+          style={styles.headerBtn}
+          onPress={askRecap}
+          testID="recap-btn"
+        >
+          <Ionicons name="reader-outline" size={20} color="#FFFFFF" />
+          <Text style={styles.headerBtnText}>Sunto</Text>
+        </TouchableOpacity>
       </View>
 
       {/* === HORIZONTAL PAGER: Voce (zen) | Lettura (timeline) ===
@@ -1752,12 +1720,17 @@ export default function Taccuino() {
                   ],
                 }}
               >
-                <EclipseOrb
+                <OrganicBlob
                   status={status}
-                  tone={lastAiTone}
-                  size={Math.min(windowWidth * 0.78, 360)}
                   meterDb={meterDb}
                   meterThreshold={meterThreshold}
+                  tone={lastAiTone}
+                  size={Math.min(windowWidth * 0.78, 360)}
+                  palette={confessionalMode ? ["#1F2937", "#374151", "#0B0B0F"] : null}
+                  statePalettes={(profile?.style_preferences as any)?.palette || null}
+                  warmth={confessionalMode ? 0 : ambient.warmth}
+                  dim={ambient.dim}
+                  texture={confessionalMode ? "solida" : null}
                 />
               </Animated.View>
               {(status === "transcribing" || status === "thinking") && (
@@ -1767,7 +1740,7 @@ export default function Taccuino() {
               )}
             </Pressable>
             <Text style={[styles.statusLabel, styles.statusLabelOnBg, { fontSize: 16, marginTop: 8 }]}>
-              {aiPaused ? "AI in pausa" : ""}
+              {aiPaused ? "AI in pausa" : statusLabel}
             </Text>
             {/* Hint swipe — solo se ci sono messaggi (altrimenti non ha senso
                 far promettere "scorri per leggere" se non c'è nulla da leggere) */}
@@ -1794,12 +1767,17 @@ export default function Taccuino() {
         {timeline.length === 0 ? (
           <View style={styles.emptyState}>
             <View style={{ marginBottom: 24 }}>
-              <EclipseOrb
+              <OrganicBlob
                 status={status}
-                tone={lastAiTone}
-                size={260}
                 meterDb={meterDb}
                 meterThreshold={meterThreshold}
+                tone={lastAiTone}
+                size={260}
+                avatarUri={(profile?.settings as any)?.ai_avatar || null}
+                palette={null}
+                statePalettes={(profile?.style_preferences as any)?.palette || null}
+                warmth={ambient.warmth}
+                dim={ambient.dim}
               />
             </View>
             <Text style={styles.emptyTitle}>
@@ -1899,7 +1877,7 @@ export default function Taccuino() {
         ) : (
           <View style={styles.bigBtnArea}>
             <Text style={[styles.statusLabel, styles.statusLabelOnBg]}>
-              {aiPaused ? "AI in pausa" : ""}
+              {aiPaused ? "AI in pausa" : statusLabel}
             </Text>
             {/* La macchia È il pulsante. Tap su di lei → avvia/ferma ascolto.
                 Niente più cerchio verde gigante: la macchia stessa diventa
@@ -1907,8 +1885,6 @@ export default function Taccuino() {
                 schermo dà il feedback periferico (vedi anche se non guardi). */}
             <Pressable
               onPress={onBigButton}
-              onLongPress={reopenKodaIntro}
-              delayLongPress={3000}
               disabled={status === "transcribing" || status === "thinking"}
               style={({ pressed }) => [
                 styles.blobTap,
@@ -1932,12 +1908,16 @@ export default function Taccuino() {
                   ],
                 }}
               >
-                <EclipseOrb
+                <OrganicBlob
                   status={status}
-                  tone={lastAiTone}
-                  size={210}
                   meterDb={meterDb}
                   meterThreshold={meterThreshold}
+                  tone={lastAiTone}
+                  size={210}
+                  palette={confessionalMode ? ["#1F2937", "#374151", "#0B0B0F"] : null}
+                  warmth={confessionalMode ? 0 : ambient.warmth}
+                  dim={ambient.dim}
+                  texture={confessionalMode ? "solida" : null}
                 />
               </Animated.View>
               {(status === "transcribing" || status === "thinking") && (
@@ -2875,13 +2855,6 @@ export default function Taccuino() {
   // Wrap the screen in a background image (custom upload) or gradient (preset),
   // with a dark overlay for legibility. If no background is set, just return
   // the plain inner view (uses theme.bg).
-  // === COLOR INTRO ===
-  // Al primo avvio, mostra il tour dei colori dell'Eclissi PRIMA di
-  // qualsiasi altra schermata. Quando l'utente lo termina (o lo salta),
-  // viene persistito il flag e non si vede più.
-  if (showColorIntro === true) {
-    return <KodaIntro voices={voiceList} onDone={dismissColorIntro} />;
-  }
   if (isCustomImage && bgValue) {
     return (
       <ImageBackground source={{ uri: bgValue }} style={{ flex: 1 }} resizeMode="cover">
