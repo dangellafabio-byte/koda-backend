@@ -1708,19 +1708,17 @@ export default function Taccuino() {
             </Text>
           </TouchableOpacity>
         </View>
-        {/* Slot destro: area invisibile long-press → riapre KodaIntro.
-            È FUORI dal pager ScrollView, quindi i gesture non vengono
-            mai cancellati. Toccando una volta non succede nulla; tieni
-            premuto ~600ms per aprire la presentazione di Koda.
-            DIMENSIONI ESPLICITE: senza minWidth/minHeight `headerBtn`
-            collassa a pochi pixel (headerCenter ha flex:1 e mangia tutto). */}
-        <Pressable
-          style={[styles.headerBtn, { minWidth: 60, minHeight: 44 }]}
-          onLongPress={reopenKodaIntro}
-          delayLongPress={600}
+        {/* Slot destro: icona "tre puntini" semi-trasparente per aprire KodaIntro.
+            Discreta (white@40%) per non rompere l'estetica zen ma visibile e
+            ovvia. Single tap → riapre la presentazione di Koda (settings vocali). */}
+        <TouchableOpacity
+          style={[styles.headerBtn, { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" }]}
+          onPress={reopenKodaIntro}
           hitSlop={20}
           testID="koda-intro-reopen"
-        />
+        >
+          <Ionicons name="ellipsis-horizontal" size={20} color="rgba(255,255,255,0.55)" />
+        </TouchableOpacity>
       </View>
 
       {/* === HORIZONTAL PAGER: Voce (zen) | Lettura (timeline) ===
