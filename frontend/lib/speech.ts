@@ -235,7 +235,7 @@ async function prepareTTSUrl(
   }
 }
 
-async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
+async function playElevenLabsNativeFromUrl(audioUrl: string, onAudioStart?: () => void): Promise<boolean> {
   // 1. Switch the audio session into PLAYBACK mode (recording=false).
   try {
     await setAudioModeAsync({
@@ -252,6 +252,7 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     let done = false;
     let everPlayed = false;
+    let firstSoundFired = false;
     let everLoaded = false;
     let lastProgressAt = Date.now();
     let lastPositionSec = 0;
@@ -295,6 +296,15 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
           }
           if (status.playing || pos > 0) {
             everPlayed = true;
+            // === Fire onAudioStart il PRIMO frame in cui sentiamo davvero
+            // audio. Il chiamante può usarlo per ritardare lo switch della
+            // UI a "speaking" → la vibrazione dell'eclissi parte ESATTAMENTE
+            // quando l'utente sente la prima sillaba, non quando la
+            // richiesta di rete è partita (che ha ~300-800ms di TTFB).
+            if (!firstSoundFired) {
+              firstSoundFired = true;
+              try { onAudioStart?.(); } catch (e) { console.warn("[speech] onAudioStart cb threw:", e); }
+            }
           }
           if (status.didJustFinish) {
             finish(true);
@@ -498,9 +508,17 @@ export const SpeechMod = {
    * /api/converse-stream-audio endpoint). Bypasses ElevenLabs/text logic —
    * just hands the URL to the platform audio player.
    *
+   * @param url       Audio URL
+   * @param onAudioStart  Callback chiamato ESATTAMENTE quando l'audio
+   *                      comincia davvero a suonare (currentTime>0). Utile
+   *                      per ritardare la transizione UI "speaking" fino a
+   *                      quando l'utente sente la prima sillaba — così
+   *                      l'eclissi NON vibra mentre è ancora silenziosa
+   *                      (durante i 300-800ms di TTFB di rete).
+   *
    * Returns true on successful playback to end, false on error/cancel.
    */
-  async playFromUrl(url: string): Promise<boolean> {
+  async playFromUrl(url: string, onAudioStart?: () => void): Promise<boolean> {
     if (!url) return false;
     stopAllPlayback();
     speakingNow = true;
@@ -520,6 +538,9 @@ export const SpeechMod = {
             speakingNow = false;
             return false;
           }
+          // Web non ha latenza di rete dopo il fetch completo —
+          // l'audio inizia praticamente subito. Spariamo il cb subito.
+          try { onAudioStart?.(); } catch {}
           const ok = await playElevenLabsWeb(buf);
           speakingNow = false;
           return ok;
@@ -529,7 +550,7 @@ export const SpeechMod = {
         }
       }
       // Native: hand URL to AVPlayer-backed expo-audio AudioPlayer.
-      const ok = await playElevenLabsNativeFromUrl(url);
+      const ok = await playElevenLabsNativeFromUrl(url, onAudioStart);
       speakingNow = false;
       return ok;
     } finally {

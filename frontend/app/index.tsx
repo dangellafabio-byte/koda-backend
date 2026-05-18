@@ -775,16 +775,19 @@ export default function Taccuino() {
         const useFastPath = !confessionalMode && (profile?.settings.voice_response !== false);
         if (useFastPath) {
           try {
-            // ID di richiesta solo per logging/correlazione (non più usato
-            // per polling waveform). Generato inline per stabilità.
             const reqId = Math.random().toString(36).slice(2, 18);
             const streamUrl =
               `${API_BASE}/converse-stream-audio?text=${encodeURIComponent(txt)}&id=${reqId}` +
               (confessionalMode ? `&ephemeral=true` : "");
-            // L'audio parte essenzialmente subito → passiamo a "speaking" e
-            // saltiamo la fase "thinking" (era 3-5s di stallo visivo).
-            setStatus("speaking");
-            const ok = await SpeechMod.playFromUrl(streamUrl);
+            // Durante TTFB (300-800ms) mostriamo "thinking" (eclissi ciclamino,
+            // flicker). Lo switch a "speaking" (vibrazione organica) avviene
+            // SOLO quando l'audio comincia davvero a suonare — così l'eclissi
+            // non vibra mentre è ancora silenziosa (era confusing).
+            setStatus("thinking");
+            const ok = await SpeechMod.playFromUrl(streamUrl, () => {
+              // L'audio è iniziato → ora ha senso vibrare.
+              setStatus("speaking");
+            });
             // Refresh della timeline (il backend ha salvato user+ai entries).
             try {
               const tl = await api.getTimeline(200);
