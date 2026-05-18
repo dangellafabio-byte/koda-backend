@@ -67,12 +67,18 @@ const NOTTE: Palette = {
   text: "#E2E8F0",
   textMuted: "#94A3B8",
   textDim: "#64748B",
-  primary: "#FBBF24",
-  primaryText: "#0B0F1A",
-  primarySoftBg: "rgba(251,191,36,0.10)",
-  primarySoftBorder: "rgba(251,191,36,0.4)",
-  userBubble: "#FBBF24",
-  userBubbleText: "#0B0F1A",
+  // === IDENTITÀ "L'AMICO FRATERNO" ===
+  // Il primary è il "blu petrolio" — esattamente lo stesso colore che
+  // l'Eclissi assume quando l'utente parla (LISTEN_PALETTE in EclipseOrb).
+  // Così il bubble dell'utente e l'orb durante la registrazione sono
+  // visivamente la stessa cosa: "questo sono io che parlo". Questa è la
+  // signature visiva dell'app — riconoscibile a colpo d'occhio.
+  primary: "#0E7C7B",
+  primaryText: "#FFFFFF",
+  primarySoftBg: "rgba(14,124,123,0.14)",
+  primarySoftBorder: "rgba(14,124,123,0.5)",
+  userBubble: "#0E7C7B",
+  userBubbleText: "#FFFFFF",
   aiBubbleBg: "rgba(148,163,184,0.10)",
   aiBubbleBorder: "rgba(148,163,184,0.35)",
   aiBubbleText: "#E2E8F0",

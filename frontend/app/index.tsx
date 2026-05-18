@@ -3049,7 +3049,11 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
 
 // Map of preset bubble accent colors. User can pick one in Settings, or use
 // any custom hex via the same field.
+// Il preset "eclissi" è il colore IDENTITARIO di Koda: lo stesso viola che
+// l'orb assume in stato idle/neutral (TONE_PALETTES.neutral in EclipseOrb).
+// Vedere la bubble di Koda in viola identitario + l'orb in viola = unicità.
 const BUBBLE_PRESETS: Record<string, { name: string; color: string; soft: string }> = {
+  eclissi:      { name: "Eclissi",     color: "#8B5CF6", soft: "rgba(139,92,246,0.18)" },
   viola:        { name: "Viola",       color: "#7C3AED", soft: "rgba(124,58,237,0.18)" },
   verde_acqua:  { name: "Verde acqua", color: "#14B8A6", soft: "rgba(20,184,166,0.18)" },
   rosa:         { name: "Rosa",        color: "#EC4899", soft: "rgba(236,72,153,0.18)" },
@@ -3060,13 +3064,15 @@ const BUBBLE_PRESETS: Record<string, { name: string; color: string; soft: string
 function resolveBubbleColors(
   bubbleColor: string | undefined
 ): { color: string; soft: string } {
-  const key = bubbleColor || "viola";
+  // Default IDENTITARIO: il viola "eclissi" — esattamente il viola idle/
+  // neutral dell'EclipseOrb. Bubble di Koda e orb si parlano visivamente.
+  const key = bubbleColor || "eclissi";
   if (BUBBLE_PRESETS[key]) return BUBBLE_PRESETS[key];
   // Custom hex: derive a soft variant
   if (typeof key === "string" && key.startsWith("#")) {
     return { color: key, soft: key + "30" };
   }
-  return BUBBLE_PRESETS.viola;
+  return BUBBLE_PRESETS.eclissi;
 }
 
 // === AIAvatar — round avatar shown next to AI bubbles. Uses a user-uploaded
