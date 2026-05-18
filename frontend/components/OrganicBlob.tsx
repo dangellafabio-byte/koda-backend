@@ -319,6 +319,8 @@ export default function OrganicBlob({
     };
     // Real-audio sampler: 40ms ≈ 25Hz. Each tick reads the current amplitude
     // from the active playback and maps it to the burst multiplier.
+    let ampSamples: number[] = [];
+    let nullCount = 0;
     const realTimer = setInterval(() => {
       if (cancelled) return;
       const amp = voiceWaveform.getCurrentAmplitude();
@@ -326,14 +328,30 @@ export default function OrganicBlob({
         // Map amplitude [0..1] → burst [0.55..1.8] so even silence keeps
         // the blob alive (gentle hum) and loud syllables pop noticeably.
         speechBurstRef.current = 0.55 + amp * 1.25;
+        ampSamples.push(amp);
+        if (ampSamples.length === 25) {
+          // Log every ~1s to confirm real amplitude is flowing
+          const min = Math.min(...ampSamples).toFixed(3);
+          const max = Math.max(...ampSamples).toFixed(3);
+          const avg = (ampSamples.reduce((s,v)=>s+v,0)/ampSamples.length).toFixed(3);
+          console.log(`[blob amp] ${ampSamples.length} samples — min=${min} max=${max} avg=${avg}`);
+          ampSamples = [];
+        }
         // Stop procedural fallback once real data is flowing.
         if (proceduralTimer) {
           clearTimeout(proceduralTimer);
           proceduralTimer = null;
         }
-      } else if (!proceduralTimer) {
-        // No waveform available — fall back to procedural.
-        proceduralStep();
+      } else {
+        nullCount++;
+        if (nullCount === 25) {
+          console.log(`[blob amp] still NULL after 1s — waveform=${voiceWaveform.hasWaveform()}`);
+          nullCount = 0;
+        }
+        if (!proceduralTimer) {
+          // No waveform available — fall back to procedural.
+          proceduralStep();
+        }
       }
     }, 40);
     // Kick off procedural while we wait for the waveform.

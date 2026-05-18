@@ -78,15 +78,28 @@ export function notifyPlaybackTime(positionSec: number, playing: boolean): void 
 }
 
 /**
- * Fetch the waveform JSON from the server. Polls with backoff if the
- * audio is still being generated server-side (ready: false).
+ * Fetch the waveform JSON from the server.
+ *
+ * Two-phase strategy (Step 3 — Fase 4):
+ *   1. POLL until `ready: true` (waveform — possibly partial — is available).
+ *      The server publishes progressive updates every ~700ms while streaming.
+ *   2. KEEP POLLING until `partial: false` (full waveform locked in) OR
+ *      until `clear()` is called (audio ended).
+ *
+ * Each successful poll REPLACES the in-memory waveform with the latest
+ * server-side snapshot, so the blob's amplitude lookup always uses the
+ * largest array available.
  */
 export async function fetchAndAttach(id: string): Promise<void> {
   if (!id) return;
   const myId = id;
-  let backoff = 150;
-  for (let attempt = 0; attempt < 30; attempt++) {
-    if (currentId !== myId) return;  // superseded
+  let backoff = 120;
+  let gotFirst = false;
+  let pollsSinceFinal = 0;
+  // Up to ~25s of polling (covers very long replies). The blob loop calls
+  // `clear()` at end-of-playback which short-circuits this loop.
+  for (let attempt = 0; attempt < 80; attempt++) {
+    if (currentId !== myId) return; // superseded
     try {
       const r = await fetch(`${API_BASE}/converse-result/${myId}`, { method: "GET" });
       if (r.ok) {
@@ -98,18 +111,27 @@ export async function fetchAndAttach(id: string): Promise<void> {
               windowMs: Number(data.window_ms) || 50,
               durationMs: Number(data.duration_ms) || (data.waveform.length * 50),
             };
-            console.log(
-              `[voiceWaveform] waveform attached: ${current.values.length} pts, ${current.durationMs}ms`,
-            );
+            if (!gotFirst) {
+              gotFirst = true;
+              console.log(
+                `[voiceWaveform] FIRST waveform: ${current.values.length} pts, ${current.durationMs}ms (partial=${!!data.partial})`,
+              );
+            }
+            // Once the server marks partial:false (final cut), poll just
+            // 1-2 more times and stop — nothing else will change.
+            if (data.partial === false || data.partial === undefined) {
+              pollsSinceFinal++;
+              if (pollsSinceFinal >= 2) return;
+            }
           }
-          return;
         }
       }
     } catch {
       // network — retry
     }
     await new Promise((res) => setTimeout(res, backoff));
-    backoff = Math.min(500, Math.floor(backoff * 1.4));
+    // Faster polling once we have first data; slower while we wait.
+    backoff = gotFirst ? 500 : Math.min(400, Math.floor(backoff * 1.4));
   }
 }
 

@@ -2445,6 +2445,45 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
         # Capture metadata for post-stream persistence
         captured = {"tone": "neutral", "domain": None, "actions": [], "memory_update": "", "extracted": None}
 
+        # === Progressive waveform computation (Step 3 — Fase 4) ===
+        # Without this, the waveform JSON only becomes available AFTER the
+        # full audio has finished streaming — which means the blob doesn't
+        # actually pulse in sync, because by the time we have data the
+        # audio has already played to the end.
+        #
+        # Background task: every ~700ms, take a snapshot of mp3_acc, decode
+        # it on a thread, and push the partial RMS array to the cache. The
+        # client polls /converse-result/{id} and picks up the partial data
+        # within ~1s of audio actually starting to play.
+        updater_stop = asyncio.Event()
+
+        async def waveform_updater():
+            if mp3_acc is None or not result_id:
+                return
+            while not updater_stop.is_set():
+                try:
+                    await asyncio.wait_for(updater_stop.wait(), timeout=0.7)
+                    break  # signaled
+                except asyncio.TimeoutError:
+                    pass
+                if len(mp3_acc) < 2048:
+                    continue  # not enough data yet
+                snapshot = bytes(mp3_acc)
+                try:
+                    wf = await asyncio.to_thread(_compute_waveform_rms, snapshot)
+                except Exception as e:
+                    logger.warning(f"[converse-stream-audio] partial waveform error: {e}")
+                    continue
+                if not wf:
+                    continue
+                existing = _converse_results.get(result_id) or {"id": result_id}
+                existing.update(wf)
+                existing["ready"] = True
+                existing["partial"] = True
+                _store_converse_result(result_id, existing)
+
+        updater_task = asyncio.create_task(waveform_updater()) if (result_id and mp3_acc is not None) else None
+
         try:
             stream = await litellm.acompletion(
                 model='openai/claude-haiku-4-5-20251001',
@@ -2608,10 +2647,14 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
                 logger.warning(f"[converse-stream-audio] profile update failed: {e}")
 
         # === Waveform extraction + result cache (Step 3 — Fase 4) ===
-        # Decode the accumulated MP3 to compute RMS amplitudes that the client
-        # uses to drive the audio-reactive blob. Done in a thread (pydub call
-        # blocks) so we don't stall the event loop AFTER the audio has fully
-        # streamed to the client — the user has already heard the response.
+        # Stop the progressive updater task — we now compute the FINAL,
+        # full-quality waveform once below.
+        if updater_task is not None:
+            updater_stop.set()
+            try:
+                await updater_task
+            except Exception:
+                pass
         if result_id and mp3_acc is not None and len(mp3_acc) > 0:
             mp3_bytes = bytes(mp3_acc)
             try:
