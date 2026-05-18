@@ -28,7 +28,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  Keyboard,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -91,25 +90,11 @@ const KODA_LINES: Record<number, string> = {
 export default function KodaIntro({ voices = [], onDone }: Props) {
   const [step, setStep] = useState(0);
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const { width, height } = Dimensions.get("window");
-  // === Keyboard awareness ===
-  // Quando la tastiera è aperta sull'iPhone, lo spazio verticale disponibile
-  // si dimezza. Senza fare nulla, l'eclissi grande "spinge" tutto il resto
-  // fuori schermo (titolo + input). Soluzione: rilevare lo stato della
-  // tastiera e ridurre drasticamente la dimensione dell'eclissi.
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
-  useEffect(() => {
-    const showEv = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
-    const hideEv = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
-    const s1 = Keyboard.addListener(showEv, () => setKeyboardVisible(true));
-    const s2 = Keyboard.addListener(hideEv, () => setKeyboardVisible(false));
-    return () => { s1.remove(); s2.remove(); };
-  }, []);
-  // Eclissi: 55% width quando tastiera chiusa, 28% quando aperta (compatta
-  // ma sempre visibile come "presenza" emotiva del momento).
-  const orbSize = keyboardVisible
-    ? Math.min(width * 0.28, 110)
-    : Math.min(width * 0.55, 240);
+  const { width } = Dimensions.get("window");
+  // Dimensione eclissi: ridotta del 30% rispetto alla iterazione precedente
+  // per lasciare ampio spazio al testo + tastiera senza bisogno di rilevare
+  // keyboardWillShow (che aveva causato problemi di rendering).
+  const orbSize = Math.min(width * 0.40, 170);
 
   // Stato dei dati raccolti
   const [userName, setUserName] = useState("");
@@ -646,12 +631,7 @@ export default function KodaIntro({ voices = [], onDone }: Props) {
           </View>
 
           {/* Eclissi centrale */}
-          <Animated.View
-            style={[
-              styles.orbWrap,
-              { opacity: fadeAnim, paddingVertical: keyboardVisible ? 4 : 16 },
-            ]}
-          >
+          <Animated.View style={[styles.orbWrap, { opacity: fadeAnim }]}>
             <EclipseOrb
               status={orbStatus}
               tone={orbTone}
