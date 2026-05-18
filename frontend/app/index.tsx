@@ -1732,6 +1732,8 @@ export default function Taccuino() {
           <View style={{ alignItems: "center", justifyContent: "center", flex: 1, gap: 18, paddingHorizontal: 24 }}>
             <Pressable
               onPress={onBigButton}
+              onLongPress={reopenKodaIntro}
+              delayLongPress={3000}
               disabled={status === "transcribing" || status === "thinking"}
               hitSlop={30}
               style={({ pressed }) => [
