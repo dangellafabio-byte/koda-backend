@@ -26,6 +26,9 @@ type Waveform = {
 
 let current: Waveform | null = null;
 let currentId: string | null = null;
+// True once server marked `partial:false` — only then can we trust the
+// waveform length to span the full audio (and use fraction-based indexing).
+let isFinal = false;
 
 // Last reported AVPlayer position + when we received it.
 let lastPlaybackSec = 0;
@@ -53,8 +56,10 @@ export function newId(): string {
 export function markPlaybackStart(id: string): void {
   currentId = id;
   current = null;
+  isFinal = false;
   lastPlaybackSec = 0;
   lastPlaybackAtMs = 0;
+  lastDurationSec = 0;
   isPlaying = false;
 }
 
@@ -62,8 +67,10 @@ export function markPlaybackStart(id: string): void {
 export function clear(): void {
   current = null;
   currentId = null;
+  isFinal = false;
   lastPlaybackSec = 0;
   lastPlaybackAtMs = 0;
+  lastDurationSec = 0;
   isPlaying = false;
 }
 
@@ -120,6 +127,11 @@ export async function fetchAndAttach(id: string): Promise<void> {
               windowMs: Number(data.window_ms) || 50,
               durationMs: Number(data.duration_ms) || (data.waveform.length * 50),
             };
+            // partial:false means the server is DONE producing waveform —
+            // safe to switch to fraction-based indexing if needed.
+            if (data.partial === false || data.partial === undefined) {
+              isFinal = true;
+            }
             if (!gotFirst) {
               gotFirst = true;
               console.log(
@@ -161,15 +173,15 @@ export function getCurrentAmplitude(): number | null {
   const effectiveSec = lastPlaybackSec + (isPlaying ? sinceUpdateMs / 1000 : 0);
   if (effectiveSec < 0) return 0;
 
-  // === FRACTION-BASED INDEXING ===
-  // Server-side waveform duration (nominal) is computed by summing per-sentence
-  // MP3 durations as reported by pydub. This can drift from the real AVPlayer
-  // duration (concatenated MP3 frames are sometimes counted weirdly). We use
-  // the AVPlayer's reported duration (lastDurationSec) as the SOURCE OF TRUTH
-  // and map [0..1] playback fraction → waveform[0..length].
-  // Fallback to time-based indexing if duration isn't known yet.
+  // === INDEX SELECTION ===
+  //  - PARTIAL waveform: use TIME-BASED indexing (the waveform[i] represents
+  //    audio at i*windowMs). Safe because every entry is "real" data.
+  //  - FINAL waveform (server marked partial:false): use FRACTION-BASED so
+  //    we tolerate minor drift between pydub's reported duration and the
+  //    AVPlayer's playback duration (per-sentence MP3 concatenation can
+  //    over/under-count by a few %).
   let idx: number;
-  if (lastDurationSec > 0.1) {
+  if (isFinal && lastDurationSec > 0.1 && isFinite(lastDurationSec)) {
     const fraction = Math.max(0, Math.min(1, effectiveSec / lastDurationSec));
     idx = Math.floor(fraction * current.values.length);
   } else {

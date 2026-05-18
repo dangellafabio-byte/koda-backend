@@ -300,44 +300,67 @@ export default function OrganicBlob({
   // at the end of sentences — perfectly sync'd with what the user hears.
   //
   // Fallback: if waveform data isn't loaded yet (first ~500ms of playback,
-  // OR for non-streaming TTS paths), we keep the original procedural burst
-  // pattern so the blob still feels alive.
+  // OR for non-streaming TTS paths), we use a SUBTLE procedural envelope so
+  // when real waveform kicks in, the visual contrast is dramatic (user sees
+  // the blob "wake up" and pulse with syllables).
   const speechBurstRef = useRef<number>(1);
+  // Animated value updated every 40ms from the live amplitude — drives a
+  // DIRECT scale on the whole blob (so loud syllables make the blob "puff").
+  const voiceAmp = useRef(new Animated.Value(0)).current;
+  // Smoothed amplitude (1st-order low-pass) for visually pleasant transitions.
+  const smoothedAmpRef = useRef<number>(0);
   useEffect(() => {
     if (status !== "speaking") {
       speechBurstRef.current = 1;
+      smoothedAmpRef.current = 0;
+      voiceAmp.setValue(0);
       return;
     }
     let cancelled = false;
-    // Procedural fallback timer (used only until real waveform kicks in).
     let proceduralTimer: any = null;
     const proceduralStep = () => {
       if (cancelled) return;
-      speechBurstRef.current = 0.6 + Math.random() * 1.0;
-      const dur = 80 + Math.random() * 140;
+      // Procedural fallback INTENTIONALLY narrow (almost still). This way,
+      // when real waveform data kicks in ~600ms after speech starts, the
+      // blob comes ALIVE — a visually unmistakable "now I'm reacting" moment.
+      const target = 0.90 + Math.random() * 0.18; // ~0.90..1.08
+      speechBurstRef.current = target;
+      // Procedural shows very little voice puff (just a tiny "we're alive" cue)
+      voiceAmp.setValue(0.08 + Math.random() * 0.06);
+      const dur = 220 + Math.random() * 180;
       proceduralTimer = setTimeout(proceduralStep, dur);
     };
-    // Real-audio sampler: 40ms ≈ 25Hz. Each tick reads the current amplitude
-    // from the active playback and maps it to the burst multiplier.
     let ampSamples: number[] = [];
     let nullCount = 0;
     const realTimer = setInterval(() => {
       if (cancelled) return;
       const amp = voiceWaveform.getCurrentAmplitude();
       if (amp !== null) {
-        // Map amplitude [0..1] → burst [0.55..1.8] so even silence keeps
-        // the blob alive (gentle hum) and loud syllables pop noticeably.
-        speechBurstRef.current = 0.55 + amp * 1.25;
+        // Low-pass smoothing so the visual flow feels analog (not jittery).
+        // Faster attack (sillaba parte rapida), slower release.
+        const prev = smoothedAmpRef.current;
+        const target = amp;
+        const alpha = target > prev ? 0.55 : 0.30; // attack vs release
+        const smoothed = prev * (1 - alpha) + target * alpha;
+        smoothedAmpRef.current = smoothed;
+
+        // Map smoothed amplitude [0..1] → burst [0.4..2.4] (much wider range
+        // than before for clearly visible per-point morphing).
+        speechBurstRef.current = 0.4 + smoothed * 2.0;
+
+        // Drive the WHOLE-BLOB voice puff: 0..1 mapped to scale +0..+22%.
+        // This is the change that makes "Apple Siri / Apple Intelligence"
+        // breathing visible — the blob itself swells on each syllable.
+        voiceAmp.setValue(smoothed);
+
         ampSamples.push(amp);
         if (ampSamples.length === 25) {
-          // Log every ~1s to confirm real amplitude is flowing
           const min = Math.min(...ampSamples).toFixed(3);
           const max = Math.max(...ampSamples).toFixed(3);
           const avg = (ampSamples.reduce((s,v)=>s+v,0)/ampSamples.length).toFixed(3);
-          console.log(`[blob amp] ${ampSamples.length} samples — min=${min} max=${max} avg=${avg}`);
+          console.log(`[blob amp] REAL ${ampSamples.length} samples — min=${min} max=${max} avg=${avg}`);
           ampSamples = [];
         }
-        // Stop procedural fallback once real data is flowing.
         if (proceduralTimer) {
           clearTimeout(proceduralTimer);
           proceduralTimer = null;
@@ -349,19 +372,19 @@ export default function OrganicBlob({
           nullCount = 0;
         }
         if (!proceduralTimer) {
-          // No waveform available — fall back to procedural.
           proceduralStep();
         }
       }
     }, 40);
-    // Kick off procedural while we wait for the waveform.
     proceduralStep();
     return () => {
       cancelled = true;
       if (proceduralTimer) clearTimeout(proceduralTimer);
       clearInterval(realTimer);
+      // Smooth release of the voice puff
+      Animated.timing(voiceAmp, { toValue: 0, duration: 300, useNativeDriver: true }).start();
     };
-  }, [status]);
+  }, [status, voiceAmp]);
 
   // Drive the morph loop
   useEffect(() => {
@@ -424,7 +447,11 @@ export default function OrganicBlob({
     return () => { stop = true; };
   }, [drift, size, driftX, driftY]);
 
-  // === Speaking pulse — same idea as Orb, scales the whole blob
+  // === Speaking pulse — slow ambient breathing (used as a backup so the
+  //     blob never feels totally inert, especially during pauses between
+  //     syllables when amplitude reads near zero). The real per-syllable
+  //     pulsation is now driven by `voiceAmp` (see above), so we keep this
+  //     loop subtle: just enough to feel alive when amp is silent.
   const speakPulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (status !== "speaking") {
@@ -433,8 +460,8 @@ export default function OrganicBlob({
     }
     const anim = Animated.loop(
       Animated.sequence([
-        Animated.timing(speakPulse, { toValue: 1, duration: 380, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-        Animated.timing(speakPulse, { toValue: 0, duration: 520, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+        Animated.timing(speakPulse, { toValue: 1, duration: 950, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(speakPulse, { toValue: 0, duration: 950, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
       ])
     );
     anim.start();
@@ -483,11 +510,17 @@ export default function OrganicBlob({
     [cx, cy, baseR, radii]
   );
 
-  // === Container transform: drift + speak-pulse + opacity dim
+  // === Container transform: drift + speak-pulse + amp puff + opacity dim
+  // The voiceAmp contribution (+0..+22%) is the dominant visual cue during
+  // speech — this is what makes the blob "puff" with each syllable, in
+  // perfect sync with the real audio waveform.
   const totalScale = Animated.add(
     Animated.add(
-      new Animated.Value(1),
-      speakPulse.interpolate({ inputRange: [0, 1], outputRange: [0, 0.06] })
+      Animated.add(
+        new Animated.Value(1),
+        speakPulse.interpolate({ inputRange: [0, 1], outputRange: [0, 0.03] })
+      ),
+      voiceAmp.interpolate({ inputRange: [0, 1], outputRange: [0, 0.22] })
     ),
     warmthAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 0.04] })
   );
