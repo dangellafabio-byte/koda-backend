@@ -468,11 +468,13 @@ export default function Taccuino() {
   useEffect(() => {
     if (status === "idle") return;
     const max: Record<string, number> = {
-      // 18s recording: oltre questo limite preferiamo SEMPRE stoppare e
-      // mandare a Whisper l'audio raccolto fino a quel momento, invece
-      // di scartarlo. L'utente vedrà la risposta o un feedback di "non
-      // ti ho sentito" — mai un silenzio inspiegabile.
-      recording: 18_000,
+      // 90s recording: con expo-audio (nuova architettura SharedObject) il
+      // mic non si "incolla" più, quindi possiamo permettere monologhi lunghi
+      // senza il timeout aggressivo di 18s che spezzava le frasi a metà.
+      // 90s è abbastanza per qualsiasi turno realistico; oltre, è verosimile
+      // un bug e preferiamo comunque processare l'audio raccolto piuttosto
+      // che scartarlo.
+      recording: 90_000,
       transcribing: 25_000, // 25s STT max
       thinking: 25_000,     // 25s LLM max (con web search)
       speaking: 60_000,     // 60s playback max (lunghi)
