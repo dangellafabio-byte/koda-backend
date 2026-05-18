@@ -187,16 +187,40 @@ export default function Taccuino() {
       setProfile(p);
     } catch {}
   }, []);
-  /** Riapri la presentazione di Koda (back-door: long-press eclissi 1.5s). */
+  /** Riapri la presentazione di Koda (back-door: long-press 1s sull'eclissi). */
   const reopenKodaIntro = useCallback(async () => {
-    try {
-      const { Alert } = require("react-native");
-      Alert.alert("Riapro la presentazione…");
-    } catch {}
     try {
       await SecureStore.deleteItemAsync("koda_intro_seen");
     } catch {}
     setShowColorIntro(true);
+  }, []);
+  // Long-press manuale via onPressIn/onPressOut + timer. Più affidabile
+  // del onLongPress di Pressable quando dentro un ScrollView orizzontale
+  // (il pager intercetta i micro-movimenti e cancella onLongPress).
+  const longPressTimerRef = useRef<any>(null);
+  const longPressFiredRef = useRef(false);
+  const beginEclipseLongPress = useCallback(() => {
+    longPressFiredRef.current = false;
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = setTimeout(() => {
+      longPressFiredRef.current = true;
+      reopenKodaIntro();
+    }, 1000);
+  }, [reopenKodaIntro]);
+  const cancelEclipseLongPress = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, []);
+  // Wrap onBigButton: salta il tap se è scattato il long-press.
+  const onBigButtonGuarded = useCallback(() => {
+    if (longPressFiredRef.current) {
+      longPressFiredRef.current = false;
+      return; // long-press ha già aperto KodaIntro, non startare recording
+    }
+    onBigButton();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [showSettings, setShowSettings] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
@@ -1735,9 +1759,9 @@ export default function Taccuino() {
         <View style={{ width: windowWidth, flex: 1, alignItems: "center", justifyContent: "center" }}>
           <View style={{ alignItems: "center", justifyContent: "center", flex: 1, gap: 18, paddingHorizontal: 24 }}>
             <Pressable
-              onPress={onBigButton}
-              onLongPress={reopenKodaIntro}
-              delayLongPress={1500}
+              onPress={onBigButtonGuarded}
+              onPressIn={beginEclipseLongPress}
+              onPressOut={cancelEclipseLongPress}
               disabled={status === "transcribing" || status === "thinking"}
               hitSlop={30}
               style={({ pressed }) => [
@@ -1912,9 +1936,9 @@ export default function Taccuino() {
                 verde quando ti sta ascoltando. Il NeonBorder sui bordi dello
                 schermo dà il feedback periferico (vedi anche se non guardi). */}
             <Pressable
-              onPress={onBigButton}
-              onLongPress={reopenKodaIntro}
-              delayLongPress={1500}
+              onPress={onBigButtonGuarded}
+              onPressIn={beginEclipseLongPress}
+              onPressOut={cancelEclipseLongPress}
               disabled={status === "transcribing" || status === "thinking"}
               style={({ pressed }) => [
                 styles.blobTap,
