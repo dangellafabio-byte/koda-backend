@@ -189,10 +189,15 @@ export default function Taccuino() {
   }, []);
   /** Riapri la presentazione di Koda (back-door: long-press nell'angolo header). */
   const reopenKodaIntro = useCallback(async () => {
+    console.log("[reopenKodaIntro] tap received, opening KodaIntro");
     try {
       await SecureStore.deleteItemAsync("koda_intro_seen");
-    } catch {}
+      console.log("[reopenKodaIntro] SecureStore cleared");
+    } catch (e) {
+      console.warn("[reopenKodaIntro] SecureStore error:", e);
+    }
     setShowColorIntro(true);
+    console.log("[reopenKodaIntro] setShowColorIntro(true) called");
   }, []);
   const [showSettings, setShowSettings] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
@@ -1713,7 +1718,11 @@ export default function Taccuino() {
             ovvia. Single tap → riapre la presentazione di Koda (settings vocali). */}
         <TouchableOpacity
           style={[styles.headerBtn, { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" }]}
-          onPress={reopenKodaIntro}
+          onPress={() => {
+            console.log("[icon-tap] ⋯ pressed, calling reopenKodaIntro");
+            Alert.alert("Debug", "Tap rilevato. Apro KodaIntro...");
+            reopenKodaIntro();
+          }}
           hitSlop={20}
           testID="koda-intro-reopen"
         >
