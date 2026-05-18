@@ -758,6 +758,31 @@ export default function Taccuino() {
             throw new Error("Parola Segreta non sbloccata");
           }
           const sealed = await sealText(txt, key);
+          // Raccogli i turni confessionali precedenti di QUESTA sessione (RAM
+          // only — vivono solo nella timeline locale, mai nel DB). Vengono
+          // cifrati con la stessa chiave e passati al backend per dare a
+          // Koda continuità intra-confessionale: dentro al confessionale
+          // ricorda quello che ci siamo detti, fuori NO.
+          // Escludiamo il messaggio ottimistico appena aggiunto (è il
+          // turno corrente, viaggia già come plaintext cifrato sopra).
+          const priorConfessional = timeline
+            .filter((e) => e.confessional && e.id !== optimistic.id && e.text)
+            .map((e) => ({ role: e.role, text: e.text }));
+          let history_nonce: string | undefined;
+          let history_ciphertext: string | undefined;
+          if (priorConfessional.length > 0) {
+            try {
+              const histJson = JSON.stringify(priorConfessional.slice(-20));
+              const sealedHist = await sealText(histJson, key);
+              history_nonce = sealedHist.nonce;
+              history_ciphertext = sealedHist.ciphertext;
+            } catch (e) {
+              // Se la cifratura della history fallisce, andiamo avanti
+              // senza — meglio un confessionale senza memoria che un
+              // errore bloccante.
+              console.warn("[sealed] history encrypt failed:", e);
+            }
+          }
           const resp = await api.converseSealed(
             {
               nonce: sealed.nonce,
@@ -766,6 +791,8 @@ export default function Taccuino() {
               ai_name: profile?.ai_name || "Coda",
               ai_gender: profile?.ai_gender || "f",
               user_gender: profile?.user_gender || "n",
+              history_nonce,
+              history_ciphertext,
             },
             keyToBase64(key)
           );

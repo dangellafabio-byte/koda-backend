@@ -182,9 +182,21 @@ export const api = {
     }),
 
   /** Confessionale Zero-Knowledge: invia messaggio cifrato + chiave volatile in header.
-   * Server decifra in RAM, chiama Claude, ricifra. Niente è loggato/persistito. */
+   * Server decifra in RAM, chiama Claude, ricifra. Niente è loggato/persistito.
+   * `history_*` opzionali: turni precedenti della stessa sessione confessionale,
+   * cifrati con la stessa chiave. Server li decifra in RAM e li passa a Claude
+   * per dare continuità intra-confessionale. */
   converseSealed: (
-    payload: { nonce: string; ciphertext: string; language?: string; ai_name?: string; ai_gender?: string; user_gender?: string },
+    payload: {
+      nonce: string;
+      ciphertext: string;
+      language?: string;
+      ai_name?: string;
+      ai_gender?: string;
+      user_gender?: string;
+      history_nonce?: string;
+      history_ciphertext?: string;
+    },
     keyB64: string
   ) =>
     jsonReq<{ nonce: string; ciphertext: string; tone: string }>(

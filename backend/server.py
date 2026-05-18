@@ -991,6 +991,16 @@ class SealedConverseRequest(BaseModel):
     ai_name: Optional[str] = None
     ai_gender: Optional[str] = None
     user_gender: Optional[str] = None
+    # Opzionale: storico della SESSIONE confessionale corrente (cifrato).
+    # Quando presente, il server lo decifra in RAM e lo passa a Claude
+    # come messaggi precedenti, per dare continuità "intra-confessionale"
+    # — Koda ricorda cosa è stato detto poco prima MA solo finché l'utente
+    # tiene aperto il confessionale. Una volta che il client svuota lo
+    # stato locale (es. chiusura app) il contesto sparisce per sempre.
+    # Formato del plaintext una volta decifrato: JSON array di
+    #   [{"role": "user"|"ai", "text": "..."}, ...]
+    history_nonce: Optional[str] = None
+    history_ciphertext: Optional[str] = None
 
 
 class SealedConverseResponse(BaseModel):
@@ -1083,9 +1093,12 @@ async def api_converse_sealed(
         f"Questa è una CONFESSIONE SIGILLATA. L'utente sta usando la 'Modalità Confessionale': "
         f"il messaggio è stato cifrato sul suo dispositivo, viaggia cifrato, e la tua "
         f"risposta tornerà a lui cifrata. Niente di tutto questo verrà salvato. "
-        f"Non hai memoria di altre conversazioni, e questa stessa sparirà tra un istante. "
-        f"È un confessionale puro: ascolta, accogli, NON moralizzare, NON consigliare a meno "
-        f"che l'utente lo chieda esplicitamente.\n"
+        f"FUORI dal confessionale tu NON ricorderai nulla di quello che si è detto qui. "
+        f"DENTRO al confessionale, finché l'utente lo tiene aperto, puoi e DEVI ricordare "
+        f"i messaggi precedenti di QUESTA sessione confessionale (se te li passo qui sotto "
+        f"come 'CONTESTO SIGILLATO'): sono parte dello stesso discorso. È un confessionale "
+        f"puro: ascolta, accogli, NON moralizzare, NON consigliare a meno che l'utente lo "
+        f"chieda esplicitamente.\n"
         f"\n"
         f"Rispondi SEMPRE in {lang_name}. MOLTO breve (1-3 frasi). Tono caldo, presenza pura. "
         f"Apri con UNA tag emotiva ([gently], [warmly], [thoughtful], [softly]) e MAX una "
@@ -1095,13 +1108,52 @@ async def api_converse_sealed(
         f"NIENTE testo fuori dal JSON."
     )
 
+    # === CONTESTO SIGILLATO (history opzionale) ===
+    # Se il client ha inviato anche la history cifrata, la decifriamo
+    # in RAM e la passiamo a Claude come messaggi precedenti. Tutto
+    # rimane in memoria di questa funzione, mai loggato, mai persistito.
+    history_msgs: List[Dict[str, str]] = []
+    if req.history_nonce and req.history_ciphertext:
+        try:
+            hist_plain = _decrypt_secretbox(
+                x_sealed_key, req.history_nonce, req.history_ciphertext
+            )
+            parsed = json.loads(hist_plain) if hist_plain else []
+            if isinstance(parsed, list):
+                for it in parsed[-20:]:  # max 20 turni recenti, evita prompt giganti
+                    role = (it.get("role") or "").lower()
+                    text = (it.get("text") or "").strip()
+                    if not text:
+                        continue
+                    if role == "user":
+                        history_msgs.append({"role": "user", "content": text})
+                    elif role in ("ai", "assistant", "koda"):
+                        history_msgs.append({"role": "assistant", "content": text})
+            # Cleanup esplicito dello scope plaintext
+            del hist_plain
+            del parsed
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"[sealed] history decrypt/parse failed (ignoring): {type(e).__name__}")
+
     try:
-        chat = LlmChat(
+        # Usiamo direttamente litellm per poter passare anche history.
+        # (LlmChat non espone facilmente messaggi precedenti.)
+        messages: List[Dict[str, str]] = [{"role": "system", "content": sys}]
+        messages.extend(history_msgs)
+        messages.append({"role": "user", "content": plaintext})
+        resp = await litellm.acompletion(
+            model='openai/claude-sonnet-4-5-20250929',
+            messages=messages,
             api_key=EMERGENT_LLM_KEY,
-            session_id=str(uuid.uuid4()),  # sessione effimera, ignorata dopo
-            system_message=sys,
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-        raw = await chat.send_message(UserMessage(text=plaintext))
+            api_base='https://integrations.emergentagent.com/llm',
+            max_tokens=400,
+            timeout=25,
+        )
+        raw = resp.choices[0].message.content if resp and resp.choices else ""
+        # Cleanup: i messaggi contengono il plaintext
+        del messages
     except Exception as e:
         # NON loggare il plaintext nemmeno qui.
         logger.error(f"[sealed] LLM error (no plaintext logged): {type(e).__name__}")
