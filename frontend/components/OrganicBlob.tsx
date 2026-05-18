@@ -276,10 +276,12 @@ export default function OrganicBlob({
 
   // Pick the morph rate based on texture: morbida = slow, vibrante = fast, solida = very slow
   const morphConfig = useMemo(() => {
-    // SPEAKING → simula corde vocali: alta frequenza + ampiezza più ampia.
-    // Sovrapposizione di onde porta a un'oscillazione "parlato-like".
+    // SPEAKING: piccola oscillazione per-punto (forma tonda mantenuta).
+    // Il vero "respiro" delle sillabe avviene via `voiceAmp` (scala globale
+    // del blob), così la forma resta organica e coerente — la pulsazione
+    // è chiara e leggibile, non un caos di deformazioni.
     if (status === "speaking") {
-      return { fps: 28, amplitude: 0.18, freq: 0.045, speech: true };
+      return { fps: 26, amplitude: 0.08, freq: 0.030, speech: true };
     }
     if (status === "recording") {
       return { fps: 20, amplitude: 0.16, freq: 0.028, speech: false };
@@ -344,9 +346,11 @@ export default function OrganicBlob({
         const smoothed = prev * (1 - alpha) + target * alpha;
         smoothedAmpRef.current = smoothed;
 
-        // Map smoothed amplitude [0..1] → burst [0.4..2.4] (much wider range
-        // than before for clearly visible per-point morphing).
-        speechBurstRef.current = 0.4 + smoothed * 2.0;
+        // Map smoothed amplitude [0..1] → burst [0.75..1.5] — narrow range
+        // for SUBTLE per-point morphing. The big visible pulse comes from
+        // `voiceAmp` driving the GLOBAL scale (so the blob stays round and
+        // organic, doesn't morph into asymmetric blobs).
+        speechBurstRef.current = 0.75 + smoothed * 0.75;
 
         // Drive the WHOLE-BLOB voice puff: 0..1 mapped to scale +0..+22%.
         // This is the change that makes "Apple Siri / Apple Intelligence"
@@ -404,9 +408,13 @@ export default function OrganicBlob({
         const tremor = morphConfig.speech
           ? Math.sin(phases.current[i] * 3.2 + i * 0.7) * 0.04 * burst
           : 0;
-        // Tiny random jitter (more for vibrante, none for solida)
+        // Tiny random jitter (more for vibrante, none for solida).
+        // DISATTIVATO durante speaking: il blob deve respirare in modo
+        // PULITO con la voce, niente "rumore" casuale che maschera la sync.
         const jitter =
-          texture === "vibrante"
+          status === "speaking"
+            ? 0
+            : texture === "vibrante"
             ? (Math.random() - 0.5) * 0.06
             : texture === "morbida"
             ? (Math.random() - 0.5) * 0.02
