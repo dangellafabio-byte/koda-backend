@@ -191,6 +191,10 @@ export async function startRecording(): Promise<Recorder> {
   const startedAt = Date.now();
 
   let stopped = false;
+  // Captured URI: read AFTER `recorder.stop()` resolves but BEFORE `release()`,
+  // because after release the SharedObject is dead and any property access can
+  // throw silently (which is why the diagnostic log after safeStop never fired).
+  let capturedUri: string | null = null;
   const safeStop = async () => {
     if (stopped) return;
     stopped = true;
@@ -201,8 +205,16 @@ export async function startRecording(): Promise<Recorder> {
     } catch (e) {
       console.warn("[voice] recorder.stop() error", e);
     }
-    console.log("[voice] safeStop: final uri=", recorder.uri, "isRecording=", recorder.isRecording);
-    // Release the SharedObject so the AVAudioSession is cleanly torn down.
+    // CRITICAL: read the URI while the SharedObject is still alive.
+    try {
+      const statusUrl = recorder.getStatus?.()?.url || null;
+      const directUri = recorder.uri || null;
+      capturedUri = statusUrl || directUri;
+      console.log("[voice] safeStop: captured uri=", capturedUri);
+    } catch (e) {
+      console.warn("[voice] safeStop: reading uri threw:", e);
+    }
+    // Now safe to release the SharedObject — AVAudioSession is cleanly torn down.
     try {
       recorder.release?.();
     } catch {}
@@ -212,20 +224,15 @@ export async function startRecording(): Promise<Recorder> {
     stop: async () => {
       console.log("[voice] stop() ENTER");
       await safeStop();
-      // expo-audio SDK 54: il campo URI è esposto come `url` nello status,
-      // non come `uri` sulla classe (typedef ambiguo). Cerchiamo in entrambi.
-      const statusUrl = recorder.getStatus?.()?.url || null;
-      const directUri = recorder.uri || null;
-      const uri: string | null = statusUrl || directUri;
       const totalMs = Date.now() - startedAt;
       console.log(
-        `[voice] stop() → uri=${uri ? "OK" : "NULL"} (status.url=${statusUrl ? "OK" : "NULL"}, recorder.uri=${directUri ? "OK" : "NULL"}) ms=${totalMs}`,
+        `[voice] stop() → uri=${capturedUri ? "OK" : "NULL"} ms=${totalMs}`,
       );
-      if (totalMs < 500 || !uri) {
+      if (totalMs < 500 || !capturedUri) {
         return null;
       }
       // RecordingPresets.HIGH_QUALITY → AAC in .m4a container on both platforms.
-      return { uri, mime: "audio/m4a", filename: "audio.m4a" };
+      return { uri: capturedUri, mime: "audio/m4a", filename: "audio.m4a" };
     },
     cancel: async () => {
       await safeStop();
