@@ -43,7 +43,7 @@ import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
 import EclipseOrb from "../components/EclipseOrb";
-import ColorIntro from "../components/ColorIntro";
+import KodaIntro from "../components/KodaIntro";
 import * as SecureStore from "expo-secure-store";
 import NeonBorder from "../components/NeonBorder";
 import RadialGlow from "../components/RadialGlow";
@@ -147,30 +147,52 @@ export default function Taccuino() {
   const [status, setStatus] = useState<Status>("idle");
   const [textInput, setTextInput] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
-  // === COLOR INTRO ===
-  // Tutorial one-shot mostrato solo al primo avvio dell'app. Persistito in
-  // SecureStore con la chiave `color_intro_seen`. Insegna in modo poetico
-  // come l'Eclissi cambia colore in base allo stato (viola = riposo,
-  // blu petrolio = ascolto, ciclamino = pensiero, vari = parlato).
+  // === KODA INTRO ===
+  // Presentazione conversazionale di Koda al primo avvio. Sostituisce
+  // sia il vecchio onboarding modale che il tutorial colori. Koda si
+  // presenta in prima persona, chiede tutte le info che gli servono
+  // (nome, gender, voce, check-in, parola segreta, voiceprint) e poi
+  // si congeda. Persistito in SecureStore con `koda_intro_seen=1`.
   // `null` = ancora da verificare; `true` = mostra; `false` = nascondi.
   const [showColorIntro, setShowColorIntro] = useState<boolean | null>(null);
+  const [voiceList, setVoiceList] = useState<Array<any>>([]);
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const seen = await SecureStore.getItemAsync("color_intro_seen");
+        const seen = await SecureStore.getItemAsync("koda_intro_seen");
         if (!cancelled) setShowColorIntro(seen !== "1");
       } catch {
         if (!cancelled) setShowColorIntro(false);
       }
+      // Carica le voci ElevenLabs disponibili per la scelta automatica
+      try {
+        const r = await fetch(`${API_BASE}/voices`);
+        if (r.ok) {
+          const v = await r.json();
+          if (!cancelled && Array.isArray(v)) setVoiceList(v);
+        }
+      } catch {}
     })();
     return () => { cancelled = true; };
   }, []);
   const dismissColorIntro = useCallback(async () => {
     setShowColorIntro(false);
     try {
-      await SecureStore.setItemAsync("color_intro_seen", "1");
+      await SecureStore.setItemAsync("koda_intro_seen", "1");
     } catch {}
+    // Refresh profile dopo che Koda ha salvato i dati
+    try {
+      const p = await api.getProfile();
+      setProfile(p);
+    } catch {}
+  }, []);
+  /** Riapri la presentazione di Koda (back-door: long-press eclissi 3s). */
+  const reopenKodaIntro = useCallback(async () => {
+    try {
+      await SecureStore.deleteItemAsync("koda_intro_seen");
+    } catch {}
+    setShowColorIntro(true);
   }, []);
   const [showSettings, setShowSettings] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
@@ -1621,8 +1643,6 @@ export default function Taccuino() {
         <TouchableOpacity
           style={styles.headerBtn}
           onPress={() => setShowInfo(true)}
-          onLongPress={() => setShowSettings(true)}
-          delayLongPress={1200}
           testID="info-btn"
         >
           <Ionicons name="information-circle-outline" size={24} color="#FFFFFF" />
@@ -1898,6 +1918,8 @@ export default function Taccuino() {
                 schermo dà il feedback periferico (vedi anche se non guardi). */}
             <Pressable
               onPress={onBigButton}
+              onLongPress={reopenKodaIntro}
+              delayLongPress={3000}
               disabled={status === "transcribing" || status === "thinking"}
               style={({ pressed }) => [
                 styles.blobTap,
@@ -2869,7 +2891,7 @@ export default function Taccuino() {
   // qualsiasi altra schermata. Quando l'utente lo termina (o lo salta),
   // viene persistito il flag e non si vede più.
   if (showColorIntro === true) {
-    return <ColorIntro onDone={dismissColorIntro} />;
+    return <KodaIntro voices={voiceList} onDone={dismissColorIntro} />;
   }
   if (isCustomImage && bgValue) {
     return (

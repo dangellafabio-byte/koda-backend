@@ -2710,6 +2710,56 @@ async def api_converse_result(rid: str):
     return data
 
 
+@api_router.post("/profile/voiceprint/enroll")
+async def api_voiceprint_enroll(
+    audio_0: UploadFile = File(None),
+    audio_1: UploadFile = File(None),
+    audio_2: UploadFile = File(None),
+    phrase_count: str = Form("3"),
+):
+    """Enrollment delle 3 frasi di voiceprint dell'utente.
+
+    Per ora (Iterazione 1) salva semplicemente i file audio raw su disco
+    sotto /app/backend/voiceprint_data/{profile_id}/. L'embedding vero
+    (256-dim via resemblyzer) sarà calcolato nell'Iterazione 2 quando
+    installeremo la libreria. Il profilo viene marcato con
+    `voiceprint_pending: true` così sappiamo che ha file da processare.
+    """
+    import os as _os
+    import time as _time
+    # Profilo singolo (mono-utente in questa fase) — prendo il primo doc
+    prof_doc = await db.profiles.find_one({})
+    if not prof_doc:
+        raise HTTPException(status_code=404, detail="No profile found")
+    pid = prof_doc.get("id") or "default"
+    base_dir = _os.path.join("/app/backend/voiceprint_data", pid)
+    _os.makedirs(base_dir, exist_ok=True)
+    saved: list[str] = []
+    for i, f in enumerate([audio_0, audio_1, audio_2]):
+        if not f:
+            continue
+        try:
+            data = await f.read()
+            if not data:
+                continue
+            out_path = _os.path.join(base_dir, f"phrase_{i}.m4a")
+            with open(out_path, "wb") as fh:
+                fh.write(data)
+            saved.append(out_path)
+        except Exception as e:
+            logging.warning(f"[voiceprint] failed to save phrase {i}: {e}")
+    # Aggiorna profilo
+    await db.profiles.update_one(
+        {"id": pid},
+        {"$set": {
+            "voiceprint_pending": True,
+            "voiceprint_enrolled_at": int(_time.time()),
+            "voiceprint_phrase_paths": saved,
+        }}
+    )
+    return {"ok": True, "saved_count": len(saved)}
+
+
 # Include the router
 app.include_router(api_router)
 
