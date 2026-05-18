@@ -49,23 +49,30 @@ type Props = {
 };
 
 // === Tone → aurora palette ([bright, mid, deep])
+// Tutta la palette identitaria di L'Amico Fraterno: viola / blu petrolio /
+// verde petrolio / ciclamino / magenta. Niente colori primari "stock".
 const TONE_PALETTES: Record<OrbTone, [string, string, string]> = {
-  // Oro / ambra — calore intimo, abbraccio, "ti capisco"
-  warm: ["#FCD34D", "#F59E0B", "#92400E"],
-  // Blu profondo — quiete, mare, respiro
+  // Verde petrolio — calore organico, "amico", abbraccio caldo ma profondo
+  warm: ["#2DD4BF", "#14B8A6", "#0F766E"],
+  // Blu notte — serenità, mare profondo, respiro lungo
   calm: ["#93C5FD", "#3B82F6", "#1E3A8A"],
-  // Verde / smeraldo — vitalità, slancio, motivazione
-  energetic: ["#86EFAC", "#10B981", "#064E3B"],
-  // Arancio bruciato — preoccupazione lieve, attenzione
-  concerned: ["#FDBA74", "#FB923C", "#7C2D12"],
-  // Rosso vivo — urgenza, allarme dolce
-  urgent: ["#FCA5A5", "#EF4444", "#7F1D1D"],
-  // Lavanda / viola — neutralità onirica, magia
-  neutral: ["#C4B5FD", "#8B5CF6", "#4C1D95"],
+  // Magenta acceso — vitalità, slancio, energia vibrante
+  energetic: ["#E879F9", "#C026D3", "#9333EA"],
+  // Viola denso — preoccupazione lieve, "ti vedo, sono qui con te"
+  concerned: ["#A78BFA", "#7C3AED", "#5B21B6"],
+  // Ciclamino acceso — urgenza dolce, attenzione necessaria ma non allarme
+  urgent: ["#F472B6", "#DB2777", "#9D174D"],
+  // Viola/lavanda — neutralità onirica, identità di base, "presenza"
+  neutral: ["#C4B5FD", "#8B5CF6", "#7C3AED"],
 };
 
-// === Color for LISTENING state (utente parla, aurora si ritira fredda)
-const LISTEN_PALETTE: [string, string, string] = ["#A5F3FC", "#0891B2", "#164E63"];
+// === Color for LISTENING state (utente parla, aurora si ritira nel petrolio)
+// Blu petrolio profondo — la luce raffredda, si raccoglie, "assorbe"
+const LISTEN_PALETTE: [string, string, string] = ["#5EEAD4", "#0E7C7B", "#134E4A"];
+
+// === Color for THINKING state (il pensiero che si formula)
+// Ciclamino — l'idea che pulsa, vivo, vibrante
+const THINK_PALETTE: [string, string, string] = ["#F9A8D4", "#EC4899", "#BE185D"];
 
 export default function EclipseOrb({
   status,
@@ -74,10 +81,11 @@ export default function EclipseOrb({
   meterDb,
   meterThreshold,
 }: Props) {
-  // === Palette resolution: tone-driven when speaking, cool when listening,
-  //     last-known-warm when thinking/idle (so the orb still has identity).
+  // === Palette resolution: tone-driven when speaking, blu petrolio when
+  // listening, ciclamino while thinking, viola when idle.
   const palette: [string, string, string] = useMemo(() => {
     if (status === "recording") return LISTEN_PALETTE;
+    if (status === "thinking" || status === "transcribing") return THINK_PALETTE;
     if (tone && TONE_PALETTES[tone]) return TONE_PALETTES[tone];
     return TONE_PALETTES.neutral;
   }, [status, tone]);
@@ -147,37 +155,74 @@ export default function EclipseOrb({
       // Aurora ESPLODE: alta intensità, filamenti estesi, pulse rapido
       Animated.parallel([
         Animated.timing(auroraIntensity, {
-          toValue: 1,
-          duration: 500,
+          toValue: 0.85,
+          duration: 400,
           easing: Easing.out(Easing.cubic),
           useNativeDriver: true,
         }),
         Animated.timing(filamentExtend, {
-          toValue: 1,
-          duration: 700,
+          toValue: 0.85,
+          duration: 600,
           easing: Easing.out(Easing.cubic),
           useNativeDriver: true,
         }),
       ]).start();
-      // Speech pulse: loop continuo 600-800ms con ampiezza naturale
-      const pulseLoop = Animated.loop(
-        Animated.sequence([
-          Animated.timing(speakPulse, {
-            toValue: 1,
-            duration: 650,
-            easing: Easing.inOut(Easing.sin),
-            useNativeDriver: true,
-          }),
-          Animated.timing(speakPulse, {
-            toValue: 0,
-            duration: 750,
-            easing: Easing.inOut(Easing.sin),
-            useNativeDriver: true,
-          }),
-        ])
-      );
-      pulseLoop.start();
-      return () => pulseLoop.stop();
+
+      // === PULSAZIONE ORGANICA DEL PARLATO ===
+      // Simula la cadenza sillabica italiana (~4-6 sillabe/sec) con:
+      //  - burst brevi (130-260ms) = sillabe
+      //  - pause naturali (400-700ms) ogni 6-10 sillabe = fine frase
+      //  - inspirazioni profonde (700ms ampie) ogni 2-3 frasi
+      //
+      // Tutto procedurale — non sincronizzato all'audio reale (impossibile
+      // farlo bene su mobile RN), ma EVOCATIVO: l'eclissi sembra respirare
+      // mentre parla, con un ritmo che il cervello legge come "umano".
+      let cancelled = false;
+      let syllableCount = 0;
+      let phraseCount = 0;
+      const step = () => {
+        if (cancelled) return;
+        // Decidi se questo step è una sillaba, una pausa breve, o un respiro
+        const rand = Math.random();
+        let intensity: number;
+        let duration: number;
+        if (phraseCount >= 2 && rand < 0.18) {
+          // RESPIRO PROFONDO (raro, ogni ~2-3 frasi) — inspirazione lenta
+          intensity = 1.0;
+          duration = 550 + Math.random() * 250;
+          phraseCount = 0;
+        } else if (syllableCount >= 6 && rand < 0.30) {
+          // FINE FRASE (pausa naturale) — eclissi si contrae brevemente
+          intensity = 0.25;
+          duration = 380 + Math.random() * 320;
+          syllableCount = 0;
+          phraseCount++;
+        } else {
+          // SILLABA — burst breve con ampiezza variabile
+          intensity = 0.55 + Math.random() * 0.45; // 0.55..1.0
+          duration = 110 + Math.random() * 130;   // 110..240ms
+          syllableCount++;
+        }
+        Animated.timing(speakPulse, {
+          toValue: intensity,
+          duration,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }).start(({ finished }) => {
+          if (finished && !cancelled) step();
+        });
+      };
+      step();
+      return () => {
+        cancelled = true;
+        speakPulse.stopAnimation();
+        Animated.timing(speakPulse, {
+          toValue: 0,
+          duration: 400,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }).start();
+      };
     }
 
     if (status === "recording") {
@@ -294,14 +339,22 @@ export default function EclipseOrb({
     inputRange: [0, 1],
     outputRange: [1.0, 1.025],
   });
-  // Speaking pulse — scale 1.00..1.05 + opacity boost
+  // Speaking pulse — ALLARGAMENTO/RESTRINGIMENTO visibile dell'eclissi
+  // intera in sync con il ritmo sillabico procedurale. Scale 1.0..1.10
+  // (10% di variazione → ben visibile, non grottesco).
   const speakScale = speakPulse.interpolate({
     inputRange: [0, 1],
-    outputRange: [1.0, 1.05],
+    outputRange: [0.94, 1.10],
   });
+  // Aurora intensity boost durante le sillabe — l'aurora "splende" sui colpi
   const speakOpacityBoost = speakPulse.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 0.2],
+    outputRange: [0, 0.35],
+  });
+  // Filamenti che si estendono sulle sillabe forti (aurora "uscente" dalle sillabe)
+  const speakFilamentBoost = speakPulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, -size * 0.04],
   });
   // Listen pulse — gentle inward radial pull (translate filaments inward by ~6px)
   const listenInwardPx = listenPulse.interpolate({
@@ -379,13 +432,18 @@ export default function EclipseOrb({
                 transform: [
                   { rotate: `${baseDeg}deg` },
                   // translateY = radial extension (negative = outward from centre)
+                  // PARLATO: ogni sillaba spinge i filamenti fuori (speakFilamentBoost),
+                  // poi rientrano. ASCOLTO: ritiro graduale verso il centro.
                   {
                     translateY: Animated.add(
-                      Animated.multiply(
-                        filamentExtend,
-                        new Animated.Value(-size * 0.08)
+                      Animated.add(
+                        Animated.multiply(
+                          filamentExtend,
+                          new Animated.Value(-size * 0.08)
+                        ),
+                        listenInwardPx
                       ),
-                      listenInwardPx
+                      speakFilamentBoost
                     ),
                   },
                 ],

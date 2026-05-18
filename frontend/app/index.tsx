@@ -43,6 +43,8 @@ import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
 import EclipseOrb from "../components/EclipseOrb";
+import ColorIntro from "../components/ColorIntro";
+import * as SecureStore from "expo-secure-store";
 import NeonBorder from "../components/NeonBorder";
 import RadialGlow from "../components/RadialGlow";
 import SealSetupModal from "../components/SealSetupModal";
@@ -145,6 +147,31 @@ export default function Taccuino() {
   const [status, setStatus] = useState<Status>("idle");
   const [textInput, setTextInput] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
+  // === COLOR INTRO ===
+  // Tutorial one-shot mostrato solo al primo avvio dell'app. Persistito in
+  // SecureStore con la chiave `color_intro_seen`. Insegna in modo poetico
+  // come l'Eclissi cambia colore in base allo stato (viola = riposo,
+  // blu petrolio = ascolto, ciclamino = pensiero, vari = parlato).
+  // `null` = ancora da verificare; `true` = mostra; `false` = nascondi.
+  const [showColorIntro, setShowColorIntro] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const seen = await SecureStore.getItemAsync("color_intro_seen");
+        if (!cancelled) setShowColorIntro(seen !== "1");
+      } catch {
+        if (!cancelled) setShowColorIntro(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  const dismissColorIntro = useCallback(async () => {
+    setShowColorIntro(false);
+    try {
+      await SecureStore.setItemAsync("color_intro_seen", "1");
+    } catch {}
+  }, []);
   const [showSettings, setShowSettings] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [showVoicePicker, setShowVoicePicker] = useState(false);
@@ -1728,7 +1755,7 @@ export default function Taccuino() {
               )}
             </Pressable>
             <Text style={[styles.statusLabel, styles.statusLabelOnBg, { fontSize: 16, marginTop: 8 }]}>
-              {aiPaused ? "AI in pausa" : statusLabel}
+              {aiPaused ? "AI in pausa" : ""}
             </Text>
             {/* Hint swipe — solo se ci sono messaggi (altrimenti non ha senso
                 far promettere "scorri per leggere" se non c'è nulla da leggere) */}
@@ -1860,7 +1887,7 @@ export default function Taccuino() {
         ) : (
           <View style={styles.bigBtnArea}>
             <Text style={[styles.statusLabel, styles.statusLabelOnBg]}>
-              {aiPaused ? "AI in pausa" : statusLabel}
+              {aiPaused ? "AI in pausa" : ""}
             </Text>
             {/* La macchia È il pulsante. Tap su di lei → avvia/ferma ascolto.
                 Niente più cerchio verde gigante: la macchia stessa diventa
@@ -2834,6 +2861,13 @@ export default function Taccuino() {
   // Wrap the screen in a background image (custom upload) or gradient (preset),
   // with a dark overlay for legibility. If no background is set, just return
   // the plain inner view (uses theme.bg).
+  // === COLOR INTRO ===
+  // Al primo avvio, mostra il tour dei colori dell'Eclissi PRIMA di
+  // qualsiasi altra schermata. Quando l'utente lo termina (o lo salta),
+  // viene persistito il flag e non si vede più.
+  if (showColorIntro === true) {
+    return <ColorIntro onDone={dismissColorIntro} />;
+  }
   if (isCustomImage && bgValue) {
     return (
       <ImageBackground source={{ uri: bgValue }} style={{ flex: 1 }} resizeMode="cover">
