@@ -2986,10 +2986,26 @@ export default function Taccuino() {
   if (showColorIntro === true) {
     return <KodaIntro voices={voiceList} onDone={dismissColorIntro} onCancel={cancelKodaIntro} />;
   }
+  // Overlay bordeaux globale quando il confessionale è ATTIVO.
+  // Tinge dolcemente tutto lo sfondo (~18% di alpha) così l'utente capisce
+  // a colpo d'occhio di trovarsi in modalità confessionale, anche durante
+  // la conversazione vocale. Quando spegne il confessionale, l'overlay
+  // sparisce e si torna allo sfondo normale.
+  const confessionalTint = confessionalMode ? (
+    <View
+      pointerEvents="none"
+      style={[
+        StyleSheet.absoluteFillObject,
+        { backgroundColor: "rgba(139,58,74,0.22)" },
+      ]}
+    />
+  ) : null;
+
   if (isCustomImage && bgValue) {
     return (
       <ImageBackground source={{ uri: bgValue }} style={{ flex: 1 }} resizeMode="cover">
         <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { backgroundColor: `rgba(0,0,0,${bgDim})` }]} />
+        {confessionalTint}
         {screenInner}
       </ImageBackground>
     );
@@ -3003,11 +3019,17 @@ export default function Taccuino() {
           end={bgPreset.end || { x: 1, y: 1 }}
           style={StyleSheet.absoluteFillObject}
         />
+        {confessionalTint}
         {screenInner}
       </View>
     );
   }
-  return screenInner;
+  return (
+    <View style={{ flex: 1 }}>
+      {screenInner}
+      {confessionalTint}
+    </View>
+  );
 }
 
 // =============== Sub components ===============
@@ -3171,26 +3193,25 @@ function Bubble({
   // Compute backgrounds for both bubbles based on chosen style.
   // In SOLID mode both are opaque (block wallpaper for max readability).
   // In GLASS mode both are translucent (wallpaper shows through subtly).
-  // === CONFESSIONALE: override colore "ceralacca" per bubble create dentro
-  //     confessionale. Quando il toggle confessionale è ON, queste bubble
-  //     appaiono nel rosso-bordeaux della ceralacca con cui si sigillavano
-  //     le lettere segrete — caldo, intimo, immediatamente riconoscibile
-  //     come "contenuto sigillato/segreto". Quando il toggle è OFF, queste
-  //     bubble non sono proprio renderizzate (filtrate in
-  //     timelineWithSeparators). */
+  // === CONFESSIONALE: in modalità confessionale i messaggi vengono
+  //     colorati DIVERSAMENTE in base a chi parla, così l'utente
+  //     distingue al volo i propri messaggi dalle risposte di Koda:
+  //       - le bubble dell'UTENTE restano del colore-utente normale
+  //         (familiarità — "questo l'ho scritto io")
+  //       - le bubble di KODA assumono il bordeaux-ceralacca
+  //         (chiaramente segreto / risposta sigillata)
+  //     Fuori dal confessionale, le bubble confessionali sono filtrate
+  //     in `timelineWithSeparators` e non vengono mai renderizzate.
   const isConfessional = !!entry.confessional;
   const confessionalColor = "#8B3A4A"; // sealing-wax burgundy
   const confessionalSoft = "#8B3A4A33"; // 20% alpha glass
+  // AI: bordeaux ceralacca; User: colore normale del tema
   const aiBg = isConfessional
     ? (bubbleStyle === "solid" ? confessionalColor : confessionalSoft)
     : (bubbleStyle === "solid" ? bubbleAccent.color : bubbleAccent.soft);
-  const userBg = isConfessional
-    ? (bubbleStyle === "solid" ? confessionalColor : confessionalSoft)
-    : (bubbleStyle === "solid" ? theme.userBubble : theme.userBubble + "55");
+  const userBg = bubbleStyle === "solid" ? theme.userBubble : theme.userBubble + "55";
   const aiBorder = isConfessional ? confessionalColor : bubbleAccent.color;
-  const userBorder = isConfessional
-    ? confessionalColor
-    : (bubbleStyle === "solid" ? "transparent" : theme.primary + "AA");
+  const userBorder = bubbleStyle === "solid" ? "transparent" : theme.primary + "AA";
 
   // === Diary aesthetic: each bubble is rotated by a tiny, deterministic
   //     amount derived from the entry id. Looks like the bubble was *placed*
