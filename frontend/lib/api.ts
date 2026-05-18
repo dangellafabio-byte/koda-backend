@@ -48,6 +48,16 @@ export type TimelineEntry = {
   actions?: Action[] | null;
   audio_duration_ms?: number | null;
   timestamp: string;
+  /** True se questa entry è stata creata DURANTE il Confessionale.
+   *  Lato client viene usato per:
+   *    - nascondere il messaggio dalla timeline visibile quando il
+   *      confessionale è OFF (privacy: se qualcuno apre l'app non
+   *      può leggerli)
+   *    - colorarlo in violetto/oscuro quando il confessionale è ON
+   *      così l'utente capisce a colpo d'occhio quali sono.
+   *  Non viene mai inviato/salvato sul backend (lì già non si scrive
+   *  nulla in DB per ephemeral/sealed flow). */
+  confessional?: boolean | null;
 };
 
 export type ProfileSettings = {

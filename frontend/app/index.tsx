@@ -744,6 +744,7 @@ export default function Taccuino() {
         role: "user",
         text: txt,
         timestamp: new Date().toISOString(),
+        confessional: confessionalMode || undefined,
       };
       setTimeline((prev) => [...prev, optimistic]);
       setStatus("thinking");
@@ -779,10 +780,12 @@ export default function Taccuino() {
             voice_text: reply,
             tone: (resp.tone as Tone) || "warm",
             timestamp: new Date().toISOString(),
+            confessional: true,
           };
           const userEntry: TimelineEntry = {
             ...optimistic,
             id: `sealed-u-${Date.now()}`,
+            confessional: true,
           };
           setTimeline((prev) => {
             const filtered = prev.filter((e) => e.id !== optimistic.id);
@@ -874,15 +877,23 @@ export default function Taccuino() {
         }
         // === STANDARD FLOW (con o senza ephemeral) ===
         const res = await api.converse(txt, undefined, { ephemeral: confessionalMode });
-        // Replace optimistic with real, then add AI entry
+        // Replace optimistic with real, then add AI entry.
+        // Se siamo in confessionale, marca le entry come `confessional`
+        // così la timeline le filtra/colora correttamente.
+        const taggedUser = confessionalMode
+          ? { ...res.user_entry, confessional: true }
+          : res.user_entry;
+        const taggedAi = confessionalMode
+          ? { ...res.ai_entry, confessional: true }
+          : res.ai_entry;
         setTimeline((prev) => {
           const filtered = prev.filter((e) => e.id !== optimistic.id);
-          return [...filtered, res.user_entry, res.ai_entry];
+          return [...filtered, taggedUser, taggedAi];
         });
         setProfile(res.profile);
         // Execute any actions (notifications, etc.) requested by the AI
-        runActions(res.ai_entry.actions || []);
-        await speakIfEnabled(res.ai_entry.voice_text || res.ai_entry.text, res.ai_entry.tone || "neutral");
+        runActions(taggedAi.actions || []);
+        await speakIfEnabled(taggedAi.voice_text || taggedAi.text, taggedAi.tone || "neutral");
       } catch (e: any) {
         const msg = String(e?.message || "");
         if (msg.includes("Parola Segreta")) {
@@ -1649,11 +1660,19 @@ export default function Taccuino() {
   // Light themes (carta/aurora etc.) → dark text; dark themes → light text.
   const textOnBubble = theme.text;
 
-  // === Build timeline w/ day separators
+  // === Build timeline w/ day separators ===
+  // PRIVACY CONFESSIONALE: i messaggi creati durante il Confessionale (flag
+  // `confessional: true`) sono VISIBILI solo quando il toggle confessionale
+  // è attivo. Quando lo disattivi, scompaiono dalla schermata di testo —
+  // così se qualcuno apre l'app non può leggerli. Quando lo riattivi,
+  // ricompaiono colorati in violetto (vedi ChatBubble) per essere
+  // immediatamente riconoscibili come "messaggi protetti".
   const timelineWithSeparators = useMemo(() => {
     const out: Array<{ kind: "sep"; key: string; label: string } | { kind: "msg"; entry: TimelineEntry }> = [];
     let lastDay = "";
     for (const e of timeline) {
+      // Privacy filter: nascondi le entry confessional quando il toggle è OFF.
+      if (e.confessional && !confessionalMode) continue;
       const d = new Date(e.timestamp);
       const dayKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
       if (dayKey !== lastDay) {
@@ -1663,7 +1682,7 @@ export default function Taccuino() {
       out.push({ kind: "msg", entry: e });
     }
     return out;
-  }, [timeline]);
+  }, [timeline, confessionalMode]);
 
   // Build the screen wrapper with optional background image / gradient
   const screenInner = (
@@ -3110,10 +3129,24 @@ function Bubble({
   // Compute backgrounds for both bubbles based on chosen style.
   // In SOLID mode both are opaque (block wallpaper for max readability).
   // In GLASS mode both are translucent (wallpaper shows through subtly).
-  const aiBg = bubbleStyle === "solid" ? bubbleAccent.color : bubbleAccent.soft;
-  const userBg = bubbleStyle === "solid" ? theme.userBubble : theme.userBubble + "55";
-  const aiBorder = bubbleAccent.color;
-  const userBorder = bubbleStyle === "solid" ? "transparent" : theme.primary + "AA";
+  // === CONFESSIONALE: override viola per bubble create dentro confessionale.
+  //     Quando il toggle confessionale è ON, queste bubble appaiono in viola
+  //     "ametista" così l'utente le riconosce a colpo d'occhio come
+  //     contenuto protetto. Quando il toggle è OFF, queste bubble non sono
+  //     proprio renderizzate (filtrate via in timelineWithSeparators). */
+  const isConfessional = !!entry.confessional;
+  const confessionalColor = "#A78BFA"; // amethyst — viola luminoso ma sobrio
+  const confessionalSoft = "#A78BFA33"; // 20% alpha glass
+  const aiBg = isConfessional
+    ? (bubbleStyle === "solid" ? confessionalColor : confessionalSoft)
+    : (bubbleStyle === "solid" ? bubbleAccent.color : bubbleAccent.soft);
+  const userBg = isConfessional
+    ? (bubbleStyle === "solid" ? confessionalColor : confessionalSoft)
+    : (bubbleStyle === "solid" ? theme.userBubble : theme.userBubble + "55");
+  const aiBorder = isConfessional ? confessionalColor : bubbleAccent.color;
+  const userBorder = isConfessional
+    ? confessionalColor
+    : (bubbleStyle === "solid" ? "transparent" : theme.primary + "AA");
 
   // === Diary aesthetic: each bubble is rotated by a tiny, deterministic
   //     amount derived from the entry id. Looks like the bubble was *placed*
