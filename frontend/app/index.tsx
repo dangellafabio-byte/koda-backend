@@ -38,12 +38,11 @@ import {
 } from "../lib/api";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId } from "../lib/speech";
-import * as vw from "../lib/voiceWaveform";
 import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
-import OrganicBlob from "../components/OrganicBlob";
+import EclipseOrb from "../components/EclipseOrb";
 import NeonBorder from "../components/NeonBorder";
 import RadialGlow from "../components/RadialGlow";
 import SealSetupModal from "../components/SealSetupModal";
@@ -734,36 +733,31 @@ export default function Taccuino() {
           await speakIfEnabled(reply, aiEntry.tone || "warm");
           return;
         }
-        // === FAST STREAMING FLOW (Step 2b + Step 3 — Fase 4) ===
-        // Quando NON siamo in confessionale e la voce è abilitata, usiamo il
-        // nuovo endpoint /api/converse-stream-audio che fa tutto in un colpo:
+        // === FAST STREAMING FLOW ===
+        // Quando NON siamo in confessionale e la voce è abilitata, usiamo
+        // l'endpoint /api/converse-stream-audio che fa tutto in un colpo:
         //   STT-result → Claude(streaming) → ElevenLabs(streaming per frase)
         //                                  → MP3 chunks → AVPlayer
-        // TTFB tipico ~100-300ms (vs ~5-8s del flusso "classic" /converse +
-        // /tts/prepare). Il testo della risposta viene salvato server-side;
-        // dopo la fine del playback rifresciamo la timeline per la chat.
+        // TTFB tipico ~100-300ms. Il testo della risposta viene salvato
+        // server-side; dopo la fine del playback rifresciamo la timeline.
         //
-        // Step 3 — blob audio-reactive: passiamo un ID client che il server
-        // usa come chiave per memorizzare la waveform RMS dell'audio. Mentre
-        // l'audio è in playback, il modulo `voiceWaveform` polla questo ID e
-        // OrganicBlob legge l'ampiezza in tempo reale per pulsare in sync.
+        // Il visual è ora `EclipseOrb`: aurora procedurale guidata dal
+        // `tone` semantico della risposta, NON dall'ampiezza audio
+        // (approccio precedente con waveform server-side abbandonato:
+        // troppi anelli di sync, effetto "macchinoso").
         const useFastPath = !confessionalMode && (profile?.settings.voice_response !== false);
         if (useFastPath) {
           try {
-            const reqId = vw.newId();
+            // ID di richiesta solo per logging/correlazione (non più usato
+            // per polling waveform). Generato inline per stabilità.
+            const reqId = Math.random().toString(36).slice(2, 18);
             const streamUrl =
               `${API_BASE}/converse-stream-audio?text=${encodeURIComponent(txt)}&id=${reqId}` +
               (confessionalMode ? `&ephemeral=true` : "");
             // L'audio parte essenzialmente subito → passiamo a "speaking" e
             // saltiamo la fase "thinking" (era 3-5s di stallo visivo).
             setStatus("speaking");
-            // Marca l'inizio del playback e fetcha la waveform in parallelo.
-            vw.markPlaybackStart(reqId);
-            // Fire-and-forget: la waveform "arriva" entro ~1s ed entra
-            // automaticamente in gioco senza bloccare il playback.
-            vw.fetchAndAttach(reqId).catch(() => {});
             const ok = await SpeechMod.playFromUrl(streamUrl);
-            vw.clear();
             // Refresh della timeline (il backend ha salvato user+ai entries).
             try {
               const tl = await api.getTimeline(200);
@@ -791,7 +785,6 @@ export default function Taccuino() {
           } catch (e: any) {
             // Fallback al flusso classico — non perdiamo il messaggio dell'utente.
             console.warn("[sendText] fast streaming path failed, falling back to /converse:", e);
-            vw.clear();
             setStatus("thinking");
             // ↓ continua con il blocco `api.converse` standard sotto
           }
@@ -1720,17 +1713,12 @@ export default function Taccuino() {
                   ],
                 }}
               >
-                <OrganicBlob
+                <EclipseOrb
                   status={status}
-                  meterDb={meterDb}
-                  meterThreshold={meterThreshold}
                   tone={lastAiTone}
                   size={Math.min(windowWidth * 0.78, 360)}
-                  palette={confessionalMode ? ["#1F2937", "#374151", "#0B0B0F"] : null}
-                  statePalettes={(profile?.style_preferences as any)?.palette || null}
-                  warmth={confessionalMode ? 0 : ambient.warmth}
-                  dim={ambient.dim}
-                  texture={confessionalMode ? "solida" : null}
+                  meterDb={meterDb}
+                  meterThreshold={meterThreshold}
                 />
               </Animated.View>
               {(status === "transcribing" || status === "thinking") && (
@@ -1767,17 +1755,12 @@ export default function Taccuino() {
         {timeline.length === 0 ? (
           <View style={styles.emptyState}>
             <View style={{ marginBottom: 24 }}>
-              <OrganicBlob
+              <EclipseOrb
                 status={status}
-                meterDb={meterDb}
-                meterThreshold={meterThreshold}
                 tone={lastAiTone}
                 size={260}
-                avatarUri={(profile?.settings as any)?.ai_avatar || null}
-                palette={null}
-                statePalettes={(profile?.style_preferences as any)?.palette || null}
-                warmth={ambient.warmth}
-                dim={ambient.dim}
+                meterDb={meterDb}
+                meterThreshold={meterThreshold}
               />
             </View>
             <Text style={styles.emptyTitle}>
@@ -1908,16 +1891,12 @@ export default function Taccuino() {
                   ],
                 }}
               >
-                <OrganicBlob
+                <EclipseOrb
                   status={status}
-                  meterDb={meterDb}
-                  meterThreshold={meterThreshold}
                   tone={lastAiTone}
                   size={210}
-                  palette={confessionalMode ? ["#1F2937", "#374151", "#0B0B0F"] : null}
-                  warmth={confessionalMode ? 0 : ambient.warmth}
-                  dim={ambient.dim}
-                  texture={confessionalMode ? "solida" : null}
+                  meterDb={meterDb}
+                  meterThreshold={meterThreshold}
                 />
               </Animated.View>
               {(status === "transcribing" || status === "thinking") && (

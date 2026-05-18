@@ -22,7 +22,6 @@ import {
 import { Platform } from "react-native";
 import type { Tone } from "./api";
 import { API_BASE } from "./api";
-import * as voiceWaveform from "./voiceWaveform";
 
 let speakingNow = false;
 let webUnlocked = false;
@@ -290,11 +289,6 @@ async function playElevenLabsNativeFromUrl(audioUrl: string): Promise<boolean> {
         if (status?.isLoaded) {
           everLoaded = true;
           const pos = status.currentTime ?? 0;
-          // Step 3 — Push playback position to voiceWaveform so the blob
-          // can pulse in sync with the actual audio playhead.
-          try {
-            voiceWaveform.notifyPlaybackTime(pos, !!status.playing, typeof status.duration === "number" ? status.duration : undefined);
-          } catch {}
           if (pos > lastPositionSec) {
             lastPositionSec = pos;
             lastProgressAt = Date.now();
