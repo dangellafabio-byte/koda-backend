@@ -38,6 +38,7 @@ import {
 } from "../lib/api";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId } from "../lib/speech";
+import * as vw from "../lib/voiceWaveform";
 import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
@@ -733,7 +734,7 @@ export default function Taccuino() {
           await speakIfEnabled(reply, aiEntry.tone || "warm");
           return;
         }
-        // === FAST STREAMING FLOW (Step 2b — Fase 4) ===
+        // === FAST STREAMING FLOW (Step 2b + Step 3 — Fase 4) ===
         // Quando NON siamo in confessionale e la voce è abilitata, usiamo il
         // nuovo endpoint /api/converse-stream-audio che fa tutto in un colpo:
         //   STT-result → Claude(streaming) → ElevenLabs(streaming per frase)
@@ -741,16 +742,28 @@ export default function Taccuino() {
         // TTFB tipico ~100-300ms (vs ~5-8s del flusso "classic" /converse +
         // /tts/prepare). Il testo della risposta viene salvato server-side;
         // dopo la fine del playback rifresciamo la timeline per la chat.
+        //
+        // Step 3 — blob audio-reactive: passiamo un ID client che il server
+        // usa come chiave per memorizzare la waveform RMS dell'audio. Mentre
+        // l'audio è in playback, il modulo `voiceWaveform` polla questo ID e
+        // OrganicBlob legge l'ampiezza in tempo reale per pulsare in sync.
         const useFastPath = !confessionalMode && (profile?.settings.voice_response !== false);
         if (useFastPath) {
           try {
+            const reqId = vw.newId();
             const streamUrl =
-              `${API_BASE}/converse-stream-audio?text=${encodeURIComponent(txt)}` +
+              `${API_BASE}/converse-stream-audio?text=${encodeURIComponent(txt)}&id=${reqId}` +
               (confessionalMode ? `&ephemeral=true` : "");
             // L'audio parte essenzialmente subito → passiamo a "speaking" e
             // saltiamo la fase "thinking" (era 3-5s di stallo visivo).
             setStatus("speaking");
+            // Marca l'inizio del playback e fetcha la waveform in parallelo.
+            vw.markPlaybackStart(reqId);
+            // Fire-and-forget: la waveform "arriva" entro ~1s ed entra
+            // automaticamente in gioco senza bloccare il playback.
+            vw.fetchAndAttach(reqId).catch(() => {});
             const ok = await SpeechMod.playFromUrl(streamUrl);
+            vw.clear();
             // Refresh della timeline (il backend ha salvato user+ai entries).
             try {
               const tl = await api.getTimeline(200);
@@ -778,6 +791,7 @@ export default function Taccuino() {
           } catch (e: any) {
             // Fallback al flusso classico — non perdiamo il messaggio dell'utente.
             console.warn("[sendText] fast streaming path failed, falling back to /converse:", e);
+            vw.clear();
             setStatus("thinking");
             // ↓ continua con il blocco `api.converse` standard sotto
           }

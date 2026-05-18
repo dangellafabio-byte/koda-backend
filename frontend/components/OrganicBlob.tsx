@@ -18,6 +18,7 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { View, StyleSheet, Animated, Easing, Image } from "react-native";
+import * as voiceWaveform from "../lib/voiceWaveform";
 import Svg, { Defs, RadialGradient, Stop, Path, Circle, G } from "react-native-svg";
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
@@ -290,10 +291,17 @@ export default function OrganicBlob({
     }
   }, [texture, status]);
 
-  // === Speech burst envelope — simula la cadenza vocale (sillabe + pause)
-  // Quando speaking: ogni 80-180ms partono dei "burst" che aumentano
-  // temporaneamente l'amplitude del morph, dando la sensazione che il blob
-  // stia parlando davvero (modulazione "consonante-vocale-pausa").
+  // === Speech burst envelope — drives blob morph in sync with real audio.
+  //
+  // Step 3 (Fase 4): when AI is speaking, instead of a random burst we read
+  // the REAL RMS amplitude of the currently playing audio (computed
+  // server-side and exposed via `lib/voiceWaveform.getCurrentAmplitude()`).
+  // The blob now visibly pulses on syllables, dips on pauses, and goes still
+  // at the end of sentences — perfectly sync'd with what the user hears.
+  //
+  // Fallback: if waveform data isn't loaded yet (first ~500ms of playback,
+  // OR for non-streaming TTS paths), we keep the original procedural burst
+  // pattern so the blob still feels alive.
   const speechBurstRef = useRef<number>(1);
   useEffect(() => {
     if (status !== "speaking") {
@@ -301,15 +309,40 @@ export default function OrganicBlob({
       return;
     }
     let cancelled = false;
-    const next = () => {
+    // Procedural fallback timer (used only until real waveform kicks in).
+    let proceduralTimer: any = null;
+    const proceduralStep = () => {
       if (cancelled) return;
-      // Random burst level: 0.6 (pausa breve) .. 1.6 (sillaba forte)
       speechBurstRef.current = 0.6 + Math.random() * 1.0;
       const dur = 80 + Math.random() * 140;
-      setTimeout(next, dur);
+      proceduralTimer = setTimeout(proceduralStep, dur);
     };
-    next();
-    return () => { cancelled = true; };
+    // Real-audio sampler: 40ms ≈ 25Hz. Each tick reads the current amplitude
+    // from the active playback and maps it to the burst multiplier.
+    const realTimer = setInterval(() => {
+      if (cancelled) return;
+      const amp = voiceWaveform.getCurrentAmplitude();
+      if (amp !== null) {
+        // Map amplitude [0..1] → burst [0.55..1.8] so even silence keeps
+        // the blob alive (gentle hum) and loud syllables pop noticeably.
+        speechBurstRef.current = 0.55 + amp * 1.25;
+        // Stop procedural fallback once real data is flowing.
+        if (proceduralTimer) {
+          clearTimeout(proceduralTimer);
+          proceduralTimer = null;
+        }
+      } else if (!proceduralTimer) {
+        // No waveform available — fall back to procedural.
+        proceduralStep();
+      }
+    }, 40);
+    // Kick off procedural while we wait for the waveform.
+    proceduralStep();
+    return () => {
+      cancelled = true;
+      if (proceduralTimer) clearTimeout(proceduralTimer);
+      clearInterval(realTimer);
+    };
   }, [status]);
 
   // Drive the morph loop

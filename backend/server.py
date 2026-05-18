@@ -2106,6 +2106,88 @@ async def api_tts_audio(token: str, request: Request):
 import litellm  # noqa: E402  (kept here to avoid affecting cold-start of unrelated endpoints)
 
 
+# ============================================================
+# Waveform cache — Step 3 (Fase 4): the blob pulses in sync with the
+# AI's voice. Server computes RMS amplitudes per ~50ms window from the
+# MP3 audio we stream, stashes them keyed by `id` (client-provided UUID),
+# and the client fetches them via /api/converse-result/{id} during playback.
+# ============================================================
+import io as _io
+import numpy as _np
+try:
+    from pydub import AudioSegment as _PydubAudioSegment  # requires ffmpeg
+    _WAVEFORM_OK = True
+except Exception as _e:
+    _PydubAudioSegment = None
+    _WAVEFORM_OK = False
+    logger.warning(f"[waveform] pydub unavailable — blob reactivity disabled: {_e}")
+
+# Bounded LRU-ish dict: id → {"text", "tone", "actions", "waveform", "window_ms", "duration_ms"}
+_converse_results: Dict[str, Dict[str, Any]] = {}
+_CONVERSE_RESULTS_MAX = 128
+WAVEFORM_WINDOW_MS = 50
+
+
+def _compute_waveform_rms(mp3_bytes: bytes) -> Optional[Dict[str, Any]]:
+    """Decode an MP3 buffer with pydub and return a list of float RMS values
+    per WAVEFORM_WINDOW_MS window (e.g. 50ms). RMS is normalized to int16
+    full-scale (32768), so values are in [0, 1].
+
+    Returns None if pydub/ffmpeg is unavailable or decode fails.
+    """
+    if not _WAVEFORM_OK or not mp3_bytes:
+        return None
+    try:
+        seg = _PydubAudioSegment.from_file(_io.BytesIO(mp3_bytes), format="mp3")
+    except Exception as e:
+        logger.warning(f"[waveform] MP3 decode failed: {e}")
+        return None
+
+    samples = _np.array(seg.get_array_of_samples(), dtype=_np.float32)
+    if seg.channels == 2 and len(samples) % 2 == 0:
+        samples = samples.reshape(-1, 2).mean(axis=1)
+    # Normalize int16 → [-1, 1]
+    sample_max = float(1 << (8 * seg.sample_width - 1))  # 32768 for 16-bit
+    samples = samples / sample_max
+
+    window_samples = int(seg.frame_rate * WAVEFORM_WINDOW_MS / 1000)
+    if window_samples <= 0:
+        return None
+
+    n_windows = len(samples) // window_samples
+    if n_windows < 1:
+        return None
+    trimmed = samples[: n_windows * window_samples].reshape(n_windows, window_samples)
+    # RMS per window
+    rms = _np.sqrt((trimmed * trimmed).mean(axis=1))
+    # Light smoothing (moving average over 3 windows) so the blob doesn't
+    # flicker on noise. Keeps perceived sync with speech intact.
+    if len(rms) >= 3:
+        kernel = _np.array([0.25, 0.5, 0.25])
+        rms = _np.convolve(rms, kernel, mode="same")
+    return {
+        "window_ms": WAVEFORM_WINDOW_MS,
+        "duration_ms": int(len(seg)),
+        "waveform": [round(float(v), 4) for v in rms.tolist()],
+    }
+
+
+def _store_converse_result(rid: str, payload: Dict[str, Any]) -> None:
+    """Insert into the bounded results cache, evicting the oldest entry if
+    we cross the cap. Simple — we don't need true LRU here, just a soft cap.
+    """
+    if not rid:
+        return
+    if len(_converse_results) >= _CONVERSE_RESULTS_MAX:
+        # Drop the first inserted key (Python dicts preserve insertion order).
+        try:
+            oldest = next(iter(_converse_results))
+            _converse_results.pop(oldest, None)
+        except StopIteration:
+            pass
+    _converse_results[rid] = payload
+
+
 class _ReplyExtractor:
     """Pulls the value of the `reply` field from a streaming JSON object,
     character by character. Robust to chunked input — call `feed(chunk)` as
@@ -2283,14 +2365,18 @@ async def _stream_tts_for_sentence(
 
 
 @api_router.post("/converse-stream-audio")
-async def api_converse_stream_audio(req: ConverseRequest):
+async def api_converse_stream_audio(req: ConverseRequest, id: Optional[str] = None):
     """End-to-end voice pipeline endpoint (POST variant).
 
     Returns an audio/mpeg HTTP chunked response. The AI text reply + metadata
     (tone, actions, etc.) are persisted to MongoDB during the stream; the
     client should fetch /api/timeline after audio playback to refresh the chat.
+
+    `id` (optional query param): client-generated UUID used as the cache key
+    for the waveform. The client then fetches /api/converse-result/{id}
+    after playback starts to drive the blob's audio-reactive animation.
     """
-    return await _converse_stream_audio_impl(req)
+    return await _converse_stream_audio_impl(req, result_id=id)
 
 
 @api_router.get("/converse-stream-audio")
@@ -2298,16 +2384,19 @@ async def api_converse_stream_audio_get(
     text: str = "",
     audio_duration_ms: Optional[int] = None,
     ephemeral: bool = False,
+    id: Optional[str] = None,
 ):
     """GET variant — needed because expo-audio's AVPlayer (iOS) can only
     fetch HTTP URLs via GET. The frontend passes the transcript via query
     string. Body is kept short (~100-300 chars typical) so URL length is fine.
+
+    `id` (optional): see POST variant docstring.
     """
     req = ConverseRequest(text=text, audio_duration_ms=audio_duration_ms, ephemeral=ephemeral)
-    return await _converse_stream_audio_impl(req)
+    return await _converse_stream_audio_impl(req, result_id=id)
 
 
-async def _converse_stream_audio_impl(req: ConverseRequest):
+async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[str] = None):
     if not EMERGENT_LLM_KEY:
         raise HTTPException(status_code=500, detail="LLM key not configured")
     text = (req.text or "").strip()
@@ -2350,6 +2439,9 @@ async def _converse_stream_audio_impl(req: ConverseRequest):
         extractor = _ReplyExtractor()
         sentence_buf = ""
         full_reply_chars: List[str] = []
+        # Accumulate MP3 bytes here so we can compute the waveform at the
+        # end of the stream for the audio-reactive blob (Step 3).
+        mp3_acc = bytearray() if result_id and _WAVEFORM_OK else None
         # Capture metadata for post-stream persistence
         captured = {"tone": "neutral", "domain": None, "actions": [], "memory_update": "", "extracted": None}
 
@@ -2392,6 +2484,8 @@ async def _converse_stream_audio_impl(req: ConverseRequest):
                             async for audio_chunk in _stream_tts_for_sentence(
                                 client_el, clean, voice_id, vs
                             ):
+                                if mp3_acc is not None:
+                                    mp3_acc.extend(audio_chunk)
                                 yield audio_chunk
 
                 # If the reply has closed AND we have leftover text, break early
@@ -2406,6 +2500,8 @@ async def _converse_stream_audio_impl(req: ConverseRequest):
                 async for audio_chunk in _stream_tts_for_sentence(
                     client_el, clean, voice_id, vs
                 ):
+                    if mp3_acc is not None:
+                        mp3_acc.extend(audio_chunk)
                     yield audio_chunk
 
         except Exception as e:
@@ -2511,14 +2607,59 @@ async def _converse_stream_audio_impl(req: ConverseRequest):
             except Exception as e:
                 logger.warning(f"[converse-stream-audio] profile update failed: {e}")
 
+        # === Waveform extraction + result cache (Step 3 — Fase 4) ===
+        # Decode the accumulated MP3 to compute RMS amplitudes that the client
+        # uses to drive the audio-reactive blob. Done in a thread (pydub call
+        # blocks) so we don't stall the event loop AFTER the audio has fully
+        # streamed to the client — the user has already heard the response.
+        if result_id and mp3_acc is not None and len(mp3_acc) > 0:
+            mp3_bytes = bytes(mp3_acc)
+            try:
+                wf = await asyncio.to_thread(_compute_waveform_rms, mp3_bytes)
+            except Exception as e:
+                logger.warning(f"[converse-stream-audio] waveform compute failed: {e}")
+                wf = None
+            payload = {
+                "id": result_id,
+                "text": reply_text,
+                "tone": tone,
+                "domain": domain,
+                "actions": [a.model_dump() if hasattr(a, "model_dump") else a for a in parsed_actions],
+                "ready": True,
+            }
+            if wf:
+                payload.update(wf)  # window_ms, duration_ms, waveform
+            _store_converse_result(result_id, payload)
+
+    # Pre-register an empty placeholder so the client can poll right away
+    # without 404s during the few hundred ms the audio is being generated.
+    if result_id:
+        _store_converse_result(result_id, {"id": result_id, "ready": False})
+
     return StreamingResponse(
         audio_pipeline(),
         media_type="audio/mpeg",
         headers={
             "Cache-Control": "no-store",
             "X-Accel-Buffering": "no",
+            "X-Message-Id": result_id or "",
         },
     )
+
+
+@api_router.get("/converse-result/{rid}")
+async def api_converse_result(rid: str):
+    """Returns the cached waveform + text reply for a streaming conversation.
+
+    The frontend calls this AFTER /api/converse-stream-audio has started
+    playback to receive the amplitude array that drives the audio-reactive
+    blob. If the audio is still generating, returns `{"ready": false}` —
+    the client should poll with a small backoff (~200ms) until `ready: true`.
+    """
+    data = _converse_results.get(rid)
+    if not data:
+        raise HTTPException(status_code=404, detail="Result not found (expired or never generated)")
+    return data
 
 
 # Include the router
