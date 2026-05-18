@@ -194,11 +194,14 @@ export async function startRecording(): Promise<Recorder> {
   const safeStop = async () => {
     if (stopped) return;
     stopped = true;
+    console.log("[voice] safeStop: pre-recorder.stop(), isRecording=", recorder.isRecording, "uri pre=", recorder.uri);
     try {
       await recorder.stop();
+      console.log("[voice] safeStop: post-recorder.stop() resolved");
     } catch (e) {
       console.warn("[voice] recorder.stop() error", e);
     }
+    console.log("[voice] safeStop: final uri=", recorder.uri, "isRecording=", recorder.isRecording);
     // Release the SharedObject so the AVAudioSession is cleanly torn down.
     try {
       recorder.release?.();
@@ -209,9 +212,15 @@ export async function startRecording(): Promise<Recorder> {
     stop: async () => {
       console.log("[voice] stop() ENTER");
       await safeStop();
-      const uri: string | null = recorder.uri || null;
+      // expo-audio SDK 54: il campo URI è esposto come `url` nello status,
+      // non come `uri` sulla classe (typedef ambiguo). Cerchiamo in entrambi.
+      const statusUrl = recorder.getStatus?.()?.url || null;
+      const directUri = recorder.uri || null;
+      const uri: string | null = statusUrl || directUri;
       const totalMs = Date.now() - startedAt;
-      console.log(`[voice] stop() → uri=${uri ? "OK ("+uri.length+" chars)" : "NULL"} ms=${totalMs} isRecording=${recorder.isRecording}`);
+      console.log(
+        `[voice] stop() → uri=${uri ? "OK" : "NULL"} (status.url=${statusUrl ? "OK" : "NULL"}, recorder.uri=${directUri ? "OK" : "NULL"}) ms=${totalMs}`,
+      );
       if (totalMs < 500 || !uri) {
         return null;
       }

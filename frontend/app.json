@@ -56,7 +56,8 @@
         {
           "microphonePermission": "Per ascoltare la tua voce con Coda"
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true
