@@ -524,21 +524,38 @@ export const SpeechMod = {
           ok = await playElevenLabsWeb(buf);
         }
       } else {
-        // Native (iOS/Android) — Prepared-file path is primary (more reliable
-        // than naked streaming through AVPlayer on iOS).
-        const url = await prepareTTSUrl(text, voiceArg, tone, ac.signal);
+        // Native (iOS/Android) — STREAMING FIRST.
+        //
+        // Why streaming-primary now (Step 2a — Fase 4):
+        //   Old flow: `/tts/prepare` waits for ElevenLabs to generate the WHOLE
+        //   MP3 server-side (3-5s), THEN returns a token, THEN client downloads.
+        //   The user heard nothing for 5-7 seconds after the AI "started speaking".
+        //
+        //   New flow: `/tts/stream` opens an ElevenLabs streaming connection on
+        //   the server and pipes MP3 chunks back over HTTP chunked-transfer as
+        //   they arrive (~300ms TTFB with eleven_flash_v2_5). expo-audio's
+        //   AVPlayer-backed `createAudioPlayer(url)` starts playback as soon as
+        //   the first audio chunk lands in its buffer (~500ms total).
+        //
+        //   Result: latency from "AI starts speaking" → "you hear voice" drops
+        //   from ~5s to ~0.5s.
+        //
+        // Prepared-file path is kept ONLY as fallback (e.g. if Range requests
+        // get blocked by a CDN, or if streaming connection fails mid-air).
+        const streamUrl = buildStreamUrl(text, voiceArg, tone);
+        ok = await playElevenLabsNativeFromUrl(streamUrl);
         if (cancelled()) {
           speakingNow = false;
           return;
         }
         if (currentAbort === ac) currentAbort = null;
-        if (url) {
-          ok = await playElevenLabsNativeFromUrl(url);
-        }
-        // Last resort: try streaming if prepare failed.
+        // Fallback: prepared-file path (slower but more resilient on bad networks).
         if (!ok && !cancelled()) {
-          const streamUrl = buildStreamUrl(text, voiceArg, tone);
-          ok = await playElevenLabsNativeFromUrl(streamUrl);
+          console.warn("[speech] streaming TTS failed, falling back to /tts/prepare");
+          const url = await prepareTTSUrl(text, voiceArg, tone, ac.signal);
+          if (url) {
+            ok = await playElevenLabsNativeFromUrl(url);
+          }
         }
       }
 
