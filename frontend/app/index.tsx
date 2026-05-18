@@ -3193,25 +3193,32 @@ function Bubble({
   // Compute backgrounds for both bubbles based on chosen style.
   // In SOLID mode both are opaque (block wallpaper for max readability).
   // In GLASS mode both are translucent (wallpaper shows through subtly).
-  // === CONFESSIONALE: in modalità confessionale i messaggi vengono
-  //     colorati DIVERSAMENTE in base a chi parla, così l'utente
-  //     distingue al volo i propri messaggi dalle risposte di Koda:
-  //       - le bubble dell'UTENTE restano del colore-utente normale
-  //         (familiarità — "questo l'ho scritto io")
-  //       - le bubble di KODA assumono il bordeaux-ceralacca
-  //         (chiaramente segreto / risposta sigillata)
-  //     Fuori dal confessionale, le bubble confessionali sono filtrate
-  //     in `timelineWithSeparators` e non vengono mai renderizzate.
+  // === COLORE BUBBLE PER INTERLOCUTORE ===
+  // Regola fondamentale: l'UTENTE e l'AI hanno SEMPRE colori distinti, sia
+  // in modalità normale che confessionale, così "a colpo d'occhio" sai chi
+  // ha parlato. In modalità "glass" l'alpha è leggermente più alta del
+  // default per non confondere ambra-utente e viola-AI quando entrambe sono
+  // semi-trasparenti.
+  //
+  // Confessionale:
+  //   - utente → stesso colore familiare (theme.userBubble)
+  //   - Koda   → bordeaux ceralacca (sigillo / risposta protetta)
+  // Normale:
+  //   - utente → theme.userBubble (colore "tuo" definito dal tema)
+  //   - Koda   → bubbleAccent.color (colore impostato in Impostazioni)
   const isConfessional = !!entry.confessional;
   const confessionalColor = "#8B3A4A"; // sealing-wax burgundy
-  const confessionalSoft = "#8B3A4A33"; // 20% alpha glass
-  // AI: bordeaux ceralacca; User: colore normale del tema
+  const confessionalSoft = "#8B3A4A66"; // 40% alpha glass — più visibile
+  // AI:
   const aiBg = isConfessional
     ? (bubbleStyle === "solid" ? confessionalColor : confessionalSoft)
-    : (bubbleStyle === "solid" ? bubbleAccent.color : bubbleAccent.soft);
-  const userBg = bubbleStyle === "solid" ? theme.userBubble : theme.userBubble + "55";
+    : (bubbleStyle === "solid" ? bubbleAccent.color : bubbleAccent.color + "66");
+  // User (sempre col colore del tema, dentro e fuori confessionale):
+  const userBg = bubbleStyle === "solid"
+    ? theme.userBubble
+    : theme.userBubble + "77"; // più saturo del precedente "55"
   const aiBorder = isConfessional ? confessionalColor : bubbleAccent.color;
-  const userBorder = bubbleStyle === "solid" ? "transparent" : theme.primary + "AA";
+  const userBorder = bubbleStyle === "solid" ? "transparent" : theme.userBubble;
 
   // === Diary aesthetic: each bubble is rotated by a tiny, deterministic
   //     amount derived from the entry id. Looks like the bubble was *placed*
