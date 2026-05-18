@@ -619,22 +619,6 @@ export default function KodaIntro({ voices = [], onDone, onCancel }: Props) {
         style={{ flex: 1 }}
       >
         <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
-          {/* Pulsante X di chiusura (solo se è stata fornita la callback onCancel).
-              Permette di uscire da KodaIntro senza completare tutti i 10 step,
-              utile se l'utente ha toccato l'icona ⋯ per errore. */}
-          {onCancel && (
-            <Pressable
-              style={styles.closeBtn}
-              onPress={() => {
-                try { SpeechMod.stop(); } catch {}
-                onCancel();
-              }}
-              hitSlop={16}
-              testID="koda-intro-close"
-            >
-              <Ionicons name="close" size={26} color="rgba(255,255,255,0.7)" />
-            </Pressable>
-          )}
           {/* Top: step indicator */}
           <View style={styles.stepDots}>
             {Array.from({ length: 10 }).map((_, i) => (
@@ -668,6 +652,23 @@ export default function KodaIntro({ voices = [], onDone, onCancel }: Props) {
               {error ? <Text style={styles.errorText}>{error}</Text> : null}
             </ScrollView>
           </Animated.View>
+
+          {/* Link "Annulla" in basso — sempre visibile su ogni step. Permette
+              di uscire da KodaIntro senza completare tutti i passaggi se è
+              stato aperto per errore. Non salva nulla nel profilo. */}
+          {onCancel && (
+            <Pressable
+              style={styles.cancelLink}
+              onPress={() => {
+                try { SpeechMod.stop(); } catch {}
+                onCancel();
+              }}
+              hitSlop={20}
+              testID="koda-intro-cancel"
+            >
+              <Text style={styles.cancelLinkText}>Annulla</Text>
+            </Pressable>
+          )}
         </SafeAreaView>
       </KeyboardAvoidingView>
     </View>
@@ -753,14 +754,30 @@ const styles = StyleSheet.create({
   },
   closeBtn: {
     position: "absolute",
-    top: 12,
-    right: 12,
+    top: 8,
+    right: 16,
     width: 44,
     height: 44,
     borderRadius: 22,
     alignItems: "center",
     justifyContent: "center",
-    zIndex: 10,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.25)",
+    zIndex: 1000,
+    elevation: 10,
+  },
+  cancelLink: {
+    alignSelf: "center",
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    marginBottom: 8,
+  },
+  cancelLinkText: {
+    color: "rgba(255,255,255,0.6)",
+    fontSize: 16,
+    fontWeight: "500",
+    textAlign: "center",
   },
   stepDots: {
     flexDirection: "row",
