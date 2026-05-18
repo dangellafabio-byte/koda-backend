@@ -22,8 +22,6 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import { runOnJS } from "react-native-reanimated";
 import * as ImagePicker from "expo-image-picker";
 import { LinearGradient } from "expo-linear-gradient";
 import {
@@ -189,52 +187,12 @@ export default function Taccuino() {
       setProfile(p);
     } catch {}
   }, []);
-  /** Riapri la presentazione di Koda (back-door: tieni premuto 800ms sull'eclissi). */
+  /** Riapri la presentazione di Koda (back-door: long-press nell'angolo header). */
   const reopenKodaIntro = useCallback(async () => {
     try {
       await SecureStore.deleteItemAsync("koda_intro_seen");
     } catch {}
     setShowColorIntro(true);
-  }, []);
-  // === ROBUST LONG-PRESS via react-native-gesture-handler ===
-  // Il precedente approccio Pressable+timestamp falliva perché lo ScrollView
-  // orizzontale genitore (il pager voce/lettura) cancella i touch su micro-
-  // movimenti. Con gesture-handler v2 il riconoscimento avviene a livello
-  // nativo e coopera con il pan dello ScrollView.
-  //
-  // Tap (≤ 500ms, ≤ 15px di movimento) → onBigButton (registra/ferma)
-  // LongPress (≥ 600ms, ≤ 25px di movimento) → reopenKodaIntro
-  //
-  // Usiamo refs per gli handler così il gesture non viene mai ricreato.
-  const onBigButtonRef = useRef<() => void>(() => {});
-  const reopenKodaIntroRef = useRef<() => void>(() => {});
-  const isPressDisabledRef = useRef<boolean>(false);
-  useEffect(() => {
-    reopenKodaIntroRef.current = reopenKodaIntro;
-  }, [reopenKodaIntro]);
-  // onBigButton viene aggiornata in effetto subito sotto (dopo la sua def).
-  const eclipseGesture = useMemo(() => {
-    const longPress = Gesture.LongPress()
-      .minDuration(600)
-      .maxDistance(40)
-      .runOnJS(true)
-      .onStart(() => {
-        reopenKodaIntroRef.current();
-      });
-    const tap = Gesture.Tap()
-      .maxDuration(500)
-      .runOnJS(true)
-      .onEnd((_e, success) => {
-        if (!success) return;
-        if (isPressDisabledRef.current) return;
-        onBigButtonRef.current();
-      });
-    // Race: il primo gesture che si riconosce vince.
-    // Tap si riconosce sul rilascio (entro 500ms) → tap rapido = vince subito.
-    // LongPress si riconosce a 600ms di pressione continua → hold = vince lui.
-    // (Exclusive non andava bene: avrebbe aspettato il fallimento di longPress
-    //  prima di provare il tap, perdendo i tap rapidi.)
-    return Gesture.Race(tap, longPress);
   }, []);
   const [showSettings, setShowSettings] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
@@ -1231,10 +1189,7 @@ export default function Taccuino() {
 
   // Mantieni le ref del gesture composto sincronizzate con la closure
   // corrente di onBigButton e con lo stato disabled (transcribing/thinking).
-  useEffect(() => {
-    onBigButtonRef.current = onBigButton;
-    isPressDisabledRef.current = status === "transcribing" || status === "thinking";
-  });
+  // (Rimosso: ora il long-press è gestito via header invisibile.)
 
   const sendTextFromBox = () => {
     if (!textInput.trim()) return;
@@ -1753,8 +1708,17 @@ export default function Taccuino() {
             </Text>
           </TouchableOpacity>
         </View>
-        {/* Slot destro vuoto — il sunto si chiede a Koda direttamente ("Fammi un sunto") */}
-        <View style={styles.headerBtn} pointerEvents="none" />
+        {/* Slot destro: area invisibile long-press → riapre KodaIntro.
+            È FUORI dal pager ScrollView, quindi i gesture non vengono
+            mai cancellati. Toccando una volta non succede nulla; tieni
+            premuto ~600ms per aprire la presentazione di Koda. */}
+        <Pressable
+          style={styles.headerBtn}
+          onLongPress={reopenKodaIntro}
+          delayLongPress={600}
+          hitSlop={10}
+          testID="koda-intro-reopen"
+        />
       </View>
 
       {/* === HORIZONTAL PAGER: Voce (zen) | Lettura (timeline) ===
@@ -1779,38 +1743,42 @@ export default function Taccuino() {
         {/* === PAGE 0: VOICE ZEN MODE ============================ */}
         <View style={{ width: windowWidth, flex: 1, alignItems: "center", justifyContent: "center" }}>
           <View style={{ alignItems: "center", justifyContent: "center", flex: 1, gap: 18, paddingHorizontal: 24 }}>
-            <GestureDetector gesture={eclipseGesture}>
+            <Pressable
+              onPress={onBigButton}
+              disabled={status === "transcribing" || status === "thinking"}
+              hitSlop={30}
+              style={({ pressed }) => [
+                { alignItems: "center", justifyContent: "center" },
+                pressed && { opacity: 0.85 },
+              ]}
+              testID="big-btn-voice"
+            >
               <Animated.View
-                style={{ alignItems: "center", justifyContent: "center" }}
-                testID="big-btn-voice"
+                style={{
+                  transform: [
+                    {
+                      scale: Animated.multiply(
+                        pulse,
+                        breathe.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.07] })
+                      ),
+                    },
+                  ],
+                }}
               >
-                <Animated.View
-                  style={{
-                    transform: [
-                      {
-                        scale: Animated.multiply(
-                          pulse,
-                          breathe.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.07] })
-                        ),
-                      },
-                    ],
-                  }}
-                >
-                  <EclipseOrb
-                    status={status}
-                    tone={lastAiTone}
-                    size={Math.min(windowWidth * 0.78, 360)}
-                    meterDb={meterDb}
-                    meterThreshold={meterThreshold}
-                  />
-                </Animated.View>
-                {(status === "transcribing" || status === "thinking") && (
-                  <View style={styles.blobOverlay} pointerEvents="none">
-                    <ActivityIndicator color="#FFFFFFEE" size="large" />
-                  </View>
-                )}
+                <EclipseOrb
+                  status={status}
+                  tone={lastAiTone}
+                  size={Math.min(windowWidth * 0.78, 360)}
+                  meterDb={meterDb}
+                  meterThreshold={meterThreshold}
+                />
               </Animated.View>
-            </GestureDetector>
+              {(status === "transcribing" || status === "thinking") && (
+                <View style={styles.blobOverlay} pointerEvents="none">
+                  <ActivityIndicator color="#FFFFFFEE" size="large" />
+                </View>
+              )}
+            </Pressable>
             <Text style={[styles.statusLabel, styles.statusLabelOnBg, { fontSize: 16, marginTop: 8 }]}>
               {aiPaused ? "AI in pausa" : ""}
             </Text>
@@ -1950,41 +1918,45 @@ export default function Taccuino() {
                 Niente più cerchio verde gigante: la macchia stessa diventa
                 verde quando ti sta ascoltando. Il NeonBorder sui bordi dello
                 schermo dà il feedback periferico (vedi anche se non guardi). */}
-            <GestureDetector gesture={eclipseGesture}>
+            <Pressable
+              onPress={onBigButton}
+              disabled={status === "transcribing" || status === "thinking"}
+              style={({ pressed }) => [
+                styles.blobTap,
+                pressed && { opacity: 0.85 },
+              ]}
+              testID="big-btn"
+              hitSlop={20}
+            >
               <Animated.View
-                style={styles.blobTap}
-                testID="big-btn"
+                style={{
+                  transform: [
+                    {
+                      scale: Animated.multiply(
+                        pulse,
+                        breathe.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0.95, 1.07],
+                        })
+                      ),
+                    },
+                  ],
+                }}
               >
-                <Animated.View
-                  style={{
-                    transform: [
-                      {
-                        scale: Animated.multiply(
-                          pulse,
-                          breathe.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [0.95, 1.07],
-                          })
-                        ),
-                      },
-                    ],
-                  }}
-                >
-                  <EclipseOrb
-                    status={status}
-                    tone={lastAiTone}
-                    size={210}
-                    meterDb={meterDb}
-                    meterThreshold={meterThreshold}
-                  />
-                </Animated.View>
-                {(status === "transcribing" || status === "thinking") && (
-                  <View style={styles.blobOverlay} pointerEvents="none">
-                    <ActivityIndicator color="#FFFFFFEE" size="large" />
-                  </View>
-                )}
+                <EclipseOrb
+                  status={status}
+                  tone={lastAiTone}
+                  size={210}
+                  meterDb={meterDb}
+                  meterThreshold={meterThreshold}
+                />
               </Animated.View>
-            </GestureDetector>
+              {(status === "transcribing" || status === "thinking") && (
+                <View style={styles.blobOverlay} pointerEvents="none">
+                  <ActivityIndicator color="#FFFFFFEE" size="large" />
+                </View>
+              )}
+            </Pressable>
             {/* In "both" mode show a compact text input under the mic */}
             {inputMode === "both" && (
               <KeyboardAvoidingView
