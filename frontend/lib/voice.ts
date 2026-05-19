@@ -32,17 +32,20 @@ let _webPermissionAsked = false;
 let _nativeReady = false;
 
 // ============ VAD CONSTANTS ============
-// Tuned for natural conversation:
-//   - SPEECH_THRESHOLD_DB: above this dB → voice present (typical speech ~ -25 to -10 dB)
-//   - SILENCE_THRESHOLD_DB: below this dB → silence (typical background ~ -50 to -60 dB)
+// Tuned to ignore background TV/music/chatter and react only to the user
+// speaking near the phone:
+//   - SPEECH_THRESHOLD_DB: above this dB → voice present (raised for noise tolerance)
+//   - SILENCE_THRESHOLD_DB: below this dB → silence (hysteresis)
 //   - SILENCE_DURATION_MS: how long silence must last before firing onSilence
 //   - MIN_SPEECH_MS: voice must be detected for at least this long before we allow silence to fire
-//     (prevents single-pop noises from triggering immediate stop)
+//   - MIN_SPEECH_FRAMES: number of CONSECUTIVE above-threshold frames required to
+//     officially mark "speech started" — eliminates single pops/short TV bursts.
 //   - METER_POLL_MS: how often we sample the microphone meter
-const SPEECH_THRESHOLD_DB = -32;     // dBFS — voice present above this
-const SILENCE_THRESHOLD_DB = -42;    // dBFS — silence below this (hysteresis)
+const SPEECH_THRESHOLD_DB = -22;     // dBFS — must be reasonably loud / close to mic
+const SILENCE_THRESHOLD_DB = -32;    // dBFS — silence below this (hysteresis)
 const SILENCE_DURATION_MS = 800;     // 800ms silence after speech → end of utterance
-const MIN_SPEECH_MS = 350;           // need at least 350ms of voice before silence can fire
+const MIN_SPEECH_MS = 500;           // need at least 500ms of voice before silence can fire
+const MIN_SPEECH_FRAMES = 3;         // 3 consecutive frames (~210ms) above threshold → real speech
 const METER_POLL_MS = 70;            // ~14Hz sampling
 const HARD_CAP_MS = 60_000;          // absolute max recording length
 
@@ -152,6 +155,7 @@ export async function startRecording(): Promise<Recorder> {
     let speechStartFired = false;
     let firstSpeechAt: number | null = null;
     let lastVoiceAt: number | null = null;
+    let consecutiveVoiceFrames = 0;
     let vadPaused = false;
     let vadStopped = false;
 
@@ -177,22 +181,27 @@ export async function startRecording(): Promise<Recorder> {
           }
           const now = Date.now();
           if (db > SPEECH_THRESHOLD_DB) {
-            if (!speechStartFired) {
+            consecutiveVoiceFrames++;
+            if (consecutiveVoiceFrames >= MIN_SPEECH_FRAMES && !speechStartFired) {
               speechStartFired = true;
-              firstSpeechAt = now;
+              firstSpeechAt = now - MIN_SPEECH_FRAMES * METER_POLL_MS;
               if (speechStartCb) try { speechStartCb(); } catch {}
             }
-            lastVoiceAt = now;
-          } else if (db < SILENCE_THRESHOLD_DB && speechStartFired && firstSpeechAt) {
-            const speechElapsed = now - firstSpeechAt;
-            if (speechElapsed >= MIN_SPEECH_MS && lastVoiceAt) {
-              const silenceFor = now - lastVoiceAt;
-              if (silenceFor >= SILENCE_DURATION_MS) {
-                vadStopped = true;
-                if (silenceCb) try { silenceCb(); } catch {}
+            if (speechStartFired) lastVoiceAt = now;
+          } else if (db < SILENCE_THRESHOLD_DB) {
+            consecutiveVoiceFrames = 0;
+            if (speechStartFired && firstSpeechAt && lastVoiceAt) {
+              const speechElapsed = now - firstSpeechAt;
+              if (speechElapsed >= MIN_SPEECH_MS) {
+                const silenceFor = now - lastVoiceAt;
+                if (silenceFor >= SILENCE_DURATION_MS) {
+                  vadStopped = true;
+                  if (silenceCb) try { silenceCb(); } catch {}
+                }
               }
             }
           }
+          // Between thresholds: hysteresis hold zone
         }, METER_POLL_MS);
       }
     } catch (e) {
@@ -310,6 +319,7 @@ export async function startRecording(): Promise<Recorder> {
   let speechStartFired = false;
   let firstSpeechAt: number | null = null;
   let lastVoiceAt: number | null = null;
+  let consecutiveVoiceFrames = 0; // anti-noise: voice must be continuous to count
   let vadStopped = false;
   let vadPaused = false;
   let speechStartCb: (() => void) | null = null;
@@ -333,22 +343,32 @@ export async function startRecording(): Promise<Recorder> {
         return;
       }
       if (db > SPEECH_THRESHOLD_DB) {
-        if (!speechStartFired) {
+        consecutiveVoiceFrames++;
+        // Only mark "speech started" after enough consecutive voice frames.
+        // This kills false positives from TV / brief background noises.
+        if (consecutiveVoiceFrames >= MIN_SPEECH_FRAMES && !speechStartFired) {
           speechStartFired = true;
-          firstSpeechAt = now;
+          firstSpeechAt = now - MIN_SPEECH_FRAMES * METER_POLL_MS;
           if (speechStartCb) try { speechStartCb(); } catch {}
         }
-        lastVoiceAt = now;
-      } else if (db < SILENCE_THRESHOLD_DB && speechStartFired && firstSpeechAt) {
-        const speechElapsed = now - firstSpeechAt;
-        if (speechElapsed >= MIN_SPEECH_MS && lastVoiceAt) {
-          const silenceFor = now - lastVoiceAt;
-          if (silenceFor >= SILENCE_DURATION_MS) {
-            vadStopped = true;
-            if (silenceCb) try { silenceCb(); } catch {}
+        if (speechStartFired) lastVoiceAt = now;
+      } else if (db < SILENCE_THRESHOLD_DB) {
+        // Reset the streak only if we're decisively below silence threshold.
+        // This hysteresis prevents flickering around the threshold from
+        // resetting the counter mid-word.
+        consecutiveVoiceFrames = 0;
+        if (speechStartFired && firstSpeechAt && lastVoiceAt) {
+          const speechElapsed = now - firstSpeechAt;
+          if (speechElapsed >= MIN_SPEECH_MS) {
+            const silenceFor = now - lastVoiceAt;
+            if (silenceFor >= SILENCE_DURATION_MS) {
+              vadStopped = true;
+              if (silenceCb) try { silenceCb(); } catch {}
+            }
           }
         }
       }
+      // Between thresholds: hold state (hysteresis zone) — don't change anything.
     } catch (e) {
       // metering can briefly fail during state transitions — non-fatal
     }
