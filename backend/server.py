@@ -465,18 +465,38 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
     user_g = (profile.user_gender or "n").lower()
     ai_g = (profile.ai_gender or "f").lower()
 
-    # Regole di declinazione per il LLM in italiano
+    # Regole di declinazione per il LLM in italiano — MOLTO PIÙ ASSERTIVE.
+    # Claude Haiku tende a derivare verso il maschile generico se non glielo
+    # ricordi ad ogni risposta. Qui forziamo la regola con esempi multipli.
     if user_g == "m":
-        user_decl = "L'utente è MASCHIO. Quando ti riferisci a lui usa aggettivi/participi al maschile (es. 'sei stanco', 'sei stato bravo', 'preoccupato', 'solo')."
+        user_decl = (
+            "L'utente è MASCHIO. Quando ti riferisci a lui usa SEMPRE aggettivi/participi "
+            "al MASCHILE: 'sei stanco', 'sei stato bravo', 'sei preoccupato', 'ti vedo solo'. "
+            "MAI 'stanca/preoccupata/sola' parlando di lui."
+        )
     elif user_g == "f":
-        user_decl = "L'utente è FEMMINA. Quando ti riferisci a lei usa aggettivi/participi al femminile (es. 'sei stanca', 'sei stata brava', 'preoccupata', 'sola')."
+        user_decl = (
+            "L'utente è FEMMINA. Quando ti riferisci a lei usa SEMPRE aggettivi/participi "
+            "al FEMMINILE: 'sei stanca', 'sei stata brava', 'sei preoccupata', 'ti vedo sola'. "
+            "MAI 'stanco/preoccupato/solo' parlando di lei."
+        )
     else:
         user_decl = "Il genere dell'utente è NEUTRO/non dichiarato. Evita aggettivi che richiedano declinazione di genere; preferisci formule neutre ('ti senti giù', 'ti vedo provato/a' solo se proprio serve)."
 
     if ai_g == "m":
-        ai_decl = f"Tu sei MASCHIO (mi chiamo {ai_name}). Quando parli di te usa il maschile (es. 'sono qui', 'sono contento', 'sarei curioso')."
+        ai_decl = (
+            f"TU SEI MASCHIO (ti chiami {ai_name}). Quando parli di TE STESSO usa SEMPRE il MASCHILE: "
+            f"'sono qui', 'sono contento', 'sarei curioso', 'sono pronto', 'mi sento pronto'. "
+            f"MAI 'contenta/curiosa/pronta' parlando di te. Questo è ASSOLUTO."
+        )
     elif ai_g == "f":
-        ai_decl = f"Tu sei FEMMINA (mi chiamo {ai_name}). Quando parli di te usa il femminile (es. 'sono qui', 'sono contenta', 'sarei curiosa')."
+        ai_decl = (
+            f"TU SEI FEMMINA (ti chiami {ai_name}). Quando parli di TE STESSA usa SEMPRE il FEMMINILE: "
+            f"'sono qui', 'sono contenta', 'sarei curiosa', 'sono pronta', 'mi sento pronta', "
+            f"'sono felice di sentirti', 'eccomi, sono qua'. "
+            f"MAI 'contento/curioso/pronto' parlando di te. Questo è ASSOLUTO. "
+            f"Non scivolare nel maschile generico — sei femmina, e la voce con cui parli è femminile."
+        )
     else:
         ai_decl = f"Il tuo genere è neutro/ambiguo (mi chiamo {ai_name}). Evita aggettivi declinati a te stesso quando possibile."
 
