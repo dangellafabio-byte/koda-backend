@@ -276,6 +276,12 @@ export default function Taccuino() {
   useEffect(() => { handsFreeRef.current = handsFree; }, [handsFree]);
   // Quando l'utente disattiva via voce mostriamo un toast di conferma breve.
   const [handsFreeToast, setHandsFreeToast] = useState<string | null>(null);
+  // === Banner "Dimmi, ti ascolto" ===
+  // Mostrato la prima volta che entriamo in passive-listen (sessione hands-free
+  // appena partita). Sparisce dopo 3.5s o appena l'utente parla davvero.
+  const [listenBanner, setListenBanner] = useState<string | null>(null);
+  const firstListenShownRef = useRef(false);
+  const listenBannerTimerRef = useRef<any>(null);
   const setHandsFreeMode = useCallback(async (on: boolean) => {
     if (!profile) return;
     const next = {
@@ -284,7 +290,10 @@ export default function Taccuino() {
     };
     setProfile(next);
     handsFreeRef.current = on;
-    setHandsFreeToast(on ? "Hands-free attivo 🎙️" : "Modalità manuale — tocca per parlare");
+    // Reset banner state: se riattiviamo dopo essere stati spenti, mostra
+    // di nuovo "Dimmi, ti ascolto" al primo avvio.
+    if (on) firstListenShownRef.current = false;
+    setHandsFreeToast(on ? "Hands-free attivo" : "Modalità manuale — tocca per parlare");
     setTimeout(() => setHandsFreeToast(null), 2500);
     try {
       await api.updateProfile({ settings: next.settings } as any);
@@ -1154,9 +1163,24 @@ export default function Taccuino() {
           }
         });
       }
-      // Only mark "recording" if we're not currently in "speaking" (otherwise
-      // the speaking status is correct — barge-in detector will swap it).
-      if (status !== "speaking") setStatus("recording");
+      // PASSIVE LISTEN: in hands-free l'orb resta calmo (status=idle) finché
+      // il VAD non rileva voce reale. Solo allora setStatus("recording")
+      // → l'orb si "anima" visivamente (pulse, recording state). In modalità
+      // manuale invece l'utente vede subito il feedback recording.
+      const passiveListen = autoStopOnSilence;
+      if (status !== "speaking" && !passiveListen) setStatus("recording");
+      // Mostra il banner "Dimmi, ti ascolto" solo la prima volta che la
+      // sessione hands-free parte (al cold start o dopo riattivazione).
+      // Sparisce automaticamente dopo 3s o quando l'utente parla davvero.
+      if (passiveListen && !firstListenShownRef.current) {
+        firstListenShownRef.current = true;
+        setListenBanner("Dimmi, ti ascolto");
+        // auto-dismiss dopo 3.5s
+        if (listenBannerTimerRef.current) clearTimeout(listenBannerTimerRef.current);
+        listenBannerTimerRef.current = setTimeout(() => {
+          setListenBanner(null);
+        }, 3500) as any;
+      }
       if (autoStopOnSilence && rec.onSilence) {
         rec.onSilence(() => {
           if (recRef.current === rec) stopTalk();
@@ -1177,6 +1201,12 @@ export default function Taccuino() {
           // BARGE-IN: user started talking — kill any AI speech immediately
           try { SpeechMod.stop(); } catch {}
           if (recRef.current === rec) setStatus("recording");
+          // L'utente ha cominciato a parlare → nascondi il banner subito.
+          if (listenBannerTimerRef.current) {
+            clearTimeout(listenBannerTimerRef.current);
+            listenBannerTimerRef.current = null;
+          }
+          setListenBanner(null);
         });
       }
     } catch (e) {
@@ -1863,11 +1893,26 @@ export default function Taccuino() {
           pointerEvents="none"
         >
           <Ionicons
-            name={handsFree ? "ear" : "hand-left"}
+            name={handsFree ? "pulse" : "hand-left"}
             size={18}
             color={handsFree ? "#34D399" : "#FBBF24"}
           />
           <Text style={styles.savedBannerText}>{handsFreeToast}</Text>
+        </View>
+      )}
+      {/* Banner "Dimmi, ti ascolto" — appare la prima volta che parte la
+          sessione hands-free. Suggerisce all'utente che può iniziare a
+          parlare. Sparisce automaticamente o appena il VAD rileva voce. */}
+      {listenBanner && !handsFreeToast && (
+        <View
+          style={[
+            styles.savedBanner,
+            { top: Math.max(insets.top + 8, 60) },
+          ]}
+          pointerEvents="none"
+        >
+          <Ionicons name="pulse" size={18} color="#34D399" />
+          <Text style={styles.savedBannerText}>{listenBanner}</Text>
         </View>
       )}
       {/* Header — totalmente zen. Solo il lucchetto confessionale al centro.
@@ -1878,7 +1923,7 @@ export default function Taccuino() {
         pointerEvents="box-none"
       >
         {/* Slot sinistro: toggle Hands-Free.
-            Icona orecchio = on (mic apre da solo); icona muta = off (tap-to-talk).
+            Icona pulse = on (onde sonore — ascolto continuo); pulse-outline = off.
             Stesse dimensioni 44×44 del slot destro per mantenere centrato il
             lucchetto del Confessionale. */}
         <TouchableOpacity
@@ -1889,8 +1934,8 @@ export default function Taccuino() {
           accessibilityLabel={handsFree ? "Hands-free attivo, tocca per disattivare" : "Hands-free spento, tocca per attivare"}
         >
           <Ionicons
-            name={handsFree ? "ear" : "ear-outline"}
-            size={20}
+            name={handsFree ? "pulse" : "pulse-outline"}
+            size={22}
             color={handsFree ? "#34D399" : "rgba(255,255,255,0.55)"}
           />
         </TouchableOpacity>
