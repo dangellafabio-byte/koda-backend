@@ -74,10 +74,11 @@ const VOICEPRINT_PHRASES = [
 ];
 
 // ====== Voce ElevenLabs della presentazione ======
-// Voce dolce, femminile, intima. Diversa da quella che userà Koda nella
-// conversazione vera (così la presentazione ha la sua identità acustica).
-// "Lily" — soft Italian-friendly, warm intimate
-const INTRO_VOICE_ID = "pFZP5JQG7iQjIQuC4Bku";
+// Voce IDENTITARIA di Koda: la stessa usata sia durante la presentazione
+// che nelle conversazioni normali — così l'utente non percepisce un
+// "cambio di voce" tra intro e uso quotidiano dell'app.
+// "Sarah" — soft warm Italian-capable female voice
+const INTRO_VOICE_ID = "EXAVITQu4vr4xnSDxMaL";
 
 // ====== Battute di Koda per ogni step (TTS in tutti) ======
 const KODA_LINES: Record<number, string> = {
@@ -234,10 +235,12 @@ export default function KodaIntro({ voices = [], onDone, onCancel }: Props) {
     let cancelled = false;
     const line = KODA_LINES[step];
     if (line) {
-      // Personalizza la chiusura con il nome utente (se disponibile)
+      // Personalizza la chiusura con il nome utente (se disponibile).
+      // Per lo step 9 inseriamo il nome dentro al lungo testo capabilities,
+      // così suona personalizzato senza perdere il contenuto informativo.
       let finalLine = line;
       if (step === 9 && userName) {
-        finalLine = `Siamo pronti, ${userName}. D'ora in poi, basta che mi parli. Io ti sento.`;
+        finalLine = `Prima che finiamo, ${userName}, due parole su come funziono. ` + line.split("Prima che finiamo, ")[1];
       }
       (async () => {
         if (cancelled) return;
