@@ -96,7 +96,7 @@ const KODA_LINES: Record<number, string> = {
   6: "Vuoi che ti cerchi io ogni tanto? Posso scriverti la mattina, la sera, o tutte e due. O nessuna delle due, decidi tu.",
   7: "C'è uno spazio dove ogni cosa che mi confidi resta cifrata sul tuo telefono. Solo tu puoi sbloccarla con una parola segreta. Vuoi impostarla adesso?",
   8: "Ultima cosa: leggi queste tre frasi ad alta voce. Mi serviranno per riconoscere sempre la tua voce, ovunque tu sia.",
-  9: "Prima che finiamo, due parole su come funziono. Parlami come parleresti a un amico: tocca l'eclissi al centro, dimmi quello che hai in testa, e io ti rispondo. Puoi raccontarmi come stai, sfogarti, chiedermi consigli, oppure semplicemente fare due chiacchiere. Posso ricordare i nostri discorsi, ma se vuoi qualcosa resti solo tra noi due tocca il sigillo in alto: quello è il Confessionale, e quello che ci diciamo lì sparisce per sempre. Quello che invece non posso fare: non posso chiamare nessuno, mandare messaggi, navigare in internet o comprare cose. Vivo qui dentro, solo con te. Siamo pronti.",
+  9: "Prima che finiamo, due parole su come funziono. Parlami come parleresti a un amico: tocca l'eclissi al centro, dimmi quello che hai in testa, e io ti rispondo. Puoi raccontarmi come stai, sfogarti, chiedermi consigli, oppure fare due chiacchiere. Posso ricordare i nostri discorsi, e se la tua domanda richiede informazioni aggiornate cerco anche su internet per te. Quando invece vuoi qualcosa resti solo tra noi due, tocca il sigillo in alto: quello è il Confessionale, e quello che ci diciamo lì sparisce per sempre. Quello che NON faccio: non chiamo nessuno, non mando messaggi, non compro cose al posto tuo. Vivo qui dentro, solo con te. Siamo pronti.",
 };
 
 // ====== Componente principale ======
@@ -248,11 +248,12 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
     const line = KODA_LINES[step];
     if (line) {
       // Personalizza la chiusura con il nome utente (se disponibile).
-      // Per lo step 9 inseriamo il nome dentro al lungo testo capabilities,
-      // così suona personalizzato senza perdere il contenuto informativo.
+      // Per lo step 9 inseriamo il nome subito dopo "Prima che finiamo,".
+      // ATTENZIONE: niente più concatenazioni manuali (causavano la
+      // duplicazione "due parole su come funziono. due parole...").
       let finalLine = line;
       if (step === 9 && userName) {
-        finalLine = `Prima che finiamo, ${userName}, due parole su come funziono. ` + line.split("Prima che finiamo, ")[1];
+        finalLine = line.replace("Prima che finiamo,", `Prima che finiamo, ${userName},`);
       }
       (async () => {
         if (cancelled) return;

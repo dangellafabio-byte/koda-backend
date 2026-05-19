@@ -2574,9 +2574,11 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
     user_payload = "\n\n".join(user_payload_parts)
 
     # Voice config for ElevenLabs.
-    # `req` doesn't carry voice_id/tone explicitly — we default to the same
-    # voice used by /api/tts. The client passes the voice via /api/profile.
-    voice_id = profile.settings.voice_id or "XrExE9yKIg1WjnnlVkGX" if hasattr(profile.settings, "voice_id") else "XrExE9yKIg1WjnnlVkGX"
+    # CORREZIONE BUG: il campo del profilo è `tts_voice_id` (NON `voice_id`).
+    # Il bug precedente faceva fallback a Matilda anche quando l'utente
+    # aveva scelto un'altra voce → cambio di voce percepibile.
+    # Default Sarah (EXAVITQu4vr4xnSDxMaL) — la stessa di KodaIntro.
+    voice_id = getattr(profile.settings, "tts_voice_id", None) or "EXAVITQu4vr4xnSDxMaL"
 
     async def audio_pipeline():
         extractor = _ReplyExtractor()
