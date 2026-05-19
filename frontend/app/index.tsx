@@ -3018,7 +3018,14 @@ export default function Taccuino() {
   // altra schermata. Quando l'utente la termina (o la salta), viene
   // persistito il flag `koda_intro_seen=1` in SecureStore.
   if (showColorIntro === true) {
-    return <KodaIntro voices={voiceList} onDone={dismissColorIntro} onCancel={cancelKodaIntro} />;
+    return (
+      <KodaIntro
+        voices={voiceList}
+        currentVoiceId={profile?.settings?.tts_voice_id || null}
+        onDone={dismissColorIntro}
+        onCancel={cancelKodaIntro}
+      />
+    );
   }
   // Overlay bordeaux globale quando il confessionale è ATTIVO.
   // Tinge fortemente tutto lo sfondo (~40% di alpha) così l'utente capisce

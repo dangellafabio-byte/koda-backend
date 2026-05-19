@@ -55,6 +55,11 @@ export type KodaIntroResult = {
 type Props = {
   /** Voci ElevenLabs disponibili (per scegliere automaticamente in base al gender) */
   voices?: Array<{ voice_id: string; name: string; labels?: any }>;
+  /** Voce attualmente scelta dall'utente (da profile.settings.tts_voice_id).
+   *  Se presente, KodaIntro la usa per parlare già da subito — così quando
+   *  l'utente rifà l'intro sente la SUA voce di Koda dall'inizio.
+   *  Se assente (primo avvio), usa Sarah come fallback. */
+  currentVoiceId?: string | null;
   /** Chiamata quando l'utente completa o salta */
   onDone: (result: KodaIntroResult) => void;
   /** Optional: chiamata quando l'utente preme la X per uscire senza salvare. */
@@ -95,7 +100,7 @@ const KODA_LINES: Record<number, string> = {
 };
 
 // ====== Componente principale ======
-export default function KodaIntro({ voices = [], onDone, onCancel }: Props) {
+export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCancel }: Props) {
   const [step, setStep] = useState(0);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const { width } = Dimensions.get("window");
@@ -163,7 +168,14 @@ export default function KodaIntro({ voices = [], onDone, onCancel }: Props) {
     const mySeq = ++speakSeqRef.current;
     try {
       setIsKodaSpeaking(true);
-      await SpeechMod.speak(text, { language: "it-IT", tone: tone as any, voiceId: INTRO_VOICE_ID });
+      await SpeechMod.speak(text, {
+        language: "it-IT",
+        tone: tone as any,
+        // Priorità: voce già scelta dall'utente (da profilo) → fallback Sarah.
+        // Così se rifai l'intro dopo aver già scelto una voce, la senti
+        // PARLARE con la SUA voce di Koda fin dal primo step.
+        voiceId: currentVoiceId || INTRO_VOICE_ID,
+      });
     } catch (e) {
       console.warn("[koda-intro] speak failed:", e);
     } finally {
