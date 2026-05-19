@@ -280,7 +280,12 @@ class TaccuinoSettings(BaseModel):
     voice_response: bool = True
     full_access_mode: bool = False  # Future: bank/calendar/health
     input_mode: str = "voice"  # "voice" | "text" | "both"
-    conversation_mode: bool = False  # hands-free continuous conversation
+    conversation_mode: bool = False  # legacy: hands-free continuous conversation
+    # === True Hands-Free Mode (June 2025) ===
+    # Default ON: il microfono si attiva da solo quando Coda è in idle e si
+    # chiude da solo dopo 800ms di silenzio. L'utente può disattivarlo a voce
+    # ("Coda modalità manuale" / "disattiva hands free") o dal toggle in header.
+    hands_free: bool = True
     theme: str = "sistema"  # "sistema" | "auto-orario" | "notte" | "giorno" | "cielo" | "bosco" | "ciliegia"
     day_start_hour: int = 7   # used when theme = "auto-orario"
     night_start_hour: int = 20  # used when theme = "auto-orario"

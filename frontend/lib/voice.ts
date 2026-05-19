@@ -1,12 +1,11 @@
 // Voice recording — migrated to expo-audio (SDK 54).
 //
-// Why: expo-av's audio session on iOS leaks across record/playback transitions,
-// causing the microphone to get stuck after several turns. expo-audio uses the
-// new SharedObject architecture and correctly tears down the AVAudioSession on
-// stop(), eliminating the "mic frozen" bug we saw with expo-av.
-//
-// API surface (Recorder type, startRecording, prewarmMic, buildFormData) is
-// IDENTICAL to the previous expo-av version, so no consumer needs to change.
+// HANDS-FREE upgrade (June 2025):
+//   - VAD (Voice Activity Detection) via metering polling (~70ms cadence)
+//   - Custom low-bitrate preset (16kHz mono ~32kbps) → file ~4x smaller
+//     → upload + STT roundtrip noticeably faster, perfect for STT
+//   - onSpeechStart / onSilence / onMeter callbacks are NOW real (were stubs)
+//   - Silence threshold + min-speech window tuned for natural pause (~800ms)
 //
 // Web path is unchanged (uses native MediaRecorder).
 import { Platform } from "react-native";
@@ -31,6 +30,21 @@ export type Recorder = {
 
 let _webPermissionAsked = false;
 let _nativeReady = false;
+
+// ============ VAD CONSTANTS ============
+// Tuned for natural conversation:
+//   - SPEECH_THRESHOLD_DB: above this dB → voice present (typical speech ~ -25 to -10 dB)
+//   - SILENCE_THRESHOLD_DB: below this dB → silence (typical background ~ -50 to -60 dB)
+//   - SILENCE_DURATION_MS: how long silence must last before firing onSilence
+//   - MIN_SPEECH_MS: voice must be detected for at least this long before we allow silence to fire
+//     (prevents single-pop noises from triggering immediate stop)
+//   - METER_POLL_MS: how often we sample the microphone meter
+const SPEECH_THRESHOLD_DB = -32;     // dBFS — voice present above this
+const SILENCE_THRESHOLD_DB = -42;    // dBFS — silence below this (hysteresis)
+const SILENCE_DURATION_MS = 800;     // 800ms silence after speech → end of utterance
+const MIN_SPEECH_MS = 350;           // need at least 350ms of voice before silence can fire
+const METER_POLL_MS = 70;            // ~14Hz sampling
+const HARD_CAP_MS = 60_000;          // absolute max recording length
 
 /**
  * Pre-warm the microphone: request permission and pre-configure the audio
@@ -66,6 +80,46 @@ export async function prewarmMic(): Promise<boolean> {
   }
 }
 
+/**
+ * Hands-Free optimized recording preset:
+ *   - 16kHz mono, ~32kbps AAC in .m4a
+ *   - Metering ENABLED → required for VAD
+ * Falls back to HIGH_QUALITY if anything goes wrong (RN never sees an error).
+ */
+function buildHandsFreePreset() {
+  const base = (RecordingPresets as any).HIGH_QUALITY || {};
+  return {
+    ...base,
+    extension: ".m4a",
+    sampleRate: 16000,
+    numberOfChannels: 1,
+    bitRate: 32000,
+    isMeteringEnabled: true,
+    android: {
+      ...(base.android || {}),
+      extension: ".m4a",
+      sampleRate: 16000,
+      numberOfChannels: 1,
+      bitRate: 32000,
+      outputFormat: "mpeg4",
+      audioEncoder: "aac",
+    },
+    ios: {
+      ...(base.ios || {}),
+      extension: ".m4a",
+      sampleRate: 16000,
+      numberOfChannels: 1,
+      bitRate: 32000,
+      // Keep MEDIUM/HIGH audio quality — file size driven by bitRate above.
+    },
+    web: {
+      ...(base.web || {}),
+      mimeType: "audio/webm",
+      bitsPerSecond: 32000,
+    },
+  };
+}
+
 export async function startRecording(): Promise<Recorder> {
   // ============ WEB ============
   if (Platform.OS === "web") {
@@ -88,9 +142,75 @@ export async function startRecording(): Promise<Recorder> {
     mr.start();
     const startedAt = Date.now();
 
+    // ===== WEB VAD via WebAudio analyser =====
+    let audioCtx: AudioContext | null = null;
+    let analyser: AnalyserNode | null = null;
+    let vadInterval: any = null;
+    let speechStartCb: (() => void) | null = null;
+    let silenceCb: (() => void) | null = null;
+    let meterCb: ((db: number, threshold?: number | null) => void) | null = null;
+    let speechStartFired = false;
+    let firstSpeechAt: number | null = null;
+    let lastVoiceAt: number | null = null;
+    let vadPaused = false;
+    let vadStopped = false;
+
+    try {
+      const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
+      if (Ctx) {
+        audioCtx = new Ctx();
+        const src = audioCtx.createMediaStreamSource(stream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 1024;
+        src.connect(analyser);
+        const buf = new Float32Array(analyser.fftSize);
+        vadInterval = setInterval(() => {
+          if (vadStopped || vadPaused || !analyser) return;
+          analyser.getFloatTimeDomainData(buf);
+          // RMS → dBFS
+          let sumSq = 0;
+          for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
+          const rms = Math.sqrt(sumSq / buf.length);
+          const db = rms > 0 ? 20 * Math.log10(rms) : -100;
+          if (meterCb) {
+            try { meterCb(db, SPEECH_THRESHOLD_DB); } catch {}
+          }
+          const now = Date.now();
+          if (db > SPEECH_THRESHOLD_DB) {
+            if (!speechStartFired) {
+              speechStartFired = true;
+              firstSpeechAt = now;
+              if (speechStartCb) try { speechStartCb(); } catch {}
+            }
+            lastVoiceAt = now;
+          } else if (db < SILENCE_THRESHOLD_DB && speechStartFired && firstSpeechAt) {
+            const speechElapsed = now - firstSpeechAt;
+            if (speechElapsed >= MIN_SPEECH_MS && lastVoiceAt) {
+              const silenceFor = now - lastVoiceAt;
+              if (silenceFor >= SILENCE_DURATION_MS) {
+                vadStopped = true;
+                if (silenceCb) try { silenceCb(); } catch {}
+              }
+            }
+          }
+        }, METER_POLL_MS);
+      }
+    } catch (e) {
+      console.warn("[voice/web] VAD setup failed:", e);
+    }
+
+    const cleanupVad = () => {
+      vadStopped = true;
+      if (vadInterval) { clearInterval(vadInterval); vadInterval = null; }
+      try { audioCtx?.close(); } catch {}
+      audioCtx = null;
+      analyser = null;
+    };
+
     return {
       stop: () =>
         new Promise((resolve) => {
+          cleanupVad();
           mr.onstop = () => {
             const blob = new Blob(chunks, { type: mime });
             stream.getTracks().forEach((t) => t.stop());
@@ -117,28 +237,28 @@ export async function startRecording(): Promise<Recorder> {
           }
         }),
       cancel: async () => {
+        cleanupVad();
         try { mr.stop(); } catch {}
         stream.getTracks().forEach((t) => t.stop());
       },
-      onSilence: () => {},
-      onSpeechStart: () => {},
-      onMeter: () => {},
-      pauseSilence: () => {},
-      resumeSilence: () => {},
-      resetSilenceState: () => {},
+      onSilence: (cb) => { silenceCb = cb; },
+      onSpeechStart: (cb) => { speechStartCb = cb; },
+      onMeter: (cb) => { meterCb = cb; },
+      pauseSilence: () => { vadPaused = true; },
+      resumeSilence: () => { vadPaused = false; },
+      resetSilenceState: () => {
+        speechStartFired = false;
+        firstSpeechAt = null;
+        lastVoiceAt = null;
+      },
     };
   }
 
-  // ============ NATIVE — expo-audio ============
-  // 1. Permission (non-blocking, may already be granted).
+  // ============ NATIVE — expo-audio with VAD ============
   try {
     await requestRecordingPermissionsAsync();
   } catch {}
 
-  // 2. Switch AVAudioSession into RECORDING mode.
-  //    With expo-audio we only need ONE call (no double-toggle hack like expo-av).
-  //    The SharedObject system handles session teardown correctly when stop()
-  //    is called, so the mic-stuck bug from expo-av is gone.
   try {
     await setAudioModeAsync({
       allowsRecording: true,
@@ -152,69 +272,107 @@ export async function startRecording(): Promise<Recorder> {
   }
   _nativeReady = true;
 
-  // 3. Create recorder + prepare + start.
-  //    expo-audio SDK 54: the canonical imperative pattern is
-  //      (a) `new AudioRecorder({})` with EMPTY options, then
-  //      (b) `await recorder.prepareToRecordAsync(RecordingPresets.X)` with
-  //          the preset — the prototype shim in ExpoAudio.js intercepts this
-  //          call and runs `createRecordingOptions()` to flatten the nested
-  //          `ios:{...}`/`android:{...}` keys before passing to native.
-  //    Passing the preset to the constructor (as we did initially) silently
-  //    discarded the platform-specific keys and produced a recorder that
-  //    looked "ready" but never wrote a file → `recorder.uri = null`.
+  const preset = buildHandsFreePreset();
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let recorder: any;
   try {
     recorder = new (AudioModule as any).AudioRecorder({});
-    console.log("[voice] AudioRecorder created, id=", recorder?.id);
   } catch (e) {
     console.warn("[voice] AudioRecorder constructor threw:", e);
     throw e;
   }
   try {
-    await recorder.prepareToRecordAsync(RecordingPresets.HIGH_QUALITY);
-    console.log(
-      "[voice] prepareToRecordAsync OK, canRecord=",
-      recorder.getStatus?.()?.canRecord,
-    );
+    await recorder.prepareToRecordAsync(preset);
   } catch (e) {
-    console.warn("[voice] prepareToRecordAsync failed:", e);
-    throw e;
+    // Fallback to HIGH_QUALITY if our custom preset fails (e.g. emulator
+    // quirks). VAD still works as long as metering is supported.
+    console.warn("[voice] prepareToRecordAsync(custom) failed, falling back:", e);
+    try {
+      await recorder.prepareToRecordAsync({
+        ...(RecordingPresets as any).HIGH_QUALITY,
+        isMeteringEnabled: true,
+      });
+    } catch (e2) {
+      console.warn("[voice] HIGH_QUALITY fallback also failed:", e2);
+      throw e2;
+    }
   }
   try {
     recorder.record();
-    console.log("[voice] record() called, isRecording=", recorder.isRecording);
   } catch (e) {
     console.warn("[voice] record() threw:", e);
     throw e;
   }
   const startedAt = Date.now();
 
+  // ===== VAD state =====
+  let speechStartFired = false;
+  let firstSpeechAt: number | null = null;
+  let lastVoiceAt: number | null = null;
+  let vadStopped = false;
+  let vadPaused = false;
+  let speechStartCb: (() => void) | null = null;
+  let silenceCb: (() => void) | null = null;
+  let meterCb: ((db: number, threshold?: number | null) => void) | null = null;
+
+  const vadInterval = setInterval(() => {
+    if (vadStopped || vadPaused) return;
+    try {
+      const st = recorder.getStatus?.();
+      if (!st || !st.isRecording) return;
+      const db: number = typeof st.metering === "number" ? st.metering : -100;
+      if (meterCb) {
+        try { meterCb(db, SPEECH_THRESHOLD_DB); } catch {}
+      }
+      const now = Date.now();
+      // Hard cap on recording length
+      if (now - startedAt > HARD_CAP_MS) {
+        vadStopped = true;
+        if (silenceCb) try { silenceCb(); } catch {}
+        return;
+      }
+      if (db > SPEECH_THRESHOLD_DB) {
+        if (!speechStartFired) {
+          speechStartFired = true;
+          firstSpeechAt = now;
+          if (speechStartCb) try { speechStartCb(); } catch {}
+        }
+        lastVoiceAt = now;
+      } else if (db < SILENCE_THRESHOLD_DB && speechStartFired && firstSpeechAt) {
+        const speechElapsed = now - firstSpeechAt;
+        if (speechElapsed >= MIN_SPEECH_MS && lastVoiceAt) {
+          const silenceFor = now - lastVoiceAt;
+          if (silenceFor >= SILENCE_DURATION_MS) {
+            vadStopped = true;
+            if (silenceCb) try { silenceCb(); } catch {}
+          }
+        }
+      }
+    } catch (e) {
+      // metering can briefly fail during state transitions — non-fatal
+    }
+  }, METER_POLL_MS);
+
   let stopped = false;
-  // Captured URI: read AFTER `recorder.stop()` resolves but BEFORE `release()`,
-  // because after release the SharedObject is dead and any property access can
-  // throw silently (which is why the diagnostic log after safeStop never fired).
   let capturedUri: string | null = null;
   const safeStop = async () => {
     if (stopped) return;
     stopped = true;
-    console.log("[voice] safeStop: pre-recorder.stop(), isRecording=", recorder.isRecording, "uri pre=", recorder.uri);
+    vadStopped = true;
+    clearInterval(vadInterval);
     try {
       await recorder.stop();
-      console.log("[voice] safeStop: post-recorder.stop() resolved");
     } catch (e) {
       console.warn("[voice] recorder.stop() error", e);
     }
-    // CRITICAL: read the URI while the SharedObject is still alive.
     try {
       const statusUrl = recorder.getStatus?.()?.url || null;
       const directUri = recorder.uri || null;
       capturedUri = statusUrl || directUri;
-      console.log("[voice] safeStop: captured uri=", capturedUri);
     } catch (e) {
       console.warn("[voice] safeStop: reading uri threw:", e);
     }
-    // Now safe to release the SharedObject — AVAudioSession is cleanly torn down.
     try {
       recorder.release?.();
     } catch {}
@@ -222,27 +380,26 @@ export async function startRecording(): Promise<Recorder> {
 
   return {
     stop: async () => {
-      console.log("[voice] stop() ENTER");
       await safeStop();
       const totalMs = Date.now() - startedAt;
-      console.log(
-        `[voice] stop() → uri=${capturedUri ? "OK" : "NULL"} ms=${totalMs}`,
-      );
       if (totalMs < 500 || !capturedUri) {
         return null;
       }
-      // RecordingPresets.HIGH_QUALITY → AAC in .m4a container on both platforms.
       return { uri: capturedUri, mime: "audio/m4a", filename: "audio.m4a" };
     },
     cancel: async () => {
       await safeStop();
     },
-    onSilence: () => {},
-    onSpeechStart: () => {},
-    onMeter: () => {},
-    pauseSilence: () => {},
-    resumeSilence: () => {},
-    resetSilenceState: () => {},
+    onSilence: (cb) => { silenceCb = cb; },
+    onSpeechStart: (cb) => { speechStartCb = cb; },
+    onMeter: (cb) => { meterCb = cb; },
+    pauseSilence: () => { vadPaused = true; },
+    resumeSilence: () => { vadPaused = false; },
+    resetSilenceState: () => {
+      speechStartFired = false;
+      firstSpeechAt = null;
+      lastVoiceAt = null;
+    },
   };
 }
 

@@ -74,6 +74,7 @@ export type ProfileSettings = {
   day_start_hour?: number;
   night_start_hour?: number;
   conversation_mode?: boolean;
+  hands_free?: boolean;             // True hands-free continuous listening (default true)
   background?: string | null;       // null | preset id | "data:image/...;base64,..."
   background_dim?: number;          // 0..1 dark overlay opacity
   ai_avatar?: string | null;        // Custom photo for AI avatar (base64 data URI)

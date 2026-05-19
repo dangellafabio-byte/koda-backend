@@ -265,6 +265,32 @@ export default function Taccuino() {
     convActiveRef.current = convActive;
   }, [convActive]);
 
+  // === HANDS-FREE MODE ===
+  // Default ON. Quando attivo, il microfono si apre da solo non appena Coda
+  // entra in idle (dopo aver finito di parlare). Il VAD chiude il mic dopo
+  // 800ms di silenzio. Disattivabile a voce ("Coda modalità manuale",
+  // "disattiva mani libere") o dal toggle in alto a sinistra dell'header.
+  // Persistito in profile.settings.hands_free.
+  const handsFree = (profile?.settings as any)?.hands_free !== false; // default true
+  const handsFreeRef = useRef(handsFree);
+  useEffect(() => { handsFreeRef.current = handsFree; }, [handsFree]);
+  // Quando l'utente disattiva via voce mostriamo un toast di conferma breve.
+  const [handsFreeToast, setHandsFreeToast] = useState<string | null>(null);
+  const setHandsFreeMode = useCallback(async (on: boolean) => {
+    if (!profile) return;
+    const next = {
+      ...profile,
+      settings: { ...profile.settings, hands_free: on } as any,
+    };
+    setProfile(next);
+    handsFreeRef.current = on;
+    setHandsFreeToast(on ? "Hands-free attivo 🎙️" : "Modalità manuale — tocca per parlare");
+    setTimeout(() => setHandsFreeToast(null), 2500);
+    try {
+      await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+  }, [profile]);
+
   const recRef = useRef<Recorder | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   // Pager horizontale: pagina 0 = voce zen, pagina 1 = lettura.
@@ -746,6 +772,41 @@ export default function Taccuino() {
     }
   }, [profile, hasSeal, timeline]);
 
+  // === HANDS-FREE AUTO-LISTEN LOOP ===
+  // Quando hands-free è attivo e siamo in idle (Coda ha finito di parlare
+  // o è appena partita l'app), riapri automaticamente il microfono dopo
+  // una breve pausa di respiro (350ms). Il VAD interno chiuderà il mic
+  // da solo dopo 800ms di silenzio.
+  //
+  // GUARDIE per NON aprire il mic:
+  //   - modale di onboarding/KodaIntro/SealSetup aperto
+  //   - input_mode forzato a "text"
+  //   - confessionale in attesa di sblocco
+  //   - registratore già attivo
+  //   - error visibile (l'utente sta leggendo un feedback)
+  useEffect(() => {
+    if (!handsFree) return;
+    if (status !== "idle") return;
+    if (!profile) return;
+    if (showOnboarding) return;
+    if (showColorIntro) return;
+    if (showSealSetup) return;
+    if (sealUnlocking) return;
+    if (showSettings) return;
+    if (profile.settings?.input_mode === "text") return;
+    if (recRef.current) return;
+    // breve pausa di respiro per evitare di registrare la coda del TTS
+    // e per dare al sistema audio iOS il tempo di switchare la sessione.
+    const t = setTimeout(() => {
+      if (!handsFreeRef.current) return;
+      if (recRef.current) return;
+      // Re-check status in closure
+      startTalkInternal(true).catch(() => {});
+    }, 450);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, handsFree, profile?.id, showOnboarding, showColorIntro, showSealSetup, sealUnlocking, showSettings]);
+
   const sendText = useCallback(
     async (text: string) => {
       const txt = text.trim();
@@ -1124,11 +1185,9 @@ export default function Taccuino() {
   };
 
   const startTalk = async () => {
-    // PIANO A (semplificazione): conversation_mode auto-loop DISABILITATO.
-    // Causa principale dei freeze/crash su iOS. Modello tap-to-talk puro.
-    // L'utente preme per iniziare, ripreme per inviare. Modello WhatsApp.
-    // Il conversation hands-free REALE arriverà nella Fase 4 con Deepgram.
-    return startTalkInternal(false);
+    // HANDS-FREE: se attivo, il VAD chiude il mic da solo dopo 800ms di silenzio.
+    // In modalità manuale (hands-free off) → tap-to-talk classico.
+    return startTalkInternal(handsFreeRef.current);
   };
 
   const stopTalk = async () => {
@@ -1242,6 +1301,42 @@ export default function Taccuino() {
       }
       // Trascrizione OK → reset contatore vuoti e procedi
       emptyTurnsRef.current = 0;
+
+      // === VOICE COMMAND: Hands-Free toggle ===
+      // Intercettiamo qui i comandi vocali per disattivare/riattivare il
+      // hands-free senza coinvolgere Claude (zero latenza, zero crediti).
+      // Match flessibile italiano + inglese, con tolleranza punteggiatura.
+      const lower = txt.toLowerCase().replace(/[.,!?;:]/g, " ").replace(/\s+/g, " ").trim();
+      const isDisableHF = /\b(stop|disattiv\w*|ferm\w*|spegn\w*|esci\w*|chiud\w*)\b.{0,20}\b(hands?[\s-]?free|mani[\s-]?libere|ascolto continuo|modalit[aà] vocale)\b/.test(lower)
+        || /\b(modalit[aà])\s+(manuale|push[\s-]?to[\s-]?talk|tap|tocco)\b/.test(lower)
+        || /\b(passa|entra|metti).{0,15}(manuale|tap|tocco)\b/.test(lower);
+      const isEnableHF = /\b(attiv\w*|riattiv\w*|riprend\w*|accend\w*)\b.{0,20}\b(hands?[\s-]?free|mani[\s-]?libere|ascolto continuo|modalit[aà] vocale)\b/.test(lower)
+        || /\b(modalit[aà])\s+(hands?[\s-]?free|automatica|vocale|continua)\b/.test(lower);
+      if (isDisableHF && handsFreeRef.current) {
+        // Disattiva hands-free, NON chiamare il backend. Coda dà conferma vocale breve.
+        await setHandsFreeMode(false);
+        // Frase di conferma breve, niente LLM call
+        const confirm = "Va bene, sono in modalità manuale. Tocca quando vuoi parlare.";
+        setTimeline((prev) => [
+          ...prev,
+          { id: `u-cmd-${Date.now()}`, role: "user", text: txt, timestamp: new Date().toISOString() },
+          { id: `ai-cmd-${Date.now()}`, role: "ai", text: confirm, tone: "warm", timestamp: new Date().toISOString() },
+        ]);
+        await speakAwareness(`[gently] ${confirm}`);
+        return;
+      }
+      if (isEnableHF && !handsFreeRef.current) {
+        await setHandsFreeMode(true);
+        const confirm = "Hands-free attivo. Parla pure quando vuoi.";
+        setTimeline((prev) => [
+          ...prev,
+          { id: `u-cmd-${Date.now()}`, role: "user", text: txt, timestamp: new Date().toISOString() },
+          { id: `ai-cmd-${Date.now()}`, role: "ai", text: confirm, tone: "warm", timestamp: new Date().toISOString() },
+        ]);
+        await speakAwareness(`[warmly] ${confirm}`);
+        return;
+      }
+
       // Send to converse
       await sendText(txt);
     } catch (e) {
@@ -1757,6 +1852,24 @@ export default function Taccuino() {
           <Text style={styles.savedBannerText}>Configurazione salvata</Text>
         </View>
       )}
+      {/* Toast hands-free: conferma visuale rapida quando l'utente
+          attiva/disattiva la modalità (da voce o da toggle). */}
+      {handsFreeToast && (
+        <View
+          style={[
+            styles.savedBanner,
+            { top: Math.max(insets.top + 8, 60) },
+          ]}
+          pointerEvents="none"
+        >
+          <Ionicons
+            name={handsFree ? "ear" : "hand-left"}
+            size={18}
+            color={handsFree ? "#34D399" : "#FBBF24"}
+          />
+          <Text style={styles.savedBannerText}>{handsFreeToast}</Text>
+        </View>
+      )}
       {/* Header — totalmente zen. Solo il lucchetto confessionale al centro.
           Niente info, niente sunto, niente impostazioni: tutto si chiede
           direttamente a Koda con la voce. L'eclissi È l'interfaccia. */}
@@ -1764,14 +1877,23 @@ export default function Taccuino() {
         style={[styles.header, { top: Math.max(insets.top + 16, 70) }]}
         pointerEvents="box-none"
       >
-        {/* Slot sinistro: stessa dimensione del slot destro (44×44) per
-            mantenere la pill del Confessionale perfettamente centrata
-            rispetto allo schermo. Senza queste dimensioni, lo slot di
-            destra (⋯) sbilancia il centraggio del flex. */}
-        <View
-          style={[styles.headerBtn, { minWidth: 44, minHeight: 44 }]}
-          pointerEvents="none"
-        />
+        {/* Slot sinistro: toggle Hands-Free.
+            Icona orecchio = on (mic apre da solo); icona muta = off (tap-to-talk).
+            Stesse dimensioni 44×44 del slot destro per mantenere centrato il
+            lucchetto del Confessionale. */}
+        <TouchableOpacity
+          style={[styles.headerBtn, { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" }]}
+          onPress={() => setHandsFreeMode(!handsFree)}
+          hitSlop={20}
+          testID="hands-free-toggle"
+          accessibilityLabel={handsFree ? "Hands-free attivo, tocca per disattivare" : "Hands-free spento, tocca per attivare"}
+        >
+          <Ionicons
+            name={handsFree ? "ear" : "ear-outline"}
+            size={20}
+            color={handsFree ? "#34D399" : "rgba(255,255,255,0.55)"}
+          />
+        </TouchableOpacity>
         <View style={styles.headerCenter} pointerEvents="box-none">
           {/* === Lucchetto Confessionale ===
               Toggle one-tap nel cuore dell'header. Quando attivo:
