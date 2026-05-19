@@ -1736,8 +1736,14 @@ export default function Taccuino() {
         style={[styles.header, { top: Math.max(insets.top + 16, 70) }]}
         pointerEvents="box-none"
       >
-        {/* Slot sinistro vuoto — spazio per centrare il lucchetto */}
-        <View style={styles.headerBtn} pointerEvents="none" />
+        {/* Slot sinistro: stessa dimensione del slot destro (44×44) per
+            mantenere la pill del Confessionale perfettamente centrata
+            rispetto allo schermo. Senza queste dimensioni, lo slot di
+            destra (⋯) sbilancia il centraggio del flex. */}
+        <View
+          style={[styles.headerBtn, { minWidth: 44, minHeight: 44 }]}
+          pointerEvents="none"
+        />
         <View style={styles.headerCenter} pointerEvents="box-none">
           {/* === Lucchetto Confessionale ===
               Toggle one-tap nel cuore dell'header. Quando attivo:
@@ -2987,7 +2993,7 @@ export default function Taccuino() {
     return <KodaIntro voices={voiceList} onDone={dismissColorIntro} onCancel={cancelKodaIntro} />;
   }
   // Overlay bordeaux globale quando il confessionale è ATTIVO.
-  // Tinge dolcemente tutto lo sfondo (~18% di alpha) così l'utente capisce
+  // Tinge fortemente tutto lo sfondo (~40% di alpha) così l'utente capisce
   // a colpo d'occhio di trovarsi in modalità confessionale, anche durante
   // la conversazione vocale. Quando spegne il confessionale, l'overlay
   // sparisce e si torna allo sfondo normale.
@@ -2996,7 +3002,7 @@ export default function Taccuino() {
       pointerEvents="none"
       style={[
         StyleSheet.absoluteFillObject,
-        { backgroundColor: "rgba(139,58,74,0.22)" },
+        { backgroundColor: "rgba(139,58,74,0.40)" },
       ]}
     />
   ) : null;
