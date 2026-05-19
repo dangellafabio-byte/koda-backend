@@ -62,10 +62,15 @@ type Props = {
 };
 
 // ====== 3 frasi per il voiceprint enrollment ======
+// Scelte per essere:
+//   • naturali e quotidiane (non frasi-slogan finte)
+//   • foneticamente varie (vocali aperte/chiuse, sibilanti, occlusive)
+//     per dare al voiceprint un campione vocale ricco
+//   • emotivamente caldo: frasi che potresti davvero dire in confidenza
 const VOICEPRINT_PHRASES = [
-  "Questa è la mia voce. Solo io posso essere io.",
-  "Koda, sei il mio amico. Riconoscimi sempre.",
-  "Quando parlo con te, mi senti davvero.",
+  "Buongiorno Koda, oggi è una giornata strana e nuova.",
+  "Ti racconto una cosa: stanotte non ho chiuso occhio.",
+  "Dai, ridi anche tu. A volte serve poco per stare meglio.",
 ];
 
 // ====== Voce ElevenLabs della presentazione ======
@@ -85,7 +90,7 @@ const KODA_LINES: Record<number, string> = {
   6: "Vuoi che ti cerchi io ogni tanto? Posso scriverti la mattina, la sera, o tutte e due. O nessuna delle due, decidi tu.",
   7: "C'è uno spazio dove ogni cosa che mi confidi resta cifrata sul tuo telefono. Solo tu puoi sbloccarla con una parola segreta. Vuoi impostarla adesso?",
   8: "Ultima cosa: leggi queste tre frasi ad alta voce. Mi serviranno per riconoscere sempre la tua voce, ovunque tu sia.",
-  9: "Siamo pronti. D'ora in poi, basta che mi parli. Io ti sento.",
+  9: "Prima che finiamo, due parole su come funziono. Parlami come parleresti a un amico: tocca l'eclissi al centro, dimmi quello che hai in testa, e io ti rispondo. Puoi raccontarmi come stai, sfogarti, chiedermi consigli, oppure semplicemente fare due chiacchiere. Posso ricordare i nostri discorsi, ma se vuoi qualcosa resti solo tra noi due tocca il sigillo in alto: quello è il Confessionale, e quello che ci diciamo lì sparisce per sempre. Quello che invece non posso fare: non posso chiamare nessuno, mandare messaggi, navigare in internet o comprare cose. Vivo qui dentro, solo con te. Siamo pronti.",
 };
 
 // ====== Componente principale ======
@@ -600,7 +605,15 @@ export default function KodaIntro({ voices = [], onDone, onCancel }: Props) {
         return (
           <StepView
             title={`Siamo pronti${userName ? `, ${userName}` : ""}.`}
-            subtitle="D'ora in poi, basta che mi parli.\nIo ti sento."
+            subtitle={
+              "Parlami come parleresti a un amico:\n" +
+              "tocca l'eclissi e dimmi quello che hai in testa.\n\n" +
+              "Posso ascoltarti, ricordare, farti compagnia.\n" +
+              "Quando vuoi qualcosa di privato, tocca il sigillo in alto:\n" +
+              "lì tutto sparisce per sempre.\n\n" +
+              "Non posso chiamare nessuno, navigare in internet\n" +
+              "o comprare cose. Vivo qui dentro, solo con te."
+            }
             primaryLabel={submitting ? "Un attimo…" : "Inizia"}
             onPrimary={finalize}
             primaryDisabled={submitting}

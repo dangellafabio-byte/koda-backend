@@ -186,6 +186,11 @@ export default function Taccuino() {
       const p = await api.getProfile();
       setProfile(p);
     } catch {}
+    // Mostra il banner di conferma in home — l'utente ha completato la
+    // presentazione (o l'ha rifatta) e i suoi dati sono stati salvati.
+    showSavedBanner();
+  // showSavedBanner è definita sotto ma è stable (useCallback []), OK.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   /** Riapri la presentazione di Koda (back-door: tap sull'icona ⋯ in alto a destra). */
   const reopenKodaIntro = useCallback(async () => {
@@ -193,6 +198,14 @@ export default function Taccuino() {
       await SecureStore.deleteItemAsync("koda_intro_seen");
     } catch {}
     setShowColorIntro(true);
+  }, []);
+  // Banner "Configurazione salvata ✓" — mostrato per ~4 secondi quando
+  // l'utente completa (o ri-completa) KodaIntro. Conferma visiva che le
+  // modifiche al profilo sono state registrate. Sparisce automaticamente.
+  const [savedBannerVisible, setSavedBannerVisible] = useState(false);
+  const showSavedBanner = useCallback(() => {
+    setSavedBannerVisible(true);
+    setTimeout(() => setSavedBannerVisible(false), 4000);
   }, []);
   /** Esci da KodaIntro senza salvare nulla (tap su X).
    *  Marca comunque `koda_intro_seen=1` così al prossimo avvio non riappare. */
@@ -1729,6 +1742,21 @@ export default function Taccuino() {
   // Build the screen wrapper with optional background image / gradient
   const screenInner = (
     <View style={[styles.screen, { backgroundColor: bgValue ? "transparent" : theme.bg }]}>
+      {/* Banner di conferma salvataggio — appare per ~4s dopo che KodaIntro
+          si chiude, così l'utente capisce che le modifiche sono andate a
+          buon fine. Posizionato in alto, sopra il flusso normale. */}
+      {savedBannerVisible && (
+        <View
+          style={[
+            styles.savedBanner,
+            { top: Math.max(insets.top + 8, 60) },
+          ]}
+          pointerEvents="none"
+        >
+          <Ionicons name="checkmark-circle" size={20} color="#34D399" />
+          <Text style={styles.savedBannerText}>Configurazione salvata</Text>
+        </View>
+      )}
       {/* Header — totalmente zen. Solo il lucchetto confessionale al centro.
           Niente info, niente sunto, niente impostazioni: tutto si chiede
           direttamente a Koda con la voce. L'eclissi È l'interfaccia. */}
@@ -3389,6 +3417,29 @@ const makeStyles = (t: any) => StyleSheet.create({
     paddingVertical: 10,
     gap: 10,
     zIndex: 10,
+  },
+  // Banner di conferma "Configurazione salvata ✓"
+  savedBanner: {
+    position: "absolute",
+    alignSelf: "center",
+    left: 40,
+    right: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 24,
+    backgroundColor: "rgba(16,185,129,0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(52,211,153,0.5)",
+    zIndex: 50,
+  },
+  savedBannerText: {
+    color: "#A7F3D0",
+    fontSize: 14,
+    fontWeight: "600",
   },
   headerCenter: { flex: 1, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
   // === Toggle Confessionale (lucchetto al centro dell'header) ===
