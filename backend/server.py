@@ -2157,6 +2157,77 @@ async def api_tts_audio(token: str, request: Request):
 
 import litellm  # noqa: E402  (kept here to avoid affecting cold-start of unrelated endpoints)
 
+# =============== TAVILY WEB SEARCH INTEGRATION ===============
+# Permette a Koda di cercare informazioni in tempo reale sul web (notizie,
+# eventi, fatti recenti). Attivato SOLO nel flusso non-confessionale
+# (/converse e /converse-stream-audio). MAI nel flusso sealed (privacy).
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip()
+try:
+    from tavily import AsyncTavilyClient
+    _tavily_client = AsyncTavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
+except Exception as _e:
+    logger.warning(f"Tavily SDK not available: {_e}")
+    _tavily_client = None
+
+# Parole-chiave che suggeriscono una query di "web search" (info recenti/fatti).
+# Heuristica leggera: meglio di un secondo LLM-call e mantiene la latenza bassa.
+_WEB_SEARCH_TRIGGERS_IT = (
+    "notizia", "notizie", "oggi", "ieri", "ultim", "recent", "prezzo", "quanto costa",
+    "meteo", "tempo", "previsioni", "calendario", "evento", "concerto",
+    "ricetta", "news", "ultime", "ha vinto", "risultato", "campionato",
+    "uscit", "scoperto", "novità", "calcio", "borsa", "azione", "criptovalute",
+    "cerca", "cercami", "scopri", "trova", "verifica", "che ore", "che giorno",
+    "anno corrente", "anno attuale", "2025", "2026", "2027",
+)
+
+def _should_web_search(text: str) -> bool:
+    """Decide euristicamente se la domanda dell'utente richiede una ricerca web.
+    Si attiva solo se Tavily è configurato e il testo contiene parole-chiave
+    che suggeriscono info real-time/fattuali. Lato Koda l'esperienza è:
+    quando ricerca → leggero aumento di latenza, ma risposta aggiornata."""
+    if not _tavily_client:
+        return False
+    t = (text or "").lower()
+    if len(t) < 4:
+        return False
+    return any(k in t for k in _WEB_SEARCH_TRIGGERS_IT)
+
+async def _tavily_search_brief(query: str, max_results: int = 4, timeout_s: float = 9.0) -> Optional[str]:
+    """Esegue una ricerca Tavily con timeout aggressivo e restituisce un brief
+    testuale che Claude può usare come contesto. Ritorna None se Tavily fallisce
+    o va in timeout — in quel caso Claude risponde senza il contesto fresco."""
+    if not _tavily_client:
+        return None
+    try:
+        async with asyncio.timeout(timeout_s):
+            res = await _tavily_client.search(
+                query=query,
+                max_results=max_results,
+                search_depth="basic",
+                include_answer=True,
+                timeout=timeout_s,
+            )
+    except (asyncio.TimeoutError, TimeoutError):
+        logger.warning(f"[tavily] timeout after {timeout_s}s for query: {query[:60]}")
+        return None
+    except Exception as e:
+        logger.warning(f"[tavily] search error: {type(e).__name__}: {e}")
+        return None
+    # Componi un brief leggibile per Claude
+    parts: List[str] = []
+    if res.get("answer"):
+        parts.append(f"RISPOSTA SINTETICA: {res['answer']}")
+    results = res.get("results") or []
+    if results:
+        parts.append("FONTI RILEVANTI:")
+        for i, r in enumerate(results[:max_results], 1):
+            title = (r.get("title") or "")[:120]
+            content = (r.get("content") or "")[:300]
+            url = r.get("url") or ""
+            parts.append(f"[{i}] {title}\n    {content}\n    Fonte: {url}")
+    return "\n".join(parts) if parts else None
+# =============== END TAVILY ===============
+
 
 # ============================================================
 # Waveform cache — Step 3 (Fase 4): the blob pulses in sync with the
@@ -2473,14 +2544,34 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
     system_prompt = _build_conversation_system_prompt(profile, recent)
     history_str = _format_history_for_llm(recent)
 
-    # Skip web search in voice-streaming mode for now (adds 6s, defeats the goal).
-    # Web-search heavy queries should fall back to legacy /api/converse client-side.
-    user_payload = (
-        f"STORICO RECENTE (per memoria a breve termine):\n{history_str}\n\n"
-        f"NUOVO MESSAGGIO DELL'UTENTE:\n{text}\n\n"
-        f"Rispondi SOLO col JSON come da istruzioni di sistema. "
-        f"IMPORTANTISSIMO: il campo \"reply\" DEVE essere il PRIMO campo del JSON."
+    # === WEB SEARCH OPZIONALE (Tavily) ===
+    # Se la domanda contiene parole-chiave che suggeriscono info real-time
+    # (notizie, prezzi, meteo, eventi, "oggi", "ultimo"…), eseguiamo PRIMA
+    # una ricerca Tavily e includiamo il brief nel prompt. Latenza extra:
+    # ~1-3s solo quando serve davvero. MAI nel flusso confessionale (è un
+    # endpoint separato /converse/sealed che non passa di qui).
+    web_search_brief: Optional[str] = None
+    if _should_web_search(text):
+        logger.info(f"[web-search] triggering Tavily for query: {text[:80]}")
+        web_search_brief = await _tavily_search_brief(text, max_results=4)
+        if web_search_brief:
+            logger.info(f"[web-search] got brief ({len(web_search_brief)} chars)")
+
+    user_payload_parts = [
+        f"STORICO RECENTE (per memoria a breve termine):\n{history_str}",
+    ]
+    if web_search_brief:
+        user_payload_parts.append(
+            "RISULTATI WEB SEARCH (informazioni AGGIORNATE e VERIFICATE — usale "
+            "per rispondere con dati reali, NON inventare. Cita brevemente le "
+            "fonti se rilevanti):\n" + web_search_brief
+        )
+    user_payload_parts.append(f"NUOVO MESSAGGIO DELL'UTENTE:\n{text}")
+    user_payload_parts.append(
+        'Rispondi SOLO col JSON come da istruzioni di sistema. '
+        'IMPORTANTISSIMO: il campo "reply" DEVE essere il PRIMO campo del JSON.'
     )
+    user_payload = "\n\n".join(user_payload_parts)
 
     # Voice config for ElevenLabs.
     # `req` doesn't carry voice_id/tone explicitly — we default to the same
