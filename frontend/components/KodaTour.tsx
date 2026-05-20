@@ -54,8 +54,11 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const [idx, setIdx] = useState(0);
-  // Pulsing animation for the ring
+  // Two animation values:
+  //   - pulse: ring breathe (scale 1 → 1.08)
+  //   - impulse: outward wave that expands + fades (like a sonar ping)
   const pulse = useRef(new Animated.Value(0)).current;
+  const impulse = useRef(new Animated.Value(0)).current;
   const fade = useRef(new Animated.Value(0)).current;
   const cancelledRef = useRef(false);
 
@@ -70,6 +73,19 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
     loop.start();
     return () => loop.stop();
   }, [pulse]);
+
+  // Sonar "impulse" wave — expands outward + fades.
+  // Restarts every 1.6s so the effect feels alive.
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(impulse, { toValue: 1, duration: 1600, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+        Animated.timing(impulse, { toValue: 0, duration: 0, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [impulse]);
 
   // Fade overlay in on mount, out on unmount
   useEffect(() => {
@@ -139,11 +155,32 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
 
   const ringScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] });
   const ringOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1] });
+  // Sonar wave: scales from 1 → 2.2x and fades opacity 0.7 → 0
+  const sonarScale = impulse.interpolate({ inputRange: [0, 1], outputRange: [1, 2.2] });
+  const sonarOpacity = impulse.interpolate({ inputRange: [0, 1], outputRange: [0.7, 0] });
 
   return (
     <Animated.View style={[styles.overlay, { opacity: fade }]} pointerEvents="auto">
       {/* Dark layer — tap-through disabled so user can't accidentally interact with home */}
       <View style={styles.dim} />
+
+      {/* SONAR WAVE — outward expanding ring (impulse effect).
+          Placed BEHIND the main ring so the main ring stays crisp. */}
+      <Animated.View
+        style={[
+          styles.sonar,
+          {
+            left: ringX,
+            top: ringY,
+            width: ringW,
+            height: ringH,
+            borderRadius: radius,
+            transform: [{ scale: sonarScale }],
+            opacity: sonarOpacity,
+          },
+        ]}
+        pointerEvents="none"
+      />
 
       {/* Glowing ring around the target */}
       <Animated.View
@@ -179,7 +216,8 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
         <Text style={styles.bubbleText}>{cleanText}</Text>
       </View>
 
-      {/* Skip button — always visible top-right */}
+      {/* Skip button — top center, easier to reach and visually balanced.
+          (Was top-right which looked like a close button for the home, not the tour.) */}
       <Pressable
         onPress={() => {
           cancelledRef.current = true;
@@ -188,12 +226,12 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
         }}
         style={[
           styles.skipBtn,
-          { top: Math.max(insets.top + 14, 50), right: 20 },
+          { top: Math.max(insets.top + 14, 50), alignSelf: "center" },
         ]}
         hitSlop={14}
       >
-        <Text style={styles.skipText}>Salta</Text>
-        <Ionicons name="close" size={16} color="#FFFFFFCC" />
+        <Text style={styles.skipText}>Salta tour</Text>
+        <Ionicons name="close-circle" size={16} color="#FFFFFFCC" />
       </Pressable>
     </Animated.View>
   );
@@ -214,20 +252,26 @@ const styles = StyleSheet.create({
   },
   ring: {
     position: "absolute",
-    borderWidth: 3,
+    borderWidth: 4,
     borderColor: "#34D399",
     backgroundColor: "transparent",
     // Glow via shadow (iOS) / elevation (Android approximation)
     ...Platform.select({
       ios: {
         shadowColor: "#34D399",
-        shadowOpacity: 0.9,
-        shadowRadius: 18,
+        shadowOpacity: 1,
+        shadowRadius: 26,
         shadowOffset: { width: 0, height: 0 },
       },
-      android: { elevation: 10 },
+      android: { elevation: 14 },
       default: {},
     }),
+  },
+  sonar: {
+    position: "absolute",
+    borderWidth: 3,
+    borderColor: "#34D399",
+    backgroundColor: "transparent",
   },
   bubble: {
     position: "absolute",

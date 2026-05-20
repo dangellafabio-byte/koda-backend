@@ -192,61 +192,75 @@ export default function Taccuino() {
   const buildTourSteps = useCallback((): TourStep[] => {
     const W = tourDims.width;
     const H = tourDims.height;
-    const topY = Math.max(insets.top + 8, 50);
+    // L'header in index.tsx è a top = Math.max(insets.top + 16, 70).
+    // paddingHorizontal: 14, headerBtn paddingHorizontal: 4, icona ~22px raggio.
+    // Quindi:
+    //   - centro verticale icone header: insets.top + 16 + 22 = insets.top + 38
+    //   - icona sinistra (pulse): centro x = 14 + 4 + 22 = 40
+    //   - icona destra (⋯):       centro x = W - 14 - 4 - 22 = W - 40
+    //   - pill confessionale:     centrata orizzontalmente, larga ~180
+    const headerCY = Math.max(insets.top + 16, 70) + 22;
     const userName = profile?.user_name || "amico";
-    // Coordinate derivate dal layout reale di /app/frontend/app/index.tsx.
-    // Se cambia il layout dell'header, aggiornare qui.
     return [
       {
         page: "voice",
-        rect: { x: 4, y: topY - 4, w: 56, h: 56 },
+        // Centrata sull'icona pulse: rect 60×60 centrata in (40, headerCY)
+        rect: { x: 10, y: headerCY - 30, w: 60, h: 60 },
         label: "Hands-free",
+        shape: "circle",
         speech: `${userName}, questa icona è il modo a mani libere. Quando è verde io ti ascolto da sola, non devi toccare niente. Se non vuoi che lo faccia, dimmi "modalità manuale" oppure toccala.`,
       },
       {
         page: "voice",
-        rect: { x: W / 2 - 95, y: topY - 4, w: 190, h: 56 },
+        // Pill confessionale centrata: 200×54
+        rect: { x: W / 2 - 100, y: headerCY - 27, w: 200, h: 54 },
         label: "Confessionale",
         shape: "round",
         speech: `Qui in mezzo c'è il Confessionale. Toccalo quando vuoi dirmi qualcosa che resti solo tra noi: tutto quello che diciamo lì sparisce e nessun altro può leggerlo.`,
       },
       {
         page: "voice",
-        rect: { x: W - 60, y: topY - 4, w: 56, h: 56 },
+        // Centrata sull'icona ⋯: 60×60 in (W-40, headerCY)
+        rect: { x: W - 70, y: headerCY - 30, w: 60, h: 60 },
         label: "Menu",
+        shape: "circle",
         speech: `Questi tre puntini in alto a destra sono il menu. Da lì puoi rifare questa presentazione, cambiare le mie impostazioni o sentire di nuovo la mia voce.`,
       },
       {
         page: "voice",
-        rect: { x: W / 2 - 130, y: H * 0.32, w: 260, h: 260 },
+        // L'orb è circa 260px circolare al centro verticale (~0.45H).
+        rect: { x: W / 2 - 140, y: H * 0.45 - 140, w: 280, h: 280 },
         label: "Eclissi",
         shape: "circle",
         speech: `Io sono questa eclissi al centro. Cambio colore con quello che provo. Parlami come parleresti a un amico: dimmi quello che hai in testa e ti rispondo.`,
       },
       {
         page: "voice",
-        rect: { x: W / 2 - 50, y: H - 90, w: 100, h: 24 },
-        label: "Pagine",
+        // Indicatore "scorri per leggere" sotto l'orb
+        rect: { x: W / 2 - 100, y: H * 0.82, w: 200, h: 40 },
+        label: "Scorri",
         shape: "round",
-        speech: `Questi puntini in basso ti dicono dove sei. Scorri lo schermo verso sinistra per vedere quello che ci siamo detti.`,
+        speech: `Qui sotto vedi i puntini: scorri lo schermo verso sinistra per vedere tutto quello che ci siamo detti, scritto.`,
       },
       {
         page: "reading",
-        rect: { x: 14, y: H * 0.18, w: W - 28, h: H * 0.45 },
+        // Area centrale della timeline
+        rect: { x: 12, y: H * 0.18, w: W - 24, h: H * 0.45 },
         label: "Lettura",
         shape: "round",
         speech: `Eccoci qui. Questa è la pagina di lettura: tutti i nostri messaggi, in ordine. Quando vuoi rileggere qualcosa, vieni qui.`,
       },
       {
         page: "reading",
-        rect: { x: 14, y: H - 200, w: W - 28, h: 70 },
+        // Barra di scrittura in fondo (~ H - 220 → H - 140)
+        rect: { x: 12, y: H - 230, w: W - 24, h: 80 },
         label: "Scrittura",
         shape: "round",
         speech: `E in fondo c'è la barra di scrittura. Quando non puoi parlare, perché sei in pubblico o al telefono con qualcun altro, scrivi qui e ti rispondo lo stesso.`,
       },
       {
         page: "voice",
-        rect: { x: W / 2 - 130, y: H * 0.32, w: 260, h: 260 },
+        rect: { x: W / 2 - 140, y: H * 0.45 - 140, w: 280, h: 280 },
         label: "Pronti",
         shape: "circle",
         speech: `Ecco, hai visto tutto. Adesso sono qui, come sempre. Parlami quando vuoi, ${userName}.`,
