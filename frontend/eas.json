@@ -26,16 +26,28 @@
       },
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://app-finder-408.preview.emergentagent.com"
       }
     },
     "production": {
       "ios": {
         "resourceClass": "m-medium"
       },
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://app-finder-408.preview.emergentagent.com"
+      }
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleId": "dangella.fabio@gmail.com",
+        "ascAppId": "REPLACE_AFTER_CREATING_APP_ON_ASC",
+        "appleTeamId": "REPLACE_WITH_YOUR_TEAM_ID"
+      }
+    }
   }
 }

@@ -1,24 +1,27 @@
 {
   "expo": {
-    "name": "L'Amico Fraterno",
+    "name": "Koda",
     "slug": "lamico-fraterno",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "lamicofraterno",
+    "scheme": "koda",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.lamicofraterno.app",
+      "supportsTablet": false,
+      "bundleIdentifier": "com.dangella.koda",
+      "buildNumber": "1",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Per ascoltare la tua voce con Coda",
-        "NSPhotoLibraryUsageDescription": "Per scegliere immagini di sfondo",
+        "NSMicrophoneUsageDescription": "Per ascoltare la tua voce e parlare con Koda",
+        "NSPhotoLibraryUsageDescription": "Per scegliere immagini di sfondo personalizzate",
+        "NSSpeechRecognitionUsageDescription": "Per trascrivere quello che dici a Koda",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
-      "package": "com.lamicofraterno.app",
+      "package": "com.dangella.koda",
+      "versionCode": 1,
       "edgeToEdgeEnabled": true,
       "permissions": [
         "RECORD_AUDIO",
@@ -54,7 +57,7 @@
       [
         "expo-audio",
         {
-          "microphonePermission": "Per ascoltare la tua voce con Coda"
+          "microphonePermission": "Per ascoltare la tua voce e parlare con Koda"
         }
       ],
       "expo-asset"
