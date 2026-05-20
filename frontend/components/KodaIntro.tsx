@@ -50,6 +50,10 @@ export type KodaIntroResult = {
   checkin_mode: CheckinMode;
   secret_word_set: boolean;
   voiceprint_enrolled: boolean;
+  /** Se true, l'app deve lanciare il tour visivo subito dopo la chiusura
+   *  della KodaIntro. Usato per spiegare i tasti della home (icona pulse,
+   *  Confessionale, ⋯, orb, swipe lettura, barra scrittura). */
+  launch_tour?: boolean;
 };
 
 type Props = {
@@ -96,7 +100,7 @@ const KODA_LINES: Record<number, string> = {
   6: "Vuoi che ti cerchi io ogni tanto? Posso scriverti la mattina, la sera, o tutte e due. O nessuna delle due, decidi tu.",
   7: "C'è uno spazio dove ogni cosa che mi confidi resta cifrata sul tuo telefono. Solo tu puoi sbloccarla con una parola segreta. Vuoi impostarla adesso?",
   8: "Ultima cosa: leggi queste tre frasi ad alta voce. Mi serviranno per riconoscere sempre la tua voce, ovunque tu sia.",
-  9: "Prima che finiamo, due parole su come funziono. Parlami come parleresti a un amico: tocca l'eclissi al centro, dimmi quello che hai in testa, e io ti rispondo. Puoi raccontarmi come stai, sfogarti, chiedermi consigli, oppure fare due chiacchiere. Posso ricordare i nostri discorsi, e se la tua domanda richiede informazioni aggiornate cerco anche su internet per te. Quando invece vuoi qualcosa resti solo tra noi due, tocca il sigillo in alto: quello è il Confessionale, e quello che ci diciamo lì sparisce per sempre. Quello che NON faccio: non chiamo nessuno, non mando messaggi, non compro cose al posto tuo. Vivo qui dentro, solo con te. Siamo pronti.",
+  9: "Bene! Adesso ti faccio vedere io come uso. Guarda dove ti indico.",
 };
 
 // ====== Componente principale ======
@@ -376,6 +380,9 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         checkin_mode: checkinMode,
         secret_word_set: secretWordChoice === "now" && secretWordValue.trim().length >= 3,
         voiceprint_enrolled: voiceprintUris.length === 3,
+        // Lancia il tour visivo subito dopo la chiusura. L'utente
+        // ha appena sentito Koda dire "ora ti faccio vedere io".
+        launch_tour: true,
       });
     } finally {
       setSubmitting(false);

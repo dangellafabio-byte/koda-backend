@@ -43,7 +43,8 @@ import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
 import EclipseOrb from "../components/EclipseOrb";
-import KodaIntro from "../components/KodaIntro";
+import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
+import KodaTour, { TourStep } from "../components/KodaTour";
 import * as SecureStore from "expo-secure-store";
 import NeonBorder from "../components/NeonBorder";
 import RadialGlow from "../components/RadialGlow";
@@ -176,7 +177,84 @@ export default function Taccuino() {
     })();
     return () => { cancelled = true; };
   }, []);
-  const dismissColorIntro = useCallback(async () => {
+  // === TOUR GUIDATO (spotlight) ===
+  // Si attiva dopo che KodaIntro termina (campo `launch_tour: true` nel
+  // result). Mostra un overlay scuro sopra la home con un anello luminoso
+  // attorno a ciascun elemento UI, mentre Koda parla a voce spiegando
+  // cosa fa. Auto-avanzamento al termine di ogni voce.
+  const [tourActive, setTourActive] = useState(false);
+  const [tourSteps, setTourSteps] = useState<TourStep[]>([]);
+  const tourDims = useWindowDimensions();
+
+  /** Costruisce gli step del tour usando le coordinate REALI della home
+   *  in base a insets e dimensioni schermo. Va chiamato al momento del
+   *  lancio per avere coordinate aggiornate (rotazione/foldable safe). */
+  const buildTourSteps = useCallback((): TourStep[] => {
+    const W = tourDims.width;
+    const H = tourDims.height;
+    const topY = Math.max(insets.top + 8, 50);
+    const userName = profile?.user_name || "amico";
+    // Coordinate derivate dal layout reale di /app/frontend/app/index.tsx.
+    // Se cambia il layout dell'header, aggiornare qui.
+    return [
+      {
+        page: "voice",
+        rect: { x: 4, y: topY - 4, w: 56, h: 56 },
+        label: "Hands-free",
+        speech: `${userName}, questa icona è il modo a mani libere. Quando è verde io ti ascolto da sola, non devi toccare niente. Se non vuoi che lo faccia, dimmi "modalità manuale" oppure toccala.`,
+      },
+      {
+        page: "voice",
+        rect: { x: W / 2 - 95, y: topY - 4, w: 190, h: 56 },
+        label: "Confessionale",
+        shape: "round",
+        speech: `Qui in mezzo c'è il Confessionale. Toccalo quando vuoi dirmi qualcosa che resti solo tra noi: tutto quello che diciamo lì sparisce e nessun altro può leggerlo.`,
+      },
+      {
+        page: "voice",
+        rect: { x: W - 60, y: topY - 4, w: 56, h: 56 },
+        label: "Menu",
+        speech: `Questi tre puntini in alto a destra sono il menu. Da lì puoi rifare questa presentazione, cambiare le mie impostazioni o sentire di nuovo la mia voce.`,
+      },
+      {
+        page: "voice",
+        rect: { x: W / 2 - 130, y: H * 0.32, w: 260, h: 260 },
+        label: "Eclissi",
+        shape: "circle",
+        speech: `Io sono questa eclissi al centro. Cambio colore con quello che provo. Parlami come parleresti a un amico: dimmi quello che hai in testa e ti rispondo.`,
+      },
+      {
+        page: "voice",
+        rect: { x: W / 2 - 50, y: H - 90, w: 100, h: 24 },
+        label: "Pagine",
+        shape: "round",
+        speech: `Questi puntini in basso ti dicono dove sei. Scorri lo schermo verso sinistra per vedere quello che ci siamo detti.`,
+      },
+      {
+        page: "reading",
+        rect: { x: 14, y: H * 0.18, w: W - 28, h: H * 0.45 },
+        label: "Lettura",
+        shape: "round",
+        speech: `Eccoci qui. Questa è la pagina di lettura: tutti i nostri messaggi, in ordine. Quando vuoi rileggere qualcosa, vieni qui.`,
+      },
+      {
+        page: "reading",
+        rect: { x: 14, y: H - 200, w: W - 28, h: 70 },
+        label: "Scrittura",
+        shape: "round",
+        speech: `E in fondo c'è la barra di scrittura. Quando non puoi parlare, perché sei in pubblico o al telefono con qualcun altro, scrivi qui e ti rispondo lo stesso.`,
+      },
+      {
+        page: "voice",
+        rect: { x: W / 2 - 130, y: H * 0.32, w: 260, h: 260 },
+        label: "Pronti",
+        shape: "circle",
+        speech: `Ecco, hai visto tutto. Adesso sono qui, come sempre. Parlami quando vuoi, ${userName}.`,
+      },
+    ];
+  }, [tourDims.width, tourDims.height, insets.top, profile?.user_name]);
+
+  const dismissColorIntro = useCallback(async (result?: KodaIntroResult) => {
     setShowColorIntro(false);
     try {
       await SecureStore.setItemAsync("koda_intro_seen", "1");
@@ -186,12 +264,23 @@ export default function Taccuino() {
       const p = await api.getProfile();
       setProfile(p);
     } catch {}
+    // Se Koda ha appena chiuso con "lancia tour", apri il tour visivo
+    // invece di mostrare il banner di conferma.
+    if (result?.launch_tour) {
+      // Costruzione step DOPO che il profilo è stato aggiornato (così il
+      // nome utente nel testo del tour è quello giusto).
+      setTimeout(() => {
+        setTourSteps(buildTourSteps());
+        setTourActive(true);
+      }, 250);
+      return;
+    }
     // Mostra il banner di conferma in home — l'utente ha completato la
     // presentazione (o l'ha rifatta) e i suoi dati sono stati salvati.
     showSavedBanner();
   // showSavedBanner è definita sotto ma è stable (useCallback []), OK.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [buildTourSteps]);
   /** Riapri la presentazione di Koda (back-door: tap sull'icona ⋯ in alto a destra). */
   const reopenKodaIntro = useCallback(async () => {
     try {
@@ -803,6 +892,7 @@ export default function Taccuino() {
     // session iOS andrebbe in "recording" e poi quando KodaIntro vuole
     // parlare il TTS resta muto. Aspettiamo esplicitamente `false`.
     if (showColorIntro !== false) return;
+    if (tourActive) return; // niente mic durante il tour visivo
     if (showSealSetup) return;
     if (sealUnlocking) return;
     if (showSettings) return;
@@ -818,7 +908,7 @@ export default function Taccuino() {
     }, 450);
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, handsFree, profile?.id, showOnboarding, showColorIntro, showSealSetup, sealUnlocking, showSettings]);
+  }, [status, handsFree, profile?.id, showOnboarding, showColorIntro, showSealSetup, sealUnlocking, showSettings, tourActive]);
 
   const sendText = useCallback(
     async (text: string) => {
@@ -3216,12 +3306,41 @@ export default function Taccuino() {
     />
   ) : null;
 
+  // === TOUR OVERLAY ===
+  // Stesso pattern del confessionalTint: variabile JSX da renderizzare in
+  // tutti i rami finali (custom image / preset gradient / plain).
+  const tourOverlay = tourActive ? (
+    <KodaTour
+      steps={tourSteps}
+      voiceId={profile?.settings?.tts_voice_id || null}
+      onPageChange={(page) => {
+        const w = tourDims.width;
+        try {
+          pagerRef.current?.scrollTo({
+            x: page === "reading" ? w : 0,
+            y: 0,
+            animated: true,
+          });
+        } catch {}
+      }}
+      onComplete={() => {
+        setTourActive(false);
+        setTourSteps([]);
+        // Riporta il pager alla pagina voce (zen) per pulizia.
+        try {
+          pagerRef.current?.scrollTo({ x: 0, y: 0, animated: true });
+        } catch {}
+      }}
+    />
+  ) : null;
+
   if (isCustomImage && bgValue) {
     return (
       <ImageBackground source={{ uri: bgValue }} style={{ flex: 1 }} resizeMode="cover">
         <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { backgroundColor: `rgba(0,0,0,${bgDim})` }]} />
         {confessionalTint}
         {screenInner}
+        {tourOverlay}
       </ImageBackground>
     );
   }
@@ -3236,6 +3355,7 @@ export default function Taccuino() {
         />
         {confessionalTint}
         {screenInner}
+        {tourOverlay}
       </View>
     );
   }
@@ -3243,6 +3363,7 @@ export default function Taccuino() {
     <View style={{ flex: 1 }}>
       {screenInner}
       {confessionalTint}
+      {tourOverlay}
     </View>
   );
 }
