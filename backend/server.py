@@ -57,6 +57,79 @@ app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
 
+# ============================================================================
+# DEV-ONLY: emergency tunnel repair endpoint.
+# When the ngrok tunnel dies and the iPhone is stuck on the red error screen,
+# the user can open /api/dev/repair in the phone's BROWSER (not Expo Go).
+# It runs `supervisorctl restart expo` and waits for the new tunnel.
+# Then the user can reload Expo Go and it works again.
+# Returns a small HTML page with feedback so the user knows what's happening.
+# ============================================================================
+import subprocess as _subprocess
+
+from fastapi.responses import HTMLResponse as _HTMLResponse
+
+
+@app.get("/api/dev/repair", response_class=_HTMLResponse)
+async def dev_repair_tunnel():
+    """Force-restart the expo tunnel. Open from a browser to fix red screen."""
+    try:
+        # Restart expo via supervisor. Non-blocking.
+        _subprocess.run(
+            ["supervisorctl", "restart", "expo"],
+            timeout=15,
+            check=False,
+            capture_output=True,
+        )
+        msg = "Tunnel in riparazione… aspetta ~30 secondi poi torna in Expo Go e premi Reload."
+        ok = True
+    except Exception as e:
+        msg = f"Errore: {e}"
+        ok = False
+    color = "#34D399" if ok else "#EF4444"
+    return f"""
+    <!DOCTYPE html>
+    <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Riparazione Coda</title>
+    <style>
+      body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+              background: #0F1622; color: #E5F7EE; margin: 0; padding: 40px 24px;
+              min-height: 100vh; box-sizing: border-box; }}
+      .card {{ max-width: 480px; margin: 60px auto; padding: 28px;
+              background: rgba(255,255,255,0.05); border-radius: 18px;
+              border: 1px solid {color}55; }}
+      h1 {{ color: {color}; margin: 0 0 18px; font-size: 24px; }}
+      p  {{ font-size: 16px; line-height: 1.55; opacity: 0.9; }}
+      .pulse {{ display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+              background: {color}; margin-right: 8px;
+              animation: pulse 1.2s ease-in-out infinite; }}
+      @keyframes pulse {{ 0%,100% {{ opacity: 0.3 }} 50% {{ opacity: 1 }} }}
+      .steps {{ background: rgba(0,0,0,0.25); padding: 16px 22px; border-radius: 12px;
+                margin-top: 18px; }}
+      .steps li {{ margin: 8px 0; }}
+    </style></head>
+    <body>
+      <div class="card">
+        <h1><span class="pulse"></span>Riparazione tunnel</h1>
+        <p>{msg}</p>
+        <div class="steps">
+          <strong>Cosa fare adesso:</strong>
+          <ol>
+            <li>Aspetta che ci siano 30 secondi (vedi il puntino qui sopra che pulsa)</li>
+            <li>Apri <strong>Expo Go</strong></li>
+            <li>Scuoti il telefono e tocca <strong>Reload</strong></li>
+          </ol>
+        </div>
+        <p style="margin-top: 28px; font-size: 13px; opacity: 0.6;">
+          Se dopo 60 secondi ancora non funziona, ricarica questa pagina.
+        </p>
+      </div>
+    </body></html>
+    """
+
+
+
+
 # ---------- Helpers ----------
 def extract_json(text: str) -> Optional[dict]:
     """Extract JSON object from LLM response."""
