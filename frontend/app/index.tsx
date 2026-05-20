@@ -798,7 +798,11 @@ export default function Taccuino() {
     if (status !== "idle") return;
     if (!profile) return;
     if (showOnboarding) return;
-    if (showColorIntro) return;
+    // CRITICAL: showColorIntro può essere `null` (in fase di caricamento da
+    // SecureStore). Se attivassimo il mic in quei millisecondi, l'audio
+    // session iOS andrebbe in "recording" e poi quando KodaIntro vuole
+    // parlare il TTS resta muto. Aspettiamo esplicitamente `false`.
+    if (showColorIntro !== false) return;
     if (showSealSetup) return;
     if (sealUnlocking) return;
     if (showSettings) return;
