@@ -1874,7 +1874,7 @@ export default function Taccuino() {
         <View
           style={[
             styles.savedBanner,
-            { top: Math.max(insets.top + 80, 130) },
+            { top: Math.max(insets.top + 120, 170) },
           ]}
           pointerEvents="none"
         >
@@ -1888,7 +1888,7 @@ export default function Taccuino() {
         <View
           style={[
             styles.savedBanner,
-            { top: Math.max(insets.top + 80, 130) },
+            { top: Math.max(insets.top + 120, 170) },
           ]}
           pointerEvents="none"
         >
@@ -1907,7 +1907,7 @@ export default function Taccuino() {
         <View
           style={[
             styles.savedBanner,
-            { top: Math.max(insets.top + 80, 130) },
+            { top: Math.max(insets.top + 120, 170) },
           ]}
           pointerEvents="none"
         >
