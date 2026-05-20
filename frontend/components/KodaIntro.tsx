@@ -730,7 +730,10 @@ function StepView({
   return (
     <View style={styles.stepView}>
       <Text style={styles.title}>{title}</Text>
-      <Text style={styles.subtitle}>{subtitle}</Text>
+      {/* SUBTITLE NASCOSTO — l'utente vuole solo voce, niente sottotesti.
+          Tutto quello che dovrebbe essere "scritto sotto" lo dice Koda
+          a voce nel KODA_LINES corrispondente. Manteniamo la prop per
+          retrocompatibilità ma non la renderizziamo. */}
       {children}
       {primaryLabel && onPrimary ? (
         <Pressable

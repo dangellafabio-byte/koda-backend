@@ -227,7 +227,8 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
       {/* NIENTE BUBBLE DI TESTO — l'esperienza è tutta a voce, come 
           richiesto dall'utente. Solo highlight + voce di Koda. */}
 
-      {/* Skip button — top center, easier to reach and visually balanced. */}
+      {/* Skip button — bottom center, "fuori dalle balle".
+          Stesse dimensioni 44+ per touch target accessibile. */}
       <Pressable
         onPress={() => {
           cancelledRef.current = true;
@@ -236,7 +237,7 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
         }}
         style={[
           styles.skipBtn,
-          { top: Math.max(insets.top + 14, 50), alignSelf: "center" },
+          { bottom: Math.max(insets.bottom + 28, 40), alignSelf: "center" },
         ]}
         hitSlop={14}
       >
