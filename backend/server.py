@@ -70,7 +70,54 @@ import subprocess as _subprocess
 from fastapi.responses import HTMLResponse as _HTMLResponse
 
 
-@app.get("/api/dev/repair", response_class=_HTMLResponse)
+@app.get("/api/dev/open", response_class=_HTMLResponse)
+async def dev_open_in_expo():
+    """One-tap page: open Expo Go directly. The user just visits this URL
+    from Safari and taps the big button — no manual URL entry needed."""
+    exp_url = "exp://app-finder-408.ngrok.io"
+    return f"""
+    <!DOCTYPE html>
+    <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Apri Coda</title>
+    <style>
+      * {{ box-sizing: border-box; }}
+      body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+              background: #0F1622; color: #E5F7EE; margin: 0; padding: 40px 24px;
+              min-height: 100vh; display: flex; align-items: center; justify-content: center; }}
+      .card {{ max-width: 420px; width: 100%; padding: 36px 28px;
+              background: rgba(255,255,255,0.05); border-radius: 22px;
+              border: 1px solid rgba(139,92,246,0.4); text-align: center; }}
+      h1 {{ color: #A78BFA; margin: 0 0 8px; font-size: 26px; font-weight: 700; }}
+      p  {{ font-size: 15px; line-height: 1.5; opacity: 0.8; margin: 0 0 28px; }}
+      .big-btn {{ display: block; width: 100%; padding: 22px;
+                  background: linear-gradient(135deg, #8B5CF6 0%, #6D28D9 100%);
+                  color: white; text-decoration: none; border-radius: 16px;
+                  font-size: 18px; font-weight: 700; letter-spacing: 0.3px;
+                  box-shadow: 0 8px 24px rgba(139,92,246,0.4);
+                  -webkit-tap-highlight-color: transparent; }}
+      .big-btn:active {{ transform: scale(0.97); opacity: 0.9; }}
+      .hint {{ margin-top: 22px; font-size: 13px; opacity: 0.55; }}
+      .orb {{ width: 80px; height: 80px; margin: 0 auto 18px;
+              border-radius: 50%;
+              background: radial-gradient(circle at 30% 30%, #A78BFA, #4C1D95);
+              box-shadow: 0 0 40px rgba(167,139,250,0.5); }}
+    </style></head>
+    <body>
+      <div class="card">
+        <div class="orb"></div>
+        <h1>Coda</h1>
+        <p>Tocca il pulsante per aprire l'app in Expo Go.<br>Tieni Expo Go già installato.</p>
+        <a class="big-btn" href="{exp_url}">Apri in Expo Go</a>
+        <div class="hint">
+          Se non succede niente, assicurati che Expo Go sia installato.<br>
+          URL diretto: <code>{exp_url}</code>
+        </div>
+      </div>
+    </body></html>
+    """
+
+
+
 async def dev_repair_tunnel():
     """Force-restart the expo tunnel. Open from a browser to fix red screen."""
     try:
