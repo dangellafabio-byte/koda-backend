@@ -1981,44 +1981,40 @@ class TTSRequest(BaseModel):
 def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], similarity: Optional[float]) -> dict:
     """Adapt ElevenLabs voice settings to the conversational tone.
 
-    DRAMATIC EMPATHY MODE:
-    - Stability VERY low (0.05-0.25) — voice is allowed to swing emotionally,
-      whisper, sigh, laugh, get quiet or intense.
-    - Style VERY high (0.65-0.95) — accentuates the voice's expressive personality.
-    - Combined with eleven_v3 audio tags inline, this produces near-human emotion.
-
-    Note: very low stability can occasionally produce minor artifacts (slight
-    quiver). That's the trade-off for true emotional expressivity.
+    BALANCED MODE (richiesto dall'utente, giugno 2025):
+    Voce calma, meno emotiva, meno "confidenziale". Stability alta per
+    pronuncia stabile e neutra. Style moderato. Niente sussurri/sospiri
+    estremi né swings emotivi forti.
     """
-    base_stability = 0.15 if stability is None else stability
-    base_similarity = 0.78 if similarity is None else similarity
-    style = 0.75
+    base_stability = 0.55 if stability is None else stability
+    base_similarity = 0.75 if similarity is None else similarity
+    style = 0.30
     speed = 1.0
     t = (tone or "neutral").lower()
     if t == "calm":
-        base_stability = 0.25
-        speed = 0.93
-        style = 0.65
+        base_stability = 0.62
+        speed = 0.97
+        style = 0.22
     elif t == "concerned":
-        base_stability = 0.12
-        speed = 0.92
-        style = 0.85
-    elif t == "warm":
-        base_stability = 0.13
+        base_stability = 0.50
         speed = 0.96
-        style = 0.85
+        style = 0.40
+    elif t == "warm":
+        base_stability = 0.55
+        speed = 0.98
+        style = 0.32
     elif t == "energetic":
-        base_stability = 0.08
-        speed = 1.06
-        style = 0.95
+        base_stability = 0.48
+        speed = 1.03
+        style = 0.42
     elif t == "urgent":
-        base_stability = 0.06
-        speed = 1.10
-        style = 0.95
+        base_stability = 0.45
+        speed = 1.05
+        style = 0.50
     else:  # neutral
-        base_stability = 0.18
+        base_stability = 0.58
         speed = 1.0
-        style = 0.7
+        style = 0.28
     return {
         "stability": base_stability,
         "similarity_boost": base_similarity,

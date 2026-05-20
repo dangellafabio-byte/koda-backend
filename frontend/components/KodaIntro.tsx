@@ -87,7 +87,11 @@ const VOICEPRINT_PHRASES = [
 // che nelle conversazioni normali — così l'utente non percepisce un
 // "cambio di voce" tra intro e uso quotidiano dell'app.
 // "Sarah" — soft warm Italian-capable female voice
-const INTRO_VOICE_ID = "EXAVITQu4vr4xnSDxMaL";
+// VOCE UFFICIALE DI KODA — Matilda (femminile, calma, italiana fluida).
+// USA QUESTA OVUNQUE. Non cambiare in altre voci nei vari fallback —
+// l'utente ha richiesto esplicitamente che la voce rimanga SEMPRE la
+// stessa, non un mix di Sarah/Jessica/Matilda.
+const INTRO_VOICE_ID = "XrExE9yKIg1WjnnlVkGX";
 
 // ====== Battute di Koda per ogni step (TTS in tutti) ======
 const KODA_LINES: Record<number, string> = {
