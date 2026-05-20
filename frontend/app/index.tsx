@@ -2250,8 +2250,11 @@ export default function Taccuino() {
                 </View>
               )}
             </Pressable>
-            {/* In "both" mode show a compact text input under the mic */}
-            {inputMode === "both" && (
+            {/* Barra di scrittura: appare SOLO in modalità lettura (Page 1).
+                Nella pagina principale (orb voce zen) l'esperienza resta
+                pulita — niente UI di scrittura, solo l'eclissi. Per scrivere
+                l'utente swipa verso sinistra e va nella pagina di lettura. */}
+            {viewMode === "reading" && (
               <KeyboardAvoidingView
                 behavior={Platform.OS === "ios" ? "padding" : undefined}
                 style={{ width: "100%", marginTop: 18 }}
@@ -2260,19 +2263,19 @@ export default function Taccuino() {
                   <TextInput
                     value={textInput}
                     onChangeText={setTextInput}
-                    placeholder="Oppure scrivi..."
+                    placeholder="Scrivi qui..."
                     placeholderTextColor="#64748B"
                     style={styles.textInput}
                     onSubmitEditing={sendTextFromBox}
                     returnKeyType="send"
                     multiline
-                    testID="text-input-both"
+                    testID="text-input-reading"
                   />
                   <TouchableOpacity
                     onPress={sendTextFromBox}
                     style={[styles.sendBtn, !textInput.trim() && { opacity: 0.4 }]}
                     disabled={!textInput.trim()}
-                    testID="send-btn-both"
+                    testID="send-btn-reading"
                   >
                     <Ionicons name="arrow-up" size={20} color={theme.primaryText} />
                   </TouchableOpacity>
