@@ -106,12 +106,21 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
     // Switch home pager to the right page if needed (handled by parent).
     if (onPageChange) onPageChange(step.page);
     let cancelled = false;
+    // Safety net: if TTS hangs / fails silently, auto-advance after 15s
+    // so the tour never gets stuck on a single step.
+    const safetyTimer = setTimeout(() => {
+      if (!cancelled && !cancelledRef.current) {
+        console.warn("[KodaTour] safety timeout — advancing");
+        setIdx((i) => i + 1);
+      }
+    }, 15000);
     (async () => {
       try {
         // Stop any leftover audio before starting next speech
         try { SpeechMod.stop(); } catch {}
-        // tiny breather so the user's eye reaches the new highlight before voice
-        await new Promise((r) => setTimeout(r, 400));
+        // Longer breather when page changes (give pager animation time to settle)
+        // so the audio session doesn't conflict with the scroll animation.
+        await new Promise((r) => setTimeout(r, 700));
         if (cancelled) return;
         await SpeechMod.speak(step.speech, {
           language: "it-IT",
@@ -126,9 +135,12 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
       // Brief pause then advance
       setTimeout(() => {
         if (!cancelled && !cancelledRef.current) setIdx((i) => i + 1);
-      }, 600);
+      }, 500);
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      clearTimeout(safetyTimer);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idx]);
 
@@ -143,16 +155,6 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
   const ringH = r.h + pad * 2;
   const radius = step.shape === "circle" ? ringW / 2 : Math.min(ringW, ringH) / 2;
 
-  // Strip audio tags ([gently], [warmly] etc) for display
-  const cleanText = step.speech.replace(/\[[^\]]+\]/g, "").replace(/\s+/g, " ").trim();
-
-  // Decide bubble position: above ring if ring is in lower half, below ring otherwise.
-  const ringCenterY = r.y + r.h / 2;
-  const bubbleAbove = ringCenterY > height * 0.55;
-  const bubbleTop = bubbleAbove
-    ? Math.max(insets.top + 60, ringY - 160)
-    : Math.min(height - 200, ringY + ringH + 24);
-
   const ringScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] });
   const ringOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1] });
   // Sonar wave: scales from 1 → 2.2x and fades opacity 0.7 → 0
@@ -161,8 +163,31 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
 
   return (
     <Animated.View style={[styles.overlay, { opacity: fade }]} pointerEvents="auto">
-      {/* Dark layer — tap-through disabled so user can't accidentally interact with home */}
-      <View style={styles.dim} />
+      {/* === VERO SPOTLIGHT === 
+          Invece di una maschera unica che cubre TUTTO (così non si vede
+          nulla dell'elemento sotto), usiamo 4 rettangoli scuri attorno
+          al "buco" trasparente. L'elemento evidenziato resta perfettamente
+          visibile, e tutto il resto è scurito all'82%. */}
+      {/* TOP — dalla cima dello schermo fino all'alto del buco */}
+      <View
+        style={[styles.dim, { top: 0, left: 0, right: 0, height: Math.max(0, ringY) }]}
+        pointerEvents="auto"
+      />
+      {/* BOTTOM — dal fondo del buco fino in fondo */}
+      <View
+        style={[styles.dim, { top: ringY + ringH, left: 0, right: 0, bottom: 0 }]}
+        pointerEvents="auto"
+      />
+      {/* LEFT — fascia laterale sinistra alta come il buco */}
+      <View
+        style={[styles.dim, { top: ringY, left: 0, width: Math.max(0, ringX), height: ringH }]}
+        pointerEvents="auto"
+      />
+      {/* RIGHT — fascia laterale destra alta come il buco */}
+      <View
+        style={[styles.dim, { top: ringY, left: ringX + ringW, right: 0, height: ringH }]}
+        pointerEvents="auto"
+      />
 
       {/* SONAR WAVE — outward expanding ring (impulse effect).
           Placed BEHIND the main ring so the main ring stays crisp. */}
@@ -199,25 +224,10 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
         pointerEvents="none"
       />
 
-      {/* Speech bubble */}
-      <View
-        style={[
-          styles.bubble,
-          { top: bubbleTop, left: 20, right: 20 },
-        ]}
-      >
-        <View style={styles.bubbleHeader}>
-          <Ionicons name="pulse" size={14} color="#34D399" />
-          <Text style={styles.bubbleLabel}>
-            {idx + 1} di {steps.length}
-            {step.label ? ` · ${step.label}` : ""}
-          </Text>
-        </View>
-        <Text style={styles.bubbleText}>{cleanText}</Text>
-      </View>
+      {/* NIENTE BUBBLE DI TESTO — l'esperienza è tutta a voce, come 
+          richiesto dall'utente. Solo highlight + voce di Koda. */}
 
-      {/* Skip button — top center, easier to reach and visually balanced.
-          (Was top-right which looked like a close button for the home, not the tour.) */}
+      {/* Skip button — top center, easier to reach and visually balanced. */}
       <Pressable
         onPress={() => {
           cancelledRef.current = true;

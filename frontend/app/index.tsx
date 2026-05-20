@@ -275,6 +275,23 @@ export default function Taccuino() {
     ];
   }, [tourDims.width, tourDims.height, insets.top, profile?.user_name]);
 
+  // === MIC OFF DURANTE INTRO/TOUR ===
+  // Se KodaIntro o il Tour si aprono mentre il mic era attivo (hands-free),
+  // chiudi immediatamente il mic per liberare la sessione audio. Senza
+  // questo, l'AVAudioSession resta in "recording" e blocca il TTS di Koda
+  // (la voce non parte durante l'intro).
+  useEffect(() => {
+    const intruderActive = showColorIntro === true || tourActive || showOnboarding;
+    if (intruderActive && recRef.current) {
+      // Mic spento brutalmente — non vogliamo né silenzio rilevato né invio.
+      try {
+        recRef.current.cancel?.();
+      } catch {}
+      recRef.current = null;
+      setStatus("idle");
+    }
+  }, [showColorIntro, tourActive, showOnboarding]);
+
   const dismissColorIntro = useCallback(async (result?: KodaIntroResult) => {
     setShowColorIntro(false);
     try {
