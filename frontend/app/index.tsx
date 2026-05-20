@@ -46,7 +46,8 @@ import EclipseOrb from "../components/EclipseOrb";
 import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
 import KodaTour, { TourStep } from "../components/KodaTour";
 import * as SecureStore from "expo-secure-store";
-import NeonBorder from "../components/NeonBorder";
+import NeonBorder, { NeonBorderStatus } from "../components/NeonBorder";
+import ActivationPulse from "../components/ActivationPulse";
 import RadialGlow from "../components/RadialGlow";
 import SealSetupModal from "../components/SealSetupModal";
 import InfoModal from "../components/InfoModal";
@@ -177,6 +178,12 @@ export default function Taccuino() {
     })();
     return () => { cancelled = true; };
   }, []);
+  // === ACTIVATION PULSE (idea 1) ===
+  // Effetto "sistema attivo" all'avvio dell'app: linea neon viola traccia
+  // il perimetro dello schermo in 1.5s, poi svanisce. Mostrato SOLO al
+  // cold start. State `false` significa "ancora da mostrare".
+  const [activationPulseDone, setActivationPulseDone] = useState(false);
+
   // === TOUR GUIDATO (spotlight) ===
   // Si attiva dopo che KodaIntro termina (campo `launch_tour: true` nel
   // result). Mostra un overlay scuro sopra la home con un anello luminoso
@@ -3310,6 +3317,42 @@ export default function Taccuino() {
   // a colpo d'occhio di trovarsi in modalità confessionale, anche durante
   // la conversazione vocale. Quando spegne il confessionale, l'overlay
   // sparisce e si torna allo sfondo normale.
+  // === NEON BORDER (idee 2 + 3) ===
+  // Bordo neon attorno allo schermo che reagisce allo stato.
+  //   - Confessionale attivo → bordeaux pulsante (sigillo)
+  //   - Hands-free + voce rilevata → verde menta sottile (ti sto sentendo)
+  //   - Recording manuale → verde brillante (recording standard)
+  // Priorità: confessional > listening > recording/thinking/speaking > idle.
+  const neonStatus: NeonBorderStatus = (() => {
+    if (confessionalMode) return "confessional";
+    if (handsFree && status === "recording") return "listening";
+    if (status === "recording") return "recording";
+    if (status === "thinking") return "thinking";
+    if (status === "speaking") return "speaking";
+    return "idle";
+  })();
+  // Spessore: bordo più sottile per "listening" (deve essere discreto),
+  // più spesso per "confessional" (deve dare il senso di soglia).
+  const neonThickness =
+    neonStatus === "confessional" ? 26 :
+    neonStatus === "listening" ? 8 :
+    20;
+  const neonBorderEl = (
+    <NeonBorder status={neonStatus} thickness={neonThickness} />
+  );
+
+  // === ACTIVATION PULSE (idea 1) ===
+  // Mostrato una sola volta dopo che il profilo è caricato e non c'è
+  // KodaIntro/onboarding in corso. Effetto "sistema attivo" all'avvio.
+  const activationPulseEl = (!activationPulseDone && profile && showColorIntro === false && !showOnboarding) ? (
+    <ActivationPulse
+      color="#8B5CF6"
+      duration={1500}
+      thickness={3}
+      onComplete={() => setActivationPulseDone(true)}
+    />
+  ) : null;
+
   const confessionalTint = confessionalMode ? (
     <View
       pointerEvents="none"
@@ -3354,6 +3397,8 @@ export default function Taccuino() {
         <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { backgroundColor: `rgba(0,0,0,${bgDim})` }]} />
         {confessionalTint}
         {screenInner}
+        {neonBorderEl}
+        {activationPulseEl}
         {tourOverlay}
       </ImageBackground>
     );
@@ -3369,6 +3414,8 @@ export default function Taccuino() {
         />
         {confessionalTint}
         {screenInner}
+        {neonBorderEl}
+        {activationPulseEl}
         {tourOverlay}
       </View>
     );
@@ -3377,6 +3424,8 @@ export default function Taccuino() {
     <View style={{ flex: 1 }}>
       {screenInner}
       {confessionalTint}
+      {neonBorderEl}
+      {activationPulseEl}
       {tourOverlay}
     </View>
   );

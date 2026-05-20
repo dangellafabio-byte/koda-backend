@@ -18,13 +18,15 @@ import React, { useEffect, useRef } from "react";
 import { View, StyleSheet, Animated, Easing, Platform } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 
-export type NeonBorderStatus = "idle" | "recording" | "thinking" | "speaking";
+export type NeonBorderStatus = "idle" | "recording" | "thinking" | "speaking" | "confessional" | "listening";
 
 const STATE_COLORS: Record<NeonBorderStatus, string | null> = {
   idle: null,                 // invisibile
   recording: "#22C55E",        // verde brillante
   thinking: "#A78BFA",         // viola tenue
   speaking: "#F59E0B",         // ambra calda
+  confessional: "#8B3A4A",     // bordeaux — sigillo del Confessionale
+  listening: "#34D399",        // verde menta sottile — VAD ha rilevato la tua voce
 };
 
 export default function NeonBorder({
