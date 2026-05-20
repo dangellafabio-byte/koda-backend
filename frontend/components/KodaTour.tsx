@@ -228,22 +228,31 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
           richiesto dall'utente. Solo highlight + voce di Koda. */}
 
       {/* Skip button — bottom center, "fuori dalle balle".
-          Stesse dimensioni 44+ per touch target accessibile. */}
-      <Pressable
-        onPress={() => {
-          cancelledRef.current = true;
-          try { SpeechMod.stop(); } catch {}
-          onComplete();
+          Wrappato in un View full-width con alignItems:center perché
+          `alignSelf: center` su Pressable absolute non funziona. */}
+      <View
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: Math.max(insets.bottom + 28, 40),
+          alignItems: "center",
         }}
-        style={[
-          styles.skipBtn,
-          { bottom: Math.max(insets.bottom + 28, 40), alignSelf: "center" },
-        ]}
-        hitSlop={14}
+        pointerEvents="box-none"
       >
-        <Text style={styles.skipText}>Salta tour</Text>
-        <Ionicons name="close-circle" size={16} color="#FFFFFFCC" />
-      </Pressable>
+        <Pressable
+          onPress={() => {
+            cancelledRef.current = true;
+            try { SpeechMod.stop(); } catch {}
+            onComplete();
+          }}
+          style={styles.skipBtn}
+          hitSlop={14}
+        >
+          <Text style={styles.skipText}>Salta tour</Text>
+          <Ionicons name="close-circle" size={16} color="#FFFFFFCC" />
+        </Pressable>
+      </View>
     </Animated.View>
   );
 }

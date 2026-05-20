@@ -549,6 +549,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
             <StepView
               title="La tua parola."
               subtitle="Pensaci bene. Solo tu la devi sapere. È la chiave per aprire la modalità sigillata."
+              showSubtitle={true}
               primaryLabel="Salva e continua"
               onPrimary={() => advance(8)}
               primaryDisabled={secretWordValue.trim().length < 3}
@@ -604,6 +605,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
           <StepView
             title={`La tua voce (${voiceprintIdx + 1} di 3)`}
             subtitle={`Premi e leggi questa frase ad alta voce:\n\n"${VOICEPRINT_PHRASES[voiceprintIdx]}"`}
+            showSubtitle={true}
           >
             <Pressable
               onPress={isRecording ? stopVoiceprintRecording : startVoiceprintRecording}
@@ -722,6 +724,7 @@ function StepView({
   primaryLabel,
   onPrimary,
   primaryDisabled,
+  showSubtitle = false,
   children,
 }: {
   title: string;
@@ -729,15 +732,23 @@ function StepView({
   primaryLabel?: string;
   onPrimary?: () => void;
   primaryDisabled?: boolean;
+  /** Mostra il sottotitolo. Default false (l'utente vuole zero testi).
+   *  Attivare SOLO per step in cui il subtitle contiene info critiche
+   *  che la voce non può veicolare (es. la frase da leggere ad alta voce
+   *  nel voiceprint enrollment). */
+  showSubtitle?: boolean;
   children?: React.ReactNode;
 }) {
   return (
     <View style={styles.stepView}>
       <Text style={styles.title}>{title}</Text>
-      {/* SUBTITLE NASCOSTO — l'utente vuole solo voce, niente sottotesti.
-          Tutto quello che dovrebbe essere "scritto sotto" lo dice Koda
-          a voce nel KODA_LINES corrispondente. Manteniamo la prop per
-          retrocompatibilità ma non la renderizziamo. */}
+      {/* SUBTITLE — mostrato solo per step "critici" dove il testo è
+          essenziale (es. le frasi da leggere ad alta voce nel voiceprint,
+          o l'avviso sulla secret word). Per tutti gli altri step il
+          contesto è fornito SOLO da Koda a voce, come richiesto. */}
+      {showSubtitle && subtitle ? (
+        <Text style={styles.subtitle}>{subtitle}</Text>
+      ) : null}
       {children}
       {primaryLabel && onPrimary ? (
         <Pressable
