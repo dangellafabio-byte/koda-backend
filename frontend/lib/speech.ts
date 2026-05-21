@@ -56,16 +56,15 @@ export function setDefaultVoiceId(id: string | null | undefined) {
  * is silently buffering even though playbackStatus says "playing". The user hears
  * NOTHING for the first TTS, then everything works from step 2 onwards.
  *
- * Fix: call setAudioModeAsync ONCE at boot to initialize the AVAudioSession in
- * playback category BEFORE the user reaches the first TTS-emitting screen.
- * Also play a 1-frame silent buffer to "unlock" the AVPlayer subsystem.
+ * Additional iOS issue: if the audio session is initialized at boot but then
+ * NOTHING uses it for several seconds (e.g. during a long splash screen),
+ * iOS may "demote" the session and the next playback attempt will again be
+ * silent. So this function is intentionally NOT one-shot — it can be called
+ * multiple times to "re-arm" the session, and is idempotent and safe.
  *
- * Idempotent and safe to call from anywhere. Errors are swallowed.
+ * Errors are swallowed.
  */
-let _prewarmed = false;
 export async function prewarmAudio(): Promise<void> {
-  if (_prewarmed) return;
-  _prewarmed = true;
   if (Platform.OS === "web") return;
   try {
     await setAudioModeAsync({
@@ -599,6 +598,12 @@ export const SpeechMod = {
     const useEleven = opts.useElevenLabs !== false; // default ON
 
     stopAllPlayback();
+
+    // Ri-arma la audio session iOS prima di OGNI speak. È idempotent e
+    // velocissimo, ma copre il caso in cui iOS ha "demoted" la session
+    // durante un periodo di inattività (es. dopo lo splash di 10s).
+    // Senza questo, il primo speak post-splash è muto.
+    await prewarmAudio();
 
     const ac = new AbortController();
     currentAbort = ac;
