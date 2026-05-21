@@ -1,44 +1,44 @@
 /**
- * NeonBorder — Bordo neon sui 4 lati dello schermo che pulsa col colore
- * dello stato corrente. È il **feedback periferico**: anche se non guardi
- * la macchia (es. stai guardando di sotto, stai parlando senza fissare
- * lo schermo), il colore lampeggia ai bordi e ti dice cosa fare.
+ * NeonBorder v3 — bordo neon che segue il perimetro arrotondato del display
+ * iOS/Android, con colori "shocking neon" intensi e glow shadow forte.
  *
- * Stati:
- *  - idle        → invisibile (bordo trasparente)
- *  - recording   → verde brillante pulsante (PARLA: ti sto ascoltando)
- *  - thinking    → viola tenue (sto pensando, aspetta)
- *  - speaking    → ambra calda (sto parlando io, ascolta)
+ * Differenza chiave vs versione precedente:
+ *  - PRIMA: 4 LinearGradient rettangolari indipendenti (top/bottom/left/right),
+ *    che lasciavano scoperti gli angoli arrotondati dell'iPhone, il notch,
+ *    e la home indicator. Brutto.
+ *  - ADESSO: un SOLO `Animated.View` in absoluteFill con `borderWidth` +
+ *    `borderRadius` ALTO. Il radius matcha quello del display (54px su iPhone
+ *    moderni), così il bordo è una cornice continua perfetta. Il glow è
+ *    ottenuto via `shadowColor + shadowRadius` (iOS) e `elevation` (Android).
  *
- * Implementazione: 4 LinearGradient absolute lungo i bordi (top/bottom
- * nero→colore→nero, left/right idem). Pulsa via Animated opacity.
- * Pointer-events: none (non blocca i tap sotto).
+ * Bonus: l'opacity (pulse) è animata tramite useNativeDriver, fluida anche
+ * sotto carico, e il color cambia via `borderColor` su rerender (transizione
+ * gestita da `fade`).
  */
 import React, { useEffect, useRef } from "react";
-import { View, StyleSheet, Animated, Easing, Platform } from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
+import { StyleSheet, Animated, Easing, Platform } from "react-native";
 
 export type NeonBorderStatus = "idle" | "recording" | "thinking" | "speaking" | "confessional" | "listening";
 
-const STATE_COLORS: Record<NeonBorderStatus, string | null> = {
-  // Rosa tenue — vita costante dell'app, "respiro" a riposo
-  idle: "#F472B6",
-  // Blu petrolio/tiffany — "ti sto ascoltando, registro"
-  recording: "#14B8A6",
-  // Stesso blu petrolio più discreto per hands-free listening
+// === COLORI SHOCKING NEON ===
+// Saturazione massima, luminosità alta, sembrano "LED veri".
+const STATE_COLORS: Record<NeonBorderStatus, string> = {
+  // Rosa shocking — vita costante dell'app a riposo
+  idle: "#FF1493",
+  // Tiffany/turchese neon — registrazione attiva
+  recording: "#00F5D4",
+  // Tiffany più tenue per hands-free listening
   listening: "#5EEAD4",
-  // Blu profondo — riflessione, "sto pensando"
-  thinking: "#3B82F6",
-  // Viola — quando Koda parla (coerente con l'eclissi viola/identità)
-  speaking: "#8B5CF6",
-  // Scarlatto — sigillo del Confessionale, urgenza/intimità del segreto
-  confessional: "#DC2626",
+  // Blu elettrico neon — riflessione/pensiero
+  thinking: "#1E90FF",
+  // Viola elettrico neon — Koda sta parlando
+  speaking: "#BD10E0",
+  // Scarlatto neon — sigillo Confessionale
+  confessional: "#FF1744",
 };
 
-// Intensità "a riposo" più tenue per non disturbare lo sguardo;
-// gli stati attivi sono pieni.
 const STATE_BASE_OPACITY: Record<NeonBorderStatus, number> = {
-  idle: 0.45,
+  idle: 0.55,         // discreto ma sempre vivo
   recording: 1.0,
   listening: 0.85,
   thinking: 1.0,
@@ -46,9 +46,19 @@ const STATE_BASE_OPACITY: Record<NeonBorderStatus, number> = {
   confessional: 1.0,
 };
 
+// Cicli di pulsazione (ms) — più lento = più "calmo".
+const STATE_CYCLE_MS: Record<NeonBorderStatus, number> = {
+  idle: 4000,         // respiro lento, quasi impercettibile
+  recording: 1100,
+  listening: 1500,
+  thinking: 1900,
+  speaking: 900,
+  confessional: 1700,
+};
+
 export default function NeonBorder({
   status,
-  thickness = 22,
+  thickness = 3,
 }: {
   status: NeonBorderStatus;
   thickness?: number;
@@ -57,143 +67,85 @@ export default function NeonBorder({
   const fade = useRef(new Animated.Value(0)).current;
   const color = STATE_COLORS[status];
   const baseOp = STATE_BASE_OPACITY[status] ?? 1;
+  const cycleMs = STATE_CYCLE_MS[status] ?? 1800;
 
-  // Fade in/out as status changes (smooth transitions)
+  // Fade-in al cambio di stato (transizione fluida tra colori)
   useEffect(() => {
     Animated.timing(fade, {
-      toValue: color ? baseOp : 0,
+      toValue: baseOp,
       duration: 350,
       easing: Easing.out(Easing.quad),
       useNativeDriver: true,
     }).start();
-  }, [color, baseOp, fade]);
+  }, [baseOp, fade]);
 
-  // Pulsing — speed varies per status to feel alive.
-  // A riposo (idle) il respiro è LENTO e leggero — quasi impercettibile.
+  // Pulsazione "respiro" del bordo
   useEffect(() => {
-    if (!color) return;
-    const cycleMs =
-      status === "recording" ? 1100 :
-      status === "speaking" ? 900 :
-      status === "idle" ? 3500 :  // respiro lento a riposo
-      1800;
+    pulse.setValue(0);
     const anim = Animated.loop(
       Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: cycleMs / 2, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0, duration: cycleMs / 2, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: cycleMs / 2,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0,
+          duration: cycleMs / 2,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
       ])
     );
     anim.start();
     return () => anim.stop();
-  }, [color, status, pulse]);
+  }, [cycleMs, pulse]);
 
-  if (!color) {
-    // Mantengo il container montato ma invisibile per evitare flicker al
-    // cambio di stato. fade gestisce l'opacità.
-  }
-
-  // pulse 0..1 → opacity 0.5..1 (così non sparisce mai del tutto durante
-  // un loop) moltiplicato per fade (0..1) che gestisce idle vs attivo.
+  // opacity finale = fade × interp(pulse 0..1 → 0.45..1)
+  // Così il bordo non scompare mai del tutto durante un loop, ma respira.
   const opacity = Animated.multiply(
     fade,
-    pulse.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1] })
+    pulse.interpolate({ inputRange: [0, 1], outputRange: [0.45, 1] })
   );
 
-  // Colore con tre stop per fade ai bordi (più intenso al centro del lato)
-  const transparent = color + "00";
-  const mid = color + "FF";
-  const edge = color + "33";
-
-  // Common gradient style props
-  const horizGrad = {
-    locations: [0, 0.5, 1] as any,
-    colors: [edge, mid, edge],
-  };
-  const vertGrad = {
-    locations: [0, 0.5, 1] as any,
-    colors: [edge, mid, edge],
-  };
-
-  // Each edge fades to transparent in the perpendicular direction
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      {/* TOP */}
-      <Animated.View style={[styles.edge, { top: 0, left: 0, right: 0, height: thickness, opacity }]}>
-        <LinearGradient
-          colors={[mid, transparent]}
-          start={{ x: 0.5, y: 0 }}
-          end={{ x: 0.5, y: 1 }}
-          style={StyleSheet.absoluteFillObject}
-        />
-        <LinearGradient
-          colors={horizGrad.colors as any}
-          start={{ x: 0, y: 0.5 }}
-          end={{ x: 1, y: 0.5 }}
-          style={[StyleSheet.absoluteFillObject, { opacity: 0.6 }]}
-        />
-      </Animated.View>
-      {/* BOTTOM */}
-      <Animated.View style={[styles.edge, { bottom: 0, left: 0, right: 0, height: thickness, opacity }]}>
-        <LinearGradient
-          colors={[transparent, mid]}
-          start={{ x: 0.5, y: 0 }}
-          end={{ x: 0.5, y: 1 }}
-          style={StyleSheet.absoluteFillObject}
-        />
-        <LinearGradient
-          colors={horizGrad.colors as any}
-          start={{ x: 0, y: 0.5 }}
-          end={{ x: 1, y: 0.5 }}
-          style={[StyleSheet.absoluteFillObject, { opacity: 0.6 }]}
-        />
-      </Animated.View>
-      {/* LEFT */}
-      <Animated.View style={[styles.edge, { top: 0, bottom: 0, left: 0, width: thickness, opacity }]}>
-        <LinearGradient
-          colors={[mid, transparent]}
-          start={{ x: 0, y: 0.5 }}
-          end={{ x: 1, y: 0.5 }}
-          style={StyleSheet.absoluteFillObject}
-        />
-        <LinearGradient
-          colors={vertGrad.colors as any}
-          start={{ x: 0.5, y: 0 }}
-          end={{ x: 0.5, y: 1 }}
-          style={[StyleSheet.absoluteFillObject, { opacity: 0.6 }]}
-        />
-      </Animated.View>
-      {/* RIGHT */}
-      <Animated.View style={[styles.edge, { top: 0, bottom: 0, right: 0, width: thickness, opacity }]}>
-        <LinearGradient
-          colors={[transparent, mid]}
-          start={{ x: 0, y: 0.5 }}
-          end={{ x: 1, y: 0.5 }}
-          style={StyleSheet.absoluteFillObject}
-        />
-        <LinearGradient
-          colors={vertGrad.colors as any}
-          start={{ x: 0.5, y: 0 }}
-          end={{ x: 0.5, y: 1 }}
-          style={[StyleSheet.absoluteFillObject, { opacity: 0.6 }]}
-        />
-      </Animated.View>
-    </View>
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        styles.frame,
+        {
+          borderColor: color,
+          borderWidth: thickness,
+          // Radius alto per matchare il rounding del display moderno.
+          // iPhone 13 Pro/14/15 hanno ~50-55px di radius display.
+          // Su Android moderni il radius è simile.
+          borderRadius: 56,
+          opacity,
+          // Glow neon via shadow (iOS) ed elevation (Android).
+          ...Platform.select({
+            ios: {
+              shadowColor: color,
+              shadowOpacity: 1,
+              shadowRadius: 28,
+              shadowOffset: { width: 0, height: 0 },
+            },
+            android: { elevation: 18 },
+            default: {},
+          }),
+        },
+      ]}
+    />
   );
 }
 
 const styles = StyleSheet.create({
-  edge: {
+  frame: {
     position: "absolute",
-    overflow: "hidden",
-    ...Platform.select({
-      ios: {
-        shadowColor: "#000",
-        shadowOpacity: 0,
-      },
-      web: {
-        // a slight blur on web so the gradient feels softer
-        filter: "blur(2px)",
-      } as any,
-    }),
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "transparent",
   },
 });

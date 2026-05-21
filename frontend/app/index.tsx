@@ -3364,12 +3364,13 @@ export default function Taccuino() {
     if (status === "speaking") return "speaking";
     return "idle";
   })();
-  // Spessore: bordo più sottile per "listening" (deve essere discreto),
-  // più spesso per "confessional" (deve dare il senso di soglia).
+  // Spessore del bordo (in pixel). Il glow vero arriva dal shadow,
+  // non serve un bordo spesso: 2-4px sono perfetti.
   const neonThickness =
-    neonStatus === "confessional" ? 26 :
-    neonStatus === "listening" ? 8 :
-    20;
+    neonStatus === "confessional" ? 4 :
+    neonStatus === "listening" ? 2 :
+    neonStatus === "idle" ? 2 :
+    3;
   const neonBorderEl = (
     <NeonBorder status={neonStatus} thickness={neonThickness} />
   );
