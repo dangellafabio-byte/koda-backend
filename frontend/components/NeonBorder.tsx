@@ -1,60 +1,41 @@
 /**
- * NeonBorder v3 — bordo neon che segue il perimetro arrotondato del display
- * iOS/Android, con colori "shocking neon" intensi e glow shadow forte.
+ * NeonBorder v4 — bordo neon arrotondato sul perimetro del display.
  *
- * Differenza chiave vs versione precedente:
- *  - PRIMA: 4 LinearGradient rettangolari indipendenti (top/bottom/left/right),
- *    che lasciavano scoperti gli angoli arrotondati dell'iPhone, il notch,
- *    e la home indicator. Brutto.
- *  - ADESSO: un SOLO `Animated.View` in absoluteFill con `borderWidth` +
- *    `borderRadius` ALTO. Il radius matcha quello del display (54px su iPhone
- *    moderni), così il bordo è una cornice continua perfetta. Il glow è
- *    ottenuto via `shadowColor + shadowRadius` (iOS) e `elevation` (Android).
- *
- * Bonus: l'opacity (pulse) è animata tramite useNativeDriver, fluida anche
- * sotto carico, e il color cambia via `borderColor` su rerender (transizione
- * gestita da `fade`).
+ * Cambiamenti rispetto a v3:
+ *  - PULSAZIONE LENTISSIMA E INDIPENDENTE: ~7s per ciclo per tutti gli stati,
+ *    opacity oscilla 0.75 ↔ 1.0 (quasi fissa, sempre molto visibile).
+ *    Non c'è sincronia con l'eclissi: il bordo "respira" per conto suo,
+ *    lentamente, come una presenza costante.
+ *  - THINKING = LUCE CHE GIRA attorno al perimetro: niente più pulsazione
+ *    classica, mostriamo un segmento di neon che corre continuamente lungo
+ *    tutto il bordo arrotondato (effetto "caricamento neon"). Bel sostituto
+ *    del solito spinner.
+ *  - Colori shocking neon (validati).
  */
-import React, { useEffect, useRef } from "react";
-import { StyleSheet, Animated, Easing, Platform } from "react-native";
+import React, { useEffect, useMemo, useRef } from "react";
+import { StyleSheet, Animated, Easing, Platform, useWindowDimensions } from "react-native";
+import Svg, { Rect } from "react-native-svg";
+
+const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
 export type NeonBorderStatus = "idle" | "recording" | "thinking" | "speaking" | "confessional" | "listening";
 
 // === COLORI SHOCKING NEON ===
-// Saturazione massima, luminosità alta, sembrano "LED veri".
 const STATE_COLORS: Record<NeonBorderStatus, string> = {
-  // Rosa shocking — vita costante dell'app a riposo
-  idle: "#FF1493",
-  // Tiffany/turchese neon — registrazione attiva
-  recording: "#00F5D4",
-  // Tiffany più tenue per hands-free listening
-  listening: "#5EEAD4",
-  // Blu elettrico neon — riflessione/pensiero
-  thinking: "#1E90FF",
-  // Viola elettrico neon — Koda sta parlando
-  speaking: "#BD10E0",
-  // Scarlatto neon — sigillo Confessionale
-  confessional: "#FF1744",
+  idle: "#FF1493",        // 🌸 Rosa shocking
+  recording: "#00F5D4",   // 💎 Tiffany neon
+  listening: "#5EEAD4",   // 💧 Tiffany chiaro
+  thinking: "#1E90FF",    // ⚡ Blu elettrico
+  speaking: "#BD10E0",    // 🟣 Viola elettrico
+  confessional: "#FF1744",// ❤️‍🔥 Scarlatto
 };
 
-const STATE_BASE_OPACITY: Record<NeonBorderStatus, number> = {
-  idle: 0.55,         // discreto ma sempre vivo
-  recording: 1.0,
-  listening: 0.85,
-  thinking: 1.0,
-  speaking: 1.0,
-  confessional: 1.0,
-};
+// Tutti gli stati hanno pulsazione MOLTO lenta (~7s), quasi immobile,
+// per essere una presenza costante senza distrarre.
+const SLOW_CYCLE_MS = 7000;
 
-// Cicli di pulsazione (ms) — più lento = più "calmo".
-const STATE_CYCLE_MS: Record<NeonBorderStatus, number> = {
-  idle: 4000,         // respiro lento, quasi impercettibile
-  recording: 1100,
-  listening: 1500,
-  thinking: 1900,
-  speaking: 900,
-  confessional: 1700,
-};
+// Display border radius (matcha gli angoli iPhone moderni)
+const DISPLAY_RADIUS = 56;
 
 export default function NeonBorder({
   status,
@@ -63,36 +44,25 @@ export default function NeonBorder({
   status: NeonBorderStatus;
   thickness?: number;
 }) {
-  const pulse = useRef(new Animated.Value(0)).current;
-  const fade = useRef(new Animated.Value(0)).current;
+  const { width: W, height: H } = useWindowDimensions();
   const color = STATE_COLORS[status];
-  const baseOp = STATE_BASE_OPACITY[status] ?? 1;
-  const cycleMs = STATE_CYCLE_MS[status] ?? 1800;
 
-  // Fade-in al cambio di stato (transizione fluida tra colori)
-  useEffect(() => {
-    Animated.timing(fade, {
-      toValue: baseOp,
-      duration: 350,
-      easing: Easing.out(Easing.quad),
-      useNativeDriver: true,
-    }).start();
-  }, [baseOp, fade]);
-
-  // Pulsazione "respiro" del bordo
+  // ============ PULSAZIONE LENTA (tutti gli stati tranne thinking) ============
+  const pulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     pulse.setValue(0);
+    if (status === "thinking") return; // thinking ha la sua animazione (chase)
     const anim = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, {
           toValue: 1,
-          duration: cycleMs / 2,
+          duration: SLOW_CYCLE_MS / 2,
           easing: Easing.inOut(Easing.sin),
           useNativeDriver: true,
         }),
         Animated.timing(pulse, {
           toValue: 0,
-          duration: cycleMs / 2,
+          duration: SLOW_CYCLE_MS / 2,
           easing: Easing.inOut(Easing.sin),
           useNativeDriver: true,
         }),
@@ -100,15 +70,85 @@ export default function NeonBorder({
     );
     anim.start();
     return () => anim.stop();
-  }, [cycleMs, pulse]);
+  }, [status, pulse]);
 
-  // opacity finale = fade × interp(pulse 0..1 → 0.45..1)
-  // Così il bordo non scompare mai del tutto durante un loop, ma respira.
-  const opacity = Animated.multiply(
-    fade,
-    pulse.interpolate({ inputRange: [0, 1], outputRange: [0.45, 1] })
-  );
+  // opacity quasi fissa: oscilla tra 0.75 e 1.0 (sempre molto visibile)
+  const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.75, 1] });
 
+  // ============ CHASE LIGHT (solo thinking) ============
+  // Animazione di un segmento di neon che corre attorno al perimetro
+  // arrotondato. Usiamo SVG Rect con strokeDasharray + strokeDashoffset.
+  // Il perimetro arrotondato vero è ~ 2*(W+H) - 8*r + 2*pi*r.
+  const perimeter = useMemo(() => {
+    const r = DISPLAY_RADIUS;
+    return 2 * (W + H) - 8 * r + 2 * Math.PI * r;
+  }, [W, H]);
+  // Lunghezza del segmento luminoso = 25% del perimetro
+  const dashLen = Math.max(80, perimeter * 0.25);
+  // Pattern dash: [segmento_acceso, segmento_spento]
+  const dashArray = `${dashLen} ${perimeter}`;
+
+  const dashOffset = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    dashOffset.setValue(0);
+    if (status !== "thinking") return;
+    const anim = Animated.loop(
+      Animated.timing(dashOffset, {
+        toValue: -perimeter,
+        duration: 2200, // tempo per fare un giro completo
+        easing: Easing.linear,
+        // strokeDashoffset NON supporta native driver
+        useNativeDriver: false,
+      })
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [status, perimeter, dashOffset]);
+
+  // ============ RENDER ============
+  if (status === "thinking") {
+    // SVG full-screen con segmento di neon che corre attorno al perimetro
+    return (
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          StyleSheet.absoluteFill,
+          {
+            ...Platform.select({
+              ios: {
+                shadowColor: color,
+                shadowOpacity: 1,
+                shadowRadius: 22,
+                shadowOffset: { width: 0, height: 0 },
+              },
+              android: { elevation: 18 },
+              default: {},
+            }),
+          },
+        ]}
+      >
+        <Svg width="100%" height="100%" style={StyleSheet.absoluteFill}>
+          <AnimatedRect
+            x={thickness / 2}
+            y={thickness / 2}
+            width={W - thickness}
+            height={H - thickness}
+            rx={DISPLAY_RADIUS}
+            ry={DISPLAY_RADIUS}
+            fill="none"
+            stroke={color}
+            strokeWidth={thickness}
+            strokeLinecap="round"
+            strokeDasharray={dashArray}
+            strokeDashoffset={dashOffset as any}
+            opacity={1}
+          />
+        </Svg>
+      </Animated.View>
+    );
+  }
+
+  // Tutti gli altri stati: bordo fisso arrotondato con pulsazione lentissima
   return (
     <Animated.View
       pointerEvents="none"
@@ -117,12 +157,8 @@ export default function NeonBorder({
         {
           borderColor: color,
           borderWidth: thickness,
-          // Radius alto per matchare il rounding del display moderno.
-          // iPhone 13 Pro/14/15 hanno ~50-55px di radius display.
-          // Su Android moderni il radius è simile.
-          borderRadius: 56,
+          borderRadius: DISPLAY_RADIUS,
           opacity,
-          // Glow neon via shadow (iOS) ed elevation (Android).
           ...Platform.select({
             ios: {
               shadowColor: color,
