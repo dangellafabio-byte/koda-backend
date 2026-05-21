@@ -620,38 +620,37 @@ export const SpeechMod = {
           ok = await playElevenLabsWeb(buf);
         }
       } else {
-        // Native (iOS/Android) — STREAMING FIRST.
+        // Native (iOS/Android) — PREPARE-FIRST (changed from streaming-first).
         //
-        // Why streaming-primary now (Step 2a — Fase 4):
-        //   Old flow: `/tts/prepare` waits for ElevenLabs to generate the WHOLE
-        //   MP3 server-side (3-5s), THEN returns a token, THEN client downloads.
-        //   The user heard nothing for 5-7 seconds after the AI "started speaking".
+        // Why: iOS AVPlayer (used by expo-audio) refuses to start progressive
+        // playback on chunked-transfer MP3 streams that lack Content-Length and
+        // Accept-Ranges headers. The /api/tts/stream endpoint serves chunked MP3
+        // without those headers → AVPlayer silently stalls → SpeechMod falls back
+        // to expo-speech robotic voice. Bug observed on iPhone 13 Pro, iOS Ad-Hoc
+        // build, May 2026.
         //
-        //   New flow: `/tts/stream` opens an ElevenLabs streaming connection on
-        //   the server and pipes MP3 chunks back over HTTP chunked-transfer as
-        //   they arrive (~300ms TTFB with eleven_flash_v2_5). expo-audio's
-        //   AVPlayer-backed `createAudioPlayer(url)` starts playback as soon as
-        //   the first audio chunk lands in its buffer (~500ms total).
+        // /api/tts/prepare → token → /api/tts/audio/{token}.mp3 is served as a
+        // static file with proper Content-Length and Accept-Ranges, which AVPlayer
+        // streams cleanly. The trade-off is ~3-5s extra latency (server waits for
+        // ElevenLabs to finish generating the full MP3 before returning the token)
+        // but the user gets the REAL Matilda voice instead of the iOS robotic
+        // fallback — a much better UX.
         //
-        //   Result: latency from "AI starts speaking" → "you hear voice" drops
-        //   from ~5s to ~0.5s.
-        //
-        // Prepared-file path is kept ONLY as fallback (e.g. if Range requests
-        // get blocked by a CDN, or if streaming connection fails mid-air).
-        const streamUrl = buildStreamUrl(text, voiceArg, tone);
-        ok = await playElevenLabsNativeFromUrl(streamUrl);
+        // Streaming endpoint is kept as a secondary fallback only.
+        const url = await prepareTTSUrl(text, voiceArg, tone, ac.signal);
         if (cancelled()) {
           speakingNow = false;
           return;
         }
+        if (url) {
+          ok = await playElevenLabsNativeFromUrl(url);
+        }
         if (currentAbort === ac) currentAbort = null;
-        // Fallback: prepared-file path (slower but more resilient on bad networks).
+        // Fallback: streaming (might work on Android or future iOS fixes).
         if (!ok && !cancelled()) {
-          console.warn("[speech] streaming TTS failed, falling back to /tts/prepare");
-          const url = await prepareTTSUrl(text, voiceArg, tone, ac.signal);
-          if (url) {
-            ok = await playElevenLabsNativeFromUrl(url);
-          }
+          console.warn("[speech] prepared TTS failed, falling back to /tts/stream");
+          const streamUrl = buildStreamUrl(text, voiceArg, tone);
+          ok = await playElevenLabsNativeFromUrl(streamUrl);
         }
       }
 
