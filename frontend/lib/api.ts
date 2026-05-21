@@ -187,6 +187,21 @@ export const api = {
    * `history_*` opzionali: turni precedenti della stessa sessione confessionale,
    * cifrati con la stessa chiave. Server li decifra in RAM e li passa a Claude
    * per dare continuità intra-confessionale. */
+  /** Confessionale Zero-Knowledge: invia messaggio cifrato + chiave volatile in header.
+   * Server decifra in RAM, chiama Claude, ricifra. Niente è loggato/persistito.
+   * `history_*` opzionali: turni precedenti della stessa sessione confessionale,
+   * cifrati con la stessa chiave. Server li decifra in RAM e li passa a Claude
+   * per dare continuità intra-confessionale. */
+  confessionalHistory: (limit: number = 200) =>
+    jsonReq<{
+      entries: Array<{ id: string; role: "user" | "ai"; nonce: string; ciphertext: string; ts: string }>;
+      count: number;
+    }>(`/confessional/history?limit=${limit}`),
+
+  /** Numero di entries presenti nel vault (senza esporre contenuti).
+   *  Usato fuori-Confessionale per dare a Koda awareness che "esiste un vault". */
+  confessionalCount: () => jsonReq<{ count: number }>("/confessional/count"),
+
   converseSealed: (
     payload: {
       nonce: string;

@@ -392,6 +392,9 @@ export default function Taccuino() {
   const [voicesEnabled, setVoicesEnabled] = useState(true);
   const [voicePreviewLoading, setVoicePreviewLoading] = useState<string | null>(null);
   const convActiveRef = useRef(false);
+  // Flag: scaricato la cronologia confessionale (cifrata) dal backend in
+  // questa sessione app. Evita fetch ripetuti.
+  const confessionalHistoryLoadedRef = useRef(false);
   useEffect(() => {
     convActiveRef.current = convActive;
   }, [convActive]);
@@ -977,13 +980,54 @@ export default function Taccuino() {
             throw new Error("Parola Segreta non sbloccata");
           }
           const sealed = await sealText(txt, key);
-          // Raccogli i turni confessionali precedenti di QUESTA sessione (RAM
-          // only — vivono solo nella timeline locale, mai nel DB). Vengono
-          // cifrati con la stessa chiave e passati al backend per dare a
-          // Koda continuità intra-confessionale: dentro al confessionale
-          // ricorda quello che ci siamo detti, fuori NO.
-          // Escludiamo il messaggio ottimistico appena aggiunto (è il
-          // turno corrente, viaggia già come plaintext cifrato sopra).
+
+          // === MEMORIA CONFESSIONALE PERSISTENTE ===
+          // Al primo turno confessionale di QUESTA app session, scarichiamo
+          // la cronologia delle sessioni precedenti (cifrata end-to-end nel
+          // backend). Decifriamo localmente e aggiungiamo alla timeline così
+          // Koda ha memoria piena delle confessioni passate.
+          if (!confessionalHistoryLoadedRef.current) {
+            confessionalHistoryLoadedRef.current = true;
+            try {
+              const hist = await api.confessionalHistory(200);
+              if (hist.entries && hist.entries.length > 0) {
+                const decryptedEntries: TimelineEntry[] = [];
+                for (const e of hist.entries) {
+                  try {
+                    const txt2 = unsealText(
+                      { nonce: e.nonce, ciphertext: e.ciphertext },
+                      key
+                    );
+                    if (txt2) {
+                      const clean2 = txt2
+                        .replace(/\[[a-zA-Zàèéìòùç '_,/-]{1,40}\]/g, "")
+                        .replace(/  +/g, " ")
+                        .trim();
+                      decryptedEntries.push({
+                        id: `hist-${e.id}`,
+                        role: e.role,
+                        text: clean2,
+                        ts: e.ts,
+                        confessional: true,
+                      } as TimelineEntry);
+                    }
+                  } catch {
+                    /* skip entry che non si può decifrare (chiave diversa) */
+                  }
+                }
+                if (decryptedEntries.length > 0) {
+                  // Prepend in timeline mantenendo ordine cronologico
+                  setTimeline((prev) => [...decryptedEntries, ...prev]);
+                }
+              }
+            } catch (e) {
+              console.warn("[sealed] history fetch failed (non-fatal):", e);
+            }
+          }
+
+          // Raccogli i turni confessionali precedenti (ora include anche
+          // quelli appena scaricati dal backend) — Koda li riceve come
+          // 'CONTESTO SIGILLATO' cifrato.
           const priorConfessional = timeline
             .filter((e) => e.confessional && e.id !== optimistic.id && e.text)
             .map((e) => ({ role: e.role, text: e.text }));

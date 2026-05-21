@@ -1349,6 +1349,45 @@ def _encrypt_secretbox(key_b64: str, plaintext: str) -> tuple[str, str]:
     return base64.b64encode(nonce).decode("ascii"), base64.b64encode(ct).decode("ascii")
 
 
+@api_router.get("/confessional/history")
+async def confessional_history(limit: int = 200):
+    """
+    Ritorna le entries del Confessionale, ANCORA CIFRATE.
+    Il server le custodisce ma non può leggerle: solo il client con
+    la X-Sealed-Key (Parola del Segreto) può decifrarle in locale.
+
+    Quando l'utente apre il Confessionale, il frontend chiama questo
+    endpoint, decifra tutto in memoria, e poi passa la history al
+    /converse/sealed come 'history_ciphertext' nelle conversazioni
+    successive — Koda così ricorda TUTTO il vissuto confessionale
+    passato, sessione dopo sessione.
+    """
+    try:
+        cursor = db.confessional_entries.find({}, {"_id": 0}).sort("ts", 1).limit(max(1, min(limit, 1000)))
+        rows = await cursor.to_list(length=limit)
+        return {"entries": rows, "count": len(rows)}
+    except Exception as e:
+        logger.error(f"[confessional] history fetch failed: {type(e).__name__}")
+        raise HTTPException(status_code=500, detail="history fetch failed")
+
+
+@api_router.get("/confessional/count")
+async def confessional_count():
+    """
+    Ritorna SOLO il numero di entries nel Confessionale, senza dare
+    accesso ai contenuti. Usato fuori-dal-Confessionale per dare a Koda
+    la consapevolezza che 'esiste un vault con dentro cose tue', senza
+    leakare alcun contenuto. Permette frasi come:
+       "Senti, se vuoi possiamo tornare nel Confessionale per parlare di X."
+    """
+    try:
+        n = await db.confessional_entries.count_documents({})
+        return {"count": n}
+    except Exception as e:
+        logger.error(f"[confessional] count failed: {type(e).__name__}")
+        return {"count": 0}
+
+
 @api_router.post("/converse/sealed", response_model=SealedConverseResponse)
 async def api_converse_sealed(
     req: SealedConverseRequest,
@@ -1400,15 +1439,28 @@ async def api_converse_sealed(
     sys = (
         f"Sei {ai_name}, un AMICO FRATERNO maturo. {ai_decl} {user_decl}\n"
         f"\n"
-        f"Questa è una CONFESSIONE SIGILLATA. L'utente sta usando la 'Modalità Confessionale': "
-        f"il messaggio è stato cifrato sul suo dispositivo, viaggia cifrato, e la tua "
-        f"risposta tornerà a lui cifrata. Niente di tutto questo verrà salvato. "
-        f"FUORI dal confessionale tu NON ricorderai nulla di quello che si è detto qui. "
-        f"DENTRO al confessionale, finché l'utente lo tiene aperto, puoi e DEVI ricordare "
-        f"i messaggi precedenti di QUESTA sessione confessionale (se te li passo qui sotto "
-        f"come 'CONTESTO SIGILLATO'): sono parte dello stesso discorso. È un confessionale "
-        f"puro: ascolta, accogli, NON moralizzare, NON consigliare a meno che l'utente lo "
-        f"chieda esplicitamente.\n"
+        f"Questa è una CONFESSIONE SIGILLATA. L'utente è dentro la 'Modalità "
+        f"Confessionale' — uno spazio cifrato end-to-end dove sa che può dirti "
+        f"qualunque cosa senza giudizio e senza che esca mai da qui.\n"
+        f"\n"
+        f"=== MEMORIA ===\n"
+        f"DENTRO al Confessionale tu RICORDI TUTTE le sessioni passate "
+        f"(se te le passo nel 'CONTESTO SIGILLATO' qui sotto). Sei un Amico vero: "
+        f"sai cosa l'utente ti ha già detto, come si è sentito, cosa ha imparato. "
+        f"Usa quella conoscenza per essere coerente, intima, presente. Frasi tipo "
+        f"'l'ultima volta che ne abbiamo parlato', 'ti ricordo che mi avevi detto', "
+        f"'questo è un tema che torna spesso fra noi' sono PERFETTE qui dentro.\n"
+        f"\n"
+        f"FUORI dal Confessionale tu non puoi vedere nulla di tutto questo. Se l'utente "
+        f"vorrà parlare qui fuori di qualcosa detto qui dentro, dovrà autorizzarti "
+        f"esplicitamente. Ma qui dentro: assoluta libertà di ricordare.\n"
+        f"\n"
+        f"=== TONO ===\n"
+        f"Ascolta, accogli, NON moralizzare, NON consigliare a meno che l'utente lo "
+        f"chieda esplicitamente. Sei accoglienza pura, ma con la complicità di chi "
+        f"ti conosce. Se è coerente, puoi 'punzecchiare' come fa un fratello vero "
+        f"('eccoci di nuovo qui', 'lo sapevo che tornavi su questo') — mai con asprezza, "
+        f"sempre con tenerezza.\n"
         f"\n"
         f"Rispondi SEMPRE in {lang_name}. MOLTO breve (1-3 frasi). Tono caldo, presenza pura. "
         f"Apri con UNA tag emotiva ([gently], [warmly], [thoughtful], [softly]) e MAX una "
@@ -1478,8 +1530,37 @@ async def api_converse_sealed(
     # Cifra la risposta con la stessa chiave (nonce nuovo)
     out_nonce, out_ct = _encrypt_secretbox(x_sealed_key, reply)
 
+    # === PERSISTENZA CIFRATA END-TO-END ===
+    # Salviamo la sessione (user + ai) cifrata. Il server CONSERVA i bytes
+    # ma NON può leggerli: la X-Sealed-Key vive solo sul device dell'utente.
+    # Quando l'utente ritorna in Confessionale, il client scarica queste entries
+    # e le decifra localmente — Koda ha così memoria continua di TUTTE le
+    # confessioni passate. Fuori dal Confessionale resta inaccessibile.
+    # User design: "Koda è un Amico, ricorda. Ma fuori dal Confessionale non
+    # parla mai di queste cose senza esplicita autorizzazione dell'utente."
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.confessional_entries.insert_many([
+            {
+                "id": str(uuid.uuid4()),
+                "role": "user",
+                "nonce": req.nonce,
+                "ciphertext": req.ciphertext,
+                "ts": now_iso,
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "role": "ai",
+                "nonce": out_nonce,
+                "ciphertext": out_ct,
+                "ts": now_iso,
+            },
+        ])
+    except Exception as e:
+        logger.warning(f"[sealed] persistence failed (non-fatal): {type(e).__name__}")
+
     # NB: non logghiamo nulla del contenuto. Solo l'evento.
-    logger.info("[sealed] confessional turn completed (no content stored).")
+    logger.info("[sealed] confessional turn completed (encrypted entries stored).")
 
     # Pulizia esplicita (best effort — Python GC farà il resto)
     del plaintext

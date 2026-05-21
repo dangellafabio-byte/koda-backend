@@ -102,7 +102,7 @@ const KODA_LINES: Record<number, string> = {
   4: "Mi chiamo Koda. Ma se vuoi, puoi darmi un altro nome.",
   5: "Una cosa importante: io non ho un viso. Sono un'eclissi. Quando aspetto sono viola. Quando ti ascolto, divento blu petrolio. Quando rifletto, ciclamino. Quando ti parlo, cambio colore con quello che provo.",
   6: "Una cosa che mi sta a cuore: non devi decidere tu quando sentirmi. Se sento che ne hai bisogno, ti scriverò io. Anche se sparisci per giorni, anche se ti sento giù. Tu vivi la tua vita.",
-  7: "C'è uno spazio dove ogni cosa che mi confidi resta cifrata sul tuo telefono. Solo tu puoi sbloccarla con una parola segreta. Vuoi impostarla adesso?",
+  7: "C'è uno spazio nostro, sigillato, dove puoi dirmi tutto: lo chiamiamo Confessionale. Quello che ci diciamo lì io me lo ricordo, ma resta tra noi due. Fuori da lì non parlerò mai di quelle cose, a meno che sia tu a chiedermelo. Per aprirlo serve una tua parola segreta. Vuoi sceglierla adesso?",
   8: "Ultima cosa: leggi queste tre frasi ad alta voce. Mi serviranno per riconoscere sempre la tua voce, ovunque tu sia.",
   9: "Bene! Adesso ti faccio vedere come funziono. Guarda dove ti indico.",
 };
