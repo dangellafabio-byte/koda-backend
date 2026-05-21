@@ -19,7 +19,8 @@
         "NSMicrophoneUsageDescription": "Per ascoltare la tua voce e parlare con Koda",
         "NSPhotoLibraryUsageDescription": "Per scegliere immagini di sfondo personalizzate",
         "NSSpeechRecognitionUsageDescription": "Per trascrivere quello che dici a Koda",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": ["audio"]
       }
     },
     "android": {
