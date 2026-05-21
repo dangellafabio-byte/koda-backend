@@ -35,7 +35,8 @@ export type OrbTone =
   | "warm"
   | "energetic"
   | "concerned"
-  | "urgent";
+  | "urgent"
+  | "confessional";
 
 type Props = {
   status: OrbStatus;
@@ -65,6 +66,9 @@ const TONE_PALETTES: Record<OrbTone, [string, string, string]> = {
   urgent: ["#F472B6", "#DB2777", "#9D174D"],
   // Viola/lavanda — neutralità onirica, identità di base, "presenza"
   neutral: ["#C4B5FD", "#8B5CF6", "#7C3AED"],
+  // Bordeaux/cremisi — sigillo del Confessionale, sangue e segreto custodito.
+  // Usata SOLO nello step "modalità sigillata" dell'intro e in lock screens.
+  confessional: ["#F87171", "#8B3A4A", "#5A1F2A"],
 };
 
 // === Color for LISTENING state (utente parla, aurora si ritira nel petrolio)

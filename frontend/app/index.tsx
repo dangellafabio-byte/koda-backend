@@ -44,6 +44,7 @@ import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
 import EclipseOrb from "../components/EclipseOrb";
 import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
+import KodaSplash from "../components/KodaSplash";
 import KodaTour, { TourStep } from "../components/KodaTour";
 import * as SecureStore from "expo-secure-store";
 import NeonBorder, { NeonBorderStatus } from "../components/NeonBorder";
@@ -157,6 +158,9 @@ export default function Taccuino() {
   // si congeda. Persistito in SecureStore con `koda_intro_seen=1`.
   // `null` = ancora da verificare; `true` = mostra; `false` = nascondi.
   const [showColorIntro, setShowColorIntro] = useState<boolean | null>(null);
+  // Splash screen all'apertura (4 sec) per mascherare la latenza di boot e
+  // dare un'identità visiva forte: eclissi che respira colori + nome AI.
+  const [showSplash, setShowSplash] = useState<boolean>(true);
   const [voiceList, setVoiceList] = useState<Array<any>>([]);
   useEffect(() => {
     let cancelled = false;
@@ -3314,6 +3318,18 @@ export default function Taccuino() {
   // Wrap the screen in a background image (custom upload) or gradient (preset),
   // with a dark overlay for legibility. If no background is set, just return
   // the plain inner view (uses theme.bg).
+  // === SPLASH SCREEN ===
+  // 4 secondi all'apertura: eclissi che respira colori + nome AI + tagline.
+  // Maschera la latenza di boot e dà identità visiva all'app.
+  if (showSplash) {
+    return (
+      <KodaSplash
+        aiName={profile?.ai_name || null}
+        duration={4000}
+        onComplete={() => setShowSplash(false)}
+      />
+    );
+  }
   // === KODA INTRO ===
   // Al primo avvio, e on-demand tramite l'icona ⋯ in alto a destra,
   // mostra la presentazione conversazionale di Koda PRIMA di qualsiasi

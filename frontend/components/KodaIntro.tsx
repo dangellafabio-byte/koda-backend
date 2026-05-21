@@ -101,7 +101,7 @@ const KODA_LINES: Record<number, string> = {
   3: "E io? Preferisci sentirmi con voce maschile o femminile?",
   4: "Mi chiamo Koda. Ma se vuoi, puoi darmi un altro nome.",
   5: "Una cosa importante: io non ho un viso. Sono un'eclissi. Quando aspetto sono viola. Quando ti ascolto, divento blu petrolio. Quando rifletto, ciclamino. Quando ti parlo, cambio colore con quello che provo.",
-  6: "Vuoi che ti cerchi io ogni tanto? Posso scriverti la mattina, la sera, o tutte e due. O nessuna delle due, decidi tu.",
+  6: "Una cosa che mi sta a cuore: non devi decidere tu quando sentirmi. Se sento che ne hai bisogno, ti scriverò io. Anche se sparisci per giorni, anche se ti sento giù. Tu vivi la tua vita.",
   7: "C'è uno spazio dove ogni cosa che mi confidi resta cifrata sul tuo telefono. Solo tu puoi sbloccarla con una parola segreta. Vuoi impostarla adesso?",
   8: "Ultima cosa: leggi queste tre frasi ad alta voce. Mi serviranno per riconoscere sempre la tua voce, ovunque tu sia.",
   9: "Bene! Adesso ti faccio vedere come funziono. Guarda dove ti indico.",
@@ -208,19 +208,24 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
     // che finisca di parlare, perché vogliamo che l'utente VEDA il viola
     // mentre lei dice "viola", il blu mentre dice "blu petrolio", ecc.
     if (step === 5) {
-      // Testo step 5: "Una cosa importante: io non ho un viso. Sono un'eclissi.
-      //  [~3s pre-roll]
-      //  Quando aspetto sono viola.        [→ idle/neutral viola, ~2.5s]
-      //  Quando ti ascolto, divento blu petrolio.  [→ recording, ~3s]
-      //  Quando rifletto, ciclamino.        [→ thinking, ~2.5s]
-      //  Quando ti parlo, cambio colore con quello che provo." [→ speaking warm rosa, ~3s]
+      // Testo step 5 (ElevenLabs Matilda ita, ~7-8 char/s con pause):
+      //  "Una cosa importante: io non ho un viso. Sono un'eclissi." (~5.5s)
+      //  "Quando aspetto sono viola."                                (~2.5s) → idle viola
+      //  "Quando ti ascolto, divento blu petrolio."                  (~4.0s) → recording blu
+      //  "Quando rifletto, ciclamino."                               (~2.8s) → thinking ciclamino
+      //  "Quando ti parlo, cambio colore con quello che provo."      (~5.0s) → speaking warm rosa
+      // I tempi sotto sommano alla DURATA del segmento attuale, non al timestamp assoluto.
       const seq: Array<[OrbStatus, OrbTone | undefined, number]> = [
-        ["idle", "neutral", 5500],        // pre-roll + "Quando aspetto sono viola"
-        ["recording", undefined, 3200],   // "Quando ti ascolto, divento blu petrolio"
-        ["thinking", undefined, 2800],    // "Quando rifletto, ciclamino"
-        ["speaking", "warm", 3500],       // "Quando ti parlo, cambio colore" — rosa
-        ["speaking", "energetic", 1500],  // sfumatura magenta finale
-        ["idle", "neutral", 2000],        // ritorno calmo
+        // 0-8s: pre-roll + "Quando aspetto sono viola" → viola (idle/neutral)
+        ["idle", "neutral", 8000],
+        // 8-12s: "Quando ti ascolto, divento blu petrolio" → blu petrolio (recording)
+        ["recording", undefined, 4000],
+        // 12-14.8s: "Quando rifletto, ciclamino" → ciclamino (thinking, palette rosa)
+        ["thinking", undefined, 2800],
+        // 14.8-19.8s: "Quando ti parlo, cambio colore con quello che provo" → rosa warm
+        ["speaking", "warm", 5000],
+        // Coda: ritorno calmo viola
+        ["idle", "neutral", 2000],
       ];
       let i = 0;
       // Stato iniziale subito
@@ -245,7 +250,9 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
     // "speaking" (pulsa rosa). Altrimenti settare un default per-step.
     if (isKodaSpeaking) {
       setOrbStatus("speaking");
-      setOrbTone("warm");
+      // Step 7 = "modalità sigillata" → eclissi BORDEAUX (colore Confessionale)
+      // mentre Koda spiega il sigillo. Resto degli step: rosa caldo (warm).
+      setOrbTone(step === 7 ? "confessional" : "warm");
       return;
     }
     // Step indices: 0=greet, 1=name, 2=ugender, 3=aigender, 4=ainame,
@@ -254,6 +261,11 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       // Voiceprint: se sta registrando → recording, altrimenti idle
       setOrbStatus(isRecording ? "recording" : "idle");
       setOrbTone("neutral");
+    } else if (step === 7) {
+      // Modalità sigillata in attesa di scelta: orb pulsante BORDEAUX
+      // (richiama visivamente il colore del Confessionale).
+      setOrbStatus("idle");
+      setOrbTone("confessional");
     } else {
       // Default neutro per gli step "domanda" (1-4, 6, 7, 9) quando
       // Koda è in silenzio: idle viola che respira.
@@ -283,7 +295,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       (async () => {
         if (cancelled) return;
         const tone: OrbTone =
-          step === 5 ? "calm" : step === 7 ? "concerned" : step === 9 ? "warm" : "warm";
+          step === 5 ? "calm" : step === 7 ? "confessional" : step === 9 ? "warm" : "warm";
         await speakKoda(finalLine, tone);
       })();
     }
@@ -528,36 +540,15 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
             onPrimary={() => advance(6)}
           />
         );
-      // -- Step 6: Check-in mode --
+      // -- Step 6: Check-in mode (automatico, niente scelta utente) --
       case 6:
         return (
           <StepView
-            title="Vuoi che ti cerchi io?"
-            subtitle="Posso scriverti la mattina, la sera, o tutte e due. O nessuna delle due — decidi tu."
-          >
-            <View style={styles.btnGroupVertical}>
-              <ChoiceBtn
-                label="La mattina"
-                selected={checkinMode === "morning"}
-                onPress={() => { setCheckinMode("morning"); advance(7); }}
-              />
-              <ChoiceBtn
-                label="La sera"
-                selected={checkinMode === "evening"}
-                onPress={() => { setCheckinMode("evening"); advance(7); }}
-              />
-              <ChoiceBtn
-                label="Mattina e sera"
-                selected={checkinMode === "both"}
-                onPress={() => { setCheckinMode("both"); advance(7); }}
-              />
-              <ChoiceBtn
-                label="Né l'una né l'altra"
-                selected={checkinMode === "off"}
-                onPress={() => { setCheckinMode("off"); advance(7); }}
-              />
-            </View>
-          </StepView>
+            title="Sentirò io quando ti serve."
+            subtitle="Se sento che ne hai bisogno — perché manchi da un po', o perché ti sento giù — ti scrivo io. Tu vivi la tua vita."
+            primaryLabel="Va bene"
+            onPrimary={() => { setCheckinMode("auto"); advance(7); }}
+          />
         );
       // -- Step 7: Secret word --
       case 7:
