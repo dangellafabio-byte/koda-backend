@@ -166,10 +166,13 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
 
   return (
     <Animated.View style={[styles.overlay, { opacity: fade }]} pointerEvents="auto">
-      {/* === SPOTLIGHT con OSCURAMENTO PARZIALE ===
-          Vediamo la home dietro (overlay nero al 45%) ma il "buco" attorno
-          al bottone resta completamente trasparente: il bottone vero brilla
-          attraverso. Nessun innerGlow: lasciamo il bottone così com'è. */}
+      {/* === SPOTLIGHT con OSCURAMENTO PARZIALE — NIENTE ANELLI ===
+          User feedback: "non voglio niente di evidenziato/cerchiato.
+          Solo che si oscuri la pagina e rimanga in evidenza per contrasto
+          quello di cui sta parlando".
+          
+          4 rettangoli scuri attorno al "buco" trasparente del target.
+          Il bottone target risalta SOLO perché il resto è scurito al 45%. */}
       <View
         style={[styles.dim, { top: 0, left: 0, right: 0, height: Math.max(0, ringY) }]}
         pointerEvents="auto"
@@ -185,42 +188,6 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
       <View
         style={[styles.dim, { top: ringY, left: ringX + ringW, right: 0, height: ringH }]}
         pointerEvents="auto"
-      />
-
-      {/* ANELLO PULSANTE ESTERNO — si restringe e si allarga attorno al
-          bottone (effetto "sonar" dolce). Nessun riempimento, solo bordo
-          chiaro pulsante, che attira l'occhio senza coprire il bottone. */}
-      <Animated.View
-        style={[
-          styles.outerRing,
-          {
-            left: ringX,
-            top: ringY,
-            width: ringW,
-            height: ringH,
-            borderRadius: radius,
-            transform: [{ scale: ringScale }],
-            opacity: ringOpacity,
-          },
-        ]}
-        pointerEvents="none"
-      />
-
-      {/* ONDA SONAR — anello secondario che si espande verso fuori e svanisce */}
-      <Animated.View
-        style={[
-          styles.sonar,
-          {
-            left: ringX,
-            top: ringY,
-            width: ringW,
-            height: ringH,
-            borderRadius: radius,
-            transform: [{ scale: sonarScale }],
-            opacity: sonarOpacity,
-          },
-        ]}
-        pointerEvents="none"
       />
 
       {/* NIENTE BUBBLE DI TESTO — l'esperienza è tutta a voce, come 
