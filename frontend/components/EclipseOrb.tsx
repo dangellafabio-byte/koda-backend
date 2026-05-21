@@ -172,30 +172,25 @@ export default function EclipseOrb({
       ]).start();
 
       // === PULSAZIONE ORGANICA DEL PARLATO ===
-      // Simula la cadenza sillabica italiana (~4-6 sillabe/sec) con:
-      //  - burst brevi (130-260ms) = sillabe
-      //  - pause naturali (400-700ms) ogni 6-10 sillabe = fine frase
-      //  - inspirazioni profonde (700ms ampie) ogni 2-3 frasi
+      // Simula la cadenza sillabica italiana con burst irregolari.
       //
-      // Tutto procedurale — non sincronizzato all'audio reale (impossibile
-      // farlo bene su mobile RN), ma EVOCATIVO: l'eclissi sembra respirare
-      // mentre parla, con un ritmo che il cervello legge come "umano".
+      // DELAY iniziale: lo status "speaking" si attiva PRIMA che l'audio TTS
+      // arrivi davvero (latenza prepare ~400-600ms su iOS Ad-Hoc). Per
+      // sincronizzare visivamente eclissi e voce, partiamo dopo ~450ms.
+      const SPEAK_PULSE_DELAY_MS = 450;
       let cancelled = false;
       let syllableCount = 0;
       let phraseCount = 0;
       const step = () => {
         if (cancelled) return;
-        // Decidi se questo step è una sillaba, una pausa breve, o un respiro
         const rand = Math.random();
         let intensity: number;
         let duration: number;
         if (phraseCount >= 2 && rand < 0.18) {
-          // RESPIRO PROFONDO (raro, ogni ~2-3 frasi) — inspirazione lenta
           intensity = 1.0;
           duration = 550 + Math.random() * 250;
           phraseCount = 0;
         } else if (syllableCount >= 6 && rand < 0.30) {
-          // FINE FRASE (pausa naturale) — eclissi si contrae brevemente
           intensity = 0.25;
           duration = 380 + Math.random() * 320;
           syllableCount = 0;
@@ -215,9 +210,14 @@ export default function EclipseOrb({
           if (finished && !cancelled) step();
         });
       };
-      step();
+      // Avvia la sequenza dopo SPEAK_PULSE_DELAY_MS per allinearla all'audio
+      // reale che ha latenza ~400-600ms su iOS Ad-Hoc (TTS prepare).
+      const startTimer = setTimeout(() => {
+        if (!cancelled) step();
+      }, SPEAK_PULSE_DELAY_MS);
       return () => {
         cancelled = true;
+        clearTimeout(startTimer);
         speakPulse.stopAnimation();
         Animated.timing(speakPulse, {
           toValue: 0,

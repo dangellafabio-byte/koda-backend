@@ -112,66 +112,11 @@ export default function NeonBorder({
   const headOffset = Animated.subtract(dashOffset, new Animated.Value(trailLen - headLen)) as any;
 
   // ============ RENDER ============
-  if (status === "thinking") {
-    // SVG full-screen: Liquid Neon Flow = scia sfumata + testa luminosa
-    return (
-      <Animated.View
-        pointerEvents="none"
-        style={[
-          StyleSheet.absoluteFill,
-          {
-            ...Platform.select({
-              ios: {
-                shadowColor: color,
-                shadowOpacity: 1,
-                shadowRadius: 24,
-                shadowOffset: { width: 0, height: 0 },
-              },
-              android: { elevation: 18 },
-              default: {},
-            }),
-          },
-        ]}
-      >
-        <Svg width="100%" height="100%" style={StyleSheet.absoluteFill}>
-          {/* 1) SCIA SFUMATA — segmento lungo, opacity bassa */}
-          <AnimatedRect
-            x={thickness / 2}
-            y={thickness / 2}
-            width={W - thickness}
-            height={H - thickness}
-            rx={DISPLAY_RADIUS}
-            ry={DISPLAY_RADIUS}
-            fill="none"
-            stroke={color}
-            strokeWidth={thickness}
-            strokeLinecap="round"
-            strokeDasharray={trailDashArray}
-            strokeDashoffset={dashOffset as any}
-            opacity={0.35}
-          />
-          {/* 2) TESTA LUMINOSA — corto segmento, davanti alla scia */}
-          <AnimatedRect
-            x={thickness / 2}
-            y={thickness / 2}
-            width={W - thickness}
-            height={H - thickness}
-            rx={DISPLAY_RADIUS}
-            ry={DISPLAY_RADIUS}
-            fill="none"
-            stroke={color}
-            strokeWidth={thickness + 1}
-            strokeLinecap="round"
-            strokeDasharray={headDashArray}
-            strokeDashoffset={headOffset}
-            opacity={1}
-          />
-        </Svg>
-      </Animated.View>
-    );
-  }
-
-  // Tutti gli altri stati: bordo fisso arrotondato con pulsazione lentissima
+  // NB: thinking ora usa lo stesso bordo fisso degli altri stati (user
+  // feedback: "togli il bordo che si muove, fallo fisso come tutti").
+  // L'effetto chase Liquid Neon Flow è disabilitato per ora.
+  //
+  // Tutti gli stati: bordo fisso arrotondato con pulsazione lentissima
   return (
     <Animated.View
       pointerEvents="none"

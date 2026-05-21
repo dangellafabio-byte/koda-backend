@@ -2196,7 +2196,7 @@ export default function Taccuino() {
               >
                 <EclipseOrb
                   status={status}
-                  tone={lastAiTone}
+                  tone={status === "speaking" ? "warm" : lastAiTone}
                   size={Math.min(windowWidth * 0.78, 360)}
                   meterDb={meterDb}
                   meterThreshold={meterThreshold}
@@ -2238,7 +2238,7 @@ export default function Taccuino() {
             <View style={{ marginBottom: 24 }}>
               <EclipseOrb
                 status={status}
-                tone={lastAiTone}
+                tone={status === "speaking" ? "warm" : lastAiTone}
                 size={260}
                 meterDb={meterDb}
                 meterThreshold={meterThreshold}
@@ -2374,7 +2374,7 @@ export default function Taccuino() {
               >
                 <EclipseOrb
                   status={status}
-                  tone={lastAiTone}
+                  tone={status === "speaking" ? "warm" : lastAiTone}
                   size={210}
                   meterDb={meterDb}
                   meterThreshold={meterThreshold}
