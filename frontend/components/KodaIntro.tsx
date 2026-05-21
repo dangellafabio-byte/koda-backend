@@ -104,7 +104,7 @@ const KODA_LINES: Record<number, string> = {
   6: "Vuoi che ti cerchi io ogni tanto? Posso scriverti la mattina, la sera, o tutte e due. O nessuna delle due, decidi tu.",
   7: "C'è uno spazio dove ogni cosa che mi confidi resta cifrata sul tuo telefono. Solo tu puoi sbloccarla con una parola segreta. Vuoi impostarla adesso?",
   8: "Ultima cosa: leggi queste tre frasi ad alta voce. Mi serviranno per riconoscere sempre la tua voce, ovunque tu sia.",
-  9: "Bene! Adesso ti faccio vedere io come uso. Guarda dove ti indico.",
+  9: "Bene! Adesso ti faccio vedere come funziono. Guarda dove ti indico.",
 };
 
 // ====== Componente principale ======

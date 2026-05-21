@@ -160,6 +160,9 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
   // Sonar wave: scales from 1 → 2.2x and fades opacity 0.7 → 0
   const sonarScale = impulse.interpolate({ inputRange: [0, 1], outputRange: [1, 2.2] });
   const sonarOpacity = impulse.interpolate({ inputRange: [0, 1], outputRange: [0.7, 0] });
+  // GLOW interno sul bottone: alterna da 0 a 0.32 opacity, dando l'effetto
+  // che il bottone stesso "respira di luce" senza disegnare anelli esterni.
+  const glowOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.0, 0.32] });
 
   return (
     <Animated.View style={[styles.overlay, { opacity: fade }]} pointerEvents="auto">
@@ -189,36 +192,20 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
         pointerEvents="auto"
       />
 
-      {/* SONAR WAVE — outward expanding ring (impulse effect).
-          Placed BEHIND the main ring so the main ring stays crisp. */}
+      {/* GLOW INTERNO SUL BOTTONE — niente più anelli esterni, solo un velo
+          chiaro semi-trasparente che pulsa SOPRA il bottone evidenziato,
+          dando l'impressione che il bottone stesso "respiri di luce".
+          User feedback: "togli l'evidenziatore, fai che il tasto stesso pulsa". */}
       <Animated.View
         style={[
-          styles.sonar,
+          styles.innerGlow,
           {
             left: ringX,
             top: ringY,
             width: ringW,
             height: ringH,
             borderRadius: radius,
-            transform: [{ scale: sonarScale }],
-            opacity: sonarOpacity,
-          },
-        ]}
-        pointerEvents="none"
-      />
-
-      {/* Glowing ring around the target */}
-      <Animated.View
-        style={[
-          styles.ring,
-          {
-            left: ringX,
-            top: ringY,
-            width: ringW,
-            height: ringH,
-            borderRadius: radius,
-            transform: [{ scale: ringScale }],
-            opacity: ringOpacity,
+            opacity: glowOpacity,
           },
         ]}
         pointerEvents="none"
@@ -292,6 +279,22 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: "#34D399",
     backgroundColor: "transparent",
+  },
+  innerGlow: {
+    position: "absolute",
+    backgroundColor: "#FFFFFF",
+    // Glow soffuso semi-trasparente che pulsa SOPRA il bottone evidenziato
+    // (effetto "il bottone respira di luce" invece di "anello attorno").
+    ...Platform.select({
+      ios: {
+        shadowColor: "#FFFFFF",
+        shadowOpacity: 0.6,
+        shadowRadius: 18,
+        shadowOffset: { width: 0, height: 0 },
+      },
+      android: { elevation: 8 },
+      default: {},
+    }),
   },
   bubble: {
     position: "absolute",
