@@ -52,8 +52,9 @@ type Props = {
 // Tutta la palette identitaria di L'Amico Fraterno: viola / blu petrolio /
 // verde petrolio / ciclamino / magenta. Niente colori primari "stock".
 const TONE_PALETTES: Record<OrbTone, [string, string, string]> = {
-  // Verde petrolio — calore organico, "amico", abbraccio caldo ma profondo
-  warm: ["#2DD4BF", "#14B8A6", "#0F766E"],
+  // Rosa caldo/blush — calore tenero, abbraccio, "ti sono vicina".
+  // Questa è la palette di DEFAULT quando Koda parla: il suo "rosa" identitario.
+  warm: ["#FBCFE8", "#F472B6", "#DB2777"],
   // Blu notte — serenità, mare profondo, respiro lungo
   calm: ["#93C5FD", "#3B82F6", "#1E3A8A"],
   // Magenta acceso — vitalità, slancio, energia vibrante

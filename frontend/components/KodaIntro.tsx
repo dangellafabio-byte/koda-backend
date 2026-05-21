@@ -203,37 +203,54 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       clearTimeout(colorTourTimerRef.current);
       colorTourTimerRef.current = null;
     }
-    // PRIORITÀ: se Koda sta parlando ORA → status "speaking" (pulsa).
-    // Altrimenti settare un default per-step.
+    // STEP 5 (tour colori) ha logica speciale: la sequenza dei colori parte
+    // SUBITO ed è sincronizzata col TESTO che Koda sta dicendo. Non aspettiamo
+    // che finisca di parlare, perché vogliamo che l'utente VEDA il viola
+    // mentre lei dice "viola", il blu mentre dice "blu petrolio", ecc.
+    if (step === 5) {
+      // Testo step 5: "Una cosa importante: io non ho un viso. Sono un'eclissi.
+      //  [~3s pre-roll]
+      //  Quando aspetto sono viola.        [→ idle/neutral viola, ~2.5s]
+      //  Quando ti ascolto, divento blu petrolio.  [→ recording, ~3s]
+      //  Quando rifletto, ciclamino.        [→ thinking, ~2.5s]
+      //  Quando ti parlo, cambio colore con quello che provo." [→ speaking warm rosa, ~3s]
+      const seq: Array<[OrbStatus, OrbTone | undefined, number]> = [
+        ["idle", "neutral", 5500],        // pre-roll + "Quando aspetto sono viola"
+        ["recording", undefined, 3200],   // "Quando ti ascolto, divento blu petrolio"
+        ["thinking", undefined, 2800],    // "Quando rifletto, ciclamino"
+        ["speaking", "warm", 3500],       // "Quando ti parlo, cambio colore" — rosa
+        ["speaking", "energetic", 1500],  // sfumatura magenta finale
+        ["idle", "neutral", 2000],        // ritorno calmo
+      ];
+      let i = 0;
+      // Stato iniziale subito
+      setOrbStatus(seq[0][0]);
+      if (seq[0][1]) setOrbTone(seq[0][1]);
+      const tick = () => {
+        i++;
+        if (i >= seq.length) return;
+        const [s, t] = seq[i];
+        setOrbStatus(s);
+        if (t) setOrbTone(t);
+        const [, , prevDur] = seq[i - 1];
+        colorTourTimerRef.current = setTimeout(tick, prevDur);
+      };
+      // Avvia il ciclo dopo la durata del PRIMO segmento
+      colorTourTimerRef.current = setTimeout(tick, seq[0][2]);
+      return () => {
+        if (colorTourTimerRef.current) clearTimeout(colorTourTimerRef.current);
+      };
+    }
+    // PRIORITÀ (per gli altri step): se Koda sta parlando ORA → status
+    // "speaking" (pulsa rosa). Altrimenti settare un default per-step.
     if (isKodaSpeaking) {
       setOrbStatus("speaking");
-      setOrbTone(step === 5 ? "calm" : "warm");
+      setOrbTone("warm");
       return;
     }
     // Step indices: 0=greet, 1=name, 2=ugender, 3=aigender, 4=ainame,
     //               5=colortour, 6=checkin, 7=secret, 8=voiceprint, 9=final
-    if (step === 5) {
-      // Tour colori: ciclo TRA gli stati visibili, partendo solo DOPO
-      // che Koda ha finito di parlare (gestito da `isKodaSpeaking`).
-      const seq: Array<[OrbStatus, OrbTone | undefined, number]> = [
-        ["speaking", "warm", 2200],
-        ["recording", undefined, 2200],
-        ["thinking", undefined, 2000],
-        ["speaking", "energetic", 1800],
-        ["speaking", "calm", 1800],
-        ["idle", "neutral", 1500],
-      ];
-      let i = 0;
-      const tick = () => {
-        if (i >= seq.length) return;
-        const [s, t, d] = seq[i];
-        setOrbStatus(s);
-        if (t) setOrbTone(t);
-        i++;
-        colorTourTimerRef.current = setTimeout(tick, d);
-      };
-      tick();
-    } else if (step === 8) {
+    if (step === 8) {
       // Voiceprint: se sta registrando → recording, altrimenti idle
       setOrbStatus(isRecording ? "recording" : "idle");
       setOrbTone("neutral");
