@@ -31,6 +31,11 @@
         "SCHEDULE_EXACT_ALARM",
         "READ_MEDIA_IMAGES",
         "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "RECORD_AUDIO",
+        "SCHEDULE_EXACT_ALARM",
+        "READ_MEDIA_IMAGES",
+        "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS"
       ],
       "adaptiveIcon": {
@@ -74,6 +79,9 @@
         "projectId": "92cf0b6f-ee99-4fbe-8562-10cfc8a786de"
       }
     },
-    "owner": "fabiod.labor"
+    "owner": "fabiod.labor",
+    "updates": {
+      "url": "https://u.expo.dev/92cf0b6f-ee99-4fbe-8562-10cfc8a786de"
+    }
   }
 }

@@ -7,6 +7,7 @@ import { View, StyleSheet, Platform } from "react-native";
 import { scheduleWeeklyAppNotification } from "../lib/notifications";
 import { ThemeProvider, useTheme, ThemeName } from "../lib/theme";
 import { api } from "../lib/api";
+import { prewarmAudio } from "../lib/speech";
 
 function ThemedShell({ children }: { children: React.ReactNode }) {
   const { theme } = useTheme();
@@ -25,6 +26,10 @@ export default function RootLayout() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
+    // Pre-warm iOS/Android audio session BEFORE first TTS plays.
+    // Fixes "Koda silent in first intro steps" bug on fresh native build.
+    prewarmAudio().catch(() => {});
+
     if (Platform.OS !== "web") {
       const t = setTimeout(() => {
         scheduleWeeklyAppNotification().catch(() => {});

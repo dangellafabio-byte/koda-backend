@@ -16,7 +16,8 @@
       },
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://app-finder-408.preview.emergentagent.com"
-      }
+      },
+      "channel": "development"
     },
     "preview": {
       "distribution": "internal",
@@ -29,7 +30,8 @@
       },
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://app-finder-408.preview.emergentagent.com"
-      }
+      },
+      "channel": "preview"
     },
     "production": {
       "ios": {
@@ -38,7 +40,8 @@
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://app-finder-408.preview.emergentagent.com"
-      }
+      },
+      "channel": "production"
     }
   },
   "submit": {

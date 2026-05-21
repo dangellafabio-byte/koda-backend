@@ -48,6 +48,38 @@ export function setDefaultVoiceId(id: string | null | undefined) {
   defaultVoiceId = id || null;
 }
 
+/**
+ * Pre-warm iOS/Android audio session at app boot.
+ *
+ * iOS issue: the FIRST call to `setAudioModeAsync(playback)` + `createAudioPlayer`
+ * + `.play()` after app launch has a ~1-3s warm-up window during which AVPlayer
+ * is silently buffering even though playbackStatus says "playing". The user hears
+ * NOTHING for the first TTS, then everything works from step 2 onwards.
+ *
+ * Fix: call setAudioModeAsync ONCE at boot to initialize the AVAudioSession in
+ * playback category BEFORE the user reaches the first TTS-emitting screen.
+ * Also play a 1-frame silent buffer to "unlock" the AVPlayer subsystem.
+ *
+ * Idempotent and safe to call from anywhere. Errors are swallowed.
+ */
+let _prewarmed = false;
+export async function prewarmAudio(): Promise<void> {
+  if (_prewarmed) return;
+  _prewarmed = true;
+  if (Platform.OS === "web") return;
+  try {
+    await setAudioModeAsync({
+      allowsRecording: false,
+      playsInSilentMode: true,
+      interruptionMode: "duckOthers",
+      shouldPlayInBackground: false,
+      shouldRouteThroughEarpiece: false,
+    });
+  } catch (e) {
+    console.warn("[speech] prewarmAudio: setAudioModeAsync failed", e);
+  }
+}
+
 // ---------- Web Speech fallback helpers ----------
 function loadWebVoices(): Promise<SpeechSynthesisVoice[]> {
   return new Promise((resolve) => {
