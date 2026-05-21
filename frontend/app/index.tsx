@@ -297,31 +297,15 @@ export default function Taccuino() {
     const intruderActive = showColorIntro === true || tourActive || showOnboarding;
     if (intruderActive && recRef.current) {
       // Mic spento brutalmente — non vogliamo né silenzio rilevato né invio.
+      // Chiamiamo cancel() (fire-and-forget): voice.ts dentro safeStop()
+      // rilascia il recorder e la sessione audio si normalizza al prossimo
+      // startTalk (voice.ts setta allowsRecording:true ogni volta).
+      // NON tocchiamo setAudioModeAsync qui — altrimenti rischiamo di
+      // bloccare la sessione iOS in playback-only e il mic non torna più.
       const r = recRef.current;
       recRef.current = null;
       setStatus("idle");
-      (async () => {
-        try {
-          // cancel() chiama internamente safeStop() in voice.ts → rilascia
-          // l'AVAudioSession iOS. È un async ma non lo aspettiamo nel
-          // useEffect: fire-and-forget.
-          await r.cancel?.();
-        } catch {}
-        // Forza il reset della sessione audio iOS in modalità SOLO playback,
-        // così il TTS del tour può partire senza conflitti.
-        if (Platform.OS !== "web") {
-          try {
-            const { setAudioModeAsync } = require("expo-audio");
-            await setAudioModeAsync({
-              allowsRecording: false,
-              playsInSilentMode: true,
-              interruptionMode: "duckOthers",
-              shouldPlayInBackground: false,
-              shouldRouteThroughEarpiece: false,
-            });
-          } catch {}
-        }
-      })();
+      try { r.cancel?.(); } catch {}
     }
   }, [showColorIntro, tourActive, showOnboarding]);
 
