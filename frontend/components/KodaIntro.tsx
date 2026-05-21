@@ -97,10 +97,10 @@ const INTRO_VOICE_ID = "XrExE9yKIg1WjnnlVkGX";
 const KODA_LINES: Record<number, string> = {
   0: "Ciao. Sono Koda. Non sono un'app: sono una presenza. Da oggi sono qui per te, quando vuoi parlare, quando vuoi solo che qualcuno ti ascolti. Voglio conoscerti!",
   1: "Come posso chiamarti? Scrivi il tuo nome qui sotto.",
-  2: "Dimmi, sei un uomo, una donna, o preferisci non specificarlo? Mi serve per parlarti nel modo giusto.",
+  2: "Dimmi, sei un uomo, una donna, o preferisci non specificarlo?",
   3: "E io? Preferisci sentirmi con voce maschile o femminile?",
   4: "Mi chiamo Koda. Ma se vuoi, puoi darmi un altro nome.",
-  5: "Una cosa importante: io non ho un viso. Sono un'eclissi. Quando aspetto sono viola. Quando ti ascolto, divento blu petrolio. Quando rifletto, ciclamino. Quando ti parlo, cambio colore con quello che provo.",
+  5: "Una cosa importante: io non ho un viso. Sono un'eclissi. Sono qui, sempre, anche quando aspetto in silenzio. Vedrai i miei movimenti, e capirai cosa sto facendo.",
   6: "Una cosa che mi sta a cuore: non devi decidere tu quando sentirmi. Se sento che ne hai bisogno, ti scriverò io. Anche se sparisci per giorni, anche se ti sento giù. Tu vivi la tua vita.",
   7: "C'è uno spazio nostro, sigillato, dove puoi dirmi tutto: lo chiamiamo Confessionale. Quello che ci diciamo lì io me lo ricordo, ma resta tra noi due. Fuori da lì non parlerò mai di quelle cose, a meno che sia tu a chiedermelo. Per aprirlo serve una tua parola segreta. Vuoi sceglierla adesso?",
   8: "Ultima cosa: leggi queste tre frasi ad alta voce. Mi serviranno per riconoscere sempre la tua voce, ovunque tu sia.",
@@ -203,49 +203,19 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       clearTimeout(colorTourTimerRef.current);
       colorTourTimerRef.current = null;
     }
-    // STEP 5 (tour colori): la sequenza dei colori parte SOLO quando Koda
-    // INIZIA a parlare (così latenza TTS variabile non sfasa la sincronizzazione
-    // col testo). Quando smette di parlare, si ferma il timer.
+    // STEP 5: l'eclissi resta VIOLA fissa (tone "warm") durante tutto il
+    // discorso. Niente cycle di colori: lei dice solo "sono un'eclissi"
+    // ma NON promette più cambi cromatici (user feedback: la corrispondenza
+    // colori non era affidabile, meglio onesti).
     if (step === 5) {
-      if (!isKodaSpeaking) {
-        // Pre-roll: in attesa che Koda parli, mostra viola (idle)
+      if (isKodaSpeaking) {
+        setOrbStatus("speaking");
+        setOrbTone("warm");
+      } else {
         setOrbStatus("idle");
-        setOrbTone("neutral");
-        return;
+        setOrbTone("warm");
       }
-      // Koda STA parlando ORA → lancia la sequenza temporale.
-      // Testo: "Una cosa importante: io non ho un viso. Sono un'eclissi.   (~5s)
-      //  Quando aspetto sono viola.                                       (~2.5s)
-      //  Quando ti ascolto, divento blu petrolio.                         (~3.5s)
-      //  Quando rifletto, ciclamino.                                      (~2.5s)
-      //  Quando ti parlo, cambio colore con quello che provo."            (~4.5s)
-      // Durate cumulative dei segmenti: 5, 7.5, 11, 13.5, 18s
-      const seq: Array<[OrbStatus, OrbTone | undefined, number]> = [
-        // 0-7.5s: pre-roll "Una cosa importante..." + "Quando aspetto sono viola" → idle viola
-        ["idle", "neutral", 7500],
-        // 7.5-11s: "Quando ti ascolto, divento blu petrolio" → recording blu
-        ["recording", undefined, 3500],
-        // 11-13.5s: "Quando rifletto, ciclamino" → thinking ciclamino rosa
-        ["thinking", undefined, 2500],
-        // 13.5-18s: "Quando ti parlo, cambio colore..." → speaking warm rosa
-        ["speaking", "warm", 4500],
-      ];
-      let i = 0;
-      setOrbStatus(seq[0][0]);
-      if (seq[0][1]) setOrbTone(seq[0][1]);
-      const tick = () => {
-        i++;
-        if (i >= seq.length) return;
-        const [s, t] = seq[i];
-        setOrbStatus(s);
-        if (t) setOrbTone(t);
-        const [, , prevDur] = seq[i - 1];
-        colorTourTimerRef.current = setTimeout(tick, prevDur);
-      };
-      colorTourTimerRef.current = setTimeout(tick, seq[0][2]);
-      return () => {
-        if (colorTourTimerRef.current) clearTimeout(colorTourTimerRef.current);
-      };
+      return;
     }
     // PRIORITÀ (per gli altri step): se Koda sta parlando ORA → status
     // "speaking" (pulsa rosa). Altrimenti settare un default per-step.
@@ -467,7 +437,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         return (
           <StepView
             title={userName ? `${userName}…` : "Dimmi…"}
-            subtitle="Sei un uomo, una donna o preferisci non specificarlo? Mi serve per parlarti nel modo giusto."
+            subtitle="Sei un uomo, una donna o preferisci non specificarlo?"
           >
             <View style={styles.btnGroupVertical}>
               <ChoiceBtn
