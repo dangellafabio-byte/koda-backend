@@ -53,22 +53,20 @@ type Props = {
 // Tutta la palette identitaria di L'Amico Fraterno: viola / blu petrolio /
 // verde petrolio / ciclamino / magenta. Niente colori primari "stock".
 const TONE_PALETTES: Record<OrbTone, [string, string, string]> = {
-  // Rosa caldo/blush — calore tenero, abbraccio, "ti sono vicina".
-  // Questa è la palette di DEFAULT quando Koda parla: il suo "rosa" identitario.
-  warm: ["#FBCFE8", "#F472B6", "#DB2777"],
+  // Viola elettrico — Koda PARLA (matcha NeonBorder "speaking")
+  warm: ["#E9D5FF", "#BD10E0", "#7E22CE"],
   // Blu notte — serenità, mare profondo, respiro lungo
   calm: ["#93C5FD", "#3B82F6", "#1E3A8A"],
   // Magenta acceso — vitalità, slancio, energia vibrante
   energetic: ["#E879F9", "#C026D3", "#9333EA"],
   // Viola denso — preoccupazione lieve, "ti vedo, sono qui con te"
   concerned: ["#A78BFA", "#7C3AED", "#5B21B6"],
-  // Ciclamino acceso — urgenza dolce, attenzione necessaria ma non allarme
+  // Ciclamino acceso — urgenza dolce
   urgent: ["#F472B6", "#DB2777", "#9D174D"],
-  // Viola/lavanda — neutralità onirica, identità di base, "presenza"
-  neutral: ["#C4B5FD", "#8B5CF6", "#7C3AED"],
-  // Bordeaux/cremisi — sigillo del Confessionale, sangue e segreto custodito.
-  // Usata SOLO nello step "modalità sigillata" dell'intro e in lock screens.
-  confessional: ["#F87171", "#8B3A4A", "#5A1F2A"],
+  // Rosa shocking — A RIPOSO / identità di base (matcha NeonBorder "idle")
+  neutral: ["#FBCFE8", "#FF1493", "#BE185D"],
+  // Scarlatto neon — sigillo del Confessionale (matcha NeonBorder "confessional")
+  confessional: ["#FCA5A5", "#FF1744", "#7F1D1D"],
 };
 
 // === Color for LISTENING state (utente parla, aurora si ritira nel petrolio)

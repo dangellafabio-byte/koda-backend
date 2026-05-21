@@ -76,30 +76,47 @@ export default function NeonBorder({
   const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.75, 1] });
 
   // ============ CHASE LIGHT (solo thinking) ============
-  // Animazione di un segmento di neon che corre attorno al perimetro
-  // arrotondato. Usiamo SVG Rect con strokeDasharray + strokeDashoffset.
-  // Il perimetro arrotondato vero è ~ 2*(W+H) - 8*r + 2*pi*r.
+  // Animazione "growing line": parte da un punto e cresce lungo il perimetro
+  // arrotondato, fino a coprire tutto il bordo. Poi sparisce e riparte.
+  // (User feedback: "non che continui a girare, parte da un punto fisso
+  // copre tutto il perimetro e poi riparte ancora").
+  //
+  // Tecnica: stroke-dasharray=[perim,perim] (un dash di perim + gap di perim,
+  // quindi solo UNA copia visibile lungo il path), stroke-dashoffset animato
+  // da `perimeter` (segmento nascosto) a `0` (segmento completamente visibile).
+  // Loop con reset istantaneo a perimeter → effetto "ricomincia dal punto".
   const perimeter = useMemo(() => {
     const r = DISPLAY_RADIUS;
     return 2 * (W + H) - 8 * r + 2 * Math.PI * r;
   }, [W, H]);
-  // Lunghezza del segmento luminoso = 25% del perimetro
-  const dashLen = Math.max(80, perimeter * 0.25);
-  // Pattern dash: [segmento_acceso, segmento_spento]
-  const dashArray = `${dashLen} ${perimeter}`;
+  const dashArray = `${perimeter} ${perimeter}`;
 
-  const dashOffset = useRef(new Animated.Value(0)).current;
+  const dashOffset = useRef(new Animated.Value(perimeter)).current;
   useEffect(() => {
-    dashOffset.setValue(0);
+    dashOffset.setValue(perimeter);
     if (status !== "thinking") return;
     const anim = Animated.loop(
-      Animated.timing(dashOffset, {
-        toValue: -perimeter,
-        duration: 2200, // tempo per fare un giro completo
-        easing: Easing.linear,
-        // strokeDashoffset NON supporta native driver
-        useNativeDriver: false,
-      })
+      Animated.sequence([
+        // Crescita lungo il perimetro (1.8s)
+        Animated.timing(dashOffset, {
+          toValue: 0,
+          duration: 1800,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: false,
+        }),
+        // Pausa breve quando l'intero bordo è illuminato (250ms)
+        Animated.timing(dashOffset, {
+          toValue: 0,
+          duration: 250,
+          useNativeDriver: false,
+        }),
+        // Reset istantaneo: torna a "nascosto" e riparte
+        Animated.timing(dashOffset, {
+          toValue: perimeter,
+          duration: 1,
+          useNativeDriver: false,
+        }),
+      ])
     );
     anim.start();
     return () => anim.stop();
