@@ -164,6 +164,14 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
   // che il bottone stesso "respira di luce" senza disegnare anelli esterni.
   const glowOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.0, 0.32] });
 
+  // === HALO BIANCO INTENSO ===
+  // Anima l'opacità dell'alone bianco fra 0.65 e 1.0 — fa "respirare" il
+  // bottone come una stella, restando ben visibile anche sopra lo sfondo
+  // dimmerato al 45%. Cross-platform: iOS usa shadow nativa, Android usa
+  // anelli concentrici con bordi semi-trasparenti.
+  const haloOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.65, 1.0] });
+  const haloScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1.0, 1.04] });
+
   return (
     <Animated.View style={[styles.overlay, { opacity: fade }]} pointerEvents="auto">
       {/* === SPOTLIGHT con OSCURAMENTO PARZIALE — NIENTE ANELLI ===
@@ -188,6 +196,81 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
       <View
         style={[styles.dim, { top: ringY, left: ringX + ringW, right: 0, height: ringH }]}
         pointerEvents="auto"
+      />
+
+      {/* === HALO BIANCO INTENSO sopra il bottone evidenziato ===
+          Sopra i 4 rettangoli di dim, disegniamo un alone bianco multistrato
+          ESATTAMENTE attorno al bottone, così risalta come una stella.
+          - iOS: una vista trasparente con shadowColor bianco e shadowRadius 28
+                 → alone soft naturale gestito dal compositor.
+          - Android: 3 anelli concentrici con bordi bianchi semi-trasparenti
+                     → effetto halo sintetico (l'elevation di RN non disegna
+                     vere ombre colorate).
+          - Cross: bordo bianco 2px sul rect del target per il "contorno
+                   netto" che fa staccare il bottone dallo sfondo dimmerato.
+          pointerEvents="none" così il bottone sottostante resta cliccabile
+          quando il tour finirà (mentre il tour è attivo non importa). */}
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.haloBorder,
+          {
+            top: ringY,
+            left: ringX,
+            width: ringW,
+            height: ringH,
+            borderRadius: radius,
+            opacity: haloOpacity,
+            transform: [{ scale: haloScale }],
+          },
+        ]}
+      />
+      {/* Ring esterno bianco semi-trasparente — visibile su Android e iOS,
+          aggiunge "spessore" all'aura anche quando l'ombra iOS non si nota */}
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.haloRing1,
+          {
+            top: ringY - 6,
+            left: ringX - 6,
+            width: ringW + 12,
+            height: ringH + 12,
+            borderRadius: radius + 6,
+            opacity: haloOpacity,
+            transform: [{ scale: haloScale }],
+          },
+        ]}
+      />
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.haloRing2,
+          {
+            top: ringY - 12,
+            left: ringX - 12,
+            width: ringW + 24,
+            height: ringH + 24,
+            borderRadius: radius + 12,
+            opacity: haloOpacity,
+            transform: [{ scale: haloScale }],
+          },
+        ]}
+      />
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.haloRing3,
+          {
+            top: ringY - 20,
+            left: ringX - 20,
+            width: ringW + 40,
+            height: ringH + 40,
+            borderRadius: radius + 20,
+            opacity: haloOpacity,
+            transform: [{ scale: haloScale }],
+          },
+        ]}
       />
 
       {/* NIENTE BUBBLE DI TESTO — l'esperienza è tutta a voce, come 
@@ -237,6 +320,56 @@ const styles = StyleSheet.create({
     // Oscuramento PARZIALE: la home/dettatura resta visibile dietro,
     // così l'utente capisce esattamente dove si trova nell'app.
     backgroundColor: "rgba(0,0,0,0.45)",
+  },
+  // === STILI HALO BIANCO ===
+  // haloBorder: bordo netto bianco 2px attorno al target — fa "stagliare"
+  // il bottone contro il dim. Su iOS gli aggiungiamo anche una shadow bianca
+  // forte (l'unico modo nativo per ottenere un vero glow morbido).
+  haloBorder: {
+    position: "absolute",
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
+    backgroundColor: "transparent",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#FFFFFF",
+        shadowOpacity: 1,
+        shadowRadius: 28,
+        shadowOffset: { width: 0, height: 0 },
+      },
+      android: { elevation: 0 }, // su Android usiamo i ring concentrici
+      default: {},
+    }),
+  },
+  // Ring 1: leggermente più grande del target, bianco quasi pieno
+  haloRing1: {
+    position: "absolute",
+    borderWidth: 3,
+    borderColor: "rgba(255,255,255,0.85)",
+    backgroundColor: "transparent",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#FFFFFF",
+        shadowOpacity: 0.9,
+        shadowRadius: 20,
+        shadowOffset: { width: 0, height: 0 },
+      },
+      default: {},
+    }),
+  },
+  // Ring 2: ancora più grande, bianco semi-trasparente
+  haloRing2: {
+    position: "absolute",
+    borderWidth: 4,
+    borderColor: "rgba(255,255,255,0.45)",
+    backgroundColor: "transparent",
+  },
+  // Ring 3: outermost, bianco diluito → effetto sfumato
+  haloRing3: {
+    position: "absolute",
+    borderWidth: 5,
+    borderColor: "rgba(255,255,255,0.18)",
+    backgroundColor: "transparent",
   },
   outerRing: {
     position: "absolute",

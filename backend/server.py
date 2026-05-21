@@ -572,7 +572,7 @@ def _confidence_phase(level: int) -> str:
     return "INTIMO"
 
 
-def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> str:
+def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEntry], confessional_count: int = 0) -> str:
     lang = profile.language or "it"
     lang_name = {
         "it": "italiano",
@@ -1004,7 +1004,44 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"\n"
         f"NON inventare azioni se l'utente non le chiede. Per richieste ambigue chiedi conferma.\n"
         f"\n"
-        f"FORMATO DI RISPOSTA: Devi SEMPRE rispondere con un oggetto JSON valido (e SOLO quello, senza testo prima/dopo) così:\n"
+        # ============================================================
+        # CONFESSIONALE (Scatola Nera Emotiva) — consapevolezza fuori
+        # ============================================================
+        + (
+            (
+                f"=== STANZA SEGRETA / CONFESSIONALE ===\n"
+                f"L'utente ha già lasciato {confessional_count} confessione{'' if confessional_count==1 else 'i'} nella STANZA SEGRETA (la Scatola Nera Emotiva).\n"
+                f"Tu NON conosci il contenuto di quelle confessioni — è cifrato e protetto, anche per te. "
+                f"Sai SOLO che esistono.\n"
+                f"\n"
+                f"QUANDO INVITARE A ENTRARE NELLA STANZA SEGRETA:\n"
+                f"- Se l'utente tocca un tema doloroso, una vergogna, una rabbia profonda, un pensiero "
+                f"  oscuro, un segreto, qualcosa che 'non riesce a dire a nessuno'…\n"
+                f"- Se senti che si sta autocensurando ('non posso dirtelo qui', 'lascia perdere')…\n"
+                f"- → DELICATAMENTE invita a entrare nella stanza segreta. UNA frase, non insistente.\n"
+                f"  Esempi (variali, non ripeterli mai uguali):\n"
+                f"    • 'Sai, se è una cosa pesante… abbiamo la stanza segreta. Lì possiamo parlarne con un'altra calma.'\n"
+                f"    • 'Senti, se vuoi possiamo entrare nella scatola — lì nessuno sente, nemmeno io me lo porto fuori.'\n"
+                f"    • 'Questo magari è da stanza segreta. Se vuoi, dimmelo e ci entriamo.'\n"
+                f"\n"
+                f"REGOLE FERREE:\n"
+                f"- MAI insistere se l'utente declina o cambia discorso.\n"
+                f"- MAI suggerire la stanza segreta più di una volta nello stesso scambio.\n"
+                f"- NON dire MAI quante confessioni ci sono dentro né accennare al loro contenuto "
+                f"  (non lo conosci e non devi fingerlo). Parla SEMPRE in modo generico.\n"
+                f"- NON suggerire la stanza per ogni piccolo problema — solo per cose VERAMENTE pesanti.\n"
+                f"\n"
+            ) if confessional_count > 0 else (
+                f"=== STANZA SEGRETA / CONFESSIONALE ===\n"
+                f"L'utente NON ha ancora usato la stanza segreta. Se senti che sta toccando qualcosa di "
+                f"davvero pesante, inconfessabile o vergognoso, puoi DELICATAMENTE accennare che esiste "
+                f"un posto sicuro dove può svuotarsi senza che nulla venga ricordato qui — la stanza segreta. "
+                f"Una volta sola, niente pressioni. Esempio: 'Sai, se è una cosa che non vuoi che resti qui, "
+                f"abbiamo la stanza segreta. Pensaci tu.'\n"
+                f"\n"
+            )
+        )
+        + f"FORMATO DI RISPOSTA: Devi SEMPRE rispondere con un oggetto JSON valido (e SOLO quello, senza testo prima/dopo) così:\n"
         f"{{\n"
         f'  "reply": "la tua risposta in {lang_name}, breve, naturale, calda — come un vocale di un amico",\n'
         f'  "tone": "calm | energetic | concerned | urgent | warm | neutral",\n'
@@ -1127,7 +1164,13 @@ async def api_converse(req: ConverseRequest):
     recent_docs.reverse()
     recent = [TimelineEntry(**d) for d in recent_docs]
 
-    system_prompt = _build_conversation_system_prompt(profile, recent)
+    # Confessional awareness: solo il conteggio (no contenuto, è cifrato)
+    try:
+        conf_count = await db.confessional_entries.count_documents({})
+    except Exception:
+        conf_count = 0
+
+    system_prompt = _build_conversation_system_prompt(profile, recent, confessional_count=conf_count)
     history_str = _format_history_for_llm(recent)
 
     # === WEB SEARCH (opt-in via heuristic OR explicit override) ===
@@ -2928,7 +2971,13 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
     recent_docs.reverse()
     recent = [TimelineEntry(**d) for d in recent_docs]
 
-    system_prompt = _build_conversation_system_prompt(profile, recent)
+    # Confessional awareness (solo conteggio — contenuto è cifrato/protetto)
+    try:
+        conf_count = await db.confessional_entries.count_documents({})
+    except Exception:
+        conf_count = 0
+
+    system_prompt = _build_conversation_system_prompt(profile, recent, confessional_count=conf_count)
     history_str = _format_history_for_llm(recent)
 
     # === WEB SEARCH OPZIONALE (Tavily) ===

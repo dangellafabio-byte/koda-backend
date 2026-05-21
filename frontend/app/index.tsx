@@ -196,6 +196,12 @@ export default function Taccuino() {
   const [tourActive, setTourActive] = useState(false);
   const [tourSteps, setTourSteps] = useState<TourStep[]>([]);
   const tourDims = useWindowDimensions();
+  // Mirror del tourActive in ref — serve per leggere il valore aggiornato
+  // dentro setTimeout/closure che sono stati schedulati PRIMA che il tour
+  // partisse (es. l'auto-mic-open timeout da 450ms): senza questo controllo
+  // il mic si apriva nel gap tra "KodaIntro chiusa" e "tourActive=true".
+  const tourActiveRef = useRef(false);
+  useEffect(() => { tourActiveRef.current = tourActive; }, [tourActive]);
 
   /** Costruisce gli step del tour usando le coordinate REALI della home
    *  in base a insets e dimensioni schermo. Va chiamato al momento del
@@ -288,11 +294,31 @@ export default function Taccuino() {
     const intruderActive = showColorIntro === true || tourActive || showOnboarding;
     if (intruderActive && recRef.current) {
       // Mic spento brutalmente — non vogliamo né silenzio rilevato né invio.
-      try {
-        recRef.current.cancel?.();
-      } catch {}
+      const r = recRef.current;
       recRef.current = null;
       setStatus("idle");
+      (async () => {
+        try {
+          // cancel() chiama internamente safeStop() in voice.ts → rilascia
+          // l'AVAudioSession iOS. È un async ma non lo aspettiamo nel
+          // useEffect: fire-and-forget.
+          await r.cancel?.();
+        } catch {}
+        // Forza il reset della sessione audio iOS in modalità SOLO playback,
+        // così il TTS del tour può partire senza conflitti.
+        if (Platform.OS !== "web") {
+          try {
+            const { setAudioModeAsync } = require("expo-audio");
+            await setAudioModeAsync({
+              allowsRecording: false,
+              playsInSilentMode: true,
+              interruptionMode: "duckOthers",
+              shouldPlayInBackground: false,
+              shouldRouteThroughEarpiece: false,
+            });
+          } catch {}
+        }
+      })();
     }
   }, [showColorIntro, tourActive, showOnboarding]);
 
@@ -948,6 +974,10 @@ export default function Taccuino() {
     const t = setTimeout(() => {
       if (!handsFreeRef.current) return;
       if (recRef.current) return;
+      // CRITICAL: re-check tourActive in closure. Senza questo, nel piccolo
+      // gap fra "KodaIntro chiusa" e "tourActive=true" il setTimeout era
+      // già stato schedulato e apriva il mic durante il tour.
+      if (tourActiveRef.current) return;
       // Re-check status in closure
       startTalkInternal(true).catch(() => {});
     }, 450);
