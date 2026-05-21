@@ -203,32 +203,34 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       clearTimeout(colorTourTimerRef.current);
       colorTourTimerRef.current = null;
     }
-    // STEP 5 (tour colori) ha logica speciale: la sequenza dei colori parte
-    // SUBITO ed è sincronizzata col TESTO che Koda sta dicendo. Non aspettiamo
-    // che finisca di parlare, perché vogliamo che l'utente VEDA il viola
-    // mentre lei dice "viola", il blu mentre dice "blu petrolio", ecc.
+    // STEP 5 (tour colori): la sequenza dei colori parte SOLO quando Koda
+    // INIZIA a parlare (così latenza TTS variabile non sfasa la sincronizzazione
+    // col testo). Quando smette di parlare, si ferma il timer.
     if (step === 5) {
-      // Testo step 5 (ElevenLabs Matilda ita, ~7-8 char/s con pause):
-      //  "Una cosa importante: io non ho un viso. Sono un'eclissi." (~5.5s)
-      //  "Quando aspetto sono viola."                                (~2.5s) → idle viola
-      //  "Quando ti ascolto, divento blu petrolio."                  (~4.0s) → recording blu
-      //  "Quando rifletto, ciclamino."                               (~2.8s) → thinking ciclamino
-      //  "Quando ti parlo, cambio colore con quello che provo."      (~5.0s) → speaking warm rosa
-      // I tempi sotto sommano alla DURATA del segmento attuale, non al timestamp assoluto.
+      if (!isKodaSpeaking) {
+        // Pre-roll: in attesa che Koda parli, mostra viola (idle)
+        setOrbStatus("idle");
+        setOrbTone("neutral");
+        return;
+      }
+      // Koda STA parlando ORA → lancia la sequenza temporale.
+      // Testo: "Una cosa importante: io non ho un viso. Sono un'eclissi.   (~5s)
+      //  Quando aspetto sono viola.                                       (~2.5s)
+      //  Quando ti ascolto, divento blu petrolio.                         (~3.5s)
+      //  Quando rifletto, ciclamino.                                      (~2.5s)
+      //  Quando ti parlo, cambio colore con quello che provo."            (~4.5s)
+      // Durate cumulative dei segmenti: 5, 7.5, 11, 13.5, 18s
       const seq: Array<[OrbStatus, OrbTone | undefined, number]> = [
-        // 0-8s: pre-roll + "Quando aspetto sono viola" → viola (idle/neutral)
-        ["idle", "neutral", 8000],
-        // 8-12s: "Quando ti ascolto, divento blu petrolio" → blu petrolio (recording)
-        ["recording", undefined, 4000],
-        // 12-14.8s: "Quando rifletto, ciclamino" → ciclamino (thinking, palette rosa)
-        ["thinking", undefined, 2800],
-        // 14.8-19.8s: "Quando ti parlo, cambio colore con quello che provo" → rosa warm
-        ["speaking", "warm", 5000],
-        // Coda: ritorno calmo viola
-        ["idle", "neutral", 2000],
+        // 0-7.5s: pre-roll "Una cosa importante..." + "Quando aspetto sono viola" → idle viola
+        ["idle", "neutral", 7500],
+        // 7.5-11s: "Quando ti ascolto, divento blu petrolio" → recording blu
+        ["recording", undefined, 3500],
+        // 11-13.5s: "Quando rifletto, ciclamino" → thinking ciclamino rosa
+        ["thinking", undefined, 2500],
+        // 13.5-18s: "Quando ti parlo, cambio colore..." → speaking warm rosa
+        ["speaking", "warm", 4500],
       ];
       let i = 0;
-      // Stato iniziale subito
       setOrbStatus(seq[0][0]);
       if (seq[0][1]) setOrbTone(seq[0][1]);
       const tick = () => {
@@ -240,7 +242,6 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         const [, , prevDur] = seq[i - 1];
         colorTourTimerRef.current = setTimeout(tick, prevDur);
       };
-      // Avvia il ciclo dopo la durata del PRIMO segmento
       colorTourTimerRef.current = setTimeout(tick, seq[0][2]);
       return () => {
         if (colorTourTimerRef.current) clearTimeout(colorTourTimerRef.current);

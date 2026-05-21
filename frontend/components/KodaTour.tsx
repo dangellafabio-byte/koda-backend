@@ -166,46 +166,58 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
 
   return (
     <Animated.View style={[styles.overlay, { opacity: fade }]} pointerEvents="auto">
-      {/* === VERO SPOTLIGHT === 
-          Invece di una maschera unica che cubre TUTTO (così non si vede
-          nulla dell'elemento sotto), usiamo 4 rettangoli scuri attorno
-          al "buco" trasparente. L'elemento evidenziato resta perfettamente
-          visibile, e tutto il resto è scurito all'82%. */}
-      {/* TOP — dalla cima dello schermo fino all'alto del buco */}
+      {/* === SPOTLIGHT con OSCURAMENTO PARZIALE ===
+          Vediamo la home dietro (overlay nero al 45%) ma il "buco" attorno
+          al bottone resta completamente trasparente: il bottone vero brilla
+          attraverso. Nessun innerGlow: lasciamo il bottone così com'è. */}
       <View
         style={[styles.dim, { top: 0, left: 0, right: 0, height: Math.max(0, ringY) }]}
         pointerEvents="auto"
       />
-      {/* BOTTOM — dal fondo del buco fino in fondo */}
       <View
         style={[styles.dim, { top: ringY + ringH, left: 0, right: 0, bottom: 0 }]}
         pointerEvents="auto"
       />
-      {/* LEFT — fascia laterale sinistra alta come il buco */}
       <View
         style={[styles.dim, { top: ringY, left: 0, width: Math.max(0, ringX), height: ringH }]}
         pointerEvents="auto"
       />
-      {/* RIGHT — fascia laterale destra alta come il buco */}
       <View
         style={[styles.dim, { top: ringY, left: ringX + ringW, right: 0, height: ringH }]}
         pointerEvents="auto"
       />
 
-      {/* GLOW INTERNO SUL BOTTONE — niente più anelli esterni, solo un velo
-          chiaro semi-trasparente che pulsa SOPRA il bottone evidenziato,
-          dando l'impressione che il bottone stesso "respiri di luce".
-          User feedback: "togli l'evidenziatore, fai che il tasto stesso pulsa". */}
+      {/* ANELLO PULSANTE ESTERNO — si restringe e si allarga attorno al
+          bottone (effetto "sonar" dolce). Nessun riempimento, solo bordo
+          chiaro pulsante, che attira l'occhio senza coprire il bottone. */}
       <Animated.View
         style={[
-          styles.innerGlow,
+          styles.outerRing,
           {
             left: ringX,
             top: ringY,
             width: ringW,
             height: ringH,
             borderRadius: radius,
-            opacity: glowOpacity,
+            transform: [{ scale: ringScale }],
+            opacity: ringOpacity,
+          },
+        ]}
+        pointerEvents="none"
+      />
+
+      {/* ONDA SONAR — anello secondario che si espande verso fuori e svanisce */}
+      <Animated.View
+        style={[
+          styles.sonar,
+          {
+            left: ringX,
+            top: ringY,
+            width: ringW,
+            height: ringH,
+            borderRadius: radius,
+            transform: [{ scale: sonarScale }],
+            opacity: sonarOpacity,
           },
         ]}
         pointerEvents="none"
@@ -255,46 +267,31 @@ const styles = StyleSheet.create({
   },
   dim: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.82)",
+    // Oscuramento PARZIALE: la home/dettatura resta visibile dietro,
+    // così l'utente capisce esattamente dove si trova nell'app.
+    backgroundColor: "rgba(0,0,0,0.45)",
   },
-  ring: {
+  outerRing: {
     position: "absolute",
-    borderWidth: 4,
-    borderColor: "#34D399",
+    borderWidth: 3,
+    borderColor: "#A7F3D0",
     backgroundColor: "transparent",
-    // Glow via shadow (iOS) / elevation (Android approximation)
     ...Platform.select({
       ios: {
         shadowColor: "#34D399",
-        shadowOpacity: 1,
-        shadowRadius: 26,
+        shadowOpacity: 0.9,
+        shadowRadius: 22,
         shadowOffset: { width: 0, height: 0 },
       },
-      android: { elevation: 14 },
+      android: { elevation: 12 },
       default: {},
     }),
   },
   sonar: {
     position: "absolute",
-    borderWidth: 3,
-    borderColor: "#34D399",
+    borderWidth: 2,
+    borderColor: "#A7F3D0",
     backgroundColor: "transparent",
-  },
-  innerGlow: {
-    position: "absolute",
-    backgroundColor: "#FFFFFF",
-    // Glow soffuso semi-trasparente che pulsa SOPRA il bottone evidenziato
-    // (effetto "il bottone respira di luce" invece di "anello attorno").
-    ...Platform.select({
-      ios: {
-        shadowColor: "#FFFFFF",
-        shadowOpacity: 0.6,
-        shadowRadius: 18,
-        shadowOffset: { width: 0, height: 0 },
-      },
-      android: { elevation: 8 },
-      default: {},
-    }),
   },
   bubble: {
     position: "absolute",
