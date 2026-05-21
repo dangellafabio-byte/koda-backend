@@ -25,7 +25,7 @@ const STATE_COLORS: Record<NeonBorderStatus, string> = {
   idle: "#FF1493",        // 🌸 Rosa shocking
   recording: "#00F5D4",   // 💎 Tiffany neon
   listening: "#5EEAD4",   // 💧 Tiffany chiaro
-  thinking: "#1E90FF",    // ⚡ Blu elettrico
+  thinking: "#EC4899",    // 🩷 Ciclamino (matcha eclissi thinking THINK_PALETTE)
   speaking: "#BD10E0",    // 🟣 Viola elettrico
   confessional: "#FF1744",// ❤️‍🔥 Scarlatto
 };
@@ -75,56 +75,45 @@ export default function NeonBorder({
   // opacity quasi fissa: oscilla tra 0.75 e 1.0 (sempre molto visibile)
   const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.75, 1] });
 
-  // ============ CHASE LIGHT (solo thinking) ============
-  // Animazione "growing line": parte da un punto e cresce lungo il perimetro
-  // arrotondato, fino a coprire tutto il bordo. Poi sparisce e riparte.
-  // (User feedback: "non che continui a girare, parte da un punto fisso
-  // copre tutto il perimetro e poi riparte ancora").
-  //
-  // Tecnica: stroke-dasharray=[perim,perim] (un dash di perim + gap di perim,
-  // quindi solo UNA copia visibile lungo il path), stroke-dashoffset animato
-  // da `perimeter` (segmento nascosto) a `0` (segmento completamente visibile).
-  // Loop con reset istantaneo a perimeter → effetto "ricomincia dal punto".
+  // ============ LIQUID NEON FLOW (solo thinking) ============
+  // Flusso circolare con scia: una "testa" luminosa corre attorno al perimetro
+  // arrotondato, seguita da una "scia" più lunga e sfumata. Loop continuo.
+  // Implementato con DUE Rect SVG sovrapposti che condividono lo stesso
+  // dashOffset animato:
+  //   1) "scia" = dashLen lunga (30% perim), opacity bassa, no glow forte
+  //   2) "testa" = dashLen corta (6% perim), opacity 1, glow massimo
+  // L'effetto visivo è: una luce neon che scorre come liquido lungo il bordo.
   const perimeter = useMemo(() => {
     const r = DISPLAY_RADIUS;
     return 2 * (W + H) - 8 * r + 2 * Math.PI * r;
   }, [W, H]);
-  const dashArray = `${perimeter} ${perimeter}`;
+  const headLen = Math.max(40, perimeter * 0.06);
+  const trailLen = Math.max(120, perimeter * 0.30);
+  const headDashArray = `${headLen} ${perimeter}`;
+  const trailDashArray = `${trailLen} ${perimeter}`;
 
-  const dashOffset = useRef(new Animated.Value(perimeter)).current;
+  const dashOffset = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    dashOffset.setValue(perimeter);
+    dashOffset.setValue(0);
     if (status !== "thinking") return;
     const anim = Animated.loop(
-      Animated.sequence([
-        // Crescita lungo il perimetro (1.8s)
-        Animated.timing(dashOffset, {
-          toValue: 0,
-          duration: 1800,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: false,
-        }),
-        // Pausa breve quando l'intero bordo è illuminato (250ms)
-        Animated.timing(dashOffset, {
-          toValue: 0,
-          duration: 250,
-          useNativeDriver: false,
-        }),
-        // Reset istantaneo: torna a "nascosto" e riparte
-        Animated.timing(dashOffset, {
-          toValue: perimeter,
-          duration: 1,
-          useNativeDriver: false,
-        }),
-      ])
+      Animated.timing(dashOffset, {
+        toValue: -perimeter,
+        duration: 2400,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      })
     );
     anim.start();
     return () => anim.stop();
   }, [status, perimeter, dashOffset]);
+  // Offset per la testa: stessa posizione della scia + lunghezza scia
+  // (così la testa è SOPRA la coda della scia, illuminandone l'estremità).
+  const headOffset = Animated.subtract(dashOffset, new Animated.Value(trailLen - headLen)) as any;
 
   // ============ RENDER ============
   if (status === "thinking") {
-    // SVG full-screen con segmento di neon che corre attorno al perimetro
+    // SVG full-screen: Liquid Neon Flow = scia sfumata + testa luminosa
     return (
       <Animated.View
         pointerEvents="none"
@@ -135,7 +124,7 @@ export default function NeonBorder({
               ios: {
                 shadowColor: color,
                 shadowOpacity: 1,
-                shadowRadius: 22,
+                shadowRadius: 24,
                 shadowOffset: { width: 0, height: 0 },
               },
               android: { elevation: 18 },
@@ -145,6 +134,7 @@ export default function NeonBorder({
         ]}
       >
         <Svg width="100%" height="100%" style={StyleSheet.absoluteFill}>
+          {/* 1) SCIA SFUMATA — segmento lungo, opacity bassa */}
           <AnimatedRect
             x={thickness / 2}
             y={thickness / 2}
@@ -156,8 +146,24 @@ export default function NeonBorder({
             stroke={color}
             strokeWidth={thickness}
             strokeLinecap="round"
-            strokeDasharray={dashArray}
+            strokeDasharray={trailDashArray}
             strokeDashoffset={dashOffset as any}
+            opacity={0.35}
+          />
+          {/* 2) TESTA LUMINOSA — corto segmento, davanti alla scia */}
+          <AnimatedRect
+            x={thickness / 2}
+            y={thickness / 2}
+            width={W - thickness}
+            height={H - thickness}
+            rx={DISPLAY_RADIUS}
+            ry={DISPLAY_RADIUS}
+            fill="none"
+            stroke={color}
+            strokeWidth={thickness + 1}
+            strokeLinecap="round"
+            strokeDasharray={headDashArray}
+            strokeDashoffset={headOffset}
             opacity={1}
           />
         </Svg>
