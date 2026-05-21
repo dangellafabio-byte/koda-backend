@@ -21,12 +21,29 @@ import { LinearGradient } from "expo-linear-gradient";
 export type NeonBorderStatus = "idle" | "recording" | "thinking" | "speaking" | "confessional" | "listening";
 
 const STATE_COLORS: Record<NeonBorderStatus, string | null> = {
-  idle: null,                 // invisibile
-  recording: "#22C55E",        // verde brillante
-  thinking: "#A78BFA",         // viola tenue
-  speaking: "#F59E0B",         // ambra calda
-  confessional: "#8B3A4A",     // bordeaux — sigillo del Confessionale
-  listening: "#34D399",        // verde menta sottile — VAD ha rilevato la tua voce
+  // Rosa tenue — vita costante dell'app, "respiro" a riposo
+  idle: "#F472B6",
+  // Blu petrolio/tiffany — "ti sto ascoltando, registro"
+  recording: "#14B8A6",
+  // Stesso blu petrolio più discreto per hands-free listening
+  listening: "#5EEAD4",
+  // Blu profondo — riflessione, "sto pensando"
+  thinking: "#3B82F6",
+  // Viola — quando Koda parla (coerente con l'eclissi viola/identità)
+  speaking: "#8B5CF6",
+  // Scarlatto — sigillo del Confessionale, urgenza/intimità del segreto
+  confessional: "#DC2626",
+};
+
+// Intensità "a riposo" più tenue per non disturbare lo sguardo;
+// gli stati attivi sono pieni.
+const STATE_BASE_OPACITY: Record<NeonBorderStatus, number> = {
+  idle: 0.45,
+  recording: 1.0,
+  listening: 0.85,
+  thinking: 1.0,
+  speaking: 1.0,
+  confessional: 1.0,
 };
 
 export default function NeonBorder({
@@ -39,21 +56,27 @@ export default function NeonBorder({
   const pulse = useRef(new Animated.Value(0)).current;
   const fade = useRef(new Animated.Value(0)).current;
   const color = STATE_COLORS[status];
+  const baseOp = STATE_BASE_OPACITY[status] ?? 1;
 
   // Fade in/out as status changes (smooth transitions)
   useEffect(() => {
     Animated.timing(fade, {
-      toValue: color ? 1 : 0,
+      toValue: color ? baseOp : 0,
       duration: 350,
       easing: Easing.out(Easing.quad),
       useNativeDriver: true,
     }).start();
-  }, [color, fade]);
+  }, [color, baseOp, fade]);
 
-  // Pulsing — speed varies per status to feel alive
+  // Pulsing — speed varies per status to feel alive.
+  // A riposo (idle) il respiro è LENTO e leggero — quasi impercettibile.
   useEffect(() => {
     if (!color) return;
-    const cycleMs = status === "recording" ? 1100 : status === "speaking" ? 900 : 1800;
+    const cycleMs =
+      status === "recording" ? 1100 :
+      status === "speaking" ? 900 :
+      status === "idle" ? 3500 :  // respiro lento a riposo
+      1800;
     const anim = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, { toValue: 1, duration: cycleMs / 2, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
