@@ -23,10 +23,15 @@ const PALETTES: Array<[string, string, string]> = [
 ];
 
 // Sub-component: cerchio con gradient di una sola palette, statico.
+// Renderizza l'ECLISSI completa:
+//  1) alone esterno (radial gradient palette)
+//  2) disco nero centrale (il "buco" dell'eclissi)
+//  3) rim light (anello sottile di luce sul bordo del disco)
 function OrbCircle({ palette, size }: { palette: [string, string, string]; size: number }) {
   const r = size / 2;
-  // ID univoco del gradient per evitare collisioni se più OrbCircle sono renderizzati
   const gradId = `g_${palette[0].slice(1)}_${palette[1].slice(1)}`;
+  // Disco nero centrale al 50% del raggio totale → eclissi "ad anello"
+  const discR = r * 0.5;
   return (
     <Svg width={size} height={size}>
       <Defs>
@@ -36,7 +41,20 @@ function OrbCircle({ palette, size }: { palette: [string, string, string]; size:
           <Stop offset="100%" stopColor={palette[2]} stopOpacity={0} />
         </RadialGradient>
       </Defs>
+      {/* 1) Alone luminoso esterno */}
       <Circle cx={r} cy={r} r={r * 0.95} fill={`url(#${gradId})`} />
+      {/* 2) Disco nero centrale — il vero "occhio" dell'eclissi */}
+      <Circle cx={r} cy={r} r={discR} fill="#06060A" />
+      {/* 3) Rim light — anello sottile luminoso attorno al disco */}
+      <Circle
+        cx={r}
+        cy={r}
+        r={discR}
+        fill="none"
+        stroke={palette[0]}
+        strokeWidth={1.5}
+        opacity={0.85}
+      />
     </Svg>
   );
 }
