@@ -51,6 +51,7 @@ import NeonBorder, { NeonBorderStatus } from "../components/NeonBorder";
 import ActivationPulse from "../components/ActivationPulse";
 import RadialGlow from "../components/RadialGlow";
 import SealSetupModal from "../components/SealSetupModal";
+import PortaFuoriModal from "../components/PortaFuoriModal";
 import InfoModal from "../components/InfoModal";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
 import { useFonts, Caveat_400Regular, Caveat_500Medium } from "@expo-google-fonts/caveat";
@@ -66,6 +67,8 @@ import {
   keyToBase64,
   biometricAvailable,
 } from "../lib/sealedCrypto";
+// === Porta Fuori: ponte one-shot dal Confessionale alla conversazione ===
+import { isBridgeOpen, consumeBridge, closeBridge } from "../lib/bringOut";
 
 type Status = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 
@@ -389,6 +392,29 @@ export default function Taccuino() {
   const [hasSeal, setHasSeal] = useState<boolean>(false);
   const [showSealSetup, setShowSealSetup] = useState(false);
   const [sealUnlocking, setSealUnlocking] = useState(false);
+
+  // === PORTA FUORI: ponte one-shot dal confessionale ===
+  const [showPortaFuori, setShowPortaFuori] = useState(false);
+  const [bridgeActive, setBridgeActive] = useState(false); // pill di stato
+  const [confessionalCount, setConfessionalCount] = useState(0);
+  // Refresh count all'avvio e dopo ogni uscita dal confessionale
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await api.confessionalCount();
+        if (!cancelled) setConfessionalCount(r?.count || 0);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [confessionalMode]);
+  // Se l'utente apre il confessionale, chiudi il ponte (i contesti sono incompatibili)
+  useEffect(() => {
+    if (confessionalMode && bridgeActive) {
+      closeBridge();
+      setBridgeActive(false);
+    }
+  }, [confessionalMode, bridgeActive]);
   // Re-check seal availability on mount + after any setup/clear.
   useEffect(() => {
     let cancelled = false;
@@ -1126,7 +1152,16 @@ export default function Taccuino() {
         // `tone` semantico della risposta, NON dall'ampiezza audio
         // (approccio precedente con waveform server-side abbandonato:
         // troppi anelli di sync, effetto "macchinoso").
-        const useFastPath = !confessionalMode && (profile?.settings.voice_response !== false);
+        // === PORTA FUORI: se è aperto un ponte one-shot, salta il fast
+        // streaming (che è GET e non porta i secrets) e vai al POST
+        // /converse con bridged_secrets. I secrets sono consumati una
+        // volta sola → la closure viene cancellata da consumeBridge.
+        const bridgeNow = isBridgeOpen() ? consumeBridge() : null;
+        if (bridgeNow) setBridgeActive(false);
+        const useFastPath =
+          !bridgeNow &&
+          !confessionalMode &&
+          (profile?.settings.voice_response !== false);
         if (useFastPath) {
           try {
             const reqId = Math.random().toString(36).slice(2, 18);
@@ -1211,7 +1246,13 @@ export default function Taccuino() {
           }
         }
         // === STANDARD FLOW (con o senza ephemeral) ===
-        const res = await api.converse(txt, undefined, { ephemeral: confessionalMode });
+        // bridgeNow è popolato SOLO se l'utente ha aperto "Porta fuori".
+        // Il backend riceverà i segreti decifrati per UN solo turno e
+        // forzerà ephemeral=true (niente DB).
+        const res = await api.converse(txt, undefined, {
+          ephemeral: confessionalMode || !!bridgeNow,
+          bridged_secrets: bridgeNow || undefined,
+        });
         // Replace optimistic with real, then add AI entry.
         // Se siamo in confessionale, marca le entry come `confessional`
         // così la timeline le filtra/colora correttamente.
@@ -2210,6 +2251,52 @@ export default function Taccuino() {
                 : "Confessionale"}
             </Text>
           </TouchableOpacity>
+          {/* === PORTA FUORI — bottone discreto accanto al lucchetto ===
+              Visibile SOLO se esiste almeno una voce nella stanza segreta
+              E non siamo già DENTRO al confessionale. Mostra un piccolo
+              pallino violetto quando il ponte è attivo (one-shot pending). */}
+          {confessionalCount > 0 && !confessionalMode && (
+            <TouchableOpacity
+              style={[
+                styles.confessionalToggle,
+                { marginLeft: 8 },
+                bridgeActive && {
+                  backgroundColor: "rgba(167,139,250,0.18)",
+                  borderColor: "rgba(167,139,250,0.55)",
+                },
+              ]}
+              onPress={() => {
+                if (bridgeActive) {
+                  // toggle off: l'utente vuole annullare il ponte aperto
+                  closeBridge();
+                  setBridgeActive(false);
+                  return;
+                }
+                setShowPortaFuori(true);
+              }}
+              hitSlop={10}
+              accessibilityLabel={
+                bridgeActive
+                  ? "Ponte aperto verso la stanza segreta — tocca per annullare"
+                  : "Porta fuori dalla stanza segreta — un singolo turno"
+              }
+              testID="porta-fuori-toggle"
+            >
+              <Ionicons
+                name={bridgeActive ? "key" : "key-outline"}
+                size={16}
+                color={bridgeActive ? "#A78BFA" : "#FFFFFFCC"}
+              />
+              <Text
+                style={[
+                  styles.confessionalToggleText,
+                  bridgeActive && { color: "#A78BFA" },
+                ]}
+              >
+                {bridgeActive ? "Ponte aperto" : "Porta fuori"}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
         {/* Slot destro: icona "tre puntini" semi-trasparente per aprire KodaIntro.
             Discreta (white@55%) per non rompere l'estetica zen ma visibile e
@@ -3377,6 +3464,14 @@ export default function Taccuino() {
           // Se era attivo il confessionale, lascia attivo (fallback a ephemeral).
         }}
         styles={styles}
+        theme={theme}
+      />
+
+      {/* Porta Fuori Modal — ponte one-shot dal Confessionale */}
+      <PortaFuoriModal
+        visible={showPortaFuori}
+        onClose={() => setShowPortaFuori(false)}
+        onBridgeOpened={() => setBridgeActive(true)}
         theme={theme}
       />
 

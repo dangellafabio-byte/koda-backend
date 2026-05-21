@@ -146,7 +146,11 @@ export const api = {
     jsonReq<TimelineEntry[]>(`/timeline?limit=${limit}`),
   clearTimeline: () => jsonReq<{ ok: boolean }>("/timeline", { method: "DELETE" }),
 
-  converse: (text: string, audio_duration_ms?: number, opts?: { ephemeral?: boolean }) =>
+  converse: (
+    text: string,
+    audio_duration_ms?: number,
+    opts?: { ephemeral?: boolean; bridged_secrets?: string[] }
+  ) =>
     jsonReq<{
       user_entry: TimelineEntry;
       ai_entry: TimelineEntry;
@@ -157,6 +161,10 @@ export const api = {
         text,
         audio_duration_ms,
         ephemeral: !!opts?.ephemeral,
+        // PORTA FUORI: segreti DECRIFRATI dal client con la parola segreta,
+        // inviati one-shot al backend solo per questo turno (forza ephemeral).
+        // La parola segreta NON viene mai inviata.
+        bridged_secrets: opts?.bridged_secrets,
       }),
     }),
 

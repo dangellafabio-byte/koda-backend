@@ -527,6 +527,14 @@ class ConverseRequest(BaseModel):
     # memory_summary, NON incluso negli ultimi messaggi del prompt. Vive
     # solo nella risposta corrente (e in RAM client). Per inconfessabili.
     ephemeral: bool = False
+    # === PORTA FUORI (one-shot bridge dal Confessionale) ===
+    # Liste di testi in chiaro DECIFRATI DAL CLIENT con la parola segreta
+    # e inviati QUI volontariamente dall'utente per autorizzare Koda a
+    # discutere di quei temi in un singolo turno fuori dal confessionale.
+    # Il backend li usa SOLO per generare la risposta corrente. Forza
+    # ephemeral=True (niente DB), niente memory_summary, niente log.
+    # La parola segreta NON arriva mai qui — è usata solo lato client.
+    bridged_secrets: Optional[List[str]] = None
 
 
 class ConverseResponse(BaseModel):
@@ -1137,6 +1145,15 @@ async def api_converse(req: ConverseRequest):
     if not text:
         raise HTTPException(status_code=400, detail="Empty message")
 
+    # === PORTA FUORI: se il client invia bridged_secrets, FORZA ephemeral.
+    # I segreti sono stati decifrati dal client con la parola segreta e ci
+    # vengono inviati VOLONTARIAMENTE solo per questo turno. Non vanno mai
+    # in DB. Non vanno in memory_summary. Non vanno nel log.
+    has_bridge = bool(req.bridged_secrets)
+    if has_bridge:
+        req.ephemeral = True
+        logger.info(f"[converse][porta-fuori] bridged turn (one-shot, ephemeral); secrets={len(req.bridged_secrets or [])}")
+
     profile = await get_or_create_profile()
     if not profile.settings.ai_enabled:
         # AI disabled — store user message only with a stub AI reply
@@ -1197,9 +1214,32 @@ async def api_converse(req: ConverseRequest):
 
     user_payload = (
         f"STORICO RECENTE (per memoria a breve termine):\n{history_str}\n\n"
-        f"NUOVO MESSAGGIO DELL'UTENTE:\n{text}"
-        f"{web_context}\n\n"
-        f"Rispondi SOLO col JSON come da istruzioni di sistema."
+        + (
+            (
+                "=== PORTA FUORI — Autorizzazione TEMPORANEA dalla stanza segreta ===\n"
+                "L'utente ha appena APERTO la stanza segreta per UN SOLO turno e ti ha "
+                "autorizzato a parlare di quanto segue, fuori dal confessionale. Tratta "
+                "questi contenuti con la stessa delicatezza con cui li tratteresti dentro "
+                "la stanza segreta. NON ripeterli letteralmente all'utente (lui li conosce "
+                "già). Usali come CONTESTO per la risposta a quello che sta chiedendo ORA.\n"
+                "REGOLE:\n"
+                "  • Dopo questo turno scordali — verranno cancellati dalla tua finestra.\n"
+                "  • Niente da salvare in memoria di lungo periodo.\n"
+                "  • Non citare URL/dettagli sensibili in voce.\n"
+                "\nSEGRETI APERTI DALL'UTENTE (in ordine cronologico):\n"
+                + "\n---\n".join(
+                    f"[{i+1}] {s.strip()}"
+                    for i, s in enumerate((req.bridged_secrets or [])[:50])
+                    if s and s.strip()
+                )
+                + "\n=== FINE PORTA FUORI ===\n\n"
+            )
+            if has_bridge
+            else ""
+        )
+        + f"NUOVO MESSAGGIO DELL'UTENTE:\n{text}"
+        + f"{web_context}\n\n"
+        + f"Rispondi SOLO col JSON come da istruzioni di sistema."
     )
 
     try:
