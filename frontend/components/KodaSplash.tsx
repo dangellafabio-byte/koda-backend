@@ -1,48 +1,44 @@
 /**
  * KodaSplash — splash screen evocativo all'apertura dell'app.
  *
+ * Versione 2 — niente pulse/scale, solo CROSS-FADE FLUIDO tra colori.
+ *
  * Scopo:
  *  - mascherare la latenza di boot (~3-5s prima che il primo TTS sia pronto)
  *  - dare un'identità visiva forte all'app fin dal primo secondo
- *  - far sentire l'utente che "l'app si sta svegliando", non che è bloccata
  *
  * Design:
  *  - sfondo nero profondo (#06060A) come tutta l'app
- *  - eclissi grande al centro che cicla automaticamente tra i 4 stati
- *    cromatici (viola → blu petrolio → ciclamino → rosa caldo), una sorta
- *    di "respiro di luce" che dura 4 secondi
+ *  - eclissi grande e STATICA al centro (cerchio con radial gradient).
+ *    Niente respiro, niente pulse. Solo i COLORI cambiano molto fluidamente
+ *    facendo cross-fade tra 4 palette (viola → blu petrolio → ciclamino → rosa).
  *  - nome AI personalizzato (`aiName` dal profilo) o "Koda" come default,
  *    fade-in dolce sotto l'eclissi
  *  - sottotitolo "L'Amico Fraterno" piccolo, tenue, sotto il nome
  *  - fade-out finale di tutto verso la home
- *
- * Comportamento:
- *  - chiama `onComplete()` dopo 4000ms (configurabile via `duration`)
- *  - se l'utente tocca lo schermo, completa subito (skip)
  */
 import React, { useEffect, useRef, useState } from "react";
-import { View, Text, StyleSheet, Animated, Pressable, Dimensions } from "react-native";
-import EclipseOrb, { OrbStatus, OrbTone } from "./EclipseOrb";
+import { View, Text, StyleSheet, Animated, Pressable, Dimensions, Platform } from "react-native";
+import Svg, { Defs, RadialGradient, Stop, Circle } from "react-native-svg";
+
+const AnimatedStop = Animated.createAnimatedComponent(Stop);
 
 interface Props {
-  /** Nome AI da mostrare (default: "Koda"). */
   aiName?: string | null;
-  /** Durata totale in ms prima del fade-out. Default 4000. */
+  /** Durata totale in ms. Default 10000. */
   duration?: number;
-  /** Chiamato quando lo splash è completo (o l'utente lo tocca). */
   onComplete: () => void;
 }
 
-// Ciclo automatico dei 4 stati cromatici, distribuiti sui ~3.5s di splash:
-// idle viola → recording blu → thinking ciclamino → speaking warm rosa.
-const COLOR_CYCLE: Array<[OrbStatus, OrbTone | undefined, number]> = [
-  ["idle", "neutral", 900],          // viola
-  ["recording", undefined, 800],     // blu petrolio
-  ["thinking", undefined, 800],      // ciclamino
-  ["speaking", "warm", 1000],        // rosa caldo
+// 4 palette identitarie, percorse in loop con cross-fade fluido.
+const PALETTES: Array<[string, string, string]> = [
+  ["#C4B5FD", "#8B5CF6", "#7C3AED"], // viola/lavanda (idle)
+  ["#5EEAD4", "#0E7C7B", "#134E4A"], // blu petrolio (recording)
+  ["#F9A8D4", "#EC4899", "#BE185D"], // ciclamino (thinking)
+  ["#FBCFE8", "#F472B6", "#DB2777"], // rosa caldo (speaking warm)
 ];
 
-export default function KodaSplash({ aiName, duration = 4000, onComplete }: Props) {
+export default function KodaSplash({ aiName, duration = 10000, onComplete }: Props) {
   const { width, height } = Dimensions.get("window");
   const orbSize = Math.min(width * 0.7, 280);
 
@@ -52,65 +48,81 @@ export default function KodaSplash({ aiName, duration = 4000, onComplete }: Prop
   const subFade = useRef(new Animated.Value(0)).current;
   const completedRef = useRef(false);
 
-  const [status, setStatus] = useState<OrbStatus>("idle");
-  const [tone, setTone] = useState<OrbTone | undefined>("neutral");
+  // Indice della palette attuale e successiva. Il cross-fade animato fa
+  // transizionare da "current" a "next" in modo fluido.
+  const [paletteIdx, setPaletteIdx] = useState(0);
+  // Animated value 0..1 che pilota la transizione tra paletteIdx e paletteIdx+1.
+  const crossfade = useRef(new Animated.Value(0)).current;
 
-  // === Sequenza di fade-in ===
+  // Calcolo quanti cicli di palette stanno nel `duration`. Ogni segmento dura
+  // duration / PALETTES.length così copriamo tutto il tempo dello splash.
+  // Esempio: 10000ms / 4 palette = 2500ms per segmento.
+  const segmentMs = Math.max(1500, Math.floor(duration / PALETTES.length));
+  // Tempo di cross-fade vero e proprio (deve essere ≤ segmentMs per essere fluido)
+  const fadeMs = Math.floor(segmentMs * 0.85);
+
+  // === Fade-in iniziale di tutti gli elementi ===
   useEffect(() => {
-    // Background subito
     Animated.timing(fade, { toValue: 1, duration: 250, useNativeDriver: true }).start();
-    // Orb fade-in dopo 100ms
     Animated.timing(orbFade, {
       toValue: 1,
-      duration: 800,
+      duration: 1000,
       delay: 100,
       useNativeDriver: true,
     }).start();
-    // Nome fade-in dopo 700ms (mentre l'orb è ancora respirando)
     Animated.timing(nameFade, {
       toValue: 1,
-      duration: 700,
-      delay: 700,
+      duration: 900,
+      delay: 900,
       useNativeDriver: true,
     }).start();
-    // Sottotitolo fade-in dopo 1.4s
     Animated.timing(subFade, {
       toValue: 1,
-      duration: 700,
-      delay: 1400,
+      duration: 900,
+      delay: 1800,
       useNativeDriver: true,
     }).start();
   }, [fade, orbFade, nameFade, subFade]);
 
-  // === Ciclo automatico colori dell'orb ===
+  // === Loop cross-fade tra palette consecutive ===
   useEffect(() => {
-    let i = 0;
+    let alive = true;
     let timer: any = null;
-    const tick = () => {
-      const [s, t, d] = COLOR_CYCLE[i % COLOR_CYCLE.length];
-      setStatus(s);
-      setTone(t ?? "neutral");
-      i++;
-      timer = setTimeout(tick, d);
+
+    const step = () => {
+      if (!alive) return;
+      // Animo crossfade 0→1 in fadeMs ms
+      crossfade.setValue(0);
+      Animated.timing(crossfade, {
+        toValue: 1,
+        duration: fadeMs,
+        // Per Stop colors di SVG NON possiamo usare native driver
+        useNativeDriver: false,
+      }).start(({ finished }) => {
+        if (!alive || !finished) return;
+        // Avanza all'indice successivo e riparte
+        setPaletteIdx((i) => (i + 1) % PALETTES.length);
+      });
+      // Schedula prossimo step dopo segmentMs (anche se la palette è in fade)
+      timer = setTimeout(step, segmentMs);
     };
-    tick();
+    step();
     return () => {
+      alive = false;
       if (timer) clearTimeout(timer);
     };
-  }, []);
+  }, [crossfade, fadeMs, segmentMs]);
 
-  // === Trigger fade-out + onComplete dopo `duration` ms ===
+  // === Fade-out finale + onComplete ===
   useEffect(() => {
     const t = setTimeout(() => {
       if (completedRef.current) return;
       completedRef.current = true;
       Animated.timing(fade, {
         toValue: 0,
-        duration: 600,
+        duration: 800,
         useNativeDriver: true,
-      }).start(() => {
-        onComplete();
-      });
+      }).start(() => onComplete());
     }, duration);
     return () => clearTimeout(t);
   }, [duration, fade, onComplete]);
@@ -120,30 +132,45 @@ export default function KodaSplash({ aiName, duration = 4000, onComplete }: Prop
     completedRef.current = true;
     Animated.timing(fade, {
       toValue: 0,
-      duration: 300,
+      duration: 350,
       useNativeDriver: true,
-    }).start(() => {
-      onComplete();
-    });
+    }).start(() => onComplete());
   };
 
+  // Colori della palette attuale e successiva
+  const cur = PALETTES[paletteIdx];
+  const nxt = PALETTES[(paletteIdx + 1) % PALETTES.length];
+
+  // Interpolo OGNI stop tra cur e nxt, ottenendo cross-fade fluido del cerchio
+  const c0 = crossfade.interpolate({ inputRange: [0, 1], outputRange: [cur[0], nxt[0]] });
+  const c1 = crossfade.interpolate({ inputRange: [0, 1], outputRange: [cur[1], nxt[1]] });
+  const c2 = crossfade.interpolate({ inputRange: [0, 1], outputRange: [cur[2], nxt[2]] });
+
   const displayName = (aiName?.trim() || "Koda").trim();
+  const r = orbSize / 2;
 
   return (
     <Animated.View style={[styles.root, { opacity: fade }]} pointerEvents="auto">
       <Pressable style={StyleSheet.absoluteFill} onPress={handleSkip}>
         <View style={styles.centerWrap}>
-          {/* Eclissi che respira colori */}
-          <Animated.View style={{ opacity: orbFade, marginBottom: 28 }}>
-            <EclipseOrb status={status} tone={tone} size={orbSize} />
+          {/* Eclissi STATICA — solo i colori del radial gradient cambiano fluidamente */}
+          <Animated.View style={{ opacity: orbFade, marginBottom: 36, width: orbSize, height: orbSize }}>
+            <Svg width={orbSize} height={orbSize}>
+              <Defs>
+                <RadialGradient id="splashGrad" cx="50%" cy="50%" r="50%" fx="38%" fy="38%">
+                  <AnimatedStop offset="0%" stopColor={c0 as any} stopOpacity={1} />
+                  <AnimatedStop offset="55%" stopColor={c1 as any} stopOpacity={0.85} />
+                  <AnimatedStop offset="100%" stopColor={c2 as any} stopOpacity={0} />
+                </RadialGradient>
+              </Defs>
+              <Circle cx={r} cy={r} r={r * 0.95} fill="url(#splashGrad)" />
+            </Svg>
           </Animated.View>
 
-          {/* Nome AI */}
           <Animated.Text style={[styles.name, { opacity: nameFade }]}>
             {displayName}
           </Animated.Text>
 
-          {/* Sottotitolo identitario */}
           <Animated.Text style={[styles.subtitle, { opacity: subFade }]}>
             L'Amico Fraterno
           </Animated.Text>
@@ -174,22 +201,21 @@ const styles = StyleSheet.create({
   },
   name: {
     color: "#F5E6F0",
-    fontSize: 38,
+    fontSize: 40,
     fontWeight: "300",
-    letterSpacing: 4,
+    letterSpacing: 5,
     textAlign: "center",
-    // Glow soffuso per dare profondità al nome
     textShadowColor: "rgba(244,114,182,0.4)",
     textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 12,
+    textShadowRadius: 14,
   },
   subtitle: {
     color: "#A78BFA",
     fontSize: 13,
     fontWeight: "400",
     letterSpacing: 5,
-    marginTop: 16,
+    marginTop: 18,
     textTransform: "uppercase",
-    opacity: 0.7,
+    opacity: 0.65,
   },
 });

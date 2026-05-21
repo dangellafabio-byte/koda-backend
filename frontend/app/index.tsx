@@ -3325,7 +3325,7 @@ export default function Taccuino() {
     return (
       <KodaSplash
         aiName={profile?.ai_name || null}
-        duration={4000}
+        duration={10000}
         onComplete={() => setShowSplash(false)}
       />
     );
