@@ -21,13 +21,19 @@ const AnimatedRect = Animated.createAnimatedComponent(Rect);
 export type NeonBorderStatus = "idle" | "recording" | "thinking" | "speaking" | "confessional" | "listening";
 
 // === COLORI SHOCKING NEON ===
+// IMPORTANTE: "idle" deve essere VISIVAMENTE LONTANISSIMO da "thinking",
+// altrimenti l'utente non sa MAI se l'app è impallata o pronta. Prima
+// avevamo idle=#FF1493 (rosa shocking) vs thinking=#EC4899 (ciclamino):
+// indistinguibili → l'utente per ore ha creduto "stuck on thinking" mentre
+// in realtà era idle. Soluzione: idle = verde menta soft (clearly "ready"
+// signal), thinking = ciclamino (clearly "Koda is processing").
 const STATE_COLORS: Record<NeonBorderStatus, string> = {
-  idle: "#FF1493",        // 🌸 Rosa shocking
-  recording: "#00F5D4",   // 💎 Tiffany neon
-  listening: "#5EEAD4",   // 💧 Tiffany chiaro
-  thinking: "#EC4899",    // 🩷 Ciclamino (matcha eclissi thinking THINK_PALETTE)
-  speaking: "#BD10E0",    // 🟣 Viola elettrico
-  confessional: "#FF1744",// ❤️‍🔥 Scarlatto
+  idle: "#7DD3C0",        // 🌿 Verde menta soft (READY/IN ATTESA)
+  recording: "#00F5D4",   // 💎 Tiffany neon (TI ASCOLTO)
+  listening: "#5EEAD4",   // 💧 Tiffany chiaro (sotto ascolto passivo)
+  thinking: "#EC4899",    // 🩷 Ciclamino (STO PENSANDO)
+  speaking: "#BD10E0",    // 🟣 Viola elettrico (STO PARLANDO)
+  confessional: "#FF1744",// ❤️‍🔥 Scarlatto (STANZA SEGRETA)
 };
 
 // Tutti gli stati hanno pulsazione MOLTO lenta (~7s), quasi immobile,

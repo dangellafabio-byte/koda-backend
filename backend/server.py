@@ -2335,20 +2335,56 @@ async def api_tts(req: TTSRequest):
 # Audio.Sound.createAsync({uri: "file://..."}) fails with -11800 errors.
 # IMPORTANT: don't pop the audio on first GET — iOS AVPlayer often makes
 # multiple HTTP requests (HEAD + Range) for the same URL. We keep it in
-# memory until eviction (LRU max size, or natural restart).
-_tts_audio_cache: dict[str, bytes] = {}
-_tts_cache_order: list[str] = []
-_TTS_CACHE_MAX = 50  # bound the cache size
+# storage until eviction.
+#
+# === SHARED STORAGE FIX (2026-05-22) ===
+# Prima la cache era un dict Python LOCALE al processo. In ambiente
+# Kubernetes con multiple repliche del backend, /api/tts/prepare poteva
+# salvare l'audio sul pod A, e iOS AVPlayer fetchava /api/tts/audio/{tok}
+# dal pod B → 404. Sintomo: Koda restava muta in modo INTERMITTENTE
+# (50% delle volte, ogni 2-3 turni). Ora salviamo in MongoDB (condiviso
+# tra tutti i pod) con TTL automatico di 10 minuti.
+_TTS_AUDIO_TTL_S = 600  # 10 minuti (più che sufficiente per finire un turno TTS)
 
 
-def _store_tts_audio(audio: bytes) -> str:
+async def _ensure_tts_audio_indexes():
+    """Crea l'indice TTL sulla collection tts_audio_cache, se non esiste."""
+    try:
+        # Indice TTL: i documenti vengono auto-cancellati X secondi dopo `created_at`.
+        await db.tts_audio_cache.create_index(
+            "created_at", expireAfterSeconds=_TTS_AUDIO_TTL_S
+        )
+        # Indice univoco sul token per lookup veloce
+        await db.tts_audio_cache.create_index("token", unique=True)
+    except Exception as e:
+        logger.warning(f"[tts_cache] create_index failed: {e}")
+
+
+async def _store_tts_audio(audio: bytes) -> str:
+    """Salva l'audio in MongoDB (shared storage) e ritorna un token UUID hex."""
     token = uuid.uuid4().hex
-    _tts_audio_cache[token] = audio
-    _tts_cache_order.append(token)
-    while len(_tts_cache_order) > _TTS_CACHE_MAX:
-        old = _tts_cache_order.pop(0)
-        _tts_audio_cache.pop(old, None)
+    await db.tts_audio_cache.insert_one({
+        "token": token,
+        "audio": audio,          # PyMongo serializza bytes → BinData
+        "created_at": datetime.now(timezone.utc),  # TTL field
+        "size": len(audio),
+    })
     return token
+
+
+async def _fetch_tts_audio(token: str) -> Optional[bytes]:
+    """Recupera l'audio dato il token. None se inesistente o scaduto."""
+    doc = await db.tts_audio_cache.find_one({"token": token}, {"audio": 1, "_id": 0})
+    if not doc:
+        return None
+    a = doc.get("audio")
+    if isinstance(a, bytes):
+        return a
+    # PyMongo a volte deserializza in `Binary` object con .read()/buffer
+    try:
+        return bytes(a)
+    except Exception:
+        return None
 
 
 @api_router.post("/tts/prepare")
@@ -2418,7 +2454,7 @@ async def api_tts_prepare(req: TTSRequest):
         logger.error(f"ElevenLabs TTS error (prepare): {e}")
         raise HTTPException(status_code=500, detail=f"TTS error: {str(e)}")
 
-    token = _store_tts_audio(audio_data)
+    token = await _store_tts_audio(audio_data)
     return {"token": token, "size": len(audio_data)}
 
 
@@ -2538,7 +2574,7 @@ async def api_tts_audio(token: str, request: Request):
     Supports HTTP Range requests (required by iOS AVPlayer for proper
     streaming playback).
     """
-    audio = _tts_audio_cache.get(token)
+    audio = await _fetch_tts_audio(token)
     if audio is None:
         raise HTTPException(status_code=404, detail="Not found")
 
@@ -3429,6 +3465,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def startup_db_client():
+    """Crea indici DB necessari all'avvio."""
+    try:
+        await _ensure_tts_audio_indexes()
+        logger.info("[startup] tts_audio_cache indexes ready")
+    except Exception as e:
+        logger.warning(f"[startup] tts_audio_cache index init failed: {e}")
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
