@@ -157,21 +157,16 @@ export default function Taccuino() {
   const [status, setStatus] = useState<Status>("idle");
 
   // === SAFETY NET GLOBALE: dead-state watchdog ===
-  // Bug ricorrente: in alcuni casi (silent switch ON al volo, audio session
-  // iOS demoted, errore di rete a metà streaming, AVPlayer che butta via il
-  // chunked stream silenziosamente) lo status rimane bloccato su "thinking"
-  // o "speaking" per sempre → schermo ciclamino fisso, mic non si riapre.
-  // Questa è una garanzia indipendente da TUTTE le altre logiche: se lo
-  // status non è "idle" per più di N secondi, lo forziamo a "idle".
-  //   - "transcribing" / "thinking": max 20s (Claude+TTS prepare normalmente <8s)
-  //   - "speaking": max 60s (TTS lunghi possono durare a lungo, ma 1 min è enough)
+  // Timeout AGGRESSIVI per UX: l'utente non deve mai aspettare più di
+  // 8 secondi se Koda si impalla.
+  //   - "transcribing" / "thinking": max 8s (Claude+TTS prepare normalmente <5s)
+  //   - "speaking": max 25s (TTS più lunghi raramente superano 20s)
   //   - "recording": gestito altrove (auto-stop su silenzio)
-  // Note: NON tocchiamo "recording" qui — quello è gestito dal VAD/auto-stop.
   const statusEnteredAtRef = useRef<number>(Date.now());
   useEffect(() => {
     statusEnteredAtRef.current = Date.now();
     if (status === "idle" || status === "recording") return;
-    const limit = status === "speaking" ? 60_000 : 20_000;
+    const limit = status === "speaking" ? 25_000 : 8_000;
     const t = setTimeout(() => {
       console.warn(`[safety] status stuck on "${status}" for ${limit}ms → force idle`);
       try { SpeechMod.stop(); } catch {}
@@ -181,6 +176,22 @@ export default function Taccuino() {
     }, limit);
     return () => clearTimeout(t);
   }, [status]);
+
+  // === RESET MANUALE: l'utente può sempre sbloccare l'app ===
+  // Quando lo status è non-idle e l'utente tappa l'orb (o il pulsante reset),
+  // chiamiamo questa funzione: stop di TUTTO e ritorno a idle pulito.
+  const forceResetToIdle = useCallback(() => {
+    console.warn("[forceResetToIdle] user-initiated reset");
+    try { SpeechMod.stop(); } catch {}
+    try {
+      if (recRef.current) {
+        recRef.current.cancel?.();
+        recRef.current = null;
+      }
+    } catch {}
+    setStatus("idle");
+    setError(null);
+  }, []);
 
   // === SCHERMO DIMMERATO durante l'inattività (risparmio batteria OLED) ===
   // Dopo 10s che status === "idle" E nessun input dall'utente, si attiva un
@@ -1739,12 +1750,15 @@ export default function Taccuino() {
       return;
     }
 
-    // While AI is speaking/thinking AND we're in a conversation loop,
-    // the big button terminates the loop (otherwise the user has no way out).
-    if (convActiveRef.current && (status === "speaking" || status === "thinking")) {
-      setConvActive(false);
-      try { SpeechMod.stop(); } catch {}
-      setStatus("idle");
+    // === EMERGENCY RESET ===
+    // Se Koda è "thinking"/"transcribing"/"speaking" → un tap forza reset.
+    // Questo è l'escape hatch sempre disponibile per l'utente. Niente più
+    // schermi bloccati: se l'app si impalla, basta toccare l'orb e parte.
+    if (status === "thinking" || status === "transcribing" || status === "speaking") {
+      forceResetToIdle();
+      // Se l'utente era in modalità conversation_mode, escila per non
+      // confondere ulteriormente lo stato.
+      if (convActiveRef.current) setConvActive(false);
       return;
     }
 
@@ -1752,11 +1766,6 @@ export default function Taccuino() {
       // Tap to start. If conversation_mode is on, turn the loop ON
       if (conversationOn) setConvActive(true);
       startTalk();
-    } else if (status === "speaking") {
-      // Stop AI voice and immediately start recording — single tap interrupts and listens
-      SpeechMod.stop();
-      setStatus("idle");
-      setTimeout(() => startTalk(), 50);
     }
   };
 
@@ -2610,7 +2619,10 @@ export default function Taccuino() {
                 schermo dà il feedback periferico (vedi anche se non guardi). */}
             <Pressable
               onPress={onBigButton}
-              disabled={status === "transcribing" || status === "thinking"}
+              // RIMOSSO disabled: l'orb deve essere SEMPRE tappabile così
+              // l'utente può sbloccare l'app anche se lo status è incastrato
+              // su "thinking"/"transcribing". onBigButton ora gestisce TUTTI
+              // gli stati con un forceResetToIdle.
               style={({ pressed }) => [
                 styles.blobTap,
                 pressed && { opacity: 0.85 },
