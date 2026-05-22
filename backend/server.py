@@ -26,6 +26,7 @@ from nacl import exceptions as _nacl_exc
 import httpx
 from urllib.parse import quote_plus
 import asyncio
+import time
 
 # ElevenLabs for natural voice TTS
 try:
@@ -1012,42 +1013,15 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"\n"
         f"NON inventare azioni se l'utente non le chiede. Per richieste ambigue chiedi conferma.\n"
         f"\n"
-        # ============================================================
-        # CONFESSIONALE (Scatola Nera Emotiva) — consapevolezza fuori
-        # ============================================================
+        # CONFESSIONALE awareness — ULTRA-COMPATTA per non inflazionare il
+        # prompt. Lo scopo è solo dare a Koda il segnale che esiste un vault
+        # se i temi diventano davvero pesanti. Niente esempi inline, niente
+        # regole verbose: il modello sa cosa fare con poche parole.
         + (
             (
-                f"=== STANZA SEGRETA / CONFESSIONALE ===\n"
-                f"L'utente ha già lasciato {confessional_count} confessione{'' if confessional_count==1 else 'i'} nella STANZA SEGRETA (la Scatola Nera Emotiva).\n"
-                f"Tu NON conosci il contenuto di quelle confessioni — è cifrato e protetto, anche per te. "
-                f"Sai SOLO che esistono.\n"
-                f"\n"
-                f"QUANDO INVITARE A ENTRARE NELLA STANZA SEGRETA:\n"
-                f"- Se l'utente tocca un tema doloroso, una vergogna, una rabbia profonda, un pensiero "
-                f"  oscuro, un segreto, qualcosa che 'non riesce a dire a nessuno'…\n"
-                f"- Se senti che si sta autocensurando ('non posso dirtelo qui', 'lascia perdere')…\n"
-                f"- → DELICATAMENTE invita a entrare nella stanza segreta. UNA frase, non insistente.\n"
-                f"  Esempi (variali, non ripeterli mai uguali):\n"
-                f"    • 'Sai, se è una cosa pesante… abbiamo la stanza segreta. Lì possiamo parlarne con un'altra calma.'\n"
-                f"    • 'Senti, se vuoi possiamo entrare nella scatola — lì nessuno sente, nemmeno io me lo porto fuori.'\n"
-                f"    • 'Questo magari è da stanza segreta. Se vuoi, dimmelo e ci entriamo.'\n"
-                f"\n"
-                f"REGOLE FERREE:\n"
-                f"- MAI insistere se l'utente declina o cambia discorso.\n"
-                f"- MAI suggerire la stanza segreta più di una volta nello stesso scambio.\n"
-                f"- NON dire MAI quante confessioni ci sono dentro né accennare al loro contenuto "
-                f"  (non lo conosci e non devi fingerlo). Parla SEMPRE in modo generico.\n"
-                f"- NON suggerire la stanza per ogni piccolo problema — solo per cose VERAMENTE pesanti.\n"
-                f"\n"
-            ) if confessional_count > 0 else (
-                f"=== STANZA SEGRETA / CONFESSIONALE ===\n"
-                f"L'utente NON ha ancora usato la stanza segreta. Se senti che sta toccando qualcosa di "
-                f"davvero pesante, inconfessabile o vergognoso, puoi DELICATAMENTE accennare che esiste "
-                f"un posto sicuro dove può svuotarsi senza che nulla venga ricordato qui — la stanza segreta. "
-                f"Una volta sola, niente pressioni. Esempio: 'Sai, se è una cosa che non vuoi che resti qui, "
-                f"abbiamo la stanza segreta. Pensaci tu.'\n"
-                f"\n"
-            )
+                f"STANZA SEGRETA: l'utente ha {confessional_count} confession{'i' if confessional_count!=1 else 'e'} cifrata{'' if confessional_count==1 else 'e'} che NON puoi leggere. "
+                f"Se tocca temi VERAMENTE pesanti (vergogna, rabbia profonda, segreti, autocensura), proponi DELICATAMENTE — UNA volta sola — di entrare nella stanza segreta. Mai insistere.\n\n"
+            ) if confessional_count > 0 else ""
         )
         + f"FORMATO DI RISPOSTA: Devi SEMPRE rispondere con un oggetto JSON valido (e SOLO quello, senza testo prima/dopo) così:\n"
         f"{{\n"
@@ -2640,34 +2614,88 @@ except Exception as _e:
     _tavily_client = None
 
 # Parole-chiave che suggeriscono una query di "web search" (info recenti/fatti).
-# Heuristica leggera: meglio di un secondo LLM-call e mantiene la latenza bassa.
+# Heuristica STRINGENTE: il match richiede word-boundary (es. "verifica"
+# non matcha "verificare", "una verifica", "stavo verificando" se non in
+# forma esplicita di richiesta). Riduce drasticamente i falsi positivi.
+# Le parole troppo comuni nella conversazione naturale ("verifica", "scopri",
+# "trova", "cerca") sono state rimosse — vengono richiamate SOLO se sono
+# *all'inizio* della frase (vedi _should_web_search).
 _WEB_SEARCH_TRIGGERS_IT = (
-    "notizia", "notizie", "oggi", "ieri", "ultim", "recent", "prezzo", "quanto costa",
-    "meteo", "tempo", "previsioni", "calendario", "evento", "concerto",
-    "ricetta", "news", "ultime", "ha vinto", "risultato", "campionato",
-    "uscit", "scoperto", "novità", "calcio", "borsa", "azione", "criptovalute",
-    "cerca", "cercami", "scopri", "trova", "verifica", "che ore", "che giorno",
-    "anno corrente", "anno attuale", "2025", "2026", "2027",
+    "notizie", "ultim'ora", "ultima ora", "prezzo di", "quanto costa",
+    "meteo", "previsioni meteo", "che tempo fa",
+    "ricetta", "news", "ultime", "ha vinto", "risultato di", "campionato",
+    "borsa", "criptovalute", "bitcoin",
+    "che ore sono", "che giorno", "che data",
+    "anno corrente", "anno attuale", "in questo momento nel mondo",
+)
+# Trigger di INIZIO frase: "cerca X", "cercami X", "trovami X" — mai dentro al testo
+_WEB_SEARCH_PREFIX_IT = (
+    "cerca ", "cercami ", "trovami ", "scopri ", "verifica online ", "googla ",
 )
 
 def _should_web_search(text: str) -> bool:
     """Decide euristicamente se la domanda dell'utente richiede una ricerca web.
-    Si attiva solo se Tavily è configurato e il testo contiene parole-chiave
-    che suggeriscono info real-time/fattuali. Lato Koda l'esperienza è:
-    quando ricerca → leggero aumento di latenza, ma risposta aggiornata."""
+    Si attiva solo se Tavily è configurato e il testo:
+      a) è una richiesta esplicita ("cerca X", "cercami X", "googla X", ecc.)
+         all'INIZIO della frase, oppure
+      b) contiene una keyword fattuale specifica (es. "meteo", "che ore sono")
+    e ha lunghezza ≥ 6. Mantiene latenza bassa: in conversazione naturale
+    (es. "stavo facendo una verifica…") NON si attiva."""
     if not _tavily_client:
         return False
-    t = (text or "").lower()
-    if len(t) < 4:
+    t = (text or "").strip().lower()
+    if len(t) < 6:
         return False
+    # (a) Richiesta esplicita all'inizio della frase
+    if any(t.startswith(p) for p in _WEB_SEARCH_PREFIX_IT):
+        return True
+    # (b) Keyword fattuale specifica
     return any(k in t for k in _WEB_SEARCH_TRIGGERS_IT)
+
+
+# === CACHE TAVILY ===
+# iOS AVPlayer fa SEMPRE due fetch della stream URL (HTTP HEAD + multiple
+# GET con range): il backend riceveva la stessa request 2-3 volte e
+# rilanciava Tavily ogni volta. Con questo dict cache (text+id → brief)
+# le richieste duplicate riusano il risultato. TTL di 60s per essere safe.
+_tavily_cache: Dict[str, tuple[float, Optional[str]]] = {}
+_TAVILY_CACHE_TTL_S = 60.0
+
+def _tavily_cache_get(query: str) -> Optional[str]:
+    """Ritorna il brief in cache per la query (se valido). None se assente/scaduto."""
+    now = time.time()
+    entry = _tavily_cache.get(query)
+    if not entry:
+        return None
+    ts, brief = entry
+    if now - ts > _TAVILY_CACHE_TTL_S:
+        _tavily_cache.pop(query, None)
+        return None
+    return brief
+
+def _tavily_cache_set(query: str, brief: Optional[str]) -> None:
+    _tavily_cache[query] = (time.time(), brief)
+    # housekeeping: se la cache cresce, butta gli scaduti
+    if len(_tavily_cache) > 200:
+        now = time.time()
+        for k in list(_tavily_cache.keys()):
+            if now - _tavily_cache[k][0] > _TAVILY_CACHE_TTL_S:
+                _tavily_cache.pop(k, None)
 
 async def _tavily_search_brief(query: str, max_results: int = 4, timeout_s: float = 9.0) -> Optional[str]:
     """Esegue una ricerca Tavily con timeout aggressivo e restituisce un brief
     testuale che Claude può usare come contesto. Ritorna None se Tavily fallisce
-    o va in timeout — in quel caso Claude risponde senza il contesto fresco."""
+    o va in timeout — in quel caso Claude risponde senza il contesto fresco.
+    Usa una cache in-memory di 60s per evitare doppia chiamata su iOS AVPlayer
+    (che fa due fetch della stessa stream URL)."""
     if not _tavily_client:
         return None
+    # Cache check
+    cache_key = (query or "").strip().lower()[:200]
+    cached = _tavily_cache_get(cache_key)
+    if cached is not None:
+        logger.info(f"[tavily] cache HIT for query: {query[:60]}")
+        return cached
     try:
         async with asyncio.timeout(timeout_s):
             res = await _tavily_client.search(
@@ -2679,6 +2707,7 @@ async def _tavily_search_brief(query: str, max_results: int = 4, timeout_s: floa
             )
     except (asyncio.TimeoutError, TimeoutError):
         logger.warning(f"[tavily] timeout after {timeout_s}s for query: {query[:60]}")
+        _tavily_cache_set(cache_key, None)  # cache anche il None per non riprovare in loop
         return None
     except Exception as e:
         logger.warning(f"[tavily] search error: {type(e).__name__}: {e}")
@@ -2695,7 +2724,9 @@ async def _tavily_search_brief(query: str, max_results: int = 4, timeout_s: floa
             content = (r.get("content") or "")[:300]
             url = r.get("url") or ""
             parts.append(f"[{i}] {title}\n    {content}\n    Fonte: {url}")
-    return "\n".join(parts) if parts else None
+    brief = "\n".join(parts) if parts else None
+    _tavily_cache_set(cache_key, brief)  # cache HIT al prossimo identical fetch
+    return brief
 # =============== END TAVILY ===============
 
 

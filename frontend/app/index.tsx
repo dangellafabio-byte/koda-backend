@@ -47,6 +47,10 @@ import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
 import KodaSplash from "../components/KodaSplash";
 import KodaTour, { TourStep } from "../components/KodaTour";
 import * as SecureStore from "expo-secure-store";
+// expo-keep-awake: tiene lo schermo acceso (no auto-lock iOS) mentre Koda
+// è impegnata. Uso il TAG per pinnare/spegnere selettivamente per gli stati
+// "active" — evito di tenere acceso 24/7 lo schermo per non scaricare batteria.
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import NeonBorder, { NeonBorderStatus } from "../components/NeonBorder";
 import ActivationPulse from "../components/ActivationPulse";
 import RadialGlow from "../components/RadialGlow";
@@ -151,6 +155,25 @@ export default function Taccuino() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [status, setStatus] = useState<Status>("idle");
+
+  // === KEEP AWAKE durante la conversazione ===
+  // iOS auto-locka lo schermo dopo ~30s di inattività. Mentre Koda parla
+  // o ascolta, l'utente NON tocca lo schermo → iOS locka → la conversazione
+  // si interrompe. Soluzione: attiviamo expo-keep-awake quando lo status è
+  // "non-idle" e lo disattiviamo quando torna idle. Così la batteria non
+  // scarica mai senza necessità.
+  useEffect(() => {
+    const busy = status !== "idle";
+    if (busy) {
+      activateKeepAwakeAsync("koda-conversation").catch(() => {});
+    } else {
+      try { deactivateKeepAwake("koda-conversation"); } catch {}
+    }
+    // Cleanup: rilascia al unmount per non lasciare il telefono sveglio
+    return () => {
+      try { deactivateKeepAwake("koda-conversation"); } catch {}
+    };
+  }, [status]);
   const [textInput, setTextInput] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
   // === KODA INTRO ===
