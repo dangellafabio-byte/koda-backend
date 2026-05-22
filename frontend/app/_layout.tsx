@@ -26,8 +26,6 @@ export default function RootLayout() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    // BUNDLE_MARKER_2026_05_22_HANDS_FREE_FIX
-    console.log("[KODA-OTA] Bundle marker: 2026-05-22-HANDS-FREE-FIX (dim disabled, MongoDB TTS, green idle)");
     // Pre-warm iOS/Android audio session BEFORE first TTS plays.
     // Fixes "Koda silent in first intro steps" bug on fresh native build.
     prewarmAudio().catch(() => {});

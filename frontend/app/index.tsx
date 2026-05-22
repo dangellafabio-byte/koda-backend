@@ -47,15 +47,10 @@ import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
 import KodaSplash from "../components/KodaSplash";
 import KodaTour, { TourStep } from "../components/KodaTour";
 import * as SecureStore from "expo-secure-store";
-// expo-keep-awake: tiene lo schermo acceso (no auto-lock iOS) mentre Koda
-// è impegnata. Uso il TAG per pinnare/spegnere selettivamente per gli stati
-// "active" — evito di tenere acceso 24/7 lo schermo per non scaricare batteria.
-import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import NeonBorder, { NeonBorderStatus } from "../components/NeonBorder";
 import ActivationPulse from "../components/ActivationPulse";
 import RadialGlow from "../components/RadialGlow";
 import SealSetupModal from "../components/SealSetupModal";
-import PortaFuoriModal from "../components/PortaFuoriModal";
 import InfoModal from "../components/InfoModal";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
 import { useFonts, Caveat_400Regular, Caveat_500Medium } from "@expo-google-fonts/caveat";
@@ -71,8 +66,6 @@ import {
   keyToBase64,
   biometricAvailable,
 } from "../lib/sealedCrypto";
-// === Porta Fuori: ponte one-shot dal Confessionale alla conversazione ===
-import { isBridgeOpen, consumeBridge, closeBridge } from "../lib/bringOut";
 
 type Status = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 
@@ -155,107 +148,6 @@ export default function Taccuino() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [status, setStatus] = useState<Status>("idle");
-
-  // === SAFETY NET GLOBALE: dead-state watchdog ===
-  // Timeout AGGRESSIVI per UX: l'utente non deve mai aspettare più di
-  // 8 secondi se Koda si impalla.
-  //   - "transcribing" / "thinking": max 8s (Claude+TTS prepare normalmente <5s)
-  //   - "speaking": max 25s (TTS più lunghi raramente superano 20s)
-  //   - "recording": gestito altrove (auto-stop su silenzio)
-  const statusEnteredAtRef = useRef<number>(Date.now());
-  useEffect(() => {
-    statusEnteredAtRef.current = Date.now();
-    if (status === "idle" || status === "recording") return;
-    const limit = status === "speaking" ? 25_000 : 8_000;
-    const t = setTimeout(() => {
-      console.warn(`[safety] status stuck on "${status}" for ${limit}ms → force idle`);
-      try { SpeechMod.stop(); } catch {}
-      setStatus("idle");
-      setError("Koda si era impallata. Riprova pure.");
-      setTimeout(() => setError(null), 3000);
-    }, limit);
-    return () => clearTimeout(t);
-  }, [status]);
-
-  // === RESET MANUALE: l'utente può sempre sbloccare l'app ===
-  // Quando lo status è non-idle e l'utente tappa l'orb (o il pulsante reset),
-  // chiamiamo questa funzione: stop di TUTTO e ritorno a idle pulito.
-  const forceResetToIdle = useCallback(() => {
-    console.warn("[forceResetToIdle] user-initiated reset");
-    try { SpeechMod.stop(); } catch {}
-    try {
-      if (recRef.current) {
-        recRef.current.cancel?.();
-        recRef.current = null;
-      }
-    } catch {}
-    setStatus("idle");
-    setError(null);
-  }, []);
-
-  // === SCHERMO DIMMERATO durante l'inattività (risparmio batteria OLED) ===
-  // Dopo 10s che status === "idle" E nessun input dall'utente, si attiva un
-  // overlay scuro semi-trasparente (opacity 0.7) sopra tutta l'UI. Su iPhone
-  // OLED i pixel neri consumano quasi zero → batteria salva. Si rimuove
-  // ISTANTANEAMENTE quando: (a) l'utente parla → onSpeechStart, (b) tocca
-  // lo schermo → onTap, (c) status cambia a non-idle (Koda risponde).
-  const [dimmed, setDimmed] = useState(false);
-  const dimTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const DIM_AFTER_MS = 10_000;
-  const armDimTimer = useCallback(() => {
-    if (dimTimerRef.current) {
-      clearTimeout(dimTimerRef.current);
-      dimTimerRef.current = null;
-    }
-    // Arma il timer solo se siamo idle (non ha senso dimmerare mentre Koda
-    // parla o l'utente sta parlando).
-    dimTimerRef.current = setTimeout(() => {
-      setDimmed(true);
-    }, DIM_AFTER_MS);
-  }, []);
-  const wakeFromDim = useCallback(() => {
-    setDimmed(false);
-    armDimTimer();
-  }, [armDimTimer]);
-  // Re-arm il timer ogni volta che status cambia
-  useEffect(() => {
-    if (status !== "idle") {
-      // Koda è impegnata → schermo sveglio E timer disarmato
-      setDimmed(false);
-      if (dimTimerRef.current) {
-        clearTimeout(dimTimerRef.current);
-        dimTimerRef.current = null;
-      }
-    } else {
-      // Tornati a idle → rearm il timer da 10s
-      armDimTimer();
-    }
-    return () => {
-      if (dimTimerRef.current) {
-        clearTimeout(dimTimerRef.current);
-        dimTimerRef.current = null;
-      }
-    };
-  }, [status, armDimTimer]);
-
-  // === KEEP AWAKE durante la conversazione ===
-  // iOS auto-locka lo schermo dopo ~30s di inattività. Mentre Koda parla
-  // o ascolta, l'utente NON tocca lo schermo → iOS locka → la conversazione
-  // si interrompe. Soluzione: attiviamo expo-keep-awake quando lo status è
-  // "non-idle" e lo disattiviamo quando torna idle. Così la batteria non
-  // scarica mai senza necessità.
-  useEffect(() => {
-    const busy = status !== "idle";
-    if (busy) {
-      activateKeepAwakeAsync("koda-conversation").catch(() => {});
-    } else {
-      try { deactivateKeepAwake("koda-conversation"); } catch {}
-    }
-    // Cleanup: rilascia al unmount per non lasciare il telefono sveglio
-    return () => {
-      try { deactivateKeepAwake("koda-conversation"); } catch {}
-    };
-  }, [status]);
   const [textInput, setTextInput] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
   // === KODA INTRO ===
@@ -481,29 +373,6 @@ export default function Taccuino() {
   const [hasSeal, setHasSeal] = useState<boolean>(false);
   const [showSealSetup, setShowSealSetup] = useState(false);
   const [sealUnlocking, setSealUnlocking] = useState(false);
-
-  // === PORTA FUORI: ponte one-shot dal confessionale ===
-  const [showPortaFuori, setShowPortaFuori] = useState(false);
-  const [bridgeActive, setBridgeActive] = useState(false); // pill di stato
-  const [confessionalCount, setConfessionalCount] = useState(0);
-  // Refresh count all'avvio e dopo ogni uscita dal confessionale
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await api.confessionalCount();
-        if (!cancelled) setConfessionalCount(r?.count || 0);
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, [confessionalMode]);
-  // Se l'utente apre il confessionale, chiudi il ponte (i contesti sono incompatibili)
-  useEffect(() => {
-    if (confessionalMode && bridgeActive) {
-      closeBridge();
-      setBridgeActive(false);
-    }
-  }, [confessionalMode, bridgeActive]);
   // Re-check seal availability on mount + after any setup/clear.
   useEffect(() => {
     let cancelled = false;
@@ -907,27 +776,7 @@ export default function Taccuino() {
       // Il conversation_mode hands-free è disabilitato (causa di freeze su iOS).
       // Arriverà nella Fase 4 con Deepgram + dev build.
       setStatus("speaking");
-      // === ANTI-HANG WATCHDOG ===
-      // Bug ricorrente: a volte AVPlayer iOS si appende sul play() (silent
-      // mode al volo, audio session demoted, chunked stream interrotto) e
-      // SpeechMod.speak() non risolve mai → status resta "speaking" per
-      // sempre → schermo ciclamino fisso, mic non si riapre. Mettiamo una
-      // race con un timeout di 45s: anche se l'audio si è impallato,
-      // torniamo SEMPRE a idle e l'utente può ricominciare.
-      try {
-        await Promise.race([
-          SpeechMod.speak(text, { language: langTag, tone }),
-          new Promise<void>((resolve) =>
-            setTimeout(() => {
-              console.warn("[speakIfEnabled] hard timeout 45s → force idle");
-              try { SpeechMod.stop(); } catch {}
-              resolve();
-            }, 45000)
-          ),
-        ]);
-      } catch (e) {
-        console.warn("[speakIfEnabled] speak threw:", e);
-      }
+      await SpeechMod.speak(text, { language: langTag, tone });
       setStatus("idle");
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1261,16 +1110,7 @@ export default function Taccuino() {
         // `tone` semantico della risposta, NON dall'ampiezza audio
         // (approccio precedente con waveform server-side abbandonato:
         // troppi anelli di sync, effetto "macchinoso").
-        // === PORTA FUORI: se è aperto un ponte one-shot, salta il fast
-        // streaming (che è GET e non porta i secrets) e vai al POST
-        // /converse con bridged_secrets. I secrets sono consumati una
-        // volta sola → la closure viene cancellata da consumeBridge.
-        const bridgeNow = isBridgeOpen() ? consumeBridge() : null;
-        if (bridgeNow) setBridgeActive(false);
-        const useFastPath =
-          !bridgeNow &&
-          !confessionalMode &&
-          (profile?.settings.voice_response !== false);
+        const useFastPath = !confessionalMode && (profile?.settings.voice_response !== false);
         if (useFastPath) {
           try {
             const reqId = Math.random().toString(36).slice(2, 18);
@@ -1355,13 +1195,7 @@ export default function Taccuino() {
           }
         }
         // === STANDARD FLOW (con o senza ephemeral) ===
-        // bridgeNow è popolato SOLO se l'utente ha aperto "Porta fuori".
-        // Il backend riceverà i segreti decifrati per UN solo turno e
-        // forzerà ephemeral=true (niente DB).
-        const res = await api.converse(txt, undefined, {
-          ephemeral: confessionalMode || !!bridgeNow,
-          bridged_secrets: bridgeNow || undefined,
-        });
+        const res = await api.converse(txt, undefined, { ephemeral: confessionalMode });
         // Replace optimistic with real, then add AI entry.
         // Se siamo in confessionale, marca le entry come `confessional`
         // così la timeline le filtra/colora correttamente.
@@ -1561,8 +1395,6 @@ export default function Taccuino() {
           // BARGE-IN: user started talking — kill any AI speech immediately
           try { SpeechMod.stop(); } catch {}
           if (recRef.current === rec) setStatus("recording");
-          // L'utente ha iniziato a parlare → sveglia lo schermo dimmerato.
-          wakeFromDim();
           // L'utente ha cominciato a parlare → nascondi il banner subito.
           if (listenBannerTimerRef.current) {
             clearTimeout(listenBannerTimerRef.current);
@@ -1750,15 +1582,12 @@ export default function Taccuino() {
       return;
     }
 
-    // === EMERGENCY RESET ===
-    // Se Koda è "thinking"/"transcribing"/"speaking" → un tap forza reset.
-    // Questo è l'escape hatch sempre disponibile per l'utente. Niente più
-    // schermi bloccati: se l'app si impalla, basta toccare l'orb e parte.
-    if (status === "thinking" || status === "transcribing" || status === "speaking") {
-      forceResetToIdle();
-      // Se l'utente era in modalità conversation_mode, escila per non
-      // confondere ulteriormente lo stato.
-      if (convActiveRef.current) setConvActive(false);
+    // While AI is speaking/thinking AND we're in a conversation loop,
+    // the big button terminates the loop (otherwise the user has no way out).
+    if (convActiveRef.current && (status === "speaking" || status === "thinking")) {
+      setConvActive(false);
+      try { SpeechMod.stop(); } catch {}
+      setStatus("idle");
       return;
     }
 
@@ -1766,6 +1595,11 @@ export default function Taccuino() {
       // Tap to start. If conversation_mode is on, turn the loop ON
       if (conversationOn) setConvActive(true);
       startTalk();
+    } else if (status === "speaking") {
+      // Stop AI voice and immediately start recording — single tap interrupts and listens
+      SpeechMod.stop();
+      setStatus("idle");
+      setTimeout(() => startTalk(), 50);
     }
   };
 
@@ -2360,52 +2194,6 @@ export default function Taccuino() {
                 : "Confessionale"}
             </Text>
           </TouchableOpacity>
-          {/* === PORTA FUORI — bottone discreto accanto al lucchetto ===
-              Visibile SOLO se esiste almeno una voce nella stanza segreta
-              E non siamo già DENTRO al confessionale. Mostra un piccolo
-              pallino violetto quando il ponte è attivo (one-shot pending). */}
-          {confessionalCount > 0 && !confessionalMode && (
-            <TouchableOpacity
-              style={[
-                styles.confessionalToggle,
-                { marginLeft: 8 },
-                bridgeActive && {
-                  backgroundColor: "rgba(167,139,250,0.18)",
-                  borderColor: "rgba(167,139,250,0.55)",
-                },
-              ]}
-              onPress={() => {
-                if (bridgeActive) {
-                  // toggle off: l'utente vuole annullare il ponte aperto
-                  closeBridge();
-                  setBridgeActive(false);
-                  return;
-                }
-                setShowPortaFuori(true);
-              }}
-              hitSlop={10}
-              accessibilityLabel={
-                bridgeActive
-                  ? "Ponte aperto verso la stanza segreta — tocca per annullare"
-                  : "Porta fuori dalla stanza segreta — un singolo turno"
-              }
-              testID="porta-fuori-toggle"
-            >
-              <Ionicons
-                name={bridgeActive ? "key" : "key-outline"}
-                size={16}
-                color={bridgeActive ? "#A78BFA" : "#FFFFFFCC"}
-              />
-              <Text
-                style={[
-                  styles.confessionalToggleText,
-                  bridgeActive && { color: "#A78BFA" },
-                ]}
-              >
-                {bridgeActive ? "Ponte aperto" : "Porta fuori"}
-              </Text>
-            </TouchableOpacity>
-          )}
         </View>
         {/* Slot destro: icona "tre puntini" semi-trasparente per aprire KodaIntro.
             Discreta (white@55%) per non rompere l'estetica zen ma visibile e
@@ -2632,10 +2420,7 @@ export default function Taccuino() {
                 schermo dà il feedback periferico (vedi anche se non guardi). */}
             <Pressable
               onPress={onBigButton}
-              // RIMOSSO disabled: l'orb deve essere SEMPRE tappabile così
-              // l'utente può sbloccare l'app anche se lo status è incastrato
-              // su "thinking"/"transcribing". onBigButton ora gestisce TUTTI
-              // gli stati con un forceResetToIdle.
+              disabled={status === "transcribing" || status === "thinking"}
               style={({ pressed }) => [
                 styles.blobTap,
                 pressed && { opacity: 0.85 },
@@ -3596,14 +3381,6 @@ export default function Taccuino() {
         theme={theme}
       />
 
-      {/* Porta Fuori Modal — ponte one-shot dal Confessionale */}
-      <PortaFuoriModal
-        visible={showPortaFuori}
-        onClose={() => setShowPortaFuori(false)}
-        onBridgeOpened={() => setBridgeActive(true)}
-        theme={theme}
-      />
-
       {/* RadialGlow — alone radiale che parte dal blob (centro schermo)
           e si propaga verso i bordi. Coerente coi 3 colori del blob:
             🟡 Ambra      = idle/recording  (tocca a te / ti ascolto)
@@ -3695,12 +3472,6 @@ export default function Taccuino() {
     />
   ) : null;
 
-  // === DIM OVERLAY DISABILITATO (2026-05-22) ===
-  // Stava intercettando il primo tap dell'utente senza dare feedback chiaro
-  // → utente toccava, niente sembrava succedere, frustrazione totale.
-  // Riattiveremo solo quando avremo tempo di renderlo perfetto.
-  const dimOverlayEl = null;
-
   // === TOUR OVERLAY ===
   // Stesso pattern del confessionalTint: variabile JSX da renderizzare in
   // tutti i rami finali (custom image / preset gradient / plain).
@@ -3738,7 +3509,6 @@ export default function Taccuino() {
         {neonBorderEl}
         {activationPulseEl}
         {tourOverlay}
-        {dimOverlayEl}
       </ImageBackground>
     );
   }
@@ -3756,7 +3526,6 @@ export default function Taccuino() {
         {neonBorderEl}
         {activationPulseEl}
         {tourOverlay}
-        {dimOverlayEl}
       </View>
     );
   }
@@ -3767,7 +3536,6 @@ export default function Taccuino() {
       {neonBorderEl}
       {activationPulseEl}
       {tourOverlay}
-      {dimOverlayEl}
     </View>
   );
 }
