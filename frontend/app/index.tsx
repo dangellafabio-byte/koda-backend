@@ -3678,22 +3678,11 @@ export default function Taccuino() {
     />
   ) : null;
 
-  // === DIM OVERLAY (risparmio batteria su OLED) ===
-  // Sopra TUTTO tranne il NeonBorder (che resta visibile come "vita" della
-  // device frame). pointerEvents="auto" così CATTURA il primo tap dell'utente
-  // → wakeFromDim → si rimuove → il tap NON arriva ai bottoni sottostanti
-  // (è una scelta UX: il primo tap "sveglia", il secondo agisce). Niente
-  // di tappabile in idle comunque (è solo l'orb).
-  const dimOverlayEl = dimmed ? (
-    <Pressable
-      style={[
-        StyleSheet.absoluteFillObject,
-        { backgroundColor: "rgba(0,0,0,0.7)", zIndex: 998 },
-      ]}
-      onPress={wakeFromDim}
-      accessibilityLabel="Tocca per riattivare lo schermo"
-    />
-  ) : null;
+  // === DIM OVERLAY DISABILITATO (2026-05-22) ===
+  // Stava intercettando il primo tap dell'utente senza dare feedback chiaro
+  // → utente toccava, niente sembrava succedere, frustrazione totale.
+  // Riattiveremo solo quando avremo tempo di renderlo perfetto.
+  const dimOverlayEl = null;
 
   // === TOUR OVERLAY ===
   // Stesso pattern del confessionalTint: variabile JSX da renderizzare in

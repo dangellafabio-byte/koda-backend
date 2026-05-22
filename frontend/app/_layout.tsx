@@ -26,10 +26,8 @@ export default function RootLayout() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    // BUNDLE_MARKER_2026_05_21_RECOVERY: stampa per confermare che il
-    // bundle aggiornato è stato fetchato (se vedi questa stringa nei log
-    // del device/console, l'OTA è stata applicata correttamente).
-    console.log("[KODA-OTA] Bundle marker: RECOVERY-2026-05-21-21:50");
+    // BUNDLE_MARKER_2026_05_22_HANDS_FREE_FIX
+    console.log("[KODA-OTA] Bundle marker: 2026-05-22-HANDS-FREE-FIX (dim disabled, MongoDB TTS, green idle)");
     // Pre-warm iOS/Android audio session BEFORE first TTS plays.
     // Fixes "Koda silent in first intro steps" bug on fresh native build.
     prewarmAudio().catch(() => {});
