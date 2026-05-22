@@ -52,6 +52,13 @@ type Props = {
 // === Tone → aurora palette ([bright, mid, deep])
 // Tutta la palette identitaria di L'Amico Fraterno: viola / blu petrolio /
 // verde petrolio / ciclamino / magenta. Niente colori primari "stock".
+//
+// === NEUTRAL IDLE (2026-05-22) ===
+// Prima neutral era rosa shocking (#FF1493) — INDISTINGUIBILE dal ciclamino
+// dello stato "thinking". L'utente passava ore credendo che l'app fosse
+// bloccata in thinking, ma era SOLO il colore di base. Cambiato a verde
+// menta soft per coerenza con NeonBorder.idle e per dare un chiaro segnale
+// visivo di "pronta, in attesa".
 const TONE_PALETTES: Record<OrbTone, [string, string, string]> = {
   // Viola elettrico — Koda PARLA (matcha NeonBorder "speaking")
   warm: ["#E9D5FF", "#BD10E0", "#7E22CE"],
@@ -63,8 +70,8 @@ const TONE_PALETTES: Record<OrbTone, [string, string, string]> = {
   concerned: ["#A78BFA", "#7C3AED", "#5B21B6"],
   // Ciclamino acceso — urgenza dolce
   urgent: ["#F472B6", "#DB2777", "#9D174D"],
-  // Rosa shocking — A RIPOSO / identità di base (matcha NeonBorder "idle")
-  neutral: ["#FBCFE8", "#FF1493", "#BE185D"],
+  // Verde menta soft — A RIPOSO / identità di base (matcha NeonBorder "idle")
+  neutral: ["#D1FAE5", "#7DD3C0", "#0F766E"],
   // Scarlatto neon — sigillo del Confessionale (matcha NeonBorder "confessional")
   confessional: ["#FCA5A5", "#FF1744", "#7F1D1D"],
 };

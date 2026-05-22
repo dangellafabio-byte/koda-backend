@@ -2466,7 +2466,16 @@ export default function Taccuino() {
               >
                 <EclipseOrb
                   status={status}
-                  tone={status === "speaking" ? "warm" : lastAiTone}
+                  // === IDLE = SEMPRE NEUTRAL (verde menta) ===
+                  // Prima rimaneva ciclamino/urgente quando Koda era idle
+                  // dopo aver dato una risposta "urgent" → l'utente credeva
+                  // che fosse bloccata in thinking. Ora a riposo è SEMPRE
+                  // verde menta = "pronta, ti ascolto".
+                  tone={
+                    status === "speaking" ? "warm" :
+                    status === "idle" ? null :
+                    lastAiTone
+                  }
                   size={Math.min(windowWidth * 0.78, 360)}
                   meterDb={meterDb}
                   meterThreshold={meterThreshold}
@@ -2508,7 +2517,11 @@ export default function Taccuino() {
             <View style={{ marginBottom: 24 }}>
               <EclipseOrb
                 status={status}
-                tone={status === "speaking" ? "warm" : lastAiTone}
+                tone={
+                  status === "speaking" ? "warm" :
+                  status === "idle" ? null :
+                  lastAiTone
+                }
                 size={260}
                 meterDb={meterDb}
                 meterThreshold={meterThreshold}
@@ -2647,7 +2660,11 @@ export default function Taccuino() {
               >
                 <EclipseOrb
                   status={status}
-                  tone={status === "speaking" ? "warm" : lastAiTone}
+                  tone={
+                    status === "speaking" ? "warm" :
+                    status === "idle" ? null :
+                    lastAiTone
+                  }
                   size={210}
                   meterDb={meterDb}
                   meterThreshold={meterThreshold}
