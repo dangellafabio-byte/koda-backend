@@ -156,6 +156,51 @@ export default function Taccuino() {
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [status, setStatus] = useState<Status>("idle");
 
+  // === SCHERMO DIMMERATO durante l'inattività (risparmio batteria OLED) ===
+  // Dopo 10s che status === "idle" E nessun input dall'utente, si attiva un
+  // overlay scuro semi-trasparente (opacity 0.7) sopra tutta l'UI. Su iPhone
+  // OLED i pixel neri consumano quasi zero → batteria salva. Si rimuove
+  // ISTANTANEAMENTE quando: (a) l'utente parla → onSpeechStart, (b) tocca
+  // lo schermo → onTap, (c) status cambia a non-idle (Koda risponde).
+  const [dimmed, setDimmed] = useState(false);
+  const dimTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const DIM_AFTER_MS = 10_000;
+  const armDimTimer = useCallback(() => {
+    if (dimTimerRef.current) {
+      clearTimeout(dimTimerRef.current);
+      dimTimerRef.current = null;
+    }
+    // Arma il timer solo se siamo idle (non ha senso dimmerare mentre Koda
+    // parla o l'utente sta parlando).
+    dimTimerRef.current = setTimeout(() => {
+      setDimmed(true);
+    }, DIM_AFTER_MS);
+  }, []);
+  const wakeFromDim = useCallback(() => {
+    setDimmed(false);
+    armDimTimer();
+  }, [armDimTimer]);
+  // Re-arm il timer ogni volta che status cambia
+  useEffect(() => {
+    if (status !== "idle") {
+      // Koda è impegnata → schermo sveglio E timer disarmato
+      setDimmed(false);
+      if (dimTimerRef.current) {
+        clearTimeout(dimTimerRef.current);
+        dimTimerRef.current = null;
+      }
+    } else {
+      // Tornati a idle → rearm il timer da 10s
+      armDimTimer();
+    }
+    return () => {
+      if (dimTimerRef.current) {
+        clearTimeout(dimTimerRef.current);
+        dimTimerRef.current = null;
+      }
+    };
+  }, [status, armDimTimer]);
+
   // === KEEP AWAKE durante la conversazione ===
   // iOS auto-locka lo schermo dopo ~30s di inattività. Mentre Koda parla
   // o ascolta, l'utente NON tocca lo schermo → iOS locka → la conversazione
@@ -1459,6 +1504,8 @@ export default function Taccuino() {
           // BARGE-IN: user started talking — kill any AI speech immediately
           try { SpeechMod.stop(); } catch {}
           if (recRef.current === rec) setStatus("recording");
+          // L'utente ha iniziato a parlare → sveglia lo schermo dimmerato.
+          wakeFromDim();
           // L'utente ha cominciato a parlare → nascondi il banner subito.
           if (listenBannerTimerRef.current) {
             clearTimeout(listenBannerTimerRef.current);
@@ -3573,6 +3620,23 @@ export default function Taccuino() {
     />
   ) : null;
 
+  // === DIM OVERLAY (risparmio batteria su OLED) ===
+  // Sopra TUTTO tranne il NeonBorder (che resta visibile come "vita" della
+  // device frame). pointerEvents="auto" così CATTURA il primo tap dell'utente
+  // → wakeFromDim → si rimuove → il tap NON arriva ai bottoni sottostanti
+  // (è una scelta UX: il primo tap "sveglia", il secondo agisce). Niente
+  // di tappabile in idle comunque (è solo l'orb).
+  const dimOverlayEl = dimmed ? (
+    <Pressable
+      style={[
+        StyleSheet.absoluteFillObject,
+        { backgroundColor: "rgba(0,0,0,0.7)", zIndex: 998 },
+      ]}
+      onPress={wakeFromDim}
+      accessibilityLabel="Tocca per riattivare lo schermo"
+    />
+  ) : null;
+
   // === TOUR OVERLAY ===
   // Stesso pattern del confessionalTint: variabile JSX da renderizzare in
   // tutti i rami finali (custom image / preset gradient / plain).
@@ -3610,6 +3674,7 @@ export default function Taccuino() {
         {neonBorderEl}
         {activationPulseEl}
         {tourOverlay}
+        {dimOverlayEl}
       </ImageBackground>
     );
   }
@@ -3627,6 +3692,7 @@ export default function Taccuino() {
         {neonBorderEl}
         {activationPulseEl}
         {tourOverlay}
+        {dimOverlayEl}
       </View>
     );
   }
@@ -3637,6 +3703,7 @@ export default function Taccuino() {
       {neonBorderEl}
       {activationPulseEl}
       {tourOverlay}
+      {dimOverlayEl}
     </View>
   );
 }
