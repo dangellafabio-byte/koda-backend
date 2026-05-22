@@ -156,6 +156,32 @@ export default function Taccuino() {
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [status, setStatus] = useState<Status>("idle");
 
+  // === SAFETY NET GLOBALE: dead-state watchdog ===
+  // Bug ricorrente: in alcuni casi (silent switch ON al volo, audio session
+  // iOS demoted, errore di rete a metà streaming, AVPlayer che butta via il
+  // chunked stream silenziosamente) lo status rimane bloccato su "thinking"
+  // o "speaking" per sempre → schermo ciclamino fisso, mic non si riapre.
+  // Questa è una garanzia indipendente da TUTTE le altre logiche: se lo
+  // status non è "idle" per più di N secondi, lo forziamo a "idle".
+  //   - "transcribing" / "thinking": max 20s (Claude+TTS prepare normalmente <8s)
+  //   - "speaking": max 60s (TTS lunghi possono durare a lungo, ma 1 min è enough)
+  //   - "recording": gestito altrove (auto-stop su silenzio)
+  // Note: NON tocchiamo "recording" qui — quello è gestito dal VAD/auto-stop.
+  const statusEnteredAtRef = useRef<number>(Date.now());
+  useEffect(() => {
+    statusEnteredAtRef.current = Date.now();
+    if (status === "idle" || status === "recording") return;
+    const limit = status === "speaking" ? 60_000 : 20_000;
+    const t = setTimeout(() => {
+      console.warn(`[safety] status stuck on "${status}" for ${limit}ms → force idle`);
+      try { SpeechMod.stop(); } catch {}
+      setStatus("idle");
+      setError("Koda si era impallata. Riprova pure.");
+      setTimeout(() => setError(null), 3000);
+    }, limit);
+    return () => clearTimeout(t);
+  }, [status]);
+
   // === SCHERMO DIMMERATO durante l'inattività (risparmio batteria OLED) ===
   // Dopo 10s che status === "idle" E nessun input dall'utente, si attiva un
   // overlay scuro semi-trasparente (opacity 0.7) sopra tutta l'UI. Su iPhone
@@ -870,7 +896,27 @@ export default function Taccuino() {
       // Il conversation_mode hands-free è disabilitato (causa di freeze su iOS).
       // Arriverà nella Fase 4 con Deepgram + dev build.
       setStatus("speaking");
-      await SpeechMod.speak(text, { language: langTag, tone });
+      // === ANTI-HANG WATCHDOG ===
+      // Bug ricorrente: a volte AVPlayer iOS si appende sul play() (silent
+      // mode al volo, audio session demoted, chunked stream interrotto) e
+      // SpeechMod.speak() non risolve mai → status resta "speaking" per
+      // sempre → schermo ciclamino fisso, mic non si riapre. Mettiamo una
+      // race con un timeout di 45s: anche se l'audio si è impallato,
+      // torniamo SEMPRE a idle e l'utente può ricominciare.
+      try {
+        await Promise.race([
+          SpeechMod.speak(text, { language: langTag, tone }),
+          new Promise<void>((resolve) =>
+            setTimeout(() => {
+              console.warn("[speakIfEnabled] hard timeout 45s → force idle");
+              try { SpeechMod.stop(); } catch {}
+              resolve();
+            }, 45000)
+          ),
+        ]);
+      } catch (e) {
+        console.warn("[speakIfEnabled] speak threw:", e);
+      }
       setStatus("idle");
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
