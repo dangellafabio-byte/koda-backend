@@ -1357,12 +1357,14 @@ export default function Taccuino() {
           }
         });
       }
-      // PASSIVE LISTEN: in hands-free l'orb resta calmo (status=idle) finché
-      // il VAD non rileva voce reale. Solo allora setStatus("recording")
-      // → l'orb si "anima" visivamente (pulse, recording state). In modalità
-      // manuale invece l'utente vede subito il feedback recording.
-      const passiveListen = autoStopOnSilence;
-      if (status !== "speaking" && !passiveListen) setStatus("recording");
+      // PASSIVE LISTEN: in hands-free l'orb mostra subito "recording" appena
+      // il mic si apre, così l'utente VEDE che può parlare. Il VAD continua
+      // comunque a fare il suo lavoro per fermare la registrazione su
+      // silenzio.
+      // (Prima il design era: orb idle → recording solo dopo VAD detect.
+      // L'utente non sapeva mai se l'app lo stava ascoltando. Vedi log:
+      // "perché non si vede quando stai registrando".)
+      if (status !== "speaking") setStatus("recording");
       // Mostra il banner "Dimmi, ti ascolto" solo la prima volta che la
       // sessione hands-free parte (al cold start o dopo riattivazione).
       // Sparisce automaticamente dopo 3s o quando l'utente parla davvero.

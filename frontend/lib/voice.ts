@@ -362,11 +362,19 @@ export async function startRecording(): Promise<Recorder> {
           if (speechStartCb) try { speechStartCb(); } catch {}
         }
         if (speechStartFired) lastVoiceAt = now;
-      } else if (db < SILENCE_THRESHOLD_DB) {
-        // Reset the streak only if we're decisively below silence threshold.
-        // This hysteresis prevents flickering around the threshold from
-        // resetting the counter mid-word.
-        consecutiveVoiceFrames = 0;
+      } else {
+        // === SILENCE/HYSTERESIS DETECTION (riscritto 2026-05-22) ===
+        // Vecchia versione: richiedeva dB < SILENCE_THRESHOLD_DB per contare
+        // silenzio. Risultato: se il rumore di fondo era a -42 dBFS (tipico
+        // di una stanza qualsiasi), il VAD restava in "hysteresis zone" per
+        // SEMPRE e onSilence non scattava mai → utente doveva cliccare a mano.
+        // Nuova logica: "non-voce" = sotto SPEECH_THRESHOLD. Conta silenzio
+        // basandosi su tempo trascorso da ultima voce, non su secondo
+        // threshold artificiale. SILENCE_THRESHOLD_DB resta solo per
+        // diagnostica (reset più aggressivo del contatore frame).
+        if (db < SILENCE_THRESHOLD_DB) {
+          consecutiveVoiceFrames = 0; // reset più aggressivo se davvero quieto
+        }
         if (speechStartFired && firstSpeechAt && lastVoiceAt) {
           const speechElapsed = now - firstSpeechAt;
           if (speechElapsed >= MIN_SPEECH_MS) {
@@ -378,7 +386,6 @@ export async function startRecording(): Promise<Recorder> {
           }
         }
       }
-      // Between thresholds: hold state (hysteresis zone) — don't change anything.
     } catch (e) {
       // metering can briefly fail during state transitions — non-fatal
     }
