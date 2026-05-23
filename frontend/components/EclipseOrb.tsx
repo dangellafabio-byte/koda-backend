@@ -70,8 +70,16 @@ const TONE_PALETTES: Record<OrbTone, [string, string, string]> = {
   concerned: ["#A78BFA", "#7C3AED", "#5B21B6"],
   // Ciclamino acceso — urgenza dolce
   urgent: ["#F472B6", "#DB2777", "#9D174D"],
-  // Verde menta soft — A RIPOSO / identità di base (matcha NeonBorder "idle")
-  neutral: ["#D1FAE5", "#7DD3C0", "#0F766E"],
+  // === NEUTRAL IDLE (2026-05-23 update) ===
+  // Champagne caldo / sabbia dorata. Prima era #7DD3C0 (verde menta) ma
+  // troppo simile al tiffany del recording → l'utente non distingueva
+  // a colpo d'occhio se Koda stava in idle o stava ascoltando.
+  // Champagne caldo ↔ tiffany freddo = contrasto caldo/freddo massimo,
+  // impossibile confonderli a un metro di distanza.
+  //   bright (rim)  #F5E6CC  crema pallida
+  //   mid   (body)  #D4B896  ← STESSO HEX del NeonBorder "idle"
+  //   deep  (base)  #8B6F4E  ambra scura per profondità sul disco nero
+  neutral: ["#F5E6CC", "#D4B896", "#8B6F4E"],
   // Scarlatto neon — sigillo del Confessionale (matcha NeonBorder "confessional")
   confessional: ["#FCA5A5", "#FF1744", "#7F1D1D"],
 };

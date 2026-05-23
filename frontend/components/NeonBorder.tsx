@@ -27,20 +27,24 @@ export type NeonBorderStatus = "idle" | "recording" | "thinking" | "speaking" | 
 // desincronizzati e l'utente non capisce più cosa sta facendo l'app.
 //
 // Mappatura attuale (NeonBorder ↔ EclipseOrb):
-//   idle          #7DD3C0 ↔ TONE_PALETTES.neutral[1]      (verde menta)
+//   idle          #D4B896 ↔ TONE_PALETTES.neutral[1]      (champagne caldo)
 //   recording     #00F5D4 ↔ LISTEN_PALETTE[1]              (tiffany neon)
 //   listening     (alias di recording — vedi index.tsx, ora unificati)
 //   thinking      #EC4899 ↔ THINK_PALETTE[1]               (ciclamino)
 //   speaking      #BD10E0 ↔ TONE_PALETTES.warm[1]          (viola elettrico)
 //   confessional  #FF1744 ↔ TONE_PALETTES.confessional[1]  (scarlatto)
 //
-// "idle" deve essere VISIVAMENTE LONTANISSIMO da "thinking", altrimenti
-// l'utente non sa MAI se l'app è impallata o pronta. Prima avevamo
-// idle=#FF1493 (rosa shocking) vs thinking=#EC4899 (ciclamino): erano
-// indistinguibili → l'utente per ore ha creduto "stuck on thinking"
-// mentre in realtà era idle. Soluzione: idle = verde menta soft.
+// === IDLE COLOR HISTORY ===
+// 1ª versione: #FF1493 (rosa shocking) — INDISTINGUIBILE dal ciclamino
+//   del thinking → utente credeva l'app "stuck on thinking" per ore.
+// 2ª versione: #7DD3C0 (verde menta) — distinto dal ciclamino, MA troppo
+//   simile al tiffany del recording → utente non capiva se stava
+//   ascoltando o era ferma.
+// 3ª versione: #D4B896 (champagne caldo) ✓ — contrasto caldo/freddo
+//   massimo con tiffany. Impossibile confondere a colpo d'occhio. Coerente
+//   con la metafora: idle = candela accesa, attesa pacata.
 const STATE_COLORS: Record<NeonBorderStatus, string> = {
-  idle: "#7DD3C0",        // 🌿 Verde menta soft (READY/IN ATTESA)
+  idle: "#D4B896",        // 🕯️ Champagne caldo (READY/IN ATTESA)
   recording: "#00F5D4",   // 💎 Tiffany neon (TI ASCOLTO — match orb LISTEN_PALETTE[1])
   listening: "#00F5D4",   // 💎 Tiffany neon (alias di recording, stesso colore)
   thinking: "#EC4899",    // 🩷 Ciclamino (STO PENSANDO)
