@@ -447,6 +447,18 @@ export default function Taccuino() {
 
   const recRef = useRef<Recorder | null>(null);
   const scrollRef = useRef<ScrollView>(null);
+  // === FIRST-TAP GATE (richiesto utente 2026-05-23) ===
+  // Regola: ad ogni cold-start dell'app E ad ogni ritorno dal background,
+  // la PRIMA attivazione del microfono deve essere fatta a mano (tap
+  // sull'orb). Solo DOPO la prima interazione manuale dell'utente in
+  // questa "sessione foreground", il loop hands-free riparte da solo.
+  //
+  // Motivo: l'auto-mic-open immediato al cold start spesso incappava in
+  // una sessione AVAudioSession iOS "incantata" (specie dopo lunghi
+  // background), causando l'orb bloccato sul verde/tiffany e mic morto.
+  // Con il primo tap esplicito siamo certi che l'utente è presente, il
+  // sistema audio è "caldo" e tutto parte pulito.
+  const userInteractedRef = useRef<boolean>(false);
   // Pager horizontale: pagina 0 = voce zen, pagina 1 = lettura.
   const pagerRef = useRef<ScrollView>(null);
   const [viewMode, setViewMode] = useState<"voice" | "reading">("voice");
@@ -499,16 +511,26 @@ export default function Taccuino() {
   // errori ("Errore nella trascrizione" persistente) e il microfono
   // sembra "morto" perché recRef punta a un registratore ormai invalido.
   //
-  // Fix conservativo, attivato SOLO sulla transizione background → active:
-  //   1. Pulisce qualsiasi errore visibile (così l'utente non vede
-  //      messaggi vecchi).
-  //   2. Cancella eventuali registratori "fantasma" (recRef.cancel()).
-  //   3. Forza lo stato a "idle" così il prossimo tap funziona.
-  // NON tocchiamo l'audio session: startTalkInternal la reimposta da solo
-  // al prossimo startRecording.
+  // Doppio fix:
+  // (A) BACKGROUND / INACTIVE → ferma subito eventuale registrazione,
+  //     resetta il flag "ho interagito" così al ritorno il loop
+  //     hands-free NON parte automaticamente (richiede tap esplicito).
+  // (B) ACTIVE (ritorno) → pulisce errori vecchi, recRef fantasma,
+  //     forza status a idle per il prossimo tap.
   useEffect(() => {
     const sub = AppState.addEventListener("change", (next) => {
-      if (next === "active") {
+      if (next === "background" || next === "inactive") {
+        // App va in background: ferma TUTTO subito.
+        userInteractedRef.current = false;
+        if (recRef.current) {
+          try { recRef.current.cancel?.(); } catch {}
+          recRef.current = null;
+        }
+        try { SpeechMod.stop(); } catch {}
+      } else if (next === "active") {
+        // Ritorno in foreground: pulizia + idle.
+        // userInteractedRef resta false (settato sopra al go-background),
+        // quindi il loop hands-free NON parte: serve un tap manuale.
         setError(null);
         if (recRef.current) {
           try { recRef.current.cancel?.(); } catch {}
@@ -970,6 +992,12 @@ export default function Taccuino() {
   //   - error visibile (l'utente sta leggendo un feedback)
   useEffect(() => {
     if (!handsFree) return;
+    // === FIRST-TAP GATE ===
+    // Il loop hands-free non parte FINCHÉ l'utente non ha toccato l'orb
+    // almeno una volta in questa sessione foreground. Questo elimina
+    // tutta una serie di problemi di sessione audio iOS al cold-start
+    // / ritorno dal background. Vedi commenti su `userInteractedRef`.
+    if (!userInteractedRef.current) return;
     if (status !== "idle") return;
     if (!profile) return;
     if (showOnboarding) return;
@@ -1617,6 +1645,13 @@ export default function Taccuino() {
   };
 
   const onBigButton = () => {
+    // === FIRST-TAP GATE ===
+    // Qualsiasi tap dell'utente sul big button marca "ho interagito in
+    // questa sessione foreground". Da qui in poi, il loop hands-free
+    // può ripartire da solo (vedi useEffect di auto-listen più sopra).
+    // Verrà resettato a false quando l'app va in background.
+    userInteractedRef.current = true;
+
     // While the user is RECORDING, the big button always means "stop recording
     // and send the audio" — regardless of conversation_mode. The previous
     // behavior (terminate the loop and CANCEL the recording) was confusing
