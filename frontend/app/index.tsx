@@ -19,6 +19,7 @@ import {
   useWindowDimensions,
   Dimensions,
   Alert,
+  AppState,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -489,6 +490,36 @@ export default function Taccuino() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // === APP STATE LIFECYCLE ===
+  // Quando l'utente mette l'app in background per un po' (telefonata,
+  // home, app switcher) e poi torna, iOS spesso rilascia la sessione
+  // audio. Lo stato React però rimane com'era → utente vede vecchi
+  // errori ("Errore nella trascrizione" persistente) e il microfono
+  // sembra "morto" perché recRef punta a un registratore ormai invalido.
+  //
+  // Fix conservativo, attivato SOLO sulla transizione background → active:
+  //   1. Pulisce qualsiasi errore visibile (così l'utente non vede
+  //      messaggi vecchi).
+  //   2. Cancella eventuali registratori "fantasma" (recRef.cancel()).
+  //   3. Forza lo stato a "idle" così il prossimo tap funziona.
+  // NON tocchiamo l'audio session: startTalkInternal la reimposta da solo
+  // al prossimo startRecording.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (next) => {
+      if (next === "active") {
+        setError(null);
+        if (recRef.current) {
+          try { recRef.current.cancel?.(); } catch {}
+          recRef.current = null;
+        }
+        setStatus("idle");
+      }
+    });
+    return () => {
+      try { sub.remove(); } catch {}
+    };
   }, []);
 
   const saveTheme = async (name: ThemeName) => {
@@ -1412,6 +1443,8 @@ export default function Taccuino() {
       }
     } catch (e) {
       setError("Microfono non disponibile. Controlla i permessi.");
+      // Auto-clear dopo 4s: se l'utente riprova, non vede l'errore vecchio.
+      setTimeout(() => setError(null), 4000);
     }
   };
 
@@ -1575,6 +1608,10 @@ export default function Taccuino() {
       // d'errore, altrimenti lo stato resta "stuck" sul prossimo tap.
       if (recRef.current === current) recRef.current = null;
       setError("Errore nella trascrizione.");
+      // Auto-clear dopo 4s: prima l'errore restava visibile per sempre.
+      // Quando l'utente backgroundava e foregroundava l'app, lo vedeva
+      // ancora a schermo a confonderlo (vedi screenshot 2026-05-23 22:24).
+      setTimeout(() => setError(null), 4000);
       setStatus("idle");
     }
   };
