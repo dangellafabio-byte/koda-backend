@@ -336,54 +336,6 @@ export async function startRecording(): Promise<Recorder> {
   let silenceCb: (() => void) | null = null;
   let meterCb: ((db: number, threshold?: number | null) => void) | null = null;
 
-  // === ADAPTIVE NOISE FLOOR (root cause 2026-05-23: "stays green forever") ===
-  // Vecchia versione: soglia fissa a -38 dBFS. Se il rumore di fondo
-  // dell'ambiente dell'utente è sopra -38 (TV accesa, ufficio rumoroso,
-  // microfono iPhone con gain alto), `lastVoiceAt` veniva aggiornato a
-  // ogni frame perché il rumore stesso supera -38 → il silenzio non
-  // veniva MAI rilevato → l'utente doveva premere il pulsante a mano.
-  //
-  // Nuova logica:
-  //   1) Nei primi ~600ms di registrazione, raccogliamo le letture dB.
-  //   2) Stimiamo il "noise floor" come la MEDIANA delle prime letture
-  //      (più robusta della media contro outliers).
-  //   3) Settiamo la soglia voce = noiseFloor + 12 dB, con bound:
-  //        - non più alta di -22 (anche con ambiente caotico la voce
-  //          umana ravvicinata supera comunque -22)
-  //        - non più bassa di -42 (anche in totale silenzio, vogliamo
-  //          almeno richiedere una voce minima).
-  //   4) Una volta calibrata, la soglia resta fissa per tutta la sessione.
-  //
-  // Questo rende il VAD self-tuning per QUALSIASI ambiente, senza chiedere
-  // all'utente di regolare nulla.
-  const calibrationSamples: number[] = [];
-  const CALIBRATION_MS = 600;
-  let adaptiveSpeechThresholdDb: number = SPEECH_THRESHOLD_DB; // default fino a calibrazione
-  let adaptiveSilenceThresholdDb: number = SILENCE_THRESHOLD_DB;
-  let calibrationDone = false;
-
-  const finalizeCalibration = () => {
-    if (calibrationDone) return;
-    calibrationDone = true;
-    if (calibrationSamples.length < 3) {
-      // Calibrazione fallita: torniamo ai valori default conservativi.
-      return;
-    }
-    // Mediana (più robusta della media contro spike)
-    const sorted = [...calibrationSamples].sort((a, b) => a - b);
-    const noiseFloor = sorted[Math.floor(sorted.length / 2)];
-    // Soglia voce = noiseFloor + 12 dB, con bound [-42, -22]
-    const proposed = noiseFloor + 12;
-    adaptiveSpeechThresholdDb = Math.min(-22, Math.max(-42, proposed));
-    // Silenzio = 8 dB sotto la soglia voce (hysteresis)
-    adaptiveSilenceThresholdDb = adaptiveSpeechThresholdDb - 8;
-    console.log(
-      `[voice/vad] calibrazione: noiseFloor=${noiseFloor.toFixed(1)} dB → ` +
-      `speechTh=${adaptiveSpeechThresholdDb.toFixed(1)} dB, ` +
-      `silenceTh=${adaptiveSilenceThresholdDb.toFixed(1)} dB`
-    );
-  };
-
   const vadInterval = setInterval(() => {
     if (vadStopped || vadPaused) return;
     try {
@@ -391,32 +343,16 @@ export async function startRecording(): Promise<Recorder> {
       if (!st || !st.isRecording) return;
       const db: number = typeof st.metering === "number" ? st.metering : -100;
       if (meterCb) {
-        try { meterCb(db, adaptiveSpeechThresholdDb); } catch {}
+        try { meterCb(db, SPEECH_THRESHOLD_DB); } catch {}
       }
       const now = Date.now();
-      const elapsedSinceStart = now - startedAt;
-
-      // === FASE DI CALIBRAZIONE (primi 600ms) ===
-      if (!calibrationDone) {
-        // Ignora valori "invalidi" (es. -100 da metering non ancora pronto)
-        if (db > -90 && isFinite(db)) {
-          calibrationSamples.push(db);
-        }
-        if (elapsedSinceStart >= CALIBRATION_MS) {
-          finalizeCalibration();
-        }
-        // Durante la calibrazione: NON facciamo speech/silence detection.
-        // Aspettiamo di avere la soglia adattiva pronta.
-        return;
-      }
-
       // Hard cap on recording length
       if (now - startedAt > HARD_CAP_MS) {
         vadStopped = true;
         if (silenceCb) try { silenceCb(); } catch {}
         return;
       }
-      if (db > adaptiveSpeechThresholdDb) {
+      if (db > SPEECH_THRESHOLD_DB) {
         consecutiveVoiceFrames++;
         // Only mark "speech started" after enough consecutive voice frames.
         // This kills false positives from TV / brief background noises.
@@ -427,10 +363,16 @@ export async function startRecording(): Promise<Recorder> {
         }
         if (speechStartFired) lastVoiceAt = now;
       } else {
-        // === SILENCE/HYSTERESIS DETECTION (riscritto 2026-05-23) ===
-        // Usa soglie ADATTIVE calibrate sul rumore di fondo reale.
-        // Non più valori fissi -38/-46 che fallivano in ambienti rumorosi.
-        if (db < adaptiveSilenceThresholdDb) {
+        // === SILENCE/HYSTERESIS DETECTION (riscritto 2026-05-22) ===
+        // Vecchia versione: richiedeva dB < SILENCE_THRESHOLD_DB per contare
+        // silenzio. Risultato: se il rumore di fondo era a -42 dBFS (tipico
+        // di una stanza qualsiasi), il VAD restava in "hysteresis zone" per
+        // SEMPRE e onSilence non scattava mai → utente doveva cliccare a mano.
+        // Nuova logica: "non-voce" = sotto SPEECH_THRESHOLD. Conta silenzio
+        // basandosi su tempo trascorso da ultima voce, non su secondo
+        // threshold artificiale. SILENCE_THRESHOLD_DB resta solo per
+        // diagnostica (reset più aggressivo del contatore frame).
+        if (db < SILENCE_THRESHOLD_DB) {
           consecutiveVoiceFrames = 0; // reset più aggressivo se davvero quieto
         }
         if (speechStartFired && firstSpeechAt && lastVoiceAt) {
