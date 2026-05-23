@@ -2274,14 +2274,18 @@ export default function Taccuino() {
             </Text>
           </TouchableOpacity>
         </View>
-        {/* Slot destro: icona "tre puntini" semi-trasparente per aprire KodaIntro.
-            Discreta (white@55%) per non rompere l'estetica zen ma visibile e
-            ovvia. Single tap → riapre la presentazione di Koda (settings vocali). */}
+        {/* Slot destro: icona "tre puntini" — apre le IMPOSTAZIONI complete.
+            Prima apriva direttamente la presentazione KodaIntro, ma l'utente
+            non aveva alcun modo di raggiungere il menu Impostazioni (tema,
+            voce, notifiche, ecc.) → comportamento controintuitivo: chi tappa
+            i tre puntini si aspetta un menu di opzioni, non una presentazione.
+            Da Impostazioni si può comunque rivedere la presentazione (link in
+            fondo) e cambiare voce (nuova riga "Voce di Koda"). */}
         <TouchableOpacity
           style={[styles.headerBtn, { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" }]}
-          onPress={reopenKodaIntro}
+          onPress={() => setShowSettings(true)}
           hitSlop={20}
-          testID="koda-intro-reopen"
+          testID="open-settings"
         >
           <Ionicons name="ellipsis-horizontal" size={20} color="rgba(255,255,255,0.55)" />
         </TouchableOpacity>
@@ -2766,6 +2770,32 @@ export default function Taccuino() {
                 onToggle={toggleVoice}
               />
             </View>
+
+            {/* === VOCE DI KODA ============================================
+                Aggiunto 2026-05-23: prima il VoicePicker era raggiungibile
+                SOLO via voice command ("apri voci"), che a volte falliva.
+                Ora è qui, sempre visibile, con la voce corrente in chiaro.
+                Mostra il nome della voce attuale lookup nella lista voices. */}
+            <TouchableOpacity
+              style={styles.settingRow}
+              onPress={() => {
+                setShowSettings(false);
+                setTimeout(() => setShowVoicePicker(true), 220);
+              }}
+              testID="open-voice-picker"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>🎙️ Voce di Koda</Text>
+                <Text style={styles.settingHint}>
+                  {(() => {
+                    const id = profile?.settings?.tts_voice_id;
+                    const v = id ? voices.find((vv) => vv.voice_id === id) : null;
+                    return v ? `Attuale: ${v.name}` : "Tocca per scegliere una voce";
+                  })()}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+            </TouchableOpacity>
 
             <View style={styles.settingRow}>
               <View style={{ flex: 1 }}>
@@ -3351,6 +3381,28 @@ export default function Taccuino() {
             <Text style={styles.dangerHint}>
               Reset completo: profilo, taccuino e ogni ricordo.
             </Text>
+
+            {/* === RIVEDI PRESENTAZIONE DI KODA ===========================
+                Spostato qui dal bottone tre-puntini header (che ora apre
+                queste impostazioni). Resta raggiungibile per chi vuole
+                rifare il setup iniziale (nome, voce, palette, ecc.). */}
+            <View style={styles.divider} />
+            <TouchableOpacity
+              style={[styles.settingRow, { paddingVertical: 14 }]}
+              onPress={() => {
+                setShowSettings(false);
+                setTimeout(() => { reopenKodaIntro(); }, 220);
+              }}
+              testID="reopen-koda-intro"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>👋 Rivedi presentazione di Koda</Text>
+                <Text style={styles.settingHint}>
+                  Riapre il setup iniziale: nome, voce, palette colori.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+            </TouchableOpacity>
 
             {/* === PROMESSA DI FERRO ===
                 Una clausola tecnica chiara visibile in app — non marketing.
