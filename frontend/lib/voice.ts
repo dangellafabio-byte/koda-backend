@@ -48,11 +48,21 @@ let _nativeReady = false;
 // l'audio veniva catturato ma classificato come "silenzio" → nessuna
 // chiamata transcribe-deepgram → l'utente vedeva l'orb sempre verde
 // (idle) e pensava che l'app fosse rotta. È IL BUG che giravamo da ore.
-// Abbassata a -38 (livello standard nei VAD audio, equivalente a "voce
-// umana normale a 30-50 cm dal telefono"). Hysteresis 8 dB per evitare
-// flap su rumore di fondo costante.
-const SPEECH_THRESHOLD_DB = -38;     // dBFS — voce umana normale (era -22, troppo alto)
-const SILENCE_THRESHOLD_DB = -46;    // dBFS — silence below this (hysteresis 8 dB)
+// Abbassata a -38 (livello standard nei VAD audio).
+//
+// === RAFFINAMENTO 2026-05-23 (caso "in macchina con musica") ===
+// -38 si è rivelata TROPPO BASSA per ambienti rumorosi:
+//   - Motore auto idle: -30/-25 dBFS → sempre sopra soglia → VAD non
+//     vede mai silenzio → orb resta sempre tiffany, utente deve toccare.
+//   - Ufficio con AC: simile.
+// Compromesso: -28 dBFS. Funziona sia in macchina che a casa:
+//   - Voce a 5-30 cm dal telefono: -15 / -5 dBFS → SOPRA -28 ✓
+//   - Voce a 50 cm in stanza silenziosa: -25 / -20 dBFS → SOPRA -28 ✓
+//   - Motore/AC/musica bassa: -30 / -25 dBFS → SOTTO -28 (la maggior
+//     parte del tempo) → silenzio rilevato correttamente.
+// Hysteresis di 8 dB tra silence e speech (era già nel codice).
+const SPEECH_THRESHOLD_DB = -28;     // dBFS — voce a distanza ravvicinata
+const SILENCE_THRESHOLD_DB = -36;    // dBFS — silence below this (hysteresis 8 dB)
 const SILENCE_DURATION_MS = 800;     // 800ms silence after speech → end of utterance
 const MIN_SPEECH_MS = 500;           // need at least 500ms of voice before silence can fire
 const MIN_SPEECH_FRAMES = 3;         // 3 consecutive frames (~210ms) above threshold → real speech
