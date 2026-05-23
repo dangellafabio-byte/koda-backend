@@ -21,16 +21,28 @@ const AnimatedRect = Animated.createAnimatedComponent(Rect);
 export type NeonBorderStatus = "idle" | "recording" | "thinking" | "speaking" | "confessional" | "listening";
 
 // === COLORI SHOCKING NEON ===
-// IMPORTANTE: "idle" deve essere VISIVAMENTE LONTANISSIMO da "thinking",
-// altrimenti l'utente non sa MAI se l'app è impallata o pronta. Prima
-// avevamo idle=#FF1493 (rosa shocking) vs thinking=#EC4899 (ciclamino):
-// indistinguibili → l'utente per ore ha creduto "stuck on thinking" mentre
-// in realtà era idle. Soluzione: idle = verde menta soft (clearly "ready"
-// signal), thinking = ciclamino (clearly "Koda is processing").
+// IMPORTANTE: queste palette DEVONO restare 1:1 sincronizzate con quelle
+// di EclipseOrb (components/EclipseOrb.tsx). Se cambi un colore qui, devi
+// cambiarlo anche lì — altrimenti il bordo e l'eclissi diventano
+// desincronizzati e l'utente non capisce più cosa sta facendo l'app.
+//
+// Mappatura attuale (NeonBorder ↔ EclipseOrb):
+//   idle          #7DD3C0 ↔ TONE_PALETTES.neutral[1]      (verde menta)
+//   recording     #00F5D4 ↔ LISTEN_PALETTE[1]              (tiffany neon)
+//   listening     (alias di recording — vedi index.tsx, ora unificati)
+//   thinking      #EC4899 ↔ THINK_PALETTE[1]               (ciclamino)
+//   speaking      #BD10E0 ↔ TONE_PALETTES.warm[1]          (viola elettrico)
+//   confessional  #FF1744 ↔ TONE_PALETTES.confessional[1]  (scarlatto)
+//
+// "idle" deve essere VISIVAMENTE LONTANISSIMO da "thinking", altrimenti
+// l'utente non sa MAI se l'app è impallata o pronta. Prima avevamo
+// idle=#FF1493 (rosa shocking) vs thinking=#EC4899 (ciclamino): erano
+// indistinguibili → l'utente per ore ha creduto "stuck on thinking"
+// mentre in realtà era idle. Soluzione: idle = verde menta soft.
 const STATE_COLORS: Record<NeonBorderStatus, string> = {
   idle: "#7DD3C0",        // 🌿 Verde menta soft (READY/IN ATTESA)
-  recording: "#00F5D4",   // 💎 Tiffany neon (TI ASCOLTO)
-  listening: "#5EEAD4",   // 💧 Tiffany chiaro (sotto ascolto passivo)
+  recording: "#00F5D4",   // 💎 Tiffany neon (TI ASCOLTO — match orb LISTEN_PALETTE[1])
+  listening: "#00F5D4",   // 💎 Tiffany neon (alias di recording, stesso colore)
   thinking: "#EC4899",    // 🩷 Ciclamino (STO PENSANDO)
   speaking: "#BD10E0",    // 🟣 Viola elettrico (STO PARLANDO)
   confessional: "#FF1744",// ❤️‍🔥 Scarlatto (STANZA SEGRETA)

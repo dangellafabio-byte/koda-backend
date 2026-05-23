@@ -1368,7 +1368,12 @@ export default function Taccuino() {
       // Mostra il banner "Dimmi, ti ascolto" solo la prima volta che la
       // sessione hands-free parte (al cold start o dopo riattivazione).
       // Sparisce automaticamente dopo 3s o quando l'utente parla davvero.
-      if (passiveListen && !firstListenShownRef.current) {
+      // (Prima qui c'era `passiveListen` non dichiarato → ReferenceError
+      //  silenziato dal try/catch che a sua volta bloccava il wiring del
+      //  VAD onSilence sotto. Ora usiamo la semantica originale:
+      //  "siamo in ascolto passivo hands-free" = handsFreeRef + autoStop.)
+      const passiveListening = handsFreeRef.current && autoStopOnSilence;
+      if (passiveListening && !firstListenShownRef.current) {
         firstListenShownRef.current = true;
         setListenBanner("Dimmi, ti ascolto");
         // auto-dismiss dopo 3.5s
@@ -2304,19 +2309,14 @@ export default function Taccuino() {
       >
         {timeline.length === 0 ? (
           <View style={styles.emptyState}>
-            <View style={{ marginBottom: 24 }}>
-              <EclipseOrb
-                status={status}
-                tone={
-                  status === "speaking" ? "warm" :
-                  status === "idle" ? null :
-                  lastAiTone
-                }
-                size={260}
-                meterDb={meterDb}
-                meterThreshold={meterThreshold}
-              />
-            </View>
+            {/* === FIX DOPPIO ECLISSI ===
+                Prima qui c'era un EclipseOrb (size 260) nell'emptyState.
+                Ma in modalità voce, la bottom bar ha già un altro orb
+                (size 210) qualche riga sotto → l'utente vedeva DUE eclissi
+                impilate verticalmente. La pagina di voce (Page 0) ha già
+                l'orb principale grande; questa Page 1 (lettura) deve
+                mostrare solo il testo di benvenuto, mantenendo l'orb
+                attivo solo in basso come pulsante tap-to-talk. */}
             <Text style={styles.emptyTitle}>
               {profile?.name ? `Ehi ${profile.name}, sono qui.` : "Sono qui."}
             </Text>
@@ -3427,17 +3427,23 @@ export default function Taccuino() {
   // a colpo d'occhio di trovarsi in modalità confessionale, anche durante
   // la conversazione vocale. Quando spegne il confessionale, l'overlay
   // sparisce e si torna allo sfondo normale.
-  // === NEON BORDER (idee 2 + 3) ===
-  // Bordo neon attorno allo schermo che reagisce allo stato.
-  //   - Confessionale attivo → bordeaux pulsante (sigillo)
-  //   - Hands-free + voce rilevata → verde menta sottile (ti sto sentendo)
-  //   - Recording manuale → verde brillante (recording standard)
-  // Priorità: confessional > listening > recording/thinking/speaking > idle.
+  // === NEON BORDER ===
+  // Bordo neon attorno allo schermo, perfettamente sincronizzato all'orb.
+  // Mappatura 1:1 stato → colore (NeonBorder e EclipseOrb leggono dalla
+  // stessa palette, vedi components/NeonBorder.tsx e EclipseOrb.tsx):
+  //   - idle          → verde menta (#7DD3C0)
+  //   - recording     → tiffany neon (#00F5D4)  [include sia manuale sia hands-free]
+  //   - transcribing  → ciclamino (#EC4899)     [come thinking, l'orb usa THINK_PALETTE]
+  //   - thinking      → ciclamino (#EC4899)
+  //   - speaking      → viola elettrico (#BD10E0)
+  //   - confessional  → scarlatto (#FF1744)
+  // Priorità: confessional > stati di interazione > idle.
   const neonStatus: NeonBorderStatus = (() => {
     if (confessionalMode) return "confessional";
-    if (handsFree && status === "recording") return "listening";
     if (status === "recording") return "recording";
-    if (status === "thinking") return "thinking";
+    // Transcribing è visivamente equivalente a thinking (l'orb mostra
+    // THINK_PALETTE in entrambi i casi) — il bordo lo segue.
+    if (status === "transcribing" || status === "thinking") return "thinking";
     if (status === "speaking") return "speaking";
     return "idle";
   })();
@@ -3445,7 +3451,6 @@ export default function Taccuino() {
   // non serve un bordo spesso: 2-4px sono perfetti.
   const neonThickness =
     neonStatus === "confessional" ? 4 :
-    neonStatus === "listening" ? 2 :
     neonStatus === "idle" ? 2 :
     3;
   const neonBorderEl = (

@@ -76,9 +76,14 @@ const TONE_PALETTES: Record<OrbTone, [string, string, string]> = {
   confessional: ["#FCA5A5", "#FF1744", "#7F1D1D"],
 };
 
-// === Color for LISTENING state (utente parla, aurora si ritira nel petrolio)
-// Blu petrolio profondo — la luce raffredda, si raccoglie, "assorbe"
-const LISTEN_PALETTE: [string, string, string] = ["#5EEAD4", "#0E7C7B", "#134E4A"];
+// === Color for LISTENING/RECORDING state (utente parla — l'aurora si
+// "raffredda" su tiffany acceso, in perfetta corrispondenza con il
+// NeonBorder "recording" (#00F5D4). Prima il mid era #0E7C7B (petrolio
+// scuro) e il bordo appariva di un colore molto diverso dall'orb. Ora:
+//   bright (rim) = #5EEAD4 chiaro
+//   mid   (body) = #00F5D4 ← STESSO HEX del NeonBorder recording
+//   deep  (base) = #0E7C7B per dare profondità contro il disco nero.
+const LISTEN_PALETTE: [string, string, string] = ["#5EEAD4", "#00F5D4", "#0E7C7B"];
 
 // === Color for THINKING state (il pensiero che si formula)
 // Ciclamino — l'idea che pulsa, vivo, vibrante
