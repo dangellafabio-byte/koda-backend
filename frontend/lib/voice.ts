@@ -41,8 +41,18 @@ let _nativeReady = false;
 //   - MIN_SPEECH_FRAMES: number of CONSECUTIVE above-threshold frames required to
 //     officially mark "speech started" — eliminates single pops/short TV bursts.
 //   - METER_POLL_MS: how often we sample the microphone meter
-const SPEECH_THRESHOLD_DB = -22;     // dBFS — must be reasonably loud / close to mic
-const SILENCE_THRESHOLD_DB = -32;    // dBFS — silence below this (hysteresis)
+//
+// === FIX 2026-05-22 (root cause "Koda non sente") ===
+// Prima la soglia era a -22 dBFS: TROPPO ALTA. Una persona che parla a
+// distanza naturale dal telefono produce in media -28 / -32 dBFS. A -22
+// l'audio veniva catturato ma classificato come "silenzio" → nessuna
+// chiamata transcribe-deepgram → l'utente vedeva l'orb sempre verde
+// (idle) e pensava che l'app fosse rotta. È IL BUG che giravamo da ore.
+// Abbassata a -38 (livello standard nei VAD audio, equivalente a "voce
+// umana normale a 30-50 cm dal telefono"). Hysteresis 8 dB per evitare
+// flap su rumore di fondo costante.
+const SPEECH_THRESHOLD_DB = -38;     // dBFS — voce umana normale (era -22, troppo alto)
+const SILENCE_THRESHOLD_DB = -46;    // dBFS — silence below this (hysteresis 8 dB)
 const SILENCE_DURATION_MS = 800;     // 800ms silence after speech → end of utterance
 const MIN_SPEECH_MS = 500;           // need at least 500ms of voice before silence can fire
 const MIN_SPEECH_FRAMES = 3;         // 3 consecutive frames (~210ms) above threshold → real speech
