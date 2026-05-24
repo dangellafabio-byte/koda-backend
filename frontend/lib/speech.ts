@@ -18,6 +18,7 @@ import * as Speech from "expo-speech";
 import {
   createAudioPlayer,
   setAudioModeAsync,
+  setIsAudioActiveAsync,
 } from "expo-audio";
 import { Platform } from "react-native";
 import type { Tone } from "./api";
@@ -278,7 +279,28 @@ async function prepareTTSUrl(
 }
 
 async function playElevenLabsNativeFromUrl(audioUrl: string, onAudioStart?: () => void): Promise<boolean> {
-  // 1. Switch the audio session into PLAYBACK mode (recording=false).
+  // === FIX 2026-05-24 (root cause "no audio heard, AVPlayer fails silently") ===
+  // Su iOS la transizione da PlayAndRecord → Playback richiede di
+  // DEATTIVARE esplicitamente la sessione audio in mezzo. Senza questo
+  // ciclo deactivate→configure→reactivate, la categoria AVAudioSession
+  // resta in "PlayAndRecord" anche dopo setAudioModeAsync({allowsRecording:
+  // false}), perché iOS rispetta la configurazione solo se la sessione è
+  // inattiva al momento della modifica. Risultato: AVPlayer prova a
+  // riprodurre ma o passa per l'earpiece (audio "muto") o stalla
+  // silenziosamente. Sintomo classico: l'utente vede ciclamino per <1s
+  // poi torna idle, nessun suono, nessun errore. Si "auto-ripristina"
+  // dopo 2-5 minuti perché iOS internamente disattiva la sessione orfana
+  // → al turno successivo la nuova configurazione viene applicata.
+  //
+  // Sequenza corretta:
+  //   1. setIsAudioActiveAsync(false) → forza iOS a rilasciare la sessione corrente
+  //   2. setAudioModeAsync(playback)  → configura la nuova modalità
+  //   3. setIsAudioActiveAsync(true)  → riattiva con la modalità nuova applicata
+  try {
+    await setIsAudioActiveAsync(false);
+  } catch (e) {
+    // Non fatale: alcune versioni iOS non richiedono la deattivazione esplicita.
+  }
   try {
     await setAudioModeAsync({
       allowsRecording: false,
@@ -289,6 +311,11 @@ async function playElevenLabsNativeFromUrl(audioUrl: string, onAudioStart?: () =
     });
   } catch (e) {
     console.warn("[speech] setAudioModeAsync(playback) failed", e);
+  }
+  try {
+    await setIsAudioActiveAsync(true);
+  } catch (e) {
+    // Non fatale: setAudioModeAsync di solito riattiva da solo.
   }
 
   return await new Promise<boolean>((resolve) => {
