@@ -171,9 +171,19 @@ function stopAllPlayback() {
   currentAbort = null;
 
   // Stop native AudioPlayer (expo-audio) — fire-and-forget.
+  // === FIX RESOURCE LEAK 2026-05-24 ===
+  // Prima azzeravamo `currentPlayer = null` PRIMA di chiamare p.remove(),
+  // creando una race condition: se un altro thread stava già chiamando
+  // cleanup() in playElevenLabsNativeFromUrl, il check `currentPlayer ===
+  // player` falliva → il player.remove() veniva saltato → AVPlayer
+  // SharedObject non rilasciato → audio session iOS continuava a tenere
+  // risorse occupate → dopo 3-5 turni di conversazione, AVPlayer non
+  // riusciva più ad avviare nuovi playback (fallimento silenzioso).
+  // Self-heal dopo 2-5 min = iOS GC riprende le risorse.
+  // Soluzione: nullare currentPlayer DOPO p.remove() così che la
+  // condizione di cleanup nei caller resti coerente.
   if (currentPlayer) {
     const p = currentPlayer;
-    currentPlayer = null;
     try {
       p.pause?.();
     } catch {}
@@ -181,6 +191,7 @@ function stopAllPlayback() {
     try {
       p.remove?.();
     } catch {}
+    currentPlayer = null;
   }
 
   // Stop web <audio>
@@ -295,7 +306,17 @@ async function playElevenLabsNativeFromUrl(audioUrl: string, onAudioStart?: () =
     const cleanup = () => {
       try { subscription?.remove?.(); } catch {}
       subscription = null;
-      if (player && currentPlayer === player) currentPlayer = null;
+      // === FIX RESOURCE LEAK 2026-05-24 ===
+      // Prima: `if (player && currentPlayer === player) currentPlayer = null;`
+      // — la condizione `player &&` falliva quando il cleanup veniva chiamato
+      // dopo che player era già stato nullato altrove, lasciando
+      // `currentPlayer` con un riferimento orfano che bloccava le successive
+      // creazioni di AudioPlayer. Ora controlliamo solo l'identità con
+      // currentPlayer e SEMPRE nulliamo se matcha, anche se `player` ref
+      // locale è già null.
+      if (currentPlayer === player) {
+        currentPlayer = null;
+      }
       try { player?.pause?.(); } catch {}
       try { player?.remove?.(); } catch {}
       player = null;
