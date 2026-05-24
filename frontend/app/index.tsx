@@ -1169,7 +1169,26 @@ export default function Taccuino() {
         // `tone` semantico della risposta, NON dall'ampiezza audio
         // (approccio precedente con waveform server-side abbandonato:
         // troppi anelli di sync, effetto "macchinoso").
-        const useFastPath = !confessionalMode && (profile?.settings.voice_response !== false);
+        // === FAST STREAMING FLOW — DISATTIVATO 2026-05-24 ===
+        // Lo streaming chunked di /converse-stream-audio è inaffidabile su
+        // iOS: AVPlayer rifiuta MP3 chunked-transfer senza Content-Length e
+        // Accept-Ranges, fallendo SILENZIOSAMENTE (orb passa a thinking poi
+        // torna idle senza audio, senza errori). Visto in produzione molte
+        // volte; il fallback a prepare-first non basta perché ok=true viene
+        // restituito anche quando l'audio non è davvero partito.
+        //
+        // Soluzione: bypassiamo del tutto il fast path. Usiamo SOLO il flusso
+        // /converse + /tts/prepare + /tts/audio/{token}.mp3 (static file con
+        // header completi), che è 100% affidabile. La latenza extra è ~2-3s
+        // (Claude + ElevenLabs genera l'intero MP3 prima di rispondere), ma
+        // l'utente preferisce 100 volte avere la risposta che lo streaming
+        // muto.
+        //
+        // Se in futuro vorremo riattivare lo streaming, dobbiamo prima
+        // verificare che il backend serva /converse-stream-audio con header
+        // Content-Length/Accept-Ranges corretti.
+        const useFastPath = false;
+        // const useFastPath = !confessionalMode && (profile?.settings.voice_response !== false);
         if (useFastPath) {
           try {
             const reqId = Math.random().toString(36).slice(2, 18);
