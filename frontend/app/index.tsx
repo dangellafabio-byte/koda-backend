@@ -1240,10 +1240,39 @@ export default function Taccuino() {
               setProfile(p);
             } catch {}
             setStatus("idle");
-            // Se il playback è fallito, mostriamo errore (l'audio NON c'è stato).
+            // Se il playback streaming è fallito, NON limitiamoci a mostrare
+            // un errore: facciamo FALLBACK alla TTS prepare-first usando il
+            // testo già generato da Claude (che è nella timeline appena
+            // rinfrescata). Questo bypassa il problema di AVPlayer iOS che
+            // rifiuta MP3 chunked-transfer senza header Content-Length e
+            // Accept-Ranges. La latenza extra è ~1-2s (rigenerazione TTS),
+            // ma l'utente sente la risposta invece di vedere l'orb tornare
+            // muto. Sintomo descritto dall'utente 2026-05-24: "tocco, parlo,
+            // l'orb diventa ciclamino per meno di un secondo poi torna
+            // champagne senza messaggi". Causa: ok=false → setError briefly
+            // → idle. Ora invece riproduce davvero la risposta.
             if (!ok) {
-              setError("La voce non è partita — l'audio non è arrivato.");
-              setTimeout(() => setError(null), 3000);
+              try {
+                const tl2 = await api.getTimeline(50);
+                const lastAi = [...tl2].reverse().find((e) => e.role === "ai");
+                if (lastAi?.text) {
+                  setStatus("speaking");
+                  try {
+                    await SpeechMod.speak(lastAi.voice_text || lastAi.text, {
+                      language: profile?.language === "it" ? "it-IT" : "it-IT",
+                      tone: (lastAi.tone as any) || "warm",
+                    });
+                  } catch {}
+                  setStatus("idle");
+                } else {
+                  // Anche il fallback non ha materiale: avvisa l'utente.
+                  setError("La voce non è partita — riprova a parlare.");
+                  setTimeout(() => setError(null), 3000);
+                }
+              } catch {
+                setError("La voce non è partita — riprova a parlare.");
+                setTimeout(() => setError(null), 3000);
+              }
             }
             return;
           } catch (e: any) {
