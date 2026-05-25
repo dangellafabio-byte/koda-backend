@@ -279,7 +279,20 @@ async function prepareTTSUrl(
 }
 
 async function playElevenLabsNativeFromUrl(audioUrl: string, onAudioStart?: () => void): Promise<boolean> {
-  // 1. Switch the audio session into PLAYBACK mode (recording=false).
+  // === FIX 2026-05-25 (mirato SOLO al playback) ===
+  // Su iOS, dopo che il microfono ha registrato (categoria PlayAndRecord),
+  // il semplice setAudioModeAsync({allowsRecording:false}) NON forza
+  // sempre la transizione a Playback puro. iOS mantiene la categoria
+  // PlayAndRecord che instrada l'audio attraverso l'earpiece (volume
+  // bassissimo, sembra "muto"). Per forzare iOS ad applicare la nuova
+  // categoria serve un ciclo deactivate → configure → reactivate.
+  //
+  // Lo applichiamo SOLO qui (playback path), NON nel recording
+  // (voice.ts), perché lì rompe l'attivazione del microfono. Il fix
+  // simmetrico recording-side è stato rollbackato il 2026-05-24.
+  try {
+    await setIsAudioActiveAsync(false);
+  } catch {}
   try {
     await setAudioModeAsync({
       allowsRecording: false,
@@ -291,6 +304,9 @@ async function playElevenLabsNativeFromUrl(audioUrl: string, onAudioStart?: () =
   } catch (e) {
     console.warn("[speech] setAudioModeAsync(playback) failed", e);
   }
+  try {
+    await setIsAudioActiveAsync(true);
+  } catch {}
 
   return await new Promise<boolean>((resolve) => {
     let done = false;
