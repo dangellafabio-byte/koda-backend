@@ -2318,6 +2318,8 @@ export default function Taccuino() {
         <LiquidInversionBg
           tone={lastAiTone}
           status={status}
+          meterDb={meterDb}
+          meterThreshold={meterThreshold}
           centerX={0.5}
           centerY={0.42}
         />
