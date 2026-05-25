@@ -2333,7 +2333,7 @@ export default function Taccuino() {
           <Ionicons
             name={handsFree ? "pulse" : "pulse-outline"}
             size={22}
-            color={handsFree ? "#34D399" : "rgba(255,255,255,0.55)"}
+            color={handsFree ? "#34D399" : (theme.isDark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.55)")}
           />
         </TouchableOpacity>
         <View style={styles.headerCenter} pointerEvents="box-none">
@@ -2379,12 +2379,13 @@ export default function Taccuino() {
                   ? hasSeal
                     ? "#34D399"
                     : "#FCA5A5"
-                  : "#FFFFFFCC"
+                  : (theme.isDark ? "#FFFFFFCC" : "rgba(0,0,0,0.8)")
               }
             />
             <Text
               style={[
                 styles.confessionalToggleText,
+                !theme.isDark && !confessionalMode && { color: "rgba(0,0,0,0.85)" },
                 confessionalMode && {
                   color: hasSeal ? "#34D399" : "#FCA5A5",
                 },
@@ -2411,7 +2412,7 @@ export default function Taccuino() {
           hitSlop={20}
           testID="open-settings"
         >
-          <Ionicons name="ellipsis-horizontal" size={20} color="rgba(255,255,255,0.55)" />
+          <Ionicons name="ellipsis-horizontal" size={20} color={theme.isDark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.65)"} />
         </TouchableOpacity>
       </View>
 

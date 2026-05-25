@@ -59,8 +59,12 @@ const NOTTE: Palette = {
   label: "Notte",
   emoji: "🌙",
   isDark: true,
-  bg: "#0B0F1A",
-  surface: "#101622",
+  // === FIX 2026-06 (richiesta utente) ===
+  // Notte = indaco notturno neon profondo. Sostituisce il vecchio
+  // #0B0F1A (quasi nero) con una tinta "cyber-neon night" più calda
+  // e visivamente connotata, in famiglia con i palette neon dell'orb.
+  bg: "#1F1A36",
+  surface: "#2A2347",
   surfaceAlt: "rgba(255,255,255,0.06)",
   border: "rgba(255,255,255,0.08)",
   divider: "rgba(255,255,255,0.07)",
@@ -99,13 +103,13 @@ const GIORNO: Palette = {
   name: "giorno",
   label: "Giorno",
   emoji: "☀️",
-  // === FIX 2026-06 (richiesta utente: "avorio perlato, scritte nere") ===
-  // Tema "Giorno" finalmente CHIARO: sfondo avorio-perla, testo nero.
-  // L'opposto del Notte. iOS rileva isDark=false → status bar nera
-  // (orario/5G/batteria) leggibile sull'avorio.
+  // === FIX 2026-06 (richiesta utente: "avorio più tenue, meno acceso") ===
+  // Avorio polveroso e desaturato (#E8E2D0). Più caldo e morbido del
+  // bianco perlato precedente — l'occhio non si "abbaglia". Testo nero
+  // resta perfettamente leggibile.
   isDark: false,
-  bg: "#F5EFE2",
-  surface: "#FFFFFF",
+  bg: "#E8E2D0",
+  surface: "#F2EDDE",
   surfaceAlt: "rgba(0,0,0,0.05)",
   border: "rgba(0,0,0,0.14)",
   divider: "rgba(0,0,0,0.10)",
@@ -118,7 +122,7 @@ const GIORNO: Palette = {
   primarySoftBorder: "rgba(14,124,123,0.5)",
   userBubble: "#0E7C7B",
   userBubbleText: "#FFFFFF",
-  aiBubbleBg: "#FFFFFF",
+  aiBubbleBg: "#F2EDDE",
   aiBubbleBorder: "rgba(0,0,0,0.10)",
   aiBubbleText: "#1A1A1A",
   success: "#16A34A",
