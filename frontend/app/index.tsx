@@ -2417,57 +2417,76 @@ export default function Taccuino() {
         {/* === PAGE 0: VOICE ZEN MODE ============================ */}
         <View style={{ width: windowWidth, flex: 1, alignItems: "center", justifyContent: "center" }}>
           <View style={{ alignItems: "center", justifyContent: "center", flex: 1, gap: 18, paddingHorizontal: 24 }}>
-            <Pressable
-              onPress={onBigButton}
-              disabled={status === "transcribing" || status === "thinking"}
-              hitSlop={30}
-              style={({ pressed }) => [
-                { alignItems: "center", justifyContent: "center" },
-                pressed && { opacity: 0.85 },
-              ]}
-              testID="big-btn-voice"
-            >
-              <Animated.View
-                style={{
-                  transform: [
-                    {
-                      scale: Animated.multiply(
-                        pulse,
-                        breathe.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.07] })
-                      ),
-                    },
-                  ],
-                }}
-              >
-                <EclipseOrb
-                  status={status}
-                  // === IDLE = SEMPRE NEUTRAL (verde menta) ===
-                  // Prima rimaneva ciclamino/urgente quando Koda era idle
-                  // dopo aver dato una risposta "urgent" → l'utente credeva
-                  // che fosse bloccata in thinking. Ora a riposo è SEMPRE
-                  // verde menta = "pronta, ti ascolto".
-                  tone={
-                    status === "speaking" ? "warm" :
-                    status === "idle" ? null :
-                    lastAiTone
-                  }
-                  size={Math.min(windowWidth * 0.78, 360)}
-                  meterDb={meterDb}
-                  meterThreshold={meterThreshold}
-                />
-              </Animated.View>
-              {(status === "transcribing" || status === "thinking") && (
-                <View style={styles.blobOverlay} pointerEvents="none">
-                  <ActivityIndicator color="#FFFFFFEE" size="large" />
-                </View>
-              )}
-            </Pressable>
-            <Text style={[styles.statusLabel, styles.statusLabelOnBg, { fontSize: 16, marginTop: 8 }]}>
-              {aiPaused ? "AI in pausa" : ""}
-            </Text>
+            {/* === ECLISSI NASCOSTA IN TEXT MODE (richiesta utente 2026-06) ===
+                In modalità scrittura (inputMode === "text") l'utente NON
+                vuole più vedere l'eclissi/orb da nessuna parte: né nella
+                bottom-bar (già rimosso), né in questa Page 0 grande.
+                In text-mode mostriamo solo un saluto minimale; per scrivere
+                l'utente swipa alla Page 1 (reading). */}
+            {inputMode !== "text" ? (
+              <>
+                <Pressable
+                  onPress={onBigButton}
+                  disabled={status === "transcribing" || status === "thinking"}
+                  hitSlop={30}
+                  style={({ pressed }) => [
+                    { alignItems: "center", justifyContent: "center" },
+                    pressed && { opacity: 0.85 },
+                  ]}
+                  testID="big-btn-voice"
+                >
+                  <Animated.View
+                    style={{
+                      transform: [
+                        {
+                          scale: Animated.multiply(
+                            pulse,
+                            breathe.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.07] })
+                          ),
+                        },
+                      ],
+                    }}
+                  >
+                    <EclipseOrb
+                      status={status}
+                      // === IDLE = SEMPRE NEUTRAL (verde menta) ===
+                      // Prima rimaneva ciclamino/urgente quando Koda era idle
+                      // dopo aver dato una risposta "urgent" → l'utente credeva
+                      // che fosse bloccata in thinking. Ora a riposo è SEMPRE
+                      // verde menta = "pronta, ti ascolto".
+                      tone={
+                        status === "speaking" ? "warm" :
+                        status === "idle" ? null :
+                        lastAiTone
+                      }
+                      size={Math.min(windowWidth * 0.78, 360)}
+                      meterDb={meterDb}
+                      meterThreshold={meterThreshold}
+                    />
+                  </Animated.View>
+                  {(status === "transcribing" || status === "thinking") && (
+                    <View style={styles.blobOverlay} pointerEvents="none">
+                      <ActivityIndicator color="#FFFFFFEE" size="large" />
+                    </View>
+                  )}
+                </Pressable>
+                <Text style={[styles.statusLabel, styles.statusLabelOnBg, { fontSize: 16, marginTop: 8 }]}>
+                  {aiPaused ? "AI in pausa" : ""}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={{ color: "#FFFFFF", fontSize: 22, fontWeight: "300", textAlign: "center", letterSpacing: 0.5 }}>
+                  {profile?.name ? `Ehi ${profile.name}.` : "Sono qui."}
+                </Text>
+                <Text style={{ color: "rgba(255,255,255,0.55)", fontSize: 14, textAlign: "center", marginTop: 4 }}>
+                  Scorri a sinistra per scrivermi.
+                </Text>
+              </>
+            )}
             {/* Hint swipe — solo se ci sono messaggi (altrimenti non ha senso
                 far promettere "scorri per leggere" se non c'è nulla da leggere) */}
-            {timeline.length > 0 ? (
+            {timeline.length > 0 && inputMode !== "text" ? (
               <View style={{ flexDirection: "row", alignItems: "center", gap: 6, opacity: 0.5, marginTop: 6 }}>
                 <Ionicons name="chevron-back" size={14} color="#FFFFFF" />
                 <Text style={{ color: "#FFFFFF", fontSize: 12 }}>scorri per leggere</Text>

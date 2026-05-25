@@ -100,27 +100,28 @@ const GIORNO: Palette = {
   label: "Giorno",
   emoji: "☀️",
   isDark: false,
-  // === FIX 2026-05-25 (richiesta utente: "lievemente più scuro") ===
-  // Prima il bg era #F8FAFC (quasi bianco puro). Ora #E2E8F0 (slate-200)
-  // — un grigio chiaro più morbido sugli occhi, ancora "giorno" ma con
-  // più contrasto per icone e bordi.
-  bg: "#E2E8F0",
-  surface: "#F1F5F9",
-  surfaceAlt: "#CBD5E1",
-  border: "#94A3B8",
-  divider: "#CBD5E1",
-  text: "#0F172A",
-  textMuted: "#475569",
+  // === FIX 2026-06 (richiesta utente: "ancora più scuro") ===
+  // L'app ha testo bianco hard-coded ovunque, quindi un "giorno" chiaro
+  // rende illeggibili i messaggi. Il tema Giorno è ora un dark-slate
+  // (#1F2937) — sempre distinguibile dal Notte (#0B0F1A) ma scuro
+  // abbastanza da garantire contrasto con il testo bianco.
+  bg: "#1F2937",
+  surface: "#27313F",
+  surfaceAlt: "rgba(255,255,255,0.06)",
+  border: "rgba(255,255,255,0.10)",
+  divider: "rgba(255,255,255,0.08)",
+  text: "#F8FAFC",
+  textMuted: "#CBD5E1",
   textDim: "#94A3B8",
-  primary: "#4F46E5",
+  primary: "#0E7C7B",
   primaryText: "#FFFFFF",
-  primarySoftBg: "#EEF2FF",
-  primarySoftBorder: "#C7D2FE",
-  userBubble: "#4F46E5",
+  primarySoftBg: "rgba(14,124,123,0.16)",
+  primarySoftBorder: "rgba(14,124,123,0.55)",
+  userBubble: "#0E7C7B",
   userBubbleText: "#FFFFFF",
-  aiBubbleBg: "#F1F5F9",
-  aiBubbleBorder: "#CBD5E1",
-  aiBubbleText: "#0F172A",
+  aiBubbleBg: "rgba(148,163,184,0.10)",
+  aiBubbleBorder: "rgba(148,163,184,0.35)",
+  aiBubbleText: "#F8FAFC",
   success: "#16A34A",
   warning: "#D97706",
   danger: "#DC2626",
