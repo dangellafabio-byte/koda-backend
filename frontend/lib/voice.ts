@@ -346,8 +346,15 @@ export async function startRecording(): Promise<Recorder> {
   let silenceCb: (() => void) | null = null;
   let meterCb: ((db: number, threshold?: number | null) => void) | null = null;
 
+  // === IMPORTANT: `stopped` deve essere dichiarata PRIMA del setInterval
+  // perché il guard sotto la controlla (insieme a vadStopped/vadPaused).
+  // Senza, una callback orfana già schedulata può eseguire dopo
+  // recorder.release() e bloccare il JS thread sul bridge nativo iOS.
+  // Vedi root cause analysis nel safeStop() più sotto. ===
+  let stopped = false;
+
   const vadInterval = setInterval(() => {
-    if (vadStopped || vadPaused) return;
+    if (vadStopped || vadPaused || stopped) return;
     try {
       const st = recorder.getStatus?.();
       if (!st || !st.isRecording) return;
@@ -401,13 +408,31 @@ export async function startRecording(): Promise<Recorder> {
     }
   }, METER_POLL_MS);
 
-  let stopped = false;
   let capturedUri: string | null = null;
   const safeStop = async () => {
     if (stopped) return;
     stopped = true;
     vadStopped = true;
     clearInterval(vadInterval);
+
+    // === FIX RACE CONDITION 2026-05-25 ===
+    // ROOT CAUSE: subito dopo clearInterval(), una callback già schedulata
+    // nell'event loop poteva ancora eseguire — chiamando getStatus() o
+    // metering() su un recorder che nel frattempo `recorder.release()`
+    // aveva invalidato. Il bridge nativo iOS si appendeva indefinitamente
+    // su questa chiamata orfana → JS thread bloccato → UI freezata
+    // (qualsiasi tap nei modal, toggle, scroll, smetteva di rispondere).
+    // L'iPhone "si ripristinava da solo" dopo 15-20 minuti perché iOS
+    // media services hanno un timeout interno di esattamente quella
+    // durata che libera il bridge appeso.
+    //
+    // FIX: aspettiamo 100ms PRIMA di toccare il recorder → l'event loop
+    // ha tempo di processare clearInterval e nessuna callback orfana
+    // partirà. Il flag `stopped` (controllato anche nell'interval guard
+    // sopra) è la cintura di sicurezza in caso la callback fosse già
+    // in-flight quando arriviamo qui.
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+
     try {
       await recorder.stop();
     } catch (e) {
