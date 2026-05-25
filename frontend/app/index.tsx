@@ -513,25 +513,23 @@ export default function Taccuino() {
       loop.stop();
     };
   }, [theme.name, auroraAnim]);
-  // Colori Aurora — sequenza di 8 momenti del CIELO VERO (richiesta utente
-  // 2026-06: "vivi, saturi, che assomiglino davvero al cielo").
-  // Versione precedente troppo polverosa/desaturata → ora colori pieni,
-  // come una giornata che scorre dall'alba alla notte stellata.
-  // Sequenza: Alba arancio → Mattino dorato → Cielo terso → Mezzogiorno blu
-  //   → Pomeriggio ambrato → Tramonto rosso → Crepuscolo rosa-viola →
-  //   Notte stellata blu profondo → loop ad Alba
+  // Colori Aurora — sequenza dei colori dell'AURORA BOREALE (richiesta
+  // utente 2026-06). Verde dominante (il colore signature dell'aurora
+  // reale, dovuto all'ossigeno), turchese, blu acqua, viola e magenta
+  // rari ma straordinari. Loop infinito che simula una vera danza
+  // dell'aurora nel cielo notturno.
+  // Sequenza: Verde lime → Verde menta → Turchese → Blu acqua →
+  //           Viola elettrico → Magenta → Verde lime (loop)
   const auroraBg = auroraAnim.interpolate({
-    inputRange: [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1],
+    inputRange: [0, 0.166, 0.333, 0.5, 0.666, 0.833, 1],
     outputRange: [
-      "#FF8C5A", // 1. Alba — arancio caldo del sole che spunta
-      "#FFB347", // 2. Mattino dorato — oro chiaro
-      "#5BBEEA", // 3. Cielo terso mattino — azzurro vivo
-      "#2196F3", // 4. Mezzogiorno — blu cielo pieno
-      "#FFA94D", // 5. Pomeriggio ambrato — ambra dorato
-      "#E74C3C", // 6. Tramonto rosso — arancio-rosso intenso
-      "#C56E91", // 7. Crepuscolo — rosa-viola
-      "#3949AB", // 8. Notte stellata — blu indaco profondo
-      "#FF8C5A", // ritorno → loop senza scalino
+      "#39FF14", // 1. Verde lime — aurora classica (ossigeno)
+      "#7CFC00", // 2. Verde menta — aurora pulsante
+      "#40E0D0", // 3. Turchese — aurora "alta atmosfera"
+      "#00B7EB", // 4. Blu acqua — bordi dei pennelli aurorali
+      "#9B30FF", // 5. Viola elettrico — aurora rara (azoto)
+      "#FF1493", // 6. Magenta rosa — aurora rosa (rarissima)
+      "#39FF14", // ritorno al verde → loop senza scalino
     ],
   });
   const breathe = useRef(new Animated.Value(0)).current;
@@ -2375,9 +2373,10 @@ export default function Taccuino() {
               left: 0,
               right: 0,
               bottom: 0,
-              // Velo minimale: i colori cielo sono colori reali (non fluo),
-              // basta un filo per dare profondità senza spegnerli.
-              backgroundColor: "rgba(0,0,0,0.15)",
+              // Velo notturno: l'aurora boreale danza nel cielo nero della
+              // notte polare. Velo al 45% per simulare quello scuro su cui
+              // i colori dell'aurora pulsano.
+              backgroundColor: "rgba(0,0,0,0.45)",
             }}
           />
         </>
