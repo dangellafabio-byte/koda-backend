@@ -2985,33 +2985,11 @@ export default function Taccuino() {
 
             <Text style={styles.settingsSubtitle}>Tema</Text>
             <View style={styles.themeRow}>
-              <TouchableOpacity
-                onPress={() => saveTheme("sistema")}
-                style={[
-                  styles.themeBtn,
-                  themeName === "sistema" && styles.themeBtnActive,
-                ]}
-                testID="theme-sistema"
-              >
-                <Ionicons
-                  name="phone-portrait-outline"
-                  size={14}
-                  color={theme.text}
-                />
-                <Text style={styles.themeBtnText}>Sistema</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => saveTheme("auto-orario")}
-                style={[
-                  styles.themeBtn,
-                  themeName === "auto-orario" && styles.themeBtnActive,
-                ]}
-                testID="theme-auto-orario"
-              >
-                <Ionicons name="time-outline" size={14} color={theme.text} />
-                <Text style={styles.themeBtnText}>Auto orario</Text>
-              </TouchableOpacity>
-              {THEME_LIST.map((p) => (
+              {/* === FILTRO TEMI (richiesta utente 2026-05-25) ===
+                  Solo Giorno e Notte. Tutti gli altri temi (Sistema, Auto
+                  orario, Cielo, Bosco, Ciliegia) sono stati nascosti
+                  dall'UI ma restano nel codice in caso vogliamo riattivarli. */}
+              {THEME_LIST.filter((p) => p.name === "giorno" || p.name === "notte").map((p) => (
                 <TouchableOpacity
                   key={p.name}
                   onPress={() => saveTheme(p.name as ThemeName)}
