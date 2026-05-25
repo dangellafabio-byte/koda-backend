@@ -2324,7 +2324,11 @@ export default function Taccuino() {
   }, [timeline, confessionalMode]);
 
   // Build the screen wrapper with optional background image / gradient
-  const isAurora = theme.name === "giorno";
+  // === Aurora DISABILITATA (richiesta utente 2026-06) ===
+  // Il tema "giorno" è ora STATICO color sabbia. Il layer Aurora animato
+  // resta nel codice ma non viene mai mostrato. Per riattivarlo, basta
+  // rimettere isAurora = theme.name === "giorno".
+  const isAurora = false;
   const isLiquid = theme.name === "liquid";
   const screenInner = (
     <View style={[styles.screen, { backgroundColor: bgValue ? "transparent" : (isAurora ? "#000" : (isLiquid ? "#F4F1EA" : theme.bg)) }]}>
