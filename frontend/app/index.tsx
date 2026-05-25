@@ -487,6 +487,36 @@ export default function Taccuino() {
     };
   }, []);
   const pulse = useRef(new Animated.Value(1)).current;
+  // === AURORA: ciclo neon infinito (richiesta utente 2026-06) ===
+  // Quando il tema è "giorno" (label "Aurora"), interpoliamo il
+  // backgroundColor attraverso 5 tinte neon notturne in un loop di
+  // 5 minuti per ciclo, completamente liscio (linear easing, no step).
+  // L'animazione gira sempre — non spreca CPU rilevabile (1 interpola-
+  // zione di colore per frame sul JS thread).
+  const auroraAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (theme.name !== "giorno") return;
+    auroraAnim.setValue(0);
+    const loop = Animated.loop(
+      Animated.timing(auroraAnim, {
+        toValue: 1,
+        duration: 300000, // 5 minuti per ciclo completo
+        easing: Easing.linear,
+        useNativeDriver: false, // color interpolation richiede JS
+      })
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+    };
+  }, [theme.name, auroraAnim]);
+  // Colori Aurora — 5 tinte neon notturne, profondamente sature ma
+  // scure abbastanza da non disturbare il testo bianco.
+  // Sequenza: Indaco → Bosco → Bordeaux → Abisso → Teal → Indaco (loop)
+  const auroraBg = auroraAnim.interpolate({
+    inputRange: [0, 0.2, 0.4, 0.6, 0.8, 1],
+    outputRange: ["#1F1A36", "#0F2419", "#2A0F1F", "#0A1929", "#0A2424", "#1F1A36"],
+  });
   const breathe = useRef(new Animated.Value(0)).current;
   // Live meter value (dB) shown as debug visualization during recording
   const [meterDb, setMeterDb] = useState<number | null>(null);
@@ -2262,8 +2292,27 @@ export default function Taccuino() {
   }, [timeline, confessionalMode]);
 
   // Build the screen wrapper with optional background image / gradient
+  const isAurora = theme.name === "giorno";
   const screenInner = (
-    <View style={[styles.screen, { backgroundColor: bgValue ? "transparent" : theme.bg }]}>
+    <View style={[styles.screen, { backgroundColor: bgValue ? "transparent" : (isAurora ? "#000" : theme.bg) }]}>
+      {/* === AURORA LAYER (richiesta utente 2026-06) ===
+          Quando il tema è "Aurora", uno strato Animated.View riempie
+          tutto lo schermo e cicla continuamente attraverso 5 tinte
+          neon notturne. È sotto a tutto il resto (zIndex 0) e
+          pointerEvents=none così non blocca i tap. */}
+      {isAurora && !bgValue && (
+        <Animated.View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: auroraBg,
+          }}
+        />
+      )}
       {/* Banner di conferma salvataggio — appare per ~4s dopo che KodaIntro
           si chiude, così l'utente capisce che le modifiche sono andate a
           buon fine. Posizionato in alto, sopra il flusso normale. */}

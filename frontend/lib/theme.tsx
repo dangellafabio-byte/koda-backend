@@ -101,30 +101,35 @@ const NOTTE: Palette = {
 
 const GIORNO: Palette = {
   name: "giorno",
-  label: "Giorno",
-  emoji: "☀️",
-  // === FIX 2026-06 (richiesta utente: "avorio più tenue, meno acceso") ===
-  // Avorio polveroso e desaturato (#E8E2D0). Più caldo e morbido del
-  // bianco perlato precedente — l'occhio non si "abbaglia". Testo nero
-  // resta perfettamente leggibile.
-  isDark: false,
-  bg: "#E8E2D0",
-  surface: "#F2EDDE",
-  surfaceAlt: "rgba(0,0,0,0.05)",
-  border: "rgba(0,0,0,0.14)",
-  divider: "rgba(0,0,0,0.10)",
-  text: "#1A1A1A",
-  textMuted: "#4B5563",
-  textDim: "#6B7280",
+  label: "Aurora",
+  emoji: "✨",
+  // === FIX 2026-06 (richiesta utente: "ciclo neon che cambia senza scalini") ===
+  // Questo NON è più un tema statico: è il tema "Aurora". Il name resta
+  // "giorno" solo per retrocompatibilità con i profili già salvati in
+  // DB; visivamente però, quando palette.name === "giorno", il root
+  // monta un overlay Animated.View che interpola il backgroundColor
+  // attraverso 5 tinte neon notturne in un loop di ~5 minuti, senza
+  // scalini. Vedi /app/frontend/app/index.tsx (cerca "auroraAnim").
+  // I valori sotto sono il fallback (bg iniziale e accenti UI), ma il
+  // colore di sfondo reale viene sovrascritto dinamicamente.
+  isDark: true,
+  bg: "#1F1A36",
+  surface: "#2A2347",
+  surfaceAlt: "rgba(255,255,255,0.10)",
+  border: "rgba(255,255,255,0.14)",
+  divider: "rgba(255,255,255,0.10)",
+  text: "#F8FAFC",
+  textMuted: "#CBD5E1",
+  textDim: "#A78BFA",
   primary: "#0E7C7B",
   primaryText: "#FFFFFF",
-  primarySoftBg: "rgba(14,124,123,0.10)",
-  primarySoftBorder: "rgba(14,124,123,0.5)",
+  primarySoftBg: "rgba(14,124,123,0.18)",
+  primarySoftBorder: "rgba(14,124,123,0.6)",
   userBubble: "#0E7C7B",
   userBubbleText: "#FFFFFF",
-  aiBubbleBg: "#F2EDDE",
-  aiBubbleBorder: "rgba(0,0,0,0.10)",
-  aiBubbleText: "#1A1A1A",
+  aiBubbleBg: "rgba(255,255,255,0.08)",
+  aiBubbleBorder: "rgba(255,255,255,0.18)",
+  aiBubbleText: "#F8FAFC",
   success: "#16A34A",
   warning: "#D97706",
   danger: "#DC2626",
