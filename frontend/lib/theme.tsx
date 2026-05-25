@@ -100,11 +100,15 @@ const GIORNO: Palette = {
   label: "Giorno",
   emoji: "☀️",
   isDark: false,
-  bg: "#F8FAFC",
-  surface: "#FFFFFF",
-  surfaceAlt: "#F1F5F9",
-  border: "#E2E8F0",
-  divider: "#E2E8F0",
+  // === FIX 2026-05-25 (richiesta utente: "lievemente più scuro") ===
+  // Prima il bg era #F8FAFC (quasi bianco puro). Ora #E2E8F0 (slate-200)
+  // — un grigio chiaro più morbido sugli occhi, ancora "giorno" ma con
+  // più contrasto per icone e bordi.
+  bg: "#E2E8F0",
+  surface: "#F1F5F9",
+  surfaceAlt: "#CBD5E1",
+  border: "#94A3B8",
+  divider: "#CBD5E1",
   text: "#0F172A",
   textMuted: "#475569",
   textDim: "#94A3B8",

@@ -2593,56 +2593,65 @@ export default function Taccuino() {
           </KeyboardAvoidingView>
         ) : (
           <View style={styles.bigBtnArea}>
-            <Text style={[styles.statusLabel, styles.statusLabelOnBg]}>
-              {aiPaused ? "AI in pausa" : ""}
-            </Text>
-            {/* La macchia È il pulsante. Tap su di lei → avvia/ferma ascolto.
-                Niente più cerchio verde gigante: la macchia stessa diventa
-                verde quando ti sta ascoltando. Il NeonBorder sui bordi dello
-                schermo dà il feedback periferico (vedi anche se non guardi). */}
-            <Pressable
-              onPress={onBigButton}
-              disabled={status === "transcribing" || status === "thinking"}
-              style={({ pressed }) => [
-                styles.blobTap,
-                pressed && { opacity: 0.85 },
-              ]}
-              testID="big-btn"
-              hitSlop={20}
-            >
-              <Animated.View
-                style={{
-                  transform: [
-                    {
-                      scale: Animated.multiply(
-                        pulse,
-                        breathe.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [0.95, 1.07],
-                        })
-                      ),
-                    },
-                  ],
-                }}
-              >
-                <EclipseOrb
-                  status={status}
-                  tone={
-                    status === "speaking" ? "warm" :
-                    status === "idle" ? null :
-                    lastAiTone
-                  }
-                  size={210}
-                  meterDb={meterDb}
-                  meterThreshold={meterThreshold}
-                />
-              </Animated.View>
-              {(status === "transcribing" || status === "thinking") && (
-                <View style={styles.blobOverlay} pointerEvents="none">
-                  <ActivityIndicator color="#FFFFFFEE" size="large" />
-                </View>
-              )}
-            </Pressable>
+            {/* === ORB NASCOSTO IN READING MODE (richiesta utente 2026-05-25) ===
+                In Page 0 (voice mode) la grande eclissi resta. In Page 1
+                (reading/writing) l'utente NON vuole più vedere l'eclissi
+                piccola: ha solo bisogno del TextInput per scrivere. La
+                separazione concettuale è: Page 0 = voce, Page 1 = scrittura. */}
+            {viewMode !== "reading" && (
+              <>
+                <Text style={[styles.statusLabel, styles.statusLabelOnBg]}>
+                  {aiPaused ? "AI in pausa" : ""}
+                </Text>
+                {/* La macchia È il pulsante. Tap su di lei → avvia/ferma ascolto.
+                    Niente più cerchio verde gigante: la macchia stessa diventa
+                    verde quando ti sta ascoltando. Il NeonBorder sui bordi dello
+                    schermo dà il feedback periferico (vedi anche se non guardi). */}
+                <Pressable
+                  onPress={onBigButton}
+                  disabled={status === "transcribing" || status === "thinking"}
+                  style={({ pressed }) => [
+                    styles.blobTap,
+                    pressed && { opacity: 0.85 },
+                  ]}
+                  testID="big-btn"
+                  hitSlop={20}
+                >
+                  <Animated.View
+                    style={{
+                      transform: [
+                        {
+                          scale: Animated.multiply(
+                            pulse,
+                            breathe.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [0.95, 1.07],
+                            })
+                          ),
+                        },
+                      ],
+                    }}
+                  >
+                    <EclipseOrb
+                      status={status}
+                      tone={
+                        status === "speaking" ? "warm" :
+                        status === "idle" ? null :
+                        lastAiTone
+                      }
+                      size={210}
+                      meterDb={meterDb}
+                      meterThreshold={meterThreshold}
+                    />
+                  </Animated.View>
+                  {(status === "transcribing" || status === "thinking") && (
+                    <View style={styles.blobOverlay} pointerEvents="none">
+                      <ActivityIndicator color="#FFFFFFEE" size="large" />
+                    </View>
+                  )}
+                </Pressable>
+              </>
+            )}
             {/* Barra di scrittura: appare SOLO in modalità lettura (Page 1).
                 Nella pagina principale (orb voce zen) l'esperienza resta
                 pulita — niente UI di scrittura, solo l'eclissi. Per scrivere
