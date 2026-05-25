@@ -45,6 +45,7 @@ import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
 import EclipseOrb from "../components/EclipseOrb";
+import LiquidInversionBg from "../components/LiquidInversionBg";
 import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
 import KodaSplash from "../components/KodaSplash";
 import KodaTour, { TourStep } from "../components/KodaTour";
@@ -2306,8 +2307,21 @@ export default function Taccuino() {
 
   // Build the screen wrapper with optional background image / gradient
   const isAurora = theme.name === "giorno";
+  const isLiquid = theme.name === "liquid";
   const screenInner = (
-    <View style={[styles.screen, { backgroundColor: bgValue ? "transparent" : (isAurora ? "#000" : theme.bg) }]}>
+    <View style={[styles.screen, { backgroundColor: bgValue ? "transparent" : (isAurora ? "#000" : (isLiquid ? "#F4F1EA" : theme.bg)) }]}>
+      {/* === LIQUID INVERSION LAYER (richiesta utente 2026-06) ===
+          Sfondo bianco-latte denso che si "deforma" attorno
+          all'eclissi e si lascia colorare dall'interno dal tone
+          dell'eclissi. Vedi components/LiquidInversionBg.tsx. */}
+      {isLiquid && !bgValue && (
+        <LiquidInversionBg
+          tone={lastAiTone}
+          status={status}
+          centerX={0.5}
+          centerY={0.42}
+        />
+      )}
       {/* === AURORA LAYER (richiesta utente 2026-06) ===
           Quando il tema è "Aurora", uno strato Animated.View riempie
           tutto lo schermo e cicla continuamente attraverso 6 tinte
@@ -3125,11 +3139,11 @@ export default function Taccuino() {
 
             <Text style={styles.settingsSubtitle}>Tema</Text>
             <View style={styles.themeRow}>
-              {/* === FILTRO TEMI (richiesta utente 2026-05-25) ===
-                  Solo Giorno e Notte. Tutti gli altri temi (Sistema, Auto
-                  orario, Cielo, Bosco, Ciliegia) sono stati nascosti
-                  dall'UI ma restano nel codice in caso vogliamo riattivarli. */}
-              {THEME_LIST.filter((p) => p.name === "giorno" || p.name === "notte").map((p) => (
+              {/* === FILTRO TEMI (richiesta utente 2026-05-25 + 2026-06) ===
+                  Solo Aurora (giorno), Liquid e Notte. Gli altri temi
+                  (Sistema, Auto orario, Cielo, Bosco, Ciliegia) sono
+                  nascosti dall'UI ma restano nel codice. */}
+              {THEME_LIST.filter((p) => p.name === "giorno" || p.name === "liquid" || p.name === "notte").map((p) => (
                 <TouchableOpacity
                   key={p.name}
                   onPress={() => saveTheme(p.name as ThemeName)}

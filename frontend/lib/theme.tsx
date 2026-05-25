@@ -5,7 +5,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { Appearance } from "react-native";
 
-export type ThemeName = "notte" | "giorno" | "cielo" | "bosco" | "ciliegia" | "sistema" | "auto-orario";
+export type ThemeName = "notte" | "giorno" | "liquid" | "cielo" | "bosco" | "ciliegia" | "sistema" | "auto-orario";
 
 export type Palette = {
   name: ThemeName;
@@ -248,15 +248,57 @@ const CILIEGIA: Palette = {
   },
 };
 
+// === LIQUID INVERSION (richiesta utente 2026-06) ===
+// "Liquido magnetico bianco". Lo sfondo non è statico: vedi il
+// componente <LiquidInversionBg> in /app/frontend/components/.
+// I valori qui sono fallback / accenti UI per i componenti che non
+// passano dal LiquidInversionBg (es. modali). bg bianco-latte, testo
+// nero. Status bar nera (isDark:false).
+const LIQUID: Palette = {
+  name: "liquid",
+  label: "Liquid",
+  emoji: "🥛",
+  isDark: false,
+  bg: "#F4F1EA",
+  surface: "#FFFFFF",
+  surfaceAlt: "rgba(0,0,0,0.05)",
+  border: "rgba(0,0,0,0.10)",
+  divider: "rgba(0,0,0,0.08)",
+  text: "#1A1A1A",
+  textMuted: "#4B5563",
+  textDim: "#6B7280",
+  primary: "#0E7C7B",
+  primaryText: "#FFFFFF",
+  primarySoftBg: "rgba(14,124,123,0.10)",
+  primarySoftBorder: "rgba(14,124,123,0.5)",
+  userBubble: "#0E7C7B",
+  userBubbleText: "#FFFFFF",
+  aiBubbleBg: "#FFFFFF",
+  aiBubbleBorder: "rgba(0,0,0,0.10)",
+  aiBubbleText: "#1A1A1A",
+  success: "#10B981",
+  warning: "#F59E0B",
+  danger: "#DC2626",
+  tone: {
+    neutral: { bg: "#F1F5F9", border: "#CBD5E1" },
+    calm: { bg: "#DBEAFE", border: "#93C5FD" },
+    warm: { bg: "#FEF3C7", border: "#FCD34D" },
+    energetic: { bg: "#DCFCE7", border: "#86EFAC" },
+    concerned: { bg: "#FFEDD5", border: "#FDBA74" },
+    urgent: { bg: "#FEE2E2", border: "#FCA5A5" },
+  },
+};
+
 export const THEMES: Record<Exclude<ThemeName, "sistema">, Palette> = {
   notte: NOTTE,
   giorno: GIORNO,
+  liquid: LIQUID,
   cielo: CIELO,
   bosco: BOSCO,
   ciliegia: CILIEGIA,
 };
 
-export const THEME_LIST: Palette[] = [GIORNO, NOTTE, CIELO, BOSCO, CILIEGIA];
+export const THEME_LIST: Palette[] = [GIORNO, LIQUID, NOTTE, CIELO, BOSCO, CILIEGIA];
 
 export function resolveTheme(name: ThemeName | undefined | null): Palette {
   if (!name || name === "sistema") {
