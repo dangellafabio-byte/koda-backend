@@ -80,7 +80,7 @@ let _nativeReady = false;
 //   - MIN_SPEECH_MS: 500 → 350ms (parte prima se inizi subito)
 const SPEECH_THRESHOLD_DB = -30;     // dBFS — voce a distanza ravvicinata o media
 const SILENCE_THRESHOLD_DB = -38;    // dBFS — silence below this (hysteresis 8 dB)
-const SILENCE_DURATION_MS = 1500;    // 1.5s silence after speech → end of utterance
+const SILENCE_DURATION_MS = 1000;    // 1s silence after speech → end of utterance
 const MIN_SPEECH_MS = 350;           // need at least 350ms of voice before silence can fire
 const MIN_SPEECH_FRAMES = 3;         // 3 consecutive frames (~210ms) above threshold → real speech
 const METER_POLL_MS = 70;            // ~14Hz sampling

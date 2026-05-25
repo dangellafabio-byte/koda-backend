@@ -20,6 +20,7 @@ import {
   Dimensions,
   Alert,
   AppState,
+  Switch,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -512,24 +513,26 @@ export default function Taccuino() {
       loop.stop();
     };
   }, [theme.name, auroraAnim]);
-  // Colori Aurora — sequenza di 6 tinte NEON SATURE (richiesta utente
-  // 2026-06: "rosa shocking, viola neon, celeste neon, pesca neon").
-  // Sono colori chiari e brillanti come insegne luminose; per mantenere
-  // leggibile il testo bianco usiamo un overlay scuro al 50% sopra il
-  // bg animato (vedi auroraOverlay nel render). L'occhio percepisce
-  // comunque la tinta neon vibrare "attraverso" il velo notturno.
-  // Sequenza: Rosa shocking → Viola fluo → Celeste neon → Verde menta →
-  //           Pesca neon → Magenta elettrico → loop
+  // Colori Aurora — sequenza di 7 tinte CIELO DIURNO (richiesta utente
+  // 2026-06: "imitano il cielo: sereno, nuvoloso, alba, tramonto, non
+  // troppo accesi, devono essere tenui ma cambiare bene da vedere").
+  // I colori non si sovrappongono con quelli dell'eclissi (rosa/viola/
+  // ciclamino/pesca/teal) per evitare confusione cromatica.
+  // Sequenza: Alba → Sereno mattina → Mezzogiorno → Nuvole → Pomeriggio →
+  //           Tramonto caldo → Crepuscolo → loop
+  // Il velo scuro (rgba(0,0,0,0.45)) sopra attenua tutto: queste tinte
+  // appaiono ammorbidite, perfette per uno sfondo che vibra senza pesare.
   const auroraBg = auroraAnim.interpolate({
-    inputRange: [0, 0.166, 0.333, 0.5, 0.666, 0.833, 1],
+    inputRange: [0, 0.143, 0.286, 0.428, 0.571, 0.714, 0.857, 1],
     outputRange: [
-      "#FF1493", // 1. Rosa shocking (deep pink)
-      "#8A2BE2", // 2. Viola elettrico (blue violet)
-      "#00BFFF", // 3. Celeste neon (deep sky blue)
-      "#00FA9A", // 4. Verde menta neon (medium spring green)
-      "#FF7F50", // 5. Pesca neon (coral)
-      "#FF00FF", // 6. Magenta elettrico (fuchsia)
-      "#FF1493", // ritorno → loop senza scalino
+      "#F4C8B0", // 1. Alba — pesca polvere
+      "#A8C5E8", // 2. Sereno mattina — azzurro tenue
+      "#7BB8E8", // 3. Mezzogiorno — azzurro cielo
+      "#B8C0CC", // 4. Nuvoloso — grigio-azzurro velato
+      "#8FB5D8", // 5. Pomeriggio — blu cielo dolce
+      "#E89B7A", // 6. Tramonto caldo — arancio polvere
+      "#C8A8C8", // 7. Crepuscolo — lavanda
+      "#F4C8B0", // ritorno → loop senza scalino
     ],
   });
   const breathe = useRef(new Animated.Value(0)).current;
@@ -2373,7 +2376,9 @@ export default function Taccuino() {
               left: 0,
               right: 0,
               bottom: 0,
-              backgroundColor: "rgba(0,0,0,0.55)",
+              // Velo leggero: i colori cielo sono già tenui, basta un
+              // filo di nero per garantire leggibilità del testo bianco.
+              backgroundColor: "rgba(0,0,0,0.30)",
             }}
           />
         </>
@@ -2598,36 +2603,22 @@ export default function Taccuino() {
                       ],
                     }}
                   >
-                    {avatar === "mirror" ? (
-                      <MirrorPool
-                        status={status}
-                        tone={
-                          status === "speaking" ? "warm" :
-                          status === "idle" ? null :
-                          lastAiTone
-                        }
-                        size={Math.min(windowWidth * 0.78, 360)}
-                        meterDb={meterDb}
-                        meterThreshold={meterThreshold}
-                      />
-                    ) : (
-                      <EclipseOrb
-                        status={status}
-                        // === IDLE = SEMPRE NEUTRAL (verde menta) ===
-                        // Prima rimaneva ciclamino/urgente quando Koda era idle
-                        // dopo aver dato una risposta "urgent" → l'utente credeva
-                        // che fosse bloccata in thinking. Ora a riposo è SEMPRE
-                        // verde menta = "pronta, ti ascolto".
-                        tone={
-                          status === "speaking" ? "warm" :
-                          status === "idle" ? null :
-                          lastAiTone
-                        }
-                        size={Math.min(windowWidth * 0.78, 360)}
-                        meterDb={meterDb}
-                        meterThreshold={meterThreshold}
-                      />
-                    )}
+                    <EclipseOrb
+                      status={status}
+                      // === IDLE = SEMPRE NEUTRAL (verde menta) ===
+                      // Prima rimaneva ciclamino/urgente quando Koda era idle
+                      // dopo aver dato una risposta "urgent" → l'utente credeva
+                      // che fosse bloccata in thinking. Ora a riposo è SEMPRE
+                      // verde menta = "pronta, ti ascolto".
+                      tone={
+                        status === "speaking" ? "warm" :
+                        status === "idle" ? null :
+                        lastAiTone
+                      }
+                      size={Math.min(windowWidth * 0.78, 360)}
+                      meterDb={meterDb}
+                      meterThreshold={meterThreshold}
+                    />
                 </Animated.View>
                 {(status === "transcribing" || status === "thinking") && (
                   <View style={styles.blobOverlay} pointerEvents="none">
@@ -3052,28 +3043,9 @@ export default function Taccuino() {
                   - Risposta vocale: gestita automaticamente dalla modalità
                     (voce → Koda parla; scrittura → Koda solo scrive). */}
 
-            {/* === VOCE DI KODA ============================================
-                Unico punto per scegliere la voce di Koda. */}
-            <TouchableOpacity
-              style={styles.settingRow}
-              onPress={() => {
-                setShowSettings(false);
-                setTimeout(() => setShowVoicePicker(true), 220);
-              }}
-              testID="open-voice-picker"
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>🎙️ Voce di Koda</Text>
-                <Text style={styles.settingHint}>
-                  {(() => {
-                    const id = profile?.settings?.tts_voice_id;
-                    const v = id ? voices.find((vv) => vv.voice_id === id) : null;
-                    return v ? `Attuale: ${v.name}` : "Tocca per scegliere una voce";
-                  })()}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
-            </TouchableOpacity>
+            {/* === VOCE DI KODA — RIMOSSA (richiesta utente 2026-06) ===
+                Il selettore voce è stato rimosso dall'UI. Resta la
+                voce di default impostata dal backend. */}
 
             {/* === Proactive Check-in opt-in ============================
                 Coda raggiunge l'utente di sua iniziativa la mattina e/o la
@@ -3171,40 +3143,12 @@ export default function Taccuino() {
 
             <View style={styles.divider} />
 
-            {/* === AVATAR: Eclissi vs Specchio d'acqua (richiesta utente 2026-06) ===
-                L'utente può scegliere visualmente quale "presenza" mostrare
-                al centro della Page 0. Default: eclipse (signature storica).
-                "Specchio d'acqua" = nuovo MirrorPool, pozza scura riflettente
-                che si illumina quando arriva voce. */}
-            <Text style={styles.settingsSubtitle}>Avatar</Text>
-            <View style={styles.themeRow}>
-              <TouchableOpacity
-                onPress={() => saveAvatar("eclipse")}
-                style={[styles.themeBtn, avatar === "eclipse" && styles.themeBtnActive]}
-                testID="avatar-eclipse"
-              >
-                <View style={[styles.themeSwatch, { backgroundColor: "#0E7C7B" }]} />
-                <Text style={styles.themeBtnText}>🌑 Eclissi</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => saveAvatar("mirror")}
-                style={[styles.themeBtn, avatar === "mirror" && styles.themeBtnActive]}
-                testID="avatar-mirror"
-              >
-                <View style={[styles.themeSwatch, { backgroundColor: "#0E1118" }]} />
-                <Text style={styles.themeBtnText}>🪞 Specchio d'acqua</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.divider} />
-
             <Text style={styles.settingsSubtitle}>Tema</Text>
             <View style={styles.themeRow}>
-              {/* === FILTRO TEMI (richiesta utente 2026-05-25 + 2026-06) ===
-                  Solo Aurora (giorno), Liquid e Notte. Gli altri temi
-                  (Sistema, Auto orario, Cielo, Bosco, Ciliegia) sono
-                  nascosti dall'UI ma restano nel codice. */}
-              {THEME_LIST.filter((p) => p.name === "giorno" || p.name === "liquid" || p.name === "notte").map((p) => (
+              {/* === FILTRO TEMI (richiesta utente 2026-06) ===
+                  Solo Aurora (giorno) e Notte. Liquid è stato rimosso
+                  perché non convinceva. Gli altri temi nascosti dall'UI. */}
+              {THEME_LIST.filter((p) => p.name === "giorno" || p.name === "notte").map((p) => (
                 <TouchableOpacity
                   key={p.name}
                   onPress={() => saveTheme(p.name as ThemeName)}
@@ -3596,47 +3540,40 @@ export default function Taccuino() {
 
             <View style={styles.divider} />
 
-            <Text style={styles.settingsSubtitle}>Cosa sa di te</Text>
-            <Text style={styles.settingsMemory}>
-              {profile?.memory_summary?.trim()
-                ? profile.memory_summary
-                : "Ancora niente. Mi conoscerai parlando."}
-            </Text>
-
-            <View style={styles.confidenceRow}>
-              <Text style={styles.confidenceLabel}>
-                Confidenza: {profile?.confidence_level ?? 0}%
-              </Text>
-              <View style={styles.confidenceBar}>
-                <View
-                  style={[
-                    styles.confidenceFill,
-                    { width: `${profile?.confidence_level ?? 0}%` },
-                  ]}
-                />
-              </View>
-            </View>
+            {/* === "Cosa sa di te" — NASCOSTO (richiesta utente 2026-06) ===
+                La sezione resta nel codice ma non è più visibile nel modal.
+                Per riattivarla, rimettere il blocco originale qui. */}
 
             <View style={styles.divider} />
 
-            <View style={styles.divider} />
-
+            {/* === NOTIFICHE: toggle on/off (richiesta utente 2026-06) ===
+                Aggiunto un interruttore semplice per abilitare/disabilitare
+                le notifiche da parte di Koda. Salvato in
+                profile.settings.notifications_enabled. Default: ON.
+                Il pulsante "Test notifica" è stato rimosso. */}
             <Text style={styles.settingsSubtitle}>Notifiche</Text>
-            <Text style={[styles.settingsMemory, { marginBottom: 10 }]}>
-              {Platform.OS === "web"
-                ? "ℹ️ Nell'anteprima web le notifiche funzionano solo finché la scheda è aperta. Sulla app installata sul telefono funzionano anche con il telefono bloccato."
-                : "Quando l'AI imposta un promemoria, lo riceverai come notifica del telefono — anche con lo schermo bloccato."}
-            </Text>
-            <TouchableOpacity
-              onPress={sendTestNotification}
-              style={styles.dangerBtn}
-              testID="test-notif-btn"
-            >
-              <Ionicons name="notifications-outline" size={16} color={theme.text} />
-              <Text style={[styles.dangerBtnText, { color: theme.text }]}>
-                Test notifica fra 10 sec
-              </Text>
-            </TouchableOpacity>
+            <View style={[styles.settingRow, { flexDirection: "row", alignItems: "center", justifyContent: "space-between" }]}>
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text style={styles.settingLabel}>🔔 Notifiche da Koda</Text>
+                <Text style={styles.settingHint}>
+                  Se le abiliti, Koda può inviarti notifiche locali (promemoria,
+                  check-in). Tutto sul tuo telefono, niente esce.
+                </Text>
+              </View>
+              <Switch
+                value={(profile?.settings as any)?.notifications_enabled !== false}
+                onValueChange={async (on) => {
+                  if (!profile) return;
+                  const nextSettings = { ...profile.settings, notifications_enabled: on } as any;
+                  setProfile({ ...profile, settings: nextSettings });
+                  try {
+                    await api.updateProfile({ settings: nextSettings });
+                  } catch {}
+                }}
+                trackColor={{ false: "rgba(255,255,255,0.18)", true: "#0E7C7B" }}
+                thumbColor="#FFFFFF"
+              />
+            </View>
 
             <View style={styles.divider} />
 
@@ -4517,6 +4454,19 @@ const makeStyles = (t: any) => StyleSheet.create({
     bottom: 0,
     paddingHorizontal: 20,
     backgroundColor: "transparent",
+  },
+  // === FIX 2026-06 (richiesta utente: "Come chiami l'amico nero, mettilo bianco") ===
+  // Lo stile styles.input non era definito → TextInput "Come chiami l'amico"
+  // usava il color default RN (nero) → illeggibile sul tema scuro. Aggiunto.
+  input: {
+    backgroundColor: t.surfaceAlt,
+    borderColor: t.border,
+    borderWidth: 1,
+    color: t.text,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    fontSize: 15,
   },
   errorText: { color: t.danger, fontSize: 12, textAlign: "center", marginTop: 8 },
   bigBtnArea: { alignItems: "center", paddingTop: 20, justifyContent: "center" },
