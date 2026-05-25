@@ -510,12 +510,25 @@ export default function Taccuino() {
       loop.stop();
     };
   }, [theme.name, auroraAnim]);
-  // Colori Aurora — 5 tinte neon notturne, profondamente sature ma
-  // scure abbastanza da non disturbare il testo bianco.
-  // Sequenza: Indaco → Bosco → Bordeaux → Abisso → Teal → Indaco (loop)
+  // Colori Aurora — sequenza di 6 tinte NEON SATURE (richiesta utente
+  // 2026-06: "rosa shocking, viola neon, celeste neon, pesca neon").
+  // Sono colori chiari e brillanti come insegne luminose; per mantenere
+  // leggibile il testo bianco usiamo un overlay scuro al 50% sopra il
+  // bg animato (vedi auroraOverlay nel render). L'occhio percepisce
+  // comunque la tinta neon vibrare "attraverso" il velo notturno.
+  // Sequenza: Rosa shocking → Viola fluo → Celeste neon → Verde menta →
+  //           Pesca neon → Magenta elettrico → loop
   const auroraBg = auroraAnim.interpolate({
-    inputRange: [0, 0.2, 0.4, 0.6, 0.8, 1],
-    outputRange: ["#1F1A36", "#0F2419", "#2A0F1F", "#0A1929", "#0A2424", "#1F1A36"],
+    inputRange: [0, 0.166, 0.333, 0.5, 0.666, 0.833, 1],
+    outputRange: [
+      "#FF1493", // 1. Rosa shocking (deep pink)
+      "#8A2BE2", // 2. Viola elettrico (blue violet)
+      "#00BFFF", // 3. Celeste neon (deep sky blue)
+      "#00FA9A", // 4. Verde menta neon (medium spring green)
+      "#FF7F50", // 5. Pesca neon (coral)
+      "#FF00FF", // 6. Magenta elettrico (fuchsia)
+      "#FF1493", // ritorno → loop senza scalino
+    ],
   });
   const breathe = useRef(new Animated.Value(0)).current;
   // Live meter value (dB) shown as debug visualization during recording
@@ -2297,21 +2310,39 @@ export default function Taccuino() {
     <View style={[styles.screen, { backgroundColor: bgValue ? "transparent" : (isAurora ? "#000" : theme.bg) }]}>
       {/* === AURORA LAYER (richiesta utente 2026-06) ===
           Quando il tema è "Aurora", uno strato Animated.View riempie
-          tutto lo schermo e cicla continuamente attraverso 5 tinte
-          neon notturne. È sotto a tutto il resto (zIndex 0) e
-          pointerEvents=none così non blocca i tap. */}
+          tutto lo schermo e cicla continuamente attraverso 6 tinte
+          neon vibranti (rosa shocking, viola fluo, celeste, verde
+          menta, pesca, magenta). È sotto a tutto il resto e
+          pointerEvents=none così non blocca i tap.
+          Sopra c'è un velo scuro semi-trasparente che attenua il
+          neon abbastanza da mantenere il testo bianco leggibile,
+          dando l'effetto "insegne luminose attraverso una notte
+          fumosa" — la tinta vibra ma non brucia la retina. */}
       {isAurora && !bgValue && (
-        <Animated.View
-          pointerEvents="none"
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: auroraBg,
-          }}
-        />
+        <>
+          <Animated.View
+            pointerEvents="none"
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: auroraBg,
+            }}
+          />
+          <View
+            pointerEvents="none"
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: "rgba(0,0,0,0.55)",
+            }}
+          />
+        </>
       )}
       {/* Banner di conferma salvataggio — appare per ~4s dopo che KodaIntro
           si chiude, così l'utente capisce che le modifiche sono andate a
