@@ -545,6 +545,35 @@ export default function Taccuino() {
     };
   }, []);
 
+  // === FORCE-ON dei comportamenti core (2026-05-25) ===
+  // Dopo aver rimosso i 3 toggle dall'UI (AI attiva / Risposta vocale /
+  // Modalità conversazione), forziamo questi 3 valori a TRUE al boot.
+  // Motivo: prima si "spegnevano" da soli (default backend false, oppure
+  // reset memoria li portava a false) → utente vedeva l'app sembrare
+  // rotta perché AI non rispondeva, Koda muta, hands-free off.
+  // Adesso sono SEMPRE TRUE: l'utente non può più sbagliare.
+  useEffect(() => {
+    if (!profile?.id) return;
+    const s = profile.settings || ({} as any);
+    const needs =
+      s.ai_enabled !== true ||
+      s.voice_response !== true ||
+      s.conversation_mode !== true;
+    if (!needs) return;
+    const next = {
+      ...profile,
+      settings: {
+        ...s,
+        ai_enabled: true,
+        voice_response: true,
+        conversation_mode: true,
+      },
+    };
+    setProfile(next);
+    api.updateProfile({ settings: next.settings } as any).catch(() => {});
+  }, [profile?.id]);
+
+
   // === KEEP SCREEN AWAKE durante conversazione attiva ===
   // Quando lo schermo iPhone si auto-spegne mentre Koda sta parlando o
   // mentre stiamo registrando, iOS interrompe l'audio session → la voce
@@ -2823,34 +2852,20 @@ export default function Taccuino() {
             <View style={styles.divider} />
             <Text style={styles.settingsSubtitle}>Comportamento</Text>
 
-            <View style={styles.settingRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>AI attiva</Text>
-                <Text style={styles.settingHint}>
-                  Quando spenta, registro solo i tuoi messaggi
-                </Text>
-              </View>
-              <Toggle on={!!profile?.settings.ai_enabled} onToggle={toggleAi} />
-            </View>
-
-            <View style={styles.settingRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>Risposta vocale</Text>
-                <Text style={styles.settingHint}>
-                  L'AI legge ad alta voce le sue risposte
-                </Text>
-              </View>
-              <Toggle
-                on={!!profile?.settings.voice_response}
-                onToggle={toggleVoice}
-              />
-            </View>
+            {/* === TOGGLE RIMOSSI (richiesta utente 2026-05-25) ===
+                Prima qui c'erano 3 toggle: "AI attiva", "Risposta vocale",
+                "Modalità conversazione". Erano fonte di errore: a volte si
+                spegnevano da soli (default backend false?) e l'utente non
+                capiva perché l'app sembrava "rotta".
+                Adesso questi 3 valori sono SEMPRE TRUE forzati al boot
+                (vedi useEffect "force-on" più sotto). I comportamenti:
+                  - AI sempre attiva (elabora ogni messaggio)
+                  - Hands-free sempre attivo (dopo Koda parla, mic riapre)
+                  - Risposta vocale: gestita automaticamente dalla modalità
+                    (voce → Koda parla; scrittura → Koda solo scrive). */}
 
             {/* === VOCE DI KODA ============================================
-                Aggiunto 2026-05-23: prima il VoicePicker era raggiungibile
-                SOLO via voice command ("apri voci"), che a volte falliva.
-                Ora è qui, sempre visibile, con la voce corrente in chiaro.
-                Mostra il nome della voce attuale lookup nella lista voices. */}
+                Unico punto per scegliere la voce di Koda. */}
             <TouchableOpacity
               style={styles.settingRow}
               onPress={() => {
@@ -2871,19 +2886,6 @@ export default function Taccuino() {
               </View>
               <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
             </TouchableOpacity>
-
-            <View style={styles.settingRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>Modalità conversazione</Text>
-                <Text style={styles.settingHint}>
-                  Hands-free: dopo che l'AI parla, riapre il microfono e si ferma da solo quando smetti.
-                </Text>
-              </View>
-              <Toggle
-                on={!!profile?.settings.conversation_mode}
-                onToggle={toggleConversation}
-              />
-            </View>
 
             {/* === Proactive Check-in opt-in ============================
                 Coda raggiunge l'utente di sua iniziativa la mattina e/o la
