@@ -45,6 +45,7 @@ import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
 import EclipseOrb from "../components/EclipseOrb";
+import MirrorPool from "../components/MirrorPool";
 import LiquidInversionBg from "../components/LiquidInversionBg";
 import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
 import KodaSplash from "../components/KodaSplash";
@@ -671,6 +672,23 @@ export default function Taccuino() {
     setProfile(next);
     try {
       await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+  };
+
+  // === AVATAR: Eclissi vs Specchio d'acqua (richiesta utente 2026-06) ===
+  // Persistito in profile.settings.avatar. Default: "eclipse" (la
+  // signature storica). "mirror" = nuovo specchio d'acqua scuro.
+  const avatar: "eclipse" | "mirror" =
+    (profile?.settings as any)?.avatar === "mirror" ? "mirror" : "eclipse";
+  const saveAvatar = async (next: "eclipse" | "mirror") => {
+    if (!profile) return;
+    const updated = {
+      ...profile,
+      settings: { ...profile.settings, avatar: next } as any,
+    };
+    setProfile(updated);
+    try {
+      await api.updateProfile({ settings: updated.settings } as any);
     } catch {}
   };
 
@@ -2580,29 +2598,43 @@ export default function Taccuino() {
                       ],
                     }}
                   >
-                    <EclipseOrb
-                      status={status}
-                      // === IDLE = SEMPRE NEUTRAL (verde menta) ===
-                      // Prima rimaneva ciclamino/urgente quando Koda era idle
-                      // dopo aver dato una risposta "urgent" → l'utente credeva
-                      // che fosse bloccata in thinking. Ora a riposo è SEMPRE
-                      // verde menta = "pronta, ti ascolto".
-                      tone={
-                        status === "speaking" ? "warm" :
-                        status === "idle" ? null :
-                        lastAiTone
-                      }
-                      size={Math.min(windowWidth * 0.78, 360)}
-                      meterDb={meterDb}
-                      meterThreshold={meterThreshold}
-                    />
-                  </Animated.View>
-                  {(status === "transcribing" || status === "thinking") && (
-                    <View style={styles.blobOverlay} pointerEvents="none">
-                      <ActivityIndicator color="#FFFFFFEE" size="large" />
-                    </View>
-                  )}
-                </Pressable>
+                    {avatar === "mirror" ? (
+                      <MirrorPool
+                        status={status}
+                        tone={
+                          status === "speaking" ? "warm" :
+                          status === "idle" ? null :
+                          lastAiTone
+                        }
+                        size={Math.min(windowWidth * 0.78, 360)}
+                        meterDb={meterDb}
+                        meterThreshold={meterThreshold}
+                      />
+                    ) : (
+                      <EclipseOrb
+                        status={status}
+                        // === IDLE = SEMPRE NEUTRAL (verde menta) ===
+                        // Prima rimaneva ciclamino/urgente quando Koda era idle
+                        // dopo aver dato una risposta "urgent" → l'utente credeva
+                        // che fosse bloccata in thinking. Ora a riposo è SEMPRE
+                        // verde menta = "pronta, ti ascolto".
+                        tone={
+                          status === "speaking" ? "warm" :
+                          status === "idle" ? null :
+                          lastAiTone
+                        }
+                        size={Math.min(windowWidth * 0.78, 360)}
+                        meterDb={meterDb}
+                        meterThreshold={meterThreshold}
+                      />
+                    )}
+                </Animated.View>
+                {(status === "transcribing" || status === "thinking") && (
+                  <View style={styles.blobOverlay} pointerEvents="none">
+                    <ActivityIndicator color="#FFFFFFEE" size="large" />
+                  </View>
+                )}
+              </Pressable>
                 <Text style={[styles.statusLabel, styles.statusLabelOnBg, { fontSize: 16, marginTop: 8 }]}>
                   {aiPaused ? "AI in pausa" : ""}
                 </Text>
@@ -3135,6 +3167,33 @@ export default function Taccuino() {
               <Text style={[styles.settingHint, { fontSize: 11, marginTop: 2, fontStyle: "italic" }]}>
                 Le notifiche sono locali — niente esce dal telefono se non al momento di generare la frase.
               </Text>
+            </View>
+
+            <View style={styles.divider} />
+
+            {/* === AVATAR: Eclissi vs Specchio d'acqua (richiesta utente 2026-06) ===
+                L'utente può scegliere visualmente quale "presenza" mostrare
+                al centro della Page 0. Default: eclipse (signature storica).
+                "Specchio d'acqua" = nuovo MirrorPool, pozza scura riflettente
+                che si illumina quando arriva voce. */}
+            <Text style={styles.settingsSubtitle}>Avatar</Text>
+            <View style={styles.themeRow}>
+              <TouchableOpacity
+                onPress={() => saveAvatar("eclipse")}
+                style={[styles.themeBtn, avatar === "eclipse" && styles.themeBtnActive]}
+                testID="avatar-eclipse"
+              >
+                <View style={[styles.themeSwatch, { backgroundColor: "#0E7C7B" }]} />
+                <Text style={styles.themeBtnText}>🌑 Eclissi</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => saveAvatar("mirror")}
+                style={[styles.themeBtn, avatar === "mirror" && styles.themeBtnActive]}
+                testID="avatar-mirror"
+              >
+                <View style={[styles.themeSwatch, { backgroundColor: "#0E1118" }]} />
+                <Text style={styles.themeBtnText}>🪞 Specchio d'acqua</Text>
+              </TouchableOpacity>
             </View>
 
             <View style={styles.divider} />
