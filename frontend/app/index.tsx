@@ -513,26 +513,25 @@ export default function Taccuino() {
       loop.stop();
     };
   }, [theme.name, auroraAnim]);
-  // Colori Aurora — sequenza di 7 tinte CIELO DIURNO (richiesta utente
-  // 2026-06: "imitano il cielo: sereno, nuvoloso, alba, tramonto, non
-  // troppo accesi, devono essere tenui ma cambiare bene da vedere").
-  // I colori non si sovrappongono con quelli dell'eclissi (rosa/viola/
-  // ciclamino/pesca/teal) per evitare confusione cromatica.
-  // Sequenza: Alba → Sereno mattina → Mezzogiorno → Nuvole → Pomeriggio →
-  //           Tramonto caldo → Crepuscolo → loop
-  // Il velo scuro (rgba(0,0,0,0.45)) sopra attenua tutto: queste tinte
-  // appaiono ammorbidite, perfette per uno sfondo che vibra senza pesare.
+  // Colori Aurora — sequenza di 8 momenti del CIELO VERO (richiesta utente
+  // 2026-06: "vivi, saturi, che assomiglino davvero al cielo").
+  // Versione precedente troppo polverosa/desaturata → ora colori pieni,
+  // come una giornata che scorre dall'alba alla notte stellata.
+  // Sequenza: Alba arancio → Mattino dorato → Cielo terso → Mezzogiorno blu
+  //   → Pomeriggio ambrato → Tramonto rosso → Crepuscolo rosa-viola →
+  //   Notte stellata blu profondo → loop ad Alba
   const auroraBg = auroraAnim.interpolate({
-    inputRange: [0, 0.143, 0.286, 0.428, 0.571, 0.714, 0.857, 1],
+    inputRange: [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1],
     outputRange: [
-      "#F4C8B0", // 1. Alba — pesca polvere
-      "#A8C5E8", // 2. Sereno mattina — azzurro tenue
-      "#7BB8E8", // 3. Mezzogiorno — azzurro cielo
-      "#B8C0CC", // 4. Nuvoloso — grigio-azzurro velato
-      "#8FB5D8", // 5. Pomeriggio — blu cielo dolce
-      "#E89B7A", // 6. Tramonto caldo — arancio polvere
-      "#C8A8C8", // 7. Crepuscolo — lavanda
-      "#F4C8B0", // ritorno → loop senza scalino
+      "#FF8C5A", // 1. Alba — arancio caldo del sole che spunta
+      "#FFB347", // 2. Mattino dorato — oro chiaro
+      "#5BBEEA", // 3. Cielo terso mattino — azzurro vivo
+      "#2196F3", // 4. Mezzogiorno — blu cielo pieno
+      "#FFA94D", // 5. Pomeriggio ambrato — ambra dorato
+      "#E74C3C", // 6. Tramonto rosso — arancio-rosso intenso
+      "#C56E91", // 7. Crepuscolo — rosa-viola
+      "#3949AB", // 8. Notte stellata — blu indaco profondo
+      "#FF8C5A", // ritorno → loop senza scalino
     ],
   });
   const breathe = useRef(new Animated.Value(0)).current;
@@ -2376,9 +2375,9 @@ export default function Taccuino() {
               left: 0,
               right: 0,
               bottom: 0,
-              // Velo leggero: i colori cielo sono già tenui, basta un
-              // filo di nero per garantire leggibilità del testo bianco.
-              backgroundColor: "rgba(0,0,0,0.30)",
+              // Velo minimale: i colori cielo sono colori reali (non fluo),
+              // basta un filo per dare profondità senza spegnerli.
+              backgroundColor: "rgba(0,0,0,0.15)",
             }}
           />
         </>
