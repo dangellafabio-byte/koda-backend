@@ -99,31 +99,28 @@ const GIORNO: Palette = {
   name: "giorno",
   label: "Giorno",
   emoji: "☀️",
-  // === FIX 2026-06 (richiesta utente: "via di mezzo, status bar leggibile") ===
-  // Un grigio-blu medio (#3A4555 ≈ slate-700). Abbastanza scuro perché:
-  //  - tutto il testo bianco hard-coded dell'app rimane leggibile
-  //  - iOS, vedendo isDark=true, mantiene gli indicatori di sistema (ora,
-  //    5G, batteria) in BIANCO invece di farli neri/illeggibili
-  // ma più chiaro del Notte (#0B0F1A) → l'utente riconosce visivamente
-  // che è un tema "diurno" / più morbido.
-  isDark: true,
-  bg: "#3A4555",
-  surface: "#46525F",
-  surfaceAlt: "rgba(255,255,255,0.10)",
-  border: "rgba(255,255,255,0.14)",
-  divider: "rgba(255,255,255,0.10)",
-  text: "#F8FAFC",
-  textMuted: "#CBD5E1",
-  textDim: "#94A3B8",
+  // === FIX 2026-06 (richiesta utente: "avorio perlato, scritte nere") ===
+  // Tema "Giorno" finalmente CHIARO: sfondo avorio-perla, testo nero.
+  // L'opposto del Notte. iOS rileva isDark=false → status bar nera
+  // (orario/5G/batteria) leggibile sull'avorio.
+  isDark: false,
+  bg: "#F5EFE2",
+  surface: "#FFFFFF",
+  surfaceAlt: "rgba(0,0,0,0.05)",
+  border: "rgba(0,0,0,0.14)",
+  divider: "rgba(0,0,0,0.10)",
+  text: "#1A1A1A",
+  textMuted: "#4B5563",
+  textDim: "#6B7280",
   primary: "#0E7C7B",
   primaryText: "#FFFFFF",
-  primarySoftBg: "rgba(14,124,123,0.18)",
-  primarySoftBorder: "rgba(14,124,123,0.6)",
+  primarySoftBg: "rgba(14,124,123,0.10)",
+  primarySoftBorder: "rgba(14,124,123,0.5)",
   userBubble: "#0E7C7B",
   userBubbleText: "#FFFFFF",
-  aiBubbleBg: "rgba(148,163,184,0.12)",
-  aiBubbleBorder: "rgba(148,163,184,0.40)",
-  aiBubbleText: "#F8FAFC",
+  aiBubbleBg: "#FFFFFF",
+  aiBubbleBorder: "rgba(0,0,0,0.10)",
+  aiBubbleText: "#1A1A1A",
   success: "#16A34A",
   warning: "#D97706",
   danger: "#DC2626",

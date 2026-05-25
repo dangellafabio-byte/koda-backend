@@ -2512,10 +2512,10 @@ export default function Taccuino() {
               </>
             ) : (
               <>
-                <Text style={{ color: "#FFFFFF", fontSize: 22, fontWeight: "300", textAlign: "center", letterSpacing: 0.5 }}>
+                <Text style={{ color: theme.text, fontSize: 22, fontWeight: "300", textAlign: "center", letterSpacing: 0.5 }}>
                   {profile?.name ? `Ehi ${profile.name}.` : "Sono qui."}
                 </Text>
-                <Text style={{ color: "rgba(255,255,255,0.55)", fontSize: 14, textAlign: "center", marginTop: 4 }}>
+                <Text style={{ color: theme.textMuted, fontSize: 14, textAlign: "center", marginTop: 4 }}>
                   Scorri a sinistra per scrivermi.
                 </Text>
               </>
@@ -2523,9 +2523,9 @@ export default function Taccuino() {
             {/* Hint swipe — solo se ci sono messaggi (altrimenti non ha senso
                 far promettere "scorri per leggere" se non c'è nulla da leggere) */}
             {timeline.length > 0 && inputMode !== "text" ? (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, opacity: 0.5, marginTop: 6 }}>
-                <Ionicons name="chevron-back" size={14} color="#FFFFFF" />
-                <Text style={{ color: "#FFFFFF", fontSize: 12 }}>scorri per leggere</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, opacity: 0.55, marginTop: 6 }}>
+                <Ionicons name="chevron-back" size={14} color={theme.text} />
+                <Text style={{ color: theme.text, fontSize: 12 }}>scorri per leggere</Text>
               </View>
             ) : null}
           </View>
@@ -2632,12 +2632,33 @@ export default function Taccuino() {
             <View style={styles.textRow}>
               <TextInput
                 value={textInput}
-                onChangeText={setTextInput}
+                onChangeText={(t) => {
+                  // === FIX INVIO RAPIDO (richiesta utente 2026-06) ===
+                  // Su iOS, multiline + onSubmitEditing NON scatta col
+                  // tasto invio: il return semplicemente inserisce \n e
+                  // chiude la tastiera. Intercettiamo manualmente il
+                  // newline: appena l'utente preme invio, mandiamo il
+                  // messaggio in un solo tap senza inserire la riga.
+                  if (t.endsWith("\n")) {
+                    const clean = t.replace(/\n+$/, "");
+                    if (clean.trim()) {
+                      setTextInput(clean);
+                      // Usa setTimeout per garantire che lo state sia
+                      // aggiornato prima dell'invio.
+                      setTimeout(() => sendTextFromBox(), 0);
+                    } else {
+                      setTextInput(clean);
+                    }
+                    return;
+                  }
+                  setTextInput(t);
+                }}
                 placeholder="Scrivi qui..."
                 placeholderTextColor="rgba(255,255,255,0.5)"
                 style={styles.textInput}
                 onSubmitEditing={sendTextFromBox}
                 returnKeyType="send"
+                blurOnSubmit={false}
                 multiline
                 testID="text-input"
               />
@@ -2653,65 +2674,20 @@ export default function Taccuino() {
           </KeyboardAvoidingView>
         ) : (
           <View style={styles.bigBtnArea}>
-            {/* === ORB NASCOSTO IN READING MODE (richiesta utente 2026-05-25) ===
-                In Page 0 (voice mode) la grande eclissi resta. In Page 1
-                (reading/writing) l'utente NON vuole più vedere l'eclissi
-                piccola: ha solo bisogno del TextInput per scrivere. La
-                separazione concettuale è: Page 0 = voce, Page 1 = scrittura. */}
-            {viewMode !== "reading" && (
-              <>
-                <Text style={[styles.statusLabel, styles.statusLabelOnBg]}>
-                  {aiPaused ? "AI in pausa" : ""}
-                </Text>
-                {/* La macchia È il pulsante. Tap su di lei → avvia/ferma ascolto.
-                    Niente più cerchio verde gigante: la macchia stessa diventa
-                    verde quando ti sta ascoltando. Il NeonBorder sui bordi dello
-                    schermo dà il feedback periferico (vedi anche se non guardi). */}
-                <Pressable
-                  onPress={onBigButton}
-                  disabled={status === "transcribing" || status === "thinking"}
-                  style={({ pressed }) => [
-                    styles.blobTap,
-                    pressed && { opacity: 0.85 },
-                  ]}
-                  testID="big-btn"
-                  hitSlop={20}
-                >
-                  <Animated.View
-                    style={{
-                      transform: [
-                        {
-                          scale: Animated.multiply(
-                            pulse,
-                            breathe.interpolate({
-                              inputRange: [0, 1],
-                              outputRange: [0.95, 1.07],
-                            })
-                          ),
-                        },
-                      ],
-                    }}
-                  >
-                    <EclipseOrb
-                      status={status}
-                      tone={
-                        status === "speaking" ? "warm" :
-                        status === "idle" ? null :
-                        lastAiTone
-                      }
-                      size={210}
-                      meterDb={meterDb}
-                      meterThreshold={meterThreshold}
-                    />
-                  </Animated.View>
-                  {(status === "transcribing" || status === "thinking") && (
-                    <View style={styles.blobOverlay} pointerEvents="none">
-                      <ActivityIndicator color="#FFFFFFEE" size="large" />
-                    </View>
-                  )}
-                </Pressable>
-              </>
-            )}
+            {/* === ORB PICCOLO RIMOSSO COMPLETAMENTE (richiesta utente 2026-06) ===
+                Prima qui c'era un secondo EclipseOrb (size 210) che agiva
+                da tap-to-talk. Ma:
+                - In Page 0 (voice zen) c'è già la grande eclissi → l'orb
+                  piccolo era ridondante (due eclissi sovrapposte).
+                - Durante lo swipe Page 0→Page 1 questo piccolo orb
+                  appariva per una frazione di secondo prima di sparire,
+                  creando un flash visivo sgradevole.
+                Soluzione definitiva: lo eliminiamo. L'utente parla dalla
+                Page 0 (orb grande = pulsante), legge/scrive dalla Page 1
+                (timeline + textRow). Nessun flash possibile. */}
+            {viewMode !== "reading" && aiPaused ? (
+              <Text style={[styles.statusLabel, styles.statusLabelOnBg]}>AI in pausa</Text>
+            ) : null}
             {/* Barra di scrittura: appare SOLO in modalità lettura (Page 1).
                 Nella pagina principale (orb voce zen) l'esperienza resta
                 pulita — niente UI di scrittura, solo l'eclissi. Per scrivere
@@ -2724,12 +2700,26 @@ export default function Taccuino() {
                 <View style={styles.textRow}>
                   <TextInput
                     value={textInput}
-                    onChangeText={setTextInput}
+                    onChangeText={(t) => {
+                      // Invio rapido — vedi commento nel TextInput sopra.
+                      if (t.endsWith("\n")) {
+                        const clean = t.replace(/\n+$/, "");
+                        if (clean.trim()) {
+                          setTextInput(clean);
+                          setTimeout(() => sendTextFromBox(), 0);
+                        } else {
+                          setTextInput(clean);
+                        }
+                        return;
+                      }
+                      setTextInput(t);
+                    }}
                     placeholder="Scrivi qui..."
                     placeholderTextColor="rgba(255,255,255,0.5)"
                     style={styles.textInput}
                     onSubmitEditing={sendTextFromBox}
                     returnKeyType="send"
+                    blurOnSubmit={false}
                     multiline
                     testID="text-input-reading"
                   />
