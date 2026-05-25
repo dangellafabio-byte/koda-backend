@@ -288,17 +288,6 @@ export async function startRecording(): Promise<Recorder> {
     await requestRecordingPermissionsAsync();
   } catch {}
 
-  // === FIX 2026-05-24 (transizione Playback → PlayAndRecord) ===
-  // Anche qui serve il ciclo deactivate → configure → reactivate per
-  // forzare iOS ad applicare il cambio di categoria. Senza questo,
-  // se l'utente passa da "Koda parla" a "io parlo" rapidamente, la
-  // categoria audio resta in "Playback" e il microfono non riesce ad
-  // attivarsi correttamente → registrazione "vuota" che fallisce 500ms
-  // dopo (totalMs < 500 → "Non ti ho sentito"). Sintomo correlato a
-  // quello visto sul playback (vedi speech.ts:playElevenLabsNativeFromUrl).
-  try {
-    await setIsAudioActiveAsync(false);
-  } catch {}
   try {
     await setAudioModeAsync({
       allowsRecording: true,
@@ -310,9 +299,6 @@ export async function startRecording(): Promise<Recorder> {
   } catch (e) {
     console.warn("[voice] setAudioModeAsync(recording) failed", e);
   }
-  try {
-    await setIsAudioActiveAsync(true);
-  } catch {}
   _nativeReady = true;
 
   const preset = buildHandsFreePreset();
