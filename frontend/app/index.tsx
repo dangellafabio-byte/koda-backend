@@ -466,6 +466,26 @@ export default function Taccuino() {
   const dimensions = useWindowDimensions();
   // Use window width with sensible fallback (Dimensions.get) for first render
   const windowWidth = dimensions.width || Dimensions.get("window").width || 390;
+  // === Keyboard height tracking (richiesta utente 2026-06) ===
+  // Su iOS, anche con KeyboardAvoidingView, una `bottomBar` con
+  // position:"absolute" non si solleva automaticamente quando la tastiera
+  // appare. Teniamo un piccolo stato `kbHeight` aggiornato dagli eventi
+  // nativi, e lo aggiungiamo come marginBottom alla bottomBar in modo che
+  // l'input rimanga sempre visibile sopra la tastiera.
+  const [kbHeight, setKbHeight] = useState<number>(0);
+  useEffect(() => {
+    const showEvt = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvt = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const showSub = Keyboard.addListener(showEvt, (e) => {
+      const h = e?.endCoordinates?.height ?? 0;
+      setKbHeight(h);
+    });
+    const hideSub = Keyboard.addListener(hideEvt, () => setKbHeight(0));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
   const pulse = useRef(new Animated.Value(1)).current;
   const breathe = useRef(new Animated.Value(0)).current;
   // Live meter value (dB) shown as debug visualization during recording
@@ -2405,6 +2425,22 @@ export default function Taccuino() {
         horizontal
         pagingEnabled
         showsHorizontalScrollIndicator={false}
+        onScroll={(e) => {
+          // === FIX FLASH ORB DURANTE SWIPE (richiesta utente 2026-06) ===
+          // Prima viewMode si aggiornava SOLO al termine del momentum
+          // (onMomentumScrollEnd). Risultato: durante lo swipe da Page 0
+          // a Page 1, viewMode era ancora "voice" e la bottom-bar mostrava
+          // ancora l'orb piccolo per una frazione di secondo → flash visivo
+          // sgradevole. Ora aggiorniamo la modalità appena passiamo la
+          // metà dello schermo: l'orb scompare prima che l'utente lo veda.
+          const x = e.nativeEvent.contentOffset.x;
+          const w = e.nativeEvent.layoutMeasurement.width || windowWidth;
+          if (w === 0) return;
+          const ratio = x / w;
+          const next: "voice" | "reading" = ratio > 0.35 ? "reading" : "voice";
+          if (next !== viewMode) setViewMode(next);
+        }}
+        scrollEventThrottle={16}
         onMomentumScrollEnd={(e) => {
           const x = e.nativeEvent.contentOffset.x;
           const w = e.nativeEvent.layoutMeasurement.width || windowWidth;
@@ -2580,7 +2616,12 @@ export default function Taccuino() {
       <View
         style={[
           styles.bottomBar,
-          { paddingBottom: Math.max(insets.bottom, 14) + (inputMode === "text" ? 0 : 28) },
+          // === FIX TASTIERA (richiesta utente 2026-06) ===
+          // Quando la tastiera è aperta, su iOS un absolute-bottom non si
+          // alza da solo: aggiungiamo marginBottom = altezza tastiera così
+          // l'utente vede sempre cosa sta scrivendo.
+          { paddingBottom: Math.max(insets.bottom, 14) + (inputMode === "text" ? 0 : 28),
+            marginBottom: kbHeight > 0 ? kbHeight - insets.bottom : 0 },
         ]}
       >
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
@@ -2593,7 +2634,7 @@ export default function Taccuino() {
                 value={textInput}
                 onChangeText={setTextInput}
                 placeholder="Scrivi qui..."
-                placeholderTextColor="#64748B"
+                placeholderTextColor="rgba(255,255,255,0.5)"
                 style={styles.textInput}
                 onSubmitEditing={sendTextFromBox}
                 returnKeyType="send"
@@ -2685,7 +2726,7 @@ export default function Taccuino() {
                     value={textInput}
                     onChangeText={setTextInput}
                     placeholder="Scrivi qui..."
-                    placeholderTextColor="#64748B"
+                    placeholderTextColor="rgba(255,255,255,0.5)"
                     style={styles.textInput}
                     onSubmitEditing={sendTextFromBox}
                     returnKeyType="send"
@@ -4320,8 +4361,9 @@ const makeStyles = (t: any) => StyleSheet.create({
     marginTop: 2,
   },
 
-  // Bottom bar — ALWAYS transparent and absolutely positioned. Messages can
-  // scroll behind it; the mic button just floats over the timeline.
+  // Bottom bar — quasi sempre trasparente per lasciare scorrere i messaggi
+  // sotto; ma quando l'utente scrive, il textRow ha un suo background opaco
+  // tramite styles.textRow (vedi sotto) per essere sempre leggibile.
   bottomBar: {
     position: "absolute",
     left: 0,
@@ -4449,13 +4491,27 @@ const makeStyles = (t: any) => StyleSheet.create({
   },
   altBtnText: { color: t.textMuted, fontSize: 12 },
 
-  // Text input mode
+  // Text input mode — banda visibile sopra tutto. Ha un proprio
+  // backgroundColor opaco (pill-shape) così che, anche quando galleggia
+  // sopra una timeline scrollabile, sia sempre perfettamente leggibile.
   textRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    paddingTop: 14,
-    paddingBottom: 12,
+    paddingTop: 10,
+    paddingBottom: 10,
+    paddingHorizontal: 10,
+    backgroundColor: "rgba(15, 23, 42, 0.92)",
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    // Shadow: stacca visivamente la banda dallo sfondo (timeline scorre
+    // sotto, ma la banda rimane "in alto" sul piano Z).
+    shadowColor: "#000",
+    shadowOpacity: 0.45,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 12,
   },
   textIconBtn: {
     width: 38,
@@ -4467,11 +4523,11 @@ const makeStyles = (t: any) => StyleSheet.create({
   },
   textInput: {
     flex: 1,
-    backgroundColor: t.surfaceAlt,
-    borderColor: t.border,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(255,255,255,0.18)",
     borderWidth: 1,
-    color: t.text,
-    paddingHorizontal: 14,
+    color: "#FFFFFF",
+    paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 22,
     fontSize: 15,

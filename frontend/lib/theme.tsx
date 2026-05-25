@@ -99,28 +99,30 @@ const GIORNO: Palette = {
   name: "giorno",
   label: "Giorno",
   emoji: "☀️",
-  isDark: false,
-  // === FIX 2026-06 (richiesta utente: "ancora più scuro") ===
-  // L'app ha testo bianco hard-coded ovunque, quindi un "giorno" chiaro
-  // rende illeggibili i messaggi. Il tema Giorno è ora un dark-slate
-  // (#1F2937) — sempre distinguibile dal Notte (#0B0F1A) ma scuro
-  // abbastanza da garantire contrasto con il testo bianco.
-  bg: "#1F2937",
-  surface: "#27313F",
-  surfaceAlt: "rgba(255,255,255,0.06)",
-  border: "rgba(255,255,255,0.10)",
-  divider: "rgba(255,255,255,0.08)",
+  // === FIX 2026-06 (richiesta utente: "via di mezzo, status bar leggibile") ===
+  // Un grigio-blu medio (#3A4555 ≈ slate-700). Abbastanza scuro perché:
+  //  - tutto il testo bianco hard-coded dell'app rimane leggibile
+  //  - iOS, vedendo isDark=true, mantiene gli indicatori di sistema (ora,
+  //    5G, batteria) in BIANCO invece di farli neri/illeggibili
+  // ma più chiaro del Notte (#0B0F1A) → l'utente riconosce visivamente
+  // che è un tema "diurno" / più morbido.
+  isDark: true,
+  bg: "#3A4555",
+  surface: "#46525F",
+  surfaceAlt: "rgba(255,255,255,0.10)",
+  border: "rgba(255,255,255,0.14)",
+  divider: "rgba(255,255,255,0.10)",
   text: "#F8FAFC",
   textMuted: "#CBD5E1",
   textDim: "#94A3B8",
   primary: "#0E7C7B",
   primaryText: "#FFFFFF",
-  primarySoftBg: "rgba(14,124,123,0.16)",
-  primarySoftBorder: "rgba(14,124,123,0.55)",
+  primarySoftBg: "rgba(14,124,123,0.18)",
+  primarySoftBorder: "rgba(14,124,123,0.6)",
   userBubble: "#0E7C7B",
   userBubbleText: "#FFFFFF",
-  aiBubbleBg: "rgba(148,163,184,0.10)",
-  aiBubbleBorder: "rgba(148,163,184,0.35)",
+  aiBubbleBg: "rgba(148,163,184,0.12)",
+  aiBubbleBorder: "rgba(148,163,184,0.40)",
   aiBubbleText: "#F8FAFC",
   success: "#16A34A",
   warning: "#D97706",
