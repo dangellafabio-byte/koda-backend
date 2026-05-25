@@ -21,11 +21,11 @@
  * stai parlando tu, ecc.
  */
 
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { Animated, Dimensions, StyleSheet, View, Easing } from "react-native";
-import Svg, { Circle, Defs, RadialGradient, Rect, Stop } from "react-native-svg";
+import Svg, { Defs, Ellipse, RadialGradient, Rect, Stop } from "react-native-svg";
 
-const AnimatedCircle = Animated.createAnimatedComponent(Circle);
+const AnimatedEllipse = Animated.createAnimatedComponent(Ellipse);
 
 // === Mappa tone → colore "latte retroilluminato" e "onde" ===
 function toneToTint(tone: string | null | undefined, status?: string): string {
@@ -52,12 +52,23 @@ interface Props {
   centerY?: number;
 }
 
-// Singolo ripple in volo. Ognuno ha il proprio Animated.Value che va
-// da 0 (nato) a 1 (dissolto fuori dallo schermo).
+// Singola "goccia di inchiostro nel latte". Ogni goccia ha:
+//  - posizione leggermente offset dal centro dell'eclissi (jitter naturale)
+//  - asimmetria sui due assi (rx ≠ ry) → forma organica, non geometrica
+//  - leggera rotazione → ogni goccia "vive" in modo unico
+//  - il proprio gradient radiale di fill → sfumato come fumo che si dirada
 interface Ripple {
   id: number;
   color: string;
   anim: Animated.Value;
+  /** offset dal centro (px) per dare l'idea di "schizzi di gocce" */
+  offsetX: number;
+  offsetY: number;
+  /** asimmetria 0.7..1.3 sui due assi */
+  ratioX: number;
+  ratioY: number;
+  /** rotazione iniziale 0..360° */
+  rotation: number;
 }
 
 const RIPPLE_DURATION = 2800; // ms per espansione completa
@@ -90,22 +101,32 @@ export default function LiquidInversionBg({
     return () => loop.stop();
   }, [breathe]);
 
-  // === Emette un nuovo ripple ===
+  // === Emette una nuova "goccia di inchiostro" ===
   const emitRipple = useCallback((color: string) => {
     const anim = new Animated.Value(0);
     const id = ++rippleIdRef.current;
+    // Parametri organici random — ogni goccia è "unica":
+    //  - offset ±35px dal centro dell'eclissi (schizzo naturale)
+    //  - asimmetria assi: 0.75..1.25 → l'ellisse non è mai un cerchio
+    //  - rotazione 0..360°
+    const offsetX = (Math.random() - 0.5) * 70;
+    const offsetY = (Math.random() - 0.5) * 70;
+    const ratioX = 0.75 + Math.random() * 0.5;
+    const ratioY = 0.75 + Math.random() * 0.5;
+    const rotation = Math.random() * 360;
     setRipples((prev) => {
-      // Limita il numero di ripple simultanei: scarta i più vecchi.
       const next = prev.length >= MAX_RIPPLES ? prev.slice(prev.length - (MAX_RIPPLES - 1)) : prev;
-      return [...next, { id, color, anim }];
+      return [...next, { id, color, anim, offsetX, offsetY, ratioX, ratioY, rotation }];
     });
     Animated.timing(anim, {
       toValue: 1,
       duration: RIPPLE_DURATION,
-      easing: Easing.out(Easing.cubic), // veloce all'inizio, lento al bordo
+      // ease-out morbido: la goccia si dilata velocemente all'inizio
+      // (come l'inchiostro reale che esplode nei primi istanti),
+      // poi rallenta mentre si dirada nel latte.
+      easing: Easing.out(Easing.quad),
       useNativeDriver: false,
     }).start(() => {
-      // Rimuovi questo ripple quando finisce.
       setRipples((prev) => prev.filter((r) => r.id !== id));
     });
   }, []);
@@ -209,36 +230,64 @@ export default function LiquidInversionBg({
         </Svg>
       </Animated.View>
 
-      {/* === LAYER 3: RIPPLES (onde nel latte) === */}
+      {/* === LAYER 3: "Gocce d'inchiostro" che si diffondono nel latte ===
+          Ogni goccia è un Ellisse (non un cerchio perfetto) con:
+            - posizione leggermente sfalsata dal centro
+            - asimmetria sui due assi → forma organica
+            - rotazione random → ogni goccia è unica
+            - fill RadialGradient → pieno al centro, sfumato a 0 ai
+              bordi → effetto fumo/inchiostro che si dirada nel latte,
+              non un anello.
+          Sincrone con la voce: cadenza simulata mentre Koda parla,
+          meterDb reale mentre parli tu. */}
       {ripples.length > 0 && (
         <Svg width={width} height={height} style={StyleSheet.absoluteFill}>
+          <Defs>
+            {ripples.map((r) => (
+              <RadialGradient
+                key={`grad-${r.id}`}
+                id={`drop-${r.id}`}
+                cx="50%"
+                cy="50%"
+                rx="50%"
+                ry="50%"
+                fx="50%"
+                fy="50%"
+              >
+                {/* Pieno al centro: l'inchiostro è denso lì.
+                    Verso i bordi: si dirada nel latte. */}
+                <Stop offset="0%" stopColor={r.color} stopOpacity="0.55" />
+                <Stop offset="55%" stopColor={r.color} stopOpacity="0.22" />
+                <Stop offset="100%" stopColor={r.color} stopOpacity="0" />
+              </RadialGradient>
+            ))}
+          </Defs>
           {ripples.map((r) => {
-            // Raggio: 60 → maxR (parte da appena fuori l'eclissi)
-            const radius = r.anim.interpolate({
+            // Dimensione: parte piccola (60px) → cresce fino a coprire
+            // ~70% dello schermo, poi sfuma via.
+            const baseRadius = r.anim.interpolate({
               inputRange: [0, 1],
-              outputRange: [60, maxR],
+              outputRange: [40, maxR * 1.2],
             });
-            // Opacità: 0.45 → 0 (sfuma mentre si espande)
             const opacity = r.anim.interpolate({
-              inputRange: [0, 0.15, 1],
-              outputRange: [0, 0.45, 0],
+              inputRange: [0, 0.18, 1],
+              outputRange: [0, 0.95, 0],
             });
-            // Spessore stroke: 2 → 14 (si dilata, perdendo nitidezza
-            // come un'onda d'acqua reale che si attenua)
-            const strokeW = r.anim.interpolate({
-              inputRange: [0, 1],
-              outputRange: [2, 14],
-            });
+            // rx e ry diversi (asimmetria) → forma organica
+            const rx = Animated.multiply(baseRadius, new Animated.Value(r.ratioX));
+            const ry = Animated.multiply(baseRadius, new Animated.Value(r.ratioY));
+            const dropCx = cxAbs + r.offsetX;
+            const dropCy = cyAbs + r.offsetY;
             return (
-              <AnimatedCircle
+              <AnimatedEllipse
                 key={r.id}
-                cx={cxAbs}
-                cy={cyAbs}
-                r={radius as any}
-                fill="none"
-                stroke={r.color}
-                strokeWidth={strokeW as any}
+                cx={dropCx}
+                cy={dropCy}
+                rx={rx as any}
+                ry={ry as any}
+                fill={`url(#drop-${r.id})`}
                 opacity={opacity as any}
+                transform={`rotate(${r.rotation} ${dropCx} ${dropCy})`}
               />
             );
           })}

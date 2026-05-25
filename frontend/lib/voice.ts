@@ -61,10 +61,27 @@ let _nativeReady = false;
 //   - Motore/AC/musica bassa: -30 / -25 dBFS → SOTTO -28 (la maggior
 //     parte del tempo) → silenzio rilevato correttamente.
 // Hysteresis di 8 dB tra silence e speech (era già nel codice).
-const SPEECH_THRESHOLD_DB = -28;     // dBFS — voce a distanza ravvicinata
-const SILENCE_THRESHOLD_DB = -36;    // dBFS — silence below this (hysteresis 8 dB)
-const SILENCE_DURATION_MS = 800;     // 800ms silence after speech → end of utterance
-const MIN_SPEECH_MS = 500;           // need at least 500ms of voice before silence can fire
+// === RAFFINAMENTO 2026-06 (caso "Koda mi taglia mentre parlo in macchina") ===
+// L'utente in auto si lamentava di TAGLI PREMATURI: dopo qualche
+// secondo, durante una pausa naturale (quando rifletti, fai "ehm…",
+// prendi fiato), il VAD dichiarava silenzio e tagliava la frase.
+// Diagnosi:
+//   - SILENCE_DURATION_MS=800 era troppo basso. Una pausa naturale
+//     tra due frasi del parlato umano dura tipicamente 600-1200ms.
+//     800ms → tagliava le pause di pensiero.
+//   - SPEECH_THRESHOLD a -28 dBFS era già OK per la maggioranza, ma
+//     un filo troppo restrittivo: se l'utente si spostava di 10cm
+//     dal microfono, ogni tanto la voce scendeva a -29/-30 e il VAD
+//     pensava "silenzio" pur non essendolo.
+// Fix:
+//   - SILENCE_DURATION_MS: 800 → 1500ms (tollera pause naturali)
+//   - SPEECH_THRESHOLD: -28 → -30 dBFS (più permissivo)
+//   - SILENCE_THRESHOLD: -36 → -38 dBFS (hysteresis più ampia)
+//   - MIN_SPEECH_MS: 500 → 350ms (parte prima se inizi subito)
+const SPEECH_THRESHOLD_DB = -30;     // dBFS — voce a distanza ravvicinata o media
+const SILENCE_THRESHOLD_DB = -38;    // dBFS — silence below this (hysteresis 8 dB)
+const SILENCE_DURATION_MS = 1500;    // 1.5s silence after speech → end of utterance
+const MIN_SPEECH_MS = 350;           // need at least 350ms of voice before silence can fire
 const MIN_SPEECH_FRAMES = 3;         // 3 consecutive frames (~210ms) above threshold → real speech
 const METER_POLL_MS = 70;            // ~14Hz sampling
 const HARD_CAP_MS = 60_000;          // absolute max recording length
