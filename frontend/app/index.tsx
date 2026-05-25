@@ -24,6 +24,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { LinearGradient } from "expo-linear-gradient";
 import {
   api,
@@ -543,6 +544,32 @@ export default function Taccuino() {
       try { sub.remove(); } catch {}
     };
   }, []);
+
+  // === KEEP SCREEN AWAKE durante conversazione attiva ===
+  // Quando lo schermo iPhone si auto-spegne mentre Koda sta parlando o
+  // mentre stiamo registrando, iOS interrompe l'audio session → la voce
+  // viene tagliata a metà frase. Per evitarlo, teniamo lo schermo sveglio
+  // SOLO quando lo stato è attivo (recording / transcribing / thinking /
+  // speaking). Quando torna idle (champagne), rilasciamo il lock così la
+  // batteria non si scarica e iOS torna a comportarsi normalmente.
+  //
+  // Tag dedicato "koda-conversation" così se in futuro vorremo altri lock
+  // (es. confessionale) sono indipendenti.
+  useEffect(() => {
+    const TAG = "koda-conversation";
+    const isActive = status === "recording" || status === "transcribing" ||
+                     status === "thinking" || status === "speaking" ||
+                     confessionalMode;
+    if (isActive) {
+      activateKeepAwakeAsync(TAG).catch(() => {});
+    } else {
+      try { deactivateKeepAwake(TAG); } catch {}
+    }
+    return () => {
+      // Sicurezza: al unmount o cambio dipendenza, rilascia.
+      try { deactivateKeepAwake(TAG); } catch {}
+    };
+  }, [status, confessionalMode]);
 
   const saveTheme = async (name: ThemeName) => {
     if (!profile) return;
