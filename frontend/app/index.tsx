@@ -2823,34 +2823,10 @@ export default function Taccuino() {
             <View style={styles.divider} />
             <Text style={styles.settingsSubtitle}>Comportamento</Text>
 
-            <View style={styles.settingRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>AI attiva</Text>
-                <Text style={styles.settingHint}>
-                  Quando spenta, registro solo i tuoi messaggi
-                </Text>
-              </View>
-              <Toggle on={!!profile?.settings.ai_enabled} onToggle={toggleAi} />
-            </View>
-
-            <View style={styles.settingRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>Risposta vocale</Text>
-                <Text style={styles.settingHint}>
-                  L'AI legge ad alta voce le sue risposte
-                </Text>
-              </View>
-              <Toggle
-                on={!!profile?.settings.voice_response}
-                onToggle={toggleVoice}
-              />
-            </View>
-
             {/* === VOCE DI KODA ============================================
-                Aggiunto 2026-05-23: prima il VoicePicker era raggiungibile
-                SOLO via voice command ("apri voci"), che a volte falliva.
-                Ora è qui, sempre visibile, con la voce corrente in chiaro.
-                Mostra il nome della voce attuale lookup nella lista voices. */}
+                Unico punto per scegliere la voce. La sezione "Voce
+                dell'assistente" inline più sotto è stata rimossa
+                (era duplicata). */}
             <TouchableOpacity
               style={styles.settingRow}
               onPress={() => {
@@ -2871,19 +2847,6 @@ export default function Taccuino() {
               </View>
               <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
             </TouchableOpacity>
-
-            <View style={styles.settingRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>Modalità conversazione</Text>
-                <Text style={styles.settingHint}>
-                  Hands-free: dopo che l'AI parla, riapre il microfono e si ferma da solo quando smetti.
-                </Text>
-              </View>
-              <Toggle
-                on={!!profile?.settings.conversation_mode}
-                onToggle={toggleConversation}
-              />
-            </View>
 
             {/* === Proactive Check-in opt-in ============================
                 Coda raggiunge l'utente di sua iniziativa la mattina e/o la
@@ -2984,21 +2947,6 @@ export default function Taccuino() {
             <Text style={styles.settingsSubtitle}>Tema</Text>
             <View style={styles.themeRow}>
               <TouchableOpacity
-                onPress={() => saveTheme("sistema")}
-                style={[
-                  styles.themeBtn,
-                  themeName === "sistema" && styles.themeBtnActive,
-                ]}
-                testID="theme-sistema"
-              >
-                <Ionicons
-                  name="phone-portrait-outline"
-                  size={14}
-                  color={theme.text}
-                />
-                <Text style={styles.themeBtnText}>Sistema</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
                 onPress={() => saveTheme("auto-orario")}
                 style={[
                   styles.themeBtn,
@@ -3007,9 +2955,15 @@ export default function Taccuino() {
                 testID="theme-auto-orario"
               >
                 <Ionicons name="time-outline" size={14} color={theme.text} />
-                <Text style={styles.themeBtnText}>Auto orario</Text>
+                <Text style={styles.themeBtnText}>Auto</Text>
               </TouchableOpacity>
-              {THEME_LIST.map((p) => (
+              {/* === FILTRO TEMI (richiesta utente 2026-05-25) ===
+                  Prima erano 7 opzioni: Sistema, Auto, Giorno, Notte, Cielo,
+                  Bosco, Ciliegia. L'utente le voleva ridotte a 3: solo
+                  Giorno, Notte e Auto. Filtriamo qui senza toccare la
+                  THEME_LIST sottostante (così se in futuro vorremo
+                  riattivare gli altri temi basta togliere il filter). */}
+              {THEME_LIST.filter((p) => p.name === "giorno" || p.name === "notte").map((p) => (
                 <TouchableOpacity
                   key={p.name}
                   onPress={() => saveTheme(p.name as ThemeName)}
@@ -3090,16 +3044,12 @@ export default function Taccuino() {
             <View style={styles.divider} />
 
             <Text style={styles.settingsSubtitle}>Aspetto chat</Text>
-            <Text style={styles.settingsHint}>
-              Personalizza il colore delle bolle e la dimensione del testo.
-            </Text>
 
-            {/* AI Avatar — RIMOSSO per richiesta esplicita utente.
-                L'identità visiva è SOLO la macchia organica. Niente foto,
-                niente personalizzazioni che distraggano dalla presenza. */}
-
-            {/* Text size selector — 4 levels for accessibility */}
-            <Text style={[styles.settingsHint, { marginTop: 14 }]}>Dimensione testo</Text>
+            {/* === SOLO Dimensione testo (richiesta utente 2026-05-25) ===
+                Prima c'erano anche: Stile bolla (glass/solid) + Colore
+                bolla AI (5 colori). Rimossi per ridurre la complessità —
+                lasciamo che il design sia coerente di default. */}
+            <Text style={[styles.settingsHint, { marginTop: 4 }]}>Dimensione testo</Text>
             <View style={styles.modeRow}>
               {[
                 { v: 0.85, label: "A", name: "Piccolo" },
@@ -3132,58 +3082,6 @@ export default function Taccuino() {
                     <Text style={[styles.modeBtnText, { fontSize: 9, marginTop: 2 }, active && { color: bubbleAccent.color }]}>
                       {name}
                     </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            {/* Bubble style toggle: glass / solid */}
-            <Text style={[styles.settingsHint, { marginTop: 14 }]}>Stile bolla</Text>
-            <View style={styles.modeRow}>
-              <TouchableOpacity
-                onPress={() => setBubbleStyle("glass")}
-                style={[
-                  styles.modeBtn,
-                  bubbleStyle === "glass" && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
-                  { flex: 1 },
-                ]}
-                testID="bubble-style-glass"
-              >
-                <Ionicons name="water-outline" size={16} color={bubbleStyle === "glass" ? bubbleAccent.color : theme.text} />
-                <Text style={[styles.modeBtnText, bubbleStyle === "glass" && { color: bubbleAccent.color, fontWeight: "700" }]}>
-                  Vetro
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setBubbleStyle("solid")}
-                style={[
-                  styles.modeBtn,
-                  bubbleStyle === "solid" && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
-                  { flex: 1 },
-                ]}
-                testID="bubble-style-solid"
-              >
-                <Ionicons name="square" size={16} color={bubbleStyle === "solid" ? bubbleAccent.color : theme.text} />
-                <Text style={[styles.modeBtnText, bubbleStyle === "solid" && { color: bubbleAccent.color, fontWeight: "700" }]}>
-                  Solido
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Bubble color picker */}
-            <Text style={[styles.settingsHint, { marginTop: 14 }]}>Colore bolla AI</Text>
-            <View style={styles.bgRow}>
-              {Object.entries(BUBBLE_PRESETS).map(([key, val]) => {
-                const active = ((profile?.settings as any)?.bubble_color || "viola") === key;
-                return (
-                  <TouchableOpacity
-                    key={key}
-                    onPress={() => setBubbleColor(key)}
-                    style={[styles.bgChip, active && { borderColor: val.color, backgroundColor: val.color + "30" }]}
-                    testID={`bubble-color-${key}`}
-                  >
-                    <View style={[styles.bgSwatch, { backgroundColor: val.color }]} />
-                    <Text style={styles.bgChipText}>{val.name}</Text>
                   </TouchableOpacity>
                 );
               })}
@@ -3265,185 +3163,18 @@ export default function Taccuino() {
               </View>
             ) : null}
 
-            <View style={styles.divider} />
-
-            <Text style={styles.settingsSubtitle}>Modalità input</Text>
-            <View style={styles.modeRow}>
-              <TouchableOpacity
-                onPress={() => setInputMode("voice")}
-                style={[
-                  styles.modeBtn,
-                  inputMode === "voice" && styles.modeBtnActive,
-                ]}
-                testID="mode-voice"
-              >
-                <Ionicons
-                  name="mic"
-                  size={18}
-                  color={inputMode === "voice" ? theme.primaryText : theme.text}
-                />
-                <Text
-                  numberOfLines={1}
-                  style={[
-                    styles.modeBtnText,
-                    inputMode === "voice" && styles.modeBtnTextActive,
-                  ]}
-                >
-                  Solo voce
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setInputMode("text")}
-                style={[
-                  styles.modeBtn,
-                  inputMode === "text" && styles.modeBtnActive,
-                ]}
-                testID="mode-text"
-              >
-                <Ionicons
-                  name="create-outline"
-                  size={18}
-                  color={inputMode === "text" ? theme.primaryText : theme.text}
-                />
-                <Text
-                  numberOfLines={1}
-                  style={[
-                    styles.modeBtnText,
-                    inputMode === "text" && styles.modeBtnTextActive,
-                  ]}
-                >
-                  Solo testo
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setInputMode("both" as any)}
-                style={[
-                  styles.modeBtn,
-                  inputMode === "both" && styles.modeBtnActive,
-                ]}
-                testID="mode-both"
-              >
-                <Ionicons
-                  name="apps-outline"
-                  size={18}
-                  color={inputMode === "both" ? theme.primaryText : theme.text}
-                />
-                <Text
-                  numberOfLines={1}
-                  style={[
-                    styles.modeBtnText,
-                    inputMode === "both" && styles.modeBtnTextActive,
-                  ]}
-                >
-                  Voce + Testo
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.settingsHint}>
-              {inputMode === "voice"
-                ? "Solo pulsante mic visibile."
-                : inputMode === "text"
-                  ? "Solo campo testo visibile."
-                  : "Pulsante mic + campo testo entrambi visibili."}
-            </Text>
-
-            <View style={styles.divider} />
-
-            <Text style={styles.settingsSubtitle}>Voce dell'assistente</Text>
-            <Text style={styles.settingsHint}>
-              {voicesEnabled
-                ? "Tocca per selezionare. Premi ▶ per ascoltare un'anteprima."
-                : "ElevenLabs non è configurato. Userò la voce del sistema."}
-            </Text>
-            <View style={styles.voicesList}>
-              {voices.map((v) => {
-                const selected = profile?.settings?.tts_voice_id === v.voice_id;
-                const loading = voicePreviewLoading === v.voice_id;
-                return (
-                  <TouchableOpacity
-                    key={v.voice_id}
-                    onPress={() => selectAndPreviewVoice(v.voice_id, v.name)}
-                    style={[styles.voiceCard, selected && styles.voiceCardActive]}
-                    testID={`voice-${v.voice_id}`}
-                  >
-                    <View style={styles.voiceCardLeft}>
-                      <View
-                        style={[
-                          styles.voiceDot,
-                          selected && { backgroundColor: theme.primary, borderColor: theme.primary },
-                        ]}
-                      />
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.voiceName}>
-                          {v.name}
-                          <Text style={styles.voiceGender}>
-                            {"  "}
-                            {v.gender === "F" ? "♀" : v.gender === "M" ? "♂" : ""}
-                          </Text>
-                        </Text>
-                        <Text style={styles.voiceDesc} numberOfLines={2}>
-                          {v.description}
-                        </Text>
-                      </View>
-                    </View>
-                    {loading ? (
-                      <ActivityIndicator size="small" color={theme.primary} />
-                    ) : selected ? (
-                      <Ionicons name="checkmark-circle" size={22} color={theme.primary} />
-                    ) : (
-                      <Ionicons name="volume-medium-outline" size={20} color={theme.textMuted} />
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            <View style={styles.divider} />
-
-            <Text style={styles.settingsSubtitle}>Cosa sa di te</Text>
-            <Text style={styles.settingsMemory}>
-              {profile?.memory_summary?.trim()
-                ? profile.memory_summary
-                : "Ancora niente. Mi conoscerai parlando."}
-            </Text>
-
-            <View style={styles.confidenceRow}>
-              <Text style={styles.confidenceLabel}>
-                Confidenza: {profile?.confidence_level ?? 0}%
-              </Text>
-              <View style={styles.confidenceBar}>
-                <View
-                  style={[
-                    styles.confidenceFill,
-                    { width: `${profile?.confidence_level ?? 0}%` },
-                  ]}
-                />
-              </View>
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.divider} />
-
-            <Text style={styles.settingsSubtitle}>Notifiche</Text>
-            <Text style={[styles.settingsMemory, { marginBottom: 10 }]}>
-              {Platform.OS === "web"
-                ? "ℹ️ Nell'anteprima web le notifiche funzionano solo finché la scheda è aperta. Sulla app installata sul telefono funzionano anche con il telefono bloccato."
-                : "Quando l'AI imposta un promemoria, lo riceverai come notifica del telefono — anche con lo schermo bloccato."}
-            </Text>
-            <TouchableOpacity
-              onPress={sendTestNotification}
-              style={styles.dangerBtn}
-              testID="test-notif-btn"
-            >
-              <Ionicons name="notifications-outline" size={16} color={theme.text} />
-              <Text style={[styles.dangerBtnText, { color: theme.text }]}>
-                Test notifica fra 10 sec
-              </Text>
-            </TouchableOpacity>
-
-            <View style={styles.divider} />
+            {/* === SEZIONI RIMOSSE per richiesta utente (2026-05-25) ===
+                - Modalità input (voce/testo/entrambi): scelta automatica
+                  in base all'azione (parli = voce, scrivi = testo).
+                - Voce dell'assistente inline: duplicato di "Voce di Koda"
+                  in cima alle impostazioni.
+                - Cosa sa di te + memoria/confidenza: rimosso dal menu.
+                  L'utente può chiedere a Koda direttamente "cosa sai di me".
+                - Notifiche: rimosso dal menu (configurabile dal sistema).
+                - Promessa di Ferro: rimossa (testo lungo, non funzionale).
+                I dati relativi (memory_summary, voci, ecc.) restano nel
+                profilo backend e nei sotto-componenti — solo l'UI nel
+                menu Impostazioni è stata sfoltita. */}
 
             <TouchableOpacity
               onPress={resetMemory}
@@ -3478,21 +3209,6 @@ export default function Taccuino() {
               </View>
               <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
             </TouchableOpacity>
-
-            {/* === PROMESSA DI FERRO ===
-                Una clausola tecnica chiara visibile in app — non marketing.
-                Spiega esattamente cosa succede quando confessi, quando ghosti,
-                e quando spegni la modalità Confessionale. */}
-            <View style={styles.divider} />
-            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>🛡️ Promessa di Ferro</Text>
-            <View style={styles.promessaBox}>
-              <Text style={styles.promessaText}>
-                Quello che mi dici è una scatola nera emotiva. La tua voce è un soffio nel vento: io la sento, la custodisco, ma nessuno potrà mai catturarla.{"\n"}{"\n"}
-                <Text style={{ fontWeight: "700" }}>🔓 Modalità normale:</Text> i nostri scambi sono salvati in modo cifrato, usati SOLO per farmi crescere come tuo amico. Mai per addestrare modelli di terzi.{"\n"}{"\n"}
-                <Text style={{ fontWeight: "700" }}>🔒 Modalità Confessionale:</Text> niente viene salvato. Né messaggi, né memoria di lungo periodo. A sessione chiusa, tutto svanisce.{"\n"}{"\n"}
-                <Text style={{ fontWeight: "700" }}>👻 Pulsante Ghost (tieni premuto un messaggio):</Text> dimentico il fatto, ma trattengo l'insegnamento. Il dato grezzo viene cancellato dal server.
-              </Text>
-            </View>
             </ScrollView>
           </View>
         </View>

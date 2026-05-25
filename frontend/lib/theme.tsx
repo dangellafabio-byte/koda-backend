@@ -99,34 +99,42 @@ const GIORNO: Palette = {
   name: "giorno",
   label: "Giorno",
   emoji: "☀️",
-  isDark: false,
-  bg: "#F8FAFC",
-  surface: "#FFFFFF",
-  surfaceAlt: "#F1F5F9",
-  border: "#E2E8F0",
-  divider: "#E2E8F0",
-  text: "#0F172A",
-  textMuted: "#475569",
+  // === FIX 2026-05-25 ===
+  // Prima il tema "Giorno" era un puro chiaro (bg #F8FAFC, text #0F172A).
+  // Ma molti elementi UI hanno testo bianco hardcoded → su sfondo bianco
+  // diventavano INVISIBILI. Refactor completo richiederebbe ore.
+  // Soluzione: "Giorno" diventa un tema scuro PIÙ CHIARO della Notte —
+  // soft warm slate. Si distingue chiaramente da Notte (visibile la
+  // transizione), ma tutti i testi bianchi restano leggibili.
+  // Identità mantenuta: signature petrolio per primary, contrasto pulito.
+  isDark: true,
+  bg: "#1F2937",                         // slate-800 (più chiaro di Notte #0B0F1A)
+  surface: "#2D3748",                    // slate-700
+  surfaceAlt: "rgba(255,255,255,0.08)",
+  border: "rgba(255,255,255,0.10)",
+  divider: "rgba(255,255,255,0.08)",
+  text: "#F3F4F6",                       // gray-100 (lievemente più chiaro di Notte)
+  textMuted: "#CBD5E1",
   textDim: "#94A3B8",
-  primary: "#4F46E5",
+  primary: "#0E7C7B",                    // stesso petrolio della Notte (signature)
   primaryText: "#FFFFFF",
-  primarySoftBg: "#EEF2FF",
-  primarySoftBorder: "#C7D2FE",
-  userBubble: "#4F46E5",
+  primarySoftBg: "rgba(14,124,123,0.16)",
+  primarySoftBorder: "rgba(14,124,123,0.55)",
+  userBubble: "#0E7C7B",
   userBubbleText: "#FFFFFF",
-  aiBubbleBg: "#F1F5F9",
-  aiBubbleBorder: "#CBD5E1",
-  aiBubbleText: "#0F172A",
-  success: "#16A34A",
-  warning: "#D97706",
-  danger: "#DC2626",
+  aiBubbleBg: "rgba(255,255,255,0.07)",
+  aiBubbleBorder: "rgba(255,255,255,0.18)",
+  aiBubbleText: "#F3F4F6",
+  success: "#34D399",
+  warning: "#FBBF24",
+  danger: "#F87171",
   tone: {
-    neutral: { bg: "#F1F5F9", border: "#CBD5E1" },
-    calm: { bg: "#E0F2FE", border: "#7DD3FC" },
-    warm: { bg: "#FEF3C7", border: "#FCD34D" },
-    energetic: { bg: "#DCFCE7", border: "#86EFAC" },
-    concerned: { bg: "#FFEDD5", border: "#FDBA74" },
-    urgent: { bg: "#FEE2E2", border: "#FCA5A5" },
+    neutral: { bg: "rgba(203,213,225,0.10)", border: "rgba(203,213,225,0.35)" },
+    calm: { bg: "rgba(96,165,250,0.10)", border: "rgba(96,165,250,0.4)" },
+    warm: { bg: "rgba(252,211,77,0.12)", border: "rgba(252,211,77,0.45)" },
+    energetic: { bg: "rgba(74,222,128,0.10)", border: "rgba(74,222,128,0.4)" },
+    concerned: { bg: "rgba(251,146,60,0.10)", border: "rgba(251,146,60,0.45)" },
+    urgent: { bg: "rgba(248,113,113,0.12)", border: "rgba(248,113,113,0.5)" },
   },
 };
 
