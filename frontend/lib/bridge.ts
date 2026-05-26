@@ -19,7 +19,7 @@ export type BridgeTier = "sobrio" | "amichevole" | "schietto";
 const BACKEND_URL =
   process.env.EXPO_PUBLIC_BACKEND_URL || process.env.EXPO_BACKEND_URL || "";
 
-const CACHE_DIR = `${FileSystem.cacheDirectory}bridges/`;
+const CACHE_DIR = `${FileSystem.cacheDirectory}bridges_v2/`;
 
 // Voice ID corrente — settato da setBridgeVoiceId(). Default null = backend
 // userà la voce Matilda default. Quando il main monta il profile, chiama
@@ -143,10 +143,13 @@ export async function playBridge(tier: BridgeTier = "amichevole"): Promise<void>
     pendingTimeout = null;
   }
 
-  // === DELAY UMANO (richiesta utente 2026-06) ===
-  // Un umano non risponde "istantaneo" — fa una piccola pausa di pensiero
-  // prima di emettere il suo "mh". 600-900ms simula bene questo.
-  const delay = 600 + Math.floor(Math.random() * 300);
+  // === DELAY UMANO (richiesta utente 2026-06, revisione 2) ===
+  // Un umano non dice "mh" istantaneamente: aspetta 1-3 secondi prima
+  // di emettere qualsiasi suono. Randomizzato per non sembrare meccanico.
+  // Se nel frattempo arriva la risposta vera (es. domanda banale risolta
+  // in 800ms), stopBridge() cancella il timer pendente → niente "mh"
+  // inutile sopra alla risposta.
+  const delay = 1000 + Math.floor(Math.random() * 2000); // 1000-3000ms
 
   return new Promise<void>((resolve) => {
     pendingTimeout = setTimeout(async () => {
