@@ -548,6 +548,19 @@ class GhostRequest(BaseModel):
 
 # Helpers
 async def get_or_create_profile() -> Profile:
+    """Restituisce il profilo dell'utente, creandolo se non esiste.
+
+    FIX RACE CONDITION 2026-06-26: con uvicorn --workers 2 e il client
+    che fa più GET /api/profile in parallelo al boot, il vecchio codice
+    find_one + insert_one creava DUPLICATI (entrambi i worker vedevano
+    vuoto, entrambi inserivano). Risultato osservato: 2 docs con id='me'
+    nel DB, Mongo restituiva A CASO uno dei due → ogni tanto l'app
+    sembrava "resettata" (no nome, no memoria, ai_name tornato a 'Coda').
+
+    Soluzione: la collection ora ha un UNIQUE INDEX su 'id'. Quindi la
+    seconda insert concorrente lancia DuplicateKeyError. La gestiamo
+    rileggendo il documento vincente.
+    """
     doc = await db.taccuino_profile.find_one({"id": "me"}, {"_id": 0})
     if doc:
         try:
@@ -556,8 +569,29 @@ async def get_or_create_profile() -> Profile:
             # Corrupt doc — recreate
             pass
     p = Profile()
-    await db.taccuino_profile.insert_one(p.model_dump())
+    try:
+        await db.taccuino_profile.insert_one(p.model_dump())
+    except Exception as e:
+        # DuplicateKeyError o simile: un altro worker ha inserito nel
+        # frattempo. Rileggi e restituisci quello.
+        try:
+            doc2 = await db.taccuino_profile.find_one({"id": "me"}, {"_id": 0})
+            if doc2:
+                return Profile(**doc2)
+        except Exception:
+            pass
+        # Non è un duplicate key (es. connessione MongoDB persa): rilancia.
+        if "duplicate" not in str(e).lower() and "E11000" not in str(e):
+            raise
     return p
+
+
+async def _ensure_profile_unique_index():
+    """Crea l'unique index su id='me' se non esiste già. Idempotente."""
+    try:
+        await db.taccuino_profile.create_index("id", unique=True)
+    except Exception as e:
+        logger.warning(f"[startup] profile unique index: {e}")
 
 
 async def save_profile(p: Profile) -> Profile:
