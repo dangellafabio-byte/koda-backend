@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone
+import hashlib
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from emergentintegrations.llm.openai import OpenAISpeechToText
@@ -2354,6 +2355,142 @@ async def _fetch_tts_audio(token: str) -> Optional[bytes]:
         return bytes(a)
     except Exception:
         return None
+
+
+# ============================================================
+# === BRIDGE PHRASES (richiesta utente 2026-06: "velocità di risposta") ===
+# Frasi-intercalare pre-generate e cachate. Quando l'utente smette di
+# parlare, il frontend riproduce SUBITO uno di questi mp3 (zero latenza
+# percepita) mentre la pipeline reale gira in background. Poi la
+# risposta vera prende il sopravvento.
+# 3 tier in base al tono dell'utente (vedi /api/tts/bridge?style=...):
+#   - sobrio: utente formale, neutro
+#   - amichevole: utente confidenziale (default)
+#   - schietto: utente che parla rude/colloquiale ("cazzo", "vabbè"...)
+# Voce default: Matilda (la stessa di default per il TTS principale,
+# così il bridge e la risposta sono indistinguibili).
+BRIDGE_PHRASES = {
+    "sobrio": [
+        "Mh.",
+        "Okay.",
+        "Ah, ok.",
+        "Capito.",
+        "Sì, allora.",
+        "Vediamo un attimo.",
+        "Aspetta, fammi pensare.",
+        "Mh, interessante.",
+        "Allora, dunque.",
+        "Sì, dimmi.",
+    ],
+    "amichevole": [
+        "Eh.",
+        "Ah, ok allora.",
+        "Mh, vediamo.",
+        "Aspetta un secondo.",
+        "Eh, fammi pensare.",
+        "Allora, dimmi un po'.",
+        "Mh, capito.",
+        "Ah, interessante questo.",
+        "Eh, vediamo un po'.",
+        "Senti, allora.",
+    ],
+    "schietto": [
+        "Eh cavolo.",
+        "Cazzo, allora.",
+        "Boh, vediamo.",
+        "Eh, vabbè.",
+        "Mh, aspetta.",
+        "Ah, cazzo eh.",
+        "Vabbè, dimmi.",
+        "Boh, fammi capire.",
+        "Cazzo, fammi pensare.",
+        "Eh ma vabbè.",
+    ],
+}
+
+
+@api_router.get("/tts/bridge")
+async def api_tts_bridge(style: str = "amichevole", i: int = 0, voice_id: Optional[str] = None):
+    """Restituisce un mp3 intercalare pre-generato e cachato.
+
+    Parametri:
+      - style: sobrio | amichevole | schietto (default: amichevole)
+      - i: indice della frase (0..N-1), il client ne sceglie uno random
+      - voice_id: opzionale, default Matilda
+    Cache: deterministico (md5 del testo + voice_id) → la prima richiesta
+    genera con ElevenLabs e salva in MongoDB; le successive sono istantanee
+    (read from cache).
+    """
+    tier = style if style in BRIDGE_PHRASES else "amichevole"
+    phrases = BRIDGE_PHRASES[tier]
+    idx = i % len(phrases)
+    text = phrases[idx]
+    vid = voice_id or "XrExE9yKIg1WjnnlVkGX"  # Matilda default
+
+    # Cache key deterministico
+    cache_key = f"bridge:{vid}:{tier}:{idx}"
+    cache_token = hashlib.md5(cache_key.encode("utf-8")).hexdigest()
+
+    # Hit cache?
+    cached = await db.tts_audio_cache.find_one({"token": cache_token}, {"audio": 1, "_id": 0})
+    if cached and cached.get("audio"):
+        return Response(
+            content=cached["audio"],
+            media_type="audio/mpeg",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
+    # Miss → genera con ElevenLabs
+    client_el = _get_eleven_client()
+    if client_el is None:
+        raise HTTPException(status_code=503, detail="ElevenLabs not configured")
+
+    try:
+        # Modello FLASH per velocità (frasi brevi, no audio tags)
+        audio_gen = client_el.text_to_speech.convert(
+            text=text,
+            voice_id=vid,
+            model_id="eleven_flash_v2_5",
+            output_format="mp3_44100_128",
+            voice_settings={
+                "stability": 0.55,
+                "similarity_boost": 0.85,
+                "style": 0.30,
+                "speed": 1.0,
+                "use_speaker_boost": True,
+            },
+        )
+        audio_data = b"".join(c for c in audio_gen if c)
+        if not audio_data:
+            raise HTTPException(status_code=500, detail="Empty TTS for bridge")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Bridge TTS gen failed for '{text}': {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Save in cache with the deterministic token (overwrite-safe)
+    try:
+        await db.tts_audio_cache.update_one(
+            {"token": cache_token},
+            {"$set": {"token": cache_token, "audio": audio_data, "created_at": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
+    except Exception as e:
+        logger.warning(f"Bridge cache write failed: {e}")
+
+    return Response(
+        content=audio_data,
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@api_router.get("/tts/bridge/count")
+async def api_tts_bridge_count():
+    """Quante frasi-bridge esistono per ciascun tier? Il frontend usa
+    questo per fare il pre-fetch al boot di tutti gli mp3."""
+    return {tier: len(phrases) for tier, phrases in BRIDGE_PHRASES.items()}
 
 
 @api_router.post("/tts/prepare")

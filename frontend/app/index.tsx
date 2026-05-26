@@ -48,6 +48,7 @@ import Orb, { OrbTone } from "../components/Orb";
 import EclipseOrb from "../components/EclipseOrb";
 import MirrorPool from "../components/MirrorPool";
 import LiquidInversionBg from "../components/LiquidInversionBg";
+import { prefetchBridges, playBridge, stopBridge, detectTier, BridgeTier } from "../lib/bridge";
 import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
 import KodaSplash from "../components/KodaSplash";
 import KodaTour, { TourStep } from "../components/KodaTour";
@@ -490,6 +491,15 @@ export default function Taccuino() {
     };
   }, []);
   const pulse = useRef(new Animated.Value(1)).current;
+  // === BRIDGE: tier in base al tono dell'utente (richiesta 2026-06) ===
+  // Aggiornato dopo ogni transcript dell'utente da detectTier(). Usato
+  // immediatamente al silenzio successivo per scegliere quale tier di
+  // bridge riprodurre.
+  const userTierRef = useRef<BridgeTier>("amichevole");
+  // Pre-fetch dei bridge mp3 al boot dell'app (fire-and-forget).
+  useEffect(() => {
+    prefetchBridges().catch(() => {});
+  }, []);
   // === AURORA: ciclo neon infinito (richiesta utente 2026-06) ===
   // Quando il tema è "giorno" (label "Aurora"), interpoliamo il
   // backgroundColor attraverso 5 tinte neon notturne in un loop di
@@ -967,6 +977,11 @@ export default function Taccuino() {
       // Il conversation_mode hands-free è disabilitato (causa di freeze su iOS).
       // Arriverà nella Fase 4 con Deepgram + dev build.
       setStatus("speaking");
+      // === BRIDGE STOP (richiesta utente 2026-06) ===
+      // Se un bridge audio è ancora in corso (intercalare "Mh, vediamo..."),
+      // lo interrompiamo proprio nel momento in cui la voce VERA di Koda
+      // sta per partire. Niente sovrapposizioni.
+      try { stopBridge(); } catch {}
       await SpeechMod.speak(text, { language: langTag, tone });
       setStatus("idle");
     },
@@ -1552,6 +1567,8 @@ export default function Taccuino() {
     ]);
     setStatus("speaking");
     try {
+      // Ferma il bridge intercalare prima della voce vera di Koda.
+      try { stopBridge(); } catch {}
       await SpeechMod.speak(text, { language: "it-IT", tone: "warm" });
     } catch {}
     setStatus("idle");
@@ -1695,6 +1712,17 @@ export default function Taccuino() {
     setStatus("transcribing");
     setMeterDb(null);
     setMeterThreshold(null);
+    // === BRIDGE START (richiesta utente 2026-06: "velocità di risposta") ===
+    // Riproduciamo IMMEDIATAMENTE un mp3 intercalare ("Mh.", "Ah ok.",
+    // "Allora vediamo..."). Cachato in locale → zero latenza. Mentre
+    // suona, in parallelo gira la pipeline reale (Deepgram → Claude →
+    // ElevenLabs). Quando la risposta vera è pronta, speakIfEnabled
+    // chiama stopBridge() e parte la voce vera. Il tier (sobrio /
+    // amichevole / schietto) viene scelto in base all'ULTIMO transcript
+    // dell'utente (userTierRef), aggiornato dopo ogni messaggio.
+    try {
+      playBridge(userTierRef.current).catch(() => {});
+    } catch {}
     try {
       const res = await current.stop();
       // Ora possiamo liberare il ref: l'audio session è stata rilasciata.
@@ -1765,6 +1793,13 @@ export default function Taccuino() {
       if (!r.ok) throw new Error("transcribe");
       const data = await r.json();
       const txt = (data.text || "").trim();
+      // === Aggiorna tier bridge (richiesta 2026-06) ===
+      // detectTier ispeziona il transcript dell'utente per parolacce/
+      // colloquialità e sceglie il tier appropriato per il PROSSIMO
+      // bridge (sobrio | amichevole | schietto). Speccchio del tono.
+      if (txt) {
+        try { userTierRef.current = detectTier(txt); } catch {}
+      }
       const cls = classifyTranscript(txt);
       if (cls !== "ok") {
         // === DIAGNOSTIC LOG (fix 2026-06 cold-start) ===
