@@ -1533,12 +1533,12 @@ async def api_converse_sealed(
         messages.extend(history_msgs)
         messages.append({"role": "user", "content": plaintext})
         resp = await litellm.acompletion(
-            model='openai/claude-sonnet-4-5-20250929',
+            model='openai/claude-haiku-4-5-20251001',
             messages=messages,
             api_key=EMERGENT_LLM_KEY,
             api_base='https://integrations.emergentagent.com/llm',
             max_tokens=400,
-            timeout=25,
+            timeout=20,
         )
         raw = resp.choices[0].message.content if resp and resp.choices else ""
         # Cleanup: i messaggi contengono il plaintext
@@ -1900,7 +1900,7 @@ async def api_ghost(req: GhostRequest):
                 api_key=EMERGENT_LLM_KEY,
                 session_id=str(uuid.uuid4()),
                 system_message=sys,
-            ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+            ).with_model("anthropic", "claude-haiku-4-5-20251001")
             raw = await chat.send_message(UserMessage(text=entry.text[:1500]))
             cand = (raw or "").strip().strip('"').strip()
             if cand and cand.upper() not in {"NULL", "NONE"}:
@@ -3632,11 +3632,6 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
         f"Se l'utente sta sfogando, NON dare consigli — solo presenza. "
         f"Adatta il registro al suo (forbito/colloquiale/laconico). "
         f"Onesto: se non sai dì 'boh, non lo so'.\n"
-        f"\n"
-        f"AUDIO TAG ElevenLabs v3 (USO MISURATO): apri con UNA SOLA tag emotiva tra "
-        f"[warmly] [gently] [sympathetic] [curious] [thoughtful] [concerned]. "
-        f"Al massimo 1 tag aggiuntiva nel mezzo se serve davvero ([pause], [sighs softly]). "
-        f"Mai più di 2 tag totali.\n"
         f"{memory_block}"
         f"\n"
         f"AZIONI (campo 'actions', emetti SOLO se l'utente lo chiede esplicitamente):\n"
@@ -3797,50 +3792,37 @@ async def _fast_pipeline_task(
                 if not clean.strip():
                     return
                 vs = _voice_settings_for_tone(current_tone, None, None)
-                use_v3 = _has_audio_tags(sentence)
-                model_id = "eleven_v3" if use_v3 else "eleven_flash_v2_5"
+                # FAST PATH: SEMPRE eleven_flash_v2_5 (~75ms TTFB, ~real-time gen).
+                # Il modello eleven_v3 è MOLTO più lento (~3-9s per frase corta)
+                # e il prompt chiede a Claude di mettere [warmly] etc. davanti,
+                # quindi se rilevassimo gli audio tag finiremmo SEMPRE su v3.
+                # I tag tipo [warmly] vengono comunque rimossi da _strip_audio_tags
+                # e Flash v2.5 li ignorerebbe in ogni caso → niente perdita.
+                model_id = "eleven_flash_v2_5"
 
                 def _do_tts():
                     audio = bytearray()
                     kwargs = dict(
-                        text=sentence if use_v3 else clean,
+                        text=clean,
                         voice_id=voice_id,
                         model_id=model_id,
-                        output_format="mp3_44100_128",
+                        output_format="mp3_44100_64",  # 64kbps @ 44.1kHz — buon compromesso qualità/velocità
                         voice_settings=vs,
+                        optimize_streaming_latency=4,  # Flash v2.5: TTFB ~75ms
                     )
-                    if use_v3:
-                        kwargs["apply_text_normalization"] = "off"
                     try:
                         gen = client_el.text_to_speech.convert(**kwargs)
                         for chunk in gen:
                             if chunk:
                                 audio.extend(chunk)
                     except Exception as e:
-                        if use_v3:
-                            logger.warning(f"[fast] v3 failed, retry flash: {e}")
-                            audio.clear()
-                            try:
-                                fb = dict(
-                                    text=clean,
-                                    voice_id=voice_id,
-                                    model_id="eleven_flash_v2_5",
-                                    output_format="mp3_44100_128",
-                                    voice_settings=vs,
-                                )
-                                gen2 = client_el.text_to_speech.convert(**fb)
-                                for chunk in gen2:
-                                    if chunk:
-                                        audio.extend(chunk)
-                            except Exception as e2:
-                                logger.error(f"[fast] tts fallback failed: {e2}")
-                        else:
-                            raise
+                        logger.error(f"[fast] tts error: {e}")
                     return bytes(audio)
 
                 t_tts = time.time()
                 audio_bytes = await asyncio.to_thread(_do_tts)
                 tts_ms = int((time.time() - t_tts) * 1000)
+                logger.info(f"[fast] sentence idx={idx} chars={len(clean)} tts_ms={tts_ms} mp3_bytes={len(audio_bytes)}")
                 if not audio_bytes:
                     logger.warning(f"[fast] empty TTS for sentence idx={idx}")
                     return
