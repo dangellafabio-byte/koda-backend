@@ -48,7 +48,6 @@ import Orb, { OrbTone } from "../components/Orb";
 import EclipseOrb from "../components/EclipseOrb";
 import MirrorPool from "../components/MirrorPool";
 import LiquidInversionBg from "../components/LiquidInversionBg";
-import { prefetchBridges, playBridge, stopBridge, detectTier, BridgeTier, setBridgeVoiceId } from "../lib/bridge";
 import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
 import KodaSplash from "../components/KodaSplash";
 import KodaTour, { TourStep } from "../components/KodaTour";
@@ -491,22 +490,6 @@ export default function Taccuino() {
     };
   }, []);
   const pulse = useRef(new Animated.Value(1)).current;
-  // === BRIDGE: tier in base al tono dell'utente (richiesta 2026-06) ===
-  // Aggiornato dopo ogni transcript dell'utente da detectTier(). Usato
-  // immediatamente al silenzio successivo per scegliere quale tier di
-  // bridge riprodurre.
-  const userTierRef = useRef<BridgeTier>("generico");
-  // Pre-fetch dei bridge mp3 al boot dell'app (fire-and-forget).
-  useEffect(() => {
-    prefetchBridges().catch(() => {});
-  }, []);
-  // Sync della voice_id corrente con bridge.ts: quando il profilo carica
-  // o l'utente cambia voce, il modulo bridge re-fetcha gli mp3 con la
-  // nuova voce. Risolve il bug "bridge con voce Matilda ma TTS Jessica".
-  useEffect(() => {
-    const vid = profile?.settings?.tts_voice_id || null;
-    setBridgeVoiceId(vid);
-  }, [profile?.settings?.tts_voice_id]);
   // === AURORA: ciclo neon infinito (richiesta utente 2026-06) ===
   // Quando il tema è "giorno" (label "Aurora"), interpoliamo il
   // backgroundColor attraverso 5 tinte neon notturne in un loop di
@@ -984,11 +967,6 @@ export default function Taccuino() {
       // Il conversation_mode hands-free è disabilitato (causa di freeze su iOS).
       // Arriverà nella Fase 4 con Deepgram + dev build.
       setStatus("speaking");
-      // === BRIDGE STOP (richiesta utente 2026-06) ===
-      // Se un bridge audio è ancora in corso (intercalare "Mh, vediamo..."),
-      // lo interrompiamo proprio nel momento in cui la voce VERA di Koda
-      // sta per partire. Niente sovrapposizioni.
-      try { stopBridge(); } catch {}
       await SpeechMod.speak(text, { language: langTag, tone });
       setStatus("idle");
     },
@@ -1574,8 +1552,6 @@ export default function Taccuino() {
     ]);
     setStatus("speaking");
     try {
-      // Ferma il bridge intercalare prima della voce vera di Koda.
-      try { stopBridge(); } catch {}
       await SpeechMod.speak(text, { language: "it-IT", tone: "warm" });
     } catch {}
     setStatus("idle");
@@ -1719,17 +1695,6 @@ export default function Taccuino() {
     setStatus("transcribing");
     setMeterDb(null);
     setMeterThreshold(null);
-    // === BRIDGE START (richiesta utente 2026-06: "velocità di risposta") ===
-    // Riproduciamo IMMEDIATAMENTE un mp3 intercalare ("Mh.", "Ah ok.",
-    // "Allora vediamo..."). Cachato in locale → zero latenza. Mentre
-    // suona, in parallelo gira la pipeline reale (Deepgram → Claude →
-    // ElevenLabs). Quando la risposta vera è pronta, speakIfEnabled
-    // chiama stopBridge() e parte la voce vera. Il tier (sobrio /
-    // amichevole / schietto) viene scelto in base all'ULTIMO transcript
-    // dell'utente (userTierRef), aggiornato dopo ogni messaggio.
-    try {
-      playBridge(userTierRef.current).catch(() => {});
-    } catch {}
     try {
       const res = await current.stop();
       // Ora possiamo liberare il ref: l'audio session è stata rilasciata.
