@@ -325,8 +325,12 @@ async def transcribe_deepgram(audio: UploadFile = File(...), language: str = For
             )
         except Exception:
             transcript = ""
-        # Riusiamo il pulitore di Whisper per rimuovere comuni junk strings
-        return {"text": _clean_whisper_output(transcript.strip())}
+        cleaned = _clean_whisper_output(transcript.strip())
+        logger.info(
+            f"[deepgram] audio_bytes={len(data)} mime={mimetype} "
+            f"raw={transcript[:120]!r} cleaned={cleaned[:120]!r}"
+        )
+        return {"text": cleaned}
     except HTTPException:
         raise
     except Exception as e:
