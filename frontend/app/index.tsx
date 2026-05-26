@@ -1295,55 +1295,19 @@ export default function Taccuino() {
           await speakIfEnabled(reply, aiEntry.tone || "warm");
           return;
         }
-        // === FAST STREAMING FLOW ===
-        // Quando NON siamo in confessionale e la voce è abilitata, usiamo
-        // l'endpoint /api/converse-stream-audio che fa tutto in un colpo:
-        //   STT-result → Claude(streaming) → ElevenLabs(streaming per frase)
-        //                                  → MP3 chunks → AVPlayer
-        // TTFB tipico ~100-300ms. Il testo della risposta viene salvato
-        // server-side; dopo la fine del playback rifresciamo la timeline.
+        // === FAST PATH (sub-2s latency) — 2026-06 ===
+        // POST /api/converse-fast/start + long-poll → token MP3 statici
+        // riprodotti in sequenza. iOS AVPlayer è happy (Content-Length +
+        // Range). Time-to-first-audio target: 1.0-1.7s server + ~200ms rete.
         //
-        // Il visual è ora `EclipseOrb`: aurora procedurale guidata dal
-        // `tone` semantico della risposta, NON dall'ampiezza audio
-        // (approccio precedente con waveform server-side abbandonato:
-        // troppi anelli di sync, effetto "macchinoso").
-        // === FAST STREAMING FLOW — DISATTIVATO 2026-05-24 ===
-        // Lo streaming chunked di /converse-stream-audio è inaffidabile su
-        // iOS: AVPlayer rifiuta MP3 chunked-transfer senza Content-Length e
-        // Accept-Ranges, fallendo SILENZIOSAMENTE (orb passa a thinking poi
-        // torna idle senza audio, senza errori). Visto in produzione molte
-        // volte; il fallback a prepare-first non basta perché ok=true viene
-        // restituito anche quando l'audio non è davvero partito.
-        //
-        // Soluzione: bypassiamo del tutto il fast path. Usiamo SOLO il flusso
-        // /converse + /tts/prepare + /tts/audio/{token}.mp3 (static file con
-        // header completi), che è 100% affidabile. La latenza extra è ~2-3s
-        // (Claude + ElevenLabs genera l'intero MP3 prima di rispondere), ma
-        // l'utente preferisce 100 volte avere la risposta che lo streaming
-        // muto.
-        //
-        // Se in futuro vorremo riattivare lo streaming, dobbiamo prima
-        // verificare che il backend serva /converse-stream-audio con header
-        // Content-Length/Accept-Ranges corretti.
-        const useFastPath = false;
-        // const useFastPath = !confessionalMode && (profile?.settings.voice_response !== false);
+        // Funziona sia in normale che in confessionale-soft (ephemeral).
+        // Sealed/cifrato passa per il branch sopra (mai per qui).
+        const useFastPath = (profile?.settings.voice_response !== false);
         if (useFastPath) {
           try {
-            const reqId = Math.random().toString(36).slice(2, 18);
-            const streamUrl =
-              `${API_BASE}/converse-stream-audio?text=${encodeURIComponent(txt)}&id=${reqId}` +
-              (confessionalMode ? `&ephemeral=true` : "");
-            // Durante TTFB (300-800ms) mostriamo "thinking" (eclissi ciclamino,
-            // flicker). Lo switch a "speaking" (vibrazione organica) avviene
-            // SOLO quando l'audio comincia davvero a suonare — così l'eclissi
-            // non vibra mentre è ancora silenziosa (era confusing).
-            setStatus("thinking");
-            // Watchdog: se entro 30s NON si è ancora passati a "speaking",
-            // significa che il backend è bloccato (timeout Claude, hang, ecc.).
-            // Senza questo, l'app resta sullo spinner per sempre (vedi
-            // screenshot utente). Quando scatta, mostra errore e torna idle.
-            let watchdogTriggered = false;
+            // Watchdog: se entro 25s non parte l'audio, abortiamo.
             let speakingStarted = false;
+            let watchdogTriggered = false;
             const watchdog = setTimeout(() => {
               if (!speakingStarted) {
                 watchdogTriggered = true;
@@ -1352,93 +1316,77 @@ export default function Taccuino() {
                 setError("Koda ci sta mettendo troppo. Riprova tra un attimo.");
                 setTimeout(() => setError(null), 4000);
               }
-            }, 30000);
-            const ok = await SpeechMod.playFromUrl(streamUrl, () => {
-              // L'audio è iniziato → ora ha senso vibrare.
-              speakingStarted = true;
-              clearTimeout(watchdog);
-              setStatus("speaking");
+            }, 25000);
+
+            // Cattura immediata del meta per aggiornare la chat appena
+            // arriva (di solito poco dopo il primo token audio).
+            let capturedMeta: any = null;
+
+            const result = await SpeechMod.fastConverse(txt, {
+              ephemeral: confessionalMode,
+              onAudioStart: () => {
+                speakingStarted = true;
+                clearTimeout(watchdog);
+                setStatus("speaking");
+              },
+              onMeta: (meta) => {
+                capturedMeta = meta;
+                // Sostituisci l'ottimistico user entry con uno "finale" e
+                // aggiungi l'AI entry SUBITO — così la chat è aggiornata
+                // mentre l'audio sta ancora suonando le frasi rimanenti.
+                try {
+                  const userFinal: TimelineEntry = {
+                    ...optimistic,
+                    id: `fast-u-${Date.now()}`,
+                    confessional: confessionalMode || undefined,
+                  };
+                  const aiEntry: TimelineEntry = {
+                    id: `fast-ai-${Date.now()}`,
+                    role: "ai",
+                    text: meta.reply || "",
+                    voice_text: meta.voice_text || undefined,
+                    tone: (meta.tone as Tone) || "warm",
+                    timestamp: new Date().toISOString(),
+                    actions: meta.actions || undefined,
+                    confessional: confessionalMode || undefined,
+                  };
+                  setTimeline((prev) => {
+                    const filtered = prev.filter((e) => e.id !== optimistic.id);
+                    return [...filtered, userFinal, aiEntry];
+                  });
+                  // Esegui le actions richieste (theme change, ecc.).
+                  if (Array.isArray(meta.actions) && meta.actions.length > 0) {
+                    runActions(meta.actions as any[]);
+                  }
+                } catch (e) {
+                  console.warn("[fast] onMeta handler error:", e);
+                }
+              },
             });
             clearTimeout(watchdog);
-            // Se il watchdog ha già gestito (timeout), non sovrascrivere lo stato.
-            if (watchdogTriggered) {
+            if (watchdogTriggered) return;
+            if (!result.ok) {
+              // Fast fallito — vado al flusso standard sotto.
+              console.warn("[fast] failed:", result.error, "— falling back to /converse");
+              setStatus("thinking");
+              // Continua col blocco standard sotto.
+            } else {
+              // Aggiorna il profilo (counters/memory) in background.
+              if (!confessionalMode) {
+                try {
+                  const p = await api.getProfile();
+                  setProfile(p);
+                } catch {}
+              }
+              setStatus("idle");
               return;
             }
-            // Refresh della timeline (il backend ha salvato user+ai entries).
-            // IMPORTANTE: i messaggi confessionali (flag `confessional:true`)
-            // NON sono mai persistiti sul server (ephemeral/sealed). Se
-            // sovrascriviamo lo state con `tl` perdiamo gli entry confessionali
-            // creati prima in questa sessione. Quindi facciamo un MERGE che
-            // preserva gli entry locali confessionali, ordinati per timestamp.
-            try {
-              const tl = await api.getTimeline(200);
-              setTimeline((prev) => {
-                const localConfessional = prev.filter((e) => e.confessional);
-                if (localConfessional.length === 0) return tl;
-                const merged = [...tl, ...localConfessional];
-                merged.sort(
-                  (a, b) =>
-                    new Date(a.timestamp).getTime() -
-                    new Date(b.timestamp).getTime()
-                );
-                return merged;
-              });
-              // Esegui le azioni dell'ultima ai_entry (theme, ecc.).
-              const lastAi = [...tl].reverse().find((e) => e.role === "ai");
-              if (lastAi?.actions?.length) {
-                runActions(lastAi.actions);
-              }
-            } catch (e) {
-              console.warn("[sendText] timeline refresh after stream failed:", e);
-            }
-            // Refresh profile (counters + memory_summary)
-            try {
-              const p = await api.getProfile();
-              setProfile(p);
-            } catch {}
-            setStatus("idle");
-            // Se il playback streaming è fallito, NON limitiamoci a mostrare
-            // un errore: facciamo FALLBACK alla TTS prepare-first usando il
-            // testo già generato da Claude (che è nella timeline appena
-            // rinfrescata). Questo bypassa il problema di AVPlayer iOS che
-            // rifiuta MP3 chunked-transfer senza header Content-Length e
-            // Accept-Ranges. La latenza extra è ~1-2s (rigenerazione TTS),
-            // ma l'utente sente la risposta invece di vedere l'orb tornare
-            // muto. Sintomo descritto dall'utente 2026-05-24: "tocco, parlo,
-            // l'orb diventa ciclamino per meno di un secondo poi torna
-            // champagne senza messaggi". Causa: ok=false → setError briefly
-            // → idle. Ora invece riproduce davvero la risposta.
-            if (!ok) {
-              try {
-                const tl2 = await api.getTimeline(50);
-                const lastAi = [...tl2].reverse().find((e) => e.role === "ai");
-                if (lastAi?.text) {
-                  setStatus("speaking");
-                  try {
-                    await SpeechMod.speak(lastAi.voice_text || lastAi.text, {
-                      language: profile?.language === "it" ? "it-IT" : "it-IT",
-                      tone: (lastAi.tone as any) || "warm",
-                    });
-                  } catch {}
-                  setStatus("idle");
-                } else {
-                  // Anche il fallback non ha materiale: avvisa l'utente.
-                  setError("La voce non è partita — riprova a parlare.");
-                  setTimeout(() => setError(null), 3000);
-                }
-              } catch {
-                setError("La voce non è partita — riprova a parlare.");
-                setTimeout(() => setError(null), 3000);
-              }
-            }
-            return;
           } catch (e: any) {
-            // Fallback al flusso classico — non perdiamo il messaggio dell'utente.
-            console.warn("[sendText] fast streaming path failed, falling back to /converse:", e);
+            console.warn("[fast] threw, falling back:", e);
             setStatus("thinking");
-            // ↓ continua con il blocco `api.converse` standard sotto
           }
         }
+        // === STANDARD FLOW (fallback) ===
         // === STANDARD FLOW (con o senza ephemeral) ===
         const res = await api.converse(txt, undefined, { ephemeral: confessionalMode });
         // Replace optimistic with real, then add AI entry.

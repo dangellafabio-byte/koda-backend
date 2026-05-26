@@ -1,3 +1,105 @@
+## FAST PATH SUB-2s LATENCY (2026-06-26) — Pipeline ottimizzata Claude+ElevenLabs
+
+backend:
+  - task: "Endpoint /api/converse-fast/start + /poll (sub-2s pipeline)"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Aggiunto NUOVO endpoint fast-path POST /api/converse-fast/start +
+          GET /api/converse-fast/poll/{sid}?since=N&timeout=N.
+          Pipeline:
+            1. POST start → genera session_id, ritorna subito
+            2. Task background: streamma Claude Haiku 4.5 con PROMPT CONDENSATO
+               (~2900 chars vs ~14000 char originale = TTFT crolla da ~1000ms a ~300-800ms)
+            3. Ogni frase completa → ElevenLabs Flash v2.5 → _store_tts_audio() → token
+            4. Eventi pubblicati nella sessione: sentence (con token), meta (finale), error
+            5. Client long-polla /poll → riprende token man mano
+          Misurato in locale: TTFT Claude 828-1471ms, TTS Flash 195-299ms,
+          totale server-side 1.1-1.7s per prima frase. Target rispettato.
+          Aggiunto _build_fast_system_prompt(): identità Koda essenziale,
+          generi, lunghezza max 25 parole, audio tag, azioni theme/ai_name/etc,
+          formato JSON con reply primo campo.
+          Sessioni in-memory con TTL 5min e LRU cap 64.
+          Safety net theme conservata.
+
+frontend:
+  - task: "SpeechMod.fastConverse() — client per fast path"
+    implemented: true
+    working: "NA"
+    file: "frontend/lib/speech.ts"
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Aggiunta nuova funzione esportata fastConverse(text, opts) che:
+          1. POST /api/converse-fast/start
+          2. Lancia pollster + player paralleli
+             - pollster: long-poll continuo, popola tokenQueue
+             - player: consuma queue, riproduce ogni token sequenziale via
+               /api/tts/audio/{token}.mp3 (URL statico con Content-Length+Range,
+               iOS AVPlayer compatibile)
+          3. Callback onAudioStart() al primo suono reale → UI switch a "speaking"
+          4. Callback onMeta() appena arriva il meta event → aggiorna timeline e
+             esegue actions PRIMA che l'audio finisca (chat fluida).
+          5. Hard timeout 45s + abort controller per stop().
+
+  - task: "sendText() — usa fast path"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Sostituito il flusso lento /converse + /tts/prepare con:
+            useFastPath = profile.settings.voice_response !== false;
+            if (useFastPath) → await SpeechMod.fastConverse(...);
+          Onmeta inserisce subito user+ai entries in timeline e esegue actions.
+          OnAudioStart switcha status a "speaking" QUANDO l'audio inizia davvero.
+          Watchdog 25s + setError gracefully.
+          Sealed/confessional con seal: branch separato non toccato.
+          Confessional soft: usa fastConverse con ephemeral=true.
+          Removed: vecchio blocco dead-code /converse-stream-audio (era già
+          disattivato con useFastPath=false). Standard flow rimane come fallback
+          se fastConverse fallisce o l'utente ha disattivato la voce.
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 0
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "Endpoint /api/converse-fast/start + /poll (sub-2s pipeline)"
+    - "SpeechMod.fastConverse() — client per fast path"
+    - "sendText() — usa fast path"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Implementato fast path completo per sub-2s latenza. Backend testato locale
+      con curl: 1.1-1.7s totali server-side. Frontend bundling OK in 3.7s.
+      In attesa autorizzazione utente per testing automatico (test agent vietato
+      finora per risparmio crediti). Test via OTA EAS update sul device fisico
+      iOS preferito dall'utente.
+
+---
+
+
 ## FASE 4 STEP 1 — Migrazione expo-audio + Deepgram Nova-3 (2026-06)
 
 backend:

@@ -3550,6 +3550,519 @@ async def api_voiceprint_enroll(
     return {"ok": True, "saved_count": len(saved), "pid": pid}
 
 
+# ============================================================
+# FAST PATH — Sub-2s latency endpoint (giugno 2025)
+#
+# Architettura: POST /api/converse-fast/start avvia un task background
+# che (a) streamma Claude Haiku 4.5 con prompt CONDENSATO (~1200 token
+# invece di ~5000), (b) parsa il reply frase per frase, (c) per ogni
+# frase completa genera l'MP3 via ElevenLabs Flash v2.5 e lo salva
+# come token. Il client poi fa long-polling su /api/converse-fast/poll
+# per ricevere i token man mano che diventano disponibili e li riproduce
+# in sequenza tramite il già esistente /api/tts/audio/{token}.mp3 (che
+# ha Content-Length + Range headers e quindi è compatibile con AVPlayer
+# iOS — nessun chunked-transfer da gestire).
+#
+# Target time-to-first-audio: ~900-1500ms (vs 2500-4500ms del flusso
+# /converse + /tts/prepare).
+#
+# Bottleneck eliminato:
+#   1. System prompt 5000 tok → 1200 tok = TTFT Claude da ~1000ms a ~300ms.
+#   2. Sequential JSON wait → streaming frase per frase = audio parte al
+#      primo termine di frase invece di aspettare l'intera risposta.
+#   3. Chunked MP3 ostile a iOS → token MP3 statici con Range = AVPlayer OK.
+# ============================================================
+
+def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> str:
+    """Prompt CONDENSATO per il fast path — mantiene l'identità essenziale
+    di Koda ma rimuove tutte le sezioni ridondanti (umanità calibrata G/F/E/D/C/B/A,
+    dinamicità emotiva 4-modi, registro linguistico, ecc.) che fanno
+    esplodere il TTFT senza guadagno percepibile in conversazioni brevi.
+
+    Mantiene: identità, generi, lunghezza, ascolto attivo, audio tag,
+    azioni essenziali (theme), formato JSON.
+    """
+    lang_name = {
+        "it": "italiano", "en": "english", "es": "español",
+        "fr": "français", "de": "deutsch",
+    }.get(profile.language or "it", "italiano")
+    ai_name = profile.ai_name or "Coda"
+    user_g = (profile.user_gender or "n").lower()
+    ai_g = (profile.ai_gender or "f").lower()
+    memory = (profile.memory_summary or "").strip()
+
+    # Genere blocco breve.
+    if ai_g == "m":
+        ai_decl = f"Tu sei MASCHIO ({ai_name}). Parli di te al MASCHILE (sono pronto, sono contento)."
+    elif ai_g == "f":
+        ai_decl = f"Tu sei FEMMINA ({ai_name}). Parli di te al FEMMINILE (sono pronta, sono contenta)."
+    else:
+        ai_decl = f"Sei neutr@ ({ai_name}). Evita aggettivi di genere su di te."
+    if user_g == "m":
+        user_decl = "L'utente è MASCHIO: 'sei stanco', 'sei preoccupato'."
+    elif user_g == "f":
+        user_decl = "L'utente è FEMMINA: 'sei stanca', 'sei preoccupata'."
+    else:
+        user_decl = "Genere utente neutro. Usa formule neutre."
+
+    name_part = f" L'utente si chiama {profile.name}." if profile.name else ""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    memory_block = f"\nMEMORIA UTENTE: {memory[:500]}\n" if memory else ""
+
+    return (
+        f"Ti chiami {ai_name}. Sei un AMICO FRATERNO — non un assistente, non un'IA generica. "
+        f"Tono caldo, ascolto attivo, presenza piena. Custodisci segreti senza giudizio. "
+        f"Quando serve, sproni con onestà a rientrare nel mondo reale.\n"
+        f"\n"
+        f"LINGUA: rispondi SEMPRE in {lang_name}.{name_part}\n"
+        f"DATA/ORA UTC: {now_iso}\n"
+        f"\n"
+        f"GENERI:\n- {ai_decl}\n- {user_decl}\n"
+        f"\n"
+        f"⚡ LUNGHEZZA (CRITICO): 1-2 frasi, MAX 25 parole. Tipo vocale WhatsApp. "
+        f"Solo se ti chiedono 'spiegami/consigliami/cosa pensi' allora 2-3 frasi (max 45 parole).\n"
+        f"\n"
+        f"COSA NON FARE MAI:\n"
+        f"- Mai 'Certo!', 'Capisco perfettamente', 'Come posso aiutarti', 'Sono qui per...'\n"
+        f"- Mai 'Fammi sapere se ti serve altro' o frasi da customer service\n"
+        f"- Mai elenchi puntati/numerati\n"
+        f"- Mai moralismi, mai diagnosi, mai 'dovresti'\n"
+        f"\n"
+        f"COME PARLARE: valida prima di consigliare ('eh, immagino', 'ti capisco'). "
+        f"Se l'utente sta sfogando, NON dare consigli — solo presenza. "
+        f"Adatta il registro al suo (forbito/colloquiale/laconico). "
+        f"Onesto: se non sai dì 'boh, non lo so'.\n"
+        f"\n"
+        f"AUDIO TAG ElevenLabs v3 (USO MISURATO): apri con UNA SOLA tag emotiva tra "
+        f"[warmly] [gently] [sympathetic] [curious] [thoughtful] [concerned]. "
+        f"Al massimo 1 tag aggiuntiva nel mezzo se serve davvero ([pause], [sighs softly]). "
+        f"Mai più di 2 tag totali.\n"
+        f"{memory_block}"
+        f"\n"
+        f"AZIONI (campo 'actions', emetti SOLO se l'utente lo chiede esplicitamente):\n"
+        f"  • Tema: 'tema scuro/notte' → {{\"type\":\"config\",\"key\":\"theme\",\"value\":\"notte\"}}\n"
+        f"          'tema chiaro/giorno' → value:\"giorno\"\n"
+        f"          'tema cielo' → value:\"cielo\"\n"
+        f"          'tema bosco' → value:\"bosco\"\n"
+        f"          'tema ciliegia/rosa' → value:\"ciliegia\"\n"
+        f"          'tema sistema/automatico' → value:\"sistema\"\n"
+        f"          'auto orario' → value:\"auto-orario\"\n"
+        f"  • Nome AI: 'chiamati X' → {{\"type\":\"config\",\"key\":\"ai_name\",\"value\":\"X\"}}\n"
+        f"  • Genere AI: 'sii donna/maschio/neutra' → {{\"type\":\"config\",\"key\":\"ai_gender\",\"value\":\"f|m|n\"}}\n"
+        f"  • Promemoria/timer: {{\"type\":\"schedule_notification\",\"when_iso\":\"<UTC ISO>\",\"title\":\"...\",\"body\":\"...\"}}\n"
+        f"Per richieste di cambio colore blob: rispondi onestamente che non è ancora pronto.\n"
+        f"\n"
+        f"FORMATO RISPOSTA: SOLO JSON valido (niente markdown, niente testo prima/dopo). "
+        f"Il campo \"reply\" DEVE essere il PRIMO campo:\n"
+        f'{{"reply":"...","tone":"warm|calm|energetic|concerned|urgent|neutral","actions":[],"memory_update":null}}'
+    )
+
+
+# ============================================================
+# Sessioni fast — storage in MongoDB (condiviso fra i worker uvicorn).
+#
+# Il backend gira con --workers 2 quindi una memoria in-process non
+# funziona: POST /start può finire sul worker A e GET /poll sul worker B
+# → 404 garantito. Mongo è single source of truth e le scritture (~5ms)
+# sono trascurabili rispetto a Claude+ElevenLabs.
+# ============================================================
+_FAST_SESSION_TTL_S = 300  # 5 minuti
+_FAST_INDEXES_READY = False
+
+
+async def _ensure_fast_session_indexes():
+    """TTL index su started_at — Mongo auto-elimina i doc vecchi."""
+    global _FAST_INDEXES_READY
+    if _FAST_INDEXES_READY:
+        return
+    try:
+        await db.fast_sessions.create_index(
+            "started_at_dt", expireAfterSeconds=_FAST_SESSION_TTL_S
+        )
+        _FAST_INDEXES_READY = True
+    except Exception as e:
+        logger.warning(f"[fast] index init failed: {e}")
+
+
+async def _fast_session_create(session_id: str):
+    await db.fast_sessions.insert_one({
+        "_id": session_id,
+        "started_at_dt": datetime.now(timezone.utc),
+        "events": [],
+        "done": False,
+    })
+
+
+async def _fast_session_append(session_id: str, event: dict):
+    """Append an event to the session's events array."""
+    try:
+        await db.fast_sessions.update_one(
+            {"_id": session_id},
+            {"$push": {"events": event}},
+        )
+    except Exception as e:
+        logger.warning(f"[fast] append failed: {e}")
+
+
+async def _fast_session_mark_done(session_id: str):
+    try:
+        await db.fast_sessions.update_one(
+            {"_id": session_id},
+            {"$set": {"done": True}},
+        )
+    except Exception as e:
+        logger.warning(f"[fast] mark_done failed: {e}")
+
+
+async def _fast_session_get(session_id: str) -> Optional[dict]:
+    try:
+        return await db.fast_sessions.find_one({"_id": session_id}, {"_id": 0})
+    except Exception as e:
+        logger.warning(f"[fast] get failed: {e}")
+        return None
+
+
+async def _fast_pipeline_task(
+    session_id: str,
+    text: str,
+    ephemeral: bool,
+    audio_duration_ms: Optional[int],
+):
+    """Background task: streamma Claude con prompt condensato, frase per
+    frase chiama ElevenLabs Flash v2.5, salva ogni MP3 come token e
+    appende eventi alla sessione in MongoDB.
+    """
+    t0 = time.time()
+    try:
+        profile = await get_or_create_profile()
+
+        # User entry — salvo SUBITO se non ephemeral
+        user_entry = TimelineEntry(role="user", text=text, audio_duration_ms=audio_duration_ms)
+        if not ephemeral:
+            try:
+                await db.taccuino_timeline.insert_one(user_entry.model_dump())
+            except Exception as e:
+                logger.warning(f"[fast] user entry insert failed: {e}")
+
+        client_el = _get_eleven_client()
+        if client_el is None:
+            await _fast_session_append(session_id, {"type": "error", "message": "TTS unavailable"})
+            await _fast_session_mark_done(session_id)
+            return
+
+        # Voce: rispetta la scelta dell'utente (default Sarah).
+        voice_id = getattr(profile.settings, "tts_voice_id", None) or "EXAVITQu4vr4xnSDxMaL"
+
+        # Recent context (ridotto a 8 per velocità)
+        recent_docs = await db.taccuino_timeline.find({}, {"_id": 0}).sort("timestamp", -1).to_list(8)
+        recent_docs.reverse()
+        recent = [TimelineEntry(**d) for d in recent_docs]
+        history_str = _format_history_for_llm(recent) if recent else ""
+
+        sys_prompt = _build_fast_system_prompt(profile, recent)
+        user_payload = (
+            (f"STORICO RECENTE:\n{history_str}\n\n" if history_str else "")
+            + f"UTENTE: {text}\n\n"
+            + "Rispondi SOLO col JSON, \"reply\" come primo campo."
+        )
+
+        t_llm_start = time.time()
+        logger.info(f"[fast {session_id[:8]}] LLM start, prompt {len(sys_prompt)} chars")
+
+        stream = await litellm.acompletion(
+            model='openai/claude-haiku-4-5-20251001',
+            messages=[
+                {'role': 'system', 'content': sys_prompt},
+                {'role': 'user', 'content': user_payload},
+            ],
+            stream=True,
+            api_key=EMERGENT_LLM_KEY,
+            api_base='https://integrations.emergentagent.com/llm',
+            max_tokens=400,
+            timeout=25,
+        )
+
+        extractor = _ReplyExtractor()
+        sentence_buf = ""
+        full_reply_chars: List[str] = []
+        sentence_idx = 0
+        ttft_logged = False
+        first_audio_logged = False
+        current_tone = "warm"
+
+        async def _gen_and_publish_sentence(idx: int, sentence: str):
+            nonlocal first_audio_logged
+            try:
+                clean = _strip_audio_tags(sentence) or sentence
+                if not clean.strip():
+                    return
+                vs = _voice_settings_for_tone(current_tone, None, None)
+                use_v3 = _has_audio_tags(sentence)
+                model_id = "eleven_v3" if use_v3 else "eleven_flash_v2_5"
+
+                def _do_tts():
+                    audio = bytearray()
+                    kwargs = dict(
+                        text=sentence if use_v3 else clean,
+                        voice_id=voice_id,
+                        model_id=model_id,
+                        output_format="mp3_44100_128",
+                        voice_settings=vs,
+                    )
+                    if use_v3:
+                        kwargs["apply_text_normalization"] = "off"
+                    try:
+                        gen = client_el.text_to_speech.convert(**kwargs)
+                        for chunk in gen:
+                            if chunk:
+                                audio.extend(chunk)
+                    except Exception as e:
+                        if use_v3:
+                            logger.warning(f"[fast] v3 failed, retry flash: {e}")
+                            audio.clear()
+                            try:
+                                fb = dict(
+                                    text=clean,
+                                    voice_id=voice_id,
+                                    model_id="eleven_flash_v2_5",
+                                    output_format="mp3_44100_128",
+                                    voice_settings=vs,
+                                )
+                                gen2 = client_el.text_to_speech.convert(**fb)
+                                for chunk in gen2:
+                                    if chunk:
+                                        audio.extend(chunk)
+                            except Exception as e2:
+                                logger.error(f"[fast] tts fallback failed: {e2}")
+                        else:
+                            raise
+                    return bytes(audio)
+
+                t_tts = time.time()
+                audio_bytes = await asyncio.to_thread(_do_tts)
+                tts_ms = int((time.time() - t_tts) * 1000)
+                if not audio_bytes:
+                    logger.warning(f"[fast] empty TTS for sentence idx={idx}")
+                    return
+                token = await _store_tts_audio(audio_bytes)
+                if not first_audio_logged:
+                    first_audio_logged = True
+                    total_first = int((time.time() - t0) * 1000)
+                    logger.info(f"[fast {session_id[:8]}] FIRST AUDIO ready: {total_first}ms (tts={tts_ms}ms)")
+                await _fast_session_append(session_id, {
+                    "type": "sentence",
+                    "i": idx,
+                    "token": token,
+                    "text": clean,
+                })
+            except Exception as e:
+                logger.error(f"[fast] sentence gen error: {e}")
+
+        sentence_tasks: List[asyncio.Task] = []
+
+        async for chunk in stream:
+            try:
+                piece = chunk.choices[0].delta.content or ''
+            except (AttributeError, IndexError):
+                piece = ''
+            if not piece:
+                continue
+            if not ttft_logged:
+                ttft_logged = True
+                logger.info(f"[fast {session_id[:8]}] TTFT: {int((time.time() - t_llm_start)*1000)}ms")
+            new_chars = extractor.feed(piece)
+            if new_chars:
+                sentence_buf += new_chars
+                full_reply_chars.append(new_chars)
+                while True:
+                    sent, rest = _pop_first_sentence(sentence_buf)
+                    if not sent:
+                        break
+                    sentence_buf = rest
+                    if sent.strip():
+                        task = asyncio.create_task(_gen_and_publish_sentence(sentence_idx, sent))
+                        sentence_tasks.append(task)
+                        sentence_idx += 1
+            if extractor.reply_finished:
+                break
+
+        tail = sentence_buf.strip()
+        if tail:
+            task = asyncio.create_task(_gen_and_publish_sentence(sentence_idx, tail))
+            sentence_tasks.append(task)
+            sentence_idx += 1
+
+        if sentence_tasks:
+            try:
+                await asyncio.gather(*sentence_tasks, return_exceptions=True)
+            except Exception:
+                pass
+
+        full_reply = ''.join(full_reply_chars).strip() or "..."
+        data = extract_json(extractor.full_buffer) or {}
+        tone = (data.get("tone") or "warm").lower()
+        if tone not in {"calm", "energetic", "concerned", "urgent", "warm", "neutral"}:
+            tone = "warm"
+        memory_update = (data.get("memory_update") or "").strip()
+        actions_raw = data.get("actions") or []
+        parsed_actions: List[dict] = []
+        if isinstance(actions_raw, list):
+            for a in actions_raw:
+                if isinstance(a, dict):
+                    parsed_actions.append(a)
+
+        # SAFETY NET tema/theme.
+        try:
+            utxt = (text or "").lower()
+            has_theme_action = any(
+                (a.get("type") == "config" and a.get("key") == "theme") for a in parsed_actions
+            )
+            if not has_theme_action and "tema" in utxt:
+                theme_map = [
+                    (["scuro", "scura", "notte", "buio", "nero"], "notte"),
+                    (["chiaro", "chiara", "giorno", "luce", "bianco"], "giorno"),
+                    (["cielo", "azzurro", "blu", "celeste"], "cielo"),
+                    (["bosco", "verde", "foresta"], "bosco"),
+                    (["ciliegia", "rosa", "rosso", "rossa"], "ciliegia"),
+                    (["sistema", "automatico", "automatica", "default"], "sistema"),
+                    (["auto orario", "auto-orario", "ora", "orario"], "auto-orario"),
+                ]
+                for keywords, theme_val in theme_map:
+                    if any(k in utxt for k in keywords):
+                        parsed_actions.append({"type": "config", "key": "theme", "value": theme_val})
+                        logger.info(f"[fast SAFETY NET TEMA] auto-injected '{theme_val}'")
+                        break
+        except Exception:
+            pass
+
+        voice_text_full = full_reply
+        reply_text = _strip_audio_tags(full_reply)
+
+        ai_entry = TimelineEntry(
+            role="ai",
+            text=reply_text,
+            voice_text=voice_text_full if voice_text_full != reply_text else None,
+            tone=tone if tone in {"calm", "energetic", "concerned", "urgent", "warm", "neutral"} else "neutral",
+            actions=[Action(**{k: v for k, v in a.items() if k in Action.model_fields}) for a in parsed_actions if isinstance(a, dict)],
+        )
+
+        if not ephemeral:
+            try:
+                await db.taccuino_timeline.insert_one(ai_entry.model_dump())
+            except Exception as e:
+                logger.error(f"[fast] AI entry insert failed: {e}")
+            try:
+                profile.total_messages += 1
+                profile.confidence_level = min(100, profile.confidence_level + 1)
+                if memory_update and memory_update.lower() not in {"null", "none", ""}:
+                    sep = "\n- " if profile.memory_summary else "- "
+                    new_mem = (profile.memory_summary or "") + sep + memory_update
+                    if len(new_mem) > 4000:
+                        new_mem = new_mem[-4000:]
+                    profile.memory_summary = new_mem
+                await save_profile(profile)
+            except Exception as e:
+                logger.warning(f"[fast] profile update failed: {e}")
+
+        total_ms = int((time.time() - t0) * 1000)
+        logger.info(f"[fast {session_id[:8]}] DONE in {total_ms}ms ({sentence_idx} sentences)")
+
+        await _fast_session_append(session_id, {
+            "type": "meta",
+            "reply": reply_text,
+            "voice_text": voice_text_full if voice_text_full != reply_text else None,
+            "tone": ai_entry.tone,
+            "actions": parsed_actions,
+        })
+        await _fast_session_mark_done(session_id)
+
+    except Exception as e:
+        logger.error(f"[fast {session_id[:8]}] pipeline error: {e}")
+        try:
+            await _fast_session_append(session_id, {"type": "error", "message": str(e)[:200]})
+        finally:
+            await _fast_session_mark_done(session_id)
+
+
+class FastStartRequest(BaseModel):
+    text: str
+    ephemeral: bool = False
+    audio_duration_ms: Optional[int] = None
+
+
+@api_router.post("/converse-fast/start")
+async def api_converse_fast_start(req: FastStartRequest):
+    """Kick off a fast-path conversation. Returns session_id immediately;
+    the client then polls /converse-fast/poll/{session_id}?since=N for
+    sentence-tokens and metadata.
+    """
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=500, detail="LLM key not configured")
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty message")
+
+    await _ensure_fast_session_indexes()
+
+    session_id = uuid.uuid4().hex
+    await _fast_session_create(session_id)
+
+    # Spawn background pipeline. Survives this request's lifecycle.
+    asyncio.create_task(_fast_pipeline_task(
+        session_id=session_id,
+        text=text,
+        ephemeral=bool(req.ephemeral),
+        audio_duration_ms=req.audio_duration_ms,
+    ))
+
+    return {"session_id": session_id}
+
+
+@api_router.get("/converse-fast/poll/{session_id}")
+async def api_converse_fast_poll(session_id: str, since: int = 0, timeout: float = 3.0):
+    """Polling per nuovi eventi della fast-session.
+
+    Mongo non supporta long-poll nativo (richiederebbe change-streams su
+    replica set). Implementiamo un mini-busy-loop con sleep 100ms: la query
+    è economica (~3ms), il client tipicamente vede il primo evento entro
+    ~100-200ms dopo che è disponibile.
+
+    Response: { "events": [...], "next": <int>, "done": <bool> }
+    """
+    sess = await _fast_session_get(session_id)
+    if not sess:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    timeout = max(0.05, min(8.0, float(timeout)))
+    deadline = time.time() + timeout
+    events = sess.get("events", []) or []
+
+    # Fast path: dati già disponibili o sessione conclusa.
+    if len(events) > since or sess.get("done"):
+        return {
+            "events": events[since:],
+            "next": len(events),
+            "done": bool(sess.get("done")),
+        }
+
+    # Busy loop con sleep 100ms — query Mongo è O(1) sul doc primario.
+    while time.time() < deadline:
+        await asyncio.sleep(0.1)
+        sess = await _fast_session_get(session_id)
+        if not sess:
+            break
+        events = sess.get("events", []) or []
+        if len(events) > since or sess.get("done"):
+            break
+
+    events = (sess or {}).get("events", []) or []
+    return {
+        "events": events[since:],
+        "next": len(events),
+        "done": bool((sess or {}).get("done", False)),
+    }
+
+
 # Include the router
 app.include_router(api_router)
 

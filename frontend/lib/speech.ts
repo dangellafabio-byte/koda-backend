@@ -561,6 +561,222 @@ function fallbackSpeak(text: string, lang: string, tone: Tone): Promise<void> {
   });
 }
 
+// ============================================================
+// FAST CONVERSE — sub-2s end-to-end latency client.
+// Calls POST /api/converse-fast/start, then long-polls
+// /api/converse-fast/poll/{sid} for sentence tokens. Each token's
+// MP3 is played sequentially via the existing static-file path
+// (/api/tts/audio/{token}.mp3) which has Content-Length + Range
+// headers — fully compatible with iOS AVPlayer.
+//
+// Time-to-first-audio: ~1.0-1.7s server-side + ~150-300ms network.
+// ============================================================
+
+export type FastConverseMeta = {
+  reply: string;
+  voice_text?: string | null;
+  tone?: Tone | null;
+  actions?: any[];
+};
+
+export type FastConverseResult = {
+  ok: boolean;
+  meta?: FastConverseMeta;
+  error?: string;
+};
+
+async function _playStaticTokenSequential(
+  token: string,
+  onAudioStart?: () => void,
+  signal?: AbortSignal
+): Promise<boolean> {
+  const url = `${API_BASE}/tts/audio/${token}.mp3`;
+  if (signal?.aborted) return false;
+  if (Platform.OS === "web") {
+    try {
+      const r = await fetch(url, { signal });
+      if (!r.ok) return false;
+      const buf = await r.arrayBuffer();
+      if (signal?.aborted) return false;
+      try { onAudioStart?.(); } catch {}
+      return await playElevenLabsWeb(buf);
+    } catch {
+      return false;
+    }
+  }
+  return await playElevenLabsNativeFromUrl(url, onAudioStart);
+}
+
+export async function fastConverse(
+  text: string,
+  opts: {
+    ephemeral?: boolean;
+    audioDurationMs?: number;
+    onAudioStart?: () => void;
+    onMeta?: (meta: FastConverseMeta) => void;
+    timeoutMs?: number;  // overall hard timeout (default 45s)
+  } = {}
+): Promise<FastConverseResult> {
+  const timeoutMs = opts.timeoutMs ?? 45000;
+
+  // Stop any in-flight playback so we don't overlap.
+  stopAllPlayback();
+  speakingNow = true;
+
+  // Re-arm iOS audio session (idempotent, fast).
+  await prewarmAudio();
+
+  const ac = new AbortController();
+  currentAbort = ac;
+
+  // Hard timeout: if the whole flow exceeds timeoutMs, abort.
+  const hardTimer = setTimeout(() => {
+    try { ac.abort(); } catch {}
+  }, timeoutMs);
+
+  try {
+    // 1) Start the session.
+    const startResp = await fetch(`${API_BASE}/converse-fast/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        ephemeral: !!opts.ephemeral,
+        audio_duration_ms: opts.audioDurationMs,
+      }),
+      signal: ac.signal,
+    });
+    if (!startResp.ok) {
+      const errText = await startResp.text().catch(() => "");
+      return { ok: false, error: `start failed: ${startResp.status} ${errText.slice(0, 200)}` };
+    }
+    const startData = await startResp.json();
+    const sid = startData?.session_id;
+    if (!sid || typeof sid !== "string") {
+      return { ok: false, error: "no session_id from server" };
+    }
+
+    // 2) Long-poll loop. Maintains a queue of pending tokens to play.
+    let cursor = 0;
+    let meta: FastConverseMeta | undefined;
+    let pollingDone = false;
+    let firstAudioFired = false;
+    let pollError: string | null = null;
+
+    const tokenQueue: { i: number; token: string; text: string }[] = [];
+    let resolveTokenWait: (() => void) | null = null;
+
+    const waitForToken = () =>
+      new Promise<void>((resolve) => {
+        if (tokenQueue.length > 0 || pollingDone || pollError) {
+          resolve();
+          return;
+        }
+        resolveTokenWait = () => {
+          resolveTokenWait = null;
+          resolve();
+        };
+      });
+    const notifyTokenWait = () => {
+      if (resolveTokenWait) resolveTokenWait();
+    };
+
+    // Pollster — runs in parallel with the audio player.
+    const pollster = (async () => {
+      while (!ac.signal.aborted && !pollingDone) {
+        try {
+          const r = await fetch(
+            `${API_BASE}/converse-fast/poll/${sid}?since=${cursor}&timeout=4`,
+            { signal: ac.signal }
+          );
+          if (!r.ok) {
+            pollError = `poll ${r.status}`;
+            pollingDone = true;
+            notifyTokenWait();
+            break;
+          }
+          const data = await r.json();
+          const evts: any[] = data?.events || [];
+          cursor = typeof data?.next === "number" ? data.next : cursor + evts.length;
+          for (const ev of evts) {
+            if (ev?.type === "sentence" && ev.token) {
+              tokenQueue.push({ i: ev.i || 0, token: ev.token, text: ev.text || "" });
+              notifyTokenWait();
+            } else if (ev?.type === "meta") {
+              meta = {
+                reply: ev.reply || "",
+                voice_text: ev.voice_text ?? null,
+                tone: (ev.tone as Tone) ?? null,
+                actions: Array.isArray(ev.actions) ? ev.actions : [],
+              };
+              try { opts.onMeta?.(meta); } catch {}
+            } else if (ev?.type === "error") {
+              pollError = String(ev.message || "server error");
+              pollingDone = true;
+              notifyTokenWait();
+              break;
+            }
+          }
+          if (data?.done) {
+            pollingDone = true;
+            notifyTokenWait();
+            break;
+          }
+        } catch (e: any) {
+          if (ac.signal.aborted) {
+            pollingDone = true;
+            notifyTokenWait();
+            break;
+          }
+          // Transient network error — short backoff then retry.
+          await new Promise((res) => setTimeout(res, 250));
+        }
+      }
+    })();
+
+    // Player — consumes tokenQueue sequentially.
+    const player = (async () => {
+      while (!ac.signal.aborted) {
+        if (tokenQueue.length === 0) {
+          if (pollingDone || pollError) break;
+          await waitForToken();
+          continue;
+        }
+        const { token } = tokenQueue.shift()!;
+        const fireStart = !firstAudioFired
+          ? () => {
+              firstAudioFired = true;
+              try { opts.onAudioStart?.(); } catch {}
+            }
+          : undefined;
+        try {
+          await _playStaticTokenSequential(token, fireStart, ac.signal);
+        } catch (e) {
+          console.warn("[fastConverse] token playback failed:", e);
+        }
+        if (ac.signal.aborted) break;
+      }
+    })();
+
+    await Promise.all([pollster, player]);
+
+    if (ac.signal.aborted) {
+      return { ok: false, error: "aborted" };
+    }
+    if (pollError) {
+      return { ok: false, error: pollError, meta };
+    }
+    return { ok: true, meta };
+  } catch (e: any) {
+    if (ac.signal.aborted) return { ok: false, error: "aborted" };
+    return { ok: false, error: String(e?.message || e) };
+  } finally {
+    clearTimeout(hardTimer);
+    if (currentAbort === ac) currentAbort = null;
+    speakingNow = false;
+  }
+}
+
 // ---------- Public API ----------
 export const SpeechMod = {
   isSpeaking(): boolean {
@@ -572,6 +788,7 @@ export const SpeechMod = {
   setDefaultVoiceId(id: string | null | undefined) {
     setDefaultVoiceId(id);
   },
+  fastConverse,
   /**
    * Play an already-generated audio stream from a URL (e.g. the new
    * /api/converse-stream-audio endpoint). Bypasses ElevenLabs/text logic —
