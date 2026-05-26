@@ -155,13 +155,14 @@ export async function playBridge(tier: BridgeTier = "generico"): Promise<void> {
     pendingTimeout = null;
   }
 
-  // === DELAY UMANO (richiesta utente 2026-06, revisione 2) ===
-  // Un umano non dice "mh" istantaneamente: aspetta 1-3 secondi prima
-  // di emettere qualsiasi suono. Randomizzato per non sembrare meccanico.
-  // Se nel frattempo arriva la risposta vera (es. domanda banale risolta
-  // in 800ms), stopBridge() cancella il timer pendente → niente "mh"
-  // inutile sopra alla risposta.
-  const delay = 1000 + Math.floor(Math.random() * 2000); // 1000-3000ms
+  // === DELAY UMANO (richiesta utente 2026-06, revisione 3) ===
+  // 500-1200ms: abbastanza per essere "umano" (non scatta a zero come
+  // un robot) ma SOTTO la latenza tipica della pipeline reale
+  // (Deepgram + Claude + ElevenLabs = ~1.5-2.5s). Così il bridge fa
+  // SEMPRE in tempo a partire prima della risposta vera.
+  // Con un delay più alto (1-3s), la risposta vera spesso arrivava
+  // prima del delay → stopBridge cancellava il timer → bridge muto.
+  const delay = 500 + Math.floor(Math.random() * 700); // 500-1200ms
 
   return new Promise<void>((resolve) => {
     pendingTimeout = setTimeout(async () => {
