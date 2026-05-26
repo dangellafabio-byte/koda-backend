@@ -1390,13 +1390,19 @@ export default function Taccuino() {
               setStatus("thinking");
               // Continua col blocco standard sotto.
             } else {
-              // Aggiorna il profilo (counters/memory) in background.
-              if (!confessionalMode) {
-                try {
-                  const p = await api.getProfile();
-                  setProfile(p);
-                } catch {}
-              }
+              // === BUG FIX 2026-06-26 ROOT CAUSE ===
+              // PRIMA qui c'era `setProfile(await api.getProfile())` dopo
+              // OGNI conversazione per sincronizzare counters/memory_summary
+              // dal backend. CONSEGUENZA: setProfile triggera rerender →
+              // inputMode (computed da profile) ricomputa → TextInput
+              // rimonta perdendo il focus → tastiera si chiude. Inoltre
+              // lo scroll listener riceve un evento layout-time che fa
+              // snappare il pager a Page 0 (home).
+              // Risultato osservato dall'utente: "l'app fa la home a modo
+              // suo" + "la pagina della scrittura non scrive".
+              // FIX: il profilo NON serve aggiornato dopo ogni turno.
+              // Counters/memory si rileggono al prossimo boot o quando
+              // l'utente apre Settings. Eliminato il refetch.
               setStatus("idle");
               return;
             }
