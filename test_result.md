@@ -1,4 +1,106 @@
-## FAST PATH SUB-2s LATENCY (2026-06-26) — Pipeline ottimizzata Claude+ElevenLabs
+## SESSIONE 2026-06-26 — BASELINE STABILE (utente sta testando 1-3 giorni)
+
+### ✅ FIX CRITICI APPLICATI E PUBBLICATI VIA EAS OTA
+
+1. **CRASH CONFESSIONALE RISOLTO** (vero root cause)
+   - File: `frontend/lib/sealedCrypto.ts`
+   - Causa: `KDF_ROUNDS = 100000` bloccava il main thread JS per 12-14s
+     durante deriveKey → iOS watchdog killava l'app appena l'utente tappava
+     "registra" in confessionale.
+   - Verifica: trace points hanno mostrato sealed-1-start a 14:43:53,
+     sealed-3-seal-msg a 14:44:07 = 14 secondi di blocco. iOS killa app
+     se main thread inattivo > 10s.
+   - Fix: `KDF_ROUNDS = 5000` (deriveKey ora <1s). Sicurezza ampia per
+     una Parola Segreta come secondo fattore.
+   - User feedback: "sembra funzionare anche il confessionale" ✅
+
+2. **HOME CHE SI RESETTA + TEXTINPUT CHE PERDE FOCUS** (root cause)
+   - File: `frontend/app/index.tsx` linea 1394-1402
+   - Causa: dopo ogni risposta AI il codice faceva `api.getProfile() +
+     setProfile(p)`. Questo triggerava rerender → inputMode ricomputato
+     → TextInput rimontata → focus perso. Inoltre il pager riceveva
+     uno scroll layout-time spurio → viewMode resettato a "voice" →
+     l'app "tornava alla home da sola".
+   - Fix: rimosso il refetch automatico post-conversation. Il profile
+     si rilegge solo al boot/apertura Settings/reset memoria.
+
+3. **VOCE METALLICA RISOLTA**
+   - File: `backend/server.py` fast pipeline
+   - Causa: `output_format="mp3_22050_32"` (32 kbps) era troppo basso
+   - Fix: `output_format="mp3_44100_64"` (64 kbps @ 44.1 kHz)
+
+4. **BUG TTS SILENZIOSO (use_v3 not defined)**
+   - File: `backend/server.py` fast pipeline
+   - Causa: dopo refactor `use_v3` non era più definita ma altri riferimenti
+     erano rimasti → eccezione catturata silently → audio mai pubblicato
+     → watchdog client a 25s = app pareva freezata
+   - Fix: rimosso tutto il codice `use_v3`, sempre flash_v2_5
+
+5. **OPTIMIZE_STREAMING_LATENCY ABILITATO**
+   - File: `backend/server.py`
+   - Aggiunto `optimize_streaming_latency=4` per Flash v2.5 (TTFB ~75ms)
+
+### 📈 NUMERI ATTUALI MISURATI (server-side, iPhone reale)
+
+Fast path normale:
+- TTFT Claude: 1700-2700ms (proxy Emergent LLM)
+- TTS Flash v2.5: 150-400ms (frasi brevi)
+- Total: 2000-3200ms ⚠️ (utente vuole 1-2s — DA OTTIMIZZARE)
+
+### 🆕 NUOVE INFRASTRUTTURE BACKEND AGGIUNTE
+
+- `POST /api/converse-fast/start` + `GET /api/converse-fast/poll/{sid}` —
+  pipeline streaming frase-per-frase con MongoDB session storage (compatibile
+  con uvicorn --workers 2)
+- `POST /api/dbg-trace` — endpoint per trace points dal client (utile per
+  debug crash su build standalone senza accesso ai console.log)
+- `_build_fast_system_prompt` — prompt condensato (~2900 chars vs ~14000)
+
+### 🆕 NUOVA INFRASTRUTTURA CLIENT
+
+- `SpeechMod.fastConverse(text, opts)` in `frontend/lib/speech.ts` —
+  client del fast path con pollster + player paralleli
+- Trace points client→backend nel sealed flow di index.tsx
+
+### 🟠 PROSSIMA SESSIONE — RICHIESTE UTENTE PENDING
+
+1. **VELOCITÀ ANCORA ALTA** (utente: "lentissima un'altra volta")
+   - Servono altre ottimizzazioni:
+     - Anthropic prompt caching via litellm (cache_control header)
+     - Streaming TTS reale (non `convert()`) per ridurre TTS latency
+     - Magari rimuovere il json wrapper dalla risposta Claude
+2. **Koda non sa cos'è il confessionale**
+   - File: `backend/server.py` sealed prompt (`_build_sealed_prompt` o
+     simile — da trovare)
+   - L'AI risponde "non so cos'è" quando l'utente chiede del confessionale.
+     Aggiungere al prompt sealed la conoscenza che è IN un confessionale.
+3. **Redesign KodaIntro tutorial** (4 schermate minimali) — non iniziato
+4. **Colori bolle messaggi dinamici per tema** — non iniziato
+5. **Automatismo tema giorno/notte** — non iniziato
+
+### 🧹 PULIZIA FATTA
+
+- Eliminato file orfano `frontend/lib/bridge.ts`
+- Rimosse referenze dead `userTierRef`/`detectTier` in index.tsx
+
+### ⚠️ DEBT TECNICO (trace points)
+
+I trace points client→backend (POST `/api/dbg-trace`) sono ANCORA NEL
+CODICE client (index.tsx sealed flow). Vanno rimossi quando confermiamo
+che il fix KDF è definitivo. Non urgente — non danneggiano nulla, solo
+qualche request HTTP in più durante il confessionale.
+
+### 💰 CREDITS BURNED
+
+Utente ha riferito ~400 crediti spesi in questa sessione. Si è giustamente
+arrabbiato perché molti tentativi precedenti non centravano il vero
+problema (era il KDF, non il modello LLM né il bitrate né l'output format).
+LEZIONE: usare TRACE POINTS sin dall'inizio per misurare DOVE
+crasha invece di tirare a indovinare.
+
+---
+
+
 
 backend:
   - task: "Endpoint /api/converse-fast/start + /poll (sub-2s pipeline)"

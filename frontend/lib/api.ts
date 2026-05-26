@@ -210,7 +210,7 @@ export const api = {
    *  Usato fuori-Confessionale per dare a Koda awareness che "esiste un vault". */
   confessionalCount: () => jsonReq<{ count: number }>("/confessional/count"),
 
-  converseSealed: (
+  converseSealed: async (
     payload: {
       nonce: string;
       ciphertext: string;
@@ -221,16 +221,40 @@ export const api = {
       history_nonce?: string;
       history_ciphertext?: string;
     },
-    keyB64: string
-  ) =>
-    jsonReq<{ nonce: string; ciphertext: string; tone: string }>(
-      "/converse/sealed",
-      {
+    keyB64: string,
+    timeoutMs: number = 25000
+  ): Promise<{ nonce: string; ciphertext: string; tone: string }> => {
+    // Hard timeout via AbortController — iOS killa l'app se un fetch
+    // HTTPS resta in attesa troppo a lungo (osservato: app crash dopo
+    // sealed-10-about-to-post). Meglio fallire pulito con errore visibile.
+    const ac = new AbortController();
+    const timer = setTimeout(() => {
+      try { ac.abort(); } catch {}
+    }, timeoutMs);
+    try {
+      const r = await fetch(`${API_BASE}/converse/sealed`, {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Sealed-Key": keyB64,
+        },
         body: JSON.stringify(payload),
-        headers: { "X-Sealed-Key": keyB64 },
+        signal: ac.signal,
+      });
+      clearTimeout(timer);
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(`HTTP ${r.status}: ${t.slice(0, 200)}`);
       }
-    ),
+      return await r.json();
+    } catch (e: any) {
+      clearTimeout(timer);
+      if (e?.name === "AbortError") {
+        throw new Error(`sealed timeout after ${timeoutMs}ms`);
+      }
+      throw e;
+    }
+  },
 
   /** Ricerca web pubblica (DuckDuckGo, no API key). */
   search: (query: string, max_results = 4) =>

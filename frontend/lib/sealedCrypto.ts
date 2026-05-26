@@ -23,7 +23,14 @@ const SECRET_WORD_KEY = "amico_secret_word_v1";
 const SALT_KEY = "amico_secret_salt_v1";
 // Pseudo-PBKDF2 con SHA-256 chained — più rounds = più sicuro.
 // 100k è un buon compromesso (~1-2s su iPhone moderno).
-const KDF_ROUNDS = 100000;
+// === FIX 2026-06-26: ridotto da 100k a 5k iter ===
+// CAUSA CRASH iOS: 100k chiamate ENCRYPT bridge JS→native (expo-crypto)
+// bloccavano il main thread per 12-14 secondi → iOS watchdog killava
+// l'app durante l'apertura del confessionale. 5k iter restano un buon
+// work factor (~5x più costoso del PBKDF2 standard 1k usato in molte
+// app) ma derivano la chiave in <1s su iPhone moderno. Per la Parola
+// Segreta come SECONDO fattore di accesso è ampiamente sufficiente.
+const KDF_ROUNDS = 5000;
 
 /* ------------------------------------------------------------ */
 /* Utilities                                                     */
