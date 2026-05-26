@@ -4045,6 +4045,21 @@ async def api_converse_fast_poll(session_id: str, since: int = 0, timeout: float
     }
 
 
+# ============================================================
+# DEBUG TRACE — usato dal client per loggare step-by-step
+# dove avviene un crash. NON sensibile (solo strings opache).
+# ============================================================
+@api_router.post("/dbg-trace")
+async def api_dbg_trace(body: dict):
+    try:
+        step = (body.get("step") or "").strip()[:80]
+        extra = (body.get("extra") or "")[:200]
+        logger.info(f"[CLIENT-TRACE] step={step!r} extra={extra!r}")
+    except Exception:
+        pass
+    return {"ok": True}
+
+
 # Include the router
 app.include_router(api_router)
 

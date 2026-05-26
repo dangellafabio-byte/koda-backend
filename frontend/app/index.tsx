@@ -1182,25 +1182,37 @@ export default function Taccuino() {
       setTimeline((prev) => [...prev, optimistic]);
       setStatus("thinking");
       try {
+        // DEBUG TRACE (rimuovibile): manda step al backend così possiamo
+        // capire dove si rompe il flow nel build standalone (no console.log).
+        const _trace = (step: string, extra?: string) => {
+          try {
+            fetch(`${API_BASE}/dbg-trace`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ step, extra: extra ?? "" }),
+            }).catch(() => {});
+          } catch {}
+        };
         // === SEALED FLOW (Zero-Knowledge Confessionale) ===
         // Se siamo in confessionale e l'utente ha impostato la Parola Segreta,
         // cifriamo il messaggio CLIENT-SIDE e chiamiamo /converse/sealed.
         if (confessionalMode && hasSeal) {
+          _trace("sealed-1-start", `txt_len=${txt.length}`);
           const key = await getSessionKey({ biometric: true });
+          _trace("sealed-2-key", key ? "ok" : "null");
           if (!key) {
             throw new Error("Parola Segreta non sbloccata");
           }
           const sealed = await sealText(txt, key);
+          _trace("sealed-3-seal-msg", `ct_len=${sealed.ciphertext.length}`);
 
           // === MEMORIA CONFESSIONALE PERSISTENTE ===
-          // Al primo turno confessionale di QUESTA app session, scarichiamo
-          // la cronologia delle sessioni precedenti (cifrata end-to-end nel
-          // backend). Decifriamo localmente e aggiungiamo alla timeline così
-          // Koda ha memoria piena delle confessioni passate.
           if (!confessionalHistoryLoadedRef.current) {
+            _trace("sealed-4-hist-fetch-begin");
             confessionalHistoryLoadedRef.current = true;
             try {
               const hist = await api.confessionalHistory(200);
+              _trace("sealed-5-hist-fetched", `entries=${hist.entries?.length ?? 0}`);
               if (hist.entries && hist.entries.length > 0) {
                 const decryptedEntries: TimelineEntry[] = [];
                 for (const e of hist.entries) {
@@ -1230,8 +1242,10 @@ export default function Taccuino() {
                   // Prepend in timeline mantenendo ordine cronologico
                   setTimeline((prev) => [...decryptedEntries, ...prev]);
                 }
+                _trace("sealed-6-hist-decrypted", `n=${decryptedEntries.length}`);
               }
             } catch (e) {
+              _trace("sealed-6-hist-error", String(e).slice(0, 100));
               console.warn("[sealed] history fetch failed (non-fatal):", e);
             }
           }
@@ -1242,21 +1256,26 @@ export default function Taccuino() {
           const priorConfessional = timeline
             .filter((e) => e.confessional && e.id !== optimistic.id && e.text)
             .map((e) => ({ role: e.role, text: e.text }));
+          _trace("sealed-7-prior-collected", `n=${priorConfessional.length}`);
           let history_nonce: string | undefined;
           let history_ciphertext: string | undefined;
           if (priorConfessional.length > 0) {
             try {
               const histJson = JSON.stringify(priorConfessional.slice(-20));
+              _trace("sealed-8-hist-stringified", `bytes=${histJson.length}`);
               const sealedHist = await sealText(histJson, key);
+              _trace("sealed-9-hist-sealed", `ct=${sealedHist.ciphertext.length}`);
               history_nonce = sealedHist.nonce;
               history_ciphertext = sealedHist.ciphertext;
             } catch (e) {
+              _trace("sealed-9-hist-seal-error", String(e).slice(0, 100));
               // Se la cifratura della history fallisce, andiamo avanti
               // senza — meglio un confessionale senza memoria che un
               // errore bloccante.
               console.warn("[sealed] history encrypt failed:", e);
             }
           }
+          _trace("sealed-10-about-to-post");
           const resp = await api.converseSealed(
             {
               nonce: sealed.nonce,
