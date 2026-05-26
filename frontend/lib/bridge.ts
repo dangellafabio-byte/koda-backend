@@ -1,18 +1,14 @@
 /**
  * bridge.ts — "bridge audio" (richiesta utente 2026-06: "velocità di risposta").
  *
- * Concept: quando l'utente smette di parlare, parte SUBITO un mp3
- * intercalare ("Mh.", "Ah ok.", "Allora vediamo...") con la stessa voce
- * di Koda. Mentre il bridge suona, in parallelo gira la pipeline reale
- * (Deepgram → Claude → ElevenLabs). Quando la risposta vera è pronta,
- * subentra senza buco.
+ * Concept: quando l'utente smette di parlare, parte un mp3 intercalare
+ * ("Mh.", "Ah ok.") con la stessa voce di Koda. Mentre il bridge suona,
+ * la pipeline reale gira in background. La risposta vera subentra senza buco.
  *
- * Per ottenere ZERO latenza, tutti i bridge sono pre-fetchati al boot
- * dell'app e cachati in /cache/bridges/. La riproduzione legge dal
- * filesystem locale → istantanea.
- *
- * Tone detection: in base al tono dell'utente (parolacce, colloquialità)
- * scegliamo il tier (sobrio | amichevole | schietto).
+ * 2026-06 — Fix:
+ *   • Voice ID dinamico (era hardcoded Matilda → ora usa la voice corrente).
+ *   • Pausa umana 600-900ms prima del bridge (no più "parte istantaneo
+ *     come un robot": un umano aspetta un attimo prima dell'"ehm").
  */
 
 import { createAudioPlayer, AudioPlayer } from "expo-audio";
@@ -25,13 +21,36 @@ const BACKEND_URL =
 
 const CACHE_DIR = `${FileSystem.cacheDirectory}bridges/`;
 
+// Voice ID corrente — settato da setBridgeVoiceId(). Default null = backend
+// userà la voce Matilda default. Quando il main monta il profile, chiama
+// setBridgeVoiceId(profile.settings.tts_voice_id) per allineare.
+let currentVoiceId: string | null = null;
 let counts: Record<BridgeTier, number> | null = null;
-let prefetched = false;
-const inMemory: Record<string, string> = {}; // key "tier:i" → file uri
+let prefetchedFor: string | null = null; // voice_id per cui abbiamo già fatto prefetch
+const inMemory: Record<string, string> = {}; // key "voiceid:tier:i" → file uri
 
 let currentPlayer: AudioPlayer | null = null;
+let pendingTimeout: ReturnType<typeof setTimeout> | null = null;
+// Cancellation token: incrementiamo ad ogni stopBridge() → i timeout
+// pendenti capiscono di essere obsoleti.
+let playGeneration = 0;
 
-/** Assicura che la directory di cache esista */
+/** Setter pubblico: il main lo chiama appena conosce la voice_id dell'utente. */
+export function setBridgeVoiceId(voiceId: string | null): void {
+  if (voiceId === currentVoiceId) return;
+  currentVoiceId = voiceId;
+  // Invalida prefetch: cambio voce → bisogna ri-scaricare per la nuova.
+  if (prefetchedFor !== voiceId) {
+    // Triggera nuovo prefetch in background (non blocchiamo qui).
+    prefetchBridges().catch(() => {});
+  }
+}
+
+/** Key univoca per cache (include voice_id per evitare collisioni tra voci) */
+function cacheKey(tier: BridgeTier, i: number): string {
+  return `${currentVoiceId || "default"}:${tier}:${i}`;
+}
+
 async function ensureDir(): Promise<void> {
   try {
     const info = await FileSystem.getInfoAsync(CACHE_DIR);
@@ -41,7 +60,6 @@ async function ensureDir(): Promise<void> {
   } catch {}
 }
 
-/** Fetch la struttura (quante frasi per ciascun tier) */
 async function fetchCounts(): Promise<Record<BridgeTier, number>> {
   if (counts) return counts;
   try {
@@ -49,25 +67,26 @@ async function fetchCounts(): Promise<Record<BridgeTier, number>> {
     if (!res.ok) throw new Error(`bridge count HTTP ${res.status}`);
     counts = (await res.json()) as Record<BridgeTier, number>;
   } catch (e) {
-    // fallback sicuro
     counts = { sobrio: 10, amichevole: 10, schietto: 10 };
   }
   return counts!;
 }
 
-/** Scarica UN bridge mp3 e lo salva su filesystem locale. Restituisce l'uri locale. */
 async function downloadBridge(tier: BridgeTier, i: number): Promise<string | null> {
-  const fileUri = `${CACHE_DIR}${tier}_${i}.mp3`;
+  const voiceSlug = (currentVoiceId || "default").replace(/[^a-zA-Z0-9]/g, "");
+  const fileUri = `${CACHE_DIR}${voiceSlug}_${tier}_${i}.mp3`;
+  const k = cacheKey(tier, i);
   try {
     const info = await FileSystem.getInfoAsync(fileUri);
     if (info.exists && (info as any).size > 100) {
-      inMemory[`${tier}:${i}`] = fileUri;
+      inMemory[k] = fileUri;
       return fileUri;
     }
-    const url = `${BACKEND_URL}/api/tts/bridge?style=${tier}&i=${i}`;
+    let url = `${BACKEND_URL}/api/tts/bridge?style=${tier}&i=${i}`;
+    if (currentVoiceId) url += `&voice_id=${encodeURIComponent(currentVoiceId)}`;
     const result = await FileSystem.downloadAsync(url, fileUri);
     if (result.status >= 200 && result.status < 300) {
-      inMemory[`${tier}:${i}`] = fileUri;
+      inMemory[k] = fileUri;
       return fileUri;
     }
   } catch {}
@@ -75,12 +94,12 @@ async function downloadBridge(tier: BridgeTier, i: number): Promise<string | nul
 }
 
 /**
- * Pre-fetch all bridges al boot dell'app. Chiamata "fire-and-forget"
- * (non blocca il rendering). Idempotente: se già fatto, ritorna subito.
+ * Pre-fetch bridges per la voice_id corrente. Idempotente: skippa se già
+ * fatto per questa voice. Re-fetcha automaticamente se la voce cambia.
  */
 export async function prefetchBridges(): Promise<void> {
-  if (prefetched) return;
-  prefetched = true; // segno subito per evitare doppie chiamate concorrenti
+  if (prefetchedFor === currentVoiceId) return;
+  const inFlightFor = currentVoiceId;
   try {
     await ensureDir();
     const cnts = await fetchCounts();
@@ -91,67 +110,96 @@ export async function prefetchBridges(): Promise<void> {
       }
     }
     await Promise.allSettled(tasks);
+    if (currentVoiceId === inFlightFor) prefetchedFor = inFlightFor;
   } catch {
-    prefetched = false; // permettiamo retry
+    /* allow retry */
   }
 }
 
 /**
- * Determina il tier in base al testo (utente) — heuristic semplice:
- * - parolacce → schietto
- * - colloquiale (vabbè, boh, cazzo lieve) → amichevole
- * - altrimenti sobrio
+ * Tone detection sul transcript dell'utente. Sceglie il tier in base a
+ * parolacce / colloquialità del parlato.
  */
 export function detectTier(userText: string | null | undefined): BridgeTier {
   if (!userText) return "amichevole";
   const t = userText.toLowerCase();
   const hard = /(cazzo|merda|fanculo|vaffa|porca|coglion|stronz)/;
-  const colloq = /(vabb[èe]|boh|cavolo|cazzar|figata|figa[t,n]|capit[oa]\b)/;
+  const colloq = /(vabb[èe]|boh|cavolo|cazzar|figata|figa[t,n])/;
   if (hard.test(t)) return "schietto";
   if (colloq.test(t)) return "amichevole";
   return "sobrio";
 }
 
 /**
- * Sceglie un bridge random per il tier dato e lo riproduce con un
- * AudioPlayer dedicato. Restituisce il player (l'ha già start-ato).
- * Se non c'è un bridge cachato disponibile, ritorna null silenziosamente.
+ * Riproduce un bridge intercalare DOPO un piccolo delay umano random
+ * (600-900ms). Se nel frattempo arriva la risposta vera, stopBridge()
+ * cancella il timeout pendente — nessun rumore.
  */
-export async function playBridge(tier: BridgeTier = "amichevole"): Promise<AudioPlayer | null> {
-  try {
-    const cnts = await fetchCounts();
-    const n = cnts[tier] || 10;
-    // Scegli random tra quelli effettivamente scaricati
-    const available: number[] = [];
-    for (let i = 0; i < n; i++) {
-      if (inMemory[`${tier}:${i}`]) available.push(i);
-    }
-    if (available.length === 0) {
-      // Niente cache → fallback: prova a scaricarne uno al volo (non aspettiamo)
-      downloadBridge(tier, 0).catch(() => {});
-      return null;
-    }
-    const idx = available[Math.floor(Math.random() * available.length)];
-    const fileUri = inMemory[`${tier}:${idx}`];
-    // Ferma player precedente se ancora in corso
-    if (currentPlayer) {
-      try { currentPlayer.remove(); } catch {}
-      currentPlayer = null;
-    }
-    const player = createAudioPlayer({ uri: fileUri });
-    currentPlayer = player;
-    try {
-      player.volume = 1.0;
-      player.play();
-    } catch {}
-    return player;
-  } catch {
-    return null;
+export async function playBridge(tier: BridgeTier = "amichevole"): Promise<void> {
+  const myGen = ++playGeneration;
+  // Cancella eventuali timeout pendenti precedenti
+  if (pendingTimeout) {
+    try { clearTimeout(pendingTimeout); } catch {}
+    pendingTimeout = null;
   }
+
+  // === DELAY UMANO (richiesta utente 2026-06) ===
+  // Un umano non risponde "istantaneo" — fa una piccola pausa di pensiero
+  // prima di emettere il suo "mh". 600-900ms simula bene questo.
+  const delay = 600 + Math.floor(Math.random() * 300);
+
+  return new Promise<void>((resolve) => {
+    pendingTimeout = setTimeout(async () => {
+      pendingTimeout = null;
+      // Se nel frattempo siamo stati cancellati (stopBridge chiamato perché
+      // la risposta vera è già pronta), non parte nulla.
+      if (myGen !== playGeneration) {
+        resolve();
+        return;
+      }
+      try {
+        const cnts = await fetchCounts();
+        const n = cnts[tier] || 10;
+        const available: number[] = [];
+        for (let i = 0; i < n; i++) {
+          if (inMemory[cacheKey(tier, i)]) available.push(i);
+        }
+        if (available.length === 0) {
+          // Niente cache → triggera download in background per il futuro
+          downloadBridge(tier, 0).catch(() => {});
+          resolve();
+          return;
+        }
+        // Re-check cancellation
+        if (myGen !== playGeneration) { resolve(); return; }
+        const idx = available[Math.floor(Math.random() * available.length)];
+        const fileUri = inMemory[cacheKey(tier, idx)];
+        if (currentPlayer) {
+          try { currentPlayer.remove(); } catch {}
+          currentPlayer = null;
+        }
+        const player = createAudioPlayer({ uri: fileUri });
+        currentPlayer = player;
+        try {
+          player.volume = 1.0;
+          player.play();
+        } catch {}
+      } catch {}
+      resolve();
+    }, delay);
+  });
 }
 
-/** Ferma immediatamente il bridge in corso (utile quando arriva la risposta vera). */
+/**
+ * Cancella sia un eventuale timeout PENDENTE (bridge non ancora partito)
+ * sia un bridge IN CORSO. Da chiamare quando la risposta vera sta per partire.
+ */
 export function stopBridge(): void {
+  playGeneration++; // invalida pending timeouts
+  if (pendingTimeout) {
+    try { clearTimeout(pendingTimeout); } catch {}
+    pendingTimeout = null;
+  }
   if (!currentPlayer) return;
   try {
     currentPlayer.pause();
@@ -160,7 +208,6 @@ export function stopBridge(): void {
   currentPlayer = null;
 }
 
-/** Verifica se un bridge è ancora in corso */
 export function isBridgePlaying(): boolean {
   if (!currentPlayer) return false;
   try {

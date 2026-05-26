@@ -48,7 +48,7 @@ import Orb, { OrbTone } from "../components/Orb";
 import EclipseOrb from "../components/EclipseOrb";
 import MirrorPool from "../components/MirrorPool";
 import LiquidInversionBg from "../components/LiquidInversionBg";
-import { prefetchBridges, playBridge, stopBridge, detectTier, BridgeTier } from "../lib/bridge";
+import { prefetchBridges, playBridge, stopBridge, detectTier, BridgeTier, setBridgeVoiceId } from "../lib/bridge";
 import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
 import KodaSplash from "../components/KodaSplash";
 import KodaTour, { TourStep } from "../components/KodaTour";
@@ -500,6 +500,13 @@ export default function Taccuino() {
   useEffect(() => {
     prefetchBridges().catch(() => {});
   }, []);
+  // Sync della voice_id corrente con bridge.ts: quando il profilo carica
+  // o l'utente cambia voce, il modulo bridge re-fetcha gli mp3 con la
+  // nuova voce. Risolve il bug "bridge con voce Matilda ma TTS Jessica".
+  useEffect(() => {
+    const vid = profile?.settings?.tts_voice_id || null;
+    setBridgeVoiceId(vid);
+  }, [profile?.settings?.tts_voice_id]);
   // === AURORA: ciclo neon infinito (richiesta utente 2026-06) ===
   // Quando il tema è "giorno" (label "Aurora"), interpoliamo il
   // backgroundColor attraverso 5 tinte neon notturne in un loop di
