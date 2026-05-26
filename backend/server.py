@@ -2369,51 +2369,51 @@ async def _fetch_tts_audio(token: str) -> Optional[bytes]:
 # di una persona che sta riflettendo, non un robot sparato veloce.
 # La cache version è "v2" → il nuovo cache_token invalida i vecchi mp3
 # sia su MongoDB che lato client (filename diverso).
-BRIDGE_VERSION = "v2"
+BRIDGE_VERSION = "v3"
 BRIDGE_PHRASES = {
-    "sobrio": [
-        "Mh, aspetta un attimo...",
-        "Capito, fammi vedere...",
-        "Sì, allora, dunque...",
-        "Ah ok, fammi pensare un secondo...",
-        "Mh, interessante questo...",
-        "Aspetta, ti dico subito...",
-        "Eh, vediamo un po' come spiegarti...",
-        "Mh, dunque, allora...",
-        "Sì, capisco, fammi riflettere...",
-        "Ok, allora, vediamo...",
+    "generico": [
+        "Eeeh...",
+        "Uhm...",
+        "Mh...",
+        "Alllooora...",
+        "Dunque...",
+        "Cioè...",
+        "Ehm, allora...",
+        "Mh, allora...",
+        "Eh, dunque...",
+        "Ah, ok...",
     ],
-    "amichevole": [
-        "Ah, ok, allora aspetta...",
-        "Eh, mh, fammi pensare un attimo...",
-        "Allora, dimmi un po'...",
-        "Mh, sì, vediamo come dirti...",
-        "Eh, aspetta, ti rispondo subito...",
-        "Ah, interessante questo, vediamo...",
-        "Mh, sì sì, ok, allora...",
-        "Eh, fammi un secondo per pensare...",
-        "Aspetta, mh, dunque...",
-        "Ok, allora, vediamo un po'...",
+    "riflessivo": [
+        "Guarda...",
+        "Diciamo che...",
+        "Praticamente...",
+        "Nel senso...",
+        "Come dire...",
+        "Guarda, diciamo che...",
+        "Allora, praticamente...",
+        "Cioè, nel senso...",
+        "Beh, diciamo che...",
+        "Insomma...",
     ],
-    "schietto": [
-        "Eh cazzo, mh, allora...",
-        "Boh, vediamo un attimo...",
-        "Ah, vabbè, dunque...",
-        "Cazzo, mh, aspetta un secondo...",
-        "Eh, vabbè, fammi pensare...",
-        "Boh, sì, dunque allora...",
-        "Cazzo, mh, allora vediamo...",
-        "Eh, va beh, sì allora...",
-        "Boh, mh, fammi capire...",
-        "Eh cavolo, ok, aspetta un attimo...",
+    "opinione": [
+        "Dipende...",
+        "Eh, dipende...",
+        "Mh, dipende...",
+        "Se devo essere sincero...",
+        "A dire il vero...",
+        "Per come la vedo io...",
+        "Questa è una bella domanda...",
+        "Mh, è una bella domanda...",
+        "Boh, dipende...",
+        "Eh, vediamo un po'...",
     ],
 }
 
 
 @api_router.get("/tts/bridge")
-async def api_tts_bridge(style: str = "amichevole", i: int = 0, voice_id: Optional[str] = None):
+async def api_tts_bridge(style: str = "generico", i: int = 0, voice_id: Optional[str] = None):
     """Restituisce un mp3 intercalare pre-generato e cachato."""
-    tier = style if style in BRIDGE_PHRASES else "amichevole"
+    tier = style if style in BRIDGE_PHRASES else "generico"
     phrases = BRIDGE_PHRASES[tier]
     idx = i % len(phrases)
     text = phrases[idx]
@@ -2443,10 +2443,10 @@ async def api_tts_bridge(style: str = "amichevole", i: int = 0, voice_id: Option
             model_id="eleven_flash_v2_5",
             output_format="mp3_44100_128",
             voice_settings={
-                "stability": 0.65,
+                "stability": 0.70,
                 "similarity_boost": 0.85,
-                "style": 0.40,
-                "speed": 0.85,   # parlato pensato, riflessivo
+                "style": 0.45,
+                "speed": 0.82,
                 "use_speaker_boost": True,
             },
         )

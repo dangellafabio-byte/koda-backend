@@ -14,12 +14,12 @@
 import { createAudioPlayer, AudioPlayer } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 
-export type BridgeTier = "sobrio" | "amichevole" | "schietto";
+export type BridgeTier = "generico" | "riflessivo" | "opinione";
 
 const BACKEND_URL =
   process.env.EXPO_PUBLIC_BACKEND_URL || process.env.EXPO_BACKEND_URL || "";
 
-const CACHE_DIR = `${FileSystem.cacheDirectory}bridges_v2/`;
+const CACHE_DIR = `${FileSystem.cacheDirectory}bridges_v3/`;
 
 // Voice ID corrente — settato da setBridgeVoiceId(). Default null = backend
 // userà la voce Matilda default. Quando il main monta il profile, chiama
@@ -117,17 +117,29 @@ export async function prefetchBridges(): Promise<void> {
 }
 
 /**
- * Tone detection sul transcript dell'utente. Sceglie il tier in base a
- * parolacce / colloquialità del parlato.
+ * Intent detection sul transcript dell'utente. Sceglie il tier di bridge:
+ *   - opinione: l'utente chiede un giudizio/preferenza/opinione
+ *               ("cosa ne pensi", "secondo te", "ti piace", "è giusto?")
+ *   - riflessivo: domanda lunga/articolata (>12 parole o contiene
+ *               "spiegami", "perché", "come mai", "raccontami") che
+ *               richiede vera elaborazione
+ *   - generico: tutto il resto, riempitivo puro
+ * Nota: la funzione conserva il nome legacy detectTier per minimizzare
+ * il refactor dei call site.
  */
 export function detectTier(userText: string | null | undefined): BridgeTier {
-  if (!userText) return "amichevole";
-  const t = userText.toLowerCase();
-  const hard = /(cazzo|merda|fanculo|vaffa|porca|coglion|stronz)/;
-  const colloq = /(vabb[èe]|boh|cavolo|cazzar|figata|figa[t,n])/;
-  if (hard.test(t)) return "schietto";
-  if (colloq.test(t)) return "amichevole";
-  return "sobrio";
+  if (!userText) return "generico";
+  const t = userText.toLowerCase().trim();
+  // Pattern di richiesta di OPINIONE (priorità più alta)
+  const opinionPattern = /(cosa ne pensi|che ne pensi|che dici|secondo te|tu (cosa|che) ne (pensi|dici)|ti (piace|sembra|pare)|è (giusto|sbagliato|corretto|vero)|sei d['']accordo|hai ragione|preferisci)/;
+  if (opinionPattern.test(t)) return "opinione";
+  // Pattern di domanda ARTICOLATA che richiede elaborazione
+  const reflectPattern = /(spiegami|spiegami|raccontami|perch[éè]|come mai|in che modo|cosa intendi|cosa significa|spiega)/;
+  if (reflectPattern.test(t)) return "riflessivo";
+  // Domanda lunga (>12 parole) → riflessiva
+  const wordCount = t.split(/\s+/).filter(Boolean).length;
+  if (wordCount > 12) return "riflessivo";
+  return "generico";
 }
 
 /**
@@ -135,7 +147,7 @@ export function detectTier(userText: string | null | undefined): BridgeTier {
  * (600-900ms). Se nel frattempo arriva la risposta vera, stopBridge()
  * cancella il timeout pendente — nessun rumore.
  */
-export async function playBridge(tier: BridgeTier = "amichevole"): Promise<void> {
+export async function playBridge(tier: BridgeTier = "generico"): Promise<void> {
   const myGen = ++playGeneration;
   // Cancella eventuali timeout pendenti precedenti
   if (pendingTimeout) {

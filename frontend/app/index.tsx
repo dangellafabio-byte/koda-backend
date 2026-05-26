@@ -495,7 +495,7 @@ export default function Taccuino() {
   // Aggiornato dopo ogni transcript dell'utente da detectTier(). Usato
   // immediatamente al silenzio successivo per scegliere quale tier di
   // bridge riprodurre.
-  const userTierRef = useRef<BridgeTier>("amichevole");
+  const userTierRef = useRef<BridgeTier>("generico");
   // Pre-fetch dei bridge mp3 al boot dell'app (fire-and-forget).
   useEffect(() => {
     prefetchBridges().catch(() => {});
