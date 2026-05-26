@@ -1591,6 +1591,19 @@ export default function Taccuino() {
           await new Promise((r) => setTimeout(r, 30));
         } catch {}
       }
+      // === COLD-START GATE (fix 2026-06: "primo messaggio perso") ===
+      // RCA documentato: dopo un cold-start (swipe-up kill + riapertura),
+      // se l'utente tocca SUBITO l'orb, AudioSession non è ancora
+      // completamente inizializzata → il recorder cattura silenzio nei
+      // primi 200-500ms → Deepgram restituisce transcript vuoto → tutto
+      // si perde silenziosamente.
+      // Soluzione: prima di startRecording, attendiamo SINCRONO che
+      // prewarmMic() finisca. Se già pronta (campo _nativeReady), il
+      // metodo restituisce immediatamente: zero costo nei turni
+      // successivi.
+      if (Platform.OS !== "web") {
+        await prewarmMic();
+      }
       const rec = await startRecording();
       recRef.current = rec;
       // Wire live meter for debug visualization
@@ -1754,6 +1767,8 @@ export default function Taccuino() {
       const txt = (data.text || "").trim();
       const cls = classifyTranscript(txt);
       if (cls !== "ok") {
+        // === DIAGNOSTIC LOG (fix 2026-06 cold-start) ===
+        console.warn(`[stopTalk] empty/garbled transcript. convActive=${convActiveRef.current}, txt="${txt}", cls=${cls}`);
         // CODA CONSAPEVOLE: spiegale all'utente cosa è successo
         if (convActiveRef.current) emptyTurnsRef.current += 1;
         let line: string;
@@ -1765,6 +1780,25 @@ export default function Taccuino() {
           emptyTurnsRef.current = 0;
           await speakAwareness(pickLine(awarenessLoopExit));
           return;
+        }
+        // === VISIBILITÀ FIX 2026-06 ("primo messaggio perso") ===
+        // Quando NON siamo in conversation mode (= primo tap manuale),
+        // aggiungiamo SEMPRE una bolla visibile nella timeline con
+        // l'awareness line. Così, anche se il TTS fallisce o l'utente
+        // swipa via prima di ascoltare, vede comunque cosa è successo
+        // nella schermata di lettura. Niente più "ho parlato ma è
+        // sparito tutto nel nulla".
+        if (!convActiveRef.current) {
+          setTimeline((prev) => [
+            ...prev,
+            {
+              id: `ai-empty-${Date.now()}`,
+              role: "ai",
+              text: line,
+              tone: "calm",
+              timestamp: new Date().toISOString(),
+            },
+          ]);
         }
         await speakAwareness(line);
         // Se ancora in conv mode, riapri mic dopo la frase
