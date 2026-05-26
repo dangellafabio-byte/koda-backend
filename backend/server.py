@@ -1963,7 +1963,7 @@ async def api_recap(period: str = "today"):
             api_key=EMERGENT_LLM_KEY,
             session_id=str(uuid.uuid4()),
             system_message=sys,
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        ).with_model("anthropic", "claude-haiku-4-5-20251001")
         out = await chat.send_message(UserMessage(text=history))
     except Exception as e:
         logger.error(f"recap error: {e}")
@@ -2063,7 +2063,7 @@ async def api_checkin_generate(req: CheckinRequest):
             api_key=EMERGENT_LLM_KEY,
             session_id=str(uuid.uuid4()),
             system_message=sys,
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        ).with_model("anthropic", "claude-haiku-4-5-20251001")
         raw = await chat.send_message(UserMessage(text=user_payload))
     except Exception as e:
         logger.error(f"checkin LLM error: {e}")

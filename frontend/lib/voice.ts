@@ -78,9 +78,16 @@ let _nativeReady = false;
 //   - SPEECH_THRESHOLD: -28 → -30 dBFS (più permissivo)
 //   - SILENCE_THRESHOLD: -36 → -38 dBFS (hysteresis più ampia)
 //   - MIN_SPEECH_MS: 500 → 350ms (parte prima se inizi subito)
-const SPEECH_THRESHOLD_DB = -30;     // dBFS — voce a distanza ravvicinata o media
-const SILENCE_THRESHOLD_DB = -38;    // dBFS — silence below this (hysteresis 8 dB)
-const SILENCE_DURATION_MS = 1000;    // 1s silence after speech → end of utterance
+// === FIX VAD 2026-06-26: utente reporting "non smette mai di recording".
+// CAUSA: in molte stanze il rumore di fondo è -30/-32 dBFS (computer fan,
+// frigo, ambiente urbano). Con SPEECH_THRESHOLD_DB=-30 il VAD continuava
+// a vedere "voce" anche quando l'utente aveva smesso → silence MAI scattava.
+// Soluzione: alziamo la soglia voce un pelo (-32 dBFS) per distinguere
+// chiaramente voce parlata da rumore di fondo medio. Voce normale a 30cm
+// dal mic è -15/-20 dBFS — molto sopra. Voce piano resta sopra -32.
+const SPEECH_THRESHOLD_DB = -32;     // dBFS — voce a distanza ravvicinata o media (era -30)
+const SILENCE_THRESHOLD_DB = -42;    // dBFS — hysteresis 10 dB (era -38)
+const SILENCE_DURATION_MS = 900;     // 0.9s silence after speech → end of utterance (era 1000)
 const MIN_SPEECH_MS = 350;           // need at least 350ms of voice before silence can fire
 const MIN_SPEECH_FRAMES = 3;         // 3 consecutive frames (~210ms) above threshold → real speech
 const METER_POLL_MS = 70;            // ~14Hz sampling
