@@ -1713,13 +1713,6 @@ export default function Taccuino() {
       if (!r.ok) throw new Error("transcribe");
       const data = await r.json();
       const txt = (data.text || "").trim();
-      // === Aggiorna tier bridge (richiesta 2026-06) ===
-      // detectTier ispeziona il transcript dell'utente per parolacce/
-      // colloquialità e sceglie il tier appropriato per il PROSSIMO
-      // bridge (sobrio | amichevole | schietto). Speccchio del tono.
-      if (txt) {
-        try { userTierRef.current = detectTier(txt); } catch {}
-      }
       const cls = classifyTranscript(txt);
       if (cls !== "ok") {
         // === DIAGNOSTIC LOG (fix 2026-06 cold-start) ===
