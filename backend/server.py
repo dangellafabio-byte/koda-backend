@@ -471,7 +471,8 @@ class Profile(BaseModel):
     # Personalizzazioni stilistiche (palette colori blob, avatar, ecc.)
     # Salvato come dict aperto per consentire estensioni future senza migrazioni.
     style_preferences: Dict[str, Any] = Field(default_factory=dict)
-    memory_summary: str = ""  # Periodically updated narrative about the user
+    memory_summary: str = ""  # Periodically updated narrative about the user (episodic)
+    core_traits: str = ""  # Long-term essence: traits, values, character (NEVER sovrascritto)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -3678,6 +3679,7 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
     user_g = (profile.user_gender or "n").lower()
     ai_g = (profile.ai_gender or "f").lower()
     memory = (profile.memory_summary or "").strip()
+    traits = (profile.core_traits or "").strip()
 
     # Genere blocco breve.
     if ai_g == "m":
@@ -3695,7 +3697,22 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
 
     name_part = f" L'utente si chiama {profile.name}." if profile.name else ""
     now_iso = datetime.now(timezone.utc).isoformat()
-    memory_block = f"\nMEMORIA UTENTE (vita, abitudini, persone, segreti):\n{memory[:3500]}\n" if memory else ""
+    # === MEMORIA A 2 LIVELLI (richiesta utente 2026-06-27) ===
+    # RITRATTO PROFONDO (core_traits): essenza permanente — chi è davvero
+    #   l'utente, suoi valori, modi di fare, tratti di carattere. Resta
+    #   anche se cancella i fatti grezzi. Cresce lentamente.
+    # MEMORIA RECENTE (memory_summary): fatti puntuali, eventi, persone,
+    #   contesto degli ultimi N giorni. Ha cap a 4000 char (FIFO).
+    memory_block = ""
+    if traits:
+        memory_block += (
+            f"\n🪞 RITRATTO PROFONDO DI {profile.name or 'utente'} "
+            f"(essenza, valori, carattere — NON dettagli effimeri):\n{traits[:1500]}\n"
+        )
+    if memory:
+        memory_block += (
+            f"\n📓 MEMORIA RECENTE (fatti, eventi, persone, contesto):\n{memory[:3500]}\n"
+        )
 
     return (
         f"Ti chiami {ai_name}. Sei un AMICO FRATERNO — non un assistente, non un'IA generica. "
@@ -3745,8 +3762,12 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
         f"Per richieste di cambio colore blob: rispondi onestamente che non è ancora pronto.\n"
         f"\n"
         f"FORMATO RISPOSTA: SOLO JSON valido (niente markdown, niente testo prima/dopo). "
-        f"Il campo \"reply\" DEVE essere il PRIMO campo:\n"
-        f'{{"reply":"...","tone":"warm|calm|energetic|concerned|urgent|neutral","actions":[],"memory_update":null}}'
+        f"Il campo \"reply\" DEVE essere il PRIMO campo. "
+        f"\"memory_update\": breve FATTO/EVENTO/DETTAGLIO del turno corrente (max 100 char), o null. "
+        f"\"trait_update\": (SOLO quando rilevi un tratto STABILE di carattere/valori/modi — NON un fatto): "
+        f"frase breve sul ritratto profondo dell'utente, es. 'è meticoloso, preferisce azione concreta a teoria' "
+        f"(max 120 char). Lascia null nella stragrande maggioranza dei turni — usa solo per insight veri.\n"
+        f'{{"reply":"...","tone":"warm|calm|energetic|concerned|urgent|neutral","actions":[],"memory_update":null,"trait_update":null}}'
     )
 
 
@@ -3986,6 +4007,7 @@ async def _fast_pipeline_task(
         if tone not in {"calm", "energetic", "concerned", "urgent", "warm", "neutral"}:
             tone = "warm"
         memory_update = (data.get("memory_update") or "").strip()
+        trait_update = (data.get("trait_update") or "").strip()
         actions_raw = data.get("actions") or []
         parsed_actions: List[dict] = []
         if isinstance(actions_raw, list):
@@ -4042,6 +4064,17 @@ async def _fast_pipeline_task(
                     if len(new_mem) > 4000:
                         new_mem = new_mem[-4000:]
                     profile.memory_summary = new_mem
+                # === CORE TRAITS: ritratto profondo permanente ===
+                # Claude lo emette SOLO quando rileva un tratto stabile (raro).
+                # Cresce lentamente, capped 1500 char. Resta in profilo
+                # ANCHE quando memory_summary viene riciclata.
+                if trait_update and trait_update.lower() not in {"null", "none", ""}:
+                    sep_t = "\n- " if profile.core_traits else "- "
+                    new_traits = (profile.core_traits or "") + sep_t + trait_update
+                    if len(new_traits) > 1500:
+                        new_traits = new_traits[-1500:]
+                    profile.core_traits = new_traits
+                    logger.info(f"[fast] trait_update saved: '{trait_update[:80]}'")
                 await save_profile(profile)
             except Exception as e:
                 logger.warning(f"[fast] profile update failed: {e}")
