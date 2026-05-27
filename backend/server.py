@@ -3894,9 +3894,9 @@ async def _fast_pipeline_task(
                         text=clean,
                         voice_id=voice_id,
                         model_id=model_id,
-                        output_format="mp3_44100_64",  # 64kbps @ 44.1kHz — buon compromesso qualità/velocità
+                        output_format="mp3_44100_128",  # 128kbps qualità piena, niente chipmunk
                         voice_settings=vs,
-                        optimize_streaming_latency=4,  # Flash v2.5: TTFB ~75ms
+                        optimize_streaming_latency=2,  # Flash v2.5: TTFB ~150ms (valore "4" causava artefatti)
                     )
                     try:
                         gen = client_el.text_to_speech.convert(**kwargs)

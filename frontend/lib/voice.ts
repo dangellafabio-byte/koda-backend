@@ -78,17 +78,18 @@ let _nativeReady = false;
 //   - SPEECH_THRESHOLD: -28 → -30 dBFS (più permissivo)
 //   - SILENCE_THRESHOLD: -36 → -38 dBFS (hysteresis più ampia)
 //   - MIN_SPEECH_MS: 500 → 350ms (parte prima se inizi subito)
-// === FIX VAD 2026-06-26: utente reporting "non smette mai di recording".
-// CAUSA: in molte stanze il rumore di fondo è -30/-32 dBFS (computer fan,
-// frigo, ambiente urbano). Con SPEECH_THRESHOLD_DB=-30 il VAD continuava
-// a vedere "voce" anche quando l'utente aveva smesso → silence MAI scattava.
-// Soluzione: alziamo la soglia voce un pelo (-32 dBFS) per distinguere
-// chiaramente voce parlata da rumore di fondo medio. Voce normale a 30cm
-// dal mic è -15/-20 dBFS — molto sopra. Voce piano resta sopra -32.
-const SPEECH_THRESHOLD_DB = -32;     // dBFS — voce a distanza ravvicinata o media (era -30)
-const SILENCE_THRESHOLD_DB = -42;    // dBFS — hysteresis 10 dB (era -38)
-const SILENCE_DURATION_MS = 900;     // 0.9s silence after speech → end of utterance (era 1000)
-const MIN_SPEECH_MS = 350;           // need at least 350ms of voice before silence can fire
+// === FIX VAD 2026-06-27: utente segnalava "registrazione troppo corta —
+// Deepgram restituisce vuoto". Misurato dai log backend: registrazioni
+// sotto ~35KB (=2s di audio) → transcript vuoto, perché Deepgram ha
+// bisogno di almeno 2.5-3s di voce continuata per trascrivere bene.
+// Aumentiamo le soglie per dare TEMPO all'utente di parlare:
+//   - SILENCE_DURATION_MS: 900 → 1500 (più tolleranza alle pause naturali)
+//   - MIN_SPEECH_MS: 350 → 700 (recording almeno 700ms PRIMA che possa
+//     scattare silence — evita cut-off dopo 1 sola parola)
+const SPEECH_THRESHOLD_DB = -32;     // dBFS — voce a distanza ravvicinata o media
+const SILENCE_THRESHOLD_DB = -42;    // dBFS — hysteresis 10 dB
+const SILENCE_DURATION_MS = 1500;    // 1.5s silence after speech → end of utterance
+const MIN_SPEECH_MS = 700;           // need at least 700ms of voice before silence can fire
 const MIN_SPEECH_FRAMES = 3;         // 3 consecutive frames (~210ms) above threshold → real speech
 const METER_POLL_MS = 70;            // ~14Hz sampling
 const HARD_CAP_MS = 60_000;          // absolute max recording length
