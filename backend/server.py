@@ -3695,7 +3695,7 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
 
     name_part = f" L'utente si chiama {profile.name}." if profile.name else ""
     now_iso = datetime.now(timezone.utc).isoformat()
-    memory_block = f"\nMEMORIA UTENTE: {memory[:500]}\n" if memory else ""
+    memory_block = f"\nMEMORIA UTENTE (vita, abitudini, persone, segreti):\n{memory[:3500]}\n" if memory else ""
 
     return (
         f"Ti chiami {ai_name}. Sei un AMICO FRATERNO — non un assistente, non un'IA generica. "
@@ -3845,8 +3845,9 @@ async def _fast_pipeline_task(
         # Voce: rispetta la scelta dell'utente (default Sarah).
         voice_id = getattr(profile.settings, "tts_voice_id", None) or "EXAVITQu4vr4xnSDxMaL"
 
-        # Recent context (ridotto a 8 per velocità)
-        recent_docs = await db.taccuino_timeline.find({}, {"_id": 0}).sort("timestamp", -1).to_list(8)
+        # Recent context: 16 messaggi (era 8). +500ms TTFT trascurabile,
+        # ma Koda non perde il filo di conversazioni multi-turno.
+        recent_docs = await db.taccuino_timeline.find({}, {"_id": 0}).sort("timestamp", -1).to_list(16)
         recent_docs.reverse()
         recent = [TimelineEntry(**d) for d in recent_docs]
         history_str = _format_history_for_llm(recent) if recent else ""
