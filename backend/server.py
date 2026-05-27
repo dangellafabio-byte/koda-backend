@@ -3896,7 +3896,9 @@ async def _fast_pipeline_task(
                         model_id=model_id,
                         output_format="mp3_44100_128",  # 128kbps qualità piena, niente chipmunk
                         voice_settings=vs,
-                        optimize_streaming_latency=2,  # Flash v2.5: TTFB ~150ms (valore "4" causava artefatti)
+                        # NIENTE optimize_streaming_latency: anche valore 2
+                        # poteva causare artefatti "chipmunk" su Flash v2.5
+                        # secondo feedback utente. Default ElevenLabs (1) OK.
                     )
                     try:
                         gen = client_el.text_to_speech.convert(**kwargs)
