@@ -73,6 +73,21 @@ VAD: ora trascrive correttamente frasi di 5-10 parole (audio 50-90 KB).
 - Resume da background: in attesa di test utente (OTA appena pubblicato)
 
 ### 🟠 ANCORA DA FARE (prossima sessione, NON urgenti)
+- 🔴 **TUTELA LEGALE / SAFETY GUARDRAILS** (PRIORITÀ ALTA prima della pubblicazione):
+  - Schermata onboarding con disclaimer esplicito: "Koda è un'IA, non un professionista.
+    In caso di crisi chiama 112 o Telefono Amico (02 2327 2327). Vietato sotto i 14 anni."
+  - Verifica età all'onboarding (GDPR-K / GDPR conformità).
+  - Clausola crisi nel prompt fast E sealed: rilevamento pensieri suicidi/autolesionismo
+    → validazione breve + raccomandazione professionista + numero emergenza.
+  - Clausola autolesionismo a terzi / abuso minori → Claude rifiuta con cura.
+  - Privacy Policy + Terms of Service redatti da legale esperto AI Act/GDPR.
+  - AI Act EU 2026 compliance: trasparenza esplicita che Koda è AI, non umano.
+  - Auditing conservazione log: il sealed NON deve mai loggare testo in chiaro
+    server-side (già OK, da verificare formalmente prima del rilascio pubblico).
+  - Documentazione interna comportamenti Koda davanti a: suicidio, violenza, illegalità,
+    CSAM, confessioni di crimini già commessi, disturbi mentali gravi, minori a rischio.
+  - Filtro pre-input lato client per soglie OBBLIGATORIE (es. rilevamento parole chiave
+    crisi nel transcript → mostro popup con numero emergenza PRIMA di mandare a Claude).
 - OTA frontend per caricare background dall'endpoint dedicato `/api/profile/background`
 - Refactor `frontend/app/index.tsx` (5100+ righe → suddivisione)
 - Refactor `backend/server.py` (>4000 righe)
