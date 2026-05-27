@@ -86,7 +86,30 @@ let _nativeReady = false;
 //   - SILENCE_DURATION_MS: 900 → 1500 (più tolleranza alle pause naturali)
 //   - MIN_SPEECH_MS: 350 → 700 (recording almeno 700ms PRIMA che possa
 //     scattare silence — evita cut-off dopo 1 sola parola)
-const SPEECH_THRESHOLD_DB = -32;     // dBFS — voce a distanza ravvicinata o media
+// === FIX VAD 2026-06-27 / SECONDO PASSAGGIO 2026-06-27 PM ===
+// L'utente segnala: "se smetto di parlare il VAD non si accorge e
+// la registrazione non si ferma — devo schiacciare manualmente".
+//
+// ROOT CAUSE: il rumore di fondo della stanza (TV, ventilatore,
+// respiro vicino al mic) sta tipicamente a -30 / -28 dBFS. Con
+// SPEECH_THRESHOLD a -32 dBFS, OGNI singolo frame anche dopo che
+// l'utente ha smesso di parlare risulta "voce" → lastVoiceAt viene
+// continuamente rinfrescato → il timer di silenzio non parte mai.
+// In più, il check di silenzio era INNESTATO nell'else: se il rumore
+// stava sopra -32 anche solo a sprazzi, il check non veniva mai
+// eseguito.
+//
+// DOPPIO FIX:
+//   1) SUSTAINED_VOICE_DB = -26 → solo voce CHIARAMENTE sopra
+//      l'ambiente rinfresca lastVoiceAt. Il rumore di fondo non
+//      tiene più viva la registrazione.
+//   2) Il check di silenzio è spostato FUORI dall'if/else: gira
+//      ad ogni frame, controlla solo lastVoiceAt. Anche se nel
+//      frame corrente c'è un picco di rumore (es. tosse), il timer
+//      di silenzio dal momento dell'ultima voce reale continua a
+//      crescere correttamente.
+const SPEECH_THRESHOLD_DB = -32;     // dBFS — bassa per INIZIARE detection voce
+const SUSTAINED_VOICE_DB = -26;      // dBFS — alta per RINFRESCARE lastVoiceAt
 const SILENCE_THRESHOLD_DB = -42;    // dBFS — hysteresis 10 dB
 const SILENCE_DURATION_MS = 1500;    // 1.5s silence after speech → end of utterance
 const MIN_SPEECH_MS = 700;           // need at least 700ms of voice before silence can fire
@@ -401,9 +424,17 @@ export async function startRecording(): Promise<Recorder> {
         if (consecutiveVoiceFrames >= MIN_SPEECH_FRAMES && !speechStartFired) {
           speechStartFired = true;
           firstSpeechAt = now - MIN_SPEECH_FRAMES * METER_POLL_MS;
+          lastVoiceAt = now;  // init at speech start
           if (speechStartCb) try { speechStartCb(); } catch {}
         }
-        if (speechStartFired) lastVoiceAt = now;
+        // FIX VAD 2026-06-27 PM: rinfresca lastVoiceAt SOLO se la voce è
+        // chiaramente sopra l'ambiente (db > SUSTAINED_VOICE_DB).
+        // Rumore di stanza tra -32 e -26 dBFS NON tiene viva la
+        // registrazione → il timer di silenzio può finalmente partire
+        // quando l'utente smette davvero di parlare.
+        if (speechStartFired && db > SUSTAINED_VOICE_DB) {
+          lastVoiceAt = now;
+        }
       } else {
         // === SILENCE/HYSTERESIS DETECTION (riscritto 2026-05-22) ===
         // Vecchia versione: richiedeva dB < SILENCE_THRESHOLD_DB per contare
@@ -417,14 +448,19 @@ export async function startRecording(): Promise<Recorder> {
         if (db < SILENCE_THRESHOLD_DB) {
           consecutiveVoiceFrames = 0; // reset più aggressivo se davvero quieto
         }
-        if (speechStartFired && firstSpeechAt && lastVoiceAt) {
-          const speechElapsed = now - firstSpeechAt;
-          if (speechElapsed >= MIN_SPEECH_MS) {
-            const silenceFor = now - lastVoiceAt;
-            if (silenceFor >= SILENCE_DURATION_MS) {
-              vadStopped = true;
-              if (silenceCb) try { silenceCb(); } catch {}
-            }
+      }
+      // FIX VAD 2026-06-27 PM: il check del silenzio è ora FUORI
+      // dall'if/else. Gira ad ogni frame e si basa solo su quanto è
+      // vecchio lastVoiceAt. Anche se nel frame corrente c'è un picco
+      // di rumore (tosse, click, ronzio), il tempo trascorso dall'ultima
+      // VOCE REALE continua a crescere → il silenzio scatta correttamente.
+      if (speechStartFired && firstSpeechAt && lastVoiceAt) {
+        const speechElapsed = now - firstSpeechAt;
+        if (speechElapsed >= MIN_SPEECH_MS) {
+          const silenceFor = now - lastVoiceAt;
+          if (silenceFor >= SILENCE_DURATION_MS) {
+            vadStopped = true;
+            if (silenceCb) try { silenceCb(); } catch {}
           }
         }
       }
