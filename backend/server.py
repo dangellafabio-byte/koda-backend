@@ -1130,7 +1130,7 @@ async def api_get_profile():
     return p
 
 
-@api_router.get("/profile/background")
+@api_router.api_route("/profile/background", methods=["GET", "HEAD"])
 async def api_get_profile_background():
     """Serve l'immagine di sfondo personalizzata dell'utente come binary.
 
