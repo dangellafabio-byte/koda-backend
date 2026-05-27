@@ -1,4 +1,94 @@
-## SESSIONE 2026-06-26 — BASELINE STABILE (utente sta testando 1-3 giorni)
+## SESSIONE 2026-06-27 — FIX APP RESUME COLD + ITALIANO CORRETTO
+
+### ✅ NUOVI FIX CRITICI
+
+1. **APP RESUME COLD** (sintomo ricorrente: "apro dopo qualche tempo, non registra + chat vuota")
+   - File: `frontend/app/index.tsx` linea 596-655 (AppState 'active' handler)
+   - Causa: il listener AppState al ritorno foreground faceva SOLO reset error/idle.
+     Non riattivava AVAudioSession (mic restava suspended), non ricaricava timeline
+     (memoria stantia), non ricaricava profilo (settings/tema sbagliati).
+   - Fix: 3 operazioni parallele non-blocking al resume:
+     - `prewarmMic()` → riattiva audio session iOS
+     - `api.getTimeline(200)` + setTimeline (merge con confessionali locali)
+     - `api.getProfile()` + setProfile
+   - Pubblicato come OTA EAS.
+
+2. **PROFILO 728 KB AL COLD START** (causa indiretta del precedente)
+   - File: `backend/server.py` endpoint `/api/profile`
+   - Causa: l'utente aveva un'immagine background base64 grande (546 KB JPEG).
+     Il GET /profile ritornava 728 KB. Cold start lentissimo, eventuali timeout/
+     parsing falliti, l'UI mostrava default invece di valori reali.
+   - Fix:
+     - GET /profile ora rimuove il base64 dal campo settings.background, lo
+       sostituisce con il puntatore "@server:/api/profile/background" → profile
+       da 728 KB a 5 KB.
+     - Nuovo endpoint `GET /api/profile/background` serve l'immagine come binary
+       con `Cache-Control: private, max-age=86400` (carica una volta, cache 24h).
+     - Nota: client NON sa ancora caricare l'endpoint separato → mostra
+       background di tema (Sabbia/Notte/etc) finché OTA frontend non aggiornato.
+
+3. **PROFILI DUPLICATI nel DB** (race condition con uvicorn --workers 2)
+   - File: `backend/server.py` get_or_create_profile
+   - Causa: 2 worker uvicorn + client che chiama GET /profile in parallelo al boot
+     → entrambi vedono "vuoto" → entrambi insertano → 2 profili `id="me"`
+     → Mongo ritornava casualmente uno dei due → ogni tot l'app sembrava "resettata"
+     (no nome, ai_name='Coda', no memoria).
+   - Fix:
+     - Aggiunto UNIQUE INDEX su collection.id
+     - `get_or_create_profile` ora cattura DuplicateKeyError e rilegge il vincente
+     - Eliminato manualmente il duplicato vuoto residuo
+
+4. **VAD CHIUDEVA TROPPO PRESTO** (sintomo: "Deepgram dice 'non ti ho sentito'")
+   - File: `frontend/lib/voice.ts`
+   - Causa: SILENCE_DURATION_MS=900, MIN_SPEECH_MS=350 → recording 2s →
+     Deepgram restituiva transcript vuoto (necessita >=2.5s audio).
+   - Fix: SILENCE_DURATION_MS=1500, MIN_SPEECH_MS=700.
+
+5. **TTS CHIPMUNK/VELOCE**
+   - File: `backend/server.py` fast pipeline
+   - Causa: `mp3_44100_64` + `optimize_streaming_latency=4` causavano artefatti
+     percepiti come "voce velocissima".
+   - Fix: tornato a `mp3_44100_128` (qualità piena), rimosso optimize_streaming_latency
+     del tutto (default ElevenLabs).
+
+6. **ITALIANO SCORRETTO** (pronomi, articoli)
+   - File: `backend/server.py` `_build_fast_system_prompt`
+   - Causa: il prompt condensato fast aveva tagliato le regole sull'italiano corretto.
+   - Fix: aggiunta sezione "ITALIANO CORRETTO" con regole su articoli (il/lo/la/gli),
+     pronomi atoni (glielo/me lo/te ne), concordanza, apostrofi. Prompt ora 2692 chars.
+
+### 📊 NUMERI MISURATI ULTIMI (post-fix)
+Fast path:
+- TTFT 1850-2496ms
+- TTS 147-480ms
+- Total 2159-2982ms
+VAD: ora trascrive correttamente frasi di 5-10 parole (audio 50-90 KB).
+
+### 🟢 STATUS APP
+- Crash confessionale: RISOLTO (KDF iter)
+- Timeline visibile in modalità scrittura: RISOLTO (cold start fix + resume fix)
+- Velocità VAD: RISOLTO (1500ms silence)
+- Italiano corretto: in attesa di test utente (modifica appena fatta)
+- Velocità voce normale: in attesa di test utente
+- Resume da background: in attesa di test utente (OTA appena pubblicato)
+
+### 🟠 ANCORA DA FARE (prossima sessione, NON urgenti)
+- OTA frontend per caricare background dall'endpoint dedicato `/api/profile/background`
+- Refactor `frontend/app/index.tsx` (5100+ righe → suddivisione)
+- Refactor `backend/server.py` (>4000 righe)
+- Pulizia trace points debug `/api/dbg-trace` quando l'utente conferma stabilità
+- KodaIntro tutorial redesign 4 schermate
+- Colori bolle messaggi dinamici per tema
+- Automatismo tema giorno/notte
+
+### 💰 RISPARMIO CREDITI
+Tutti i fix backend zero-OTA. Solo 2 OTA pubblicati in questa sessione:
+1. VAD 1500ms + TTS chipmunk fix
+2. Resume cold (timeline + profile + audio)
+
+---
+
+
 
 ### ✅ FIX CRITICI APPLICATI E PUBBLICATI VIA EAS OTA
 

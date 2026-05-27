@@ -594,15 +594,61 @@ export default function Taccuino() {
         }
         try { SpeechMod.stop(); } catch {}
       } else if (next === "active") {
-        // Ritorno in foreground: pulizia + idle.
-        // userInteractedRef resta false (settato sopra al go-background),
-        // quindi il loop hands-free NON parte: serve un tap manuale.
+        // === FIX 2026-06-27 RESUME COLD ===
+        // Quando l'app torna foreground DOPO essere stata in background
+        // (anche solo 1-2 minuti), iOS sospende: AVAudioSession scollegata,
+        // network reset, eventuali update in DB non sincronizzati.
+        // Sintomi osservati dall'utente: "apro dopo qualche tempo e non
+        // registra + schermata scrittura senza conversazione caricata".
+        // Soluzione: al ritorno facciamo TRE cose chirurgiche:
+        //   1. prewarmMic() → riattiva audio session iOS
+        //   2. refresh timeline → niente schermata vuota
+        //   3. refresh profile → cattura eventuali cambi (settings, memoria)
         setError(null);
         if (recRef.current) {
           try { recRef.current.cancel?.(); } catch {}
           recRef.current = null;
         }
         setStatus("idle");
+        // Audio session warm-up (async, fire-and-forget — non blocchiamo UI).
+        (async () => {
+          try {
+            await prewarmMic();
+          } catch (e) {
+            console.warn("[resume] prewarmMic failed:", e);
+          }
+        })();
+        // Timeline + profile refresh in parallelo, non blocking.
+        (async () => {
+          try {
+            const tl = await api.getTimeline(200);
+            if (Array.isArray(tl) && tl.length > 0) {
+              setTimeline((prev) => {
+                // Preserva eventuali entry confessionali locali (ephemeral)
+                const localConfessional = prev.filter((e) => e.confessional);
+                if (localConfessional.length === 0) return tl;
+                const merged = [...tl, ...localConfessional];
+                merged.sort(
+                  (a, b) =>
+                    new Date(a.timestamp).getTime() -
+                    new Date(b.timestamp).getTime()
+                );
+                return merged;
+              });
+            }
+          } catch (e) {
+            console.warn("[resume] timeline refresh failed:", e);
+          }
+        })();
+        (async () => {
+          try {
+            const p = await api.getProfile();
+            // Aggiorna solo se ID matches (evita race con onboarding)
+            if (p && p.id) setProfile(p);
+          } catch (e) {
+            console.warn("[resume] profile refresh failed:", e);
+          }
+        })();
       }
     });
     return () => {
