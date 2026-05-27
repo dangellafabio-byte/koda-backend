@@ -30,6 +30,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import {
   api,
   API_BASE,
+  BACKEND,
   TimelineEntry,
   Profile,
   toneStyle,
@@ -2297,7 +2298,29 @@ export default function Taccuino() {
     ? (profile?.settings as any).background_dim
     : 0.55;
   const bgPreset = bgValue && BG_PRESETS.find((p) => p.id === bgValue);
-  const isCustomImage = !!bgValue && (bgValue.startsWith("data:") || bgValue.startsWith("file:") || bgValue.startsWith("http"));
+  // === Sfondo personalizzato ===
+  // Il backend, per evitare di gonfiare ogni /api/profile con un base64 da
+  // centinaia di KB, sostituisce il blob "data:image/...;base64,..." con un
+  // breve placeholder del tipo:
+  //   "@server:/api/profile/background?v=<hash>"
+  // Il frontend deve quindi convertire questo placeholder in una URL HTTP
+  // completa che <ImageBackground> sa caricare. L'hash cambia quando l'utente
+  // carica una nuova foto → forza iOS a riscaricare l'immagine.
+  const isServerBg = typeof bgValue === "string" && bgValue.startsWith("@server:");
+  const isCustomImage = !!bgValue && (
+    bgValue.startsWith("data:") ||
+    bgValue.startsWith("file:") ||
+    bgValue.startsWith("http") ||
+    isServerBg
+  );
+  const bgUri: string | null = (() => {
+    if (!bgValue) return null;
+    if (isServerBg) return `${BACKEND}${bgValue.slice("@server:".length)}`;
+    if (bgValue.startsWith("data:") || bgValue.startsWith("file:") || bgValue.startsWith("http")) {
+      return bgValue;
+    }
+    return null;
+  })();
   const bubbleAccent = useMemo(
     () => resolveBubbleColors((profile?.settings as any)?.bubble_color),
     [(profile?.settings as any)?.bubble_color]
@@ -3411,7 +3434,8 @@ export default function Taccuino() {
                 <Text style={[styles.bgChipText, { color: theme.primary, fontWeight: "700" }]}>
                   {(profile?.settings as any)?.background?.startsWith?.("data:") ||
                   (profile?.settings as any)?.background?.startsWith?.("file:") ||
-                  (profile?.settings as any)?.background?.startsWith?.("http")
+                  (profile?.settings as any)?.background?.startsWith?.("http") ||
+                  (profile?.settings as any)?.background?.startsWith?.("@server:")
                     ? "Cambia foto…"
                     : "Carica foto…"}
                 </Text>
@@ -3893,9 +3917,9 @@ export default function Taccuino() {
     />
   ) : null;
 
-  if (isCustomImage && bgValue) {
+  if (isCustomImage && bgUri) {
     return (
-      <ImageBackground source={{ uri: bgValue }} style={{ flex: 1 }} resizeMode="cover">
+      <ImageBackground source={{ uri: bgUri }} style={{ flex: 1 }} resizeMode="cover">
         <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { backgroundColor: `rgba(0,0,0,${bgDim})` }]} />
         {confessionalTint}
         {screenInner}

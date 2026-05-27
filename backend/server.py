@@ -1118,8 +1118,13 @@ async def api_get_profile():
     try:
         bg = p.settings.background or ""
         if bg.startswith("data:") and len(bg) > 2000:
-            # Sostituisci il blob base64 con un puntatore breve.
-            p.settings.background = "@server:/api/profile/background"
+            # Sostituisci il blob base64 con un puntatore breve + hash per cache-bust.
+            # L'hash dipende dal contenuto: se l'utente carica una nuova foto,
+            # il placeholder cambia → il frontend richiede una URL diversa →
+            # bypassa cache iOS senza riscaricare se la foto è la stessa.
+            import hashlib as _hl
+            v = _hl.md5(bg[:4096].encode("utf-8", errors="ignore")).hexdigest()[:10]
+            p.settings.background = f"@server:/api/profile/background?v={v}"
     except Exception:
         pass
     return p
@@ -1170,7 +1175,23 @@ async def api_update_profile(update: ProfileUpdate):
     if update.onboarded is not None:
         p.onboarded = update.onboarded
     if update.settings is not None:
-        p.settings = update.settings
+        new_settings = update.settings
+        # FIX CRITICO 2026-06-27: protezione contro la sovrascrittura del
+        # background. Il GET /api/profile sostituisce il base64 reale
+        # nel payload con un placeholder "@server:/api/profile/background?v=…"
+        # per non gonfiare la risposta. Se il client, dopo aver letto il
+        # profilo, fa un update qualsiasi (es. cambia tema, voce, dim…)
+        # rimanda quell'oggetto settings INTERO, placeholder incluso.
+        # Senza questa difesa il replace_one cancellava per sempre il
+        # base64 reale nel DB → l'utente perdeva il suo sfondo.
+        try:
+            nb = (new_settings.background or "") if new_settings else ""
+            if isinstance(nb, str) and nb.startswith("@server:"):
+                # Preserva il valore originale nel DB.
+                new_settings.background = p.settings.background
+        except Exception:
+            pass
+        p.settings = new_settings
     if update.style_preferences is not None:
         # Merge profondo: nuovi valori sovrascrivono quelli esistenti senza
         # cancellare le altre chiavi (es. cambiare solo "recording" lascia
