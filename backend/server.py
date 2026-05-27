@@ -1100,7 +1100,57 @@ def _format_history_for_llm(recent: List[TimelineEntry]) -> str:
 
 @api_router.get("/profile", response_model=Profile)
 async def api_get_profile():
-    return await get_or_create_profile()
+    """Ritorna il profilo dell'utente.
+
+    FIX 2026-06-26: rimuoviamo il background base64 dal payload — se l'utente
+    ha impostato un'immagine personalizzata come sfondo, il base64 può
+    arrivare a centinaia di KB (caso reale visto: 728 KB). Ciò gonfia
+    OGNI risposta di /profile (chiamato 2-3 volte al cold start dal client
+    in parallelo) → cold start dell'app lentissimo e potenziali timeout
+    iOS / parsing JSON falliti / UI che mostra default invece dei dati
+    reali (sfondo mancante, tema sbagliato, ecc.).
+    Il background ora si carica via endpoint dedicato /api/profile/background
+    SOLO quando il client lo richiede esplicitamente. Il campo nel JSON
+    profile contiene un flag "has_custom" oppure "" (default).
+    """
+    p = await get_or_create_profile()
+    try:
+        bg = p.settings.background or ""
+        if bg.startswith("data:") and len(bg) > 2000:
+            # Sostituisci il blob base64 con un puntatore breve.
+            p.settings.background = "@server:/api/profile/background"
+    except Exception:
+        pass
+    return p
+
+
+@api_router.get("/profile/background")
+async def api_get_profile_background():
+    """Serve l'immagine di sfondo personalizzata dell'utente come binary.
+
+    Estrae il base64 dal profilo e lo decodifica al volo. Aggiunge
+    Cache-Control aggressivo perché lo sfondo cambia raramente.
+    """
+    p = await get_or_create_profile()
+    bg = (p.settings.background or "") if p.settings else ""
+    if not bg or not bg.startswith("data:"):
+        raise HTTPException(status_code=404, detail="No custom background set")
+    try:
+        # data:image/jpeg;base64,XXXX → mime=image/jpeg, payload=XXXX
+        header, _, b64 = bg.partition(",")
+        mime = "image/jpeg"
+        if ";" in header:
+            mime = header[len("data:"):].split(";", 1)[0] or "image/jpeg"
+        import base64 as _b64
+        raw = _b64.b64decode(b64)
+    except Exception as e:
+        logger.error(f"[bg] decode failed: {e}")
+        raise HTTPException(status_code=500, detail="Background decode failed")
+    return Response(
+        content=raw,
+        media_type=mime,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 @api_router.put("/profile", response_model=Profile)
