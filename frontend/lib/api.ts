@@ -231,7 +231,23 @@ export const api = {
     const timer = setTimeout(() => {
       try { ac.abort(); } catch {}
     }, timeoutMs);
+    // === FIX CRASH FINALE 2026-06-28 SERA ===
+    // r.json() su iOS RN può crashare nativamente quando la response
+    // arriva con caratteri UTF-8 strani o headers Cloudflare anomali.
+    // SOLUZIONE: leggi come testo grezzo, poi JSON.parse in pure JS.
+    // Il parsing JS è catchable, quello nativo no.
+    // Traccio anche ogni step interno per pinpointare il crash.
+    const dbgTrace = (step: string, extra?: string) => {
+      try {
+        fetch(`${API_BASE}/dbg-trace`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ step, extra: extra || "" }),
+        }).catch(() => {});
+      } catch {}
+    };
     try {
+      dbgTrace("apiSealed-A-pre-fetch");
       const r = await fetch(`${API_BASE}/converse/sealed`, {
         method: "POST",
         headers: {
@@ -242,11 +258,24 @@ export const api = {
         signal: ac.signal,
       });
       clearTimeout(timer);
+      dbgTrace("apiSealed-B-headers-recv", `status=${r.status}`);
       if (!r.ok) {
         const t = await r.text().catch(() => "");
         throw new Error(`HTTP ${r.status}: ${t.slice(0, 200)}`);
       }
-      return await r.json();
+      // ATTENZIONE: NON usare r.json() — crash nativo iOS osservato.
+      // Usa r.text() + JSON.parse JS (catchable).
+      const bodyText = await r.text();
+      dbgTrace("apiSealed-C-text-read", `bytes=${bodyText.length}`);
+      let parsed: any;
+      try {
+        parsed = JSON.parse(bodyText);
+      } catch (pe: any) {
+        dbgTrace("apiSealed-D-json-err", String(pe).slice(0, 80));
+        throw new Error("Risposta server non valida");
+      }
+      dbgTrace("apiSealed-E-parsed-ok");
+      return parsed;
     } catch (e: any) {
       clearTimeout(timer);
       if (e?.name === "AbortError") {
