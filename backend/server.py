@@ -1100,7 +1100,7 @@ def _format_history_for_llm(recent: List[TimelineEntry]) -> str:
 # ---------- Routes (Taccuino) ----------
 
 @api_router.get("/profile", response_model=Profile)
-async def api_get_profile():
+async def api_get_profile(request: Request):
     """Ritorna il profilo dell'utente.
 
     FIX 2026-06-26: rimuoviamo il background base64 dal payload — se l'utente
@@ -1111,20 +1111,38 @@ async def api_get_profile():
     iOS / parsing JSON falliti / UI che mostra default invece dei dati
     reali (sfondo mancante, tema sbagliato, ecc.).
     Il background ora si carica via endpoint dedicato /api/profile/background
-    SOLO quando il client lo richiede esplicitamente. Il campo nel JSON
-    profile contiene un flag "has_custom" oppure "" (default).
+    SOLO quando il client lo richiede esplicitamente.
+
+    FIX 2026-06-27 SERA: ritorniamo una URL HTTPS COMPLETA invece del
+    placeholder "@server:/...". Motivo: l'iPhone, dopo periodi di
+    inattività, riparte dal bundle JS embed (vecchio, pre-fix) che NON
+    sa interpretare il prefisso "@server:". Una URL HTTPS, invece, è
+    riconosciuta sia dal bundle vecchio (che già controlla startsWith("http"))
+    sia dal nuovo. Risultato: lo sfondo appare immediatamente alla prima
+    apertura dell'app, indipendentemente da quale bundle stia girando.
     """
     p = await get_or_create_profile()
     try:
         bg = p.settings.background or ""
         if bg.startswith("data:") and len(bg) > 2000:
-            # Sostituisci il blob base64 con un puntatore breve + hash per cache-bust.
-            # L'hash dipende dal contenuto: se l'utente carica una nuova foto,
-            # il placeholder cambia → il frontend richiede una URL diversa →
-            # bypassa cache iOS senza riscaricare se la foto è la stessa.
+            # Hash deterministico → cache-bust automatico quando l'immagine cambia.
             import hashlib as _hl
             v = _hl.md5(bg[:4096].encode("utf-8", errors="ignore")).hexdigest()[:10]
-            p.settings.background = f"@server:/api/profile/background?v={v}"
+            # Costruisci la base URL dalla richiesta corrente, così la URL
+            # restituita corrisponde esattamente all'host che il client sta
+            # già usando (preview Emergent / Cloudflare / qualunque proxy).
+            try:
+                scheme = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
+                host = (
+                    request.headers.get("x-forwarded-host")
+                    or request.headers.get("host")
+                    or request.url.netloc
+                )
+                base = f"{scheme}://{host}"
+            except Exception:
+                # Fallback se per qualche motivo non riusciamo a leggere headers.
+                base = ""
+            p.settings.background = f"{base}/api/profile/background?v={v}"
     except Exception:
         pass
     return p
@@ -1176,18 +1194,26 @@ async def api_update_profile(update: ProfileUpdate):
         p.onboarded = update.onboarded
     if update.settings is not None:
         new_settings = update.settings
-        # FIX CRITICO 2026-06-27: protezione contro la sovrascrittura del
-        # background. Il GET /api/profile sostituisce il base64 reale
-        # nel payload con un placeholder "@server:/api/profile/background?v=…"
-        # per non gonfiare la risposta. Se il client, dopo aver letto il
-        # profilo, fa un update qualsiasi (es. cambia tema, voce, dim…)
-        # rimanda quell'oggetto settings INTERO, placeholder incluso.
-        # Senza questa difesa il replace_one cancellava per sempre il
-        # base64 reale nel DB → l'utente perdeva il suo sfondo.
+        # FIX CRITICO 2026-06-27 + AGGIORNATO 2026-06-27 SERA: protezione
+        # contro la sovrascrittura del background.
+        # Il GET /api/profile sostituisce il base64 reale nel payload con
+        # una URL HTTPS completa tipo:
+        #   "https://app-finder-408.preview.emergentagent.com/api/profile/background?v=…"
+        # (in passato era "@server:/...", manteniamo entrambi i pattern
+        # per compatibilità con eventuali client vecchi in cache).
+        # Se il client, dopo aver letto il profilo, fa un update qualsiasi
+        # (es. cambia tema, voce, dim…) rimanda quell'oggetto settings INTERO,
+        # placeholder/URL inclusa.
+        # Senza questa difesa il replace_one cancellava per sempre il base64
+        # reale nel DB → l'utente perdeva il suo sfondo.
         try:
             nb = (new_settings.background or "") if new_settings else ""
-            if isinstance(nb, str) and nb.startswith("@server:"):
-                # Preserva il valore originale nel DB.
+            if isinstance(nb, str) and (
+                nb.startswith("@server:")
+                or "/api/profile/background" in nb
+            ):
+                # È un placeholder che il client sta semplicemente rimandando
+                # indietro. Preserva il valore reale già nel DB.
                 new_settings.background = p.settings.background
         except Exception:
             pass
