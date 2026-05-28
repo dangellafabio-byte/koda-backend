@@ -1258,11 +1258,12 @@ export default function Taccuino() {
             _trace("sealed-4-hist-fetch-begin");
             confessionalHistoryLoadedRef.current = true;
             try {
-              const hist = await api.confessionalHistory(200);
+              const hist = await api.confessionalHistory(50);
               _trace("sealed-5-hist-fetched", `entries=${hist.entries?.length ?? 0}`);
               if (hist.entries && hist.entries.length > 0) {
                 const decryptedEntries: TimelineEntry[] = [];
-                for (const e of hist.entries) {
+                for (let i = 0; i < hist.entries.length; i++) {
+                  const e = hist.entries[i];
                   try {
                     const txt2 = unsealText(
                       { nonce: e.nonce, ciphertext: e.ciphertext },
@@ -1283,6 +1284,15 @@ export default function Taccuino() {
                     }
                   } catch {
                     /* skip entry che non si può decifrare (chiave diversa) */
+                  }
+                  // FIX CRASH 2026-06-28: cedi il JS thread ogni 5 entry
+                  // così iOS non innesca il watchdog (10s) durante il
+                  // primo messaggio confessionale dopo un cold start.
+                  // Senza questo, decifrare 20+ entry in sincrono poteva
+                  // bloccare il thread JS abbastanza a lungo da far killare
+                  // l'app a iOS.
+                  if (i % 5 === 4) {
+                    await new Promise<void>((r) => setTimeout(r, 0));
                   }
                 }
                 if (decryptedEntries.length > 0) {

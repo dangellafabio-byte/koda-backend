@@ -1669,7 +1669,7 @@ async def api_converse_sealed(
         messages.extend(history_msgs)
         messages.append({"role": "user", "content": plaintext})
         resp = await litellm.acompletion(
-            model='openai/claude-sonnet-4-5-20250929',
+            model='openai/claude-haiku-4-5-20251001',
             messages=messages,
             api_key=EMERGENT_LLM_KEY,
             api_base='https://integrations.emergentagent.com/llm',
