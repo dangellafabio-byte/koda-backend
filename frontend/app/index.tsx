@@ -1254,13 +1254,27 @@ export default function Taccuino() {
           _trace("sealed-3-seal-msg", `ct_len=${sealed.ciphertext.length}`);
 
           // === MEMORIA CONFESSIONALE PERSISTENTE ===
+          // FIX CRASH FINALE 2026-06-28: il for-loop di decifratura history
+          // crashava l'app NATIVAMENTE su iOS (osservato: 3 tentativi
+          // consecutivi morivano tra sealed-5 e sealed-6). Non è il
+          // contenuto delle entry (validate strutturalmente OK), né
+          // unsealText (validato difensivamente), ma probabilmente la
+          // combinazione di: setTimeline con array grande + render
+          // pressure + audio session.
+          // SOLUZIONE: DECIFERIAMO LA HISTORY IN BACKGROUND, NON-BLOCKING.
+          // Il flusso principale procede subito a POSTare il messaggio
+          // sigillato. La memoria si carica fire-and-forget. Se l'iOS
+          // decide di killare quel task per qualsiasi ragione, il flusso
+          // principale è già passato oltre.
           if (!confessionalHistoryLoadedRef.current) {
-            _trace("sealed-4-hist-fetch-begin");
             confessionalHistoryLoadedRef.current = true;
-            try {
-              const hist = await api.confessionalHistory(50);
-              _trace("sealed-5-hist-fetched", `entries=${hist.entries?.length ?? 0}`);
-              if (hist.entries && hist.entries.length > 0) {
+            _trace("sealed-4-hist-deferred");
+            // Fire-and-forget: parte in background, non blocca.
+            (async () => {
+              try {
+                const hist = await api.confessionalHistory(20);
+                _trace("sealed-5-bg-hist-fetched", `entries=${hist.entries?.length ?? 0}`);
+                if (!hist.entries || hist.entries.length === 0) return;
                 const decryptedEntries: TimelineEntry[] = [];
                 for (let i = 0; i < hist.entries.length; i++) {
                   const e = hist.entries[i];
@@ -1282,29 +1296,18 @@ export default function Taccuino() {
                         confessional: true,
                       } as TimelineEntry);
                     }
-                  } catch {
-                    /* skip entry che non si può decifrare (chiave diversa) */
-                  }
-                  // FIX CRASH 2026-06-28: cedi il JS thread ogni 5 entry
-                  // così iOS non innesca il watchdog (10s) durante il
-                  // primo messaggio confessionale dopo un cold start.
-                  // Senza questo, decifrare 20+ entry in sincrono poteva
-                  // bloccare il thread JS abbastanza a lungo da far killare
-                  // l'app a iOS.
-                  if (i % 5 === 4) {
-                    await new Promise<void>((r) => setTimeout(r, 0));
-                  }
+                  } catch {}
+                  // Yield ad OGNI iterazione (più aggressivo) per non bloccare mai il main thread.
+                  await new Promise<void>((r) => setTimeout(r, 10));
                 }
                 if (decryptedEntries.length > 0) {
-                  // Prepend in timeline mantenendo ordine cronologico
                   setTimeline((prev) => [...decryptedEntries, ...prev]);
                 }
-                _trace("sealed-6-hist-decrypted", `n=${decryptedEntries.length}`);
+                _trace("sealed-6-bg-hist-decrypted", `n=${decryptedEntries.length}`);
+              } catch (bgErr) {
+                _trace("sealed-6-bg-error", String(bgErr).slice(0, 100));
               }
-            } catch (e) {
-              _trace("sealed-6-hist-error", String(e).slice(0, 100));
-              console.warn("[sealed] history fetch failed (non-fatal):", e);
-            }
+            })();
           }
 
           // Raccogli i turni confessionali precedenti (ora include anche
