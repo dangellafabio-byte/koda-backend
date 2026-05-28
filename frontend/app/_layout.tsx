@@ -67,14 +67,36 @@ export default function RootLayout() {
       // not blocking init
     }
     (async () => {
+      // === FIX 2026-06-28 SERA: timeout + retry sulla fetch profilo ===
+      // PROBLEMA: in passato facevamo `await api.getProfile()` senza
+      // timeout. iOS al cold start ha la rete/DNS spesso non pronti
+      // → la fetch poteva restare appesa per MINUTI → l'app restava
+      // nello stato `!ready` che mostra una View vuota con
+      // backgroundColor #0B0F1A (indaco scuro). L'utente vedeva una
+      // "versione base, app non utilizzabile" per 5-10 minuti.
+      //
+      // SOLUZIONE: race con un timeout di 5s. Se in 5s la fetch non
+      // ha risposto, procediamo con i default e lasciamo che index.tsx
+      // (che ha il suo retry su AppState change) carichi il profilo
+      // appena la rete è pronta. L'importante è che l'app sia
+      // VISIBILE e USABILE, non bloccata in limbo.
+      const PROFILE_TIMEOUT_MS = 5000;
       try {
-        const p = await api.getProfile();
+        const p = await Promise.race([
+          api.getProfile(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("profile-cold-timeout")), PROFILE_TIMEOUT_MS)
+          ),
+        ]);
         const t = (p.settings?.theme as ThemeName) || "sistema";
         setInitialTheme(t);
         if (typeof p.settings?.day_start_hour === "number") setDayStart(p.settings.day_start_hour);
         if (typeof p.settings?.night_start_hour === "number") setNightStart(p.settings.night_start_hour);
-      } catch {}
-      setReady(true);
+      } catch {
+        // Rete lenta / DNS non pronto / preview down: NON bloccare l'UI.
+        // index.tsx farà i suoi tentativi di caricamento.
+      }
+      setReady(true); // SEMPRE procediamo. Mai più "limbo indaco".
     })();
   }, []);
 
