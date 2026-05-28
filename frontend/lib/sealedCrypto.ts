@@ -218,11 +218,35 @@ export async function sealText(plaintext: string, key: Uint8Array): Promise<Seal
 
 export function unsealText(payload: SealedPayload, key: Uint8Array): string | null {
   try {
-    const ct = b64ToBytes(payload.ciphertext);
-    const nonce = b64ToBytes(payload.nonce);
+    // FIX CRASH 2026-06-28: validazione difensiva. iOS poteva crashare
+    // nativamente dentro nacl.secretbox.open se nonce o ciphertext
+    // avevano formato/lunghezza non valida (es. entry corrotta in DB
+    // da una vecchia versione). Native crashes NON sono catchabili
+    // in JS try/catch → l'app moriva durante il for-loop di
+    // decifratura della history confessionale (visto a sealed-5).
+    if (!payload || typeof payload.ciphertext !== "string" || typeof payload.nonce !== "string") {
+      return null;
+    }
+    if (!key || key.length !== 32) return null;
+
+    let ct: Uint8Array;
+    let nonce: Uint8Array;
+    try {
+      ct = b64ToBytes(payload.ciphertext);
+      nonce = b64ToBytes(payload.nonce);
+    } catch {
+      return null; // base64 malformato
+    }
+    // nacl secretbox: nonce DEVE essere 24 bytes, ciphertext almeno 16 (MAC)
+    if (nonce.length !== 24 || ct.length < 17) return null;
+
     const out = nacl.secretbox.open(ct, nonce, key);
     if (!out) return null;
-    return bytesToUtf8(out);
+    try {
+      return bytesToUtf8(out);
+    } catch {
+      return null; // bytes non UTF-8 validi
+    }
   } catch {
     return null;
   }
