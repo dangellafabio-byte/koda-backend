@@ -1231,7 +1231,17 @@ export default function Taccuino() {
       try {
         // DEBUG TRACE (rimuovibile): manda step al backend così possiamo
         // capire dove si rompe il flow nel build standalone (no console.log).
+        // === FIX CRASH SEALED 2026-06-28 NOTTE ===
+        // Le chiamate fire-and-forget a /api/dbg-trace creavano
+        // contesa nel pool di connessioni iOS NSURLSession (limite ~4-6
+        // connessioni per host). Quando la risposta di /converse/sealed
+        // arrivava da Cloudflare con Set-Cookie HTTP/2, iOS crashava
+        // NATIVAMENTE nel cookie handler PRIMA di bridgare la risposta
+        // a JavaScript (per questo i catch JS non scattavano).
+        // SOLUZIONE: in produzione le trace sono NO-OP. In dev restano
+        // per diagnostica futura.
         const _trace = (step: string, extra?: string) => {
+          if (!__DEV__) return;
           try {
             fetch(`${API_BASE}/dbg-trace`, {
               method: "POST",

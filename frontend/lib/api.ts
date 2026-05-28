@@ -237,7 +237,12 @@ export const api = {
     // SOLUZIONE: leggi come testo grezzo, poi JSON.parse in pure JS.
     // Il parsing JS è catchable, quello nativo no.
     // Traccio anche ogni step interno per pinpointare il crash.
+    // FIX CRASH SEALED 2026-06-28 NOTTE: in produzione le trace sono
+    // NO-OP. Vedi commento in index.tsx — le fetch fire-and-forget
+    // saturavano il pool NSURLSession e iOS crashava nel cookie handler
+    // alla ricezione della risposta principale.
     const dbgTrace = (step: string, extra?: string) => {
+      if (!__DEV__) return;
       try {
         fetch(`${API_BASE}/dbg-trace`, {
           method: "POST",
