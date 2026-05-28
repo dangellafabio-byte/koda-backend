@@ -4,6 +4,7 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { View, StyleSheet, Platform } from "react-native";
+import * as Updates from "expo-updates";
 import { scheduleWeeklyAppNotification } from "../lib/notifications";
 import { ThemeProvider, useTheme, ThemeName } from "../lib/theme";
 import { api } from "../lib/api";
@@ -26,6 +27,35 @@ export default function RootLayout() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
+    // === FIX 2026-06-28: AUTO-APPLY OTA UPDATES ON COLD START ===
+    // Senza questo, expo-updates scarica il bundle in background ma lo
+    // applica solo al PROSSIMO avvio dell'app. Risultato: ogni volta che
+    // l'utente apre l'app dopo molta inattività, gira il bundle vecchio
+    // (embed nel binario o quello applicato prima) per ~5 minuti finché
+    // il sistema non scarica e ricarica.
+    // Con questo blocco: al cold start controlliamo se c'è un update;
+    // se sì, scarichiamo e ricarichiamo IMMEDIATAMENTE.
+    // Side effects: ~500ms-2s di "splash" in più all'avvio se c'è
+    // davvero un update. Senza update: nessun impatto (la check è
+    // rapida quando non c'è niente da scaricare).
+    (async () => {
+      try {
+        if (!__DEV__ && Updates.isEnabled) {
+          const u = await Updates.checkForUpdateAsync();
+          if (u.isAvailable) {
+            await Updates.fetchUpdateAsync();
+            // Ricarica subito: l'utente vede 1-2s di splash ma poi
+            // è sull'ultima versione. Niente più "5 minuti rotti".
+            await Updates.reloadAsync();
+            return; // mai raggiunto: reloadAsync() resetta tutto
+          }
+        }
+      } catch {
+        // Update check fallita (offline, server EAS down, ecc.):
+        // ignora silenziosamente, l'app parte con il bundle corrente.
+      }
+    })();
+
     // Pre-warm iOS/Android audio session BEFORE first TTS plays.
     // Fixes "Koda silent in first intro steps" bug on fresh native build.
     prewarmAudio().catch(() => {});

@@ -1368,7 +1368,34 @@ export default function Taccuino() {
             const filtered = prev.filter((e) => e.id !== optimistic.id);
             return [...filtered, userEntry, aiEntry];
           });
-          await speakIfEnabled(reply, aiEntry.tone || "warm");
+          // FIX CRASH CONFESSIONALE 2026-06-28: il crash nativo iOS
+          // avveniva ESATTAMENTE QUI — dopo il setTimeline, durante o
+          // subito prima di speakIfEnabled. Probabile causa: AVAudioSession
+          // ancora in modalità "recording" dal turn appena finito, e il
+          // tentativo di playback TTS senza reset esplicito causava un
+          // exception nativa non catchabile in JS.
+          // Mitigazioni:
+          //  (1) piccolo delay (150ms) per lasciar settle iOS
+          //  (2) reset esplicito a modalità playback
+          //  (3) wrap totale in try/catch così se TTS fallisce, l'app
+          //      NON crasha — al massimo non senti la risposta vocale,
+          //      ma il testo è già in timeline.
+          try {
+            await new Promise<void>((r) => setTimeout(r, 150));
+            try {
+              const { setAudioModeAsync } = await import("expo-audio");
+              await setAudioModeAsync({
+                allowsRecording: false,
+                playsInSilentMode: true,
+                shouldPlayInBackground: false,
+              } as any);
+            } catch {}
+            await speakIfEnabled(reply, aiEntry.tone || "warm");
+          } catch (speakErr) {
+            _trace("sealed-speak-error", String(speakErr).slice(0, 100));
+            console.warn("[sealed] speak failed (non-fatal):", speakErr);
+            setStatus("idle");
+          }
           return;
         }
         // === FAST PATH (sub-2s latency) — 2026-06 ===
