@@ -1333,19 +1333,37 @@ export default function Taccuino() {
             }
           }
           _trace("sealed-10-about-to-post");
-          const resp = await api.converseSealed(
-            {
-              nonce: sealed.nonce,
-              ciphertext: sealed.ciphertext,
-              language: profile?.language || "it",
-              ai_name: profile?.ai_name || "Coda",
-              ai_gender: profile?.ai_gender || "f",
-              user_gender: profile?.user_gender || "n",
-              history_nonce,
-              history_ciphertext,
-            },
-            keyToBase64(key)
-          );
+          let resp: { nonce: string; ciphertext: string; tone: string };
+          try {
+            resp = await api.converseSealed(
+              {
+                nonce: sealed.nonce,
+                ciphertext: sealed.ciphertext,
+                language: profile?.language || "it",
+                ai_name: profile?.ai_name || "Coda",
+                ai_gender: profile?.ai_gender || "f",
+                user_gender: profile?.user_gender || "n",
+                history_nonce,
+                history_ciphertext,
+              },
+              keyToBase64(key)
+            );
+            _trace("sealed-11-resp-ok", `nonce_len=${resp.nonce?.length || 0}`);
+          } catch (postErr: any) {
+            // FIX CRASH 2026-06-28 SERA: il POST a /api/converse/sealed
+            // a volte non arriva al server (Cloudflare timeout / iOS
+            // native crash / etc.). Senza catch esplicito qui, l'errore
+            // propagava fino al try/catch esterno che lasciava l'app
+            // in "thinking" state perpetuo → iOS watchdog kill.
+            // Adesso: traccia esplicita + messaggio utente, no crash.
+            _trace("sealed-11-post-error", String(postErr).slice(0, 150));
+            console.warn("[sealed] POST failed:", postErr);
+            setStatus("idle");
+            setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
+            setError("Confessionale: rete bloccata. Riprova tra un attimo.");
+            setTimeout(() => setError(null), 5000);
+            return;
+          }
           // Decifra la risposta lato client
           const reply = unsealText({ nonce: resp.nonce, ciphertext: resp.ciphertext }, key) || "";
           // Strip audio tags per chat display (regex rapido)
