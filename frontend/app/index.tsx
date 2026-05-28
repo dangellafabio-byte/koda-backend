@@ -1263,61 +1263,27 @@ export default function Taccuino() {
           const sealed = await sealText(txt, key);
           _trace("sealed-3-seal-msg", `ct_len=${sealed.ciphertext.length}`);
 
-          // === MEMORIA CONFESSIONALE PERSISTENTE ===
-          // FIX CRASH FINALE 2026-06-28: il for-loop di decifratura history
-          // crashava l'app NATIVAMENTE su iOS (osservato: 3 tentativi
-          // consecutivi morivano tra sealed-5 e sealed-6). Non è il
-          // contenuto delle entry (validate strutturalmente OK), né
-          // unsealText (validato difensivamente), ma probabilmente la
-          // combinazione di: setTimeline con array grande + render
-          // pressure + audio session.
-          // SOLUZIONE: DECIFERIAMO LA HISTORY IN BACKGROUND, NON-BLOCKING.
-          // Il flusso principale procede subito a POSTare il messaggio
-          // sigillato. La memoria si carica fire-and-forget. Se l'iOS
-          // decide di killare quel task per qualsiasi ragione, il flusso
-          // principale è già passato oltre.
+          // === MEMORIA CONFESSIONALE DISABILITATA TEMPORANEAMENTE ===
+          // FIX CRASH TURN 2 — 2026-06-28 NOTTE:
+          // Sul secondo turn del confessionale l'app crashava in fase
+          // "pensa" PRIMA del POST. Cause concrete:
+          //  - 14+ entry decrittate in timeline (BG task da turn 1)
+          //  - audio TTS buffers ancora in RAM
+          //  - audio recording buffer del turn 2
+          //  - JSON.stringify priorConfessional + sealText (5-10KB)
+          // Tutto insieme → iOS killa per memory pressure.
+          //
+          // Decisione condivisa con l'utente: "lascia perdere la memoria
+          // pregressa, basta che funzioni da adesso in poi".
+          // Quindi: NON carichiamo la history dal vault, NON inviamo
+          // priorConfessional al backend. Ogni turn è isolato.
+          // Pro: zero accumulo di stato, niente crash memory-pressure.
+          // Contro: Koda non ricorda i confessional precedenti.
+          //
+          // In futuro: rifare lazy + paginato + senza setTimeline gigante.
           if (!confessionalHistoryLoadedRef.current) {
             confessionalHistoryLoadedRef.current = true;
-            _trace("sealed-4-hist-deferred");
-            // Fire-and-forget: parte in background, non blocca.
-            (async () => {
-              try {
-                const hist = await api.confessionalHistory(20);
-                _trace("sealed-5-bg-hist-fetched", `entries=${hist.entries?.length ?? 0}`);
-                if (!hist.entries || hist.entries.length === 0) return;
-                const decryptedEntries: TimelineEntry[] = [];
-                for (let i = 0; i < hist.entries.length; i++) {
-                  const e = hist.entries[i];
-                  try {
-                    const txt2 = unsealText(
-                      { nonce: e.nonce, ciphertext: e.ciphertext },
-                      key
-                    );
-                    if (txt2) {
-                      const clean2 = txt2
-                        .replace(/\[[a-zA-Zàèéìòùç '_,/-]{1,40}\]/g, "")
-                        .replace(/  +/g, " ")
-                        .trim();
-                      decryptedEntries.push({
-                        id: `hist-${e.id}`,
-                        role: e.role,
-                        text: clean2,
-                        ts: e.ts,
-                        confessional: true,
-                      } as TimelineEntry);
-                    }
-                  } catch {}
-                  // Yield ad OGNI iterazione (più aggressivo) per non bloccare mai il main thread.
-                  await new Promise<void>((r) => setTimeout(r, 10));
-                }
-                if (decryptedEntries.length > 0) {
-                  setTimeline((prev) => [...decryptedEntries, ...prev]);
-                }
-                _trace("sealed-6-bg-hist-decrypted", `n=${decryptedEntries.length}`);
-              } catch (bgErr) {
-                _trace("sealed-6-bg-error", String(bgErr).slice(0, 100));
-              }
-            })();
+            _trace("sealed-4-hist-disabled");
           }
 
           // Raccogli i turni confessionali precedenti (ora include anche
