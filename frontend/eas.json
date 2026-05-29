@@ -21,6 +21,7 @@
     },
     "preview": {
       "distribution": "internal",
+      "autoIncrement": true,
       "ios": {
         "resourceClass": "m-medium",
         "simulator": false
