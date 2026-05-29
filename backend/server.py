@@ -484,7 +484,12 @@ class ProfileUpdate(BaseModel):
     ai_gender: Optional[str] = None
     user_gender: Optional[str] = None
     onboarded: Optional[bool] = None
-    settings: Optional[TaccuinoSettings] = None
+    # FIX 2026-07: settings come Dict aperto (non TaccuinoSettings) per
+    # evitare che Pydantic riempia i campi mancanti con i default e
+    # SOVRASCRIVA silenziosamente valori già salvati (es. tts_voice_id
+    # ripristinato a Matilda quando il client salva solo il tema).
+    # Il merge per campo avviene nel PUT handler.
+    settings: Optional[Dict[str, Any]] = None
     style_preferences: Optional[Dict[str, Any]] = None
 
 
@@ -1193,31 +1198,32 @@ async def api_update_profile(update: ProfileUpdate):
     if update.onboarded is not None:
         p.onboarded = update.onboarded
     if update.settings is not None:
-        new_settings = update.settings
-        # FIX CRITICO 2026-06-27 + AGGIORNATO 2026-06-27 SERA: protezione
-        # contro la sovrascrittura del background.
-        # Il GET /api/profile sostituisce il base64 reale nel payload con
-        # una URL HTTPS completa tipo:
-        #   "https://app-finder-408.preview.emergentagent.com/api/profile/background?v=…"
-        # (in passato era "@server:/...", manteniamo entrambi i pattern
-        # per compatibilità con eventuali client vecchi in cache).
-        # Se il client, dopo aver letto il profilo, fa un update qualsiasi
-        # (es. cambia tema, voce, dim…) rimanda quell'oggetto settings INTERO,
-        # placeholder/URL inclusa.
-        # Senza questa difesa il replace_one cancellava per sempre il base64
-        # reale nel DB → l'utente perdeva il suo sfondo.
-        try:
-            nb = (new_settings.background or "") if new_settings else ""
-            if isinstance(nb, str) and (
-                nb.startswith("@server:")
-                or "/api/profile/background" in nb
-            ):
-                # È un placeholder che il client sta semplicemente rimandando
-                # indietro. Preserva il valore reale già nel DB.
-                new_settings.background = p.settings.background
-        except Exception:
-            pass
-        p.settings = new_settings
+        # FIX 2026-07: merge per campo invece di sostituzione totale.
+        # Prima: `p.settings = new_settings` ricostruiva un TaccuinoSettings
+        # riempiendo TUTTI i campi mancanti con i default — quindi se il
+        # client salvava solo "theme", veniva silenziosamente sovrascritto
+        # tts_voice_id → Matilda, theme defaults, ecc.
+        # Ora: prendiamo solo le chiavi effettivamente inviate dal client
+        # e le applichiamo sul Settings esistente.
+        incoming = update.settings  # già dict
+        if isinstance(incoming, dict):
+            current = p.settings.model_dump()
+            # Protezione background placeholder/URL (mantenuta).
+            try:
+                nb = incoming.get("background")
+                if isinstance(nb, str) and (
+                    nb.startswith("@server:")
+                    or "/api/profile/background" in nb
+                ):
+                    incoming = {k: v for k, v in incoming.items() if k != "background"}
+            except Exception:
+                pass
+            current.update(incoming)
+            try:
+                p.settings = TaccuinoSettings(**current)
+            except Exception as e:
+                logger.warning(f"[profile] settings merge fallita ({e}), uso current")
+                p.settings = TaccuinoSettings(**{**TaccuinoSettings().model_dump(), **current})
     if update.style_preferences is not None:
         # Merge profondo: nuovi valori sovrascrivono quelli esistenti senza
         # cancellare le altre chiavi (es. cambiare solo "recording" lascia
@@ -3730,9 +3736,9 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
 
     # Genere blocco breve.
     if ai_g == "m":
-        ai_decl = f"Tu sei MASCHIO ({ai_name}). Parli di te al MASCHILE (sono pronto, sono contento)."
+        ai_decl = f"Tu sei MASCHIO ({ai_name}). OBBLIGATORIO parlare di te al MASCHILE SEMPRE: 'sono pronto', 'sono contento', 'sono stato', 'mi sono sentito'. MAI 'pronta/contenta/stata/sentita'."
     elif ai_g == "f":
-        ai_decl = f"Tu sei FEMMINA ({ai_name}). Parli di te al FEMMINILE (sono pronta, sono contenta)."
+        ai_decl = f"Tu sei FEMMINA ({ai_name}). OBBLIGATORIO parlare di te al FEMMINILE SEMPRE: 'sono pronta', 'sono contenta', 'sono stata', 'mi sono sentita', 'sicura', 'tranquilla'. MAI 'pronto/contento/stato/sentito/sicuro/tranquillo' riferito a te stessa."
     else:
         ai_decl = f"Sei neutr@ ({ai_name}). Evita aggettivi di genere su di te."
     if user_g == "m":

@@ -14,7 +14,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.dangella.koda",
-      "buildNumber": "1",
+      "buildNumber": "2",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Per ascoltare la tua voce e parlare con Koda",
         "NSPhotoLibraryUsageDescription": "Per scegliere immagini di sfondo personalizzate",
@@ -25,7 +25,7 @@
     },
     "android": {
       "package": "com.dangella.koda",
-      "versionCode": 1,
+      "versionCode": 2,
       "edgeToEdgeEnabled": true,
       "permissions": [
         "RECORD_AUDIO",

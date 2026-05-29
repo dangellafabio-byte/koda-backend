@@ -1,3 +1,27 @@
+## SESSIONE 2026-07 — NATIVE BUILD iOS + ANDROID + FIX VOCE JESSICA
+
+### ✅ NUOVI FIX BACKEND (pre-build)
+1. **Bug critico race condition voice reset → Matilda** (server.py)
+   - `ProfileUpdate.settings`: cambiato da `TaccuinoSettings` a `Dict[str, Any]`.
+     Pydantic non riempie più tutti i default mancanti, evitando overwrite.
+   - PUT /api/profile ora fa **merge per campo** anziché replace totale del Settings.
+   - DB ripristinato: `tts_voice_id = cgSgspJ2msm6clMCkdW9` (Jessica).
+   - Smoke test eseguito: PUT `{theme:"notte"}` preserva voce + background.
+2. **Rinforzo genere AI nel prompt italiano** (_build_fast_system_prompt):
+   - Genere femminile/maschile ora con esempi obbligatori espliciti.
+3. **Bump versioni native**:
+   - `ios.buildNumber`: "1" → "2"
+   - `android.versionCode`: 1 → 2
+
+### 🟡 IN ATTESA UTENTE
+- `EXPO_TOKEN` per autenticazione EAS CLI nel container (sessione scaduta).
+- Una volta ricevuto, lancio in parallelo:
+  - `eas build --platform ios --profile preview --non-interactive`
+  - `eas build --platform android --profile preview --non-interactive`
+
+---
+
+
 ## SESSIONE 2026-06-27 — FIX APP RESUME COLD + ITALIANO CORRETTO
 
 ### ✅ NUOVI FIX CRITICI
