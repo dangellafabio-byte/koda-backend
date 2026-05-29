@@ -540,34 +540,77 @@ export default function Taccuino() {
 
   // Initial load
   useEffect(() => {
-    (async () => {
-      try {
-        const p = await api.getProfile();
-        setProfile(p);
-        // Sync theme from profile if different
-        const tName = (p.settings?.theme as ThemeName) || "sistema";
-        if (tName !== themeName) setThemeName(tName);
-        if (
-          typeof p.settings?.day_start_hour === "number" ||
-          typeof p.settings?.night_start_hour === "number"
-        ) {
-          setHours(p.settings?.day_start_hour ?? 7, p.settings?.night_start_hour ?? 20);
+    // === FIX 2026-07: caricamento RESILIENTE con timeout e retry ===
+    // PRIMA: profile e timeline erano in serie senza timeout. Se la rete iOS
+    // al cold start era lenta (DNS pigro), getProfile poteva bloccarsi per
+    // MINUTI → la timeline non veniva mai caricata → "messaggi non caricati".
+    // ORA: profile e timeline INDIPENDENTI, ciascuno con timeout 4s e retry
+    // automatico. Se rete non risponde, riprova ogni 3s in background fino
+    // a successo. L'app mostra UI subito, i dati arrivano appena possibile.
+    let cancelled = false;
+
+    const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T> =>
+      Promise.race([
+        p,
+        new Promise<T>((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), ms)
+        ),
+      ]);
+
+    const loadProfile = async () => {
+      let attempt = 0;
+      while (!cancelled) {
+        try {
+          const p = await withTimeout(api.getProfile(), 4000);
+          if (cancelled) return;
+          setProfile(p);
+          const tName = (p.settings?.theme as ThemeName) || "sistema";
+          if (tName !== themeName) setThemeName(tName);
+          if (
+            typeof p.settings?.day_start_hour === "number" ||
+            typeof p.settings?.night_start_hour === "number"
+          ) {
+            setHours(p.settings?.day_start_hour ?? 7, p.settings?.night_start_hour ?? 20);
+          }
+          if (p.settings?.tts_voice_id) {
+            setDefaultVoiceId(p.settings.tts_voice_id);
+          }
+          if (!p.onboarded) setShowOnboarding(true);
+          else if (p.settings?.input_mode !== "text") {
+            prewarmMic().catch(() => {});
+          }
+          return; // success
+        } catch (e) {
+          attempt++;
+          if (attempt > 30) return; // giveup dopo ~90s
+          await new Promise((r) => setTimeout(r, 3000));
         }
-        // Sync ElevenLabs voice id into speech module
-        if (p.settings?.tts_voice_id) {
-          setDefaultVoiceId(p.settings.tts_voice_id);
-        }
-        if (!p.onboarded) setShowOnboarding(true);
-        else if (p.settings?.input_mode !== "text") {
-          // Pre-warm mic permission so first tap goes straight to recording
-          prewarmMic().catch(() => {});
-        }
-        const t = await api.getTimeline(200);
-        setTimeline(t);
-      } catch (e) {
-        console.warn("init error", e);
       }
-    })();
+    };
+
+    const loadTimeline = async () => {
+      let attempt = 0;
+      while (!cancelled) {
+        try {
+          const t = await withTimeout(api.getTimeline(200), 5000);
+          if (cancelled) return;
+          setTimeline(t);
+          return; // success
+        } catch (e) {
+          attempt++;
+          if (attempt > 30) return; // giveup dopo ~90s
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+      }
+    };
+
+    // Lancia in PARALLELO: il timeline NON aspetta più il profile.
+    loadProfile();
+    loadTimeline();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
