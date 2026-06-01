@@ -11,6 +11,11 @@
  *  4. (2400-3000ms) tutto sfuma in nero, animazione termina
  *
  * Haptic feedback su fase 1 (ignite), fase 3 (seal), fase 4 (close).
+ *
+ * ⚠️ FIX 2026-07: refactor per non violare Rules of Hooks.
+ *  Le particelle sono ora un sub-component <FlameParticle/> con i propri
+ *  hooks. Prima erano dentro Array.from()/`.map()` con useSharedValue/
+ *  useAnimatedStyle dentro callback → crash in release build (Hermes + new arch).
  */
 
 import React, { useEffect, useMemo } from "react";
@@ -45,8 +50,15 @@ const DEFAULT_LABELS = {
   confirmation: "Dato grezzo cancellato per sempre.",
 };
 
-// 12 particelle disposte casualmente sull'asse X
+// 14 particelle disposte casualmente sull'asse X
 const PARTICLE_COUNT = 14;
+
+type ParticleConfig = {
+  x: number;
+  delay: number;
+  size: number;
+  color: string;
+};
 
 function fireHaptic(type: "light" | "medium" | "heavy") {
   if (Platform.OS === "web") return;
@@ -57,6 +69,66 @@ function fireHaptic(type: "light" | "medium" | "heavy") {
   } catch {}
 }
 
+// ──────────────────────────────────────────────────────────────────
+// Sub-component: una singola particella di fiamma.
+// I propri hooks (useSharedValue + useAnimatedStyle) vivono qui in modo
+// sicuro, perché viene istanziato in numero fisso (PARTICLE_COUNT).
+// ──────────────────────────────────────────────────────────────────
+type FlameParticleProps = {
+  cfg: ParticleConfig;
+  trigger: boolean;
+};
+
+function FlameParticle({ cfg, trigger }: FlameParticleProps) {
+  const y = useSharedValue(0);
+  const opacity = useSharedValue(0);
+
+  useEffect(() => {
+    if (!trigger) {
+      // reset quando l'overlay viene smontato / nascosto
+      y.value = 0;
+      opacity.value = 0;
+      return;
+    }
+    opacity.value = withDelay(
+      cfg.delay,
+      withSequence(
+        withTiming(1, { duration: 200 }),
+        withDelay(800, withTiming(0, { duration: 400 }))
+      )
+    );
+    y.value = withDelay(
+      cfg.delay,
+      withTiming(-SCREEN_H * 0.7, { duration: 1400, easing: Easing.out(Easing.quad) })
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trigger]);
+
+  const pStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: y.value }],
+    opacity: opacity.value,
+  }));
+
+  return (
+    <Animated.View
+      style={[
+        styles.particle,
+        {
+          left: cfg.x,
+          width: cfg.size,
+          height: cfg.size,
+          backgroundColor: cfg.color,
+          shadowColor: cfg.color,
+        },
+        pStyle,
+      ]}
+    />
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Main component
+// ──────────────────────────────────────────────────────────────────
 export default function FortezzaCloseEffect({ visible, onComplete, labels }: Props) {
   const L = { ...DEFAULT_LABELS, ...(labels || {}) };
 
@@ -66,8 +138,8 @@ export default function FortezzaCloseEffect({ visible, onComplete, labels }: Pro
   const sealOpacity = useSharedValue(0);
   const confirmOpacity = useSharedValue(0);
 
-  // Particle animation values
-  const particleConfigs = useMemo(
+  // Generato una sola volta. È solo dati, niente hooks dentro.
+  const particleConfigs = useMemo<ParticleConfig[]>(
     () =>
       Array.from({ length: PARTICLE_COUNT }, (_, i) => ({
         x: (i / PARTICLE_COUNT) * SCREEN_W + (Math.random() - 0.5) * 40,
@@ -77,18 +149,17 @@ export default function FortezzaCloseEffect({ visible, onComplete, labels }: Pro
       })),
     []
   );
-  const particleAnims = useMemo(
-    () =>
-      Array.from({ length: PARTICLE_COUNT }, () => ({
-        y: useSharedValue(0),
-        opacity: useSharedValue(0),
-      })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    []
-  );
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      // reset state quando viene chiuso
+      containerOpacity.value = 0;
+      glowOpacity.value = 0;
+      sealScale.value = 0;
+      sealOpacity.value = 0;
+      confirmOpacity.value = 0;
+      return;
+    }
 
     // FASE 1: bagliore (ignite)
     fireHaptic("light");
@@ -97,21 +168,6 @@ export default function FortezzaCloseEffect({ visible, onComplete, labels }: Pro
       withTiming(0.6, { duration: 400, easing: Easing.out(Easing.quad) }),
       withDelay(2000, withTiming(0, { duration: 600 }))
     );
-
-    // FASE 2: particelle che salgono
-    particleConfigs.forEach((cfg, idx) => {
-      particleAnims[idx].opacity.value = withDelay(
-        cfg.delay,
-        withSequence(
-          withTiming(1, { duration: 200 }),
-          withDelay(800, withTiming(0, { duration: 400 }))
-        )
-      );
-      particleAnims[idx].y.value = withDelay(
-        cfg.delay,
-        withTiming(-SCREEN_H * 0.7, { duration: 1400, easing: Easing.out(Easing.quad) })
-      );
-    });
 
     // FASE 3: sigillo appare con piccolo "thump"
     sealOpacity.value = withDelay(1500, withTiming(1, { duration: 400 }));
@@ -122,11 +178,11 @@ export default function FortezzaCloseEffect({ visible, onComplete, labels }: Pro
         withTiming(1, { duration: 200 })
       )
     );
-    setTimeout(() => fireHaptic("medium"), 1500);
+    const t1 = setTimeout(() => fireHaptic("medium"), 1500);
 
     // FASE 4: conferma + chiusura
     confirmOpacity.value = withDelay(2100, withTiming(1, { duration: 400 }));
-    setTimeout(() => fireHaptic("heavy"), 2400);
+    const t2 = setTimeout(() => fireHaptic("heavy"), 2400);
 
     // Fade out tutto
     containerOpacity.value = withDelay(
@@ -137,12 +193,16 @@ export default function FortezzaCloseEffect({ visible, onComplete, labels }: Pro
         }
       })
     );
+
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
   const containerStyle = useAnimatedStyle(() => ({
     opacity: containerOpacity.value,
-    pointerEvents: containerOpacity.value > 0.1 ? ("auto" as const) : ("none" as const),
   }));
   const glowStyle = useAnimatedStyle(() => ({ opacity: glowOpacity.value }));
   const sealStyle = useAnimatedStyle(() => ({
@@ -151,6 +211,8 @@ export default function FortezzaCloseEffect({ visible, onComplete, labels }: Pro
   }));
   const confirmStyle = useAnimatedStyle(() => ({ opacity: confirmOpacity.value }));
 
+  // IMPORTANTE: NON return null prima degli hooks per evitare hook-count
+  // mismatch. Invece, nascondiamo l'overlay solo a livello di stile.
   if (!visible) return null;
 
   return (
@@ -158,29 +220,10 @@ export default function FortezzaCloseEffect({ visible, onComplete, labels }: Pro
       {/* Glow caldo dal basso */}
       <Animated.View style={[styles.glow, glowStyle]} />
 
-      {/* Particelle di fiamma */}
-      {particleConfigs.map((cfg, idx) => {
-        const pStyle = useAnimatedStyle(() => ({
-          transform: [{ translateY: particleAnims[idx].y.value }],
-          opacity: particleAnims[idx].opacity.value,
-        }));
-        return (
-          <Animated.View
-            key={idx}
-            style={[
-              styles.particle,
-              {
-                left: cfg.x,
-                width: cfg.size,
-                height: cfg.size,
-                backgroundColor: cfg.color,
-                shadowColor: cfg.color,
-              },
-              pStyle,
-            ]}
-          />
-        );
-      })}
+      {/* Particelle di fiamma — ogni particella è un sub-component con i propri hooks */}
+      {particleConfigs.map((cfg, idx) => (
+        <FlameParticle key={idx} cfg={cfg} trigger={visible} />
+      ))}
 
       {/* Sigillo centrale */}
       <Animated.View style={[styles.sealContainer, sealStyle]}>
