@@ -378,6 +378,14 @@ export default function Taccuino() {
   // Si attiva quando l'utente esce dal confessionale dopo aver scambiato
   // almeno un messaggio in modalità Fortezza. Al termine, wipe locale.
   const [showFortezzaWipe, setShowFortezzaWipe] = useState(false);
+  // FIX 2026-06: tracciamo l'uso della Fortezza tramite un ref invece che
+  // controllare la timeline. La timeline viene periodicamente ri-fetchata
+  // dal backend, e i messaggi Fortezza (che NON vengono salvati su DB per
+  // design zero-knowledge) sparivano dalla timeline → l'animazione di
+  // chiusura non partiva mai. Il ref è indipendente dal refetch.
+  // Viene messo a true al primo messaggio Fortezza inviato/ricevuto, e
+  // resettato al termine dell'animazione di wipe.
+  const fortezzaUsedThisSessionRef = useRef<boolean>(false);
   // === Zero-Knowledge: Parola Segreta (Sigillo) ===
   // Se l'utente ha impostato una Parola Segreta, in modalità Confessionale
   // il messaggio viene cifrato sul dispositivo e inviato a /converse/sealed.
@@ -1302,6 +1310,10 @@ export default function Taccuino() {
         if (isFortezza) {
           try {
             const { emotion, intensity, language } = classifyEmotion(txt);
+            // FIX 2026-06: marca che la sessione Fortezza è stata usata
+            // (così alla chiusura del Confessionale parte l'animazione di
+            // wipe a fiamme, indipendentemente dal refetch della timeline)
+            fortezzaUsedThisSessionRef.current = true;
             const resp = await fetch(`${API_BASE}/converse/fortezza`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -2715,7 +2727,12 @@ export default function Taccuino() {
                 // Fortezza in questa sessione, lancio l'animazione di chiusura
                 // (fiamma + sigillo) che, una volta finita, wipa i messaggi
                 // local-fortezza dalla timeline → "dato grezzo cancellato".
-                const hasFortezzaMsgs = timeline.some((e) => e.fortezza);
+                // FIX 2026-06: uso il ref invece di timeline.some() perché
+                // la timeline viene re-fetchata dal backend e i messaggi
+                // Fortezza locali sparivano → l'animazione non partiva mai.
+                const hasFortezzaMsgs =
+                  fortezzaUsedThisSessionRef.current ||
+                  timeline.some((e) => e.fortezza);
                 forgetSessionKey();
                 if (hasFortezzaMsgs) {
                   setShowFortezzaWipe(true);
@@ -3974,6 +3991,8 @@ export default function Taccuino() {
           setTimeline((prev) => prev.filter((e) => !e.fortezza));
           setShowFortezzaWipe(false);
           setConfessionalMode(false);
+          // FIX 2026-06: reset del ref per la prossima sessione Fortezza
+          fortezzaUsedThisSessionRef.current = false;
         }}
       />
     </View>
