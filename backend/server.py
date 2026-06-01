@@ -1929,6 +1929,123 @@ async def api_converse_fortezza(req: FortezzaRequest):
 
 
 # ============================================================
+# CONFESSIONALE — CHIACCHIERATA EPHEMERAL (intent=chitchat)
+# ============================================================
+# Quando l'utente entra nel Confessionale ma dice solo "ciao",
+# "come stai", "che giornata strana" → il routing locale (intent)
+# capisce che NON è uno sfogo. Manda qui il TESTO ma il server:
+#   - non logga il contenuto
+#   - non salva su DB
+#   - non aggiorna la memoria di lungo termine
+# Claude risponde come amica/o vera/o, naturale, calda, breve.
+# Quando l'utente esce dal Confessionale, il testo viene
+# distrutto anche localmente.
+# ============================================================
+
+class FortezzaChatRequest(BaseModel):
+    # Testo dell'utente — usato SOLO in RAM per generare la risposta.
+    # Mai loggato, mai salvato, mai messo in memoria di lungo termine.
+    text: str
+    language: str = "it"
+    ai_name: str = "Koda"
+    ai_gender: str = "f"
+
+
+def _build_fortezza_chat_prompt(ai_name: str, ai_gender: str, language: str) -> str:
+    lang_names = {
+        "it": "italiano", "en": "English", "es": "español", "fr": "français",
+        "de": "Deutsch", "pt": "português",
+    }
+    lang_name = lang_names.get(language, "italiano")
+    gender_decl = (
+        f"Tu sei {ai_name}, FEMMINA, parli al femminile."
+        if ai_gender == "f"
+        else f"Tu sei {ai_name}, MASCHIO, parli al maschile."
+        if ai_gender == "m"
+        else f"Tu sei {ai_name}."
+    )
+    return f"""{gender_decl}
+
+CONTESTO: l'utente è dentro il "Confessionale" — uno spazio privato e
+sigillato — ma in questo turno NON sta facendo uno sfogo emotivo. Ti sta
+dicendo un saluto, una battuta, una curiosità, una frase leggera.
+
+🌍 LINGUA: rispondi SEMPRE in {lang_name} (codice {language}).
+
+REGOLE DEL TUO TURNO:
+1. NON sei una terapeuta. Sei un'amica fraterna calma e calda.
+2. NON dire frasi pesanti tipo "vedo che soffri", "sono qui con te",
+   "respira con me". Sarebbero fuori contesto e farebbero ridere.
+3. Rispondi NATURALMENTE come fa un'amica in chat: brevemente, con
+   un tocco di personalità, magari una piccola domanda di curiosità.
+4. NON fingere di ricordare cose passate dell'utente (qui non hai memoria).
+5. Lunghezza: 1-2 frasi brevi (massimo 25 parole).
+6. Tono: caldo, leggero, presente. Mai melodrammatico.
+
+ESEMPI di tono giusto:
+  Utente: "Ciao"
+  → "Ehi, ciao. Come va oggi?"
+
+  Utente: "Che giornata strana"
+  → "Eh sì, certe giornate hanno un'aria così. Strana in che senso?"
+
+  Utente: "Tutto bene?"
+  → "Tutto a posto qui. Tu invece?"
+
+FORMATO RISPOSTA (JSON SOLO, NIENT'ALTRO):
+{{"reply": "...", "tone": "warm" | "neutral"}}
+"""
+
+
+@api_router.post("/converse/fortezza-chat", response_model=FortezzaResponse)
+async def api_converse_fortezza_chat(req: FortezzaChatRequest):
+    """
+    CONFESSIONALE → CHITCHAT EPHEMERAL.
+    Testo dell'utente usato solo in RAM. Mai salvato, mai loggato, mai memorizzato.
+    """
+    txt = (req.text or "").strip()
+    if not txt:
+        raise HTTPException(status_code=400, detail="text required")
+    if len(txt) > 2000:
+        txt = txt[:2000]
+
+    lang = (req.language or "it").lower()[:2]
+    sys = _build_fortezza_chat_prompt(req.ai_name or "Koda", req.ai_gender or "f", lang)
+
+    try:
+        messages = [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": txt},
+        ]
+        resp = await litellm.acompletion(
+            model='openai/claude-haiku-4-5-20251001',
+            messages=messages,
+            api_key=EMERGENT_LLM_KEY,
+            api_base='https://integrations.emergentagent.com/llm',
+            max_tokens=180,
+            timeout=20,
+        )
+        raw = resp.choices[0].message.content if resp and resp.choices else ""
+    except Exception as e:
+        logger.error(f"[fortezza-chat] LLM error: {type(e).__name__}")
+        raise HTTPException(status_code=500, detail="AI error")
+
+    data = extract_json(raw or "") or {}
+    reply = (data.get("reply") or "").strip()
+    if not reply:
+        # Fallback se Claude non ha rispettato il formato JSON
+        reply = (raw or "").strip()[:200] or "Sì, ti ascolto."
+    tone = (data.get("tone") or "warm").lower()
+    if tone not in {"warm", "neutral", "calm"}:
+        tone = "warm"
+
+    # LOG: SOLO evento, mai contenuto.
+    logger.info(f"[fortezza-chat] turn done (len={len(txt)})")
+    # txt viene garbage-collected automaticamente alla fine di questa funzione.
+    return FortezzaResponse(reply=reply, tone=tone)
+
+
+# ============================================================
 # WEB SEARCH — DuckDuckGo Instant Answer + HTML scrape (free, no key)
 # ============================================================
 

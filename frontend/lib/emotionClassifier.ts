@@ -267,6 +267,135 @@ export function classifyEmotion(text: string): EmotionClassification {
 }
 
 // ──────────────────────────────────────────────────────────────────
+// INTENT ROUTING — "chiacchierata" vs "confessione".
+//
+// Il muro di gomma: se in modalità Fortezza l'utente dice solo "ciao",
+// estrarre un'emozione e mandare un codice astratto al server produce
+// una risposta empatica fuori contesto ("Vedo che soffri..."). Soluzione:
+// PRIMA di applicare il filtro matematico, classifichiamo l'INTENTO.
+//
+//   - "chitchat"   → saluto / curiosità / battuta / domanda leggera
+//                    → il testo viene mandato al server in modalità
+//                      ephemeral (no DB, no memoria) per una risposta
+//                      naturale e calda
+//   - "confession" → sfogo / dolore / segreto / racconto carico
+//                    → si attiva il protocollo Fortezza zero-knowledge
+//                      (solo codice emozione, testo distrutto)
+//
+// Regola di sicurezza: nel dubbio → "confession" (preferiamo essere
+// empatici-pesanti che sembrare freddi).
+// ──────────────────────────────────────────────────────────────────
+
+export type Intent = "chitchat" | "confession";
+
+// Saluti & conversazione leggera (multilingua)
+const CHITCHAT_OPENERS: string[] = [
+  // it
+  "ciao", "ehi", "ehilà", "salve", "buongiorno", "buonasera", "buonanotte",
+  "come stai", "come va", "tutto bene", "tutto ok", "tutto a posto",
+  "che fai", "cosa fai", "che combini", "che mi racconti", "novità",
+  "come è andata", "com'è andata", "come è andato", "com'è andato",
+  "che si dice", "che dici", "raccontami",
+  // en
+  "hi", "hey", "hello", "howdy", "good morning", "good evening", "good night",
+  "how are you", "how's it going", "how do you do", "what's up", "whats up",
+  "what are you doing", "what's new",
+  // es
+  "hola", "buenos días", "buenas noches", "qué tal", "que tal", "cómo estás", "como estas",
+  "qué haces", "que haces",
+  // fr
+  "salut", "bonjour", "bonsoir", "comment ça va", "ça va", "quoi de neuf",
+  // de
+  "hallo", "hi", "guten morgen", "guten abend", "wie geht's", "wie geht es",
+  // pt
+  "olá", "oi", "bom dia", "boa noite", "como vai", "tudo bem", "como estás",
+];
+
+// Parole/frasi che indicano sfogo emotivo serio (multilingua)
+const CONFESSION_MARKERS: string[] = [
+  // it - distress
+  "sto male", "non sto bene", "non ce la faccio", "non riesco più",
+  "voglio morire", "vorrei sparire", "mi sento perso", "mi sento persa",
+  "ho paura", "ho ansia", "ho fatto", "ho un segreto",
+  "mi vergogno", "ho tradito", "mi odio", "mi disprezzo",
+  "non valgo niente", "non servo a niente", "sono solo", "sono sola",
+  "soffro", "piango", "sto piangendo", "ho voglia di piangere",
+  "non dormo", "non mangio", "mi fa male", "fa male",
+  "mio padre", "mia madre", "mio figlio", "mia figlia",
+  "lui mi", "lei mi", "loro mi",
+  // en
+  "i feel bad", "i'm broken", "i'm scared", "i'm afraid", "i hate myself",
+  "i can't go on", "i want to die", "i did something",
+  // es
+  "estoy mal", "me siento mal", "tengo miedo", "me odio", "no puedo más",
+  // fr
+  "je vais mal", "j'ai peur", "je me déteste", "je n'en peux plus",
+  // de
+  "es geht mir schlecht", "ich habe angst", "ich hasse mich",
+  // pt
+  "estou mal", "tenho medo", "me odeio",
+];
+
+const NEUTRAL_BORING_TOPICS: string[] = [
+  // questions about Koda herself / curiosity / meta
+  "cosa sei", "chi sei", "what are you", "who are you",
+  "come funzioni", "how do you work",
+  // weather / smalltalk
+  "che tempo", "che giornata", "pioggia", "sole", "freddo",
+];
+
+export function classifyIntent(text: string): Intent {
+  const t = text.toLowerCase().trim();
+  const wordCount = t.split(/\s+/).filter(Boolean).length;
+
+  if (!t) return "chitchat";
+
+  // 1. Frasi molto lunghe → quasi sicuramente uno sfogo.
+  if (wordCount > 25) return "confession";
+
+  // 2. Match esplicito su confession markers
+  for (const m of CONFESSION_MARKERS) {
+    if (t.includes(m)) return "confession";
+  }
+
+  // 3. Match esplicito su chitchat openers (deve essere all'inizio o uguale)
+  for (const op of CHITCHAT_OPENERS) {
+    if (t === op || t.startsWith(op + " ") || t.startsWith(op + ",") ||
+        t.startsWith(op + "!") || t.startsWith(op + "?") || t.startsWith(op + ".")) {
+      return "chitchat";
+    }
+  }
+
+  // 4. Topic neutri/curiosità (cosa sei, che tempo fa, ecc.)
+  for (const n of NEUTRAL_BORING_TOPICS) {
+    if (t.includes(n)) return "chitchat";
+  }
+
+  // 5. Frasi BREVI senza emotion markers forti → chitchat
+  //    (es. "che bella giornata", "oggi è strano", "mah", "boh")
+  if (wordCount <= 6) {
+    // Verifica se contiene almeno una parola emotiva forte
+    const c = classifyEmotion(text);
+    if (c.intensity === "lieve" || c.emotion === "dolore") {
+      // dolore è il fallback default → significa "non ho trovato nulla di emotivo"
+      // → trattalo come chitchat
+      return "chitchat";
+    }
+  }
+
+  // 6. Frase media (7-25 parole): usa l'emozione
+  //    - intensità alta o emozioni forti (vergogna, rabbia, paura, tristezza, dolore reale) → confession
+  //    - resto → chitchat
+  const c = classifyEmotion(text);
+  if (c.intensity === "alta") return "confession";
+  if (c.intensity === "media" && c.emotion !== "dolore") return "confession";
+
+  // Default: chitchat (preferiamo non sembrare melodrammatici se non c'è
+  // un chiaro segnale di sfogo)
+  return "chitchat";
+}
+
+// ──────────────────────────────────────────────────────────────────
 // SAFE WIPE — chiama questo quando l'utente esce dal confessionale.
 // Forza la garbage collection di stringhe sensibili sovrascrivendole.
 // ──────────────────────────────────────────────────────────────────

@@ -42,7 +42,7 @@ import {
 } from "../lib/api";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId } from "../lib/speech";
-import { classifyEmotion, secureWipeStrings } from "../lib/emotionClassifier";
+import { classifyEmotion, classifyIntent, secureWipeStrings } from "../lib/emotionClassifier";
 import FortezzaCloseEffect from "../components/FortezzaCloseEffect";
 import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
@@ -1309,12 +1309,40 @@ export default function Taccuino() {
         // astratto al server. Il testo grezzo non lascia mai il telefono.
         if (isFortezza) {
           try {
-            const { emotion, intensity, language } = classifyEmotion(txt);
+            // FIX 2026-06: ROUTING LOCALE (chitchat vs confession).
+            // Prima estraeamo SEMPRE emozione+intensità da qualunque testo
+            // → frasi tipo "ciao" o "che giornata strana" generavano risposte
+            // empatiche pesanti fuori contesto ("Vedo che soffri…").
+            // Adesso il classificatore locale decide PRIMA se è chiacchierata
+            // o sfogo, poi sceglie il protocollo giusto.
+            //
+            //   - chitchat   → endpoint /converse/fortezza-chat con il TESTO
+            //                  (ephemeral: server non logga, non salva, non
+            //                  memorizza; testo viene distrutto a fine RAM)
+            //   - confession → endpoint /converse/fortezza con SOLO il codice
+            //                  emozione astratto (zero-knowledge totale)
+            //
+            // In entrambi i casi: niente memoria di lungo termine, niente DB.
+            const intent = classifyIntent(txt);
             // FIX 2026-06: marca che la sessione Fortezza è stata usata
-            // (così alla chiusura del Confessionale parte l'animazione di
-            // wipe a fiamme, indipendentemente dal refetch della timeline)
+            // (per triggerare animazione di chiusura, vedi toggle)
             fortezzaUsedThisSessionRef.current = true;
-            const resp = await fetch(`${API_BASE}/converse/fortezza`, {
+
+            let resp: Response;
+            if (intent === "chitchat") {
+              resp = await fetch(`${API_BASE}/converse/fortezza-chat`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  text: txt,
+                  language: profile?.language || "it",
+                  ai_name: profile?.ai_name || "Koda",
+                  ai_gender: profile?.ai_gender || "f",
+                }),
+              });
+            } else {
+              const { emotion, intensity, language } = classifyEmotion(txt);
+              resp = await fetch(`${API_BASE}/converse/fortezza`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -1325,6 +1353,7 @@ export default function Taccuino() {
                 ai_gender: profile?.ai_gender || "f",
               }),
             });
+            }
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();
             const reply = (data.reply || "Sono qui.").trim();
