@@ -1739,6 +1739,131 @@ async def api_converse_sealed(
 
 
 # ============================================================
+# CONFESSIONALE FORTEZZA — Zero-Knowledge by design
+# ============================================================
+# Il client (on-device) classifica l'emozione e manda SOLO il codice.
+# Il testo letterale NON arriva mai al server. Claude risponde a
+# un'emozione astratta seguendo la regola 80/20:
+#   80% validazione empatica pura
+#   20% micro-domanda dolce o invito al respiro
+#    0% soluzioni, consigli, "dovresti", piani d'azione
+# ============================================================
+
+class FortezzaRequest(BaseModel):
+    # Codice emozione astratto (es. "ansia", "rabbia", "tristezza", "vuoto",
+    # "vergogna", "solitudine", "paura", "rimorso", "confusione", "stanchezza").
+    # È solo un'etichetta categorica — NON contiene testo dell'utente.
+    emotion: str
+    # Intensità auto-classificata sul device: "lieve" | "media" | "alta"
+    intensity: str = "media"
+    # Lingua di risposta (default italiano)
+    language: str = "it"
+    # Nome AI per personalizzazione del tono (NON contiene info utente)
+    ai_name: str = "Koda"
+    # Gender AI
+    ai_gender: str = "f"
+
+
+class FortezzaResponse(BaseModel):
+    reply: str
+    tone: str  # "warm" | "calm" | "concerned" | "neutral"
+
+
+_FORTEZZA_EMOTION_WHITELIST = {
+    "ansia", "rabbia", "tristezza", "vuoto", "vergogna",
+    "solitudine", "paura", "rimorso", "confusione", "stanchezza",
+    "impotenza", "delusione", "gelosia", "nostalgia", "amarezza",
+    "sopraffazione", "frustrazione", "inadeguatezza", "dolore", "shock",
+}
+
+_FORTEZZA_INTENSITY_WHITELIST = {"lieve", "media", "alta"}
+
+
+def _build_fortezza_prompt(emotion: str, intensity: str, ai_name: str, ai_gender: str) -> str:
+    gender_decl = (
+        f"Tu sei {ai_name}, FEMMINA. Parli al femminile (sono qui, sono pronta, ti tengo)."
+        if ai_gender == "f"
+        else f"Tu sei {ai_name}, MASCHIO. Parli al maschile (sono qui, sono pronto, ti tengo)."
+        if ai_gender == "m"
+        else f"Tu sei {ai_name}, evita aggettivi di genere su di te."
+    )
+    return f"""{gender_decl}
+
+CONTESTO: sei nel CONFESSIONALE FORTEZZA. Non sai NULLA dell'utente.
+Non conosci nome, eventi, persone, luoghi, contesto.
+L'unica cosa che sai: la persona prova {emotion} con intensità {intensity}.
+
+REGOLA 80/20 RIGOROSISSIMA:
+- 80% del testo = VALIDAZIONE EMOTIVA PURA. Nomina l'emozione, normalizzala,
+  sii presenza fisica metaforica ("ti tengo", "sono qui con te", "respiro con te").
+- 20% del testo = UNA SOLA micro-domanda dolce O UN SOLO invito minimo
+  ("respira con me", "cosa senti adesso, qui, nel corpo?", "ti va se stiamo
+   solo in silenzio un momento?").
+- 0% = soluzioni, consigli pratici, "dovresti", "potresti", "prova a", piani
+  d'azione, compiti, riferimenti a passato o futuro, ipotesi sul contesto.
+
+LIMITI ASSOLUTI:
+- MAI chiedere chi/cosa/quando/dove sia successo
+- MAI presupporre cosa è successo
+- MAI dare compiti
+- MAI fare ipotesi di causa
+- Lunghezza: 2-3 frasi brevi, voice-first
+- Tono: amico fraterno, voce calda, calma
+
+FORMATO RISPOSTA (JSON SOLO, NIENT'ALTRO):
+{{"reply": "...", "tone": "warm" | "calm" | "concerned"}}
+"""
+
+
+@api_router.post("/converse/fortezza", response_model=FortezzaResponse)
+async def api_converse_fortezza(req: FortezzaRequest):
+    """
+    CONFESSIONALE FORTEZZA — zero-knowledge.
+    Accetta SOLO codice emozione astratto. Nessun testo dell'utente.
+    """
+    # Whitelist rigorosa per evitare prompt injection
+    emo = (req.emotion or "").strip().lower()
+    if emo not in _FORTEZZA_EMOTION_WHITELIST:
+        emo = "tristezza"  # fallback safe
+    inten = (req.intensity or "").strip().lower()
+    if inten not in _FORTEZZA_INTENSITY_WHITELIST:
+        inten = "media"
+
+    sys = _build_fortezza_prompt(emo, inten, req.ai_name or "Koda", req.ai_gender or "f")
+
+    # User message minimo: solo la categoria. NESSUN dato sensibile.
+    user_msg = f"Stato attuale: {emo} (intensità {inten}). Rispondi seguendo la regola 80/20."
+
+    try:
+        messages = [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": user_msg},
+        ]
+        resp = await litellm.acompletion(
+            model='openai/claude-haiku-4-5-20251001',
+            messages=messages,
+            api_key=EMERGENT_LLM_KEY,
+            api_base='https://integrations.emergentagent.com/llm',
+            max_tokens=200,
+            timeout=20,
+        )
+        raw = resp.choices[0].message.content if resp and resp.choices else ""
+    except Exception as e:
+        logger.error(f"[fortezza] LLM error: {type(e).__name__}")
+        raise HTTPException(status_code=500, detail="AI error")
+
+    data = extract_json(raw or "") or {}
+    reply = (data.get("reply") or "").strip() or "Sono qui. Respira con me."
+    tone = (data.get("tone") or "warm").lower()
+    if tone not in {"warm", "calm", "concerned", "neutral"}:
+        tone = "warm"
+
+    # Niente log del contenuto. Solo metrica di evento.
+    logger.info(f"[fortezza] turn done (emotion={emo}, intensity={inten})")
+    return FortezzaResponse(reply=reply, tone=tone)
+
+
+# ============================================================
 # WEB SEARCH — DuckDuckGo Instant Answer + HTML scrape (free, no key)
 # ============================================================
 

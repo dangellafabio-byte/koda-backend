@@ -2670,11 +2670,7 @@ export default function Taccuino() {
                 },
               ]}
             >
-              {confessionalMode
-                ? hasSeal
-                  ? "Sigillato"
-                  : "Confessionale"
-                : "Confessionale"}
+              {confessionalMode ? "Confessionale" : "Confessionale"}
             </Text>
           </TouchableOpacity>
         </View>

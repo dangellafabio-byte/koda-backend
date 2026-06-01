@@ -527,7 +527,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
           return (
             <StepView
               title="La tua parola."
-              subtitle="Pensaci bene. Solo tu la devi sapere. È la chiave per aprire la modalità sigillata."
+              subtitle="Pensaci bene. Solo tu la devi sapere. È la chiave per aprire il Confessionale."
               showSubtitle={true}
               primaryLabel="Salva e continua"
               onPrimary={() => advance(8)}
@@ -551,7 +551,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         }
         return (
           <StepView
-            title="Modalità sigillata."
+            title="Confessionale aperto."
             subtitle={
               "C'è uno spazio dove ogni cosa che mi confidi resta cifrata sul tuo telefono. Solo tu puoi sbloccarla con una parola segreta.\n\nVuoi impostarla adesso?"
             }
@@ -617,7 +617,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
               "Parlami come parleresti a un amico:\n" +
               "tocca l'eclissi e dimmi quello che hai in testa.\n\n" +
               "Posso ascoltarti, ricordare, farti compagnia.\n" +
-              "Quando vuoi qualcosa di privato, tocca il sigillo in alto:\n" +
+              "Quando vuoi qualcosa di privato, apri il Confessionale:\n" +
               "lì tutto sparisce per sempre.\n\n" +
               "Non posso chiamare nessuno, navigare in internet\n" +
               "o comprare cose. Vivo qui dentro, solo con te."

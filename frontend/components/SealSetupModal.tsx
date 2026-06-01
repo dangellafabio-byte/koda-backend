@@ -129,7 +129,7 @@ export default function SealSetupModal({
                 color={hasSeal ? "#34D399" : theme.primary}
               />
               <Text style={s.title}>
-                {hasSeal ? "Parola Segreta" : "Sigilla la Confessione"}
+                {hasSeal ? "Parola Segreta" : "Crea Confessionale"}
               </Text>
             </View>
             <TouchableOpacity onPress={onClose} hitSlop={10}>
@@ -195,7 +195,7 @@ export default function SealSetupModal({
                 {busy ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={s.primaryBtnText}>Sigilla</Text>
+                  <Text style={s.primaryBtnText}>Conferma</Text>
                 )}
               </TouchableOpacity>
             </>
