@@ -746,17 +746,22 @@ export default function Taccuino() {
   // Tag dedicato "koda-conversation" così se in futuro vorremo altri lock
   // (es. confessionale) sono indipendenti.
   useEffect(() => {
+    // expo-keep-awake è buggato su web: chiamare deactivate senza prima
+    // un activate andato a buon fine throwa sync. Su mobile native funziona
+    // perfettamente. Skip totale su web per evitare crash della preview.
+    if (Platform.OS === "web") return;
     const TAG = "koda-conversation";
     const isActive = status === "recording" || status === "transcribing" ||
                      status === "thinking" || status === "speaking" ||
                      confessionalMode;
-    if (isActive) {
-      activateKeepAwakeAsync(TAG).catch(() => {});
-    } else {
-      try { deactivateKeepAwake(TAG); } catch {}
-    }
+    try {
+      if (isActive) {
+        activateKeepAwakeAsync(TAG).catch(() => {});
+      } else {
+        try { deactivateKeepAwake(TAG); } catch {}
+      }
+    } catch {}
     return () => {
-      // Sicurezza: al unmount o cambio dipendenza, rilascia.
       try { deactivateKeepAwake(TAG); } catch {}
     };
   }, [status, confessionalMode]);
@@ -1276,8 +1281,10 @@ export default function Taccuino() {
       const txt = text.trim();
       if (!txt) return;
       setError(null);
-      // Optimistic: append a local pending entry
-      const isFortezza = !!(confessionalMode && profile?.settings?.fortezza_mode);
+      // Optimistic: append a local pending entry.
+      // CONFESSIONALE = FORTEZZA: sempre attivo quando confessional mode è ON.
+      // Nessun toggle, nessuna opzione → privacy massima by design.
+      const isFortezza = !!confessionalMode;
       const optimistic: TimelineEntry = {
         id: `local-${Date.now()}`,
         role: "user",
