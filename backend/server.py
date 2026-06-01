@@ -1756,7 +1756,8 @@ class FortezzaRequest(BaseModel):
     emotion: str
     # Intensità auto-classificata sul device: "lieve" | "media" | "alta"
     intensity: str = "media"
-    # Lingua di risposta (default italiano)
+    # Lingua di risposta (ISO 639-1: it, en, es, fr, de, pt, …)
+    # Auto-rilevata sul device. Claude risponde nella stessa lingua.
     language: str = "it"
     # Nome AI per personalizzazione del tono (NON contiene info utente)
     ai_name: str = "Koda"
@@ -1779,7 +1780,13 @@ _FORTEZZA_EMOTION_WHITELIST = {
 _FORTEZZA_INTENSITY_WHITELIST = {"lieve", "media", "alta"}
 
 
-def _build_fortezza_prompt(emotion: str, intensity: str, ai_name: str, ai_gender: str) -> str:
+def _build_fortezza_prompt(emotion: str, intensity: str, ai_name: str, ai_gender: str, language: str = "it") -> str:
+    lang_names = {
+        "it": "italiano", "en": "English", "es": "español", "fr": "français",
+        "de": "Deutsch", "pt": "português", "nl": "Nederlands", "pl": "polski",
+        "ru": "русский", "ar": "العربية", "zh": "中文", "ja": "日本語",
+    }
+    lang_name = lang_names.get(language, "italiano")
     gender_decl = (
         f"Tu sei {ai_name}, FEMMINA. Parli al femminile."
         if ai_gender == "f"
@@ -1787,6 +1794,13 @@ def _build_fortezza_prompt(emotion: str, intensity: str, ai_name: str, ai_gender
         if ai_gender == "m"
         else f"Tu sei {ai_name}, evita aggettivi di genere su di te."
     )
+    lang_instr = f"""
+🌐 LINGUA OBBLIGATORIA: rispondi ESCLUSIVAMENTE in {lang_name}.
+- NON usare NESSUNA parola italiana se la lingua non è italiano
+- Le frasi-ancora e il micro-invito che ti darò sotto sono in italiano:
+  TRADUCILE COMPLETAMENTE nella lingua {lang_name}, naturalmente
+- Output 100% in {lang_name}, zero mix
+"""
     import random
     fem = ai_gender == "f"
     sol_word = "sola" if fem else "solo"
@@ -1829,7 +1843,7 @@ def _build_fortezza_prompt(emotion: str, intensity: str, ai_name: str, ai_gender
     selected_invite = random.choice(invite_pool)
 
     return f"""{gender_decl}
-
+{lang_instr}
 CONTESTO: sei nel CONFESSIONALE FORTEZZA. Non sai NULLA dell'utente.
 Non conosci nome, eventi, persone, luoghi, contesto.
 L'unica cosa che sai: la persona prova {emotion} con intensità {intensity}.
@@ -1875,7 +1889,7 @@ async def api_converse_fortezza(req: FortezzaRequest):
     if inten not in _FORTEZZA_INTENSITY_WHITELIST:
         inten = "media"
 
-    sys = _build_fortezza_prompt(emo, inten, req.ai_name or "Koda", req.ai_gender or "f")
+    sys = _build_fortezza_prompt(emo, inten, req.ai_name or "Koda", req.ai_gender or "f", (req.language or "it").lower()[:2])
 
     # User message minimo: solo la categoria. NESSUN dato sensibile.
     user_msg = f"Stato attuale: {emo} (intensità {inten}). Rispondi seguendo la regola 80/20."
