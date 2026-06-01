@@ -58,6 +58,11 @@ export type TimelineEntry = {
    *  Non viene mai inviato/salvato sul backend (lì già non si scrive
    *  nulla in DB per ephemeral/sealed flow). */
   confessional?: boolean | null;
+  // CONFESSIONALE FORTEZZA: voce LOCAL ONLY, mai inviata al server.
+  // Distinguibile dalle voci sealed normali (che invece arrivano al server
+  // cifrate). Le voci fortezza vengono CANCELLATE definitivamente quando
+  // l'utente esce dal confessionale (effetto fiamma).
+  fortezza?: boolean | null;
 };
 
 export type ProfileSettings = {

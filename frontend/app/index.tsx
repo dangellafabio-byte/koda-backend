@@ -42,6 +42,8 @@ import {
 } from "../lib/api";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId } from "../lib/speech";
+import { classifyEmotion, secureWipeStrings } from "../lib/emotionClassifier";
+import FortezzaCloseEffect from "../components/FortezzaCloseEffect";
 import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
@@ -372,6 +374,10 @@ export default function Taccuino() {
   // entrano nel memory_summary di lungo periodo, e a fine sessione (chiusura
   // app o toggle off) spariscono dalla RAM.
   const [confessionalMode, setConfessionalMode] = useState(false);
+  // FORTEZZA: stato dell'animazione di chiusura (fiamma + sigillo).
+  // Si attiva quando l'utente esce dal confessionale dopo aver scambiato
+  // almeno un messaggio in modalità Fortezza. Al termine, wipe locale.
+  const [showFortezzaWipe, setShowFortezzaWipe] = useState(false);
   // === Zero-Knowledge: Parola Segreta (Sigillo) ===
   // Se l'utente ha impostato una Parola Segreta, in modalità Confessionale
   // il messaggio viene cifrato sul dispositivo e inviato a /converse/sealed.
@@ -1044,7 +1050,11 @@ export default function Taccuino() {
   }, [status]);
 
   const speakIfEnabled = useCallback(
-    async (text: string, tone: TimelineEntry["tone"]) => {
+    async (text: string, tone: TimelineEntry["tone"], opts?: { fromText?: boolean }) => {
+      // FIX 2026-07: se la richiesta proviene dalla tastiera (input testo),
+      // NON parlare. L'utente probabilmente è in un contesto dove non vuole
+      // audio (notte, pubblico). Risponde solo a video.
+      if (opts?.fromText) return;
       if (!profile?.settings.voice_response) {
         // PIANO A: auto-reopen del mic disabilitato. L'utente tappa per parlare.
         return;
@@ -1257,21 +1267,75 @@ export default function Taccuino() {
   }, [status, handsFree, profile?.id, showOnboarding, showColorIntro, showSealSetup, sealUnlocking, showSettings, tourActive]);
 
   const sendText = useCallback(
-    async (text: string) => {
+    async (text: string, opts?: { fromText?: boolean }) => {
+      // FIX 2026-07: se l'utente sta SCRIVENDO (input da tastiera),
+      // Koda risponde anche lei SOLO IN TESTO — niente TTS.
+      // Motivo: se l'utente scrive, è probabile in contesto pubblico/notte
+      // dove non può/vuole parlare ad alta voce → Koda fa lo stesso.
+      const fromText = !!opts?.fromText;
       const txt = text.trim();
       if (!txt) return;
       setError(null);
       // Optimistic: append a local pending entry
+      const isFortezza = !!(confessionalMode && profile?.settings?.fortezza_mode);
       const optimistic: TimelineEntry = {
         id: `local-${Date.now()}`,
         role: "user",
         text: txt,
         timestamp: new Date().toISOString(),
         confessional: confessionalMode || undefined,
+        fortezza: isFortezza || undefined,
       };
       setTimeline((prev) => [...prev, optimistic]);
       setStatus("thinking");
       try {
+        // === CONFESSIONALE FORTEZZA (Zero-Knowledge) ===
+        // Se attivo: classifica emozione ON-DEVICE, manda solo il codice
+        // astratto al server. Il testo grezzo non lascia mai il telefono.
+        if (isFortezza) {
+          try {
+            const { emotion, intensity, language } = classifyEmotion(txt);
+            const resp = await fetch(`${API_BASE}/converse/fortezza`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                emotion,
+                intensity,
+                language: language || profile?.language || "it",
+                ai_name: profile?.ai_name || "Koda",
+                ai_gender: profile?.ai_gender || "f",
+              }),
+            });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            const reply = (data.reply || "Sono qui.").trim();
+            const tone = (data.tone === "calm" ? "neutral" : "warm") as TimelineEntry["tone"];
+            const aiEntry: TimelineEntry = {
+              id: `local-fortezza-${Date.now()}`,
+              role: "ai",
+              text: reply,
+              timestamp: new Date().toISOString(),
+              confessional: true,
+              fortezza: true,
+              tone,
+            };
+            setTimeline((prev) => [...prev, aiEntry]);
+            setStatus("idle");
+            // TTS solo se non sta scrivendo
+            if (!fromText) {
+              await speakIfEnabled(reply, tone, { fromText });
+            }
+          } catch (fErr: any) {
+            console.warn("[fortezza] error:", fErr);
+            setStatus("idle");
+            // Rimuovi user optimistic — l'utente decida se riprovare
+            setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
+            setError("Confessionale temporaneamente non disponibile.");
+            setTimeout(() => setError(null), 4000);
+          }
+          return; // skip vecchi flow
+        }
+
         // DEBUG TRACE (rimuovibile): manda step al backend così possiamo
         // capire dove si rompe il flow nel build standalone (no console.log).
         // === FIX CRASH SEALED 2026-06-28 NOTTE ===
@@ -1435,7 +1499,7 @@ export default function Taccuino() {
                 shouldPlayInBackground: false,
               } as any);
             } catch {}
-            await speakIfEnabled(reply, aiEntry.tone || "warm");
+            await speakIfEnabled(reply, aiEntry.tone || "warm", { fromText });
           } catch (speakErr) {
             _trace("sealed-speak-error", String(speakErr).slice(0, 100));
             console.warn("[sealed] speak failed (non-fatal):", speakErr);
@@ -1450,7 +1514,7 @@ export default function Taccuino() {
         //
         // Funziona sia in normale che in confessionale-soft (ephemeral).
         // Sealed/cifrato passa per il branch sopra (mai per qui).
-        const useFastPath = (profile?.settings.voice_response !== false);
+        const useFastPath = !fromText && (profile?.settings.voice_response !== false);
         if (useFastPath) {
           try {
             // Watchdog: se entro 25s non parte l'audio, abortiamo.
@@ -1559,7 +1623,7 @@ export default function Taccuino() {
         setProfile(res.profile);
         // Execute any actions (notifications, etc.) requested by the AI
         runActions(taggedAi.actions || []);
-        await speakIfEnabled(taggedAi.voice_text || taggedAi.text, taggedAi.tone || "neutral");
+        await speakIfEnabled(taggedAi.voice_text || taggedAi.text, taggedAi.tone || "neutral", { fromText });
       } catch (e: any) {
         const msg = String(e?.message || "");
         if (msg.includes("Parola Segreta")) {
@@ -2013,7 +2077,9 @@ export default function Taccuino() {
     const txt = textInput;
     setTextInput("");
     Keyboard.dismiss();
-    sendText(txt);
+    // FIX 2026-07: marca come "from text" → Koda risponde SOLO in testo,
+    // niente TTS. Coerente con l'azione dell'utente che ha scelto di scrivere.
+    sendText(txt, { fromText: true });
   };
 
   const askRecap = async () => {
@@ -2638,8 +2704,16 @@ export default function Taccuino() {
                   return;
                 }
               } else {
-                // Disattivando il confessionale, dimentica la chiave volatile.
+                // Disattivando il confessionale: se ho usato la modalità
+                // Fortezza in questa sessione, lancio l'animazione di chiusura
+                // (fiamma + sigillo) che, una volta finita, wipa i messaggi
+                // local-fortezza dalla timeline → "dato grezzo cancellato".
+                const hasFortezzaMsgs = timeline.some((e) => e.fortezza);
                 forgetSessionKey();
+                if (hasFortezzaMsgs) {
+                  setShowFortezzaWipe(true);
+                  return; // l'animazione chiuderà confessionalMode al termine
+                }
               }
               setConfessionalMode((m) => !m);
             }}
@@ -3877,6 +3951,24 @@ export default function Taccuino() {
             💧 Verde acqua = thinking        (sto pensando)
             💜 Magenta    = speaking        (sto parlando io) */}
       <RadialGlow status={status as any} />
+
+      {/* CONFESSIONALE FORTEZZA — animazione di chiusura (fiamma + sigillo).
+          Si attiva quando l'utente esce dal confessionale dopo aver scambiato
+          almeno un messaggio in modalità Fortezza. 3 secondi di rituale
+          visivo, poi wipe locale di tutte le voci fortezza. */}
+      <FortezzaCloseEffect
+        visible={showFortezzaWipe}
+        labels={{
+          sealed: "🔒 Sigillato. Resta tra te e te.",
+          confirmation: "Dato grezzo cancellato per sempre.",
+        }}
+        onComplete={() => {
+          // WIPE: rimuovi tutte le voci marcate fortezza dalla timeline
+          setTimeline((prev) => prev.filter((e) => !e.fortezza));
+          setShowFortezzaWipe(false);
+          setConfessionalMode(false);
+        }}
+      />
     </View>
   );
 

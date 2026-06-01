@@ -451,6 +451,11 @@ class TaccuinoSettings(BaseModel):
             "casa": False,
         }
     )
+    # CONFESSIONALE FORTEZZA (Zero-Knowledge):
+    # quando True, le confessioni vengono classificate ON-DEVICE e SOLO
+    # il codice astratto dell'emozione viene inviato al server.
+    # Il testo grezzo non lascia mai il telefono.
+    fortezza_mode: bool = True
 
 
 class Profile(BaseModel):
