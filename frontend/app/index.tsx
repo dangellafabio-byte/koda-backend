@@ -43,6 +43,12 @@ import {
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId } from "../lib/speech";
 import { classifyEmotion, classifyIntent, secureWipeStrings } from "../lib/emotionClassifier";
+import {
+  loadProfileCache,
+  saveProfileCache,
+  loadTimelineCache,
+  saveTimelineCache,
+} from "../lib/localCache";
 import FortezzaCloseEffect from "../components/FortezzaCloseEffect";
 import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
@@ -583,6 +589,9 @@ export default function Taccuino() {
           const p = await withTimeout(api.getProfile(), 4000);
           if (cancelled) return;
           setProfile(p);
+          // CACHE: salva il profile aggiornato sul filesystem locale
+          // (cold start prossimo = UI istantanea)
+          saveProfileCache(p).catch(() => {});
           const tName = (p.settings?.theme as ThemeName) || "sistema";
           if (tName !== themeName) setThemeName(tName);
           if (
@@ -614,6 +623,8 @@ export default function Taccuino() {
           const t = await withTimeout(api.getTimeline(200), 5000);
           if (cancelled) return;
           setTimeline(t);
+          // CACHE: salva la timeline aggiornata (esclude entries fortezza)
+          saveTimelineCache(t).catch(() => {});
           return; // success
         } catch (e) {
           attempt++;
@@ -623,7 +634,35 @@ export default function Taccuino() {
       }
     };
 
+    // === COLD START FAST-PATH (cache locale) ===
+    // Prima del network, leggi la cache locale e popola lo stato così
+    // l'utente vede SUBITO nome, sfondo e ultimi messaggi anche se il
+    // backend è lento o addormentato. La race è gestita: se il network
+    // torna prima della cache, vince il network e non sovrascriviamo.
+    const fastPathHydrate = async () => {
+      try {
+        const [cachedProfile, cachedTimeline] = await Promise.all([
+          loadProfileCache<Profile>(),
+          loadTimelineCache<TimelineEntry>(),
+        ]);
+        if (cancelled) return;
+        // Hydrate SOLO se non abbiamo già dati freschi dal network
+        if (cachedProfile) {
+          setProfile((current) => (current ? current : cachedProfile));
+          const tName = (cachedProfile.settings?.theme as ThemeName) || "sistema";
+          setThemeName((cur) => (cur === tName ? cur : tName));
+        }
+        if (cachedTimeline && cachedTimeline.length > 0) {
+          setTimeline((current) => (current.length > 0 ? current : cachedTimeline));
+        }
+      } catch {
+        // ignore: cache best-effort
+      }
+    };
+
     // Lancia in PARALLELO: il timeline NON aspetta più il profile.
+    // Fast-path cache parte per primo per UI istantanea.
+    fastPathHydrate();
     loadProfile();
     loadTimeline();
 

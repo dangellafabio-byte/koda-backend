@@ -8,6 +8,7 @@ import { scheduleWeeklyAppNotification } from "../lib/notifications";
 import { ThemeProvider, useTheme, ThemeName } from "../lib/theme";
 import { api } from "../lib/api";
 import { prewarmAudio } from "../lib/speech";
+import { loadProfileCache } from "../lib/localCache";
 
 function ThemedShell({ children }: { children: React.ReactNode }) {
   const { theme } = useTheme();
@@ -53,6 +54,25 @@ export default function RootLayout() {
       // not blocking init
     }
     (async () => {
+      // === FAST-PATH CACHE (2026-06) ===
+      // Prima del network, leggi la cache locale e applica TEMA / orari.
+      // Così l'utente al cold start salta direttamente alla home senza
+      // vedere lo schermo nero di "loading" se la rete è lenta.
+      try {
+        const cached = await loadProfileCache<any>();
+        if (cached) {
+          const t = (cached.settings?.theme as ThemeName) || "sistema";
+          setInitialTheme(t);
+          if (typeof cached.settings?.day_start_hour === "number") setDayStart(cached.settings.day_start_hour);
+          if (typeof cached.settings?.night_start_hour === "number") setNightStart(cached.settings.night_start_hour);
+          // Abbiamo dati locali: sblocchiamo SUBITO l'UI. Il network
+          // continuerà in parallelo per gli aggiornamenti.
+          setReady(true);
+        }
+      } catch {
+        // ignore
+      }
+
       // === FIX 2026-06-28 SERA: timeout + retry sulla fetch profilo ===
       // PROBLEMA: in passato facevamo `await api.getProfile()` senza
       // timeout. iOS al cold start ha la rete/DNS spesso non pronti
