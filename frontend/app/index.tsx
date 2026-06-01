@@ -386,6 +386,11 @@ export default function Taccuino() {
   // Viene messo a true al primo messaggio Fortezza inviato/ricevuto, e
   // resettato al termine dell'animazione di wipe.
   const fortezzaUsedThisSessionRef = useRef<boolean>(false);
+  // GHOST SESSION TOKEN — "Doppia Stanza" 2026-06.
+  // UUID anonimo generato all'entrata del Confessionale, distrutto
+  // all'uscita. NON contiene/non è collegato all'ID utente.
+  // Serve solo come firma anonima della sessione lato server.
+  const confessionalGhostTokenRef = useRef<string | null>(null);
   // === Zero-Knowledge: Parola Segreta (Sigillo) ===
   // Se l'utente ha impostato una Parola Segreta, in modalità Confessionale
   // il messaggio viene cifrato sul dispositivo e inviato a /converse/sealed.
@@ -1309,51 +1314,42 @@ export default function Taccuino() {
         // astratto al server. Il testo grezzo non lascia mai il telefono.
         if (isFortezza) {
           try {
-            // FIX 2026-06: ROUTING LOCALE (chitchat vs confession).
-            // Prima estraeamo SEMPRE emozione+intensità da qualunque testo
-            // → frasi tipo "ciao" o "che giornata strana" generavano risposte
-            // empatiche pesanti fuori contesto ("Vedo che soffri…").
-            // Adesso il classificatore locale decide PRIMA se è chiacchierata
-            // o sfogo, poi sceglie il protocollo giusto.
-            //
-            //   - chitchat   → endpoint /converse/fortezza-chat con il TESTO
-            //                  (ephemeral: server non logga, non salva, non
-            //                  memorizza; testo viene distrutto a fine RAM)
-            //   - confession → endpoint /converse/fortezza con SOLO il codice
-            //                  emozione astratto (zero-knowledge totale)
-            //
-            // In entrambi i casi: niente memoria di lungo termine, niente DB.
+            // === ARCHITETTURA "DOPPIA STANZA" (2026-06) ===
+            // Stanza B = Confessionale Ghost:
+            //  - genera un GHOST TOKEN anonimo per la sessione (UUID locale,
+            //    NON contiene l'ID utente)
+            //  - manda al server il TESTO + intent_hint + intensity_hint +
+            //    ghost_token (firma anonima)
+            //  - il server NON salva, NON logga il contenuto, NON memorizza
+            //  - Claude vede il testo per dare risposta calda e contestuale
+            //    ma vede solo l'UUID anonimo (zero linkage all'identità)
+            //  - all'uscita: wipe locale + token distrutto
             const intent = classifyIntent(txt);
-            // FIX 2026-06: marca che la sessione Fortezza è stata usata
-            // (per triggerare animazione di chiusura, vedi toggle)
+            const { intensity } = classifyEmotion(txt);
+            // Genera ghost token al primo turno della sessione (poi riusalo)
+            if (!confessionalGhostTokenRef.current) {
+              confessionalGhostTokenRef.current =
+                `ghost-${Date.now().toString(36)}-${Math.random()
+                  .toString(36)
+                  .slice(2, 10)}`;
+            }
+            const ghostToken = confessionalGhostTokenRef.current;
+            // FIX 2026-06: marca che la sessione è stata usata (per animazione)
             fortezzaUsedThisSessionRef.current = true;
 
-            let resp: Response;
-            if (intent === "chitchat") {
-              resp = await fetch(`${API_BASE}/converse/fortezza-chat`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  text: txt,
-                  language: profile?.language || "it",
-                  ai_name: profile?.ai_name || "Koda",
-                  ai_gender: profile?.ai_gender || "f",
-                }),
-              });
-            } else {
-              const { emotion, intensity, language } = classifyEmotion(txt);
-              resp = await fetch(`${API_BASE}/converse/fortezza`, {
+            const resp = await fetch(`${API_BASE}/converse/confessional`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                emotion,
-                intensity,
-                language: language || profile?.language || "it",
+                text: txt,
+                session_token: ghostToken,
+                intent_hint: intent,
+                intensity_hint: intensity,
+                language: profile?.language || "it",
                 ai_name: profile?.ai_name || "Koda",
                 ai_gender: profile?.ai_gender || "f",
               }),
             });
-            }
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();
             const reply = (data.reply || "Sono qui.").trim();
@@ -4022,6 +4018,8 @@ export default function Taccuino() {
           setConfessionalMode(false);
           // FIX 2026-06: reset del ref per la prossima sessione Fortezza
           fortezzaUsedThisSessionRef.current = false;
+          // GHOST TOKEN: distruggi al wipe (Doppia Stanza 2026-06)
+          confessionalGhostTokenRef.current = null;
         }}
       />
     </View>

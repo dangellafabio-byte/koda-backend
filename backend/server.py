@@ -1929,6 +1929,188 @@ async def api_converse_fortezza(req: FortezzaRequest):
 
 
 # ============================================================
+# CONFESSIONALE — UNIFICATO ("Stanza B" / Doppia Stanza)
+# ============================================================
+# Architettura "ghost": l'utente paga normalmente in Stanza A
+# (account, abbonamento, memoria di lungo termine). Quando entra
+# nel Confessionale (Stanza B), l'app:
+#   1. genera un GHOST TOKEN anonimo locale (UUID monouso)
+#   2. taglia ogni collegamento con l'identità dell'utente
+#   3. invia SOLO il testo dello sfogo + ghost_token + hint
+#      di registro (chitchat / sfogo) + intensità
+#   4. il server NON salva, NON logga contenuto, NON memorizza
+#   5. all'uscita: wipe totale local + timer 0 in RAM server
+#
+# Claude vede il testo (necessario per risposta calda e
+# contestuale) ma vede solo un UUID anonimo come firma, e i
+# log del server salvano solo "[confessional] turn done".
+# ============================================================
+
+class ConfessionalRequest(BaseModel):
+    # Testo dello sfogo — RAM only, mai loggato/salvato.
+    text: str
+    # Ghost session token (UUID generato sul device).
+    # NON contiene l'ID utente. Serve solo per il rate limiting
+    # all'interno di una sessione, non per identificare nessuno.
+    session_token: str = ""
+    # Hint di routing locale: "chitchat" o "confession" (suggerimento
+    # del classificatore on-device). Aiuta Claude a tarare il tono.
+    intent_hint: str = "confession"  # default verso empatia
+    # Intensità auto-classificata: "lieve" | "media" | "alta"
+    intensity_hint: str = "media"
+    language: str = "it"
+    ai_name: str = "Koda"
+    ai_gender: str = "f"
+
+
+def _build_confessional_prompt(
+    intent_hint: str,
+    intensity_hint: str,
+    ai_name: str,
+    ai_gender: str,
+    language: str,
+) -> str:
+    lang_names = {
+        "it": "italiano", "en": "English", "es": "español",
+        "fr": "français", "de": "Deutsch", "pt": "português",
+    }
+    lang_name = lang_names.get(language, "italiano")
+    gender_decl = (
+        f"Tu sei {ai_name}, FEMMINA, parli al femminile."
+        if ai_gender == "f"
+        else f"Tu sei {ai_name}, MASCHIO, parli al maschile."
+        if ai_gender == "m"
+        else f"Tu sei {ai_name}."
+    )
+
+    # Tarare la guida in base all'intent + intensità
+    if intent_hint == "chitchat":
+        style_block = """
+REGISTRO DI QUESTO TURNO: l'utente NON sta facendo uno sfogo grave.
+È un saluto, una battuta, una frase leggera, una curiosità.
+
+REGOLE:
+- Rispondi come un'amica vera in chat: NATURALMENTE, brevemente.
+- NON usare frasi pesanti tipo "vedo che soffri", "respira con me",
+  "sono qui con te", "ti sento". Sarebbero fuori contesto.
+- Puoi essere un po' giocosa, fare una piccola domanda di curiosità.
+- 1-2 frasi brevi, max 25 parole.
+"""
+    elif intensity_hint == "alta":
+        style_block = """
+REGISTRO DI QUESTO TURNO: l'utente sta facendo uno SFOGO INTENSO.
+Sente molto, è carico, forse spaventato. Ti sta confessando qualcosa.
+
+REGOLE D'ORO:
+- ASCOLTA quello che dice. RIFERISCI specificamente al contenuto del
+  suo messaggio (parafrasando, non ripetendo). Mostra che hai capito.
+- NON dare consigli. NON dare compiti. NON fare diagnosi.
+- 80% validazione concreta del SUO vissuto + 20% gentile invito a
+  continuare. NIENTE soluzioni, NIENTE psicologia da manuale.
+- Riconosci il dettaglio specifico (es. "che la psicologia con i tuoi
+  non sta funzionando…" se è quello che ha detto). Mai generico.
+- Tono caldo, vicino, presente. Da amica fraterna, non da terapeuta.
+- 2-4 frasi, max 50 parole. Voice-first.
+"""
+    else:
+        # media o lieve, ma intent=confession
+        style_block = """
+REGISTRO DI QUESTO TURNO: l'utente sta parlando di qualcosa che gli
+pesa, ma con tono medio. Non è un'esplosione, è una confidenza.
+
+REGOLE:
+- ASCOLTA quello che dice davvero. Riferisci ESPLICITAMENTE al contenuto
+  del suo messaggio (citando il dettaglio concreto, non frasi vaghe).
+- NON dare consigli, NON spiegare cosa "dovrebbe fare".
+- Valida il SUO vissuto specifico, poi una piccola domanda aperta o
+  un invito a dire di più (se naturale).
+- NIENTE frasi-formula tipo "Sono qui con te / Ti sento". USA parole
+  fresche, costruite sul SUO testo.
+- 2-3 frasi, max 40 parole. Voice-first, tono caldo e calmo.
+"""
+
+    return f"""{gender_decl}
+
+CONTESTO TECNICO (NON dirlo all'utente):
+Sei dentro al "Confessionale" — uno spazio anonimo e ephemeral. Quello
+che dice l'utente esiste solo per questo turno: nessun database, nessun
+log del contenuto, nessuna memoria di lungo termine. NON fingere di
+ricordare cose passate, non hai memoria qui.
+
+🌍 LINGUA: rispondi SEMPRE in {lang_name} (codice {language}).
+{style_block}
+LIMITI ASSOLUTI (sempre):
+- MAI dare diagnosi mediche/psichiatriche.
+- MAI dare compiti, esercizi, "ti suggerisco di…".
+- MAI usare la formula "Mi dispiace molto per quello che stai vivendo".
+- MAI usare frasi che potrebbero essere usate per chiunque (genericità).
+
+FORMATO RISPOSTA (JSON SOLO, NIENT'ALTRO):
+{{"reply": "...", "tone": "warm" | "calm" | "concerned" | "neutral"}}
+"""
+
+
+@api_router.post("/converse/confessional", response_model=FortezzaResponse)
+async def api_converse_confessional(req: ConfessionalRequest):
+    """
+    CONFESSIONALE UNIFICATO — "Doppia Stanza".
+    Riceve il testo dello sfogo + ghost token anonimo + hint di registro.
+    Nessuna persistenza. Nessun log del contenuto. Solo evento.
+    """
+    txt = (req.text or "").strip()
+    if not txt:
+        raise HTTPException(status_code=400, detail="text required")
+    if len(txt) > 4000:
+        txt = txt[:4000]
+
+    intent = (req.intent_hint or "confession").lower()
+    if intent not in {"chitchat", "confession"}:
+        intent = "confession"
+    intensity = (req.intensity_hint or "media").lower()
+    if intensity not in {"lieve", "media", "alta"}:
+        intensity = "media"
+    lang = (req.language or "it").lower()[:2]
+
+    sys = _build_confessional_prompt(
+        intent, intensity, req.ai_name or "Koda", req.ai_gender or "f", lang
+    )
+
+    try:
+        messages = [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": txt},
+        ]
+        resp = await litellm.acompletion(
+            model='openai/claude-haiku-4-5-20251001',
+            messages=messages,
+            api_key=EMERGENT_LLM_KEY,
+            api_base='https://integrations.emergentagent.com/llm',
+            max_tokens=250,
+            timeout=25,
+        )
+        raw = resp.choices[0].message.content if resp and resp.choices else ""
+    except Exception as e:
+        logger.error(f"[confessional] LLM error: {type(e).__name__}")
+        raise HTTPException(status_code=500, detail="AI error")
+
+    data = extract_json(raw or "") or {}
+    reply = (data.get("reply") or "").strip()
+    if not reply:
+        reply = (raw or "").strip()[:300] or "Ti ascolto."
+    tone = (data.get("tone") or "warm").lower()
+    if tone not in {"warm", "calm", "concerned", "neutral"}:
+        tone = "warm"
+
+    # LOG ANONIMO: niente contenuto, niente token utente.
+    # Solo evento tecnico (durata, intent, intensity).
+    logger.info(
+        f"[confessional] turn done (intent={intent}, intensity={intensity}, len={len(txt)})"
+    )
+    # txt esce dallo scope e viene GC dal Python runtime.
+    return FortezzaResponse(reply=reply, tone=tone)
+
+
+# ============================================================
 # CONFESSIONALE — CHIACCHIERATA EPHEMERAL (intent=chitchat)
 # ============================================================
 # Quando l'utente entra nel Confessionale ma dice solo "ciao",
