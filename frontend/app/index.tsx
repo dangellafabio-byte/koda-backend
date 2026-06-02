@@ -50,7 +50,6 @@ import {
   saveTimelineCache,
 } from "../lib/localCache";
 import Constants from "expo-constants";
-import * as Application from "expo-application";
 import FortezzaCloseEffect from "../components/FortezzaCloseEffect";
 import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
@@ -3958,19 +3957,13 @@ export default function Taccuino() {
             </View>
 
             {/* === VERSIONE APP ===
-                Footer identificativo della build installata.
-                Usiamo expo-application invece di expo-constants:
-                Constants.nativeBuildVersion era stato deprecato e
-                ritornava null nell'SDK attuale → footer mostrava solo
-                la versione senza il numero. expo-application legge
-                direttamente dal binario nativo (Info.plist iOS o
-                AndroidManifest) e funziona sempre. */}
+                Footer minimale (senza expo-application per evitare
+                crash su build che non l'avevano linkato nativamente).
+                Mostra solo versione semantica. Per il numero build
+                preciso, usare i log EAS o il timestamp installazione. */}
             <View style={{ alignItems: "center", marginTop: 24, marginBottom: 8 }}>
               <Text style={{ color: theme.text + "55", fontSize: 11, fontStyle: "italic" }}>
-                Koda v{Application.nativeApplicationVersion || Constants.expoConfig?.version || "1.0.1"}
-                {Application.nativeBuildVersion
-                  ? ` · build ${Application.nativeBuildVersion}`
-                  : ""}
+                Koda v{Constants.expoConfig?.version || "1.0.1"}
               </Text>
             </View>
             </ScrollView>
