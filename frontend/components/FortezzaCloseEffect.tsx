@@ -1,22 +1,20 @@
 /**
- * FortezzaCloseEffect — animazione "lettera che brucia" 2026-06.
+ * FortezzaCloseEffect — "Doppio fronte di fiamma" 2026-06.
  *
- * Effetto richiesto dall'utente: una linea di fuoco frastagliata sale
- * dal basso verso l'alto, "bruciando" il contenuto della chat. Sopra
- * la linea: cenere/nero. Sotto: il contenuto della chat ancora visibile
- * che sta scomparendo. Alla fine: schermata nera totale, sigillo che
- * appare, conferma "dato grezzo cancellato" e poi onComplete.
+ * Versione 3: l'utente ha chiesto che entrambi i lati (alto e basso)
+ * brucino, e che la fiamma sembri davvero una fiamma (non una scarica
+ * elettrica). Tre layer di fuoco per ciascun fronte: glow esteso,
+ * fiamma centrale calda, scintille brillanti. Tra i due fronti, il
+ * contenuto della chat resta visibile e si restringe finché si chiude.
  *
  * Fasi:
- *  1. (0-1800ms)   la linea di fuoco sale dal basso al top
- *                  + il contenuto sopra la linea diventa nero
- *                  + glow arancione sulla linea
- *  2. (1800-2400ms) tutto schermo nero, appare il sigillo 🔒
- *  3. (2400-2900ms) appare conferma "Dato grezzo cancellato"
- *  4. (2900-3500ms) fade out totale → onComplete
- *
- * Haptic: light all'inizio, medium quando appare il sigillo, heavy
- * alla conferma finale.
+ *  1. (0-1800ms)   due fronti di fiamma si avvicinano al centro
+ *                  - bottom: parte dal basso sale verso il centro
+ *                  - top:    parte dall'alto scende verso il centro
+ *                  - dietro ogni fronte: lenzuolo nero "bruciato"
+ *  2. (1800-2400ms) i fronti si incontrano, schermo totalmente nero
+ *  3. (1900-2900ms) appare sigillo 🔒 + conferma "Dato grezzo cancellato"
+ *  4. (3000-3500ms) fade out → onComplete
  */
 
 import React, { useEffect } from "react";
@@ -30,17 +28,15 @@ import Animated, {
   Easing,
   runOnJS,
   interpolate,
+  SharedValue,
 } from "react-native-reanimated";
-import Svg, { Path } from "react-native-svg";
+import Svg, { Path, Defs, LinearGradient, Stop } from "react-native-svg";
 import * as Haptics from "expo-haptics";
-
-const AnimatedSvg = Animated.createAnimatedComponent(Svg);
 
 type Props = {
   visible: boolean;
   onComplete?: () => void;
   labels?: {
-    burning?: string;
     sealed?: string;
     confirmation?: string;
   };
@@ -49,21 +45,18 @@ type Props = {
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
 
 const DEFAULT_LABELS = {
-  burning: "Brucia...",
   sealed: "🔒 Sigillato. Resta tra te e te.",
   confirmation: "Dato grezzo cancellato per sempre.",
 };
 
-// Costanti dell'animazione
-const BURN_DURATION = 1800;     // tempo che la linea impiega a salire
-const SEAL_APPEAR_AT = 1900;    // quando appare il sigillo
-const CONFIRM_APPEAR_AT = 2400; // quando appare la conferma
-const TOTAL_DURATION = 3400;    // durata totale prima di onComplete
+const BURN_DURATION = 1800;
+const SEAL_APPEAR_AT = 1900;
+const CONFIRM_APPEAR_AT = 2400;
+const TOTAL_DURATION = 3500;
 
-// Numero di punti sul wave (più alto = più frastagliato)
-const WAVE_POINTS = 32;
-// Ampiezza della fiamma frastagliata (in pixel)
-const WAVE_AMPLITUDE = 14;
+// Geometria del fronte di fuoco
+const FLAME_HEIGHT = 90; // altezza del "muro di fuoco" (più alto = più fluffy)
+const WAVE_POINTS = 24;
 
 function fireHaptic(type: "light" | "medium" | "heavy") {
   if (Platform.OS === "web") return;
@@ -75,54 +68,162 @@ function fireHaptic(type: "light" | "medium" | "heavy") {
 }
 
 /**
- * Genera una path SVG di un'onda frastagliata orizzontale che simula
- * una fiamma. La randomness è statica perché vogliamo la stessa "forma"
- * di fiamma durante tutto il rendering (l'onda non si muove, è solo
- * traslata verticalmente dal componente padre).
+ * Genera la "silhouette" superiore di un muro di fuoco — irregolare,
+ * con picchi e valli che simulano lingue di fiamma. La path forma un
+ * poligono chiuso che va da sinistra → su → destra → giù → chiudi.
+ *
+ * Direction: "up" = punte verso l'alto (per fronte che sale dal basso)
+ *            "down" = punte verso il basso (per fronte che scende dall'alto)
+ *
+ * seed serve a generare path diverse tra i layer della fiamma.
  */
-function generateJaggedFirePath(): string {
+function generateFlameSilhouette(
+  direction: "up" | "down",
+  amplitudeMul: number = 1,
+  seed: number = 0
+): string {
   const step = SCREEN_W / WAVE_POINTS;
-  let d = `M -20,0`;
+  const sign = direction === "up" ? -1 : 1;
+  const baseY = direction === "up" ? FLAME_HEIGHT : 0;
+  // punto di partenza in basso-sinistra (per "up") o alto-sinistra (per "down")
+  const closeY = direction === "up" ? FLAME_HEIGHT : 0;
+  const farY = direction === "up" ? 0 : FLAME_HEIGHT;
+
+  let d = `M -20,${closeY} L -20,${baseY}`;
   for (let i = 0; i <= WAVE_POINTS; i++) {
     const x = i * step;
-    // sin + random per dare un effetto fiamma irregolare
+    // Generiamo una silhouette tipo fiamma usando combinazione di sin
+    const peak =
+      Math.sin(i * 0.55 + seed) * 0.55 +
+      Math.sin(i * 1.7 + seed * 2) * 0.3 +
+      Math.cos(i * 0.3 + seed * 3) * 0.15;
+    // peak è in -1..1, lo mappiamo su 0..FLAME_HEIGHT
+    const flameTip = (peak + 1) * 0.5; // 0..1
     const y =
-      Math.sin(i * 0.7) * WAVE_AMPLITUDE * 0.6 +
-      (Math.random() - 0.5) * WAVE_AMPLITUDE;
-    d += ` L${x},${y}`;
+      direction === "up"
+        ? FLAME_HEIGHT - flameTip * FLAME_HEIGHT * amplitudeMul
+        : flameTip * FLAME_HEIGHT * amplitudeMul;
+    d += ` L${x.toFixed(1)},${y.toFixed(1)}`;
   }
-  d += ` L${SCREEN_W + 20},0`;
+  d += ` L${SCREEN_W + 20},${baseY} L${SCREEN_W + 20},${closeY} Z`;
   return d;
 }
 
-// La path viene generata UNA volta al mount del modulo, così è stabile
-// tra le re-render del componente.
-const JAGGED_PATH = generateJaggedFirePath();
+// Path statiche, generate una volta sola
+const FLAME_BOTTOM_OUTER = generateFlameSilhouette("up", 1.0, 0);
+const FLAME_BOTTOM_MID = generateFlameSilhouette("up", 0.75, 7);
+const FLAME_BOTTOM_CORE = generateFlameSilhouette("up", 0.45, 13);
+
+const FLAME_TOP_OUTER = generateFlameSilhouette("down", 1.0, 21);
+const FLAME_TOP_MID = generateFlameSilhouette("down", 0.75, 29);
+const FLAME_TOP_CORE = generateFlameSilhouette("down", 0.45, 37);
+
+/**
+ * Componente: il singolo "muro di fuoco" (sopra o sotto).
+ * Si posiziona absolute e si traduce verticalmente.
+ */
+function FlameFront({
+  direction,
+  progress,
+}: {
+  direction: "bottom" | "top";
+  // shared value 0..1 (0 = fuori schermo, 1 = al centro)
+  progress: SharedValue<number>;
+}) {
+  const dir = direction === "bottom" ? "up" : "down";
+
+  const wrapStyle = useAnimatedStyle(() => {
+    // Per la fiamma "bottom": parte dal basso e sale.
+    // Quando progress=0 → la base della fiamma è a SCREEN_H (fuori schermo basso)
+    // Quando progress=1 → la base è al centro (SCREEN_H/2)
+    if (direction === "bottom") {
+      const baseY = SCREEN_H - SCREEN_H * 0.5 * progress.value;
+      return {
+        top: baseY - FLAME_HEIGHT,
+        opacity: interpolate(progress.value, [0, 0.05, 0.95, 1], [0, 1, 1, 0.85]),
+      };
+    } else {
+      // top: parte da -FLAME_HEIGHT (fuori dall'alto) e scende verso SCREEN_H/2 - FLAME_HEIGHT
+      const baseY = -FLAME_HEIGHT + SCREEN_H * 0.5 * progress.value;
+      return {
+        top: baseY,
+        opacity: interpolate(progress.value, [0, 0.05, 0.95, 1], [0, 1, 1, 0.85]),
+      };
+    }
+  });
+
+  // Path da renderizzare in base alla direzione
+  const outerPath = dir === "up" ? FLAME_BOTTOM_OUTER : FLAME_TOP_OUTER;
+  const midPath = dir === "up" ? FLAME_BOTTOM_MID : FLAME_TOP_MID;
+  const corePath = dir === "up" ? FLAME_BOTTOM_CORE : FLAME_TOP_CORE;
+  const gradientId = direction === "bottom" ? "flameGradBot" : "flameGradTop";
+
+  return (
+    <Animated.View style={[styles.flameWrap, wrapStyle]} pointerEvents="none">
+      <Svg
+        width={SCREEN_W + 40}
+        height={FLAME_HEIGHT}
+        viewBox={`-20 0 ${SCREEN_W + 40} ${FLAME_HEIGHT}`}
+        style={{ position: "absolute", left: -20 }}
+      >
+        <Defs>
+          <LinearGradient
+            id={gradientId}
+            x1="0"
+            y1={dir === "up" ? FLAME_HEIGHT : 0}
+            x2="0"
+            y2={dir === "up" ? 0 : FLAME_HEIGHT}
+          >
+            <Stop offset="0" stopColor="#7A0E00" stopOpacity={1} />
+            <Stop offset="0.4" stopColor="#FF4500" stopOpacity={1} />
+            <Stop offset="0.7" stopColor="#FFA500" stopOpacity={1} />
+            <Stop offset="1" stopColor="#FFE066" stopOpacity={1} />
+          </LinearGradient>
+        </Defs>
+        {/* Outer flame: alone esterno scuro/rosso scuro */}
+        <Path d={outerPath} fill={`url(#${gradientId})`} opacity={0.55} />
+        {/* Mid flame: la massa principale di fuoco arancione */}
+        <Path d={midPath} fill="#FF6B1A" opacity={0.9} />
+        {/* Core: cuore brillante giallo */}
+        <Path d={corePath} fill="#FFE066" opacity={0.95} />
+      </Svg>
+      {/* Glow esteso sotto la base (dove la fiamma "esce" dal nero) */}
+      <View
+        style={[
+          styles.flameGlow,
+          direction === "bottom"
+            ? { bottom: -8 }
+            : { top: -8 },
+        ]}
+      />
+    </Animated.View>
+  );
+}
 
 export default function FortezzaCloseEffect({ visible, onComplete, labels }: Props) {
   const L = { ...DEFAULT_LABELS, ...(labels || {}) };
 
-  // SharedValues per le animazioni
   const containerOpacity = useSharedValue(0);
-  const burnProgress = useSharedValue(0);  // 0 = linea in basso, 1 = linea in cima
+  const burnProgress = useSharedValue(0);   // 0..1 — quanto si è avvicinato il fuoco al centro
+  const blackoutOpacity = useSharedValue(0); // 0..1 — nero finale che copre tutto
   const sealOpacity = useSharedValue(0);
   const sealScale = useSharedValue(0.5);
   const confirmOpacity = useSharedValue(0);
 
   useEffect(() => {
     if (!visible) {
-      // reset
       containerOpacity.value = 0;
       burnProgress.value = 0;
+      blackoutOpacity.value = 0;
       sealOpacity.value = 0;
       sealScale.value = 0.5;
       confirmOpacity.value = 0;
       return;
     }
 
-    // === FASE 1: la linea di fuoco si accende e sale ===
     fireHaptic("light");
-    // Fade in completa container in 200ms, poi resta fino al fade-out finale
+
+    // FASE 1: i due fronti di fuoco si avvicinano al centro in 1800ms
     containerOpacity.value = withSequence(
       withTiming(1, { duration: 200 }),
       withDelay(
@@ -134,13 +235,18 @@ export default function FortezzaCloseEffect({ visible, onComplete, labels }: Pro
         })
       )
     );
-    // La fiamma sale dal basso (0) verso l'alto (1)
     burnProgress.value = withTiming(1, {
       duration: BURN_DURATION,
       easing: Easing.inOut(Easing.cubic),
     });
 
-    // === FASE 2: sigillo appare con piccolo "thump" ===
+    // FASE 2: blackout (i due fronti si incontrano)
+    blackoutOpacity.value = withDelay(
+      BURN_DURATION - 100,
+      withTiming(1, { duration: 350 })
+    );
+
+    // FASE 3: sigillo
     const t1 = setTimeout(() => fireHaptic("medium"), SEAL_APPEAR_AT);
     sealOpacity.value = withDelay(SEAL_APPEAR_AT, withTiming(1, { duration: 350 }));
     sealScale.value = withDelay(
@@ -151,7 +257,7 @@ export default function FortezzaCloseEffect({ visible, onComplete, labels }: Pro
       )
     );
 
-    // === FASE 3: conferma ===
+    // FASE 4: conferma
     const t2 = setTimeout(() => fireHaptic("heavy"), CONFIRM_APPEAR_AT);
     confirmOpacity.value = withDelay(
       CONFIRM_APPEAR_AT,
@@ -165,34 +271,23 @@ export default function FortezzaCloseEffect({ visible, onComplete, labels }: Pro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
-  // Stili animati
+  // Stili
   const containerStyle = useAnimatedStyle(() => ({
     opacity: containerOpacity.value,
   }));
-
-  // Il "lenzuolo nero" della parte già bruciata: parte dall'alto e
-  // cresce verso il basso man mano che la fiamma sale.
-  // L'altezza è SCREEN_H * burnProgress, ma la calcoliamo da
-  // bottom-up: quando progress=1, copre tutto lo schermo.
-  const ashStyle = useAnimatedStyle(() => {
-    // burnProgress: 0 → top=SCREEN_H (niente nero). 1 → top=0 (tutto nero)
-    const burnedHeight = SCREEN_H * burnProgress.value;
-    return {
-      height: burnedHeight,
-    };
+  // Lenzuolo nero che cresce dal basso (dietro la fiamma bottom)
+  const ashBottomStyle = useAnimatedStyle(() => {
+    const h = SCREEN_H * 0.5 * burnProgress.value;
+    return { height: h };
   });
-
-  // La linea di fuoco si posiziona sul confine tra ash (sopra) e chat (sotto)
-  const fireLineStyle = useAnimatedStyle(() => {
-    const top = SCREEN_H * (1 - burnProgress.value) - 24; // -24 = metà altezza linea
-    return {
-      top,
-      // Verso la fine la linea sparisce (perché ha già bruciato tutto)
-      opacity: interpolate(burnProgress.value, [0, 0.05, 0.92, 1], [0, 1, 1, 0]),
-    };
+  // Lenzuolo nero che cresce dall'alto (dietro la fiamma top)
+  const ashTopStyle = useAnimatedStyle(() => {
+    const h = SCREEN_H * 0.5 * burnProgress.value;
+    return { height: h };
   });
-
-  // Sigillo al centro
+  const blackoutStyle = useAnimatedStyle(() => ({
+    opacity: blackoutOpacity.value,
+  }));
   const sealStyle = useAnimatedStyle(() => ({
     opacity: sealOpacity.value,
     transform: [{ scale: sealScale.value }],
@@ -206,44 +301,19 @@ export default function FortezzaCloseEffect({ visible, onComplete, labels }: Pro
       style={[styles.container, containerStyle]}
       pointerEvents="none"
     >
-      {/* Lenzuolo nero (parte bruciata) — parte dall'alto e cresce */}
-      <Animated.View style={[styles.ash, ashStyle]} />
+      {/* Lenzuolo nero dall'alto */}
+      <Animated.View style={[styles.ashTop, ashTopStyle]} />
+      {/* Lenzuolo nero dal basso */}
+      <Animated.View style={[styles.ashBottom, ashBottomStyle]} />
 
-      {/* Linea di fuoco frastagliata che sale */}
-      <Animated.View style={[styles.fireLineWrap, fireLineStyle]}>
-        {/* Glow chiaro arancione (alone) — più ampio */}
-        <View style={styles.glowOuter} />
-        {/* Glow stretto intenso */}
-        <View style={styles.glowInner} />
-        {/* La fiamma vera e propria (path SVG frastagliata) */}
-        <Svg
-          width={SCREEN_W + 40}
-          height={48}
-          style={{ position: "absolute", left: -20, top: 0 }}
-          viewBox={`-20 -24 ${SCREEN_W + 40} 48`}
-        >
-          {/* Stroke arancione spesso */}
-          <Path
-            d={JAGGED_PATH}
-            stroke="#FFB000"
-            strokeWidth={3}
-            fill="none"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          {/* Stroke giallo brillante più sottile (cuore della fiamma) */}
-          <Path
-            d={JAGGED_PATH}
-            stroke="#FFF5C0"
-            strokeWidth={1.2}
-            fill="none"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </Svg>
-      </Animated.View>
+      {/* Fronti di fuoco */}
+      <FlameFront direction="top" progress={burnProgress} />
+      <FlameFront direction="bottom" progress={burnProgress} />
 
-      {/* Sigillo al centro (appare dopo la combustione) */}
+      {/* Blackout finale che copre tutto quando i fronti si incontrano */}
+      <Animated.View style={[styles.blackout, blackoutStyle]} />
+
+      {/* Sigillo */}
       <Animated.View style={[styles.sealContainer, sealStyle]} pointerEvents="none">
         <Text style={styles.sealIcon}>🔒</Text>
         <Text style={styles.sealText}>{L.sealed}</Text>
@@ -267,55 +337,53 @@ const styles = StyleSheet.create({
     zIndex: 9999,
     overflow: "hidden",
   },
-  // Lenzuolo nero che copre l'area "bruciata" (dall'alto, cresce)
-  ash: {
+  // Lenzuolo nero dall'alto
+  ashTop: {
     position: "absolute",
     top: 0,
     left: 0,
     right: 0,
     backgroundColor: "#0A0A0A",
   },
-  // Container della linea di fuoco — altezza 48px così c'è spazio per il glow
-  fireLineWrap: {
+  // Lenzuolo nero dal basso
+  ashBottom: {
     position: "absolute",
+    bottom: 0,
     left: 0,
     right: 0,
-    height: 48,
-    justifyContent: "center",
-    alignItems: "center",
+    backgroundColor: "#0A0A0A",
   },
-  // Glow esteso (sfumato) attorno alla linea
-  glowOuter: {
+  // Wrapper di un fronte di fuoco (la posizione viene animata)
+  flameWrap: {
     position: "absolute",
     left: 0,
     right: 0,
-    top: 12,
-    height: 24,
-    backgroundColor: "#FF6B35",
-    opacity: 0.35,
-    // Su iOS lo shadow funziona, su Android serve elevation
+    height: FLAME_HEIGHT,
+  },
+  // Glow esteso sotto/sopra il fronte (per dare "calore" all'aria circostante)
+  flameGlow: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    height: 30,
+    backgroundColor: "#FF6B1A",
+    opacity: 0.18,
     shadowColor: "#FF8C00",
     shadowOpacity: 1,
-    shadowRadius: 30,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 24,
-  },
-  // Glow intenso centrale (cuore della fiamma)
-  glowInner: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    top: 22,
-    height: 4,
-    backgroundColor: "#FFD27A",
-    opacity: 0.95,
-    shadowColor: "#FFD27A",
-    shadowOpacity: 1,
-    shadowRadius: 14,
+    shadowRadius: 24,
     shadowOffset: { width: 0, height: 0 },
     elevation: 16,
   },
-  // Sigillo al centro dello schermo
+  // Blackout totale finale (sopra fiamme + nero)
+  blackout: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "#000000",
+  },
+  // Sigillo
   sealContainer: {
     position: "absolute",
     top: 0,
@@ -342,7 +410,6 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 6,
   },
-  // Conferma in basso
   confirmContainer: {
     position: "absolute",
     bottom: SCREEN_H * 0.18,
