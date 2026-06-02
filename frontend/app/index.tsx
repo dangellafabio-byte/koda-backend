@@ -50,6 +50,7 @@ import {
   saveTimelineCache,
 } from "../lib/localCache";
 import Constants from "expo-constants";
+import * as Application from "expo-application";
 import FortezzaCloseEffect from "../components/FortezzaCloseEffect";
 import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
@@ -3957,17 +3958,18 @@ export default function Taccuino() {
             </View>
 
             {/* === VERSIONE APP ===
-                Piccolo footer per identificare quale build è installata.
-                IMPORTANTE: usiamo Constants.nativeBuildVersion (e non
-                expoConfig.ios.buildNumber) perché EAS auto-incrementa
-                solo il binario nativo, lasciando app.json fermo a "3".
-                nativeBuildVersion legge dal binario reale (Info.plist
-                iOS / AndroidManifest) ed è quindi sempre aggiornato. */}
+                Footer identificativo della build installata.
+                Usiamo expo-application invece di expo-constants:
+                Constants.nativeBuildVersion era stato deprecato e
+                ritornava null nell'SDK attuale → footer mostrava solo
+                la versione senza il numero. expo-application legge
+                direttamente dal binario nativo (Info.plist iOS o
+                AndroidManifest) e funziona sempre. */}
             <View style={{ alignItems: "center", marginTop: 24, marginBottom: 8 }}>
               <Text style={{ color: theme.text + "55", fontSize: 11, fontStyle: "italic" }}>
-                Koda v{Constants.nativeApplicationVersion || Constants.expoConfig?.version || "1.0.1"}
-                {Constants.nativeBuildVersion
-                  ? ` · build ${Constants.nativeBuildVersion}`
+                Koda v{Application.nativeApplicationVersion || Constants.expoConfig?.version || "1.0.1"}
+                {Application.nativeBuildVersion
+                  ? ` · build ${Application.nativeBuildVersion}`
                   : ""}
               </Text>
             </View>
