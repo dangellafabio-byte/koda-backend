@@ -49,6 +49,7 @@ import {
   loadTimelineCache,
   saveTimelineCache,
 } from "../lib/localCache";
+import Constants from "expo-constants";
 import FortezzaCloseEffect from "../components/FortezzaCloseEffect";
 import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
@@ -3952,6 +3953,22 @@ export default function Taccuino() {
                 <Text style={{ fontWeight: "700" }}>🔓 Modalità normale:</Text> i nostri scambi sono salvati in modo cifrato, usati SOLO per farmi crescere come tuo amico. Mai per addestrare modelli di terzi.{"\n"}{"\n"}
                 <Text style={{ fontWeight: "700" }}>🔒 Modalità Confessionale:</Text> niente viene salvato. Né messaggi, né memoria di lungo periodo. A sessione chiusa, tutto svanisce.{"\n"}{"\n"}
                 <Text style={{ fontWeight: "700" }}>👻 Pulsante Ghost (tieni premuto un messaggio):</Text> dimentico il fatto, ma trattengo l'insegnamento. Il dato grezzo viene cancellato dal server.
+              </Text>
+            </View>
+
+            {/* === VERSIONE APP ===
+                Piccolo footer per identificare quale build è installata.
+                IMPORTANTE: usiamo Constants.nativeBuildVersion (e non
+                expoConfig.ios.buildNumber) perché EAS auto-incrementa
+                solo il binario nativo, lasciando app.json fermo a "3".
+                nativeBuildVersion legge dal binario reale (Info.plist
+                iOS / AndroidManifest) ed è quindi sempre aggiornato. */}
+            <View style={{ alignItems: "center", marginTop: 24, marginBottom: 8 }}>
+              <Text style={{ color: theme.text + "55", fontSize: 11, fontStyle: "italic" }}>
+                Koda v{Constants.nativeApplicationVersion || Constants.expoConfig?.version || "1.0.1"}
+                {Constants.nativeBuildVersion
+                  ? ` · build ${Constants.nativeBuildVersion}`
+                  : ""}
               </Text>
             </View>
             </ScrollView>
