@@ -1,14 +1,45 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { View, StyleSheet, Platform } from "react-native";
+import { View, StyleSheet, Platform, AppState, AppStateStatus } from "react-native";
 import { scheduleWeeklyAppNotification } from "../lib/notifications";
 import { ThemeProvider, useTheme, ThemeName } from "../lib/theme";
 import { api } from "../lib/api";
 import { prewarmAudio } from "../lib/speech";
 import { loadProfileCache } from "../lib/localCache";
+
+// ============================================================
+// BACKEND KEEP-ALIVE 2026-06
+// ============================================================
+// PROBLEMA: il container preview di Emergent va in sleep dopo
+// ~5 min di inattività. La prima richiesta dopo lo sleep impiega
+// 60-90 secondi a tornare → l'app sembra "bloccata".
+// FIX: ping leggero ogni 4 min al backend mentre l'app è in
+// foreground (background lo skip-piamo per non sprecare batteria).
+// ============================================================
+const KEEP_ALIVE_INTERVAL_MS = 4 * 60 * 1000; // 4 minuti
+const KEEP_ALIVE_TIMEOUT_MS = 8000; // 8 sec timeout per il ping (best-effort)
+
+async function pingBackend(): Promise<void> {
+  try {
+    const base = (process.env.EXPO_PUBLIC_BACKEND_URL || "").replace(/\/$/, "");
+    if (!base) return;
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), KEEP_ALIVE_TIMEOUT_MS);
+    try {
+      await fetch(`${base}/api/profile`, {
+        method: "GET",
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(t);
+    }
+  } catch {
+    // Silent. È solo "warm-up", non importa se fallisce.
+  }
+}
 
 function ThemedShell({ children }: { children: React.ReactNode }) {
   const { theme } = useTheme();
@@ -104,6 +135,52 @@ export default function RootLayout() {
       }
       setReady(true); // SEMPRE procediamo. Mai più "limbo indaco".
     })();
+
+    // ====================================================
+    // KEEP-ALIVE 2026-06: ping ogni 4 min finché in foreground.
+    // Tiene caldo il container backend di Emergent (che altrimenti
+    // va in sleep dopo ~5 min di inattività → prossima richiesta
+    // dell'utente sembra "bloccata" per 60-90 sec).
+    // ====================================================
+    let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+    let currentAppState: AppStateStatus = AppState.currentState;
+
+    const startKeepAlive = () => {
+      if (keepAliveTimer) return;
+      // ping immediato (l'utente sta usando l'app ADESSO)
+      pingBackend();
+      keepAliveTimer = setInterval(() => {
+        pingBackend();
+      }, KEEP_ALIVE_INTERVAL_MS);
+    };
+
+    const stopKeepAlive = () => {
+      if (keepAliveTimer) {
+        clearInterval(keepAliveTimer);
+        keepAliveTimer = null;
+      }
+    };
+
+    if (currentAppState === "active") startKeepAlive();
+
+    const sub = AppState.addEventListener("change", (next) => {
+      const wasBackground = currentAppState !== "active";
+      currentAppState = next;
+      if (next === "active") {
+        // Tornato in foreground: ping subito (potrebbe essere passato
+        // tanto tempo dall'ultimo ping → backend probabilmente cold)
+        if (wasBackground) pingBackend();
+        startKeepAlive();
+      } else {
+        stopKeepAlive();
+      }
+    });
+
+    return () => {
+      stopKeepAlive();
+      sub.remove();
+    };
+  }, []);
   }, []);
 
   if (!ready) {
