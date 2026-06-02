@@ -181,7 +181,6 @@ export default function RootLayout() {
       sub.remove();
     };
   }, []);
-  }, []);
 
   if (!ready) {
     // Avoid theme flash: render minimal black screen until profile arrives.
