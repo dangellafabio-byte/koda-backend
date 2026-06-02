@@ -1404,9 +1404,19 @@ export default function Taccuino() {
             };
             setTimeline((prev) => [...prev, aiEntry]);
             setStatus("idle");
-            // TTS solo se non sta scrivendo
+            // TTS solo se non sta scrivendo.
+            // FIX 2026-06: TTS isolato in proprio try/catch così se la
+            // sintesi vocale fallisce (rete, ElevenLabs flaky, audio
+            // session iOS) NON facciamo apparire "Confessionale
+            // temporaneamente non disponibile" all'utente. Il messaggio
+            // è già in timeline, la conversazione è andata bene.
             if (!fromText) {
-              await speakIfEnabled(reply, tone, { fromText });
+              try {
+                await speakIfEnabled(reply, tone, { fromText });
+              } catch (ttsErr) {
+                // log silenzioso, non bloccare la UX
+                console.warn("[fortezza] TTS error (non-fatal):", ttsErr);
+              }
             }
           } catch (fErr: any) {
             console.warn("[fortezza] error:", fErr);
