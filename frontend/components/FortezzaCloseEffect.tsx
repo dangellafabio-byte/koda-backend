@@ -161,9 +161,24 @@ export default function FortezzaCloseEffect({ visible, onComplete, labels }: Pro
       return;
     }
 
-    // FASE 1: bagliore (ignite)
+    // FASE 1: bagliore (ignite). FIX 2026-06: l'overlay container fa
+    // tutto il ciclo in UNA sola sequenza (fade-in → stay → fade-out),
+    // perché Reanimated interrompe le animazioni precedenti se
+    // riassegnamo `.value` di fila → in versione precedente il fade-in
+    // veniva sovrascritto dal delay+fade-out e l'overlay restava
+    // invisibile per 3 secondi.
     fireHaptic("light");
-    containerOpacity.value = withTiming(1, { duration: 200 });
+    containerOpacity.value = withSequence(
+      withTiming(1, { duration: 200 }),
+      withDelay(
+        2500,
+        withTiming(0, { duration: 600 }, (finished) => {
+          if (finished && onComplete) {
+            runOnJS(onComplete)();
+          }
+        })
+      )
+    );
     glowOpacity.value = withSequence(
       withTiming(0.6, { duration: 400, easing: Easing.out(Easing.quad) }),
       withDelay(2000, withTiming(0, { duration: 600 }))
@@ -180,19 +195,10 @@ export default function FortezzaCloseEffect({ visible, onComplete, labels }: Pro
     );
     const t1 = setTimeout(() => fireHaptic("medium"), 1500);
 
-    // FASE 4: conferma + chiusura
+    // FASE 4: conferma + chiusura (l'haptic e il fade-out finale sono
+    // già impostati nella withSequence di containerOpacity sopra)
     confirmOpacity.value = withDelay(2100, withTiming(1, { duration: 400 }));
     const t2 = setTimeout(() => fireHaptic("heavy"), 2400);
-
-    // Fade out tutto
-    containerOpacity.value = withDelay(
-      2700,
-      withTiming(0, { duration: 600 }, (finished) => {
-        if (finished && onComplete) {
-          runOnJS(onComplete)();
-        }
-      })
-    );
 
     return () => {
       clearTimeout(t1);
