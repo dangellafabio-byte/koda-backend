@@ -2,19 +2,27 @@
  * Taccuino Vivo — API client
  */
 
+const RAILWAY_PROD = "https://koda-backend-production-4a34.up.railway.app";
+
 const detectBackend = (): string => {
   // EXPO_PUBLIC_BACKEND_URL is set in app .env. Falls back to relative /api on web.
   const env = process.env.EXPO_PUBLIC_BACKEND_URL;
-  if (env) return env.replace(/\/$/, "");
+  // === HARDENED ROUTING 2026-06 ===
+  // Se l'env var contiene un dominio preview Emergent (che ora non è più il
+  // backend di produzione ufficiale), FORZIAMO Railway. Questo blocca un
+  // intero ramo di bug derivati da .env che si auto-ripristinano in dev
+  // container o da bundle vecchi cached lato Metro/iOS.
+  if (env) {
+    if (env.includes("preview.emergentagent.com")) {
+      return RAILWAY_PROD;
+    }
+    return env.replace(/\/$/, "");
+  }
   if (typeof window !== "undefined" && window.location) {
     return window.location.origin;
   }
-  // === HARDCODED FALLBACK (2026-06) ===
-  // Se per qualche motivo l'env var non viene inlinata da Metro durante un
-  // eas update (es. cache, build incrementale), usiamo direttamente Railway
-  // così l'app non torna mai sul backend preview che ora non esiste più
-  // come "production". Questa riga si attiva solo come ultimissima rete.
-  return "https://koda-backend-production-4a34.up.railway.app";
+  // Ultimo fallback assoluto: Railway.
+  return RAILWAY_PROD;
 };
 
 export const BACKEND = detectBackend();
