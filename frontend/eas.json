@@ -30,7 +30,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://app-finder-408.preview.emergentagent.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app"
       },
       "channel": "preview"
     },
@@ -40,7 +40,7 @@
       },
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://app-finder-408.preview.emergentagent.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app"
       },
       "channel": "production"
     }
