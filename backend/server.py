@@ -4738,6 +4738,18 @@ async def api_dbg_trace(body: dict):
 # Include the router
 app.include_router(api_router)
 
+# === DEMO SOUNDS (preview only) ============================================
+# Serve sample sounds for thinking-sound selection (Fabio demo)
+from fastapi.responses import FileResponse  # noqa: E402
+@app.get("/api/demo-sound/{name}")
+async def demo_sound(name: str):
+    safe = name.replace("/", "").replace("..", "")
+    path = Path(__file__).parent / "sound_samples" / f"{safe}.wav"
+    if not path.exists():
+        raise HTTPException(404, "not found")
+    return FileResponse(str(path), media_type="audio/wav")
+# ============================================================================
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
