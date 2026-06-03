@@ -42,6 +42,7 @@ import {
 } from "../lib/api";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId } from "../lib/speech";
+import { startThinkingSound, stopThinkingSound } from "../lib/thinkingSound";
 import { classifyEmotion, classifyIntent, secureWipeStrings } from "../lib/emotionClassifier";
 import {
   loadProfileCache,
@@ -1107,6 +1108,23 @@ export default function Taccuino() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
+  // === THINKING SOUND (richiesta utente 2026-06) =====================
+  // Quando Koda sta elaborando (transcribing/thinking) parte il jingle
+  // "Gentle Pause": 4 note morbide pentatoniche con sottofondo caldo.
+  // Utile se l'utente non sta guardando il telefono (altra app, schermo
+  // bloccato). Si ferma appena Koda inizia a parlare o torna idle.
+  useEffect(() => {
+    if (status === "transcribing" || status === "thinking") {
+      startThinkingSound();
+    } else {
+      stopThinkingSound();
+    }
+    return () => {
+      stopThinkingSound();
+    };
+  }, [status]);
+
+
   const speakIfEnabled = useCallback(
     async (text: string, tone: TimelineEntry["tone"], opts?: { fromText?: boolean }) => {
       // FIX 2026-07: se la richiesta proviene dalla tastiera (input testo),
@@ -2166,7 +2184,14 @@ export default function Taccuino() {
   // corrente di onBigButton e con lo stato disabled (transcribing/thinking).
   // (Rimosso: ora il long-press è gestito via header invisibile.)
 
+  // Debounce per evitare doppio-invio quando passiamo a onPressIn (vedi
+  // commento sul TouchableOpacity del send button).
+  const lastSendRef = useRef<number>(0);
   const sendTextFromBox = () => {
+    // Anti-doppio-tap: ignora i tentativi a meno di 300ms l'uno dall'altro.
+    const now = Date.now();
+    if (now - lastSendRef.current < 300) return;
+    lastSendRef.current = now;
     if (!textInput.trim()) return;
     const txt = textInput;
     setTextInput("");
@@ -3112,7 +3137,7 @@ export default function Taccuino() {
                 testID="text-input"
               />
               <TouchableOpacity
-                onPress={sendTextFromBox}
+                onPressIn={sendTextFromBox}
                 style={[styles.sendBtn, !textInput.trim() && { opacity: 0.4 }]}
                 disabled={!textInput.trim()}
                 testID="send-btn"
@@ -3173,7 +3198,7 @@ export default function Taccuino() {
                     testID="text-input-reading"
                   />
                   <TouchableOpacity
-                    onPress={sendTextFromBox}
+                    onPressIn={sendTextFromBox}
                     style={[styles.sendBtn, !textInput.trim() && { opacity: 0.4 }]}
                     disabled={!textInput.trim()}
                     testID="send-btn-reading"
