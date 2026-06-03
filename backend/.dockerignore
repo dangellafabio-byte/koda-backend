@@ -1,0 +1,16 @@
+# File ignorati durante il build Docker — non finiscono nell'immagine.
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.log
+tests/
+voiceprint_data/
+.env
+.env.local
+.env.*.local
+.git
+.gitignore
+.DS_Store
