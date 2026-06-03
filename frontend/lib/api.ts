@@ -9,7 +9,12 @@ const detectBackend = (): string => {
   if (typeof window !== "undefined" && window.location) {
     return window.location.origin;
   }
-  return "";
+  // === HARDCODED FALLBACK (2026-06) ===
+  // Se per qualche motivo l'env var non viene inlinata da Metro durante un
+  // eas update (es. cache, build incrementale), usiamo direttamente Railway
+  // così l'app non torna mai sul backend preview che ora non esiste più
+  // come "production". Questa riga si attiva solo come ultimissima rete.
+  return "https://koda-backend-production-4a34.up.railway.app";
 };
 
 export const BACKEND = detectBackend();
