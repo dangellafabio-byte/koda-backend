@@ -3136,14 +3136,22 @@ export default function Taccuino() {
                 multiline
                 testID="text-input"
               />
-              <TouchableOpacity
-                onPressIn={sendTextFromBox}
+              {/* === SEND BUTTON FIX 2026-06 ===
+                  TouchableOpacity (sia onPress che onPressIn) viene
+                  ingoiato dal gesture recognizer di iOS quando la tastiera
+                  è aperta. Usiamo View + onStartShouldSetResponder per
+                  catturare il touch al livello più basso possibile, prima
+                  che UIKit decida di dismissare la tastiera. Risultato:
+                  1 tap = invio immediato. */}
+              <View
                 style={[styles.sendBtn, !textInput.trim() && { opacity: 0.4 }]}
-                disabled={!textInput.trim()}
+                onStartShouldSetResponder={() => !!textInput.trim()}
+                onResponderGrant={() => { if (textInput.trim()) sendTextFromBox(); }}
+                onResponderTerminationRequest={() => false}
                 testID="send-btn"
               >
                 <Ionicons name="arrow-up" size={20} color={theme.primaryText} />
-              </TouchableOpacity>
+              </View>
             </View>
           </KeyboardAvoidingView>
         ) : (
@@ -3197,14 +3205,15 @@ export default function Taccuino() {
                     multiline
                     testID="text-input-reading"
                   />
-                  <TouchableOpacity
-                    onPressIn={sendTextFromBox}
+                  <View
                     style={[styles.sendBtn, !textInput.trim() && { opacity: 0.4 }]}
-                    disabled={!textInput.trim()}
+                    onStartShouldSetResponder={() => !!textInput.trim()}
+                    onResponderGrant={() => { if (textInput.trim()) sendTextFromBox(); }}
+                    onResponderTerminationRequest={() => false}
                     testID="send-btn-reading"
                   >
                     <Ionicons name="arrow-up" size={20} color={theme.primaryText} />
-                  </TouchableOpacity>
+                  </View>
                 </View>
               </KeyboardAvoidingView>
             )}
