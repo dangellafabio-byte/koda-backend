@@ -23,6 +23,7 @@ import {
   Switch,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { TouchableOpacity as GHTouchableOpacity } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
@@ -3136,22 +3137,22 @@ export default function Taccuino() {
                 multiline
                 testID="text-input"
               />
-              {/* === SEND BUTTON FIX 2026-06 ===
-                  TouchableOpacity (sia onPress che onPressIn) viene
-                  ingoiato dal gesture recognizer di iOS quando la tastiera
-                  è aperta. Usiamo View + onStartShouldSetResponder per
-                  catturare il touch al livello più basso possibile, prima
-                  che UIKit decida di dismissare la tastiera. Risultato:
-                  1 tap = invio immediato. */}
-              <View
+              {/* === SEND BUTTON FIX FINAL (2026-06) ===
+                  Approccio 1 (onPress): inghiottito da iOS keyboard gesture.
+                  Approccio 2 (onPressIn): stesso problema.
+                  Approccio 3 (View+Responder): non sempre cattura su iOS.
+                  Approccio 4 (DEFINITIVO): GHTouchableOpacity da
+                  react-native-gesture-handler. Lavora a livello nativo
+                  via UIGestureRecognizer prioritario, bypassa la dismiss
+                  automatica della tastiera. */}
+              <GHTouchableOpacity
+                onPress={sendTextFromBox}
                 style={[styles.sendBtn, !textInput.trim() && { opacity: 0.4 }]}
-                onStartShouldSetResponder={() => !!textInput.trim()}
-                onResponderGrant={() => { if (textInput.trim()) sendTextFromBox(); }}
-                onResponderTerminationRequest={() => false}
+                disabled={!textInput.trim()}
                 testID="send-btn"
               >
                 <Ionicons name="arrow-up" size={20} color={theme.primaryText} />
-              </View>
+              </GHTouchableOpacity>
             </View>
           </KeyboardAvoidingView>
         ) : (
@@ -3205,15 +3206,14 @@ export default function Taccuino() {
                     multiline
                     testID="text-input-reading"
                   />
-                  <View
+                  <GHTouchableOpacity
+                    onPress={sendTextFromBox}
                     style={[styles.sendBtn, !textInput.trim() && { opacity: 0.4 }]}
-                    onStartShouldSetResponder={() => !!textInput.trim()}
-                    onResponderGrant={() => { if (textInput.trim()) sendTextFromBox(); }}
-                    onResponderTerminationRequest={() => false}
+                    disabled={!textInput.trim()}
                     testID="send-btn-reading"
                   >
                     <Ionicons name="arrow-up" size={20} color={theme.primaryText} />
-                  </View>
+                  </GHTouchableOpacity>
                 </View>
               </KeyboardAvoidingView>
             )}
