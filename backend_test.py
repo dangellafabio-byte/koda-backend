@@ -1,302 +1,238 @@
+#!/usr/bin/env python3
 """
-Taccuino Vivo backend test suite.
+Backend test — Tavily Web Search integration via /api/converse-fast/start.
 
-Tests after the legacy "App Compass" cleanup that removed ~310 lines from
-backend/server.py. Verifies:
-1. All Taccuino endpoints still respond (200)
-2. Removed legacy endpoints return 404 / 410 (NOT 500)
-3. /api/transcribe rejects empty audio (400)
-4. /api/tts/prepare + /api/tts/audio/{token}.mp3 (with Range)
-5. Watch for unexpected 500 errors
+Tests:
+1) Explicit "cerca" trigger → web-search triggered, reply uses web facts
+2) Factual keyword "meteo" → web-search triggered, reply has weather info
+3) Normal conversation → NO web-search trigger, normal empathic reply
 """
-
-import io
 import os
 import sys
-import json
 import time
-
+import json
 import requests
-
-# Resolve backend URL from frontend/.env (EXPO_PUBLIC_BACKEND_URL)
-FRONTEND_ENV = "/app/frontend/.env"
-BASE_URL = None
-with open(FRONTEND_ENV, "r") as f:
-    for line in f:
-        line = line.strip()
-        if line.startswith("EXPO_PUBLIC_BACKEND_URL="):
-            BASE_URL = line.split("=", 1)[1].strip().strip('"').strip("'")
-            break
-
-if not BASE_URL:
-    print("FATAL: cannot resolve EXPO_PUBLIC_BACKEND_URL from frontend/.env")
-    sys.exit(1)
-
-API = BASE_URL.rstrip("/") + "/api"
-print(f"Testing against: {API}")
-print("=" * 80)
+from typing import Optional, Tuple, List, Dict, Any
 
 
-results = []  # (name, status, http, message)
+def _load_backend_url() -> str:
+    env_path = "/app/frontend/.env"
+    url = None
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("EXPO_PUBLIC_BACKEND_URL=") or line.startswith("REACT_APP_BACKEND_URL="):
+                url = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if line.startswith("EXPO_PUBLIC_BACKEND_URL="):
+                    break
+    if not url:
+        print("FATAL: cannot find backend URL in /app/frontend/.env")
+        sys.exit(2)
+    return url.rstrip("/")
 
 
-def record(name, ok, http, msg=""):
-    status = "PASS" if ok else "FAIL"
-    results.append((name, status, http, msg))
-    print(f"[{status}] {name} — HTTP {http}{(' — ' + msg) if msg else ''}")
+BACKEND = _load_backend_url()
+API = f"{BACKEND}/api"
+BACKEND_LOG = "/var/log/supervisor/backend.err.log"
 
 
-def safe_req(method, path, **kwargs):
-    url = API + path
+def _log_position() -> int:
     try:
-        r = requests.request(method, url, timeout=60, **kwargs)
-        return r, None
+        return os.path.getsize(BACKEND_LOG)
+    except Exception:
+        return 0
+
+
+def _log_slice_since(pos: int) -> str:
+    try:
+        with open(BACKEND_LOG, "rb") as f:
+            f.seek(pos)
+            return f.read().decode("utf-8", errors="replace")
     except Exception as e:
-        return None, str(e)
+        return f"<log slice error: {e}>"
 
 
-# ---------------------------------------------------------------
-# 1. Working Taccuino endpoints
-# ---------------------------------------------------------------
+def run_fast_convo(text: str, ephemeral: bool = False, max_wall_s: float = 60.0):
+    log_pos_before = _log_position()
+    t0 = time.time()
+    r = requests.post(f"{API}/converse-fast/start",
+                      json={"text": text, "ephemeral": ephemeral},
+                      timeout=20)
+    print(f"  POST /converse-fast/start → HTTP {r.status_code}  ({int((time.time()-t0)*1000)}ms)")
+    if r.status_code != 200:
+        print(f"    body: {r.text[:400]}")
+        return r.status_code, "", None, [], _log_slice_since(log_pos_before)
+    sid = r.json().get("session_id", "")
+    print(f"  session_id: {sid}")
+    if not sid:
+        return r.status_code, "", None, [], _log_slice_since(log_pos_before)
 
-# 1a. GET /api/
-r, err = safe_req("GET", "/")
-if err:
-    record("GET /api/", False, "-", f"network error: {err}")
-else:
-    ok = r.status_code == 200
-    try:
-        body = r.json()
-    except Exception:
-        body = {}
-    msg_ok = isinstance(body, dict) and body.get("message") == "Taccuino Vivo API" and body.get("status") == "ok"
-    record("GET /api/", ok and msg_ok, r.status_code,
-           "" if ok and msg_ok else f"unexpected body: {r.text[:200]}")
-
-
-# 1b. GET /api/profile
-r, err = safe_req("GET", "/profile")
-if err:
-    record("GET /api/profile", False, "-", err)
-else:
-    ok = r.status_code == 200
-    try:
-        body = r.json()
-    except Exception:
-        body = {}
-    has_id = isinstance(body, dict) and body.get("id") == "me"
-    record("GET /api/profile", ok and has_id, r.status_code,
-           "" if ok and has_id else f"body: {r.text[:200]}")
-
-
-# 1c. PUT /api/profile {name: "Marco"}
-test_name = "Marco"
-r, err = safe_req("PUT", "/profile", json={"name": test_name})
-if err:
-    record("PUT /api/profile", False, "-", err)
-else:
-    ok = r.status_code == 200
-    try:
-        body = r.json()
-    except Exception:
-        body = {}
-    name_ok = body.get("name") == test_name
-    record("PUT /api/profile (set name)", ok and name_ok, r.status_code,
-           "" if ok and name_ok else f"body: {r.text[:200]}")
-
-
-# 1d. GET /api/timeline?limit=5
-r, err = safe_req("GET", "/timeline", params={"limit": 5})
-if err:
-    record("GET /api/timeline", False, "-", err)
-else:
-    ok = r.status_code == 200
-    try:
-        body = r.json()
-    except Exception:
-        body = None
-    is_list = isinstance(body, list)
-    record("GET /api/timeline?limit=5", ok and is_list, r.status_code,
-           "" if ok and is_list else f"body: {r.text[:200]}")
+    since = 0
+    all_events: List[dict] = []
+    meta_event: Optional[dict] = None
+    deadline = time.time() + max_wall_s
+    done = False
+    poll_count = 0
+    while time.time() < deadline:
+        poll_count += 1
+        try:
+            pr = requests.get(f"{API}/converse-fast/poll/{sid}",
+                              params={"since": since, "timeout": 8},
+                              timeout=12)
+        except requests.RequestException as e:
+            print(f"    poll error: {e}")
+            time.sleep(0.5)
+            continue
+        if pr.status_code != 200:
+            print(f"  POLL → HTTP {pr.status_code}: {pr.text[:200]}")
+            return pr.status_code, sid, None, all_events, _log_slice_since(log_pos_before)
+        body = pr.json()
+        events = body.get("events", []) or []
+        for ev in events:
+            all_events.append(ev)
+            etype = ev.get("type")
+            if etype == "sentence":
+                print(f"    ← sentence i={ev.get('i')} text={(ev.get('text') or '')[:80]!r}")
+            elif etype == "meta":
+                meta_event = ev
+                print(f"    ← meta reply={(ev.get('reply') or '')[:120]!r} tone={ev.get('tone')}")
+            elif etype == "error":
+                print(f"    ← ERROR: {ev.get('message')}")
+            else:
+                print(f"    ← {etype}: {json.dumps(ev)[:120]}")
+        since = body.get("next", since)
+        done = bool(body.get("done"))
+        if done:
+            break
+    total_ms = int((time.time() - t0) * 1000)
+    print(f"  total wallclock: {total_ms}ms, polls={poll_count}, done={done}")
+    return r.status_code, sid, meta_event, all_events, _log_slice_since(log_pos_before)
 
 
-# 1e. POST /api/converse
-r, err = safe_req("POST", "/converse", json={"text": "ciao, come stai?"})
-ai_tone = None
-if err:
-    record("POST /api/converse", False, "-", err)
-else:
-    ok = r.status_code == 200
-    body = {}
-    try:
-        body = r.json()
-    except Exception:
-        pass
-    user_e = body.get("user_entry") if isinstance(body, dict) else None
-    ai_e = body.get("ai_entry") if isinstance(body, dict) else None
-    prof = body.get("profile") if isinstance(body, dict) else None
-    has_all = bool(user_e and ai_e and prof)
-    ai_text_ok = bool(ai_e and (ai_e.get("text") or "").strip())
-    ai_tone_ok = bool(ai_e and ai_e.get("tone"))
-    if ai_e:
-        ai_tone = ai_e.get("tone")
-    full_ok = ok and has_all and ai_text_ok and ai_tone_ok
-    record(
-        "POST /api/converse {text:'ciao, come stai?'}",
-        full_ok,
-        r.status_code,
-        "" if full_ok else f"missing fields. body keys: {list(body.keys()) if isinstance(body, dict) else 'n/a'}; status={r.status_code}; raw[:200]={r.text[:200]}",
-    )
+def _grep_fast_lines(log: str, sid8: str) -> List[str]:
+    out = []
+    for line in log.splitlines():
+        if f"[fast {sid8}]" in line or "[fast]" in line:
+            out.append(line.strip())
+    return out
 
 
-# 1f. GET /api/recap?period=today
-r, err = safe_req("GET", "/recap", params={"period": "today"})
-if err:
-    record("GET /api/recap?period=today", False, "-", err)
-else:
-    ok = r.status_code == 200
-    body = {}
-    try:
-        body = r.json()
-    except Exception:
-        pass
-    has_recap = isinstance(body, dict) and "recap" in body
-    record("GET /api/recap?period=today", ok and has_recap, r.status_code,
-           "" if ok and has_recap else f"body: {r.text[:200]}")
-
-
-# 1g. GET /api/voices
-r, err = safe_req("GET", "/voices")
-if err:
-    record("GET /api/voices", False, "-", err)
-else:
-    ok = r.status_code == 200
-    body = {}
-    try:
-        body = r.json()
-    except Exception:
-        pass
-    voices = body.get("voices", []) if isinstance(body, dict) else []
-    enabled = body.get("enabled") if isinstance(body, dict) else None
-    expected = {"Matilda", "Sarah", "Charlotte", "Jessica", "Liam", "Charlie", "Callum", "Daniel"}
-    names = {v.get("name") for v in voices if isinstance(v, dict)}
-    has_curated = expected.issubset(names)
-    full_ok = ok and has_curated and isinstance(enabled, bool)
-    record("GET /api/voices", full_ok, r.status_code,
-           "" if full_ok else f"missing curated voices. found: {sorted(names)}; enabled={enabled}")
-
-
-# 1h. POST /api/tts/prepare
-voice_id_matilda = "XrExE9yKIg1WjnnlVkGX"
-r, err = safe_req("POST", "/tts/prepare", json={"text": "ciao", "voice_id": voice_id_matilda})
-tts_token = None
-tts_size = None
-if err:
-    record("POST /api/tts/prepare", False, "-", err)
-else:
-    body = {}
-    try:
-        body = r.json()
-    except Exception:
-        pass
-    if r.status_code == 200:
-        tts_token = body.get("token")
-        tts_size = body.get("size")
-        ok = bool(tts_token) and isinstance(tts_size, int) and tts_size > 0
-        record("POST /api/tts/prepare {text:'ciao'}", ok, r.status_code,
-               "" if ok else f"unexpected body: {r.text[:200]}")
-    elif r.status_code == 503:
-        # Config issue, NOT regression
-        record("POST /api/tts/prepare {text:'ciao'}", True, r.status_code,
-               "Minor: ElevenLabs not configured (503) — config issue, NOT regression from cleanup")
+def assert_true(name: str, cond: bool, detail: str = "") -> bool:
+    if cond:
+        print(f"    ✅ {name}")
     else:
-        record("POST /api/tts/prepare {text:'ciao'}", False, r.status_code,
-               f"unexpected: {r.text[:200]}")
+        print(f"    ❌ {name}  {detail}")
+    return cond
 
 
-# 1i. GET /api/tts/audio/{token}.mp3 (with and without Range)
-if tts_token:
-    # Full GET
-    r, err = safe_req("GET", f"/tts/audio/{tts_token}.mp3")
-    if err:
-        record("GET /api/tts/audio/{token}.mp3", False, "-", err)
+def test_case(label: str, text: str, expect_web_search: bool,
+              expect_reply_keywords: Optional[List[str]] = None) -> Dict[str, Any]:
+    print(f"\n{'='*70}\n{label}\n{'='*70}")
+    print(f"  text: {text!r}")
+    status, sid, meta, events, log = run_fast_convo(text, ephemeral=False)
+    sid8 = sid[:8]
+    fast_lines = _grep_fast_lines(log, sid8)
+    web_trigger_lines = [l for l in fast_lines if "web-search triggered" in l]
+    web_done_lines = [l for l in fast_lines if "web-search done in" in l]
+    print(f"  -- [fast {sid8}] log lines: {len(fast_lines)} matching")
+    for ln in fast_lines[-14:]:
+        # show only the suffix to keep noise low
+        print(f"    | {ln[-220:]}")
+
+    results: Dict[str, Any] = {
+        "label": label, "text": text, "start_status": status, "session_id": sid,
+        "meta": meta, "events_count": len(events),
+        "expect_web_search": expect_web_search,
+        "web_trigger_lines": web_trigger_lines, "web_done_lines": web_done_lines,
+        "pass": True, "reasons": [],
+    }
+
+    if not assert_true("start returned 200", status == 200):
+        results["pass"] = False; results["reasons"].append("start != 200")
+    if not assert_true("session_id present", bool(sid)):
+        results["pass"] = False; results["reasons"].append("no session_id")
+    if not assert_true("polling reached done=true (meta event received)", meta is not None):
+        results["pass"] = False; results["reasons"].append("no meta event / not done")
+    reply_text = (meta or {}).get("reply", "") or ""
+    print(f"    reply: {reply_text!r}")
+
+    if expect_web_search:
+        ok_trig = len(web_trigger_lines) > 0
+        if not assert_true("web-search triggered logged", ok_trig):
+            results["pass"] = False; results["reasons"].append("no web-search trigger log")
+        ok_brief = any("brief=yes" in l for l in web_done_lines)
+        if not assert_true("Tavily returned brief=yes", ok_brief,
+                           detail=f"web_done_lines={web_done_lines}"):
+            results["pass"] = False; results["reasons"].append("brief != yes")
     else:
-        ct = r.headers.get("content-type", "").lower()
-        accept_ranges = r.headers.get("accept-ranges", "").lower()
-        ok = r.status_code == 200 and "audio/mpeg" in ct and len(r.content) > 0
-        record("GET /api/tts/audio/{token}.mp3 (full)", ok, r.status_code,
-               "" if ok else f"ct={ct}, len={len(r.content)}, accept_ranges={accept_ranges}")
+        ok_no_trig = len(web_trigger_lines) == 0
+        if not assert_true("NO web-search triggered", ok_no_trig,
+                           detail=f"unexpected: {web_trigger_lines}"):
+            results["pass"] = False; results["reasons"].append("unexpected web-search trigger")
 
-    # Range request 0-100
-    r, err = safe_req("GET", f"/tts/audio/{tts_token}.mp3", headers={"Range": "bytes=0-100"})
-    if err:
-        record("GET /api/tts/audio/{token}.mp3 (Range)", False, "-", err)
-    else:
-        cr = r.headers.get("content-range", "")
-        ct = r.headers.get("content-type", "").lower()
-        ok = r.status_code == 206 and "audio/mpeg" in ct and len(r.content) == 101 and cr.startswith("bytes 0-100/")
-        record("GET /api/tts/audio/{token}.mp3 (Range bytes=0-100)", ok, r.status_code,
-               "" if ok else f"content-range={cr}, ct={ct}, len={len(r.content)}")
-else:
-    record("GET /api/tts/audio/{token}.mp3", True, "skip",
-           "Skipped: no token from /tts/prepare")
+    if reply_text:
+        if expect_web_search:
+            forbidden = ("non ho accesso a internet", "non posso cercare",
+                         "non posso accedere a internet", "non ho accesso al web")
+            lowered = reply_text.lower()
+            ok_not_refusal = not any(f in lowered for f in forbidden)
+            assert_true("reply does NOT refuse web access", ok_not_refusal,
+                        detail=f"reply: {reply_text[:200]}")
+            if not ok_not_refusal:
+                results["pass"] = False; results["reasons"].append("reply refuses web")
+        if expect_reply_keywords:
+            lowered = reply_text.lower()
+            found = [k for k in expect_reply_keywords if k.lower() in lowered]
+            print(f"    reply keyword hits: {found}")
+            results["keyword_hits"] = found
 
-
-# ---------------------------------------------------------------
-# 2. Removed legacy endpoints (must NOT be 500)
-# ---------------------------------------------------------------
-
-legacy_cases = [
-    ("GET",  "/categories",   404),
-    ("GET",  "/featured-app", 404),
-    ("POST", "/recommend",    410),
-    ("GET",  "/favorites",    404),
-    ("GET",  "/history",      404),
-    ("GET",  "/demo/mp4",     404),
-]
-
-for method, path, expected_code in legacy_cases:
-    kwargs = {}
-    if method == "POST" and path == "/recommend":
-        kwargs["json"] = {"query": "x"}
-    r, err = safe_req(method, path, **kwargs)
-    if err:
-        record(f"{method} /api{path}", False, "-", err)
-        continue
-    ok = r.status_code == expected_code
-    is_500 = r.status_code >= 500
-    note = ""
-    if is_500:
-        note = f"CRITICAL: 500-class error indicates dangling code references! body: {r.text[:200]}"
-    elif not ok:
-        note = f"expected {expected_code}, got {r.status_code}"
-    record(f"{method} /api{path} (expect {expected_code})", ok, r.status_code, note)
+    return results
 
 
-# ---------------------------------------------------------------
-# 3. /api/transcribe rejects empty audio with 400
-# ---------------------------------------------------------------
+def main() -> int:
+    print(f"Backend: {API}")
+    print(f"Log: {BACKEND_LOG}\n")
+    try:
+        r = requests.get(f"{API}/", timeout=10)
+        print(f"GET /api/ → {r.status_code}: {r.text[:80]}")
+    except Exception as e:
+        print(f"GET /api/ failed: {e}")
+        return 2
 
-# Send an empty file under field "audio"
-files = {"audio": ("empty.webm", b"", "audio/webm")}
-data = {"language": "it"}
-r, err = safe_req("POST", "/transcribe", files=files, data=data)
-if err:
-    record("POST /api/transcribe (empty audio)", False, "-", err)
-else:
-    ok = r.status_code == 400
-    record("POST /api/transcribe (empty audio → expect 400)", ok, r.status_code,
-           "" if ok else f"body: {r.text[:200]}")
+    results = []
+    results.append(test_case(
+        "TEST 1 — Trigger esplicito 'Cerca le ultime notizie dall'Italia'",
+        "Cerca le ultime notizie dall'Italia",
+        expect_web_search=True,
+    ))
+    results.append(test_case(
+        "TEST 2 — Keyword fattuale 'Che tempo fa oggi a Roma?'",
+        "Che tempo fa oggi a Roma?",
+        expect_web_search=True,
+        expect_reply_keywords=["roma", "grad", "sole", "piogg", "nuvol", "ventos", "ciel", "°"],
+    ))
+    results.append(test_case(
+        "TEST 3 — Conversazione normale (no trigger)",
+        "Ciao, come va? Oggi mi sento un po' stanco.",
+        expect_web_search=False,
+    ))
+
+    print(f"\n{'#'*70}\nFINAL SUMMARY\n{'#'*70}")
+    all_pass = True
+    for r in results:
+        mark = "✅" if r["pass"] else "❌"
+        print(f"{mark} {r['label']}")
+        print(f"     reply: {((r.get('meta') or {}).get('reply') or '')[:200]!r}")
+        if r["web_trigger_lines"]:
+            print(f"     trigger log: {r['web_trigger_lines'][-1][-220:]}")
+        if r["web_done_lines"]:
+            print(f"     done log:    {r['web_done_lines'][-1][-220:]}")
+        if r["reasons"]:
+            print(f"     reasons: {r['reasons']}")
+        if not r["pass"]:
+            all_pass = False
+    return 0 if all_pass else 1
 
 
-# ---------------------------------------------------------------
-# Final summary
-# ---------------------------------------------------------------
-print("=" * 80)
-print("SUMMARY")
-print("=" * 80)
-fails = [r for r in results if r[1] == "FAIL"]
-for name, status, http, msg in results:
-    print(f"  [{status}] HTTP={http} {name} {('— ' + msg) if msg and status == 'FAIL' else ''}")
-print(f"\nTotal: {len(results)} | Pass: {len(results) - len(fails)} | Fail: {len(fails)}")
-sys.exit(1 if fails else 0)
+if __name__ == "__main__":
+    sys.exit(main())

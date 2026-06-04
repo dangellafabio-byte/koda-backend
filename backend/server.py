@@ -4291,6 +4291,16 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
         f"LINGUA: rispondi SEMPRE in {lang_name}.{name_part}\n"
         f"DATA/ORA UTC: {now_iso}\n"
         f"\n"
+        f"🌐 ACCESSO INTERNET: hai accesso al web in tempo reale (Tavily). "
+        f"Quando la domanda dell'utente richiede dati freschi (notizie, meteo, prezzi, "
+        f"eventi recenti, risultati sportivi, quotazioni), il sistema esegue automaticamente "
+        f"una ricerca PRIMA di chiamarti e ti consegna i risultati nel blocco "
+        f"'RISULTATI WEB SEARCH'. Se quel blocco è presente: USA quei dati come verità, "
+        f"NON dire 'non ho accesso a internet' — perché ce l'hai. Se NON è presente, "
+        f"vuol dire che la domanda non richiede info real-time: rispondi normalmente "
+        f"dalla tua conoscenza. MAI dire all'utente che hai 'cercato su Google' — è "
+        f"trasparente, semplicemente rispondi come se sapessi.\n"
+        f"\n"
         f"GENERI:\n- {ai_decl}\n- {user_decl}\n"
         f"\n"
         f"⚡ LUNGHEZZA (CRITICO): 1-2 frasi, MAX 25 parole. Tipo vocale WhatsApp. "
@@ -4443,11 +4453,33 @@ async def _fast_pipeline_task(
         history_str = _format_history_for_llm(recent) if recent else ""
 
         sys_prompt = _build_fast_system_prompt(profile, recent)
-        user_payload = (
-            (f"STORICO RECENTE:\n{history_str}\n\n" if history_str else "")
-            + f"UTENTE: {text}\n\n"
-            + "Rispondi SOLO col JSON, \"reply\" come primo campo."
-        )
+
+        # === WEB SEARCH OPZIONALE (Tavily) — Fast pipeline ===
+        # Se la domanda richiede informazioni real-time (notizie, meteo, prezzi,
+        # eventi recenti), eseguiamo Tavily PRIMA dello stream LLM. Latenza extra:
+        # ~1-3s solo quando serve davvero. MAI in flussi confessionali (separati).
+        # Non blocchiamo se ephemeral=True (ma in questo caso il messaggio non
+        # viene salvato comunque). Se Tavily fallisce/timeout → continua senza.
+        web_search_brief: Optional[str] = None
+        if _should_web_search(text):
+            logger.info(f"[fast {session_id[:8]}] web-search triggered for: {text[:80]}")
+            t_search = time.time()
+            web_search_brief = await _tavily_search_brief(text, max_results=4, timeout_s=8.0)
+            logger.info(f"[fast {session_id[:8]}] web-search done in {(time.time()-t_search)*1000:.0f}ms, brief={'yes' if web_search_brief else 'no'}")
+
+        user_payload_parts = []
+        if history_str:
+            user_payload_parts.append(f"STORICO RECENTE:\n{history_str}")
+        if web_search_brief:
+            user_payload_parts.append(
+                "RISULTATI WEB SEARCH (informazioni AGGIORNATE in tempo reale — "
+                "usale per rispondere con dati reali, NON inventare. Cita "
+                "brevemente la fonte se rilevante, NON leggere URL ad alta voce):\n"
+                + web_search_brief
+            )
+        user_payload_parts.append(f"UTENTE: {text}")
+        user_payload_parts.append('Rispondi SOLO col JSON, "reply" come primo campo.')
+        user_payload = "\n\n".join(user_payload_parts)
 
         t_llm_start = time.time()
         logger.info(f"[fast {session_id[:8]}] LLM start, prompt {len(sys_prompt)} chars")
