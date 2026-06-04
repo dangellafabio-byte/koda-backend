@@ -1,0 +1,57 @@
+# .dockerignore — esclude tutto dal build context tranne quello che serve.
+# Senza questo file Railway/Docker carica TUTTO il repo (~26k file con
+# frontend/node_modules) e va in errore "grpc: error while marshaling".
+
+# === Frontend (gigantesco, non serve al backend) ===
+frontend/
+.expo/
+node_modules/
+
+# === Test reports & assets non necessari al runtime ===
+test_reports/
+tests/
+backend_test*.py
+test_result.md
+design_guidelines.json
+README.md
+
+# === Emergent metadata & memory ===
+.emergent/
+memory/
+scripts/
+
+# === Git & dev ===
+.git/
+.gitignore
+.gitconfig
+
+# === Python cache & venvs ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# === IDE / OS ===
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# === Logs & temp ===
+*.log
+*.tmp
+*.bak
+
+# === Audio assets non runtime (verranno copiati esplicitamente se serve) ===
+backend/voiceprint_data/
+backend/sound_samples/
+
+# === Env locale (non serve in produzione, Railway inietta le sue) ===
+backend/.env
+.env
