@@ -2786,17 +2786,16 @@ export default function Taccuino() {
           <Text style={styles.savedBannerText}>{listenBanner}</Text>
         </View>
       )}
-      {/* Header — totalmente zen. Solo il lucchetto confessionale al centro.
-          Niente info, niente sunto, niente impostazioni: tutto si chiede
-          direttamente a Koda con la voce. L'eclissi È l'interfaccia. */}
+      {/* === HEADER ZEN (richiesta utente 2026-06) ===
+          Riga 1 (alta, vicino al clock): icone laterali (hands-free + menu)
+          Riga 2 (più in basso): toggle Confessionale
+          Tutte e tre le icone restano agganciate con anchor punti distinti
+          per avere LATERALI vicino al clock e CENTRO più in giù. */}
       <View
-        style={[styles.header, { top: Math.max(insets.top + 56, 110) }]}
+        style={[styles.header, { top: Math.max(insets.top + 4, 50), justifyContent: "space-between" }]}
         pointerEvents="box-none"
       >
-        {/* Slot sinistro: toggle Hands-Free.
-            Icona pulse = on (onde sonore — ascolto continuo); pulse-outline = off.
-            Stesse dimensioni 44×44 del slot destro per mantenere centrato il
-            lucchetto del Confessionale. */}
+        {/* Slot sinistro: toggle Hands-Free. */}
         <TouchableOpacity
           style={[styles.headerBtn, { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" }]}
           onPress={() => setHandsFreeMode(!handsFree)}
@@ -2810,6 +2809,27 @@ export default function Taccuino() {
             color={handsFree ? "#34D399" : (theme.isDark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.55)")}
           />
         </TouchableOpacity>
+        {/* Slot destro: menu impostazioni (preso dall'old position). */}
+        <TouchableOpacity
+          style={[styles.headerBtn, { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" }]}
+          onPress={() => setShowSettings(true)}
+          hitSlop={20}
+          testID="settings-toggle"
+          accessibilityLabel="Apri impostazioni"
+        >
+          <Ionicons
+            name="ellipsis-horizontal"
+            size={22}
+            color={theme.isDark ? "rgba(255,255,255,0.65)" : "rgba(0,0,0,0.65)"}
+          />
+        </TouchableOpacity>
+      </View>
+
+      {/* === RIGA 2: TOGGLE CONFESSIONALE (centrato, più in basso) === */}
+      <View
+        style={[styles.confessionaleRow, { top: Math.max(insets.top + 56, 110) }]}
+        pointerEvents="box-none"
+      >
         <View style={styles.headerCenter} pointerEvents="box-none">
           {/* === Lucchetto Confessionale ===
               Toggle one-tap nel cuore dell'header. Quando attivo:
@@ -2889,14 +2909,8 @@ export default function Taccuino() {
             i tre puntini si aspetta un menu di opzioni, non una presentazione.
             Da Impostazioni si può comunque rivedere la presentazione (link in
             fondo) e cambiare voce (nuova riga "Voce di Koda"). */}
-        <TouchableOpacity
-          style={[styles.headerBtn, { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" }]}
-          onPress={() => setShowSettings(true)}
-          hitSlop={20}
-          testID="open-settings"
-        >
-          <Ionicons name="ellipsis-horizontal" size={20} color={theme.isDark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.65)"} />
-        </TouchableOpacity>
+        {/* Settings button moved to top row (2026-06).
+            Riga 1 = side icons vicino al clock; Riga 2 = Confessionale. */}
       </View>
 
       {/* === HORIZONTAL PAGER: Voce (zen) | Lettura (timeline) ===
@@ -2935,11 +2949,11 @@ export default function Taccuino() {
         decelerationRate="fast"
       >
         {/* === PAGE 0: VOICE ZEN MODE ============================ */}
-        {/* CORREZIONE 2026-06: paddingBottom centrava l'orb troppo in
-            ALTO (riduceva lo spazio disponibile in fondo e il centro
-            geometrico saliva). Soluzione: paddingTop. Toglie spazio
-            dall'alto → il centro scende → orb verso il basso percettivo. */}
-        <View style={{ width: windowWidth, flex: 1, alignItems: "center", justifyContent: "center", paddingTop: Math.max(insets.top, 14) + 60 }}>
+        {/* CORREZIONE 2026-06: rimosso il paddingTop/Bottom — la pagina
+            è ora un semplice flex-center, e l'orb è davvero al centro
+            geometrico dello schermo. La "scorri per leggere" è
+            posizionata absolute al simmetrico dello slot Confessionale. */}
+        <View style={{ width: windowWidth, flex: 1, alignItems: "center", justifyContent: "center" }}>
           <View style={{ alignItems: "center", justifyContent: "center", flex: 1, gap: 18, paddingHorizontal: 24 }}>
             {/* === ECLISSI NASCOSTA IN TEXT MODE (richiesta utente 2026-06) ===
                 In modalità scrittura (inputMode === "text") l'utente NON
@@ -3687,6 +3701,34 @@ export default function Taccuino() {
                 ? "Tocca per selezionare. Premi ▶ per ascoltare un'anteprima."
                 : "ElevenLabs non è configurato. Userò la voce del sistema."}
             </Text>
+
+            {/* === INDICATORE CONFIDENZA (richiesta utente 2026-06, opt B) ===
+                Read-only. Mostra al volo a che fase relazionale è Koda.
+                Cresce di +1 ad ogni messaggio fuori dal Confessionale.
+                0-10 = appena conosciuti, 100 = confidenza totale. */}
+            <View style={styles.confidenceRow} testID="confidence-indicator">
+              <Text style={styles.confidenceLabel}>
+                💞 Confidenza con Koda — {profile?.confidence_level ?? 0}/100 ({((): string => {
+                  const lv = profile?.confidence_level ?? 0;
+                  if (lv >= 100) return "totale";
+                  if (lv >= 61) return "amici stretti";
+                  if (lv >= 31) return "amici";
+                  if (lv >= 11) return "prendiamo confidenza";
+                  return "appena conosciuti";
+                })()})
+              </Text>
+              <View style={styles.confidenceBar}>
+                <View
+                  style={[
+                    styles.confidenceFill,
+                    { width: `${Math.min(100, Math.max(0, profile?.confidence_level ?? 0))}%` },
+                  ]}
+                />
+              </View>
+              <Text style={[styles.settingsHint, { fontSize: 11, marginTop: 4, fontStyle: "italic" }]}>
+                Cresce automaticamente man mano che parliamo. I messaggi del Confessionale non contano.
+              </Text>
+            </View>
             <View style={styles.voicesList}>
               {voices.map((v) => {
                 const selected = profile?.settings?.tts_voice_id === v.voice_id;
@@ -4454,8 +4496,19 @@ const makeStyles = (t: any) => StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 6,
     gap: 10,
+    zIndex: 10,
+  },
+  // Riga 2 dell'header — toggle Confessionale isolato e centrato.
+  // Stesso paddingHorizontal della riga 1 per allineamento verticale.
+  confessionaleRow: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 14,
     zIndex: 10,
   },
   // Banner di conferma "Configurazione salvata ✓"

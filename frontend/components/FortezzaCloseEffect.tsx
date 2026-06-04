@@ -22,16 +22,20 @@ import { View, Text, StyleSheet, Dimensions, Platform } from "react-native";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
+  useAnimatedProps,
   withTiming,
   withDelay,
+  withRepeat,
   withSequence,
   Easing,
   runOnJS,
   interpolate,
   SharedValue,
 } from "react-native-reanimated";
-import Svg, { Path, Defs, LinearGradient, Stop } from "react-native-svg";
+import Svg, { Path, Defs, LinearGradient, Stop, Circle } from "react-native-svg";
 import * as Haptics from "expo-haptics";
+
+const AnimatedPath = Animated.createAnimatedComponent(Path);
 
 type Props = {
   visible: boolean;
@@ -121,6 +125,12 @@ const FLAME_TOP_CORE = generateFlameSilhouette("down", 0.45, 37);
 /**
  * Componente: il singolo "muro di fuoco" (sopra o sotto).
  * Si posiziona absolute e si traduce verticalmente.
+ *
+ * 2026-06 #5: aggiunti FLICKER ANIMATION e SPARKS per dare vita reale
+ * alla fiamma. Le 3 layer (outer/mid/core) ora ognuna pulsa con
+ * frequenza e ampiezza diversa (sinusoidale + lieve sfasamento) creando
+ * l'illusione del fuoco che si agita. Sparks: 5 piccoli punti luminosi
+ * che salgono e svaniscono di continuo.
  */
 function FlameFront({
   direction,
@@ -131,6 +141,49 @@ function FlameFront({
   progress: SharedValue<number>;
 }) {
   const dir = direction === "bottom" ? "up" : "down";
+
+  // === FLICKER SHARED VALUES (richiesta utente 2026-06 #5) ===
+  // Tre layer indipendenti che pulsano in scaleY + opacity con frequenze
+  // diverse. Risultato visivo: la fiamma sembra davvero "viva" anziché
+  // un blocco statico che si traduce verticalmente.
+  const flickerOuter = useSharedValue(0);
+  const flickerMid = useSharedValue(0);
+  const flickerCore = useSharedValue(0);
+
+  useEffect(() => {
+    // Outer: pulsa lento e ampio (la "fluffiness" esterna)
+    flickerOuter.value = withRepeat(
+      withTiming(1, { duration: 380, easing: Easing.inOut(Easing.sin) }),
+      -1,
+      true
+    );
+    // Mid: pulsa medio-rapido (la massa principale)
+    flickerMid.value = withRepeat(
+      withTiming(1, { duration: 220, easing: Easing.inOut(Easing.sin) }),
+      -1,
+      true
+    );
+    // Core: pulsa rapidissimo (il cuore della fiamma scintilla)
+    flickerCore.value = withRepeat(
+      withTiming(1, { duration: 140, easing: Easing.inOut(Easing.sin) }),
+      -1,
+      true
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const outerStyle = useAnimatedStyle(() => ({
+    transform: [{ scaleY: 0.92 + flickerOuter.value * 0.16 }],
+    opacity: 0.48 + flickerOuter.value * 0.14,
+  }));
+  const midStyle = useAnimatedStyle(() => ({
+    transform: [{ scaleY: 0.88 + flickerMid.value * 0.22 }],
+    opacity: 0.78 + flickerMid.value * 0.18,
+  }));
+  const coreStyle = useAnimatedStyle(() => ({
+    transform: [{ scaleY: 0.85 + flickerCore.value * 0.28 }],
+    opacity: 0.82 + flickerCore.value * 0.18,
+  }));
 
   const wrapStyle = useAnimatedStyle(() => {
     // Per la fiamma "bottom": parte dal basso e sale.
@@ -158,6 +211,12 @@ function FlameFront({
   const corePath = dir === "up" ? FLAME_BOTTOM_CORE : FLAME_TOP_CORE;
   const gradientId = direction === "bottom" ? "flameGradBot" : "flameGradTop";
 
+  // Origine del transform scaleY: la base della fiamma (così le punte si
+  // allungano/accorciano verso l'alto/basso senza traslare la base).
+  const originStyle = dir === "up"
+    ? { transformOrigin: "50% 100%" as any }
+    : { transformOrigin: "50% 0%" as any };
+
   return (
     <Animated.View style={[styles.flameWrap, wrapStyle]} pointerEvents="none">
       <Svg
@@ -180,13 +239,42 @@ function FlameFront({
             <Stop offset="1" stopColor="#FFE066" stopOpacity={1} />
           </LinearGradient>
         </Defs>
-        {/* Outer flame: alone esterno scuro/rosso scuro */}
-        <Path d={outerPath} fill={`url(#${gradientId})`} opacity={0.55} />
-        {/* Mid flame: la massa principale di fuoco arancione */}
-        <Path d={midPath} fill="#FF6B1A" opacity={0.9} />
-        {/* Core: cuore brillante giallo */}
-        <Path d={corePath} fill="#FFE066" opacity={0.95} />
       </Svg>
+      {/* Layer outer con flicker indipendente */}
+      <Animated.View style={[StyleSheet.absoluteFill, originStyle, outerStyle]} pointerEvents="none">
+        <Svg
+          width={SCREEN_W + 40}
+          height={FLAME_HEIGHT}
+          viewBox={`-20 0 ${SCREEN_W + 40} ${FLAME_HEIGHT}`}
+          style={{ position: "absolute", left: -20 }}
+        >
+          <Path d={outerPath} fill={`url(#${gradientId})`} />
+        </Svg>
+      </Animated.View>
+      {/* Layer mid */}
+      <Animated.View style={[StyleSheet.absoluteFill, originStyle, midStyle]} pointerEvents="none">
+        <Svg
+          width={SCREEN_W + 40}
+          height={FLAME_HEIGHT}
+          viewBox={`-20 0 ${SCREEN_W + 40} ${FLAME_HEIGHT}`}
+          style={{ position: "absolute", left: -20 }}
+        >
+          <Path d={midPath} fill="#FF6B1A" />
+        </Svg>
+      </Animated.View>
+      {/* Layer core: il cuore brillante */}
+      <Animated.View style={[StyleSheet.absoluteFill, originStyle, coreStyle]} pointerEvents="none">
+        <Svg
+          width={SCREEN_W + 40}
+          height={FLAME_HEIGHT}
+          viewBox={`-20 0 ${SCREEN_W + 40} ${FLAME_HEIGHT}`}
+          style={{ position: "absolute", left: -20 }}
+        >
+          <Path d={corePath} fill="#FFE066" />
+        </Svg>
+      </Animated.View>
+      {/* SPARKS — 6 piccoli punti che salgono e svaniscono */}
+      <Sparks direction={direction} />
       {/* Glow esteso sotto la base (dove la fiamma "esce" dal nero) */}
       <View
         style={[
@@ -197,6 +285,88 @@ function FlameFront({
         ]}
       />
     </Animated.View>
+  );
+}
+
+/**
+ * Sparks: piccoli punti luminosi che salgono dalla cresta della fiamma
+ * e svaniscono. Per il fronte bottom salgono verso l'alto; per il fronte
+ * top "cadono" verso il basso (effetto specchio).
+ */
+function Sparks({ direction }: { direction: "bottom" | "top" }) {
+  const SPARK_COUNT = 6;
+  const sparks = React.useMemo(() => {
+    return new Array(SPARK_COUNT).fill(0).map((_, i) => ({
+      x: 30 + (i * SCREEN_W) / SPARK_COUNT + Math.random() * 40,
+      delay: i * 130 + Math.random() * 200,
+      duration: 700 + Math.random() * 400,
+      size: 1.5 + Math.random() * 2.5,
+    }));
+  }, []);
+  return (
+    <>
+      {sparks.map((s, i) => (
+        <Spark key={i} {...s} direction={direction} />
+      ))}
+    </>
+  );
+}
+
+function Spark({
+  x,
+  delay,
+  duration,
+  size,
+  direction,
+}: {
+  x: number;
+  delay: number;
+  duration: number;
+  size: number;
+  direction: "bottom" | "top";
+}) {
+  const p = useSharedValue(0);
+  useEffect(() => {
+    p.value = withRepeat(
+      withSequence(
+        withDelay(delay, withTiming(1, { duration, easing: Easing.out(Easing.quad) })),
+        withTiming(0, { duration: 0 })
+      ),
+      -1,
+      false
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const animStyle = useAnimatedStyle(() => {
+    const travel = 50; // px che lo spark percorre verticalmente
+    const dy = direction === "bottom" ? -travel * p.value : travel * p.value;
+    const opacity = interpolate(p.value, [0, 0.15, 1], [0, 1, 0]);
+    return {
+      transform: [{ translateY: dy }],
+      opacity,
+    };
+  });
+  const startY = direction === "bottom" ? 0 : FLAME_HEIGHT;
+  return (
+    <Animated.View
+      style={[
+        {
+          position: "absolute",
+          left: x,
+          top: startY - size,
+          width: size * 2,
+          height: size * 2,
+          borderRadius: size,
+          backgroundColor: "#FFE8A8",
+          shadowColor: "#FFB347",
+          shadowOpacity: 0.9,
+          shadowRadius: 3,
+          shadowOffset: { width: 0, height: 0 },
+        },
+        animStyle,
+      ]}
+      pointerEvents="none"
+    />
   );
 }
 
