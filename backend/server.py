@@ -4521,11 +4521,27 @@ async def _fast_pipeline_task(
                     first_audio_logged = True
                     total_first = int((time.time() - t0) * 1000)
                     logger.info(f"[fast {session_id[:8]}] FIRST AUDIO ready: {total_first}ms (tts={tts_ms}ms)")
+                # === ORB REATTIVO (richiesta utente 2026-06 #3) ===
+                # Computiamo l'envelope RMS della frase per permettere all'orb
+                # di pulsare in sincrono con sillabe/accenti/cadenza reale.
+                # ~16Hz (window 60ms) è abbastanza per cogliere il ritmo
+                # senza generare payload eccessivi.
+                waveform = None
+                window_ms = 60
+                try:
+                    wf = await asyncio.to_thread(_compute_waveform_rms, audio_bytes)
+                    if wf and wf.get("waveform"):
+                        waveform = wf["waveform"]
+                        window_ms = wf.get("window_ms", 60)
+                except Exception as e:
+                    logger.warning(f"[fast] waveform compute failed: {e}")
                 await _fast_session_append(session_id, {
                     "type": "sentence",
                     "i": idx,
                     "token": token,
                     "text": clean,
+                    "waveform": waveform,
+                    "window_ms": window_ms,
                 })
             except Exception as e:
                 logger.error(f"[fast] sentence gen error: {e}")

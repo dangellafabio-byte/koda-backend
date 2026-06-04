@@ -23,6 +23,7 @@ import {
 import { Platform } from "react-native";
 import type { Tone } from "./api";
 import { API_BASE } from "./api";
+import { startReactiveWaveform, stopReactiveWaveform } from "./audioReactivity";
 
 let speakingNow = false;
 let webUnlocked = false;
@@ -155,6 +156,10 @@ export async function unlockSpeech(): Promise<void> {
 
 // ---------- Utility: stop everything ----------
 function stopAllPlayback() {
+  // === ORB REATTIVO (2026-06 #3) ===
+  // Fermiamo sempre il driver waveform appena interrompiamo il playback.
+  try { stopReactiveWaveform(); } catch {}
+
   // Clear zombie intervals/timer
   if (activeStallWatcher) {
     try { clearInterval(activeStallWatcher); } catch {}
@@ -700,7 +705,15 @@ export async function fastConverse(
           cursor = typeof data?.next === "number" ? data.next : cursor + evts.length;
           for (const ev of evts) {
             if (ev?.type === "sentence" && ev.token) {
-              tokenQueue.push({ i: ev.i || 0, token: ev.token, text: ev.text || "" });
+              // === 2026-06 #3: passo waveform + window_ms al consumer
+              //     così l'orb può pulsare in sincrono con sillabe reali. ===
+              tokenQueue.push({
+                i: ev.i || 0,
+                token: ev.token,
+                text: ev.text || "",
+                waveform: Array.isArray(ev.waveform) ? ev.waveform : null,
+                window_ms: typeof ev.window_ms === "number" ? ev.window_ms : 60,
+              });
               notifyTokenWait();
             } else if (ev?.type === "meta") {
               meta = {
@@ -742,13 +755,28 @@ export async function fastConverse(
           await waitForToken();
           continue;
         }
-        const { token } = tokenQueue.shift()!;
+        const { token, waveform, window_ms } = tokenQueue.shift()!;
         const fireStart = !firstAudioFired
           ? () => {
               firstAudioFired = true;
               try { opts.onAudioStart?.(); } catch {}
+              // === ORB REATTIVO (2026-06 #3) ===
+              // Avvio del driver waveform sincronizzato con la prima frase.
+              try {
+                if (waveform && waveform.length > 0) {
+                  startReactiveWaveform(waveform, window_ms || 60);
+                }
+              } catch {}
             }
-          : undefined;
+          : () => {
+              // Per le frasi successive (non la prima), aggiorniamo il
+              // driver in modo che continui a seguire la cadenza nuova.
+              try {
+                if (waveform && waveform.length > 0) {
+                  startReactiveWaveform(waveform, window_ms || 60);
+                }
+              } catch {}
+            };
         try {
           await _playStaticTokenSequential(token, fireStart, ac.signal);
         } catch (e) {

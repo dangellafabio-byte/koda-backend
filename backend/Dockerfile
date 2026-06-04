@@ -6,10 +6,13 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Dipendenze di sistema essenziali
+# 2026-06: ffmpeg aggiunto per pydub (decode mp3 di Koda → envelope di
+# ampiezza per l'orb reattivo alla voce, richiesta utente #3).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libsndfile1 \
     ca-certificates \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Installa dipendenze Python (layer caching: requirements prima del codice)

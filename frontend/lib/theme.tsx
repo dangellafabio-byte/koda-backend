@@ -103,19 +103,18 @@ const GIORNO: Palette = {
   name: "giorno",
   label: "Giorno",
   emoji: "☀️",
-  // === FIX 2026-06 (utente: champagne morbido, non bianco puro) ===
-  // Bianco puro era troppo clinico e cancellava il colore champagne
-  // dell'orb in stand-by. Champagne soffuso #F0E6D2 lascia respirare
-  // l'orb e mantiene leggibilità totale del testo scuro.
+  // === FIX 2026-06 v3 (utente: "carta quasi panna, più scuro del champagne") ===
+  // Carta panna profonda — sfondo come una pagina di carta antica.
+  // L'orb champagne in stand-by si vede nettamente sopra (contrasto > 12%).
   isDark: false,
-  bg: "#F0E6D2",
-  surface: "#F8F1E0",
-  surfaceAlt: "rgba(60,40,20,0.06)",
-  border: "rgba(60,40,20,0.12)",
-  divider: "rgba(60,40,20,0.10)",
-  text: "#1F1B16",
-  textMuted: "#5B4F40",
-  textDim: "#7A6D5C",
+  bg: "#DCC9A8",
+  surface: "#E8DBC0",
+  surfaceAlt: "rgba(60,40,20,0.08)",
+  border: "rgba(60,40,20,0.16)",
+  divider: "rgba(60,40,20,0.12)",
+  text: "#1A150D",
+  textMuted: "#544738",
+  textDim: "#7A6951",
   primary: "#0E7C7B",
   primaryText: "#FFFFFF",
   primarySoftBg: "rgba(14,124,123,0.10)",

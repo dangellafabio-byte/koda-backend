@@ -17,6 +17,7 @@
 import React, { useEffect, useRef, useMemo } from "react";
 import { View, StyleSheet, Animated, Easing, Image } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import { subscribeReactive } from "../lib/audioReactivity";
 
 export type OrbStatus = "idle" | "recording" | "thinking" | "speaking";
 export type OrbTone =
@@ -163,6 +164,11 @@ export default function Orb({
   }, [status, spin]);
 
   // === Speaking: rhythmic pulse ===
+  // 2026-06 #3: SOSTITUITO il loop sinusoidale con un driver REATTIVO
+  // che segue l'envelope RMS della voce TTS frase per frase. Risultato:
+  // l'orb pulsa in sincrono con sillabe, accenti, cadenze reali di Koda
+  // anziché con un'onda artificiale fissa. Fallback al loop classico se
+  // il waveform non è disponibile (es. ElevenLabs spento → expo-speech).
   useEffect(() => {
     if (status !== "speaking") {
       Animated.timing(speakPulse, {
@@ -172,7 +178,30 @@ export default function Orb({
       }).start();
       return;
     }
-    const anim = Animated.loop(
+    let fallbackAnim: Animated.CompositeAnimation | null = null;
+    let unsub: (() => void) | null = null;
+    let waveformActive = false;
+
+    // Sottoscrivo il driver reattivo. Ogni frame riceviamo un valore 0..1
+    // che setto direttamente su speakPulse via setValue (no timing per
+    // mantenere la reattività ad alta frequenza, ~60Hz).
+    unsub = subscribeReactive((v) => {
+      // Quando il driver ha un valore non nullo, fermo eventuale fallback.
+      if (v > 0.001 && !waveformActive) {
+        waveformActive = true;
+        if (fallbackAnim) {
+          fallbackAnim.stop();
+          fallbackAnim = null;
+        }
+      }
+      if (waveformActive) {
+        speakPulse.setValue(v);
+      }
+    });
+
+    // Avvio un fallback sinusoidale per il caso "TTS senza waveform"
+    // (es. browser/expo-speech). Si autoferma appena arrivano dati reali.
+    fallbackAnim = Animated.loop(
       Animated.sequence([
         Animated.timing(speakPulse, {
           toValue: 1,
@@ -188,9 +217,10 @@ export default function Orb({
         }),
       ])
     );
-    anim.start();
+    fallbackAnim.start();
     return () => {
-      anim.stop();
+      if (unsub) unsub();
+      if (fallbackAnim) fallbackAnim.stop();
     };
   }, [status, speakPulse]);
 
