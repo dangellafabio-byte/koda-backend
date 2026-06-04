@@ -2792,7 +2792,7 @@ export default function Taccuino() {
           Tutte e tre le icone restano agganciate con anchor punti distinti
           per avere LATERALI vicino al clock e CENTRO più in giù. */}
       <View
-        style={[styles.header, { top: Math.max(insets.top + 4, 50), justifyContent: "space-between" }]}
+        style={[styles.header, { top: Math.max(insets.top + 28, 70), justifyContent: "space-between" }]}
         pointerEvents="box-none"
       >
         {/* Slot sinistro: toggle Hands-Free. */}
@@ -2827,7 +2827,7 @@ export default function Taccuino() {
 
       {/* === RIGA 2: TOGGLE CONFESSIONALE (centrato, più in basso) === */}
       <View
-        style={[styles.confessionaleRow, { top: Math.max(insets.top + 56, 110) }]}
+        style={[styles.confessionaleRow, { top: Math.max(insets.top + 100, 150) }]}
         pointerEvents="box-none"
       >
         <View style={styles.headerCenter} pointerEvents="box-none">
@@ -2953,7 +2953,7 @@ export default function Taccuino() {
             è ora un semplice flex-center, e l'orb è davvero al centro
             geometrico dello schermo. La "scorri per leggere" è
             posizionata absolute al simmetrico dello slot Confessionale. */}
-        <View style={{ width: windowWidth, flex: 1, alignItems: "center", justifyContent: "center" }}>
+        <View style={{ width: windowWidth, flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 90 }}>
           <View style={{ alignItems: "center", justifyContent: "center", flex: 1, gap: 18, paddingHorizontal: 24 }}>
             {/* === ECLISSI NASCOSTA IN TEXT MODE (richiesta utente 2026-06) ===
                 In modalità scrittura (inputMode === "text") l'utente NON
@@ -4105,34 +4105,13 @@ export default function Taccuino() {
     />
   ) : null;
 
-  if (isCustomImage && bgUri) {
-    return (
-      <ImageBackground source={{ uri: bgUri }} style={{ flex: 1 }} resizeMode="cover">
-        <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { backgroundColor: `rgba(0,0,0,${bgDim})` }]} />
-        {confessionalTint}
-        {screenInner}
-        {neonBorderEl}
-        {activationPulseEl}
-        {tourOverlay}
-      </ImageBackground>
-    );
-  }
-  if (bgPreset) {
-    return (
-      <View style={{ flex: 1 }}>
-        <LinearGradient
-          colors={bgPreset.colors as any}
-          start={bgPreset.start || { x: 0, y: 0 }}
-          end={bgPreset.end || { x: 1, y: 1 }}
-          style={StyleSheet.absoluteFillObject}
-        />
-        {confessionalTint}
-        {screenInner}
-        {neonBorderEl}
-        {activationPulseEl}
-        {tourOverlay}
-      </View>
-    );
+  // === BACKGROUND PRESET/CUSTOM IMAGE DISABLED (richiesta utente 2026-06 #10) ===
+  // Tutto rimosso: niente più sfondi custom, niente preset (notturno/aurora/carta).
+  // L'unico "sfondo" è ora il bg del tema (giorno=bianco, notte=nero/blu).
+  // Le seguenti var sono forzate sempre a null per cortocircuitare la logica
+  // che renderizzava ImageBackground / LinearGradient quando bgValue era settato.
+  if (isCustomImage || bgUri || bgPreset) {
+    // ignorati intenzionalmente: il tema vince sempre
   }
   return (
     <View style={{ flex: 1 }}>
