@@ -1115,13 +1115,16 @@ export default function Taccuino() {
   // Utile se l'utente non sta guardando il telefono (altra app, schermo
   // bloccato). Si ferma appena Koda inizia a parlare o torna idle.
   //
-  // RICHIESTA 2026-06 (#7): in modalità scrittura (inputMode === "text")
-  // l'utente NON vuole sentire alcun suono — la chat è silenziosa per
-  // definizione. Il feedback "Koda sta pensando" lo diamo SOLO con il
-  // bubble dei 3 puntini in colore "thinking" distinto.
+  // RICHIESTA 2026-06 (#7) v2: in MODALITÀ SCRITTURA l'utente NON vuole
+  // sentire alcun suono. Il problema era che `inputMode` può essere
+  // "voice"/"text"/"both"; in "both" l'utente entra nel pannello scrittura
+  // (viewMode === "reading") ma inputMode resta "both" → suono partiva.
+  // Correzione: usiamo viewMode che riflette davvero LA PAGINA in cui si
+  // trova l'utente. Se sta nel pannello reading/chat, niente suono.
   useEffect(() => {
     const isThinking = status === "transcribing" || status === "thinking";
-    if (isThinking && inputMode !== "text") {
+    const userIsInTextScreen = viewMode === "reading" || inputMode === "text";
+    if (isThinking && !userIsInTextScreen) {
       startThinkingSound();
     } else {
       stopThinkingSound();
@@ -1129,7 +1132,7 @@ export default function Taccuino() {
     return () => {
       stopThinkingSound();
     };
-  }, [status, inputMode]);
+  }, [status, inputMode, viewMode]);
 
 
   const speakIfEnabled = useCallback(
@@ -2787,7 +2790,7 @@ export default function Taccuino() {
           Niente info, niente sunto, niente impostazioni: tutto si chiede
           direttamente a Koda con la voce. L'eclissi È l'interfaccia. */}
       <View
-        style={[styles.header, { top: Math.max(insets.top + 16, 70) }]}
+        style={[styles.header, { top: Math.max(insets.top + 56, 110) }]}
         pointerEvents="box-none"
       >
         {/* Slot sinistro: toggle Hands-Free.
@@ -3665,88 +3668,18 @@ export default function Taccuino() {
 
             <View style={styles.divider} />
 
-            <Text style={styles.settingsSubtitle}>Modalità input</Text>
-            <View style={styles.modeRow}>
-              <TouchableOpacity
-                onPress={() => setInputMode("voice")}
-                style={[
-                  styles.modeBtn,
-                  inputMode === "voice" && styles.modeBtnActive,
-                ]}
-                testID="mode-voice"
-              >
-                <Ionicons
-                  name="mic"
-                  size={18}
-                  color={inputMode === "voice" ? theme.primaryText : theme.text}
-                />
-                <Text
-                  numberOfLines={1}
-                  style={[
-                    styles.modeBtnText,
-                    inputMode === "voice" && styles.modeBtnTextActive,
-                  ]}
-                >
-                  Solo voce
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setInputMode("text")}
-                style={[
-                  styles.modeBtn,
-                  inputMode === "text" && styles.modeBtnActive,
-                ]}
-                testID="mode-text"
-              >
-                <Ionicons
-                  name="create-outline"
-                  size={18}
-                  color={inputMode === "text" ? theme.primaryText : theme.text}
-                />
-                <Text
-                  numberOfLines={1}
-                  style={[
-                    styles.modeBtnText,
-                    inputMode === "text" && styles.modeBtnTextActive,
-                  ]}
-                >
-                  Solo testo
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setInputMode("both" as any)}
-                style={[
-                  styles.modeBtn,
-                  inputMode === "both" && styles.modeBtnActive,
-                ]}
-                testID="mode-both"
-              >
-                <Ionicons
-                  name="apps-outline"
-                  size={18}
-                  color={inputMode === "both" ? theme.primaryText : theme.text}
-                />
-                <Text
-                  numberOfLines={1}
-                  style={[
-                    styles.modeBtnText,
-                    inputMode === "both" && styles.modeBtnTextActive,
-                  ]}
-                >
-                  Voce + Testo
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.settingsHint}>
-              {inputMode === "voice"
-                ? "Solo pulsante mic visibile."
-                : inputMode === "text"
-                  ? "Solo campo testo visibile."
-                  : "Pulsante mic + campo testo entrambi visibili."}
-            </Text>
-
-            <View style={styles.divider} />
+            {/* === MODALITÀ INPUT RIMOSSA (richiesta utente 2026-06) ===
+                L'utente passa già da voce a scrittura tramite lo swipe tra
+                le due pagine principali (home voce ↔ chat scrittura).
+                Avere un toggle in Settings era ridondante e confondeva. */}
+            {/* Forziamo internamente input_mode su "both" così entrambi
+                i pannelli restano disponibili nel layout. */}
+            {(() => {
+              if (inputMode !== "both") {
+                try { setInputMode("both" as any); } catch {}
+              }
+              return null;
+            })()}
 
             <Text style={styles.settingsSubtitle}>Voce dell'assistente</Text>
             <Text style={styles.settingsHint}>
