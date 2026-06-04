@@ -456,6 +456,13 @@ class TaccuinoSettings(BaseModel):
     # il codice astratto dell'emozione viene inviato al server.
     # Il testo grezzo non lascia mai il telefono.
     fortezza_mode: bool = True
+    # WEB SEARCH (Tavily):
+    # quando True (default) Koda può cercare informazioni real-time sul web
+    # quando l'utente fa domande fattuali (meteo, notizie, prezzi).
+    # MAI attivo nel Confessionale (sealed/fortezza/confessional endpoints).
+    # L'utente può disattivarlo dalle Impostazioni se preferisce zero
+    # comunicazioni esterne.
+    web_search_enabled: bool = True
 
 
 class Profile(BaseModel):
@@ -3482,7 +3489,11 @@ async def _tavily_search_brief(query: str, max_results: int = 4, timeout_s: floa
     testuale che Claude può usare come contesto. Ritorna None se Tavily fallisce
     o va in timeout — in quel caso Claude risponde senza il contesto fresco.
     Usa una cache in-memory di 60s per evitare doppia chiamata su iOS AVPlayer
-    (che fa due fetch della stessa stream URL)."""
+    (che fa due fetch della stessa stream URL).
+
+    PRIVACY: la ricerca è ristretta a una whitelist di domini italiani
+    autorevoli (testate giornalistiche, Wikipedia, servizi meteo certificati)
+    per evitare leak di contesto a siti random o tracker pubblicitari."""
     if not _tavily_client:
         return None
     # Cache check
@@ -3498,6 +3509,23 @@ async def _tavily_search_brief(query: str, max_results: int = 4, timeout_s: floa
                 max_results=max_results,
                 search_depth="basic",
                 include_answer=True,
+                # WHITELIST domini certificati — riduce leak e migliora qualità.
+                # Mix tra news IT (ansa, repubblica, corriere, ilsole24ore, lastampa),
+                # broadcasters (rainews, sky tg24), reference (wikipedia it/en,
+                # treccani), meteo certificati (meteo.it, ilmeteo.it, 3bmeteo,
+                # protezione civile), e finanza (borsa italiana, sole24ore).
+                include_domains=[
+                    "ansa.it", "repubblica.it", "corriere.it", "ilsole24ore.com",
+                    "lastampa.it", "rainews.it", "tg24.sky.it", "agi.it",
+                    "tgcom24.mediaset.it", "ilfattoquotidiano.it",
+                    "wikipedia.org", "it.wikipedia.org", "en.wikipedia.org",
+                    "treccani.it",
+                    "meteo.it", "ilmeteo.it", "3bmeteo.com", "meteoam.it",
+                    "protezionecivile.gov.it",
+                    "borsaitaliana.it", "milanofinanza.it",
+                    "coingecko.com", "coinmarketcap.com",
+                    "gov.it", "europa.eu",
+                ],
                 timeout=timeout_s,
             )
     except (asyncio.TimeoutError, TimeoutError):
@@ -4460,8 +4488,13 @@ async def _fast_pipeline_task(
         # ~1-3s solo quando serve davvero. MAI in flussi confessionali (separati).
         # Non blocchiamo se ephemeral=True (ma in questo caso il messaggio non
         # viene salvato comunque). Se Tavily fallisce/timeout → continua senza.
+        # PRIVACY: rispetta il toggle utente `settings.web_search_enabled` —
+        # se l'utente lo disattiva da Impostazioni, Tavily NON viene MAI chiamato.
         web_search_brief: Optional[str] = None
-        if _should_web_search(text):
+        ws_enabled = bool(getattr(profile.settings, "web_search_enabled", True))
+        if not ws_enabled:
+            logger.info(f"[fast {session_id[:8]}] web-search disabled by user — skip")
+        elif _should_web_search(text):
             logger.info(f"[fast {session_id[:8]}] web-search triggered for: {text[:80]}")
             t_search = time.time()
             web_search_brief = await _tavily_search_brief(text, max_results=4, timeout_s=8.0)

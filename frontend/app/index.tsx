@@ -3539,6 +3539,40 @@ export default function Taccuino() {
               </Text>
             </View>
 
+            {/* === RICERCA WEB (Tavily) — toggle privacy ====================
+                Quando attivo: se l'utente fa domande fattuali (meteo, notizie,
+                prezzi), Koda esegue una ricerca su fonti italiane certificate
+                (ANSA, Repubblica, Corriere, Wikipedia, meteo.it, ecc.) PRIMA
+                di rispondere. Solo la query corrente viene inviata, nessun
+                dato personale. Quando OFF: Koda usa SOLO la sua conoscenza
+                statica, nessuna comunicazione esterna oltre l'LLM. MAI
+                attivo nel Confessionale a prescindere dal toggle. */}
+            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8, marginTop: 14 }]}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingLabel}>🌐 Ricerca web</Text>
+                  <Text style={styles.settingHint}>
+                    Permetti a Koda di consultare fonti certificate (ANSA,
+                    Repubblica, Wikipedia, meteo.it…) per meteo, notizie e fatti
+                    recenti. Nel Confessionale resta sempre spento.
+                  </Text>
+                </View>
+                <Switch
+                  value={(profile?.settings as any)?.web_search_enabled !== false}
+                  onValueChange={async (on) => {
+                    if (!profile) return;
+                    const nextSettings = { ...profile.settings, web_search_enabled: on } as any;
+                    setProfile({ ...profile, settings: nextSettings });
+                    try {
+                      await api.updateProfile({ settings: nextSettings });
+                    } catch {}
+                  }}
+                  trackColor={{ false: theme.muted + "55", true: bubbleAccent.color }}
+                  thumbColor="#fff"
+                />
+              </View>
+            </View>
+
             <View style={styles.divider} />
 
             <Text style={styles.settingsSubtitle}>Tema</Text>
