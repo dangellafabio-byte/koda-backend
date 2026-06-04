@@ -2932,11 +2932,11 @@ export default function Taccuino() {
         decelerationRate="fast"
       >
         {/* === PAGE 0: VOICE ZEN MODE ============================ */}
-        {/* paddingBottom richiesta utente 2026-06: la bottomBar absolute
-            "ruba" ~80-100px visivi → senza compenso l'orb appariva troppo
-            in alto. Aggiungiamo paddingBottom dinamico per spingerlo nel
-            centro percettivo dello schermo (non solo geometrico). */}
-        <View style={{ width: windowWidth, flex: 1, alignItems: "center", justifyContent: "center", paddingBottom: Math.max(insets.bottom, 14) + 70 }}>
+        {/* CORREZIONE 2026-06: paddingBottom centrava l'orb troppo in
+            ALTO (riduceva lo spazio disponibile in fondo e il centro
+            geometrico saliva). Soluzione: paddingTop. Toglie spazio
+            dall'alto → il centro scende → orb verso il basso percettivo. */}
+        <View style={{ width: windowWidth, flex: 1, alignItems: "center", justifyContent: "center", paddingTop: Math.max(insets.top, 14) + 60 }}>
           <View style={{ alignItems: "center", justifyContent: "center", flex: 1, gap: 18, paddingHorizontal: 24 }}>
             {/* === ECLISSI NASCOSTA IN TEXT MODE (richiesta utente 2026-06) ===
                 In modalità scrittura (inputMode === "text") l'utente NON
@@ -3084,22 +3084,21 @@ export default function Taccuino() {
               style={[
                 styles.bubbleAi,
                 {
-                  // === COLORE "THINKING" DISTINTO (richiesta 2026-06 #7) ===
-                  // Prima il bubble di pensiero era identico al colore dei
-                  // messaggi (viola) → utente non distingueva "sta pensando"
-                  // da "ha scritto". Ora usiamo un teal soffice e dedicato:
-                  // anche dopo che Koda scrive in viola, il bubble pensante
-                  // resta identificabile a colpo d'occhio.
-                  backgroundColor: bubbleStyle === "solid" ? "#3FB5B0" : "rgba(63,181,176,0.16)",
-                  borderColor: "#3FB5B0",
+                  // === COLORE "THINKING" CICLAMINO (richiesta 2026-06 #7) ===
+                  // Prima era teal #3FB5B0 — l'utente lo percepiva troppo
+                  // simile al verde acqua dell'orb idle/dei suoi messaggi.
+                  // Ora ciclamino vibrante = lo stesso colore evocativo
+                  // dell'orb quando pensa in home screen.
+                  backgroundColor: bubbleStyle === "solid" ? "#EC4899" : "rgba(236,72,153,0.18)",
+                  borderColor: "#EC4899",
                   borderWidth: bubbleStyle === "glass" ? 1 : 0,
                 },
               ]}
             >
               <View style={{ flexDirection: "row", alignItems: "center", gap: 4, height: 18 }}>
-                <TypingDot delay={0} color={bubbleStyle === "solid" ? "#FFFFFF" : "#3FB5B0"} />
-                <TypingDot delay={150} color={bubbleStyle === "solid" ? "#FFFFFF" : "#3FB5B0"} />
-                <TypingDot delay={300} color={bubbleStyle === "solid" ? "#FFFFFF" : "#3FB5B0"} />
+                <TypingDot delay={0} color={bubbleStyle === "solid" ? "#FFFFFF" : "#EC4899"} />
+                <TypingDot delay={150} color={bubbleStyle === "solid" ? "#FFFFFF" : "#EC4899"} />
+                <TypingDot delay={300} color={bubbleStyle === "solid" ? "#FFFFFF" : "#EC4899"} />
               </View>
             </View>
           </View>
@@ -3527,10 +3526,10 @@ export default function Taccuino() {
 
             <Text style={styles.settingsSubtitle}>Tema</Text>
             <View style={styles.themeRow}>
-              {/* === FILTRO TEMI (richiesta utente 2026-06) ===
-                  Solo Aurora (giorno) e Notte. Liquid è stato rimosso
-                  perché non convinceva. Gli altri temi nascosti dall'UI. */}
-              {THEME_LIST.filter((p) => p.name === "giorno" || p.name === "notte").map((p) => (
+              {/* === FILTRO TEMI (richiesta utente 2026-06 #10) ===
+                  Giorno + Notte + Auto-orario (basato su ora del telefono).
+                  Tutti gli altri temi sono nascosti dall'UI. */}
+              {THEME_LIST.filter((p) => p.name === "giorno" || p.name === "notte" || p.name === "auto-orario").map((p) => (
                 <TouchableOpacity
                   key={p.name}
                   onPress={() => saveTheme(p.name as ThemeName)}
@@ -3612,12 +3611,11 @@ export default function Taccuino() {
 
             <Text style={styles.settingsSubtitle}>Aspetto chat</Text>
             <Text style={styles.settingsHint}>
-              Personalizza il colore delle bolle e la dimensione del testo.
+              Scegli la dimensione del testo.
             </Text>
 
-            {/* AI Avatar — RIMOSSO per richiesta esplicita utente.
-                L'identità visiva è SOLO la macchia organica. Niente foto,
-                niente personalizzazioni che distraggano dalla presenza. */}
+            {/* Personalizzazioni rimosse (richiesta utente 2026-06 #10):
+                niente più colori bolle, stili glass/solid o sfondi. */}
 
             {/* Text size selector — 4 levels for accessibility */}
             <Text style={[styles.settingsHint, { marginTop: 14 }]}>Dimensione testo</Text>
@@ -3658,134 +3656,12 @@ export default function Taccuino() {
               })}
             </View>
 
-            {/* Bubble style toggle: glass / solid */}
-            <Text style={[styles.settingsHint, { marginTop: 14 }]}>Stile bolla</Text>
-            <View style={styles.modeRow}>
-              <TouchableOpacity
-                onPress={() => setBubbleStyle("glass")}
-                style={[
-                  styles.modeBtn,
-                  bubbleStyle === "glass" && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
-                  { flex: 1 },
-                ]}
-                testID="bubble-style-glass"
-              >
-                <Ionicons name="water-outline" size={16} color={bubbleStyle === "glass" ? bubbleAccent.color : theme.text} />
-                <Text style={[styles.modeBtnText, bubbleStyle === "glass" && { color: bubbleAccent.color, fontWeight: "700" }]}>
-                  Vetro
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setBubbleStyle("solid")}
-                style={[
-                  styles.modeBtn,
-                  bubbleStyle === "solid" && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
-                  { flex: 1 },
-                ]}
-                testID="bubble-style-solid"
-              >
-                <Ionicons name="square" size={16} color={bubbleStyle === "solid" ? bubbleAccent.color : theme.text} />
-                <Text style={[styles.modeBtnText, bubbleStyle === "solid" && { color: bubbleAccent.color, fontWeight: "700" }]}>
-                  Solido
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Bubble color picker */}
-            <Text style={[styles.settingsHint, { marginTop: 14 }]}>Colore bolla AI</Text>
-            <View style={styles.bgRow}>
-              {Object.entries(BUBBLE_PRESETS).map(([key, val]) => {
-                const active = ((profile?.settings as any)?.bubble_color || "viola") === key;
-                return (
-                  <TouchableOpacity
-                    key={key}
-                    onPress={() => setBubbleColor(key)}
-                    style={[styles.bgChip, active && { borderColor: val.color, backgroundColor: val.color + "30" }]}
-                    testID={`bubble-color-${key}`}
-                  >
-                    <View style={[styles.bgSwatch, { backgroundColor: val.color }]} />
-                    <Text style={styles.bgChipText}>{val.name}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            <View style={styles.divider} />
-
-            <Text style={styles.settingsSubtitle}>Sfondo</Text>
-            <Text style={styles.settingsHint}>
-              Personalizza con una tua foto o scegli un preset.
-            </Text>
-            <View style={styles.bgRow}>
-              <TouchableOpacity
-                onPress={() => saveBackground(null)}
-                style={[
-                  styles.bgChip,
-                  styles.bgChipPlain,
-                  !((profile?.settings as any)?.background) && styles.bgChipActive,
-                ]}
-                testID="bg-none"
-              >
-                <Ionicons name="ban-outline" size={16} color={theme.text} />
-                <Text style={styles.bgChipText}>Nessuno</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={pickBackgroundFromGallery}
-                style={[styles.bgChip, styles.bgChipUpload]}
-                testID="bg-upload"
-              >
-                <Ionicons name="image-outline" size={16} color={theme.primary} />
-                <Text style={[styles.bgChipText, { color: theme.primary, fontWeight: "700" }]}>
-                  {(profile?.settings as any)?.background?.startsWith?.("data:") ||
-                  (profile?.settings as any)?.background?.startsWith?.("file:") ||
-                  (profile?.settings as any)?.background?.startsWith?.("http") ||
-                  (profile?.settings as any)?.background?.startsWith?.("@server:")
-                    ? "Cambia foto…"
-                    : "Carica foto…"}
-                </Text>
-              </TouchableOpacity>
-              {BG_PRESETS.map((p) => {
-                const active = (profile?.settings as any)?.background === p.id;
-                return (
-                  <TouchableOpacity
-                    key={p.id}
-                    onPress={() => saveBackground(p.id)}
-                    style={[styles.bgChip, active && styles.bgChipActive]}
-                    testID={`bg-preset-${p.id}`}
-                  >
-                    <LinearGradient
-                      colors={p.colors as any}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 1 }}
-                      style={styles.bgSwatch}
-                    />
-                    <Text style={styles.bgChipText}>{p.name}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            {(profile?.settings as any)?.background ? (
-              <View style={styles.bgDimRow}>
-                <Text style={styles.bgDimLabel}>Scurisci sfondo</Text>
-                <View style={styles.bgDimCtrl}>
-                  {[0.2, 0.4, 0.55, 0.7, 0.85].map((v) => {
-                    const cur = typeof (profile?.settings as any)?.background_dim === "number"
-                      ? (profile?.settings as any).background_dim
-                      : 0.55;
-                    const active = Math.abs(cur - v) < 0.05;
-                    return (
-                      <TouchableOpacity
-                        key={v}
-                        onPress={() => saveBackgroundDim(v)}
-                        style={[styles.bgDimDot, active && styles.bgDimDotActive]}
-                      >
-                        <View style={[styles.bgDimDotInner, { backgroundColor: `rgba(0,0,0,${v})` }]} />
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </View>
-            ) : null}
+            {/* === STILE/COLORE BOLLE + SFONDO RIMOSSI (richiesta 2026-06 #10) ===
+                L'utente vuole minimalismo Zen: niente customizzazione
+                colori bolle, niente stili vetro/solido, niente upload foto
+                di sfondo, niente preset di sfondo. L'app deve avere
+                un'identità visiva UNICA. Resta solo: tema giorno/notte +
+                dimensione testo (accessibilità). */}
 
             <View style={styles.divider} />
 
