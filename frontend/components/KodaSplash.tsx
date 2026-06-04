@@ -5,7 +5,7 @@
  * fluido tra 4 palette tramite OPACITY di due cerchi sovrapposti.
  */
 import React, { useEffect, useRef, useState } from "react";
-import { View, Text, StyleSheet, Animated, Pressable, Dimensions } from "react-native";
+import { View, Text, StyleSheet, Animated, Easing, Pressable, Dimensions } from "react-native";
 import Svg, { Defs, RadialGradient, Stop, Circle } from "react-native-svg";
 
 interface Props {
@@ -73,8 +73,10 @@ export default function KodaSplash({ aiName, duration = 10000, onComplete }: Pro
   // Animated value 0..1 = opacity del cerchio "successivo" sovrapposto.
   const crossOp = useRef(new Animated.Value(0)).current;
 
-  const segmentMs = Math.max(1500, Math.floor(duration / PALETTES.length));
-  const fadeMs = Math.floor(segmentMs * 0.85);
+  const segmentMs = Math.max(2200, Math.floor(duration / PALETTES.length));
+  // Cross-fade più lungo (95% del segmento) per transizioni "burrose" senza
+  // stacchi percettibili. Easing inOut sotto per ammorbidire ulteriormente.
+  const fadeMs = Math.floor(segmentMs * 0.95);
 
   // === Fade-in iniziale ===
   useEffect(() => {
@@ -109,6 +111,9 @@ export default function KodaSplash({ aiName, duration = 10000, onComplete }: Pro
       Animated.timing(crossOp, {
         toValue: 1,
         duration: fadeMs,
+        // Easing inOut sine = velocità che parte lenta, accelera al centro,
+        // rallenta in uscita. Risultato visivo: NESSUNO stacco percettibile.
+        easing: Easing.inOut(Easing.sin),
         useNativeDriver: true,
       }).start(({ finished }) => {
         if (!alive || !finished) return;
@@ -207,12 +212,12 @@ const styles = StyleSheet.create({
   },
   name: {
     color: "#F5E6F0",
-    fontSize: 44,
-    fontWeight: "300",
-    letterSpacing: 6,
+    fontSize: 52,
+    fontWeight: "600",
+    letterSpacing: 4,
     textAlign: "center",
-    textShadowColor: "rgba(244,114,182,0.45)",
+    textShadowColor: "rgba(244,114,182,0.55)",
     textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 18,
+    textShadowRadius: 24,
   },
 });

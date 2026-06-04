@@ -1114,8 +1114,14 @@ export default function Taccuino() {
   // "Gentle Pause": 4 note morbide pentatoniche con sottofondo caldo.
   // Utile se l'utente non sta guardando il telefono (altra app, schermo
   // bloccato). Si ferma appena Koda inizia a parlare o torna idle.
+  //
+  // RICHIESTA 2026-06 (#7): in modalità scrittura (inputMode === "text")
+  // l'utente NON vuole sentire alcun suono — la chat è silenziosa per
+  // definizione. Il feedback "Koda sta pensando" lo diamo SOLO con il
+  // bubble dei 3 puntini in colore "thinking" distinto.
   useEffect(() => {
-    if (status === "transcribing" || status === "thinking") {
+    const isThinking = status === "transcribing" || status === "thinking";
+    if (isThinking && inputMode !== "text") {
       startThinkingSound();
     } else {
       stopThinkingSound();
@@ -1123,7 +1129,7 @@ export default function Taccuino() {
     return () => {
       stopThinkingSound();
     };
-  }, [status]);
+  }, [status, inputMode]);
 
 
   const speakIfEnabled = useCallback(
@@ -2926,7 +2932,11 @@ export default function Taccuino() {
         decelerationRate="fast"
       >
         {/* === PAGE 0: VOICE ZEN MODE ============================ */}
-        <View style={{ width: windowWidth, flex: 1, alignItems: "center", justifyContent: "center" }}>
+        {/* paddingBottom richiesta utente 2026-06: la bottomBar absolute
+            "ruba" ~80-100px visivi → senza compenso l'orb appariva troppo
+            in alto. Aggiungiamo paddingBottom dinamico per spingerlo nel
+            centro percettivo dello schermo (non solo geometrico). */}
+        <View style={{ width: windowWidth, flex: 1, alignItems: "center", justifyContent: "center", paddingBottom: Math.max(insets.bottom, 14) + 70 }}>
           <View style={{ alignItems: "center", justifyContent: "center", flex: 1, gap: 18, paddingHorizontal: 24 }}>
             {/* === ECLISSI NASCOSTA IN TEXT MODE (richiesta utente 2026-06) ===
                 In modalità scrittura (inputMode === "text") l'utente NON
@@ -3066,21 +3076,30 @@ export default function Taccuino() {
             "speaking" (the AI message is already in the timeline at that point). */}
         {(status === "thinking" || status === "transcribing") && (
           <View style={[styles.bubbleRow, styles.bubbleRowL]}>
-            <AIAvatar photo={(profile?.settings as any)?.ai_avatar || null} color={bubbleAccent.color} />
+            {/* AIAvatar rimosso (richiesta utente 2026-06): in text-mode
+                il mini-orb di fianco ai messaggi non aveva più senso
+                visivo. Ora il messaggio Koda è allineato puro a sinistra
+                speculare a quello user a destra. */}
             <View
               style={[
                 styles.bubbleAi,
                 {
-                  backgroundColor: bubbleStyle === "solid" ? bubbleAccent.color : bubbleAccent.soft,
-                  borderColor: bubbleAccent.color,
+                  // === COLORE "THINKING" DISTINTO (richiesta 2026-06 #7) ===
+                  // Prima il bubble di pensiero era identico al colore dei
+                  // messaggi (viola) → utente non distingueva "sta pensando"
+                  // da "ha scritto". Ora usiamo un teal soffice e dedicato:
+                  // anche dopo che Koda scrive in viola, il bubble pensante
+                  // resta identificabile a colpo d'occhio.
+                  backgroundColor: bubbleStyle === "solid" ? "#3FB5B0" : "rgba(63,181,176,0.16)",
+                  borderColor: "#3FB5B0",
                   borderWidth: bubbleStyle === "glass" ? 1 : 0,
                 },
               ]}
             >
               <View style={{ flexDirection: "row", alignItems: "center", gap: 4, height: 18 }}>
-                <TypingDot delay={0} color={textOnBubble} />
-                <TypingDot delay={150} color={textOnBubble} />
-                <TypingDot delay={300} color={textOnBubble} />
+                <TypingDot delay={0} color={bubbleStyle === "solid" ? "#FFFFFF" : "#3FB5B0"} />
+                <TypingDot delay={150} color={bubbleStyle === "solid" ? "#FFFFFF" : "#3FB5B0"} />
+                <TypingDot delay={300} color={bubbleStyle === "solid" ? "#FFFFFF" : "#3FB5B0"} />
               </View>
             </View>
           </View>
@@ -3417,7 +3436,7 @@ export default function Taccuino() {
             <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 10 }]}>
               <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.settingLabel}>💌 Coda mi scrive</Text>
+                  <Text style={styles.settingLabel}>💌 Koda mi scrive</Text>
                   <Text style={styles.settingHint}>
                     Quando vuoi, ti faccio un piccolo check-in di mia iniziativa.
                   </Text>
@@ -4529,7 +4548,10 @@ function Bubble({
         { transform: [{ rotate: `${rot}deg` }] },
       ]}
     >
-      {!isUser ? <AIAvatar photo={aiAvatar} color={bubbleAccent.color} /> : null}
+      {/* AIAvatar rimosso definitivamente (richiesta utente 2026-06): in
+          text-mode l'avatar mini-orb di fianco ai messaggi di Koda non
+          serve. Bilanciamento puro: messaggi Koda flush-left, messaggi
+          utente flush-right, simmetria perfetta. */}
       <View style={{ maxWidth: "82%" }}>
         {isUser ? (
           <Pressable
