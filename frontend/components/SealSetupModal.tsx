@@ -252,12 +252,15 @@ function makeStyles(theme: any) {
     card: {
       width: "100%",
       maxWidth: 420,
-      backgroundColor: theme.card || "#1E1B2E",
+      // === FIX 2026-06 #5: usare theme.surface, NON theme.card (che non
+      // esiste nella Palette type → fallback fisso a #1E1B2E creava un
+      // box scuro anche in tema Giorno, rendendo invisibile il testo). ===
+      backgroundColor: theme.surface,
       borderRadius: 18,
       padding: 22,
       gap: 14,
       borderWidth: 1,
-      borderColor: theme.border || "rgba(255,255,255,0.1)",
+      borderColor: theme.border,
     },
     header: {
       flexDirection: "row",
@@ -267,36 +270,36 @@ function makeStyles(theme: any) {
     title: {
       fontSize: 20,
       fontWeight: "700",
-      color: theme.text || "#fff",
+      color: theme.text,
     },
     body: {
       fontSize: 15,
-      color: theme.text || "#fff",
+      color: theme.text,
       lineHeight: 22,
     },
     bodySmall: {
       fontSize: 13,
-      color: (theme.text || "#fff") + "B0",
+      color: theme.textMuted,
       lineHeight: 19,
       marginTop: 4,
     },
     bold: {
       fontWeight: "700",
-      color: theme.primary || "#A78BFA",
+      color: theme.primary,
     },
     input: {
       borderWidth: 1,
-      borderColor: theme.border || "rgba(255,255,255,0.18)",
+      borderColor: theme.border,
       borderRadius: 12,
       paddingHorizontal: 14,
       paddingVertical: 12,
       fontSize: 16,
-      color: theme.text || "#fff",
-      backgroundColor: "rgba(255,255,255,0.04)",
+      color: theme.text,
+      backgroundColor: theme.surfaceAlt,
     },
     bioHint: {
       fontSize: 12,
-      color: (theme.text || "#fff") + "90",
+      color: theme.textDim,
       fontStyle: "italic",
     },
     err: {
