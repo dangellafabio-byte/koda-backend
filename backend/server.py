@@ -471,12 +471,23 @@ class Profile(BaseModel):
     onboarded: bool = False
     name: Optional[str] = None
     # === L'Amico Fraterno: identità AI + genere utente per declinazione lingua
-    # ai_name: rinominabile dall'utente (default "Coda"). UNICA variabile di identità modificabile.
-    ai_name: str = "Coda"
+    # ai_name: rinominabile dall'utente (default "Koda"). UNICA variabile di identità modificabile.
+    ai_name: str = "Koda"
     # ai_gender / user_gender: 'm' | 'f' | 'n' (neutro). Usati nel prompt per
     # declinare aggettivi/participi in modo corretto in italiano (sei stanco/a).
     ai_gender: str = "f"
     user_gender: str = "n"
+    # === VOCE DI KODA ("Trova la tua Koda") =================================
+    # koda_voice: scelta dall'utente DURANTE L'ONBOARDING (1 turno, mai più).
+    # Valori previsti: "eco" (timbro femminile caldo) | "aria" (timbro
+    # profondo/ambiguo). La mapping verso ElevenLabs voice_id avviene in
+    # `_resolve_voice_id()` — l'utente non conosce gli ID tecnici.
+    # Default "eco" se l'utente salta l'onboarding (failsafe).
+    koda_voice: str = "eco"
+    # voice_locked: una volta che l'onboarding finisce, koda_voice non può
+    # più essere modificato via API. Strategia di brand: la Koda dell'utente
+    # è UNA, non si scambia. Cambia solo se si fa onboarding-reset (raro).
+    voice_locked: bool = False
     confidence_level: int = 0  # 0-100, slowly grows
     total_messages: int = 0
     settings: TaccuinoSettings = Field(default_factory=TaccuinoSettings)
@@ -496,6 +507,9 @@ class ProfileUpdate(BaseModel):
     ai_gender: Optional[str] = None
     user_gender: Optional[str] = None
     onboarded: Optional[bool] = None
+    # Voce di Koda — settata UNA volta in onboarding. Se voice_locked=True
+    # nel profilo, gli update successivi a koda_voice vengono ignorati.
+    koda_voice: Optional[str] = None
     # FIX 2026-07: settings come Dict aperto (non TaccuinoSettings) per
     # evitare che Pydantic riempia i campi mancanti con i default e
     # SOVRASCRIVA silenziosamente valori già salvati (es. tts_voice_id
@@ -1302,6 +1316,22 @@ async def api_update_profile(update: ProfileUpdate):
         p.user_gender = update.user_gender
     if update.onboarded is not None:
         p.onboarded = update.onboarded
+    # === KODA VOICE — lock dopo prima scelta ============================
+    # Strategia "Trova la tua Koda": l'utente sceglie eco o aria UNA volta
+    # durante l'onboarding. Da quel momento, voice_locked diventa True e
+    # ogni tentativo successivo di cambiare koda_voice viene IGNORATO
+    # silenziosamente (non lanciamo errore per non rompere client legacy).
+    if update.koda_voice is not None:
+        if p.voice_locked:
+            logger.info(f"[profile] koda_voice change rejected (locked). current={p.koda_voice}, attempted={update.koda_voice}")
+        elif update.koda_voice in KODA_VOICES:
+            p.koda_voice = update.koda_voice
+            # Quando si chiude l'onboarding (update.onboarded=True), blocca
+            # la voce. Se l'utente non setta onboarded ma cambia voce a
+            # raffica in preview, lasciamo libero finché non chiude.
+            if update.onboarded is True:
+                p.voice_locked = True
+                logger.info(f"[profile] voice_locked=True with koda_voice={p.koda_voice}")
     if update.settings is not None:
         # FIX 2026-07: merge per campo invece di sostituzione totale.
         # Prima: `p.settings = new_settings` ricostruiva un TaccuinoSettings
@@ -2927,8 +2957,116 @@ def _strip_audio_tags(text: str) -> str:
     return cleaned
 
 
+@api_router.get("/voice/options")
+async def api_get_voice_options():
+    """Lista le voci disponibili per l'onboarding ("eco" e "aria"). 
+    Restituisce label + descrizione (NON l'ID ElevenLabs — quello è interno).
+    Usato dal frontend per costruire la schermata di scelta voce."""
+    return {
+        "options": [
+            {
+                "key": k,
+                "label": v["label"],
+                "description": v["description"],
+                # URL del preview audio TTS — generato on-demand
+                "preview_url": f"/api/voice/preview/{k}",
+            }
+            for k, v in KODA_VOICES.items()
+        ]
+    }
+
+
+@api_router.get("/voice/preview/{voice_key}")
+async def api_voice_preview(voice_key: str):
+    """Restituisce un sample audio di 3 secondi della voce scelta. Una frase
+    breve, calda, neutra, identica per tutte le voci così l'utente può
+    confrontarle direttamente."""
+    if voice_key not in KODA_VOICES:
+        raise HTTPException(404, "voice not found")
+    voice_id = KODA_VOICES[voice_key]["voice_id"]
+    # Frase di preview: corta, calda, identica per tutte le voci.
+    preview_text = "Ciao, sono qui con te. Quando vuoi parliamo."
+    # Cache key separata per le preview (TTL lungo: la voce non cambia mai)
+    cache_key = f"voice_preview_{voice_key}_{hashlib.sha1(preview_text.encode()).hexdigest()[:8]}"
+    cached = await db.tts_audio_cache.find_one({"_id": cache_key})
+    if cached and cached.get("mp3_b64"):
+        return Response(content=base64.b64decode(cached["mp3_b64"]), media_type="audio/mpeg")
+    # Genera il sample
+    client_el = _get_eleven_client()
+    if client_el is None:
+        raise HTTPException(503, "TTS unavailable")
+    try:
+        loop = asyncio.get_running_loop()
+        def _gen():
+            audio = bytearray()
+            for chunk in client_el.text_to_speech.convert(
+                text=preview_text, voice_id=voice_id,
+                model_id="eleven_flash_v2_5", output_format="mp3_44100_128",
+            ):
+                if chunk:
+                    audio.extend(chunk)
+            return bytes(audio)
+        mp3_bytes = await loop.run_in_executor(None, _gen)
+        # Cache permanente
+        try:
+            await db.tts_audio_cache.insert_one({
+                "_id": cache_key,
+                "mp3_b64": base64.b64encode(mp3_bytes).decode(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception:
+            pass  # cache best-effort
+        return Response(content=mp3_bytes, media_type="audio/mpeg")
+    except Exception as e:
+        logger.warning(f"[voice preview] error: {e}")
+        raise HTTPException(502, "preview generation failed")
+
+
 def _has_audio_tags(text: str) -> bool:
     return bool(_AUDIO_TAG_RE.search(text or ""))
+
+
+# ============================================================
+# VOCI DI KODA — "Trova la tua Koda"
+# ============================================================
+# Strategia di brand: una sola voce per utente, scelta UNA volta in
+# onboarding, mai più modificabile. Due timbri:
+#   - "eco":  femminile, caldo, lento — per il 65-70% del target
+#   - "aria": ambiguo/profondo — per chi cerca un timbro più androgino
+# I voice_id ElevenLabs sono interni — l'utente non li vede mai.
+# In futuro (Fase 2 dopo 1k utenti) sostituiremo questi con voci CUSTOM
+# clonate da doppiatori italiani professionali — l'API resterà stabile.
+# ============================================================
+
+KODA_VOICES: Dict[str, Dict[str, str]] = {
+    # Voce primaria — femminile, calda, italiana fluente.
+    # Lily (ElevenLabs): warm-mature-italian. Per il target "amica fraterna"
+    # del 65-70% del bacino utenti italiano.
+    "eco": {
+        "voice_id": "pFZP5JQG7iQjIQuC4Bku",
+        "label": "Eco",
+        "description": "Una presenza calda e accogliente, che ascolta senza fretta.",
+    },
+    # Voce alternativa — maschile, profonda, rassicurante (figura paterna).
+    # Brian (ElevenLabs): master narrator, low-deep-calm. Per il target che
+    # cerca autorevolezza non clinica nel Confessionale (uomini over 35, ma
+    # anche donne con storia di violenza che NON vogliono voce femminile).
+    "aria": {
+        "voice_id": "nPczCjzI2devNBz1zQrb",
+        "label": "Aria",
+        "description": "Una voce profonda e calma, una presenza che rassicura.",
+    },
+}
+
+
+def _resolve_voice_id(profile: "Profile") -> str:
+    """Risolve l'ID ElevenLabs effettivo a partire dalla scelta brand
+    dell'utente (`koda_voice`). Failsafe: se il campo è vuoto/non valido,
+    usa "eco". Rispetta retro-compatibilità con `settings.tts_voice_id`
+    custom (era il vecchio sistema) — quel campo verrà rimosso in v2."""
+    key = (getattr(profile, "koda_voice", None) or "eco").strip().lower()
+    voice = KODA_VOICES.get(key) or KODA_VOICES["eco"]
+    return voice["voice_id"]
 
 
 # ============================================================
@@ -4910,8 +5048,9 @@ async def _fast_pipeline_task(
             await _fast_session_mark_done(session_id)
             return
 
-        # Voce: rispetta la scelta dell'utente (default Sarah).
-        voice_id = getattr(profile.settings, "tts_voice_id", None) or "EXAVITQu4vr4xnSDxMaL"
+        # Voce: rispetta la scelta UNICA dell'utente (eco/aria) — bloccata
+        # dopo l'onboarding. Vedi _resolve_voice_id() per la mappatura.
+        voice_id = _resolve_voice_id(profile)
 
         # Recent context: 16 messaggi (era 8). +500ms TTFT trascurabile,
         # ma Koda non perde il filo di conversazioni multi-turno.
