@@ -1130,13 +1130,32 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"\n"
         f"FORMATO DI RISPOSTA: Devi SEMPRE rispondere con un oggetto JSON valido (e SOLO quello, senza testo prima/dopo) così:\n"
         f"{{\n"
-        f'  "reply": "la tua risposta in {lang_name}, breve, naturale, calda — come un vocale di un amico",\n'
+        f'  "reply": "[TONE:warm] la tua risposta in {lang_name}, breve, naturale, calda — come un vocale di un amico",\n'
         f'  "tone": "calm | energetic | concerned | urgent | warm | neutral",\n'
         f'  "domain": "soldi | tempo | spesa | salute | lavoro | casa | altro | null",\n'
         f'  "extracted": {{ "domain": "...", "intent": "...", "amount": 12.5, "currency": "EUR", "item": "...", "when": "...", "flags": ["..."] }} or null,\n'
         f'  "actions": [{{ "type": "schedule_notification", "when_iso": "...", "title": "...", "body": "...", "label": "..." }}],\n'
         f'  "memory_update": "una breve frase da aggiungere alla memoria di lungo periodo, oppure null se nulla di rilevante"\n'
         f"}}\n"
+        f"\n"
+        f"━━━ TAG VOCALE OBBLIGATORIO ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"DEVI iniziare il valore di 'reply' con un tag [TONE:xxx] dove xxx è UNO di:\n"
+        f"  • [TONE:warm]      → tono di default, abbraccio caldo (saluti, chiacchiere)\n"
+        f"  • [TONE:concerned] → dolore, lutto, ansia, depressione, paura, vergogna\n"
+        f"                       (es. 'mi dispiace tanto', 'capisco quanto fa male')\n"
+        f"  • [TONE:calm]      → sussurro consolatorio, momenti di intimità profonda\n"
+        f"                       (es. 'respira con me', 'sono qui, con calma')\n"
+        f"  • [TONE:energetic] → entusiasmo, gioia condivisa, complimenti sinceri\n"
+        f"                       (es. 'che bello!', 'sono felice per te!', 'evviva!')\n"
+        f"  • [TONE:urgent]    → safety/emergenze (suicidio, autolesionismo, abuso) — \n"
+        f"                       voce incalzante che invita a chiamare 1522/112/118\n"
+        f"  • [TONE:neutral]   → solo informazioni neutre (meteo, fatti, calcoli)\n"
+        f"\n"
+        f"REGOLA: il valore di 'tone' (JSON separato) DEVE corrispondere al tag inline.\n"
+        f"Il tag [TONE:xxx] verrà rimosso dal backend prima della sintesi vocale —\n"
+        f"serve SOLO al motore di sintesi per scegliere l'intonazione giusta.\n"
+        f"Esempio CORRETTO: \"reply\": \"[TONE:concerned] Senti, ti capisco. Quello che mi racconti pesa tanto.\"\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"\n"
         f"Il campo 'actions' può essere [] se non c'è nulla da fare. NESSUN markdown, NESSUN testo extra, SOLO il JSON."
     )
@@ -2897,49 +2916,47 @@ class TTSRequest(BaseModel):
 def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], similarity: Optional[float]) -> dict:
     """Adapt ElevenLabs voice settings to the conversational tone.
 
-    WARMTH MODE (richiesto dall'utente, giugno 2026):
-    Voce calda, accogliente, rassicurante. Niente più "BALANCED MODE"
-    monotono — ora la voce ha calore vero e variabilità tonale.
-    - stability bassa (0.30–0.45) → più espressività, swings emotivi naturali
-    - style alta (0.40–0.55) → carattere e calore presenti
-    - speed lievemente sotto 1.0 → sensazione di presenza/attenzione
-    - similarity più alta (0.82) → aderisce al timbro originale della voce
-      (Eco = Lily, Aria = Brian) senza derive sintetiche
+    WARMTH MODE + WIDE SPREAD (giugno 2026, fase 2):
+    Spread espanso tra i toni per rendere la differenza chiaramente percepibile
+    all'orecchio. Range delle variabili:
+    - stability: 0.25 (urgent, max espressivo) → 0.55 (calm, sussurrato stabile)
+    - style:     0.30 (calm, asciutto) → 0.70 (urgent, drammatico)
+    - speed:     0.92 (calm, lento) → 1.08 (urgent, incalzante)
+    Differenza minima ~30% → percepibile come "voce diversa".
     """
-    base_stability = 0.40 if stability is None else stability
     base_similarity = 0.82 if similarity is None else similarity
-    style = 0.45
-    speed = 0.97
     t = (tone or "neutral").lower()
+
     if t == "calm":
-        # calmo ma caldo, ritmo lento per intimità
-        base_stability = 0.45
-        speed = 0.95
-        style = 0.42
+        # sussurrato, lento, asciutto — momenti di intimità profonda
+        base_stability = stability if stability is not None else 0.55
+        style = 0.30
+        speed = 0.92
     elif t == "concerned":
-        # preoccupato/empatico: più variabilità emotiva, più lento
-        base_stability = 0.35
-        speed = 0.95
-        style = 0.50
+        # empatico, profondo, espressivo, leggermente più lento
+        base_stability = stability if stability is not None else 0.28
+        style = 0.60
+        speed = 0.93
     elif t == "warm":
-        # ★ TONO PRINCIPALE — opzione B: caldo abbraccio sonoro
-        base_stability = 0.38
+        # ★ default: abbraccio caldo, naturale, presente
+        base_stability = stability if stability is not None else 0.35
+        style = 0.55
         speed = 0.96
-        style = 0.50
     elif t == "energetic":
-        # vivace ma non frenetico
-        base_stability = 0.40
-        speed = 1.02
-        style = 0.55
+        # vivace, gioioso, leggero
+        base_stability = stability if stability is not None else 0.32
+        style = 0.65
+        speed = 1.05
     elif t == "urgent":
-        # incalzante (sicurezza/hotline) — resta espressivo
-        base_stability = 0.35
-        speed = 1.04
-        style = 0.55
-    else:  # neutral (default per conversazione standard)
-        base_stability = 0.42
-        speed = 0.97
-        style = 0.45
+        # safety/emergenza: incalzante, drammatico, rapido
+        base_stability = stability if stability is not None else 0.25
+        style = 0.70
+        speed = 1.08
+    else:  # neutral — solo per fatti/info neutre (meteo, calcoli)
+        base_stability = stability if stability is not None else 0.50
+        style = 0.40
+        speed = 0.98
+
     return {
         "stability": base_stability,
         "similarity_boost": base_similarity,
@@ -2947,6 +2964,132 @@ def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], si
         "speed": speed,
         "use_speaker_boost": True,
     }
+
+
+# ============================================================
+# TONE DETECTION (Hybrid: LLM-driven + Heuristic fallback)
+# ============================================================
+#
+# Architettura "Opzione C" approvata utente, giugno 2026:
+#   1. Claude emette un tag [TONE:xxx] come PRIMA cosa dentro 'reply'
+#   2. Il fast pipeline lo intercetta, lo estrae, lo rimuove dal testo
+#   3. Se il tag manca, la heuristic Python sotto fa fallback su keyword
+#
+# Le keyword sono ordinate per PRIORITÀ (urgent > concerned > calm > ...) —
+# se più toni matchano, vince quello più "forte" emotivamente.
+
+_VALID_TONES = {"calm", "energetic", "concerned", "urgent", "warm", "neutral"}
+
+# Pattern del tag inline. Tolerante a spazi e a maiuscole/minuscole.
+_TONE_TAG_RE = re.compile(r'^\s*\[\s*TONE\s*:\s*([a-zA-Z]+)\s*\]\s*', re.IGNORECASE)
+
+# Keyword italiane per detection euristica (priorità top→bottom).
+# IMPORTANTE: le chiavi sono normalizzate (lowercase, niente accenti tolti).
+_TONE_KEYWORDS = {
+    "urgent": [
+        "1522", "112", "118", "telefono amico",
+        "chiama subito", "chiamali ora", "ti prego chiama",
+        "emergenza", "ora chiamali", "1.5.2.2",
+    ],
+    "concerned": [
+        "mi dispiace", "mi spiace", "ti capisco quanto", "ti capisco",
+        "ti abbraccio", "fa male", "è dura", "che dolore",
+        "che peso", "soffri", "ti senti sol", "doloros",
+        "ti vedo provat", "mi addolora", "ti senti perso", "ti senti persa",
+        "che ferita", "non sei sol",
+    ],
+    "calm": [
+        "respira", "fai un respiro", "facciamo un respiro",
+        "con calma", "senza fretta", "rilassati", "rilassa",
+        "piano piano", "respiriamo", "andiamo piano",
+    ],
+    "energetic": [
+        "che bello", "che meravig", "fantastico", "incredibile",
+        "wow", "evviva", "sono felice per te",
+        "che notiz", "che bella notiz", "evvai", "magnifico",
+    ],
+    "warm": [
+        "sono qui", "ti ascolto", "ti voglio bene", "raccontami",
+        "ci sono per te", "ci sono io", "vicino a te", "vicina a te",
+        "grazie di", "grazie per", "che bello sentirti",
+    ],
+}
+
+
+def _heuristic_tone(text: str) -> str:
+    """Fallback heuristic: detect tone from Italian keywords.
+
+    Used when the LLM omits the [TONE:xxx] tag from the reply. Scans the
+    first ~120 characters of the reply (sufficient for a salutation/opener
+    in Italian). Returns "neutral" if no keyword matches.
+    """
+    if not text:
+        return "warm"  # default warm per le risposte vuote/short
+    t = text.lower()[:240]
+    for tone in ("urgent", "concerned", "calm", "energetic", "warm"):
+        for kw in _TONE_KEYWORDS[tone]:
+            if kw in t:
+                return tone
+    return "neutral"
+
+
+class _ToneDetector:
+    """Inline tone detector for streaming TTS pipeline.
+
+    Workflow:
+      1. Riceve chars dal _ReplyExtractor
+      2. Bufferizza i primi ~40 chars cercando il tag [TONE:xxx]
+      3. Se trovato → estrae tono + rimuove tag → emette il resto
+      4. Se non trovato entro 40 chars o entro la prima frase →
+         applica _heuristic_tone() sul buffer accumulato
+
+    L'output di feed() è il testo "pulito" (senza tag) pronto per la TTS.
+    Il tono estratto è disponibile in self.tone.
+    """
+
+    # Caratteri da bufferizzare prima del fallback heuristic.
+    _MAX_BUFFER = 40
+
+    def __init__(self):
+        self.tone: str = "warm"  # default safe (non più "neutral" piatto)
+        self.locked: bool = False  # True quando tono determinato
+        self._buf: str = ""
+
+    def feed(self, chars: str) -> str:
+        if self.locked:
+            return chars
+        self._buf += chars
+        # Tentativo 1: tag esplicito all'inizio
+        m = _TONE_TAG_RE.match(self._buf)
+        if m:
+            t = m.group(1).lower()
+            if t in _VALID_TONES:
+                self.tone = t
+            self.locked = True
+            out = self._buf[m.end():]
+            self._buf = ""
+            return out
+        # Tentativo 2: buffer pieno o fine frase → heuristic fallback
+        if len(self._buf) >= self._MAX_BUFFER or any(p in self._buf for p in ".!?\n"):
+            self.tone = _heuristic_tone(self._buf)
+            self.locked = True
+            out = self._buf
+            self._buf = ""
+            return out
+        # Ancora in attesa: trattieni i chars per ora
+        return ""
+
+    def flush(self) -> str:
+        """Chiamato a fine streaming per emettere eventuali chars trattenuti
+        nel buffer (caso edge: risposta ultra-corta < 40 chars senza tag)."""
+        if self.locked:
+            return ""
+        # Heuristic sul poco testo disponibile
+        self.tone = _heuristic_tone(self._buf)
+        self.locked = True
+        out = self._buf
+        self._buf = ""
+        return out
 
 
 # Common ElevenLabs v3 audio tags (Italian + English) we ALLOW the LLM to use.
@@ -4473,6 +4616,11 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
 
     async def audio_pipeline():
         extractor = _ReplyExtractor()
+        # === TONE DETECTOR (Opzione C: LLM tag + heuristic fallback) ===
+        # Intercetta il tag [TONE:xxx] all'inizio del reply (se Claude lo
+        # emette) o cade in heuristic Python sulle prime parole. Risultato
+        # disponibile in tone_det.tone, sempre valorizzato entro ~40 chars.
+        tone_det = _ToneDetector()
         sentence_buf = ""
         full_reply_chars: List[str] = []
         # Accumulate MP3 bytes here so we can compute the waveform at the
@@ -4483,8 +4631,11 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
         # appended to `wf_progressive` (avoids re-decoding the cumulative
         # buffer, which was 10x slower and caused latency drift).
         wf_progressive: List[float] = [] if (result_id and _WAVEFORM_OK) else []
-        # Capture metadata for post-stream persistence
-        captured = {"tone": "neutral", "domain": None, "actions": [], "memory_update": "", "extracted": None}
+        # Capture metadata for post-stream persistence.
+        # NOTA: il tono iniziale è "warm" (non "neutral") perché è il default
+        # safe per saluti/risposte short. Verrà sovrascritto dal _ToneDetector
+        # entro i primi ~40 chars o con la prima frase completa.
+        captured = {"tone": "warm", "domain": None, "actions": [], "memory_update": "", "extracted": None}
 
         async def _append_sentence_waveform(sentence_mp3: bytes):
             """Decode just this sentence's MP3 (small, fast) and append its
@@ -4535,6 +4686,17 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
 
                 new_chars = extractor.feed(piece)
                 if new_chars:
+                    # === TONE TAG DETECTION (Opzione C) ============================
+                    # Passa i chars al detector. Se il tag [TONE:xxx] non è ancora
+                    # arrivato, restituisce "" (chars trattenuti nel suo buffer).
+                    # Quando il tag è risolto (esplicito o heuristic), restituisce
+                    # tutto il testo accumulato pulito dal tag.
+                    new_chars = tone_det.feed(new_chars)
+                    if tone_det.locked and captured["tone"] != tone_det.tone:
+                        captured["tone"] = tone_det.tone
+                        logger.info(f"[tone] detected={tone_det.tone}")
+
+                if new_chars:
                     sentence_buf += new_chars
                     full_reply_chars.append(new_chars)
 
@@ -4546,7 +4708,8 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
                         sentence_buf = rest
                         clean = _strip_audio_tags(sent) or sent
                         if clean.strip():
-                            # Determine tone heuristic from partial reply (still neutral here).
+                            # Tono ora dinamico: viene dal _ToneDetector (tag LLM
+                            # esplicito o heuristic Python su keyword italiane).
                             vs = _voice_settings_for_tone(captured["tone"], None, None)
                             # Buffer THIS sentence's MP3 bytes for per-sentence waveform.
                             sentence_mp3 = bytearray() if mp3_acc is not None else None
@@ -4568,6 +4731,15 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
                     break
 
             # Flush trailing partial sentence (no terminator) as final TTS call.
+            # Prima svuotiamo il tone_det in caso di risposta ultra-corta (< 40 chars
+            # senza tag esplicito): forza heuristic sui chars ancora in buffer.
+            residual_chars = tone_det.flush()
+            if residual_chars:
+                sentence_buf += residual_chars
+                full_reply_chars.append(residual_chars)
+                if captured["tone"] != tone_det.tone:
+                    captured["tone"] = tone_det.tone
+                    logger.info(f"[tone] flushed={tone_det.tone}")
             tail = sentence_buf.strip()
             if tail:
                 clean = _strip_audio_tags(tail) or tail
