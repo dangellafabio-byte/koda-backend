@@ -2897,40 +2897,49 @@ class TTSRequest(BaseModel):
 def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], similarity: Optional[float]) -> dict:
     """Adapt ElevenLabs voice settings to the conversational tone.
 
-    BALANCED MODE (richiesto dall'utente, giugno 2025):
-    Voce calma, meno emotiva, meno "confidenziale". Stability alta per
-    pronuncia stabile e neutra. Style moderato. Niente sussurri/sospiri
-    estremi né swings emotivi forti.
+    WARMTH MODE (richiesto dall'utente, giugno 2026):
+    Voce calda, accogliente, rassicurante. Niente più "BALANCED MODE"
+    monotono — ora la voce ha calore vero e variabilità tonale.
+    - stability bassa (0.30–0.45) → più espressività, swings emotivi naturali
+    - style alta (0.40–0.55) → carattere e calore presenti
+    - speed lievemente sotto 1.0 → sensazione di presenza/attenzione
+    - similarity più alta (0.82) → aderisce al timbro originale della voce
+      (Eco = Lily, Aria = Brian) senza derive sintetiche
     """
-    base_stability = 0.55 if stability is None else stability
-    base_similarity = 0.75 if similarity is None else similarity
-    style = 0.30
-    speed = 1.0
+    base_stability = 0.40 if stability is None else stability
+    base_similarity = 0.82 if similarity is None else similarity
+    style = 0.45
+    speed = 0.97
     t = (tone or "neutral").lower()
     if t == "calm":
-        base_stability = 0.62
-        speed = 0.97
-        style = 0.22
-    elif t == "concerned":
-        base_stability = 0.50
-        speed = 0.96
-        style = 0.40
-    elif t == "warm":
-        base_stability = 0.55
-        speed = 0.98
-        style = 0.32
-    elif t == "energetic":
-        base_stability = 0.48
-        speed = 1.03
-        style = 0.42
-    elif t == "urgent":
+        # calmo ma caldo, ritmo lento per intimità
         base_stability = 0.45
-        speed = 1.05
+        speed = 0.95
+        style = 0.42
+    elif t == "concerned":
+        # preoccupato/empatico: più variabilità emotiva, più lento
+        base_stability = 0.35
+        speed = 0.95
         style = 0.50
-    else:  # neutral
-        base_stability = 0.58
-        speed = 1.0
-        style = 0.28
+    elif t == "warm":
+        # ★ TONO PRINCIPALE — opzione B: caldo abbraccio sonoro
+        base_stability = 0.38
+        speed = 0.96
+        style = 0.50
+    elif t == "energetic":
+        # vivace ma non frenetico
+        base_stability = 0.40
+        speed = 1.02
+        style = 0.55
+    elif t == "urgent":
+        # incalzante (sicurezza/hotline) — resta espressivo
+        base_stability = 0.35
+        speed = 1.04
+        style = 0.55
+    else:  # neutral (default per conversazione standard)
+        base_stability = 0.42
+        speed = 0.97
+        style = 0.45
     return {
         "stability": base_stability,
         "similarity_boost": base_similarity,
@@ -3578,7 +3587,7 @@ async def _fetch_tts_audio(token: str) -> Optional[bytes]:
 # di una persona che sta riflettendo, non un robot sparato veloce.
 # La cache version è "v2" → il nuovo cache_token invalida i vecchi mp3
 # sia su MongoDB che lato client (filename diverso).
-BRIDGE_VERSION = "v3"
+BRIDGE_VERSION = "v4"  # bump → invalida cache mp3 dopo "Warmth Mode" giugno 2026
 BRIDGE_PHRASES = {
     "generico": [
         "Eeeh...",
@@ -3645,16 +3654,18 @@ async def api_tts_bridge(style: str = "generico", i: int = 0, voice_id: Optional
         raise HTTPException(status_code=503, detail="ElevenLabs not configured")
 
     try:
-        # FLASH model + SPEED 0.85: pronuncia LENTA, "pensata"
+        # FLASH model + SPEED 0.82: pronuncia LENTA, "pensata"
+        # Voice settings allineati al Warmth Mode (giugno 2026): meno
+        # stability per intercalari più naturali e umani.
         audio_gen = client_el.text_to_speech.convert(
             text=text,
             voice_id=vid,
             model_id="eleven_flash_v2_5",
             output_format="mp3_44100_128",
             voice_settings={
-                "stability": 0.70,
+                "stability": 0.45,
                 "similarity_boost": 0.85,
-                "style": 0.45,
+                "style": 0.50,
                 "speed": 0.82,
                 "use_speaker_boost": True,
             },
