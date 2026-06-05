@@ -60,6 +60,53 @@ api_router = APIRouter(prefix="/api")
 
 
 # ============================================================================
+# ADMIN: cleanup endpoint per stale claim (giugno 2026 — ONE-TIME)
+# Da rimuovere dopo che Fabio's iPhone ha reclamato correttamente "me".
+# Protetto da secret token inviato in header X-Admin-Secret.
+# ============================================================================
+_ADMIN_SECRET = "fabio-koda-cleanup-2026"
+
+
+@api_router.post("/admin/release-stale-claim")
+async def release_stale_claim(x_admin_secret: Optional[str] = Header(None)):
+    """Sblocca "me" da un claim di test e ripristina i dati legacy.
+
+    Cosa fa:
+    1. Trova il claim_by attuale su "me"
+    2. Se quel UUID ha un profilo → revert: cancella quel profilo e
+       riassegna le sue timeline a "me", poi rimuove claimed_by su "me"
+    3. Risultato: "me" torna unclaimed con tutti i suoi 675 messaggi,
+       pronta per essere reclamata dal PRIMO device reale che si connette
+    """
+    if x_admin_secret != _ADMIN_SECRET:
+        return {"error": "unauthorized"}
+    me = await db.taccuino_profile.find_one({"id": "me"})
+    if not me:
+        return {"error": "me profile not found"}
+    claimer = me.get("claimed_by")
+    if not claimer:
+        return {"ok": True, "msg": "me is not claimed, nothing to do"}
+    # Cancella il profilo del claimer
+    deleted_profile = await db.taccuino_profile.delete_one({"id": claimer})
+    # Riassegna timeline da claimer → me
+    timeline_reverted = await db.taccuino_timeline.update_many(
+        {"profile_id": claimer},
+        {"$set": {"profile_id": "me"}},
+    )
+    # Rimuove claimed_by da me
+    await db.taccuino_profile.update_one(
+        {"id": "me"},
+        {"$unset": {"claimed_by": "", "claimed_at": ""}},
+    )
+    return {
+        "ok": True,
+        "released_claimer": claimer,
+        "deleted_profile": deleted_profile.deleted_count,
+        "timeline_reverted": timeline_reverted.modified_count,
+    }
+
+
+# ============================================================================
 # MULTI-USER UUID (giugno 2026)
 # ----------------------------------------------------------------------------
 # Ogni device genera un UUID al primo avvio e lo manda nell'header
@@ -685,22 +732,7 @@ async def get_or_create_profile() -> Profile:
     # Profilo per `uid` non esiste. Se uid != "me", proviamo la migrazione.
     if uid != "me":
         legacy = await db.taccuino_profile.find_one({"id": "me"})
-        # === SELF-HEALING CLAIM (giugno 2026) ===
-        # "me" potrebbe già essere claimed da un test UUID (es. curl di
-        # debug). Per evitare di bruciare la memoria storica, il claim
-        # vale SOLO se il claimer ha effettivamente creato il suo profilo
-        # (= ha "owned" i dati). Se invece il claimer non esiste o non
-        # ha profilo, il claim viene considerato orfano e ri-assegnabile.
-        is_claim_valid = False
-        if legacy and legacy.get("claimed_by"):
-            prev_claimer = legacy["claimed_by"]
-            prev_profile = await db.taccuino_profile.find_one({"id": prev_claimer})
-            if prev_profile:
-                is_claim_valid = True
-            else:
-                logger.info(f"[multi-user] stale claim by {prev_claimer[:8]}... — releasing")
-
-        if legacy and not is_claim_valid:
+        if legacy and not legacy.get("claimed_by"):
             # Copia "me" → nuovo UUID (preserva ogni campo: key_facts,
             # ai_name, settings, voice_locked, total_messages, memory_summary).
             try:
