@@ -60,6 +60,65 @@ api_router = APIRouter(prefix="/api")
 
 
 # ============================================================================
+# MULTI-USER UUID (giugno 2026)
+# ----------------------------------------------------------------------------
+# Ogni device genera un UUID al primo avvio e lo manda nell'header
+# `X-User-Id` su ogni richiesta. Il middleware sotto estrae il valore e
+# lo mette in una ContextVar che get_or_create_profile() e tutte le
+# operazioni sulla timeline leggono come "current user". Default = "me"
+# (utente legacy single-user, backwards compat per build vecchie).
+# ============================================================================
+from contextvars import ContextVar
+
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+_current_user_id: ContextVar[str] = ContextVar("current_user_id", default="me")
+
+
+def current_user_id() -> str:
+    """Restituisce l'id utente per la request in corso (UUID o "me")."""
+    return _current_user_id.get()
+
+
+@app.middleware("http")
+async def user_id_middleware(request, call_next):
+    """Estrae `X-User-Id` dall'header e lo setta come ContextVar.
+
+    Validazione: deve essere un UUID v4 ben formato. Qualsiasi valore
+    sospetto fa fallback a "me" (utente legacy). Questo evita inezioni
+    o uso del backend come database multiutente generico.
+    """
+    raw = request.headers.get("x-user-id", "") or ""
+    raw = raw.strip().lower()
+    uid = raw if (_UUID_RE.match(raw) or raw == "me") else "me"
+    token = _current_user_id.set(uid)
+    try:
+        return await call_next(request)
+    finally:
+        _current_user_id.reset(token)
+
+
+def _uf(extra: Optional[dict] = None) -> dict:
+    """User-Filter helper: filtro MongoDB per la timeline che include
+    sempre il `profile_id` corrente. Usato in TUTTE le query timeline.
+
+    NOTA migrazione: i doc vecchi senza `profile_id` sono già stati
+    migrati nel primo `get_or_create_profile()` del nuovo build, quindi
+    qui basta filtrare per profile_id == current uid. Se per qualsiasi
+    motivo qualche doc è rimasto senza profile_id, "me" lo coprirà.
+    """
+    uid = current_user_id()
+    if uid == "me":
+        # Per l'utente legacy include anche i doc senza profile_id.
+        f = {"$or": [{"profile_id": "me"}, {"profile_id": {"$exists": False}}, {"profile_id": None}]}
+    else:
+        f = {"profile_id": uid}
+    if extra:
+        # Combina i due filtri con $and esplicito
+        return {"$and": [f, extra]}
+    return f
+
+
+# ============================================================================
 # DEV-ONLY: emergency tunnel repair endpoint.
 # When the ngrok tunnel dies and the iPhone is stuck on the red error screen,
 # the user can open /api/dev/repair in the phone's BROWSER (not Expo Go).
@@ -555,6 +614,13 @@ class TimelineEntry(BaseModel):
     actions: List[Action] = []
     audio_duration_ms: Optional[int] = None
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # === MULTI-USER (giugno 2026) ===
+    # ID utente proprietario di questa entry. Auto-popolato dalla
+    # ContextVar `_current_user_id` settata dal middleware da header
+    # X-User-Id. Così qualsiasi `TimelineEntry(...)` creato durante la
+    # gestione di una request eredita automaticamente l'id corretto,
+    # senza dover passare uid esplicitamente a tutte le funzioni interne.
+    profile_id: str = Field(default_factory=lambda: current_user_id())
 
 
 class ConverseRequest(BaseModel):
@@ -584,39 +650,83 @@ class GhostRequest(BaseModel):
 
 # Helpers
 async def get_or_create_profile() -> Profile:
-    """Restituisce il profilo dell'utente, creandolo se non esiste.
+    """Restituisce il profilo dell'utente per la request corrente.
 
-    FIX RACE CONDITION 2026-06-26: con uvicorn --workers 2 e il client
-    che fa più GET /api/profile in parallelo al boot, il vecchio codice
-    find_one + insert_one creava DUPLICATI (entrambi i worker vedevano
-    vuoto, entrambi inserivano). Risultato osservato: 2 docs con id='me'
-    nel DB, Mongo restituiva A CASO uno dei due → ogni tanto l'app
-    sembrava "resettata" (no nome, no memoria, ai_name tornato a 'Coda').
+    Multi-user (giugno 2026): legge l'id dalla ContextVar `_current_user_id`
+    settata dal middleware da header `X-User-Id`. Default "me" per backwards
+    compat con build vecchie senza header.
 
-    Soluzione: la collection ora ha un UNIQUE INDEX su 'id'. Quindi la
-    seconda insert concorrente lancia DuplicateKeyError. La gestiamo
-    rileggendo il documento vincente.
+    MIGRAZIONE AUTOMATICA "me" → UUID:
+    Al PRIMO accesso di un nuovo UUID al backend, se NON esiste un profilo
+    con quell'id MA esiste il profilo legacy "me" non ancora reclamato
+    (campo `claimed_by` assente), il nuovo profilo eredita TUTTO da "me"
+    (key_facts, ai_name, settings, voice_locked, total_messages, ecc.) e
+    "me" viene marcato come `claimed_by: <UUID>` per impedire un secondo
+    claim da un altro device. Quindi: il PRIMO device a connettersi col
+    nuovo build OTA si porta dietro tutta la memoria storica, gli altri
+    device partono freschi.
+
+    Anche la TIMELINE viene migrata: ogni doc senza `profile_id` (= legacy
+    creato sotto "me") viene rinominato col nuovo UUID. Così l'utente
+    storico non perde i suoi messaggi quando passa al multi-user.
+
+    FIX RACE CONDITION 2026-06-26 (storico): la collection ha UNIQUE INDEX
+    su 'id'. Una seconda insert concorrente lancia DuplicateKeyError che
+    gestiamo rileggendo il documento vincente.
     """
-    doc = await db.taccuino_profile.find_one({"id": "me"}, {"_id": 0})
+    uid = current_user_id()
+    doc = await db.taccuino_profile.find_one({"id": uid}, {"_id": 0})
     if doc:
         try:
             return Profile(**doc)
         except Exception:
-            # Corrupt doc — recreate
-            pass
-    p = Profile()
+            pass  # Corrupt doc — recreate
+
+    # Profilo per `uid` non esiste. Se uid != "me", proviamo la migrazione.
+    if uid != "me":
+        legacy = await db.taccuino_profile.find_one({"id": "me"})
+        if legacy and not legacy.get("claimed_by"):
+            # Copia "me" → nuovo UUID (preserva ogni campo: key_facts,
+            # ai_name, settings, voice_locked, total_messages, memory_summary).
+            try:
+                new_doc = {k: v for k, v in legacy.items() if k != "_id"}
+                new_doc["id"] = uid
+                await db.taccuino_profile.insert_one(new_doc)
+                # Marca "me" come claimed così nessun altro device potrà
+                # ereditare la memoria storica.
+                await db.taccuino_profile.update_one(
+                    {"id": "me"},
+                    {"$set": {"claimed_by": uid, "claimed_at": datetime.utcnow().isoformat()}},
+                )
+                # Migra anche la timeline: aggiorna tutti i doc senza
+                # profile_id (= legacy "me") col nuovo UUID.
+                await db.taccuino_timeline.update_many(
+                    {"$or": [{"profile_id": {"$exists": False}}, {"profile_id": None}, {"profile_id": "me"}]},
+                    {"$set": {"profile_id": uid}},
+                )
+                logger.info(f"[multi-user] migrated 'me' → {uid[:8]}... (first claim)")
+                # Restituisci il profilo appena creato
+                fresh = await db.taccuino_profile.find_one({"id": uid}, {"_id": 0})
+                if fresh:
+                    fresh.pop("claimed_by", None)  # campo interno, non esporre
+                    return Profile(**fresh)
+            except Exception as e:
+                logger.warning(f"[multi-user] migration failed for {uid[:8]}: {e}")
+                # Cadiamo nel ramo "create fresh profile" sotto.
+
+    # Nessun profilo trovato (e migrazione non applicabile/fallita) → crea fresh.
+    p = Profile(id=uid)
     try:
         await db.taccuino_profile.insert_one(p.model_dump())
     except Exception as e:
-        # DuplicateKeyError o simile: un altro worker ha inserito nel
-        # frattempo. Rileggi e restituisci quello.
+        # DuplicateKeyError: un altro worker ha inserito nel frattempo.
         try:
-            doc2 = await db.taccuino_profile.find_one({"id": "me"}, {"_id": 0})
+            doc2 = await db.taccuino_profile.find_one({"id": uid}, {"_id": 0})
             if doc2:
+                doc2.pop("claimed_by", None)
                 return Profile(**doc2)
         except Exception:
             pass
-        # Non è un duplicate key (es. connessione MongoDB persa): rilancia.
         if "duplicate" not in str(e).lower() and "E11000" not in str(e):
             raise
     return p
@@ -632,7 +742,10 @@ async def _ensure_profile_unique_index():
 
 async def save_profile(p: Profile) -> Profile:
     p.updated_at = datetime.now(timezone.utc).isoformat()
-    await db.taccuino_profile.replace_one({"id": "me"}, p.model_dump(), upsert=True)
+    # Multi-user: usa l'id del profilo passato (p.id), che corrisponde
+    # all'utente corrente perché get_or_create_profile() lo setta dal
+    # ContextVar. NON forziamo più "me" come chiave.
+    await db.taccuino_profile.replace_one({"id": p.id}, p.model_dump(), upsert=True)
     return p
 
 
@@ -1424,20 +1537,20 @@ async def api_update_profile(update: ProfileUpdate):
 async def api_reset_profile():
     """Reset entire memory and profile (free will / privacy)."""
     await db.taccuino_profile.delete_many({})
-    await db.taccuino_timeline.delete_many({})
+    await db.taccuino_timeline.delete_many(_uf())
     return {"ok": True, "message": "Memoria cancellata."}
 
 
 @api_router.get("/timeline", response_model=List[TimelineEntry])
 async def api_get_timeline(limit: int = 200):
-    docs = await db.taccuino_timeline.find({}, {"_id": 0}).sort("timestamp", -1).to_list(limit)
+    docs = await db.taccuino_timeline.find(_uf(), {"_id": 0}).sort("timestamp", -1).to_list(limit)
     docs.reverse()  # chronological order (oldest first)
     return [TimelineEntry(**d) for d in docs]
 
 
 @api_router.delete("/timeline")
 async def api_clear_timeline():
-    await db.taccuino_timeline.delete_many({})
+    await db.taccuino_timeline.delete_many(_uf())
     return {"ok": True}
 
 
@@ -1472,7 +1585,7 @@ async def api_converse(req: ConverseRequest):
     # Load recent context — anche in ephemeral usiamo il context recente per
     # la qualità della risposta, ma la NUOVA confessione non finirà nel
     # contesto futuro perché non viene salvata.
-    recent_docs = await db.taccuino_timeline.find({}, {"_id": 0}).sort("timestamp", -1).to_list(20)
+    recent_docs = await db.taccuino_timeline.find(_uf(), {"_id": 0}).sort("timestamp", -1).to_list(20)
     recent_docs.reverse()
     recent = [TimelineEntry(**d) for d in recent_docs]
 
@@ -2666,7 +2779,7 @@ async def api_ghost_topic(req: dict):
 # ============================================================
 @api_router.post("/reset_history")
 async def api_reset_history():
-    await db.taccuino_timeline.delete_many({})
+    await db.taccuino_timeline.delete_many(_uf())
     profile = await get_or_create_profile()
     await db.taccuino_profile.update_one(
         {"id": profile.id},
@@ -2684,7 +2797,7 @@ async def api_reset_history():
 async def api_ghost(req: GhostRequest):
     """Cancella un'entry e (opzionalmente) preserva l'insegnamento."""
     # Trova l'entry da cancellare
-    target = await db.taccuino_timeline.find_one({"id": req.entry_id}, {"_id": 0})
+    target = await db.taccuino_timeline.find_one(_uf({"id": req.entry_id}), {"_id": 0})
     if not target:
         raise HTTPException(status_code=404, detail="Entry non trovata")
 
@@ -2745,7 +2858,7 @@ async def api_recap(period: str = "today"):
     else:
         since = now - timedelta(hours=24)
     docs = await db.taccuino_timeline.find(
-        {"timestamp": {"$gte": since.isoformat()}},
+        _uf({"timestamp": {"$gte": since.isoformat()}}),
         {"_id": 0},
     ).sort("timestamp", 1).to_list(500)
     if not docs:
@@ -2817,7 +2930,7 @@ async def api_checkin_generate(req: CheckinRequest):
     }.get(lang, "italiano")
 
     # Pull the most recent N timeline entries to give Claude fresh context.
-    docs = await db.taccuino_timeline.find({}, {"_id": 0}).sort("timestamp", -1).to_list(8)
+    docs = await db.taccuino_timeline.find(_uf(), {"_id": 0}).sort("timestamp", -1).to_list(8)
     docs.reverse()
     recent = [TimelineEntry(**d) for d in docs]
     last_lines = "\n".join(
@@ -3124,59 +3237,15 @@ _AUDIO_TAG_RE = re.compile(r"\[[a-zA-ZàèéìòùÀÈÉÌÒÙ /,'_-]{1,40}\]")
 
 
 def _strip_audio_tags(text: str) -> str:
-    """Remove [audio tags] AND tone-tag [TONE:xxx] from text — used both for
-    chat-bubble display AND for cleaning sentences before they reach the TTS
-    engine. The tone tag is meta-information for the synth: it MUST never end
-    up in the actual mp3 (otherwise ElevenLabs literally pronounces 'tone warm').
-    """
+    """Remove [audio tags] from text — used for chat-bubble display."""
     if not text:
         return text
     cleaned = _AUDIO_TAG_RE.sub("", text)
-    # Strip [TONE:xxx] prefix wherever it appears (start of string or stray).
-    cleaned = _TONE_TAG_RE.sub("", cleaned)  # head match
-    # Also catch tone-tags that occasionally land in the middle (e.g.
-    # multi-sentence reply where Claude prepends one per sentence).
-    cleaned = re.sub(r'\[\s*TONE\s*:\s*[a-zA-Z]+\s*\]\s*', '', cleaned, flags=re.IGNORECASE)
     # Collapse double spaces created by removal
     cleaned = re.sub(r"  +", " ", cleaned).strip()
     # Also strip leading punctuation glue like " ,"
     cleaned = re.sub(r"\s+([,.;!?])", r"\1", cleaned)
     return cleaned
-
-
-# ============================================================
-# CLOSE-INTENT HEURISTIC (Python fallback per close_session)
-# ============================================================
-# Se Claude dimentica di settare close_session=true (capita spesso quando
-# il prompt è lungo), questa funzione scansiona il messaggio dell'utente
-# per pattern di saluto/chiusura italiani. È un fallback robusto.
-_CLOSE_INTENT_PATTERNS = [
-    "ci sentiamo dopo", "ci sentiamo poi", "ci sentiamo piu' tardi",
-    "ci sentiamo più tardi", "ci sentiamo domani", "ci sentiamo presto",
-    "a dopo", "a più tardi", "a piu' tardi", "a domani", "a presto",
-    "ciao koda", "ciao bro", "ciao amico",
-    "buonanotte", "buona notte", "buon giorno koda", "buona giornata",
-    "vado a letto", "vado a dormire", "vado adesso", "vado che ho da fare",
-    "devo andare", "devo scappare", "ora scappo", "ti saluto",
-    "basta per oggi", "mi fermo qui", "chiudo qui", "ora chiudo",
-    "grazie ora chiudo", "grazie ci sentiamo", "grazie a dopo",
-    "ci aggiorniamo", "alla prossima",
-]
-
-
-def _detect_close_intent(user_text: str) -> bool:
-    """Return True if the user's last message looks like a farewell."""
-    if not user_text:
-        return False
-    t = user_text.lower().strip()
-    # Match only se è la frase intera o quasi (< 80 char), così evitiamo
-    # falsi positivi quando "ciao" è nel mezzo di una frase più lunga.
-    if len(t) > 100:
-        return False
-    for pat in _CLOSE_INTENT_PATTERNS:
-        if pat in t:
-            return True
-    return False
 
 
 @api_router.get("/voice/options")
@@ -4641,7 +4710,7 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
     if not req.ephemeral:
         await db.taccuino_timeline.insert_one(user_entry.model_dump())
 
-    recent_docs = await db.taccuino_timeline.find({}, {"_id": 0}).sort("timestamp", -1).to_list(20)
+    recent_docs = await db.taccuino_timeline.find(_uf(), {"_id": 0}).sort("timestamp", -1).to_list(20)
     recent_docs.reverse()
     recent = [TimelineEntry(**d) for d in recent_docs]
 
@@ -5323,7 +5392,7 @@ async def _fast_pipeline_task(
 
         # Recent context: 16 messaggi (era 8). +500ms TTFT trascurabile,
         # ma Koda non perde il filo di conversazioni multi-turno.
-        recent_docs = await db.taccuino_timeline.find({}, {"_id": 0}).sort("timestamp", -1).to_list(16)
+        recent_docs = await db.taccuino_timeline.find(_uf(), {"_id": 0}).sort("timestamp", -1).to_list(16)
         recent_docs.reverse()
         recent = [TimelineEntry(**d) for d in recent_docs]
         history_str = _format_history_for_llm(recent) if recent else ""
@@ -5542,15 +5611,8 @@ async def _fast_pipeline_task(
         # ("ci sentiamo dopo", "buonanotte", ecc.). Inviato al client via meta
         # event → il client chiude la sessione dopo l'audio del saluto.
         close_session = bool(data.get("close_session") or False)
-        # FALLBACK HEURISTIC: se Claude ha dimenticato di settare il flag ma
-        # l'utente ha chiaramente salutato per chiudere, lo settiamo noi.
-        # Capita perché il prompt è lungo e il modello a volte ignora i campi
-        # JSON extra. La heuristic Python è 100% deterministica.
-        if not close_session and _detect_close_intent(text or ""):
-            close_session = True
-            logger.info(f"[fast {session_id[:8]}] close_session=true (heuristic fallback, user said: '{(text or '')[:60]}')")
-        elif close_session:
-            logger.info(f"[fast {session_id[:8]}] close_session=true (LLM detected)")
+        if close_session:
+            logger.info(f"[fast {session_id[:8]}] close_session=true (user wants to end)")
         memory_update = (data.get("memory_update") or "").strip()
         trait_update = (data.get("trait_update") or "").strip()
         actions_raw = data.get("actions") or []
@@ -5584,12 +5646,8 @@ async def _fast_pipeline_task(
         except Exception:
             pass
 
-        # _strip_audio_tags ora rimuove sia gli [audio tag] che il [TONE:xxx]
-        # → reply_text è il testo pulito da mostrare/sintetizzare. Lo usiamo
-        # per entrambi (display e voice) perché non vogliamo che il tag tone
-        # finisca mai nelle bolle chat né nell'audio sintetizzato.
-        voice_text_full = _strip_audio_tags(full_reply)
-        reply_text = voice_text_full
+        voice_text_full = full_reply
+        reply_text = _strip_audio_tags(full_reply)
 
         ai_entry = TimelineEntry(
             role="ai",
