@@ -2931,6 +2931,346 @@ def _has_audio_tags(text: str) -> bool:
     return bool(_AUDIO_TAG_RE.search(text or ""))
 
 
+# ============================================================
+# MEMORIA BIOGRAFICA PERMANENTE (key_facts)
+# ============================================================
+# Quando l'utente menziona fatti su di sé (nome dei figli, lavoro, città,
+# date significative, ecc.) li salviamo come "fatti chiave" che vengono
+# iniettati in OGNI prompt successivo. Così Koda li ricorda PER SEMPRE,
+# non solo nel contesto recente di 16 turni.
+# Estrazione via REGEX italiana (zero costo LLM, zero latenza). Più
+# avanti potremo aggiungere una passata LLM async per fatti sottili.
+# Schema MongoDB: collection `taccuino_key_facts`
+#   { id: str, fact: str, category: str, created_at: iso, source_text: str }
+# ============================================================
+
+_KF_NAME_BLACKLIST = {
+    "vegetariano", "vegana", "vegano", "celiaco", "celiaca",
+    "intollerante", "ingegnere", "medico", "dottore", "avvocato",
+    "infermiere", "infermiera", "insegnante", "studente", "studentessa",
+    "stanco", "stanca", "felice", "triste", "contento", "contenta",
+    "preoccupato", "preoccupata", "arrabbiato", "arrabbiata",
+    "qui", "lì", "là", "fuori", "dentro", "casa",
+}
+
+
+def _kf_is_valid_name(s: str) -> bool:
+    """Filtra falsi positivi del pattern 'sono X' / 'mi chiamo X'."""
+    if not s:
+        return False
+    return s.lower() not in _KF_NAME_BLACKLIST
+
+
+_KF_PATTERNS = [
+    # Nome utente
+    (re.compile(r"\b(?:mi chiamo|sono)\s+([A-Z][a-zàèéìòù]+)\b", re.I),
+     "identità", lambda m: f"Si chiama {m.group(1).capitalize()}" if _kf_is_valid_name(m.group(1)) else None),
+    # Età
+    (re.compile(r"\bho\s+(\d{1,3})\s+anni\b", re.I),
+     "identità", lambda m: f"Ha {m.group(1)} anni"),
+    # Città
+    (re.compile(r"\b(?:vivo|abito|sto)\s+(?:a|in|nel|nella|sul)\s+([A-Z][a-zàèéìòù]+(?:\s+[A-Z][a-zàèéìòù]+)?)\b", re.I),
+     "luogo", lambda m: f"Vive a {m.group(1)}"),
+    # Lavoro / professione
+    (re.compile(r"\b(?:lavoro|faccio|sono)\s+(?:come|il|la|un|un'|uno)\s+([a-zàèéìòù]+(?:e|a|o|i|tore|trice|sta|ologo|ologa)?)\b", re.I),
+     "lavoro", lambda m: f"Lavora come {m.group(1).lower()}"),
+    (re.compile(r"\blavoro\s+(?:a|in|presso)\s+([A-Z][\w\s&]{2,40})\b"),
+     "lavoro", lambda m: f"Lavora presso {m.group(1).strip()}"),
+    # Famiglia — figli
+    (re.compile(r"\bho\s+(?:un|una)\s+(figli[ao])\s+(?:di\s+)?(\d+)\s+(?:ann[oi]|mes[ei])\b", re.I),
+     "famiglia", lambda m: f"Ha un{'a' if m.group(1).endswith('a') else ''} {m.group(1).lower()} di {m.group(2)} anni"),
+    (re.compile(r"\bho\s+(\d+)\s+(figli|figlie)\b", re.I),
+     "famiglia", lambda m: f"Ha {m.group(1)} {m.group(2).lower()}"),
+    # Partner
+    (re.compile(r"\b(?:mia|la mia)\s+(moglie|compagna|ragazza|fidanzata)\s+(?:si chiama|è)\s+([A-Z][a-zàèéìòù]+)\b", re.I),
+     "famiglia", lambda m: f"{m.group(1).capitalize()} si chiama {m.group(2).capitalize()}"),
+    (re.compile(r"\b(?:mio|il mio)\s+(marito|compagno|ragazzo|fidanzato)\s+(?:si chiama|è)\s+([A-Z][a-zàèéìòù]+)\b", re.I),
+     "famiglia", lambda m: f"{m.group(1).capitalize()} si chiama {m.group(2).capitalize()}"),
+    # Animali
+    (re.compile(r"\bho\s+(?:un|una)\s+(cane|gatto|cagnolino|gattino|coniglio)\s+(?:che\s+si chiama|chiamato|di nome)\s+([A-Z][a-zàèéìòù]+)\b", re.I),
+     "famiglia", lambda m: f"Ha un{'a' if m.group(1).endswith('a') else ''} {m.group(1).lower()} di nome {m.group(2).capitalize()}"),
+    # Hobby / passioni
+    (re.compile(r"\b(?:adoro|amo|mi piace|mi piacciono)\s+(?:il |la |i |gli |le )?(calcio|tennis|nuoto|musica|cinema|fotografia|cucina|cucinare|leggere|libri|viaggi|viaggiare|trekking|montagna|mare)\b", re.I),
+     "passione", lambda m: f"Ama {m.group(1).lower()}"),
+    # Allergie / dieta
+    (re.compile(r"\bsono\s+(vegetariano|vegana|vegano|celiaco|celiaca|intollerante al lattosio|intollerante al glutine)\b", re.I),
+     "salute", lambda m: f"È {m.group(1).lower()}"),
+]
+
+
+def _extract_key_facts_from_text(text: str) -> List[Dict[str, str]]:
+    """Estrae fatti biografici dall'input dell'utente via regex italiane.
+    Ritorna lista di dict {fact, category, source_text}. Veloce, zero costo
+    LLM. Approccio low-recall/high-precision: meglio mancare un fatto che
+    salvarne uno sbagliato (poi Koda sembra confusa)."""
+    if not text or len(text) < 5:
+        return []
+    facts = []
+    for pat, cat, fmt in _KF_PATTERNS:
+        for m in pat.finditer(text):
+            try:
+                fact = fmt(m)
+                if fact and len(fact) < 200:
+                    facts.append({"fact": fact, "category": cat, "source_text": text[:300]})
+            except Exception:
+                continue
+    # Dedup all'interno della stessa estrazione
+    seen = set()
+    out = []
+    for f in facts:
+        if f["fact"] not in seen:
+            seen.add(f["fact"])
+            out.append(f)
+    return out
+
+
+async def _save_key_facts(facts: List[Dict[str, str]]) -> int:
+    """Salva fatti nuovi nella collection — skippa duplicati (stessa fact
+    string)."""
+    if not facts:
+        return 0
+    saved = 0
+    for f in facts:
+        try:
+            exists = await db.taccuino_key_facts.find_one({"fact": f["fact"]})
+            if exists:
+                continue
+            doc = {
+                "id": str(uuid.uuid4()),
+                "fact": f["fact"],
+                "category": f.get("category", "altro"),
+                "source_text": f.get("source_text", ""),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.taccuino_key_facts.insert_one(doc)
+            saved += 1
+            logger.info(f"[key_facts] saved: {f['fact'][:80]}")
+        except Exception as e:
+            logger.warning(f"[key_facts] save failed: {e}")
+    return saved
+
+
+async def _get_key_facts_brief(limit: int = 20) -> str:
+    """Restituisce una stringa formattata coi fatti chiave esistenti, da
+    iniettare nel system prompt. Limit 20 per non gonfiare i token."""
+    try:
+        cursor = db.taccuino_key_facts.find({}, {"_id": 0}).sort("created_at", -1).limit(limit)
+        facts = await cursor.to_list(limit)
+        if not facts:
+            return ""
+        lines = [f"  • {f.get('fact', '').strip()}" for f in facts if f.get("fact")]
+        return "\n".join(lines) if lines else ""
+    except Exception as e:
+        logger.warning(f"[key_facts] get brief failed: {e}")
+        return ""
+
+
+@api_router.get("/key-facts")
+async def api_get_key_facts():
+    """Lista tutti i fatti chiave dell'utente — per la futura UI di gestione."""
+    try:
+        cursor = db.taccuino_key_facts.find({}, {"_id": 0}).sort("created_at", -1).limit(200)
+        facts = await cursor.to_list(200)
+        return {"facts": facts, "count": len(facts)}
+    except Exception as e:
+        logger.warning(f"[key_facts] list failed: {e}")
+        return {"facts": [], "count": 0, "error": str(e)}
+
+
+@api_router.delete("/key-facts/{fact_id}")
+async def api_delete_key_fact(fact_id: str):
+    """Cancella un fatto chiave."""
+    try:
+        r = await db.taccuino_key_facts.delete_one({"id": fact_id})
+        return {"deleted": r.deleted_count}
+    except Exception as e:
+        return {"deleted": 0, "error": str(e)}
+
+
+# ============================================================
+# SAFETY GUARDRAILS (Italia)
+# ============================================================
+# Quando l'utente menziona contenuti critici (suicidio, autolesionismo,
+# violenza domestica, abusi su minori) Koda DEVE:
+#   1. Rispondere con empatia, senza minimizzare e senza moralismi
+#   2. Suggerire risorse italiane verificate (numeri verdi nazionali)
+# Approccio: detection via keyword italiane (non LLM — troppo costoso/lento),
+# e iniezione di un BLOCCO SAFETY nel prompt che istruisce Claude. NON
+# blocchiamo la conversazione: Koda risponde lo stesso ma in modo informato.
+# ============================================================
+
+# Set di keyword sensibili (lowercase). False positive accettabili — meglio
+# attivare safety per niente che mancarla. Italiani + alcune espressioni
+# colloquiali comuni.
+_SAFETY_SUICIDE_KW = {
+    "suicid", "uccidermi", "farla finita", "non voglio più vivere", "non vivere più",
+    "togliermi la vita", "non ne posso più", "voglio morire", "voglio sparire",
+    "ammazzarmi", "ucciderò me", "ho pensato di morire", "se mi succedesse qualcosa",
+    "lasciare questo mondo", "buttarmi", "vado a buttarmi",
+}
+_SAFETY_SELFHARM_KW = {
+    "autolesion", "tagliarmi", "mi taglio", "mi faccio male", "lametta",
+    "farmi del male", "ferirmi", "punirmi facendo",
+}
+_SAFETY_DOMESTIC_KW = {
+    "mio marito mi picchia", "mio ragazzo mi picchia", "compagno mi picchia",
+    "mi mena", "violenza in casa", "mi mette le mani addosso",
+    "mi stupra", "mi stuprato", "mi ha violentata", "abuso in casa",
+}
+_SAFETY_MINOR_KW = {
+    "mio figlio è in pericolo", "bambino abusato", "bambino violentato",
+    "ho visto un bambino", "minore in pericolo",
+}
+
+
+def _detect_safety_category(text: str) -> Optional[str]:
+    """Ritorna la categoria di rischio rilevata, o None. Veloce — solo lookup
+    di sottostringhe sul testo lowercase. Non sostituisce un sistema di
+    moderazione vero ma copre i casi più comuni in italiano."""
+    if not text:
+        return None
+    t = text.lower()
+    for kw in _SAFETY_SUICIDE_KW:
+        if kw in t:
+            return "suicide"
+    for kw in _SAFETY_SELFHARM_KW:
+        if kw in t:
+            return "selfharm"
+    for kw in _SAFETY_DOMESTIC_KW:
+        if kw in t:
+            return "domestic"
+    for kw in _SAFETY_MINOR_KW:
+        if kw in t:
+            return "minor"
+    return None
+
+
+def _safety_prompt_injection(category: str) -> str:
+    """Restituisce un blocco di istruzioni da iniettare nel system prompt
+    quando viene rilevata una categoria di rischio. Le risorse sono i numeri
+    italiani ufficiali (giugno 2026)."""
+    common_intro = (
+        "\n\n⚠️ SAFETY — l'utente ha menzionato qualcosa di delicato. "
+        "RISPONDI con presenza e tenerezza, MAI minimizzando, MAI con tono "
+        "professionale-clinico, MAI con elenchi puntati. Sei un amico. "
+        "Dopo aver validato il dolore ed espresso che gli sei vicino, "
+        "SUGGERISCI UNA risorsa concreta (UNA, non un elenco), come la "
+        "consiglieresti a un amico. Esempio: 'Senti, c'è il Telefono Amico, "
+        "02 2327 2327, sono persone vere, anonime — non sei sol@.' "
+        "DOPO la risorsa torna subito al filo umano, non chiudere.\n"
+        "Risorse italiane verificate:\n"
+    )
+    by_cat = {
+        "suicide": (
+            "  • Telefono Amico Italia (volontari, anonimo, 24/7): 02 2327 2327\n"
+            "  • Samaritans Onlus (ascolto anonimo): 06 7720 8977\n"
+            "  • Numero Verde Suicidio Prevenzione: 800 86 00 22\n"
+            "Se il rischio sembra IMMEDIATO (gesto in atto): suggerisci il 112."
+        ),
+        "selfharm": (
+            "  • Telefono Amico Italia: 02 2327 2327 (volontari, anonimo)\n"
+            "  • Samaritans Onlus: 06 7720 8977"
+        ),
+        "domestic": (
+            "  • Numero antiviolenza Italia (24/7, anonimo): 1522\n"
+            "  • Centri Antiviolenza D.i.Re — direcontrolaviolenza.it"
+        ),
+        "minor": (
+            "  • Telefono Azzurro (minori in pericolo): 19696 (24/7)\n"
+            "  • Forze dell'ordine: 112 se il pericolo è IMMEDIATO"
+        ),
+    }
+    return common_intro + by_cat.get(category, by_cat["suicide"])
+
+
+# ============================================================
+# TTS NORMALIZATION (italiano)
+# ============================================================
+# ElevenLabs Flash v2.5 in italiano legge bene i numeri puri ma incespica su:
+# - simboli unità: "29°C", "29°", "50%", "€9,99", "5km", "10h30"
+# - separatori orari/decimali: "10:30", "9.99", "1.500"
+# - caratteri speciali: "&", "@", "#"
+# - URL e abbreviazioni tecniche
+# Questa funzione fa una normalizzazione difensiva PRIMA di mandare il testo
+# al TTS, così Koda pronuncia "29 gradi" invece di "29 grado C" o peggio.
+# ============================================================
+
+# Pattern compilati a livello modulo per riusarli a ogni frase.
+_NORM_DEGREES_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*°\s*[Cc]")            # 29°C, 29 °C
+_NORM_DEGREES_SOLO_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*°(?![FK])")       # 29°
+_NORM_PERCENT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*%")                     # 50%
+_NORM_EURO_RE = re.compile(r"€\s*(\d+(?:[.,]\d+)?)")                        # €9,99
+_NORM_EURO_POST_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*€")                   # 9,99€
+_NORM_DOLLAR_RE = re.compile(r"\$\s*(\d+(?:[.,]\d+)?)")                     # $5
+_NORM_KM_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*km\b", re.I)                 # 5km
+_NORM_KG_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*kg\b", re.I)                 # 5kg
+_NORM_HOUR_RE = re.compile(r"\b(\d+)\s*h\s*(\d+)\b")                        # 10h30 → "10 e 30"
+_NORM_HOUR_SOLO_RE = re.compile(r"(\d+)\s*h\b(?!\s*ttp)", re.I)             # 5h (escl. http)
+_NORM_MIN_RE = re.compile(r"(\d+)\s*min\b", re.I)                           # 5min
+_NORM_TIME_RE = re.compile(r"\b(\d{1,2}):(\d{2})\b")                        # 10:30
+_NORM_URL_RE = re.compile(r"https?://\S+", re.I)
+_NORM_WWW_RE = re.compile(r"\bwww\.\S+", re.I)
+
+
+def _normalize_for_tts_it(text: str) -> str:
+    """Espande simboli/unità per il TTS italiano. NON modifica il testo
+    visualizzato in chat (quello passa puro). Applicato SOLO prima della
+    chiamata a ElevenLabs.
+
+    Esempi:
+        "Oggi 29°C a Roma"      → "Oggi 29 gradi a Roma"
+        "Sconto del 50%"        → "Sconto del 50 percento"
+        "Costa €9,99"           → "Costa 9 euro e 99"
+        "Sono 5km da qui"       → "Sono 5 chilometri da qui"
+        "Ci vediamo alle 10:30" → "Ci vediamo alle 10 e 30"
+    """
+    if not text:
+        return text
+    t = text
+    # URL → "link" (evita ElevenLabs che li sillaba carattere per carattere)
+    t = _NORM_URL_RE.sub("link", t)
+    t = _NORM_WWW_RE.sub("link", t)
+    # Gradi: "29°C" / "29 °C" → "29 gradi"
+    t = _NORM_DEGREES_RE.sub(lambda m: f"{m.group(1).replace('.', ',')} gradi", t)
+    t = _NORM_DEGREES_SOLO_RE.sub(lambda m: f"{m.group(1).replace('.', ',')} gradi", t)
+    # Percentuale
+    t = _NORM_PERCENT_RE.sub(lambda m: f"{m.group(1).replace('.', ',')} percento", t)
+    # Valute — formato italiano: "9,99 €" → "9 euro e 99"
+    def _euro_repl(m):
+        amt = m.group(1).replace(".", ",")
+        if "," in amt:
+            whole, cents = amt.split(",", 1)
+            cents = cents[:2].ljust(2, "0")
+            return f"{whole} euro e {cents}" if int(cents) > 0 else f"{whole} euro"
+        return f"{amt} euro"
+    t = _NORM_EURO_RE.sub(_euro_repl, t)
+    t = _NORM_EURO_POST_RE.sub(_euro_repl, t)
+    def _dollar_repl(m):
+        amt = m.group(1).replace(".", ",")
+        if "," in amt:
+            whole, cents = amt.split(",", 1)
+            cents = cents[:2].ljust(2, "0")
+            return f"{whole} dollari e {cents}" if int(cents) > 0 else f"{whole} dollari"
+        return f"{amt} dollari"
+    t = _NORM_DOLLAR_RE.sub(_dollar_repl, t)
+    # Cleanup doppi (es. "$15 dollari" → "15 dollari dollari" → "15 dollari")
+    t = re.sub(r"\b(euro|dollari|gradi|percento|chilometri|chili|ore|minuti)\s+\1\b", r"\1", t, flags=re.I)
+    # Unità di misura
+    t = _NORM_KM_RE.sub(lambda m: f"{m.group(1).replace('.', ',')} chilometri", t)
+    t = _NORM_KG_RE.sub(lambda m: f"{m.group(1).replace('.', ',')} chili", t)
+    # Orari: "10:30" → "10 e 30"; "10h30" → "10 e 30"; "5h" → "5 ore"
+    t = _NORM_TIME_RE.sub(lambda m: f"{m.group(1)} e {m.group(2)}", t)
+    t = _NORM_HOUR_RE.sub(lambda m: f"{m.group(1)} e {m.group(2)}", t)
+    t = _NORM_HOUR_SOLO_RE.sub(lambda m: f"{m.group(1)} ore", t)
+    t = _NORM_MIN_RE.sub(lambda m: f"{m.group(1)} minuti", t)
+    # Caratteri ambigui per il TTS
+    t = t.replace(" & ", " e ").replace("&", " e ")
+    t = t.replace("@", " chiocciola ")
+    # Compatta spazi doppi creati dalle sostituzioni
+    t = re.sub(r"  +", " ", t).strip()
+    return t
+
+
 @api_router.get("/voices")
 async def api_list_voices():
     """Return the curated list of voices (plus user's custom voices if any)."""
@@ -4553,6 +4893,16 @@ async def _fast_pipeline_task(
                 await db.taccuino_timeline.insert_one(user_entry.model_dump())
             except Exception as e:
                 logger.warning(f"[fast] user entry insert failed: {e}")
+            # === MEMORIA BIOGRAFICA: estrai fatti chiave in background ===
+            # Regex-only, ~1ms, zero costo. Salva fatti nuovi nella collection
+            # taccuino_key_facts (skip duplicati). Sarà letta nel prompt dei
+            # turni successivi così Koda ricorda "per sempre".
+            try:
+                _extracted = _extract_key_facts_from_text(text)
+                if _extracted:
+                    asyncio.create_task(_save_key_facts(_extracted))
+            except Exception as e:
+                logger.warning(f"[key_facts] extraction failed: {e}")
 
         client_el = _get_eleven_client()
         if client_el is None:
@@ -4571,6 +4921,29 @@ async def _fast_pipeline_task(
         history_str = _format_history_for_llm(recent) if recent else ""
 
         sys_prompt = _build_fast_system_prompt(profile, recent)
+
+        # === MEMORIA BIOGRAFICA: inietta i fatti chiave noti su Fabio ===
+        # Vengono dai turni precedenti (regex extraction). 1 chiamata Mongo
+        # rapida (~5ms). Permette a Koda di ricordare nome figli, lavoro,
+        # città, hobby, ecc. anche dopo 1000 messaggi.
+        kf_brief = await _get_key_facts_brief(limit=20)
+        if kf_brief:
+            sys_prompt = sys_prompt + (
+                "\n\n📓 FATTI CHIAVE SULL'UTENTE (memoria permanente — "
+                "ricordali nelle risposte se rilevanti, senza ripeterli "
+                "esplicitamente come una scheda):\n" + kf_brief + "\n"
+            )
+
+        # === SAFETY GUARDRAILS (Italia) — P0 obbligatorio per App Store ===
+        # Se il messaggio contiene parole chiave critiche (suicidio/auto-
+        # lesionismo/violenza domestica/abusi su minori), iniettiamo nel
+        # system prompt UN blocco safety che istruisce Claude a rispondere
+        # con risorse italiane verificate, mantenendo il tono "amico".
+        # NON blocchiamo la chat — Koda continua a essere presente.
+        safety_cat = _detect_safety_category(text)
+        if safety_cat:
+            logger.warning(f"[fast {session_id[:8]}] SAFETY trigger: category={safety_cat}")
+            sys_prompt = sys_prompt + _safety_prompt_injection(safety_cat)
 
         # === WEB SEARCH OPZIONALE (Tavily) — Fast pipeline ===
         # Se la domanda richiede informazioni real-time (notizie, meteo, prezzi,
@@ -4640,6 +5013,10 @@ async def _fast_pipeline_task(
                 clean = _strip_audio_tags(sentence) or sentence
                 if not clean.strip():
                     return
+                # Normalizza simboli/unità per il TTS italiano: "29°C" → "29 gradi",
+                # "50%" → "50 percento", "€9,99" → "9 euro e 99", ecc.
+                # Solo per il TTS — il testo visualizzato in chat resta intatto.
+                clean_tts = _normalize_for_tts_it(clean)
                 vs = _voice_settings_for_tone(current_tone, None, None)
                 # FAST PATH: SEMPRE eleven_flash_v2_5 (~75ms TTFB, ~real-time gen).
                 # Il modello eleven_v3 è MOLTO più lento (~3-9s per frase corta)
@@ -4652,7 +5029,7 @@ async def _fast_pipeline_task(
                 def _do_tts():
                     audio = bytearray()
                     kwargs = dict(
-                        text=clean,
+                        text=clean_tts,
                         voice_id=voice_id,
                         model_id=model_id,
                         output_format="mp3_44100_128",  # 128kbps qualità piena, niente chipmunk
