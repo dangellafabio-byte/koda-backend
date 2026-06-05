@@ -3124,15 +3124,59 @@ _AUDIO_TAG_RE = re.compile(r"\[[a-zA-ZàèéìòùÀÈÉÌÒÙ /,'_-]{1,40}\]")
 
 
 def _strip_audio_tags(text: str) -> str:
-    """Remove [audio tags] from text — used for chat-bubble display."""
+    """Remove [audio tags] AND tone-tag [TONE:xxx] from text — used both for
+    chat-bubble display AND for cleaning sentences before they reach the TTS
+    engine. The tone tag is meta-information for the synth: it MUST never end
+    up in the actual mp3 (otherwise ElevenLabs literally pronounces 'tone warm').
+    """
     if not text:
         return text
     cleaned = _AUDIO_TAG_RE.sub("", text)
+    # Strip [TONE:xxx] prefix wherever it appears (start of string or stray).
+    cleaned = _TONE_TAG_RE.sub("", cleaned)  # head match
+    # Also catch tone-tags that occasionally land in the middle (e.g.
+    # multi-sentence reply where Claude prepends one per sentence).
+    cleaned = re.sub(r'\[\s*TONE\s*:\s*[a-zA-Z]+\s*\]\s*', '', cleaned, flags=re.IGNORECASE)
     # Collapse double spaces created by removal
     cleaned = re.sub(r"  +", " ", cleaned).strip()
     # Also strip leading punctuation glue like " ,"
     cleaned = re.sub(r"\s+([,.;!?])", r"\1", cleaned)
     return cleaned
+
+
+# ============================================================
+# CLOSE-INTENT HEURISTIC (Python fallback per close_session)
+# ============================================================
+# Se Claude dimentica di settare close_session=true (capita spesso quando
+# il prompt è lungo), questa funzione scansiona il messaggio dell'utente
+# per pattern di saluto/chiusura italiani. È un fallback robusto.
+_CLOSE_INTENT_PATTERNS = [
+    "ci sentiamo dopo", "ci sentiamo poi", "ci sentiamo piu' tardi",
+    "ci sentiamo più tardi", "ci sentiamo domani", "ci sentiamo presto",
+    "a dopo", "a più tardi", "a piu' tardi", "a domani", "a presto",
+    "ciao koda", "ciao bro", "ciao amico",
+    "buonanotte", "buona notte", "buon giorno koda", "buona giornata",
+    "vado a letto", "vado a dormire", "vado adesso", "vado che ho da fare",
+    "devo andare", "devo scappare", "ora scappo", "ti saluto",
+    "basta per oggi", "mi fermo qui", "chiudo qui", "ora chiudo",
+    "grazie ora chiudo", "grazie ci sentiamo", "grazie a dopo",
+    "ci aggiorniamo", "alla prossima",
+]
+
+
+def _detect_close_intent(user_text: str) -> bool:
+    """Return True if the user's last message looks like a farewell."""
+    if not user_text:
+        return False
+    t = user_text.lower().strip()
+    # Match only se è la frase intera o quasi (< 80 char), così evitiamo
+    # falsi positivi quando "ciao" è nel mezzo di una frase più lunga.
+    if len(t) > 100:
+        return False
+    for pat in _CLOSE_INTENT_PATTERNS:
+        if pat in t:
+            return True
+    return False
 
 
 @api_router.get("/voice/options")
@@ -5498,8 +5542,15 @@ async def _fast_pipeline_task(
         # ("ci sentiamo dopo", "buonanotte", ecc.). Inviato al client via meta
         # event → il client chiude la sessione dopo l'audio del saluto.
         close_session = bool(data.get("close_session") or False)
-        if close_session:
-            logger.info(f"[fast {session_id[:8]}] close_session=true (user wants to end)")
+        # FALLBACK HEURISTIC: se Claude ha dimenticato di settare il flag ma
+        # l'utente ha chiaramente salutato per chiudere, lo settiamo noi.
+        # Capita perché il prompt è lungo e il modello a volte ignora i campi
+        # JSON extra. La heuristic Python è 100% deterministica.
+        if not close_session and _detect_close_intent(text or ""):
+            close_session = True
+            logger.info(f"[fast {session_id[:8]}] close_session=true (heuristic fallback, user said: '{(text or '')[:60]}')")
+        elif close_session:
+            logger.info(f"[fast {session_id[:8]}] close_session=true (LLM detected)")
         memory_update = (data.get("memory_update") or "").strip()
         trait_update = (data.get("trait_update") or "").strip()
         actions_raw = data.get("actions") or []
@@ -5533,8 +5584,12 @@ async def _fast_pipeline_task(
         except Exception:
             pass
 
-        voice_text_full = full_reply
-        reply_text = _strip_audio_tags(full_reply)
+        # _strip_audio_tags ora rimuove sia gli [audio tag] che il [TONE:xxx]
+        # → reply_text è il testo pulito da mostrare/sintetizzare. Lo usiamo
+        # per entrambi (display e voice) perché non vogliamo che il tag tone
+        # finisca mai nelle bolle chat né nell'audio sintetizzato.
+        voice_text_full = _strip_audio_tags(full_reply)
+        reply_text = voice_text_full
 
         ai_entry = TimelineEntry(
             role="ai",
