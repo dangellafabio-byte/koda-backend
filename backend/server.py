@@ -685,7 +685,22 @@ async def get_or_create_profile() -> Profile:
     # Profilo per `uid` non esiste. Se uid != "me", proviamo la migrazione.
     if uid != "me":
         legacy = await db.taccuino_profile.find_one({"id": "me"})
-        if legacy and not legacy.get("claimed_by"):
+        # === SELF-HEALING CLAIM (giugno 2026) ===
+        # "me" potrebbe già essere claimed da un test UUID (es. curl di
+        # debug). Per evitare di bruciare la memoria storica, il claim
+        # vale SOLO se il claimer ha effettivamente creato il suo profilo
+        # (= ha "owned" i dati). Se invece il claimer non esiste o non
+        # ha profilo, il claim viene considerato orfano e ri-assegnabile.
+        is_claim_valid = False
+        if legacy and legacy.get("claimed_by"):
+            prev_claimer = legacy["claimed_by"]
+            prev_profile = await db.taccuino_profile.find_one({"id": prev_claimer})
+            if prev_profile:
+                is_claim_valid = True
+            else:
+                logger.info(f"[multi-user] stale claim by {prev_claimer[:8]}... — releasing")
+
+        if legacy and not is_claim_valid:
             # Copia "me" → nuovo UUID (preserva ogni campo: key_facts,
             # ai_name, settings, voice_locked, total_messages, memory_summary).
             try:
