@@ -1135,8 +1135,34 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f'  "domain": "soldi | tempo | spesa | salute | lavoro | casa | altro | null",\n'
         f'  "extracted": {{ "domain": "...", "intent": "...", "amount": 12.5, "currency": "EUR", "item": "...", "when": "...", "flags": ["..."] }} or null,\n'
         f'  "actions": [{{ "type": "schedule_notification", "when_iso": "...", "title": "...", "body": "...", "label": "..." }}],\n'
-        f'  "memory_update": "una breve frase da aggiungere alla memoria di lungo periodo, oppure null se nulla di rilevante"\n'
+        f'  "memory_update": "una breve frase da aggiungere alla memoria di lungo periodo, oppure null se nulla di rilevante",\n'
+        f'  "close_session": false\n'
         f"}}\n"
+        f"\n"
+        f"━━━ CHIUSURA NATURALE CONVERSAZIONE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Se l'utente ti SALUTA per chiudere la conversazione, imposta\n"
+        f'  "close_session": true\n'
+        f"e rispondi con un saluto BREVE e CALDO (max 12 parole), come faresti\n"
+        f"al telefono con un amico che ti dice 'ok ci sentiamo'.\n"
+        f"\n"
+        f"Esempi di INTENT di chiusura (riconoscili anche in forme diverse):\n"
+        f"  • 'ciao {ai_name}', 'a dopo', 'a più tardi', 'a presto'\n"
+        f"  • 'ci sentiamo dopo', 'ci sentiamo più tardi', 'ci sentiamo poi'\n"
+        f"  • 'devo andare', 'vado che ho da fare', 'ora scappo'\n"
+        f"  • 'vado a letto', 'buonanotte', 'buona giornata'\n"
+        f"  • 'basta per oggi', 'mi fermo qui', 'chiudo qui'\n"
+        f"  • 'grazie {ai_name}, ora chiudo', 'grazie, ci aggiorniamo'\n"
+        f"\n"
+        f"Esempi di reply per close_session=true (breve, caldo, NIENTE domande):\n"
+        f"  • '[TONE:warm] A dopo. Sono qui quando vuoi.'\n"
+        f"  • '[TONE:warm] Buonanotte. Riposati bene.'\n"
+        f"  • '[TONE:warm] Ti aspetto quando ti va.'\n"
+        f"  • '[TONE:warm] Ok, vai sereno. Un abbraccio.'\n"
+        f"\n"
+        f"REGOLA D'ORO: con close_session=true, NIENTE domanda finale, NIENTE\n"
+        f"appiglio per riallacciare. È un saluto, non una continuazione.\n"
+        f"Se non sei SICURO che sia un saluto di chiusura → lascia false.\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"\n"
         f"━━━ TAG VOCALE OBBLIGATORIO ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"DEVI iniziare il valore di 'reply' con un tag [TONE:xxx] dove xxx è UNO di:\n"
@@ -4782,6 +4808,14 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
         domain = data.get("domain")
         if domain not in {"soldi", "tempo", "spesa", "salute", "lavoro", "casa", "altro"}:
             domain = None
+        # === CLOSE SESSION FLAG (giugno 2026) ===
+        # Claude imposta close_session=true quando rileva un saluto di chiusura
+        # dall'utente ("ci sentiamo dopo", "buonanotte", ecc.). Il frontend lo
+        # legge da /api/converse-result/{rid} e, dopo che l'audio di saluto è
+        # stato riprodotto, chiude automaticamente la sessione/torna alla home.
+        close_session = bool(data.get("close_session") or False)
+        if close_session:
+            logger.info(f"[close_session] user requested conversation end")
 
         extracted_obj = None
         extracted_raw = data.get("extracted")
@@ -4882,6 +4916,7 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
                 "tone": tone,
                 "domain": domain,
                 "actions": [a.model_dump() if hasattr(a, "model_dump") else a for a in parsed_actions],
+                "close_session": close_session,
                 "ready": True,
             }
             if wf:
@@ -5120,12 +5155,19 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
         f"Per richieste di cambio colore blob: rispondi onestamente che non è ancora pronto.\n"
         f"\n"
         f"FORMATO RISPOSTA: SOLO JSON valido (niente markdown, niente testo prima/dopo). "
-        f"Il campo \"reply\" DEVE essere il PRIMO campo. "
+        f"Il campo \"reply\" DEVE essere il PRIMO campo, e DEVE iniziare con un tag [TONE:xxx] "
+        f"(es. \"reply\":\"[TONE:warm] ...\"). Toni: warm|calm|concerned|energetic|urgent|neutral. "
+        f"Sceglilo in base allo stato emotivo dell'utente (concerned per dolore/ansia, calm per intimità, "
+        f"energetic per gioia condivisa, urgent solo per safety). "
         f"\"memory_update\": breve FATTO/EVENTO/DETTAGLIO del turno corrente (max 100 char), o null. "
         f"\"trait_update\": (SOLO quando rilevi un tratto STABILE di carattere/valori/modi — NON un fatto): "
         f"frase breve sul ritratto profondo dell'utente, es. 'è meticoloso, preferisce azione concreta a teoria' "
         f"(max 120 char). Lascia null nella stragrande maggioranza dei turni — usa solo per insight veri.\n"
-        f'{{"reply":"...","tone":"warm|calm|energetic|concerned|urgent|neutral","actions":[],"memory_update":null,"trait_update":null}}'
+        f"\"close_session\": true SOLO se l'utente saluta per CHIUDERE la conversazione "
+        f"('ciao Koda', 'a dopo', 'ci sentiamo poi', 'buonanotte', 'devo andare', 'vado a letto', "
+        f"'grazie ora chiudo'). Quando true, reply BREVE e CALDA (max 12 parole), NIENTE domande, "
+        f"NIENTE riapertura ('A dopo. Sono qui quando vuoi.' / 'Buonanotte, riposati bene.').\n"
+        f'{{"reply":"[TONE:warm] ...","tone":"warm|calm|energetic|concerned|urgent|neutral","actions":[],"memory_update":null,"trait_update":null,"close_session":false}}'
     )
 
 
@@ -5451,6 +5493,13 @@ async def _fast_pipeline_task(
         tone = (data.get("tone") or "warm").lower()
         if tone not in {"calm", "energetic", "concerned", "urgent", "warm", "neutral"}:
             tone = "warm"
+        # === CLOSE SESSION FLAG (giugno 2026) ===
+        # Claude lo imposta a true quando rileva intent di chiusura dell'utente
+        # ("ci sentiamo dopo", "buonanotte", ecc.). Inviato al client via meta
+        # event → il client chiude la sessione dopo l'audio del saluto.
+        close_session = bool(data.get("close_session") or False)
+        if close_session:
+            logger.info(f"[fast {session_id[:8]}] close_session=true (user wants to end)")
         memory_update = (data.get("memory_update") or "").strip()
         trait_update = (data.get("trait_update") or "").strip()
         actions_raw = data.get("actions") or []
@@ -5533,6 +5582,7 @@ async def _fast_pipeline_task(
             "voice_text": voice_text_full if voice_text_full != reply_text else None,
             "tone": ai_entry.tone,
             "actions": parsed_actions,
+            "close_session": close_session,
         })
         await _fast_session_mark_done(session_id)
 
