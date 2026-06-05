@@ -3538,7 +3538,7 @@ def _should_web_search(text: str) -> bool:
 # rilanciava Tavily ogni volta. Con questo dict cache (text+id → brief)
 # le richieste duplicate riusano il risultato. TTL di 60s per essere safe.
 _tavily_cache: Dict[str, tuple[float, Optional[str]]] = {}
-_TAVILY_CACHE_TTL_S = 60.0
+_TAVILY_CACHE_TTL_S = 300.0  # 5 min: query come "meteo Roma" cambia poco a query frequenza utente
 
 def _tavily_cache_get(query: str) -> Optional[str]:
     """Ritorna il brief in cache per la query (se valido). None se assente/scaduto."""
@@ -3561,12 +3561,13 @@ def _tavily_cache_set(query: str, brief: Optional[str]) -> None:
             if now - _tavily_cache[k][0] > _TAVILY_CACHE_TTL_S:
                 _tavily_cache.pop(k, None)
 
-async def _tavily_search_brief(query: str, max_results: int = 4, timeout_s: float = 9.0) -> Optional[str]:
+async def _tavily_search_brief(query: str, max_results: int = 2, timeout_s: float = 4.0) -> Optional[str]:
     """Esegue una ricerca Tavily con timeout aggressivo e restituisce un brief
     testuale che Claude può usare come contesto. Ritorna None se Tavily fallisce
     o va in timeout — in quel caso Claude risponde senza il contesto fresco.
-    Usa una cache in-memory di 60s per evitare doppia chiamata su iOS AVPlayer
-    (che fa due fetch della stessa stream URL).
+    Usa una cache in-memory di 5 minuti per ridurre re-query (giugno 2026:
+    timeout tagliato da 8s→4s, max_results 4→2, cache 60s→300s — riduce la
+    latenza percepita di 300-500ms quando il search si attiva).
 
     PRIVACY: la ricerca è ristretta a una whitelist di domini italiani
     autorevoli (testate giornalistiche, Wikipedia, servizi meteo certificati)
@@ -4592,7 +4593,7 @@ async def _fast_pipeline_task(
         elif _should_web_search(text):
             logger.info(f"[fast {session_id[:8]}] web-search triggered for: {text[:80]}")
             t_search = time.time()
-            web_search_brief = await _tavily_search_brief(text, max_results=4, timeout_s=8.0)
+            web_search_brief = await _tavily_search_brief(text, max_results=2, timeout_s=4.0)
             logger.info(f"[fast {session_id[:8]}] web-search done in {(time.time()-t_search)*1000:.0f}ms, brief={'yes' if web_search_brief else 'no'}")
 
         user_payload_parts = []
