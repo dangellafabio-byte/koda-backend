@@ -3081,14 +3081,8 @@ def _get_eleven_client():
 # Curated list of voices that work well for Italian.
 # (voice_id, display name, short description, gender)
 CURATED_VOICES = [
-    {"voice_id": "XrExE9yKIg1WjnnlVkGX", "name": "Matilda", "description": "Femminile, calda e amichevole — perfetta per un assistente personale", "gender": "F", "accent": "multilingue"},
-    {"voice_id": "EXAVITQu4vr4xnSDxMaL", "name": "Sarah", "description": "Femminile, giovane e naturale", "gender": "F", "accent": "multilingue"},
-    {"voice_id": "XB0fDUnXU5powFXDhCwa", "name": "Charlotte", "description": "Femminile, delicata e rilassante", "gender": "F", "accent": "multilingue"},
-    {"voice_id": "cgSgspJ2msm6clMCkdW9", "name": "Jessica", "description": "Femminile, chiara ed espressiva", "gender": "F", "accent": "multilingue"},
-    {"voice_id": "TX3LPaxmHKxFdv7VOQHJ", "name": "Liam", "description": "Maschile, giovane e sicuro", "gender": "M", "accent": "multilingue"},
-    {"voice_id": "IKne3meq5aSn9XLyUdCD", "name": "Charlie", "description": "Maschile, rilassato e naturale", "gender": "M", "accent": "multilingue"},
-    {"voice_id": "N2lVS1w4EtoT3dr4eOWO", "name": "Callum", "description": "Maschile, profondo e tranquillo", "gender": "M", "accent": "multilingue"},
-    {"voice_id": "onwK4e9ZLuTAKqWW03F9", "name": "Daniel", "description": "Maschile, autorevole ma cordiale", "gender": "M", "accent": "multilingue"},
+    {"voice_id": "pFZP5JQG7iQjIQuC4Bku", "name": "Eco", "description": "Una presenza calda e accogliente, che ascolta senza fretta.", "gender": "F", "accent": "italiano"},
+    {"voice_id": "nPczCjzI2devNBz1zQrb", "name": "Aria", "description": "Una voce profonda e calma, una presenza che rassicura.", "gender": "M", "accent": "italiano"},
 ]
 
 
@@ -3750,29 +3744,12 @@ def _normalize_for_tts_it(text: str) -> str:
 
 @api_router.get("/voices")
 async def api_list_voices():
-    """Return the curated list of voices (plus user's custom voices if any)."""
-    voices = list(CURATED_VOICES)
+    """Return the curated list of voices.
+    
+    NOTA (giugno 2026): voci limitate a Eco + Aria — l'utente sceglie UNA voce
+    in onboarding (voice_locked), niente più voci custom o ElevenLabs raw."""
     client_el = _get_eleven_client()
-    if client_el is not None:
-        try:
-            res = client_el.voices.get_all()
-            all_voices = getattr(res, "voices", []) or []
-            curated_ids = {v["voice_id"] for v in CURATED_VOICES}
-            for v in all_voices:
-                vid = getattr(v, "voice_id", None)
-                name = getattr(v, "name", None)
-                category = getattr(v, "category", "") or ""
-                if vid and vid not in curated_ids and category in {"cloned", "generated", "professional"}:
-                    voices.append({
-                        "voice_id": vid,
-                        "name": name or "Voce custom",
-                        "description": f"Voce personale ({category})",
-                        "gender": "?",
-                        "accent": "custom",
-                    })
-        except Exception as e:
-            logger.warning(f"Failed to fetch custom voices: {e}")
-    return {"voices": voices, "enabled": bool(client_el)}
+    return {"voices": list(CURATED_VOICES), "enabled": bool(client_el)}
 
 
 @api_router.post("/tts")
