@@ -28,9 +28,11 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { createAudioPlayer, AudioPlayer } from "expo-audio";
 import EclipseOrb, { OrbStatus, OrbTone } from "./EclipseOrb";
 import { SpeechMod } from "../lib/speech";
 import { startRecording, buildFormData } from "../lib/voice";
@@ -109,6 +111,27 @@ const KODA_LINES: Record<number, string> = {
 
 // ====== Componente principale ======
 export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCancel }: Props) {
+  // === FASE MARKETING (M1/M2/M3) inserita PRIMA dei 10 step tecnici ===
+  // Le 3 schermate emozionali introducono Koda all'utente PRIMA di chiedere
+  // dati. Non toccano la logica dei 10 step esistenti (raccolta nome,
+  // parola segreta, voiceprint) ma offrono un primo contatto curato.
+  const [phase, setPhase] = useState<"marketing" | "setup">("marketing");
+  const [marketingStep, setMarketingStep] = useState<0 | 1 | 2>(0);
+  // Voce scelta nella schermata M2 (chiave brand: "aria" | "echo")
+  const [selectedVoiceKey, setSelectedVoiceKey] = useState<"aria" | "echo" | null>(null);
+  // Player audio per la preview voce (M2) — fetch dell'endpoint
+  // /api/voice/preview/{key} e playback via expo-audio.
+  const previewPlayerRef = useRef<AudioPlayer | null>(null);
+  const [previewLoadingKey, setPreviewLoadingKey] = useState<"aria" | "echo" | null>(null);
+
+  // Tema chiaro "Pietra Zen" se l'utente apre l'app di giorno (7-19).
+  // Altrimenti dark coerente con l'app standard. La decisione viene presa
+  // SOLO all'apertura — non cambia mid-onboarding.
+  const isDayTime = useRef<boolean>((() => {
+    const h = new Date().getHours();
+    return h >= 7 && h < 20;
+  })()).current;
+
   const [step, setStep] = useState(0);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const { width } = Dimensions.get("window");
@@ -203,6 +226,26 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       clearTimeout(colorTourTimerRef.current);
       colorTourTimerRef.current = null;
     }
+    // === FASE MARKETING (M1/M2/M3) ===
+    // M1: idle neutral (verde menta, leggero respiro)
+    // M2: tone in base alla voce selezionata (aria=light, echo=warm)
+    // M3: thinking (ciclamino) = "ti sto spiegando le regole"
+    if (phase === "marketing") {
+      if (marketingStep === 0) {
+        setOrbStatus("idle");
+        setOrbTone("neutral");
+      } else if (marketingStep === 1) {
+        setOrbStatus("idle");
+        if (selectedVoiceKey === "aria") setOrbTone("calm");
+        else if (selectedVoiceKey === "echo") setOrbTone("warm");
+        else setOrbTone("neutral");
+      } else if (marketingStep === 2) {
+        // "Sto pensando" = sto spiegando le regole
+        setOrbStatus("thinking");
+        setOrbTone("warm");
+      }
+      return;
+    }
     // STEP 5: l'eclissi resta VIOLA fissa (tone "warm") durante tutto il
     // discorso. Niente cycle di colori: lei dice solo "sono un'eclissi"
     // ma NON promette più cambi cromatici (user feedback: la corrispondenza
@@ -246,12 +289,68 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
     return () => {
       if (colorTourTimerRef.current) clearTimeout(colorTourTimerRef.current);
     };
-  }, [step, isRecording, isKodaSpeaking]);
+  }, [step, isRecording, isKodaSpeaking, phase, marketingStep, selectedVoiceKey]);
+
+  // ====== Cleanup audio preview player on unmount ======
+  useEffect(() => {
+    return () => {
+      try {
+        previewPlayerRef.current?.remove?.();
+        previewPlayerRef.current = null;
+      } catch {}
+    };
+  }, []);
+
+  // ====== Playback voice preview (M2) ======
+  // Tap su una carta voce → fetch audio dall'endpoint /api/voice/preview/{key}
+  // e riproduce il sample. La voce scelta viene salvata in stato (M2 → Conferma).
+  // L'utente può tappare l'altra carta per cambiare e ascoltare prima di confermare.
+  const playVoicePreview = useCallback(async (key: "aria" | "echo") => {
+    setSelectedVoiceKey(key);
+    setPreviewLoadingKey(key);
+    // Ferma eventuale TTS in corso (per non sovrapporre voci)
+    try { SpeechMod.stop(); } catch {}
+    // Stoppa eventuale preview precedente
+    try {
+      if (previewPlayerRef.current) {
+        previewPlayerRef.current.pause();
+        previewPlayerRef.current.remove?.();
+        previewPlayerRef.current = null;
+      }
+    } catch {}
+    try {
+      const url = `${API_BASE}/voice/preview/${key}`;
+      const player = createAudioPlayer({ uri: url });
+      previewPlayerRef.current = player;
+      // expo-audio: il player carica async; play() può essere chiamato subito.
+      player.play();
+    } catch (e) {
+      console.warn("[koda-intro] voice preview play failed:", e);
+      // Fallback: usa SpeechMod con voiceId hardcoded brand→ElevenLabs
+      const voiceMap: Record<string, string> = {
+        aria: "pFZP5JQG7iQjIQuC4Bku",
+        echo: "nPczCjzI2devNBz1zQrb",
+      };
+      try {
+        await SpeechMod.speak(
+          "Ciao, sono qui con te. Quando vuoi parliamo.",
+          { language: "it-IT", tone: "warm", voiceId: voiceMap[key] }
+        );
+      } catch {}
+    } finally {
+      // Lascia ~500ms di "loading" visivo, l'audio inizia subito dopo
+      setTimeout(() => setPreviewLoadingKey(null), 800);
+    }
+  }, []);
 
   // ====== Koda parla automaticamente all'apertura di OGNI step ======
   // Pulsazione sincronizzata: l'eclissi va in "speaking" solo durante
   // il TTS effettivo (vedi gestione `isKodaSpeaking` sopra).
+  // IMPORTANTE: durante la fase MARKETING (M1/M2/M3) NON facciamo
+  // partire il TTS automatico — le schermate sono visive/testuali e
+  // l'utente decide se attivare l'audio toccando le carte voce in M2.
   useEffect(() => {
+    if (phase !== "setup") return;
     let cancelled = false;
     const line = KODA_LINES[step];
     if (line) {
@@ -272,7 +371,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
     }
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step]);
+  }, [step, phase]);
 
   // ====== Registrazione voiceprint ======
   const startVoiceprintRecording = useCallback(async () => {
@@ -448,42 +547,28 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
               <ChoiceBtn
                 label="Sono un uomo"
                 selected={userGender === "m"}
-                onPress={() => { setUserGender("m"); advance(3); }}
+                onPress={() => { setUserGender("m"); advance(4); }}
               />
               <ChoiceBtn
                 label="Sono una donna"
                 selected={userGender === "f"}
-                onPress={() => { setUserGender("f"); advance(3); }}
+                onPress={() => { setUserGender("f"); advance(4); }}
               />
               <ChoiceBtn
                 label="Preferisco non specificarlo"
                 selected={userGender === "x"}
-                onPress={() => { setUserGender("x"); advance(3); }}
+                onPress={() => { setUserGender("x"); advance(4); }}
               />
             </View>
           </StepView>
         );
-      // -- Step 3: AI voice (Aria/Echo — asessuate) --
+      // -- Step 3: AI voice — SKIPPATO (la scelta è gestita in M2 prima dell'onboarding).
+      // Manteniamo il case come safety net se per qualche motivo si arriva qui:
+      // auto-advance al successivo step utile.
       case 3:
-        return (
-          <StepView
-            title="Con quale voce vuoi accompagnarti?"
-            subtitle="Due presenze speculari. Scegli quella che senti più tua."
-          >
-            <View style={styles.btnGroupVertical}>
-              <ChoiceBtn
-                label="🌬️  Aria — limpida, fresca, apertura"
-                selected={aiGender === "f"}
-                onPress={() => { setAiGender("f"); advance(4); }}
-              />
-              <ChoiceBtn
-                label="🌌  Echo — profonda, avvolgente, intimità"
-                selected={aiGender === "m"}
-                onPress={() => { setAiGender("m"); advance(4); }}
-              />
-            </View>
-          </StepView>
-        );
+        // Auto-skip silenzioso
+        setTimeout(() => advance(4), 0);
+        return null;
       // -- Step 4: AI name --
       case 4:
         return (
@@ -558,7 +643,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
           <StepView
             title="Confessionale aperto."
             subtitle={
-              "C'è uno spazio dove ogni cosa che mi confidi resta cifrata sul tuo telefono. Solo tu puoi sbloccarla con una parola segreta.\n\nVuoi impostarla adesso?"
+              "Il Confessionale è uno spazio sigillato tra noi due. Quello che ci diciamo lì non viene salvato da nessuna parte: a sessione chiusa, svanisce come un soffio. Per aprirlo serve una tua parola segreta — la conosci solo tu.\n\nVuoi impostarla adesso?"
             }
           >
             <View style={styles.btnGroupVertical}>
@@ -637,25 +722,164 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
     }
   };
 
+  // ====== Render schermate MARKETING (M1/M2/M3) ======
+  // Le 3 schermate emozionali introduttive prima dei 10 step tecnici.
+  // Tema: Pietra Zen (#F4F4F2) di giorno, nero di notte.
+  const renderMarketing = () => {
+    // M1 — La Copertina
+    if (marketingStep === 0) {
+      return (
+        <StepView
+          title="Koda"
+          subtitle={
+            "Il tuo spazio di ascolto.\n\nUna presenza silenziosa, un confidente sempre accessibile. Uno spazio sicuro progettato per accogliere i tuoi pensieri, senza giudizio."
+          }
+          showSubtitle={true}
+          primaryLabel="Entra nello spazio"
+          onPrimary={() => setMarketingStep(1)}
+          darkOnLight={isDayTime}
+        />
+      );
+    }
+    // M2 — Scelta voce con anteprima audio
+    if (marketingStep === 1) {
+      return (
+        <StepView
+          title="La voce che ti accompagna."
+          subtitle="Con quale voce vuoi che ti accompagni nel tuo percorso? Scegli il tono che risuona meglio con la tua interiorità."
+          showSubtitle={true}
+          primaryLabel={selectedVoiceKey ? "Conferma voce" : "Tocca una voce per ascoltarla"}
+          onPrimary={() => {
+            if (!selectedVoiceKey) return;
+            // Aggancia la scelta alla logica AI gender esistente (per declinazione).
+            // aria = chiara/Lily → mappata storicamente su gender "f" (femminile/leggero)
+            // echo = profonda/Brian → mappata su "m" (maschile/avvolgente)
+            setAiGender(selectedVoiceKey === "aria" ? "f" : "m");
+            // Stoppa eventuale preview ancora in playback
+            try {
+              previewPlayerRef.current?.pause();
+              previewPlayerRef.current?.remove?.();
+              previewPlayerRef.current = null;
+            } catch {}
+            setMarketingStep(2);
+          }}
+          primaryDisabled={!selectedVoiceKey}
+          darkOnLight={isDayTime}
+        >
+          <View style={styles.voiceCardGroup}>
+            <Pressable
+              onPress={() => playVoicePreview("aria")}
+              style={({ pressed }) => [
+                styles.voiceCardBig,
+                isDayTime && styles.voiceCardBigLight,
+                selectedVoiceKey === "aria" && (isDayTime ? styles.voiceCardBigSelectedLight : styles.voiceCardBigSelected),
+                pressed && { opacity: 0.85 },
+              ]}
+              testID="m2-voice-aria"
+            >
+              <Text style={[styles.voiceCardEmoji]}>🌬️</Text>
+              <Text style={[styles.voiceCardTitle, isDayTime && { color: "#18181B" }]}>Aria</Text>
+              <Text style={[styles.voiceCardDesc, isDayTime && { color: "#52525B" }]}>
+                Una presenza limpida, leggera, aperta.
+              </Text>
+              {previewLoadingKey === "aria" && (
+                <ActivityIndicator size="small" color={isDayTime ? "#0E7C7B" : "#A1A1AA"} style={{ marginTop: 6 }} />
+              )}
+              {selectedVoiceKey === "aria" && previewLoadingKey !== "aria" && (
+                <Ionicons name="checkmark-circle" size={20} color="#34D399" style={{ marginTop: 6 }} />
+              )}
+            </Pressable>
+            <Pressable
+              onPress={() => playVoicePreview("echo")}
+              style={({ pressed }) => [
+                styles.voiceCardBig,
+                isDayTime && styles.voiceCardBigLight,
+                selectedVoiceKey === "echo" && (isDayTime ? styles.voiceCardBigSelectedLight : styles.voiceCardBigSelected),
+                pressed && { opacity: 0.85 },
+              ]}
+              testID="m2-voice-echo"
+            >
+              <Text style={[styles.voiceCardEmoji]}>🌌</Text>
+              <Text style={[styles.voiceCardTitle, isDayTime && { color: "#18181B" }]}>Echo</Text>
+              <Text style={[styles.voiceCardDesc, isDayTime && { color: "#52525B" }]}>
+                Una presenza profonda, calda, avvolgente.
+              </Text>
+              {previewLoadingKey === "echo" && (
+                <ActivityIndicator size="small" color={isDayTime ? "#0E7C7B" : "#A1A1AA"} style={{ marginTop: 6 }} />
+              )}
+              {selectedVoiceKey === "echo" && previewLoadingKey !== "echo" && (
+                <Ionicons name="checkmark-circle" size={20} color="#34D399" style={{ marginTop: 6 }} />
+              )}
+            </Pressable>
+          </View>
+        </StepView>
+      );
+    }
+    // M3 — Manifesto delle Regole
+    return (
+      <StepView
+        title="Le regole del nostro spazio."
+        subtitle={
+          "📱  Voce e Scrittura: parla liberamente toccando l'Eclissi, oppure scorri da destra a sinistra per scrivermi in chat.\n\n" +
+          "🔒  Il Confessionale: una stanza blindata e volatile. Quello che ci diciamo lì dentro svanisce come fumo non appena chiudi il lucchetto.\n\n" +
+          "⚙️  Controllo totale: nelle impostazioni (⋯) puoi attivare i miei check-in, cambiare tema (Giorno/Notte/Auto) o cancellare l'intera memoria in un tap."
+        }
+        showSubtitle={true}
+        primaryLabel="Inizia la configurazione"
+        onPrimary={() => {
+          // Transizione fluida verso lo step 0 del setup esistente
+          Animated.timing(fadeAnim, {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: true,
+          }).start(() => {
+            setPhase("setup");
+            setStep(0);
+            Animated.timing(fadeAnim, {
+              toValue: 1,
+              duration: 500,
+              useNativeDriver: true,
+            }).start();
+          });
+        }}
+        darkOnLight={isDayTime}
+      />
+    );
+  };
+
   return (
-    <View style={styles.root}>
-      <StatusBar barStyle="light-content" />
+    <View style={[styles.root, isDayTime && styles.rootLight]}>
+      <StatusBar barStyle={isDayTime ? "dark-content" : "light-content"} />
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={{ flex: 1 }}
       >
         <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
-          {/* Top: step indicator */}
+          {/* Top: step indicator — 3 dots durante MARKETING, 10 dots durante SETUP */}
           <View style={styles.stepDots}>
-            {Array.from({ length: 10 }).map((_, i) => (
-              <View
-                key={i}
-                style={[
-                  styles.dot,
-                  i === step ? styles.dotActive : i < step ? styles.dotDone : styles.dotInactive,
-                ]}
-              />
-            ))}
+            {phase === "marketing"
+              ? Array.from({ length: 3 }).map((_, i) => (
+                  <View
+                    key={`m-${i}`}
+                    style={[
+                      styles.dot,
+                      i === marketingStep
+                        ? (isDayTime ? styles.dotActiveLight : styles.dotActive)
+                        : i < marketingStep
+                        ? (isDayTime ? styles.dotDoneLight : styles.dotDone)
+                        : (isDayTime ? styles.dotInactiveLight : styles.dotInactive),
+                    ]}
+                  />
+                ))
+              : Array.from({ length: 10 }).map((_, i) => (
+                  <View
+                    key={`s-${i}`}
+                    style={[
+                      styles.dot,
+                      i === step ? styles.dotActive : i < step ? styles.dotDone : styles.dotInactive,
+                    ]}
+                  />
+                ))}
           </View>
 
           {/* Eclissi centrale */}
@@ -674,7 +898,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
               contentContainerStyle={styles.scrollContent}
               showsVerticalScrollIndicator={false}
             >
-              {renderStep()}
+              {phase === "marketing" ? renderMarketing() : renderStep()}
               {error ? <Text style={styles.errorText}>{error}</Text> : null}
             </ScrollView>
           </Animated.View>
@@ -687,12 +911,17 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
               style={styles.cancelLink}
               onPress={() => {
                 try { SpeechMod.stop(); } catch {}
+                try {
+                  previewPlayerRef.current?.pause();
+                  previewPlayerRef.current?.remove?.();
+                  previewPlayerRef.current = null;
+                } catch {}
                 onCancel();
               }}
               hitSlop={20}
               testID="koda-intro-cancel"
             >
-              <Text style={styles.cancelLinkText}>Annulla</Text>
+              <Text style={[styles.cancelLinkText, isDayTime && { color: "rgba(0,0,0,0.55)" }]}>Annulla</Text>
             </Pressable>
           )}
         </SafeAreaView>
@@ -710,6 +939,7 @@ function StepView({
   primaryDisabled,
   showSubtitle = false,
   children,
+  darkOnLight = false,
 }: {
   title: string;
   subtitle: string;
@@ -722,16 +952,18 @@ function StepView({
    *  nel voiceprint enrollment). */
   showSubtitle?: boolean;
   children?: React.ReactNode;
+  /** Quando true: testi scuri su fondo Pietra Zen (M1/M2/M3 di giorno). */
+  darkOnLight?: boolean;
 }) {
   return (
     <View style={styles.stepView}>
-      <Text style={styles.title}>{title}</Text>
+      <Text style={[styles.title, darkOnLight && styles.titleLight]}>{title}</Text>
       {/* SUBTITLE — mostrato solo per step "critici" dove il testo è
           essenziale (es. le frasi da leggere ad alta voce nel voiceprint,
           o l'avviso sulla secret word). Per tutti gli altri step il
           contesto è fornito SOLO da Koda a voce, come richiesto. */}
       {showSubtitle && subtitle ? (
-        <Text style={styles.subtitle}>{subtitle}</Text>
+        <Text style={[styles.subtitle, darkOnLight && styles.subtitleLight]}>{subtitle}</Text>
       ) : null}
       {children}
       {primaryLabel && onPrimary ? (
@@ -740,11 +972,18 @@ function StepView({
           disabled={primaryDisabled}
           style={({ pressed }) => [
             styles.primaryBtn,
-            primaryDisabled && styles.primaryBtnDisabled,
+            darkOnLight && styles.primaryBtnLight,
+            primaryDisabled && (darkOnLight ? styles.primaryBtnDisabledLight : styles.primaryBtnDisabled),
             pressed && !primaryDisabled && { opacity: 0.75 },
           ]}
         >
-          <Text style={[styles.primaryBtnText, primaryDisabled && { color: "#52525B" }]}>
+          <Text
+            style={[
+              styles.primaryBtnText,
+              darkOnLight && styles.primaryBtnTextLight,
+              primaryDisabled && { color: darkOnLight ? "#A1A1AA" : "#52525B" },
+            ]}
+          >
             {primaryLabel}
           </Text>
         </Pressable>
@@ -955,5 +1194,93 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: "center",
     marginTop: 12,
+  },
+
+  // ============================================================
+  // STILI FASE MARKETING (M1/M2/M3) — Pietra Zen di giorno, dark di notte
+  // ============================================================
+  rootLight: {
+    backgroundColor: "#F4F4F2", // Pietra Zen
+  },
+  titleLight: {
+    color: "#18181B",
+    fontWeight: "400",
+  },
+  subtitleLight: {
+    color: "#52525B",
+  },
+  primaryBtnLight: {
+    backgroundColor: "#18181B",
+    borderColor: "#18181B",
+  },
+  primaryBtnTextLight: {
+    color: "#F4F4F2",
+  },
+  primaryBtnDisabledLight: {
+    backgroundColor: "#E4E4E7",
+    borderColor: "#E4E4E7",
+  },
+  dotActiveLight: {
+    backgroundColor: "#18181B",
+  },
+  dotDoneLight: {
+    backgroundColor: "#A1A1AA",
+  },
+  dotInactiveLight: {
+    backgroundColor: "#D4D4D8",
+  },
+
+  // ====== Carte voce M2 (più grandi e tattili delle ChoiceBtn standard) ======
+  voiceCardGroup: {
+    flexDirection: "column",
+    gap: 14,
+    marginTop: 12,
+    marginBottom: 24,
+  },
+  voiceCardBig: {
+    backgroundColor: "#18181B",
+    borderRadius: 18,
+    paddingVertical: 22,
+    paddingHorizontal: 20,
+    borderWidth: 1.5,
+    borderColor: "#27272A",
+    alignItems: "center",
+    minHeight: 100,
+  },
+  voiceCardBigLight: {
+    backgroundColor: "#FFFFFF",
+    borderColor: "#E4E4E7",
+    // Ombra morbida per gallegg. su Pietra Zen
+    shadowColor: "#000",
+    shadowOpacity: 0.04,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  voiceCardBigSelected: {
+    borderColor: "#34D399",
+    backgroundColor: "#0F1F1B",
+  },
+  voiceCardBigSelectedLight: {
+    borderColor: "#0E7C7B",
+    backgroundColor: "#F0FBFA",
+  },
+  voiceCardEmoji: {
+    fontSize: 30,
+    marginBottom: 6,
+  },
+  voiceCardTitle: {
+    color: "#FAFAFA",
+    fontSize: 20,
+    fontWeight: "500",
+    marginBottom: 4,
+    letterSpacing: 0.3,
+  },
+  voiceCardDesc: {
+    color: "#A1A1AA",
+    fontSize: 14,
+    textAlign: "center",
+    fontWeight: "300",
+    lineHeight: 19,
   },
 });
