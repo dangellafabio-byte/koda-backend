@@ -2,8 +2,6 @@
  * Taccuino Vivo — API client
  */
 
-import { getUserId, getUserIdSync } from "./userId";
-
 const RAILWAY_PROD = "https://koda-backend-production-4a34.up.railway.app";
 
 const detectBackend = (): string => {
@@ -141,19 +139,9 @@ export type Profile = {
 };
 
 async function jsonReq<T>(path: string, init?: RequestInit): Promise<T> {
-  // Auto-inject X-User-Id header for multi-user backend.
-  // Tenta sync per evitare round-trip ad ogni call; se non in cache fa await.
-  let uid = getUserIdSync();
-  if (!uid) {
-    uid = await getUserId();
-  }
   const r = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      "X-User-Id": uid,
-      ...(init?.headers || {}),
-    },
+    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
   });
   if (!r.ok) {
     const t = await r.text();
@@ -329,39 +317,6 @@ export const api = {
         body: JSON.stringify({ query, max_results }),
       }
     ),
-
-  // ── Subscription / Paywall ────────────────────────────────────────────────
-  getSubscriptionStatus: () =>
-    jsonReq<SubscriptionStatus>("/subscription/status"),
-  startTrial: () =>
-    jsonReq<SubscriptionStatus>("/subscription/start-trial", { method: "POST" }),
-  mockPurchase: (plan: "essential" | "daily" | "plus") =>
-    jsonReq<SubscriptionStatus>("/subscription/mock-purchase", {
-      method: "POST",
-      body: JSON.stringify({ plan }),
-    }),
-  restorePurchases: () =>
-    jsonReq<SubscriptionStatus>("/subscription/restore", { method: "POST" }),
-  cancelSubscription: () =>
-    jsonReq<SubscriptionStatus>("/subscription/cancel", { method: "POST" }),
-};
-
-export type PlanName = "none" | "trial" | "essential" | "daily" | "plus";
-
-export type SubscriptionStatus = {
-  plan: PlanName;
-  status: string;
-  has_access: boolean;
-  in_trial: boolean;
-  trial_expires_at: string | null;
-  current_period_end: string | null;
-  daily_limit: number;
-  daily_used: number;
-  daily_remaining: number;
-  monthly_limit: number;
-  monthly_used: number;
-  monthly_remaining: number;
-  can_start_trial: boolean;
 };
 
 // Tone -> color/icon map (UI helper)

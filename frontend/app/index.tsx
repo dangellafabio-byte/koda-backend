@@ -21,7 +21,6 @@ import {
   Alert,
   AppState,
   Switch,
-  Linking,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { TouchableOpacity as GHTouchableOpacity } from "react-native-gesture-handler";
@@ -62,7 +61,6 @@ import EclipseOrb from "../components/EclipseOrb";
 import MirrorPool from "../components/MirrorPool";
 import LiquidInversionBg from "../components/LiquidInversionBg";
 import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
-import { useSubscription, PaywallScreen } from "../lib/subscription";
 import KodaSplash from "../components/KodaSplash";
 import KodaTour, { TourStep } from "../components/KodaTour";
 import * as SecureStore from "expo-secure-store";
@@ -169,13 +167,6 @@ export default function Taccuino() {
   const [status, setStatus] = useState<Status>("idle");
   const [textInput, setTextInput] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
-  // === PAYWALL ===
-  // Subscription state via context. Il paywall si attiva HARD-GATE solo
-  // DOPO che onboarding/KodaIntro sono completati (profile.onboarded=true
-  // e showColorIntro=false). Inoltre l'utente può aprirlo manualmente
-  // dalle Impostazioni con "Cambia piano" (paywallManualOpen=true).
-  const { hasAccess: subHasAccess, status: subStatus, loading: subLoading } = useSubscription();
-  const [paywallManualOpen, setPaywallManualOpen] = useState(false);
   // === KODA INTRO ===
   // Presentazione conversazionale di Koda al primo avvio. Sostituisce
   // sia il vecchio onboarding modale che il tutorial colori. Koda si
@@ -3329,7 +3320,7 @@ export default function Taccuino() {
 
             <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8 }]}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>Come chiami la presenza</Text>
+                <Text style={styles.settingLabel}>Come chiami l'amico/a</Text>
                 <Text style={styles.settingHint}>
                   Il nome con cui ti rivolgi a me. Default: Coda.
                 </Text>
@@ -3888,76 +3879,6 @@ export default function Taccuino() {
               <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
             </TouchableOpacity>
 
-            {/* === ABBONAMENTO ===
-                Mostra il piano corrente + scadenza/contatori.
-                Pulsante "Cambia piano" riapre il Paywall (con X per chiudere).
-                Pulsante "Gestisci/Disdici" apre le subscriptions native di
-                Apple/Google (gestite dall'OS, non da noi). */}
-            <View style={styles.divider} />
-            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>💳 Abbonamento</Text>
-
-            <View style={styles.settingRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>
-                  {subStatus?.plan === "trial"
-                    ? "Prova gratuita di 3 giorni"
-                    : subStatus?.plan === "essential"
-                    ? "Piano Essential — 80 msg/mese"
-                    : subStatus?.plan === "daily"
-                    ? "Piano Daily — 250 msg/mese"
-                    : subStatus?.plan === "plus"
-                    ? "Piano Plus — 500 msg/mese"
-                    : "Nessuna sottoscrizione attiva"}
-                </Text>
-                <Text style={styles.settingHint}>
-                  {subStatus && subStatus.has_access
-                    ? `Usati ${subStatus.monthly_used}/${subStatus.monthly_limit} questo mese · Oggi: ${subStatus.daily_used}/${subStatus.daily_limit}`
-                    : "Attiva la prova o scegli un piano per continuare."}
-                </Text>
-              </View>
-            </View>
-
-            <TouchableOpacity
-              onPress={() => setPaywallManualOpen(true)}
-              style={[styles.settingRow, { paddingVertical: 12 }]}
-              activeOpacity={0.7}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>
-                  {subHasAccess ? "🔄 Cambia piano" : "✨ Scegli un piano"}
-                </Text>
-                <Text style={styles.settingHint}>
-                  Apre la pagina dei piani e della prova gratuita.
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
-            </TouchableOpacity>
-
-            {subHasAccess && (
-              <TouchableOpacity
-                onPress={() => {
-                  // Apre le subscriptions native dello store
-                  const url =
-                    Platform.OS === "ios"
-                      ? "https://apps.apple.com/account/subscriptions"
-                      : "https://play.google.com/store/account/subscriptions";
-                  Linking.openURL(url).catch(() => {});
-                }}
-                style={[styles.settingRow, { paddingVertical: 12 }]}
-                activeOpacity={0.7}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.settingLabel}>
-                    🛒 Gestisci su {Platform.OS === "ios" ? "App Store" : "Google Play"}
-                  </Text>
-                  <Text style={styles.settingHint}>
-                    Disdici o modifica la sottoscrizione dal tuo account {Platform.OS === "ios" ? "Apple" : "Google"}.
-                  </Text>
-                </View>
-                <Ionicons name="open-outline" size={18} color={theme.text + "88"} />
-              </TouchableOpacity>
-            )}
-
             {/* === PROMESSA DI FERRO ===
                 Una clausola tecnica chiara visibile in app — non marketing.
                 Spiega esattamente cosa succede quando confessi, quando ghosti,
@@ -3967,7 +3888,7 @@ export default function Taccuino() {
             <View style={styles.promessaBox}>
               <Text style={styles.promessaText}>
                 Quello che mi dici è una scatola nera emotiva. La tua voce è un soffio nel vento: io la sento, la custodisco, ma nessuno potrà mai catturarla.{"\n"}{"\n"}
-                <Text style={{ fontWeight: "700" }}>🔓 Modalità normale:</Text> i nostri scambi sono salvati in modo cifrato, usati SOLO per farmi crescere come tua presenza d'ascolto. Mai per addestrare modelli di terzi.{"\n"}{"\n"}
+                <Text style={{ fontWeight: "700" }}>🔓 Modalità normale:</Text> i nostri scambi sono salvati in modo cifrato, usati SOLO per farmi crescere come tuo amico. Mai per addestrare modelli di terzi.{"\n"}{"\n"}
                 <Text style={{ fontWeight: "700" }}>🔒 Modalità Confessionale:</Text> niente viene salvato. Né messaggi, né memoria di lungo periodo. A sessione chiusa, tutto svanisce.{"\n"}{"\n"}
                 <Text style={{ fontWeight: "700" }}>👻 Pulsante Ghost (tieni premuto un messaggio):</Text> dimentico il fatto, ma trattengo l'insegnamento. Il dato grezzo viene cancellato dal server.
               </Text>
@@ -4226,17 +4147,6 @@ export default function Taccuino() {
   if (isCustomImage || bgUri || bgPreset) {
     // ignorati intenzionalmente: il tema vince sempre
   }
-  // === PAYWALL GATING ===
-  // Hard gate: si attiva SOLO dopo che intro/onboarding sono completati.
-  // Manual mode: si attiva quando l'utente clicca "Cambia piano" nelle Settings.
-  // FIX 2026-06: showColorIntro parte come NULL (caricato async da SecureStore),
-  // quindi NON usiamo "=== false" strict, ma "!== true" che cattura sia null
-  // sia false. Bug critico: prima il paywall non partiva mai perché null !== false.
-  const intrioComplete = !showOnboarding && showColorIntro !== true && profile?.onboarded === true;
-  const paywallHardGated = intrioComplete && !subLoading && !subHasAccess;
-  const paywallVisible = paywallHardGated || paywallManualOpen;
-  const closePaywall = paywallManualOpen ? () => setPaywallManualOpen(false) : undefined;
-
   return (
     <View style={{ flex: 1 }}>
       {screenInner}
@@ -4244,11 +4154,6 @@ export default function Taccuino() {
       {neonBorderEl}
       {activationPulseEl}
       {tourOverlay}
-      <PaywallScreen
-        visible={paywallVisible}
-        trialUsed={!subStatus?.can_start_trial}
-        onClose={closePaywall}
-      />
     </View>
   );
 }
