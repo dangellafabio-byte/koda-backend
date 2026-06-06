@@ -317,6 +317,78 @@ export const api = {
         body: JSON.stringify({ query, max_results }),
       }
     ),
+
+  /** Ricordi semantici (long-term memory, giugno 2026).
+   *  source filter: "chat" | "confessional_abstract" | omesso (= entrambi). */
+  listMemories: (limit = 50, source?: "chat" | "confessional_abstract") => {
+    const q = source ? `?limit=${limit}&source=${source}` : `?limit=${limit}`;
+    return jsonReq<{
+      memories: Array<{
+        id: string;
+        concept: string;
+        tags: string[];
+        emotion?: string | null;
+        importance: number;
+        source: "chat" | "confessional_abstract";
+        created_at: string;
+      }>;
+      count: number;
+    }>(`/memories${q}`);
+  },
+
+  deleteMemory: (id: string) =>
+    jsonReq<{ ok: boolean }>(`/memories/${id}`, { method: "DELETE" }),
+
+  clearMemories: (source?: "chat" | "confessional_abstract") => {
+    const q = source ? `?source=${source}` : "";
+    return jsonReq<{ ok: boolean; deleted: number }>(`/memories${q}`, { method: "DELETE" });
+  },
+
+  /** Distillazione astratta del Confessionale alla CHIUSURA della sessione.
+   *  Il frontend cifra la sessione confessionale (stessa chiave usata per
+   *  i singoli messaggi sealed) e la manda qui. Il server decifra in RAM,
+   *  estrae UN concetto psicologico astratto, lo salva come ricordo
+   *  con source="confessional_abstract", e brucia il plaintext.
+   *
+   *  Il frontend chiama questo PRIMA del wipe locale e PRIMA di chiamare
+   *  forgetSessionKey(). È un fire-and-forget: se fallisce, non blocchiamo
+   *  l'animazione di uscita (la sessione locale viene comunque bruciata). */
+  confessionalDistill: async (
+    payload: { history_nonce: string; history_ciphertext: string; language?: string },
+    keyB64: string,
+    timeoutMs: number = 20000
+  ): Promise<{ saved: boolean; memory_id?: string; reason?: string }> => {
+    const ac = new AbortController();
+    const timer = setTimeout(() => { try { ac.abort(); } catch {} }, timeoutMs);
+    try {
+      const r = await fetch(`${API_BASE}/confessional/distill`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Sealed-Key": keyB64,
+        },
+        body: JSON.stringify(payload),
+        signal: ac.signal,
+      });
+      clearTimeout(timer);
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(`HTTP ${r.status}: ${t.slice(0, 200)}`);
+      }
+      const txt = await r.text();
+      try {
+        return JSON.parse(txt);
+      } catch {
+        return { saved: false, reason: "parse_error" };
+      }
+    } catch (e: any) {
+      clearTimeout(timer);
+      if (e?.name === "AbortError") {
+        throw new Error(`distill timeout after ${timeoutMs}ms`);
+      }
+      throw e;
+    }
+  },
 };
 
 // Tone -> color/icon map (UI helper)

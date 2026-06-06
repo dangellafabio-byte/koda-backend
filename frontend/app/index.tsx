@@ -2863,6 +2863,47 @@ export default function Taccuino() {
                 const hasFortezzaMsgs =
                   fortezzaUsedThisSessionRef.current ||
                   timeline.some((e) => e.fortezza);
+
+                // === DISTILLAZIONE ASTRATTA (giugno 2026) ===
+                // Prima di bruciare la sessione, se è stato usato il
+                // Confessionale sigillato (con Parola Segreta), distilla
+                // un concetto astratto dalla sessione e salvalo come
+                // ricordo. Fire-and-forget: non blocchiamo l'animazione.
+                // Strategia: prendi i messaggi confessional locali, cifrali
+                // con la sessionKey corrente, manda al backend. Backend
+                // decifra, estrae il concetto, lo salva, brucia il testo.
+                try {
+                  const confEntries = timeline.filter((e) => e.confessional && e.text);
+                  if (confEntries.length >= 2) { // almeno 1 turno utente+ai
+                    (async () => {
+                      try {
+                        const key = await getSessionKey({ biometric: false });
+                        if (!key) return; // no seal → niente distillazione
+                        const history = confEntries.map((e) => ({
+                          role: e.role,
+                          text: e.text,
+                        }));
+                        const sealed = await sealText(JSON.stringify(history), key);
+                        const keyB64 = keyToBase64(key);
+                        await api.confessionalDistill(
+                          {
+                            history_nonce: sealed.nonce,
+                            history_ciphertext: sealed.ciphertext,
+                            language: profile?.language || "it",
+                          },
+                          keyB64,
+                        );
+                        console.log("[distill] confessional concept saved");
+                      } catch (err) {
+                        console.warn("[distill] failed (non-fatal):", err);
+                      }
+                    })();
+                  }
+                } catch (e) {
+                  // Non fatale: l'utente non se ne accorge
+                  console.warn("[distill] setup failed:", e);
+                }
+
                 forgetSessionKey();
                 if (hasFortezzaMsgs) {
                   setShowFortezzaWipe(true);
@@ -3352,7 +3393,7 @@ export default function Taccuino() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.settingLabel}>Tu sei…</Text>
                 <Text style={styles.settingHint}>
-                  Mi serve per parlarti correttamente (es. "sei stanco" / "sei stanca").
+                  Mi serve per parlarti correttamente (es. &quot;sei stanco&quot; / &quot;sei stanca&quot;).
                 </Text>
               </View>
               <View style={{ flexDirection: "row", gap: 8 }}>
@@ -3391,7 +3432,7 @@ export default function Taccuino() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.settingLabel}>{profile?.ai_name || "Coda"} è…</Text>
                 <Text style={styles.settingHint}>
-                  Definisce come si esprime di sé (es. "sono qui per te" maschile o femminile).
+                  Definisce come si esprime di sé (es. &quot;sono qui per te&quot; maschile o femminile).
                 </Text>
               </View>
               <View style={{ flexDirection: "row", gap: 8 }}>
@@ -3729,7 +3770,7 @@ export default function Taccuino() {
               return null;
             })()}
 
-            <Text style={styles.settingsSubtitle}>Voce dell'assistente</Text>
+            <Text style={styles.settingsSubtitle}>Voce dell&apos;assistente</Text>
             <Text style={styles.settingsHint}>
               {voicesEnabled
                 ? "Tocca per selezionare. Premi ▶ per ascoltare un'anteprima."
@@ -3888,9 +3929,9 @@ export default function Taccuino() {
             <View style={styles.promessaBox}>
               <Text style={styles.promessaText}>
                 Quello che mi dici è una scatola nera emotiva. La tua voce è un soffio nel vento: io la sento, la custodisco, ma nessuno potrà mai catturarla.{"\n"}{"\n"}
-                <Text style={{ fontWeight: "700" }}>🔓 Modalità normale:</Text> i nostri scambi sono salvati in modo cifrato, usati SOLO per farmi crescere come tua presenza d'ascolto. Mai per addestrare modelli di terzi.{"\n"}{"\n"}
+                <Text style={{ fontWeight: "700" }}>🔓 Modalità normale:</Text> i nostri scambi sono salvati in modo cifrato, usati SOLO per farmi crescere come tua presenza d&apos;ascolto. Mai per addestrare modelli di terzi.{"\n"}{"\n"}
                 <Text style={{ fontWeight: "700" }}>🔒 Modalità Confessionale:</Text> niente viene salvato. Né messaggi, né memoria di lungo periodo. A sessione chiusa, tutto svanisce.{"\n"}{"\n"}
-                <Text style={{ fontWeight: "700" }}>👻 Pulsante Ghost (tieni premuto un messaggio):</Text> dimentico il fatto, ma trattengo l'insegnamento. Il dato grezzo viene cancellato dal server.
+                <Text style={{ fontWeight: "700" }}>👻 Pulsante Ghost (tieni premuto un messaggio):</Text> dimentico il fatto, ma trattengo l&apos;insegnamento. Il dato grezzo viene cancellato dal server.
               </Text>
             </View>
 

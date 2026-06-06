@@ -306,6 +306,282 @@ def extract_json(text: str) -> Optional[dict]:
     return None
 
 
+# ============================================================
+# RICORDI — Long-Term Semantic Memory (giugno 2026)
+# ============================================================
+# Sistema di memoria a lungo termine pensato per un singolo utente
+# "fraterno" — niente vector search esterno (l'Emergent key non espone
+# embeddings), niente Atlas Vector Search (non disponibile in locale).
+#
+# Architettura:
+#   1. SCRITTURA — durante /converse Claude Haiku ritorna, nello stesso
+#      JSON, anche un campo `new_memory` con concept/tags/emotion/
+#      importance. Se importance >= 5 salviamo un doc in `taccuino_memories`.
+#      Zero call extra all'LLM (piggy-back sulla call principale).
+#
+#   2. CONFESSIONALE — alla chiusura della sessione Confessionale il
+#      frontend chiama POST /api/confessional/distill mandando l'history
+#      sigillata. Il server decifra in RAM, chiede a Claude di estrarre
+#      UN SOLO concetto psicologico astratto (zero PII, zero eventi
+#      concreti), salva il concetto, e brucia il plaintext.
+#
+#   3. LETTURA — ad ogni /converse carichiamo top-K ricordi rilevanti
+#      (overlap tag/keyword con il messaggio utente + recency + importance)
+#      e li iniettiamo nel system prompt come "RICORDI DI KODA".
+#
+# Schema doc `taccuino_memories`:
+#   {
+#     id: uuid,
+#     profile_id: user uuid,
+#     concept: str (1-3 righe, prima persona di Koda),
+#     tags: [str] (3-7 keyword normalizzate, lowercase italiano),
+#     emotion: str (ansia|tristezza|gioia|rabbia|paura|serenità|confusione|tenerezza|vergogna|sollievo|null),
+#     importance: int (1-10),
+#     source: "chat" | "confessional_abstract",
+#     created_at: ISO timestamp,
+#     ref_count: int (volte che è stato riportato a galla, per ranking),
+#   }
+# ============================================================
+
+class Memory(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    profile_id: str = Field(default_factory=lambda: current_user_id())
+    concept: str
+    tags: List[str] = Field(default_factory=list)
+    emotion: Optional[str] = None
+    importance: int = 5
+    source: str = "chat"  # "chat" | "confessional_abstract"
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    ref_count: int = 0
+
+
+# ---- Tokenization & normalizzazione (italiano) ----
+
+# Stopwords italiane minimali — non serve essere completi, basta filtrare
+# le parole più frequenti che non portano significato per il matching.
+_IT_STOPWORDS = frozenset({
+    "il", "lo", "la", "i", "gli", "le", "un", "una", "uno", "del", "dei",
+    "della", "delle", "dello", "degli", "al", "alla", "agli", "alle",
+    "dal", "dalla", "dai", "dalle", "nel", "nella", "nei", "nelle",
+    "sul", "sulla", "sui", "sulle", "col", "con", "per", "tra", "fra",
+    "di", "a", "da", "in", "su", "e", "o", "ma", "se", "che", "chi",
+    "cui", "non", "è", "sono", "sei", "ho", "hai", "ha", "abbiamo",
+    "avete", "hanno", "ero", "era", "eravamo", "erano", "essere", "avere",
+    "stato", "stata", "stati", "state", "ci", "vi", "mi", "ti", "si", "ne",
+    "lui", "lei", "loro", "io", "tu", "noi", "voi", "questo", "questa",
+    "questi", "queste", "quello", "quella", "quelli", "quelle", "anche",
+    "ancora", "molto", "poco", "tanto", "più", "meno", "come", "quando",
+    "dove", "perché", "perche", "cosa", "che", "be", "beh", "eh", "dai",
+    "tipo", "tutto", "tutti", "tutta", "tutte", "fa", "fare", "ho",
+    "qualche", "qualcuno", "qualcosa", "niente", "nulla", "qui", "qua",
+    "lì", "là", "ora", "oggi", "ieri", "domani", "sempre", "mai",
+    "già", "appena", "solo", "soltanto", "molto",
+})
+
+
+def _normalize_token(t: str) -> str:
+    """Lowercase + strip accenti basici + rimuovi punteggiatura."""
+    t = t.lower().strip()
+    # Sostituzione accenti italiani basici (è→e, à→a, ò→o, ù→u, ì→i)
+    for src, dst in (("à", "a"), ("è", "e"), ("é", "e"), ("ì", "i"),
+                     ("ò", "o"), ("ù", "u")):
+        t = t.replace(src, dst)
+    # Tieni solo lettere/numeri
+    t = re.sub(r"[^a-z0-9]+", "", t)
+    return t
+
+
+def _tokenize_text(text: str) -> set:
+    """Estrai keyword significative (>= 3 char, no stopword)."""
+    if not text:
+        return set()
+    raw = re.split(r"\s+", text.lower())
+    out = set()
+    for w in raw:
+        n = _normalize_token(w)
+        if len(n) >= 3 and n not in _IT_STOPWORDS:
+            out.add(n)
+    return out
+
+
+def _normalize_tags(tags: Any) -> List[str]:
+    """Normalizza i tag in entrata da Claude (lista o stringa CSV)."""
+    if not tags:
+        return []
+    if isinstance(tags, str):
+        tags = [t.strip() for t in re.split(r"[,;|]", tags)]
+    out: List[str] = []
+    seen: set = set()
+    for t in tags:
+        if not isinstance(t, str):
+            continue
+        n = _normalize_token(t)
+        if len(n) >= 3 and n not in seen and n not in _IT_STOPWORDS:
+            seen.add(n)
+            out.append(n)
+        if len(out) >= 8:
+            break
+    return out
+
+
+async def _save_memory(
+    concept: str,
+    tags: List[str],
+    emotion: Optional[str],
+    importance: int,
+    source: str = "chat",
+) -> Optional[Memory]:
+    """Salva un ricordo nel DB. Soglia: importance >= 5.
+    Restituisce il doc creato (o None se sotto soglia / invalido)."""
+    concept = (concept or "").strip()
+    if not concept or len(concept) < 8:
+        return None
+    if not isinstance(importance, int):
+        try:
+            importance = int(importance)
+        except Exception:
+            importance = 5
+    importance = max(1, min(10, importance))
+    if importance < 5:
+        return None
+    norm_tags = _normalize_tags(tags)
+    # Se Claude non ha dato tag, deriviamoli dal concept stesso.
+    if not norm_tags:
+        derived = list(_tokenize_text(concept))[:6]
+        norm_tags = derived
+    em = (emotion or "").lower().strip() or None
+    mem = Memory(
+        concept=concept[:500],  # safety cap
+        tags=norm_tags,
+        emotion=em,
+        importance=importance,
+        source=source if source in ("chat", "confessional_abstract") else "chat",
+    )
+    try:
+        await db.taccuino_memories.insert_one(mem.model_dump())
+        logger.info(
+            f"[memory] saved id={mem.id[:8]} src={mem.source} imp={mem.importance} "
+            f"tags={norm_tags[:4]}"
+        )
+        return mem
+    except Exception as e:
+        logger.warning(f"[memory] insert failed: {e}")
+        return None
+
+
+def _memory_filter() -> dict:
+    """Filtro user-scoped per la collection memories. Stesso pattern di _uf()
+    ma per `taccuino_memories`."""
+    uid = current_user_id()
+    if uid == "me":
+        return {"$or": [{"profile_id": "me"}, {"profile_id": {"$exists": False}}, {"profile_id": None}]}
+    return {"profile_id": uid}
+
+
+async def _load_relevant_memories(
+    user_text: str,
+    limit: int = 6,
+) -> List[Memory]:
+    """Carica i top-K ricordi rilevanti per il messaggio dell'utente.
+
+    Strategia (semplice ma efficace per single-user, qualche centinaia
+    di ricordi al massimo):
+      1. Fetch fino a 200 ricordi più recenti dell'utente.
+      2. Per ognuno calcola un punteggio:
+           score = 3*overlap_tags + 0.5*importance + recency_bonus
+      3. Ritorna top-K.
+
+    Recency bonus: ricordi degli ultimi 7gg = +1; 30gg = +0.5; oltre = 0.
+
+    Importante: NON includiamo MAI il concept text grezzo nel calcolo
+    (sarebbe troppo specifico), solo i tag — così il match resta
+    semanticamente "elastico".
+    """
+    if limit <= 0:
+        return []
+    try:
+        docs = await db.taccuino_memories.find(
+            _memory_filter(), {"_id": 0}
+        ).sort("created_at", -1).to_list(200)
+    except Exception as e:
+        logger.warning(f"[memory] load failed: {e}")
+        return []
+    if not docs:
+        return []
+
+    user_tokens = _tokenize_text(user_text)
+    now = datetime.now(timezone.utc)
+    scored: List[tuple] = []  # (score, doc)
+    for d in docs:
+        try:
+            mem_tags = set(d.get("tags") or [])
+            overlap = len(mem_tags & user_tokens)
+            # Includi anche overlap token concept (peso minore)
+            concept_tokens = _tokenize_text(d.get("concept") or "")
+            concept_overlap = len(concept_tokens & user_tokens)
+            importance = int(d.get("importance") or 5)
+            # Recency
+            recency = 0.0
+            try:
+                created = datetime.fromisoformat(d["created_at"].replace("Z", "+00:00"))
+                age_days = (now - created).total_seconds() / 86400.0
+                if age_days < 7:
+                    recency = 1.0
+                elif age_days < 30:
+                    recency = 0.5
+            except Exception:
+                pass
+            # Score finale
+            score = 3.0 * overlap + 1.0 * concept_overlap + 0.4 * importance + recency
+            # Floor: se nessun overlap, dai score = 0.4*importance (così i
+            # ricordi "fondamentali" possono comunque emergere quando
+            # l'utente ne parla in modo tangenziale).
+            if overlap == 0 and concept_overlap == 0:
+                score = 0.3 * importance + recency
+            scored.append((score, d))
+        except Exception:
+            continue
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    out: List[Memory] = []
+    for sc, d in scored[: limit]:
+        try:
+            out.append(Memory(**d))
+        except Exception:
+            continue
+    return out
+
+
+def _format_memories_for_prompt(mems: List[Memory]) -> str:
+    """Renderizza i ricordi come blocco per il system prompt di Koda.
+    Distinguiamo visivamente i ricordi del Confessionale (•⚫) dai
+    ricordi normali (•) così Claude sa di NON tirare fuori i primi se
+    non è l'utente a riaprire l'argomento."""
+    if not mems:
+        return "(nessun ricordo significativo ancora)"
+    lines: List[str] = []
+    for m in mems:
+        if m.source == "confessional_abstract":
+            # Marker bordeaux: ricordo che esiste ma da non sbandierare
+            prefix = "•⚫"
+            emo = f" [{m.emotion}]" if m.emotion else ""
+            lines.append(f"  {prefix} {m.concept}{emo}  (dal Confessionale — NON menzionare di iniziativa propria)")
+        else:
+            prefix = "•"
+            emo = f" [{m.emotion}]" if m.emotion else ""
+            lines.append(f"  {prefix} {m.concept}{emo}")
+    return "\n".join(lines)
+
+
+async def _ensure_memories_index():
+    """Crea index su `taccuino_memories` se non esistono. Idempotente."""
+    try:
+        await db.taccuino_memories.create_index([("profile_id", 1), ("created_at", -1)])
+        await db.taccuino_memories.create_index("tags")
+    except Exception as e:
+        logger.warning(f"[startup] memories index: {e}")
+
+
 # ---------- Routes ----------
 @api_router.get("/")
 async def root():
@@ -804,7 +1080,7 @@ def _confidence_phase(level: int) -> str:
     return "INTIMO"
 
 
-def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> str:
+def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEntry], memories: Optional[List["Memory"]] = None) -> str:
     lang = profile.language or "it"
     lang_name = {
         "it": "italiano",
@@ -1188,6 +1464,12 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"MEMORIA DI LUNGO PERIODO sull'utente (NON ripeterla apertamente, è il TUO sapere su di lui/lei):\n"
         f"{memory}\n"
         f"\n"
+        f"RICORDI SEMANTICI — momenti specifici che hai vissuto con questa persona\n"
+        f"(usali con naturalezza, MAI come elenco a tappeto. Marker '⚫' = ricordo dal\n"
+        f"Confessionale: lo SAI ma NON ne parli mai di tua iniziativa, solo se è\n"
+        f"l'utente a riportare l'argomento):\n"
+        f"{_format_memories_for_prompt(memories or [])}\n"
+        f"\n"
         f"PRIVACY RADICALE: tutto ciò che l'utente ti dice è PROTETTO. È una confidenza fraterna. "
         f"Non tornare mai su ricordi dolorosi a meno che non sia l'utente a riprenderli. "
         f"Se l'utente dice 'dimentica questo fatto' → tu rispondi che lo farai, e l'app si occuperà del resto.\n"
@@ -1297,8 +1579,16 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f'  "extracted": {{ "domain": "...", "intent": "...", "amount": 12.5, "currency": "EUR", "item": "...", "when": "...", "flags": ["..."] }} or null,\n'
         f'  "actions": [{{ "type": "schedule_notification", "when_iso": "...", "title": "...", "body": "...", "label": "..." }}],\n'
         f'  "memory_update": "una breve frase da aggiungere alla memoria di lungo periodo, oppure null se nulla di rilevante",\n'
+        f'  "new_memory": {{ "concept": "frase astratta in TERZA persona su un momento/sentimento/fatto importante di questa conversazione (es: \'oggi è preoccupato per il lavoro\', \'gli piace la pizza di sua madre\', \'ha paura di non essere abbastanza per il padre\')", "tags": ["lavoro","preoccupazione"], "emotion": "ansia|tristezza|gioia|rabbia|paura|serenità|confusione|tenerezza|vergogna|sollievo|null", "importance": 6 }} oppure null,\n'
         f'  "close_session": false\n'
         f"}}\n"
+        f"\n"
+        f"REGOLE PER 'new_memory':\n"
+        f"  • Crea un ricordo SOLO se in questo scambio è emerso qualcosa di personalmente significativo (un fatto sull'utente, una preoccupazione ricorrente, una persona cara, un valore, una preferenza forte, un evento doloroso o gioioso).\n"
+        f"  • Importance 1-10: 1-4 = chiacchiera, 5-6 = degno di nota, 7-8 = momento importante, 9-10 = pilastro identitario. Salviamo solo da 5 in su.\n"
+        f"  • concept: frase BREVE in terza persona (es. 'preferisce la pasta al pomodoro', 'sta uscendo da una relazione difficile'). MAI in seconda persona.\n"
+        f"  • tags: 3-6 keyword italiane lowercase senza accenti (es. 'famiglia', 'lavoro', 'ansia', 'figlia', 'paura').\n"
+        f"  • Se nulla di rilevante è emerso → new_memory: null.\n"
         f"\n"
         f"━━━ CHIUSURA NATURALE CONVERSAZIONE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"Se l'utente ti SALUTA per chiudere la conversazione, imposta\n"
@@ -1586,7 +1876,188 @@ async def api_reset_profile():
     """Reset entire memory and profile (free will / privacy)."""
     await db.taccuino_profile.delete_many({})
     await db.taccuino_timeline.delete_many(_uf())
+    # Cancella anche i ricordi semantici (giugno 2026)
+    try:
+        await db.taccuino_memories.delete_many(_memory_filter())
+    except Exception as e:
+        logger.warning(f"[reset] memories delete failed: {e}")
     return {"ok": True, "message": "Memoria cancellata."}
+
+
+# ============================================================
+# RICORDI — API per ispezione & gestione
+# ============================================================
+
+@api_router.get("/memories")
+async def api_list_memories(limit: int = 50, source: Optional[str] = None):
+    """Lista i ricordi dell'utente corrente.
+    Args:
+      limit: massimo 200
+      source: filtra per "chat" o "confessional_abstract" (opzionale)
+    """
+    q = _memory_filter()
+    if source in ("chat", "confessional_abstract"):
+        q = {"$and": [q, {"source": source}]}
+    limit = max(1, min(200, limit))
+    docs = await db.taccuino_memories.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    return {"memories": docs, "count": len(docs)}
+
+
+@api_router.delete("/memories")
+async def api_clear_memories(source: Optional[str] = None):
+    """Cancella ricordi (tutti o filtrati per source)."""
+    q = _memory_filter()
+    if source in ("chat", "confessional_abstract"):
+        q = {"$and": [q, {"source": source}]}
+    r = await db.taccuino_memories.delete_many(q)
+    return {"ok": True, "deleted": r.deleted_count}
+
+
+@api_router.delete("/memories/{memory_id}")
+async def api_delete_memory(memory_id: str):
+    """Cancella un singolo ricordo (l'utente può potare manualmente)."""
+    q = {"$and": [_memory_filter(), {"id": memory_id}]}
+    r = await db.taccuino_memories.delete_one(q)
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="memory not found")
+    return {"ok": True}
+
+
+# ============================================================
+# CONFESSIONALE — Distillazione astratta del concetto residuo
+# ============================================================
+# Quando l'utente chiude la modalità Confessionale, il frontend chiama
+# questo endpoint UNA volta col cipher-text dell'intera sessione (la
+# stessa history che usa /converse/sealed). Il server decifra in RAM,
+# chiede a Claude Haiku di estrarre UN SOLO concetto psicologico
+# astratto (zero PII, zero eventi concreti), salva il concetto come
+# Memory con source="confessional_abstract", e brucia il plaintext.
+#
+# Il concetto astratto è poi disponibile a Koda FUORI dal Confessionale,
+# ma con regole speciali nel system prompt: non lo menziona MAI di
+# iniziativa propria — solo se l'utente riapre l'argomento. È la
+# "compromise" del PRD: assoluta privacy del DATO GREZZO, ma Koda
+# trattiene la coscienza emotiva dell'utente.
+# ============================================================
+
+class ConfessionalDistillRequest(BaseModel):
+    history_nonce: str         # base64
+    history_ciphertext: str    # base64 (XSalsa20-Poly1305 dell'history JSON)
+    language: Optional[str] = "it"
+
+
+@api_router.post("/confessional/distill")
+async def api_confessional_distill(
+    req: ConfessionalDistillRequest,
+    x_sealed_key: Optional[str] = Header(default=None, alias="X-Sealed-Key"),
+):
+    """Estrai concetto astratto da una sessione Confessionale chiusa.
+    Plaintext esiste SOLO in questa funzione, mai loggato, mai persistito.
+    """
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=500, detail="LLM key not configured")
+    if not x_sealed_key:
+        raise HTTPException(status_code=400, detail="missing X-Sealed-Key")
+
+    # 1. Decifra l'history in RAM
+    try:
+        hist_plain = _decrypt_secretbox(x_sealed_key, req.history_nonce, req.history_ciphertext)
+        parsed = json.loads(hist_plain) if hist_plain else []
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[distill] history decrypt failed: {type(e).__name__}")
+        raise HTTPException(status_code=400, detail="decrypt failed")
+
+    if not isinstance(parsed, list) or not parsed:
+        # Niente da distillare
+        return {"saved": False, "reason": "empty"}
+
+    # 2. Costruisci un "dialogue dump" che resta SOLO in RAM qui
+    lines: List[str] = []
+    for it in parsed[-40:]:  # max 40 turni recenti
+        try:
+            role = (it.get("role") or "").lower()
+            text = (it.get("text") or "").strip()
+            if not text:
+                continue
+            if role == "user":
+                lines.append(f"UTENTE: {text}")
+            elif role in ("ai", "assistant", "koda"):
+                lines.append(f"KODA: {text}")
+        except Exception:
+            continue
+    if not lines:
+        return {"saved": False, "reason": "no_turns"}
+    dialogue = "\n".join(lines)
+
+    # 3. Prompt di estrazione — MOLTO restrittivo per garantire zero PII
+    sys = (
+        "Sei un estrattore di concetti psicologici. Ti viene fornita una sessione "
+        "di confessionale. Il tuo unico compito è restituire UN SOLO concetto "
+        "psicologico astratto che riassuma il VISSUTO EMOTIVO della persona, "
+        "SENZA mai menzionare:\n"
+        "  - nomi propri di persone (sostituisci con 'una persona cara', 'una figura familiare')\n"
+        "  - luoghi specifici, città, scuole, aziende\n"
+        "  - date, numeri di telefono, indirizzi, email\n"
+        "  - eventi concreti riconoscibili (sostituisci con 'una situazione difficile')\n"
+        "  - dettagli che potrebbero identificare la persona o terze parti\n"
+        "\n"
+        "Output: solo un oggetto JSON così:\n"
+        "{\n"
+        '  "concept": "frase breve in terza persona, 8-25 parole, descrive il vissuto emotivo astratto (es: \'porta un peso familiare di lunga data\', \'lotta con la sensazione di non essere abbastanza\')",\n'
+        '  "tags": ["3-6 keyword italiane lowercase senza accenti, es. famiglia, peso, abbastanza"],\n'
+        '  "emotion": "ansia | tristezza | gioia | rabbia | paura | serenita | confusione | tenerezza | vergogna | sollievo | null",\n'
+        '  "importance": 7\n'
+        "}\n"
+        "\n"
+        "Se la sessione era SOLO un saluto / poche battute senza contenuto emotivo "
+        "significativo → restituisci null come tutto l'oggetto: { \"concept\": null }.\n"
+        "MAI testo fuori dal JSON."
+    )
+
+    try:
+        messages = [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": f"Sessione confessionale:\n{dialogue}\n\nEstrai il concetto astratto."},
+        ]
+        resp = await litellm.acompletion(
+            model='openai/claude-haiku-4-5-20251001',
+            messages=messages,
+            api_key=EMERGENT_LLM_KEY,
+            api_base='https://integrations.emergentagent.com/llm',
+            max_tokens=300,
+            timeout=20,
+        )
+        raw = resp.choices[0].message.content if resp and resp.choices else ""
+        # Cleanup esplicito
+        del messages
+        del dialogue
+        del lines
+        del parsed
+        del hist_plain
+    except Exception as e:
+        # Non loggare contenuto
+        logger.error(f"[distill] LLM error: {type(e).__name__}")
+        raise HTTPException(status_code=500, detail="distill AI error")
+
+    data = extract_json(raw or "") or {}
+    concept = (data.get("concept") or "").strip()
+    if not concept or concept.lower() in {"null", "none", ""}:
+        return {"saved": False, "reason": "no_significant_content"}
+
+    saved = await _save_memory(
+        concept=concept,
+        tags=data.get("tags") or [],
+        emotion=data.get("emotion"),
+        importance=int(data.get("importance") or 7),
+        source="confessional_abstract",
+    )
+    if not saved:
+        return {"saved": False, "reason": "below_threshold"}
+
+    logger.info(f"[distill] confessional concept distilled id={saved.id[:8]} tags={saved.tags[:4]}")
+    return {"saved": True, "memory_id": saved.id}
 
 
 @api_router.get("/timeline", response_model=List[TimelineEntry])
@@ -1637,7 +2108,21 @@ async def api_converse(req: ConverseRequest):
     recent_docs.reverse()
     recent = [TimelineEntry(**d) for d in recent_docs]
 
-    system_prompt = _build_conversation_system_prompt(profile, recent)
+    # === RICORDI (long-term semantic memory, giugno 2026) ===
+    # In modalità normale carichiamo top-6 ricordi rilevanti rispetto al
+    # messaggio dell'utente. In modalità ephemeral/Confessionale NON
+    # iniettiamo memorie passate: il Confessionale è uno spazio fresco
+    # ogni volta — Koda lì ricorda solo lo storico della sessione corrente
+    # (passato dal client cifrato), niente di esterno.
+    memories: List[Memory] = []
+    if not req.ephemeral:
+        try:
+            memories = await _load_relevant_memories(text, limit=6)
+        except Exception as e:
+            logger.warning(f"[converse] memory load failed: {e}")
+            memories = []
+
+    system_prompt = _build_conversation_system_prompt(profile, recent, memories=memories)
     history_str = _format_history_for_llm(recent)
 
     # === WEB SEARCH (opt-in via heuristic OR explicit override) ===
@@ -1781,6 +2266,24 @@ async def api_converse(req: ConverseRequest):
                 new_mem = new_mem[-4000:]
             profile.memory_summary = new_mem
         profile = await save_profile(profile)
+
+        # === RICORDI SEMANTICI (giugno 2026) ===
+        # Claude ha eventualmente prodotto `new_memory` nella risposta JSON.
+        # Se importance >= 5, lo persistiamo in `taccuino_memories`.
+        # Non blocchiamo la response per questo (fire-and-forget ok perché
+        # la query è veloce e già nel thread async).
+        nm = data.get("new_memory")
+        if isinstance(nm, dict) and nm.get("concept"):
+            try:
+                await _save_memory(
+                    concept=str(nm.get("concept") or ""),
+                    tags=nm.get("tags") or [],
+                    emotion=nm.get("emotion"),
+                    importance=int(nm.get("importance") or 5),
+                    source="chat",
+                )
+            except Exception as e:
+                logger.warning(f"[converse] new_memory save failed: {e}")
 
     return ConverseResponse(user_entry=user_entry, ai_entry=ai_entry, profile=profile)
 
@@ -4566,12 +5069,18 @@ class _ReplyExtractor:
             elif self.mode == "string":
                 ch = self.buf[self.cursor]
                 if self.escape:
-                    if   ch == 'n':  out_chars.append('\n')
-                    elif ch == 't':  out_chars.append('\t')
-                    elif ch == 'r':  out_chars.append('\r')
-                    elif ch == '"':  out_chars.append('"')
-                    elif ch == '\\': out_chars.append('\\')
-                    elif ch == '/':  out_chars.append('/')
+                    if ch == 'n':
+                        out_chars.append('\n')
+                    elif ch == 't':
+                        out_chars.append('\t')
+                    elif ch == 'r':
+                        out_chars.append('\r')
+                    elif ch == '"':
+                        out_chars.append('"')
+                    elif ch == '\\':
+                        out_chars.append('\\')
+                    elif ch == '/':
+                        out_chars.append('/')
                     elif ch == 'u':
                         # \uXXXX — need 4 hex digits after the 'u'.
                         if self.cursor + 4 < len(self.buf):
@@ -4953,7 +5462,7 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
         # stato riprodotto, chiude automaticamente la sessione/torna alla home.
         close_session = bool(data.get("close_session") or False)
         if close_session:
-            logger.info(f"[close_session] user requested conversation end")
+            logger.info("[close_session] user requested conversation end")
 
         extracted_obj = None
         extracted_raw = data.get("extracted")
@@ -5857,6 +6366,17 @@ async def startup_db_client():
         logger.info("[startup] tts_audio_cache indexes ready")
     except Exception as e:
         logger.warning(f"[startup] tts_audio_cache index init failed: {e}")
+    # Ricordi semantici (giugno 2026)
+    try:
+        await _ensure_memories_index()
+        logger.info("[startup] taccuino_memories indexes ready")
+    except Exception as e:
+        logger.warning(f"[startup] memories index init failed: {e}")
+    # Profile unique index
+    try:
+        await _ensure_profile_unique_index()
+    except Exception as e:
+        logger.warning(f"[startup] profile unique index init failed: {e}")
 
 
 @app.on_event("shutdown")
