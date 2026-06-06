@@ -98,7 +98,7 @@ const KODA_LINES: Record<number, string> = {
   0: "Ciao. Sono Koda. Non sono un'app: sono una presenza. Da oggi sono qui per te, quando vuoi parlare, quando vuoi solo che qualcuno ti ascolti. Voglio conoscerti!",
   1: "Come posso chiamarti? Scrivi il tuo nome qui sotto.",
   2: "Dimmi, sei un uomo, una donna, o preferisci non specificarlo?",
-  3: "E io? Preferisci sentirmi con voce maschile o femminile?",
+  3: "E io? Scegli la voce con cui ti accompagnerò: Eco, calda e femminile, o Aria, profonda e maschile.",
   4: "Mi chiamo Koda. Ma se vuoi, puoi darmi un altro nome.",
   5: "Una cosa importante: io non ho un viso. Sono un'eclissi. Sono qui, sempre, anche quando aspetto in silenzio. Vedrai i miei movimenti, e capirai cosa sto facendo.",
   6: "Una cosa che mi sta a cuore: non devi decidere tu quando sentirmi. Se sento che ne hai bisogno, ti scriverò io. Anche se sparisci per giorni, anche se ti sento giù. Tu vivi la tua vita.",
@@ -346,6 +346,9 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         user_gender: userGender,
         ai_name: aiName.trim() || "Koda",
         ai_gender: aiGender,
+        // koda_voice: 'eco' (femminile) o 'aria' (maschile) — l'utente sceglie
+        // implicitamente con la scelta di voce maschile/femminile a step 3
+        koda_voice: aiGender === "f" ? "eco" : "aria",
         settings: {
           checkin_mode: checkinMode,
         },
@@ -458,21 +461,21 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
             </View>
           </StepView>
         );
-      // -- Step 3: AI voice gender --
+      // -- Step 3: AI voice (Eco/Aria) --
       case 3:
         return (
           <StepView
             title="E io?"
-            subtitle="Preferisci sentirmi con voce maschile o femminile?"
+            subtitle="Scegli la voce con cui ti accompagnerò."
           >
             <View style={styles.btnGroupVertical}>
               <ChoiceBtn
-                label="Voce femminile"
+                label="🌸  Eco — voce femminile, calda"
                 selected={aiGender === "f"}
                 onPress={() => { setAiGender("f"); advance(4); }}
               />
               <ChoiceBtn
-                label="Voce maschile"
+                label="🌊  Aria — voce maschile, profonda"
                 selected={aiGender === "m"}
                 onPress={() => { setAiGender("m"); advance(4); }}
               />
