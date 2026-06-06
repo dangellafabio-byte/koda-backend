@@ -3320,7 +3320,7 @@ export default function Taccuino() {
 
             <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8 }]}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>Come chiami l'amico/a</Text>
+                <Text style={styles.settingLabel}>Come chiami la presenza</Text>
                 <Text style={styles.settingHint}>
                   Il nome con cui ti rivolgi a me. Default: Coda.
                 </Text>
@@ -3888,7 +3888,7 @@ export default function Taccuino() {
             <View style={styles.promessaBox}>
               <Text style={styles.promessaText}>
                 Quello che mi dici è una scatola nera emotiva. La tua voce è un soffio nel vento: io la sento, la custodisco, ma nessuno potrà mai catturarla.{"\n"}{"\n"}
-                <Text style={{ fontWeight: "700" }}>🔓 Modalità normale:</Text> i nostri scambi sono salvati in modo cifrato, usati SOLO per farmi crescere come tuo amico. Mai per addestrare modelli di terzi.{"\n"}{"\n"}
+                <Text style={{ fontWeight: "700" }}>🔓 Modalità normale:</Text> i nostri scambi sono salvati in modo cifrato, usati SOLO per farmi crescere come tua presenza d'ascolto. Mai per addestrare modelli di terzi.{"\n"}{"\n"}
                 <Text style={{ fontWeight: "700" }}>🔒 Modalità Confessionale:</Text> niente viene salvato. Né messaggi, né memoria di lungo periodo. A sessione chiusa, tutto svanisce.{"\n"}{"\n"}
                 <Text style={{ fontWeight: "700" }}>👻 Pulsante Ghost (tieni premuto un messaggio):</Text> dimentico il fatto, ma trattengo l'insegnamento. Il dato grezzo viene cancellato dal server.
               </Text>
