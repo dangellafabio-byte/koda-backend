@@ -5851,6 +5851,14 @@ async def api_dbg_trace(body: dict):
 # Include the router
 app.include_router(api_router)
 
+# === Subscription + Legal Docs (giugno 2026) ===
+from subscription import create_subscription_router, create_webhook_router  # noqa: E402
+from legal import create_legal_router  # noqa: E402
+
+app.include_router(create_subscription_router(lambda: db, current_user_id))
+app.include_router(create_webhook_router(lambda: db))
+app.include_router(create_legal_router())
+
 # === DEMO SOUNDS (preview only) ============================================
 # Serve sample sounds for thinking-sound selection (Fabio demo)
 from fastapi.responses import FileResponse  # noqa: E402

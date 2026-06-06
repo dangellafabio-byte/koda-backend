@@ -9,6 +9,8 @@ import { ThemeProvider, useTheme, ThemeName } from "../lib/theme";
 import { api } from "../lib/api";
 import { prewarmAudio } from "../lib/speech";
 import { loadProfileCache } from "../lib/localCache";
+import { SubscriptionProvider, useSubscription, PaywallScreen } from "../lib/subscription";
+import { getUserId } from "../lib/userId";
 
 // ============================================================
 // BACKEND KEEP-ALIVE 2026-06
@@ -51,6 +53,27 @@ function ThemedShell({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * Hard Paywall Gate.
+ * Renderizza il contenuto principale solo se la subscription è attiva.
+ * Altrimenti mostra il PaywallScreen full-screen (non dismissibile).
+ *
+ * Durante il primo check di status (loading) lascia vedere comunque
+ * l'app per non bloccare con un flash bianco — il paywall apparirà
+ * se necessario subito dopo (max ~1s).
+ */
+function PaywallGate({ children }: { children: React.ReactNode }) {
+  const { hasAccess, loading, status } = useSubscription();
+  // Mostra paywall se: caricamento finito E non ha accesso
+  const showPaywall = !loading && !hasAccess;
+  return (
+    <>
+      {children}
+      <PaywallScreen visible={showPaywall} trialUsed={!status?.can_start_trial} />
+    </>
+  );
+}
+
 export default function RootLayout() {
   const [initialTheme, setInitialTheme] = useState<ThemeName>("sistema");
   const [dayStart, setDayStart] = useState(7);
@@ -77,6 +100,10 @@ export default function RootLayout() {
     // Pre-warm iOS/Android audio session BEFORE first TTS plays.
     // Fixes "Koda silent in first intro steps" bug on fresh native build.
     prewarmAudio().catch(() => {});
+
+    // Pre-genera/leggi lo user UUID (X-User-Id) — usato dal multi-user
+    // backend e da RevenueCat. Idempotente, salva in SecureStore.
+    getUserId().catch(() => {});
 
     if (Platform.OS !== "web") {
       setTimeout(() => {
@@ -201,15 +228,19 @@ export default function RootLayout() {
           initialDayStart={dayStart}
           initialNightStart={nightStart}
         >
-          <ThemedShell>
-            <Stack
-              screenOptions={{
-                headerShown: false,
-                contentStyle: { backgroundColor: "transparent" },
-                animation: "fade",
-              }}
-            />
-          </ThemedShell>
+          <SubscriptionProvider>
+            <ThemedShell>
+              <PaywallGate>
+                <Stack
+                  screenOptions={{
+                    headerShown: false,
+                    contentStyle: { backgroundColor: "transparent" },
+                    animation: "fade",
+                  }}
+                />
+              </PaywallGate>
+            </ThemedShell>
+          </SubscriptionProvider>
         </ThemeProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
