@@ -4229,7 +4229,10 @@ export default function Taccuino() {
   // === PAYWALL GATING ===
   // Hard gate: si attiva SOLO dopo che intro/onboarding sono completati.
   // Manual mode: si attiva quando l'utente clicca "Cambia piano" nelle Settings.
-  const intrioComplete = !showOnboarding && showColorIntro === false && profile?.onboarded === true;
+  // FIX 2026-06: showColorIntro parte come NULL (caricato async da SecureStore),
+  // quindi NON usiamo "=== false" strict, ma "!== true" che cattura sia null
+  // sia false. Bug critico: prima il paywall non partiva mai perché null !== false.
+  const intrioComplete = !showOnboarding && showColorIntro !== true && profile?.onboarded === true;
   const paywallHardGated = intrioComplete && !subLoading && !subHasAccess;
   const paywallVisible = paywallHardGated || paywallManualOpen;
   const closePaywall = paywallManualOpen ? () => setPaywallManualOpen(false) : undefined;
