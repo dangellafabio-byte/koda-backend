@@ -3081,8 +3081,8 @@ def _get_eleven_client():
 # Curated list of voices that work well for Italian.
 # (voice_id, display name, short description, gender)
 CURATED_VOICES = [
-    {"voice_id": "pFZP5JQG7iQjIQuC4Bku", "name": "Eco", "description": "Una presenza calda e accogliente, che ascolta senza fretta.", "gender": "F", "accent": "italiano"},
-    {"voice_id": "nPczCjzI2devNBz1zQrb", "name": "Aria", "description": "Una voce profonda e calma, una presenza che rassicura.", "gender": "M", "accent": "italiano"},
+    {"voice_id": "pFZP5JQG7iQjIQuC4Bku", "name": "Aria", "description": "Limpida e fresca — spazio, respiro, apertura.", "gender": "neutro", "accent": "italiano"},
+    {"voice_id": "nPczCjzI2devNBz1zQrb", "name": "Echo", "description": "Profonda e avvolgente — riflessione, eco interiore, intimità.", "gender": "neutro", "accent": "italiano"},
 ]
 
 
@@ -3372,22 +3372,19 @@ def _has_audio_tags(text: str) -> bool:
 # ============================================================
 
 KODA_VOICES: Dict[str, Dict[str, str]] = {
-    # Voce primaria — femminile, calda, italiana fluente.
-    # Lily (ElevenLabs): warm-mature-italian. Per il target "amica fraterna"
-    # del 65-70% del bacino utenti italiano.
-    "eco": {
-        "voice_id": "pFZP5JQG7iQjIQuC4Bku",
-        "label": "Eco",
-        "description": "Una presenza calda e accogliente, che ascolta senza fretta.",
-    },
-    # Voce alternativa — maschile, profonda, rassicurante (figura paterna).
-    # Brian (ElevenLabs): master narrator, low-deep-calm. Per il target che
-    # cerca autorevolezza non clinica nel Confessionale (uomini over 35, ma
-    # anche donne con storia di violenza che NON vogliono voce femminile).
+    # ARIA — Lily (ElevenLabs pFZP5JQG7iQjIQuC4Bku). Limpida, fresca,
+    # evoca spazio/respiro/leggerezza/apertura. Asessuata nel framing.
     "aria": {
-        "voice_id": "nPczCjzI2devNBz1zQrb",
+        "voice_id": "pFZP5JQG7iQjIQuC4Bku",
         "label": "Aria",
-        "description": "Una voce profonda e calma, una presenza che rassicura.",
+        "description": "Limpida e fresca — spazio, respiro, apertura.",
+    },
+    # ECHO — Brian (ElevenLabs nPczCjzI2devNBz1zQrb). Profonda, calda,
+    # avvolgente. Evoca riflessione, eco interiore, intimità. Asessuata.
+    "echo": {
+        "voice_id": "nPczCjzI2devNBz1zQrb",
+        "label": "Echo",
+        "description": "Profonda e avvolgente — riflessione, eco interiore, intimità.",
     },
 }
 
@@ -3395,10 +3392,13 @@ KODA_VOICES: Dict[str, Dict[str, str]] = {
 def _resolve_voice_id(profile: "Profile") -> str:
     """Risolve l'ID ElevenLabs effettivo a partire dalla scelta brand
     dell'utente (`koda_voice`). Failsafe: se il campo è vuoto/non valido,
-    usa "eco". Rispetta retro-compatibilità con `settings.tts_voice_id`
-    custom (era il vecchio sistema) — quel campo verrà rimosso in v2."""
-    key = (getattr(profile, "koda_voice", None) or "eco").strip().lower()
-    voice = KODA_VOICES.get(key) or KODA_VOICES["eco"]
+    usa "aria". Retrocompatibilità: il vecchio "eco" (mappava su Lily/chiara)
+    viene rimappato su "aria" (Lily/chiara) — stesso voice_id, brand diverso."""
+    key = (getattr(profile, "koda_voice", None) or "aria").strip().lower()
+    # Retrocompat: "eco" (vecchio brand sulla voce chiara Lily) → "aria" (nuovo brand)
+    if key == "eco":
+        key = "aria"
+    voice = KODA_VOICES.get(key) or KODA_VOICES["aria"]
     return voice["voice_id"]
 
 

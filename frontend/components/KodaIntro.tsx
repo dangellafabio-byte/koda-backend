@@ -98,7 +98,7 @@ const KODA_LINES: Record<number, string> = {
   0: "Ciao. Sono Koda. Non sono un'app: sono una presenza. Da oggi sono qui per te, quando vuoi parlare, quando vuoi solo che qualcuno ti ascolti. Voglio conoscerti!",
   1: "Come posso chiamarti? Scrivi il tuo nome qui sotto.",
   2: "Dimmi, sei un uomo, una donna, o preferisci non specificarlo?",
-  3: "E io? Scegli la voce con cui ti accompagnerò: Eco, calda e femminile, o Aria, profonda e maschile.",
+  3: "Con quale voce vuoi accompagnarti? Due presenze speculari: Aria, limpida e fresca, oppure Echo, profonda e avvolgente.",
   4: "Mi chiamo Koda. Ma se vuoi, puoi darmi un altro nome.",
   5: "Una cosa importante: io non ho un viso. Sono un'eclissi. Sono qui, sempre, anche quando aspetto in silenzio. Vedrai i miei movimenti, e capirai cosa sto facendo.",
   6: "Una cosa che mi sta a cuore: non devi decidere tu quando sentirmi. Se sento che ne hai bisogno, ti scriverò io. Anche se sparisci per giorni, anche se ti sento giù. Tu vivi la tua vita.",
@@ -346,9 +346,11 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         user_gender: userGender,
         ai_name: aiName.trim() || "Koda",
         ai_gender: aiGender,
-        // koda_voice: 'eco' (femminile) o 'aria' (maschile) — l'utente sceglie
-        // implicitamente con la scelta di voce maschile/femminile a step 3
-        koda_voice: aiGender === "f" ? "eco" : "aria",
+        // koda_voice ('aria' chiara/limpida o 'echo' profonda/avvolgente).
+        // Lo step 3 mappa: f → aria (Lily chiara), m → echo (Brian profonda).
+        // Le voci sono asessuate nel branding; ai_gender resta solo per
+        // la declinazione automatica del prompt Claude (saggio/saggia).
+        koda_voice: aiGender === "f" ? "aria" : "echo",
         settings: {
           checkin_mode: checkinMode,
         },
@@ -461,21 +463,21 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
             </View>
           </StepView>
         );
-      // -- Step 3: AI voice (Eco/Aria) --
+      // -- Step 3: AI voice (Aria/Echo — asessuate) --
       case 3:
         return (
           <StepView
-            title="E io?"
-            subtitle="Scegli la voce con cui ti accompagnerò."
+            title="Con quale voce vuoi accompagnarti?"
+            subtitle="Due presenze speculari. Scegli quella che senti più tua."
           >
             <View style={styles.btnGroupVertical}>
               <ChoiceBtn
-                label="🌸  Eco — voce femminile, calda"
+                label="🌬️  Aria — limpida, fresca, apertura"
                 selected={aiGender === "f"}
                 onPress={() => { setAiGender("f"); advance(4); }}
               />
               <ChoiceBtn
-                label="🌊  Aria — voce maschile, profonda"
+                label="🌌  Echo — profonda, avvolgente, intimità"
                 selected={aiGender === "m"}
                 onPress={() => { setAiGender("m"); advance(4); }}
               />
