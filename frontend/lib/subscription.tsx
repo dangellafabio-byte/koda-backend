@@ -140,9 +140,14 @@ type PaywallScreenProps = {
   visible: boolean;
   /** Se true e l'utente ha già consumato il trial, mostra solo i piani paid. */
   trialUsed?: boolean;
+  /** Se passato, mostra una X in alto a destra che chiude il paywall.
+   *  Quando il paywall è in "hard gate" (utente senza accesso) NON va passato
+   *  → il paywall resta non-dismissibile. Quando l'utente lo apre dalle
+   *  Impostazioni per "Cambiare piano", passa il callback per consentire chiusura. */
+  onClose?: () => void;
 };
 
-export function PaywallScreen({ visible, trialUsed }: PaywallScreenProps) {
+export function PaywallScreen({ visible, trialUsed, onClose }: PaywallScreenProps) {
   const { startTrial, purchasePlan, restore, status } = useSubscription();
   const [busy, setBusy] = useState<string | null>(null);
   const insets = useSafeAreaInsets();
@@ -202,6 +207,17 @@ export function PaywallScreen({ visible, trialUsed }: PaywallScreenProps) {
   return (
     <Modal visible={visible} animationType="fade" transparent={false} statusBarTranslucent>
       <View style={[styles.screen, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 16 }]}>
+        {/* Close X (solo se onClose è passato — "Cambia piano" dalle Settings) */}
+        {onClose && (
+          <Pressable
+            onPress={onClose}
+            style={[styles.closeBtn, { top: insets.top + 12 }]}
+            hitSlop={16}
+            disabled={!!busy}
+          >
+            <Text style={styles.closeBtnText}>✕</Text>
+          </Pressable>
+        )}
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
@@ -327,6 +343,23 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#F4F4F2", // Pietra Zen
     paddingHorizontal: 20,
+  },
+  closeBtn: {
+    position: "absolute",
+    right: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(0,0,0,0.06)",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 10,
+  },
+  closeBtnText: {
+    fontSize: 18,
+    color: "#1A1A1A",
+    fontWeight: "500",
+    lineHeight: 20,
   },
   scrollContent: {
     paddingBottom: 32,

@@ -9,7 +9,7 @@ import { ThemeProvider, useTheme, ThemeName } from "../lib/theme";
 import { api } from "../lib/api";
 import { prewarmAudio } from "../lib/speech";
 import { loadProfileCache } from "../lib/localCache";
-import { SubscriptionProvider, useSubscription, PaywallScreen } from "../lib/subscription";
+import { SubscriptionProvider } from "../lib/subscription";
 import { getUserId } from "../lib/userId";
 
 // ============================================================
@@ -49,27 +49,6 @@ function ThemedShell({ children }: { children: React.ReactNode }) {
     <>
       <StatusBar style={theme.isDark ? "light" : "dark"} />
       <View style={[styles.root, { backgroundColor: theme.bg }]}>{children}</View>
-    </>
-  );
-}
-
-/**
- * Hard Paywall Gate.
- * Renderizza il contenuto principale solo se la subscription è attiva.
- * Altrimenti mostra il PaywallScreen full-screen (non dismissibile).
- *
- * Durante il primo check di status (loading) lascia vedere comunque
- * l'app per non bloccare con un flash bianco — il paywall apparirà
- * se necessario subito dopo (max ~1s).
- */
-function PaywallGate({ children }: { children: React.ReactNode }) {
-  const { hasAccess, loading, status } = useSubscription();
-  // Mostra paywall se: caricamento finito E non ha accesso
-  const showPaywall = !loading && !hasAccess;
-  return (
-    <>
-      {children}
-      <PaywallScreen visible={showPaywall} trialUsed={!status?.can_start_trial} />
     </>
   );
 }
@@ -230,15 +209,13 @@ export default function RootLayout() {
         >
           <SubscriptionProvider>
             <ThemedShell>
-              <PaywallGate>
-                <Stack
-                  screenOptions={{
-                    headerShown: false,
-                    contentStyle: { backgroundColor: "transparent" },
-                    animation: "fade",
-                  }}
-                />
-              </PaywallGate>
+              <Stack
+                screenOptions={{
+                  headerShown: false,
+                  contentStyle: { backgroundColor: "transparent" },
+                  animation: "fade",
+                }}
+              />
             </ThemedShell>
           </SubscriptionProvider>
         </ThemeProvider>
