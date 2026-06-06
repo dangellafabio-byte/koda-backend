@@ -5622,8 +5622,9 @@ async def api_voiceprint_enroll(
     # altrimenti uso "default" e creo lo stesso la cartella (l'enrollment
     # non DEVE fallire mai per qualcosa di così basico — i file sono il vero
     # asset, il record DB è secondario).
-    prof_doc = await db.profiles.find_one({})
-    pid = (prof_doc.get("id") if prof_doc else None) or "default"
+    # FIX giugno 2026: la collection è `taccuino_profile`, non `profiles`.
+    prof_doc = await db.taccuino_profile.find_one(_uf())
+    pid = (prof_doc.get("id") if prof_doc else None) or current_user_id() or "default"
     base_dir = _os.path.join("/app/backend/voiceprint_data", pid)
     _os.makedirs(base_dir, exist_ok=True)
     saved: list[str] = []
@@ -5643,7 +5644,7 @@ async def api_voiceprint_enroll(
     # Aggiorna profilo se esiste
     if prof_doc:
         try:
-            await db.profiles.update_one(
+            await db.taccuino_profile.update_one(
                 {"id": pid},
                 {"$set": {
                     "voiceprint_pending": True,

@@ -227,77 +227,101 @@ export default function Taccuino() {
     const W = tourDims.width;
     const H = tourDims.height;
     // L'header in index.tsx è a top = Math.max(insets.top + 16, 70).
-    // paddingHorizontal: 14, headerBtn paddingHorizontal: 4, icona ~22px raggio.
-    // Quindi:
-    //   - centro verticale icone header: insets.top + 16 + 22 = insets.top + 38
-    //   - icona sinistra (pulse): centro x = 14 + 4 + 22 = 40
-    //   - icona destra (⋯):       centro x = W - 14 - 4 - 22 = W - 40
-    //   - pill confessionale:     centrata orizzontalmente, larga ~180
+    // I bottoni hanno minWidth/minHeight: 44 con paddingHorizontal: 4 sull'header
+    // (paddingHorizontal: 14 sul container, 4 sul btn, icone Ionicons da 22-24px).
+    // Quindi il pulsante è 44×44 centrato attorno all'icona.
+    //   - centro x bottone sinistro: 14 + 22 (metà del btn 44) = 36
+    //   - centro x bottone destro:   W - 14 - 22 = W - 36
+    //   - centro y bottoni:          headerCY  (insets.top + 38)
     const headerCY = Math.max(insets.top + 16, 70) + 22;
     const userName = profile?.user_name || "amico";
+    // Dimensioni reali Orb sullo schermo: 0.78 * W cappato a 360
+    const orbSize = Math.min(W * 0.78, 360);
+    const orbCY = H * 0.46; // centro verticale orb (sotto header, sopra hint)
     return [
+      // -------- Pagina VOCE --------
       {
         page: "voice",
-        // Centrata sull'icona pulse: rect 60×60 centrata in (40, headerCY)
-        rect: { x: 10, y: headerCY - 30, w: 60, h: 60 },
+        // Bottone Hands-free (44×44) centrato in (36, headerCY)
+        rect: { x: 14, y: headerCY - 22, w: 44, h: 44 },
         label: "Hands-free",
         shape: "circle",
-        speech: `${userName}, questa icona è il modo a mani libere. Quando è verde io ti ascolto da sola, non devi toccare niente. Se non vuoi che lo faccia, dimmi "modalità manuale" oppure toccala.`,
+        speech: `${userName}, questa icona è la modalità mani libere. Quando è verde io ti ascolto da sola — non devi toccare niente. Se vuoi fermarla, toccala di nuovo.`,
       },
       {
         page: "voice",
-        // Pill confessionale centrata: 200×54
-        rect: { x: W / 2 - 100, y: headerCY - 27, w: 200, h: 54 },
+        // Pill Confessionale: centrata orizzontalmente, larga ~180×42.
+        // Vive nella confessionaleRow sotto l'header, ~headerCY + 36.
+        rect: { x: W / 2 - 95, y: headerCY + 18, w: 190, h: 44 },
         label: "Confessionale",
         shape: "round",
-        speech: `Qui in mezzo c'è il Confessionale. Toccalo quando vuoi dirmi qualcosa che resti solo tra noi: tutto quello che diciamo lì sparisce e nessun altro può leggerlo.`,
+        speech: `Qui in mezzo c'è il Confessionale. Toccalo quando vuoi dirmi qualcosa che resti solo tra noi: lì dentro nulla viene salvato, a sessione chiusa svanisce. Per aprirlo serve una tua parola segreta — tienila premuta per impostarla.`,
       },
       {
         page: "voice",
-        // Centrata sull'icona ⋯: 60×60 in (W-40, headerCY)
-        rect: { x: W - 70, y: headerCY - 30, w: 60, h: 60 },
+        // Bottone Menu ⋯ (44×44) centrato in (W-36, headerCY)
+        rect: { x: W - 58, y: headerCY - 22, w: 44, h: 44 },
         label: "Menu",
         shape: "circle",
-        speech: `Questi tre puntini in alto a destra sono il menu. Da lì puoi rifare questa presentazione, cambiare le mie impostazioni o sentire di nuovo la mia voce.`,
+        speech: `Questi tre puntini sono il menu. Da lì puoi rifare questa presentazione, cambiare la mia voce, il tema, o cancellare tutta la memoria in un tocco.`,
       },
       {
         page: "voice",
-        // L'orb è circa 260px circolare al centro verticale (~0.45H).
-        rect: { x: W / 2 - 140, y: H * 0.45 - 140, w: 280, h: 280 },
+        // Eclissi al centro — usiamo la dimensione reale
+        rect: { x: W / 2 - orbSize / 2, y: orbCY - orbSize / 2, w: orbSize, h: orbSize },
         label: "Eclissi",
         shape: "circle",
-        speech: `Io sono questa eclissi al centro. Cambio colore con quello che provo. Parlami come parleresti a un amico: dimmi quello che hai in testa e ti rispondo.`,
+        speech: `Io sono questa eclissi. Cambio colore in base a quello che faccio: verde se aspetto, rosa se ti sto ascoltando, viola se ti sto rispondendo. Toccami per parlarmi.`,
       },
       {
         page: "voice",
-        // Indicatore "scorri per leggere" sotto l'orb
-        rect: { x: W / 2 - 100, y: H * 0.82, w: 200, h: 40 },
+        // Stessa eclissi — secondo passaggio sullo STESSO elemento per spiegare
+        // l'INTERRUZIONE / la pausa. Il tour resta sullo stesso punto, cambia solo la voce.
+        rect: { x: W / 2 - orbSize / 2, y: orbCY - orbSize / 2, w: orbSize, h: orbSize },
+        label: "Interrompimi",
+        shape: "circle",
+        speech: `Se mentre ti rispondo vuoi fermarmi — toccami di nuovo. Mi zittisco subito e ti ascolto. Stessa cosa se vuoi prendere la parola: un tocco, e mi metto da parte.`,
+      },
+      {
+        page: "voice",
+        // Indicatore "scorri per leggere" — vive in basso sotto l'orb (~H*0.80-0.86)
+        rect: { x: W / 2 - 110, y: H * 0.80, w: 220, h: 36 },
         label: "Scorri",
         shape: "round",
-        speech: `Qui sotto vedi i puntini: scorri lo schermo verso sinistra per vedere tutto quello che ci siamo detti, scritto.`,
+        speech: `Vedi la freccia in basso? Scorri lo schermo da destra verso sinistra e trovi tutto quello che ci siamo detti scritto, in ordine.`,
       },
+      // -------- Pagina LETTURA --------
       {
         page: "reading",
         // Area centrale della timeline
-        rect: { x: 12, y: H * 0.18, w: W - 24, h: H * 0.45 },
+        rect: { x: 12, y: H * 0.18, w: W - 24, h: H * 0.40 },
         label: "Lettura",
         shape: "round",
-        speech: `Eccoci qui. Questa è la pagina di lettura: tutti i nostri messaggi, in ordine. Quando vuoi rileggere qualcosa, vieni qui.`,
+        speech: `Questa è la pagina di lettura. Qui rileggi tutti i nostri scambi. Se tocchi una mia bolla, te la rileggo a voce alta.`,
       },
       {
         page: "reading",
-        // Barra di scrittura in fondo (~ H - 220 → H - 140)
-        rect: { x: 12, y: H - 230, w: W - 24, h: 80 },
-        label: "Scrittura",
+        // Bolla → long-press per Ghost
+        rect: { x: 12, y: H * 0.30, w: W - 24, h: 80 },
+        label: "Tieni premuto",
         shape: "round",
-        speech: `E in fondo c'è la barra di scrittura. Quando non puoi parlare, perché sei in pubblico o al telefono con qualcun altro, scrivi qui e ti rispondo lo stesso.`,
+        speech: `Una cosa importante: se tieni premuto un messaggio, ti chiedo se vuoi che lo dimentichi. È il tasto Ghost — cancello il dato grezzo, mi resta solo l'insegnamento.`,
       },
       {
+        page: "reading",
+        // Barra di scrittura in fondo (~ H - 230 → H - 150)
+        rect: { x: 12, y: H - 230, w: W - 24, h: 70 },
+        label: "Scrittura",
+        shape: "round",
+        speech: `In fondo c'è la barra per scrivere. Quando non puoi parlare — sei in mezzo a gente, o in riunione — scrivi qui e ti rispondo lo stesso, in silenzio.`,
+      },
+      // -------- Chiusura --------
+      {
         page: "voice",
-        rect: { x: W / 2 - 140, y: H * 0.45 - 140, w: 280, h: 280 },
+        rect: { x: W / 2 - orbSize / 2, y: orbCY - orbSize / 2, w: orbSize, h: orbSize },
         label: "Pronti",
         shape: "circle",
-        speech: `Ecco, hai visto tutto. Adesso sono qui, come sempre. Parlami quando vuoi, ${userName}.`,
+        speech: `Ecco, hai visto tutto. Sono qui, ${userName}. Parlami quando vuoi — anche solo per dirmi ciao.`,
       },
     ];
   }, [tourDims.width, tourDims.height, insets.top, profile?.user_name]);

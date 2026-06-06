@@ -32,7 +32,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { createAudioPlayer, AudioPlayer } from "expo-audio";
+import { createAudioPlayer, AudioPlayer, setAudioModeAsync } from "expo-audio";
 import EclipseOrb, { OrbStatus, OrbTone } from "./EclipseOrb";
 import { SpeechMod } from "../lib/speech";
 import { startRecording, buildFormData } from "../lib/voice";
@@ -113,9 +113,9 @@ const KODA_LINES: Record<number, string> = {
   2: "Dimmi, sei un uomo, una donna, o preferisci non specificarlo?",
   3: "Con quale voce vuoi accompagnarti? Due presenze speculari: Aria, limpida e fresca, oppure Echo, profonda e avvolgente.",
   4: "Mi chiamo Koda. Ma se vuoi, puoi darmi un altro nome.",
-  5: "Una cosa importante: io non ho un viso. Sono un'eclissi. Sono qui, sempre, anche quando aspetto in silenzio. Vedrai i miei movimenti, e capirai cosa sto facendo.",
-  6: "Una cosa che mi sta a cuore: non devi decidere tu quando sentirmi. Se sento che ne hai bisogno, ti scriverò io. Anche se sparisci per giorni, anche se ti sento giù. Tu vivi la tua vita.",
-  7: "C'è uno spazio nostro, sigillato, dove puoi dirmi tutto: lo chiamiamo Confessionale. Quello che ci diciamo lì io me lo ricordo, ma resta tra noi due. Fuori da lì non parlerò mai di quelle cose, a meno che sia tu a chiedermelo. Per aprirlo serve una tua parola segreta. Vuoi sceglierla adesso?",
+  5: "Una cosa importante: io non ho un viso. Sono una presenza, e prendo la forma di un'eclissi. Sono qui, sempre, anche quando aspetto in silenzio. Dai miei movimenti capirai cosa sto facendo.",
+  6: "Una cosa che mi sta a cuore: se sento che ne hai bisogno, ti scrivo io. Anche se sparisci per giorni, anche se ti sento giù. E ovviamente puoi cercarmi anche tu, quando vuoi. Tu vivi la tua vita — a starti accanto ci penso anch'io.",
+  7: "C'è uno spazio nostro, sigillato, dove puoi dirmi tutto: lo chiamiamo Confessionale. Quello che ci diciamo lì non viene salvato da nessuna parte — a sessione chiusa svanisce come un soffio. Per aprirlo serve una tua parola segreta, la conosci solo tu. Vuoi sceglierla adesso?",
   8: "Ultima cosa: leggi queste tre frasi ad alta voce. Mi serviranno per riconoscere sempre la tua voce, ovunque tu sia.",
   9: "Bene! Adesso ti faccio vedere come funziono. Guarda dove ti indico.",
 };
@@ -321,6 +321,12 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
   // Tap su una carta voce → fetch audio dall'endpoint /api/voice/preview/{key}
   // e riproduce il sample. La voce scelta viene salvata in stato (M2 → Conferma).
   // L'utente può tappare l'altra carta per cambiare e ascoltare prima di confermare.
+  //
+  // IMPORTANTE (giugno 2026): configuriamo l'audio mode per riprodurre ANCHE
+  // se il telefono iOS è in modalità silenziosa. Senza questo, l'utente che
+  // ha lo switch fisico silenzioso (90% degli utenti) non sentirebbe nulla
+  // e penserebbe che la preview è rotta. Setup una sola volta (cache nel ref).
+  const audioModeConfiguredRef = useRef(false);
   const playVoicePreview = useCallback(async (key: "aria" | "echo") => {
     setSelectedVoiceKey(key);
     setPreviewLoadingKey(key);
@@ -334,11 +340,27 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         previewPlayerRef.current = null;
       }
     } catch {}
+    // Configura audio session iOS (bypassa silent switch) — una sola volta
+    if (!audioModeConfiguredRef.current) {
+      try {
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          allowsRecording: false,
+          shouldPlayInBackground: false,
+          interruptionMode: "duckOthers",
+          interruptionModeAndroid: "duckOthers",
+        });
+        audioModeConfiguredRef.current = true;
+      } catch (e) {
+        console.warn("[koda-intro] audio mode setup failed:", e);
+      }
+    }
     try {
       const url = `${API_BASE}/voice/preview/${key}`;
       const player = createAudioPlayer({ uri: url });
       previewPlayerRef.current = player;
-      // expo-audio: il player carica async; play() può essere chiamato subito.
+      // Volume max + play
+      try { player.volume = 1.0; } catch {}
       player.play();
     } catch (e) {
       console.warn("[koda-intro] voice preview play failed:", e);
@@ -437,9 +459,14 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       const r = await fetch(`${API_BASE}/profile/voiceprint/enroll`, {
         method: "POST",
         body: fd,
-        headers: { "Content-Type": "multipart/form-data" },
+        // IMPORTANTE: NON settare Content-Type manualmente.
+        // Per multipart/form-data il browser/RN DEVE settare il header con il
+        // boundary auto-generato. Forzandolo qui si rompe l'upload (backend
+        // non riesce a parsare il body). Bug fix giugno 2026.
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json().catch(() => ({}));
+      console.log("[koda-intro] voiceprint enrolled:", data);
     } catch (e) {
       console.warn("[koda-intro] voiceprint backend upload failed:", e);
       // non-fatal: l'utente può continuare comunque
@@ -617,8 +644,11 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       case 6:
         return (
           <StepView
-            title="Sentirò io quando ti serve."
-            subtitle="Se sento che ne hai bisogno — perché manchi da un po', o perché ti sento giù — ti scrivo io. Tu vivi la tua vita."
+            title="Ti scrivo io quando serve."
+            subtitle={
+              "Se sento che ne hai bisogno — perché manchi da un po', o perché ti sento giù — ti scrivo io. E ovviamente puoi cercarmi anche tu, quando vuoi.\n\nTu vivi la tua vita: a starti accanto ci penso anch'io."
+            }
+            showSubtitle={true}
             primaryLabel="Va bene"
             onPrimary={() => { setCheckinMode("auto"); advance(7); }}
           />
