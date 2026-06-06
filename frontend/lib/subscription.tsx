@@ -208,7 +208,7 @@ export function PaywallScreen({ visible, trialUsed }: PaywallScreenProps) {
         >
           {/* Header */}
           <View style={styles.header}>
-            <Text style={styles.kicker}>L'AMICO FRATERNO</Text>
+            <Text style={styles.kicker}>IL TUO SPAZIO DI ASCOLTO</Text>
             <Text style={styles.title}>Apri la porta a Koda</Text>
             <Text style={styles.subtitle}>
               Una presenza fraterna sempre con te. Scegli come iniziare.

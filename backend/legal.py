@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse
 EFFECTIVE_DATE = "5 giugno 2026"
 COMPANY_NAME = "Fabio D'Angella"  # Aggiornare con denominazione legale corretta
 CONTACT_EMAIL = "dangella.fabio@gmail.com"
-APP_NAME = "Koda — L'Amico Fraterno"
+APP_NAME = "Koda — Il tuo spazio di ascolto"
 
 
 _BASE_CSS = """
@@ -163,7 +163,7 @@ TERMS_HTML = _wrap("Termini di Servizio", f"""
 non utilizzare l'App.</p>
 
 <h2>2. Descrizione del servizio</h2>
-<p>{APP_NAME} è un'app di compagnia AI conversazionale "amico fraterno", progettata
+<p>{APP_NAME} è un'app di compagnia AI conversazionale, uno spazio di ascolto personale, progettata
 per il benessere emotivo e la crescita personale. Include funzionalità di
 conversazione vocale, modalità Confessionale a privacy aumentata, e personalizzazione
 dell'esperienza.</p>
