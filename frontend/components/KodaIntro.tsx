@@ -93,7 +93,18 @@ const VOICEPRINT_PHRASES = [
 // USA QUESTA OVUNQUE. Non cambiare in altre voci nei vari fallback —
 // l'utente ha richiesto esplicitamente che la voce rimanga SEMPRE la
 // stessa, non un mix di Sarah/Jessica/Matilda.
-const INTRO_VOICE_ID = "XrExE9yKIg1WjnnlVkGX";
+// ====== Voice IDs ElevenLabs delle due voci brand ======
+// Mappa stabile tra brand (aria/echo) e ElevenLabs voice_id.
+// Tenuto qui sincrono col backend (KODA_VOICES in server.py).
+const BRAND_VOICE_IDS = {
+  aria: "pFZP5JQG7iQjIQuC4Bku",   // Lily — chiara, leggera
+  echo: "nPczCjzI2devNBz1zQrb",   // Brian — profonda, avvolgente
+} as const;
+
+// Voce di fallback per la presentazione (PRIMA che l'utente scelga in M2):
+// = Aria. Niente più Matilda/Sarah. La prima voce che l'utente sente DEVE
+// essere una delle due voci brand dell'app, mai una terza.
+const INTRO_VOICE_ID = BRAND_VOICE_IDS.aria;
 
 // ====== Battute di Koda per ogni step (TTS in tutti) ======
 const KODA_LINES: Record<number, string> = {
@@ -192,20 +203,25 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
   const speakSeqRef = useRef(0);
 
   // ====== Sintetizza voce di Koda (best-effort, non blocca avanzamento) ======
-  // Durante la presentazione usa la voce dolce/intima `INTRO_VOICE_ID` —
-  // diversa da quella che userà Koda nella conversazione vera. Setta
-  // `isKodaSpeaking=true` per la durata del TTS così l'eclissi pulsa.
+  // Setta `isKodaSpeaking=true` per la durata del TTS così l'eclissi pulsa.
+  // PRIORITÀ VOCE (giugno 2026):
+  //   1. Voce scelta in M2 (selectedVoiceKey) → mappata su BRAND_VOICE_IDS
+  //   2. Voce già nel profilo (currentVoiceId)
+  //   3. Fallback INTRO_VOICE_ID = Aria (mai più Matilda/Sarah/altre)
+  // Così la PRIMA voce che l'utente sente è SEMPRE una delle due voci
+  // brand dell'app — coerenza totale con l'identità sonora.
   const speakKoda = useCallback(async (text: string, tone: OrbTone = "warm") => {
     const mySeq = ++speakSeqRef.current;
     try {
       setIsKodaSpeaking(true);
+      const resolvedVoiceId =
+        (selectedVoiceKey && BRAND_VOICE_IDS[selectedVoiceKey]) ||
+        currentVoiceId ||
+        INTRO_VOICE_ID;
       await SpeechMod.speak(text, {
         language: "it-IT",
         tone: tone as any,
-        // Priorità: voce già scelta dall'utente (da profilo) → fallback Sarah.
-        // Così se rifai l'intro dopo aver già scelto una voce, la senti
-        // PARLARE con la SUA voce di Koda fin dal primo step.
-        voiceId: currentVoiceId || INTRO_VOICE_ID,
+        voiceId: resolvedVoiceId,
       });
     } catch (e) {
       console.warn("[koda-intro] speak failed:", e);
@@ -216,7 +232,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         setIsKodaSpeaking(false);
       }
     }
-  }, []);
+  }, [selectedVoiceKey, currentVoiceId]);
 
   // ====== Ciclo dell'eclissi colorata (step "color tour") ======
   const colorTourTimerRef = useRef<any>(null);
@@ -326,15 +342,11 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       player.play();
     } catch (e) {
       console.warn("[koda-intro] voice preview play failed:", e);
-      // Fallback: usa SpeechMod con voiceId hardcoded brand→ElevenLabs
-      const voiceMap: Record<string, string> = {
-        aria: "pFZP5JQG7iQjIQuC4Bku",
-        echo: "nPczCjzI2devNBz1zQrb",
-      };
+      // Fallback: usa SpeechMod con voice_id brand
       try {
         await SpeechMod.speak(
           "Ciao, sono qui con te. Quando vuoi parliamo.",
-          { language: "it-IT", tone: "warm", voiceId: voiceMap[key] }
+          { language: "it-IT", tone: "warm", voiceId: BRAND_VOICE_IDS[key] }
         );
       } catch {}
     } finally {
