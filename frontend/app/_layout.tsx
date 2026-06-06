@@ -4,6 +4,7 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { View, StyleSheet, Platform, AppState, AppStateStatus } from "react-native";
+import * as Updates from "expo-updates";
 import { scheduleWeeklyAppNotification } from "../lib/notifications";
 import { ThemeProvider, useTheme, ThemeName } from "../lib/theme";
 import { api } from "../lib/api";
@@ -40,6 +41,36 @@ async function pingBackend(): Promise<void> {
     }
   } catch {
     // Silent. È solo "warm-up", non importa se fallisce.
+  }
+}
+
+// ============================================================
+// OTA AUTO-UPDATE 2026-06
+// ============================================================
+// PROBLEMA: expo-updates di default è lazy — scarica l'update al
+// primo cold start ma lo applica solo al SECONDO. L'utente vede
+// l'app "ferma" per giorni perché serve restart all'app due volte.
+// FIX: al boot controlla in foreground se c'è un update.
+//      Se sì, lo scarica e lo applica IMMEDIATAMENTE (reloadAsync).
+//      Skip in dev (__DEV__=true) per non interferire con Metro.
+// ============================================================
+async function applyOtaIfAvailable(): Promise<void> {
+  // In dev mode (Metro / Expo Go) Updates è disabilitato/no-op.
+  if (__DEV__ || !Updates.isEnabled) return;
+  try {
+    const check = await Updates.checkForUpdateAsync();
+    if (check.isAvailable) {
+      const result = await Updates.fetchUpdateAsync();
+      if (result.isNew) {
+        // Piccolo delay per evitare flash bianco subito al boot
+        setTimeout(() => {
+          Updates.reloadAsync().catch(() => {});
+        }, 1500);
+      }
+    }
+  } catch (e) {
+    // Silent: network down / no update / corrupted manifest → ignora.
+    console.warn("[OTA] check/apply failed:", e);
   }
 }
 
@@ -83,6 +114,9 @@ export default function RootLayout() {
     // Pre-genera/leggi lo user UUID (X-User-Id) — usato dal multi-user
     // backend e da RevenueCat. Idempotente, salva in SecureStore.
     getUserId().catch(() => {});
+
+    // OTA: controlla + applica eventuale update appena partito.
+    applyOtaIfAvailable().catch(() => {});
 
     if (Platform.OS !== "web") {
       setTimeout(() => {
