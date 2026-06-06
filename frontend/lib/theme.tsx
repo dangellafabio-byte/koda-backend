@@ -103,27 +103,28 @@ const GIORNO: Palette = {
   name: "giorno",
   label: "Giorno",
   emoji: "☀️",
-  // === FIX 2026-06 v3 (utente: "carta quasi panna, più scuro del champagne") ===
-  // Carta panna profonda — sfondo come una pagina di carta antica.
-  // L'orb champagne in stand-by si vede nettamente sopra (contrasto > 12%).
+  // === FIX 2026-06 v4 (utente: "Pietra Zen #F4F4F2 — off-white neutro per
+  // far risaltare al massimo il bagliore champagne dell'Orb senza impastare
+  // la grafica") ===
+  // Sfondo washi paper, zero dominanti cromatiche, atmosfera zen pulita.
   isDark: false,
-  bg: "#DCC9A8",
-  surface: "#E8DBC0",
-  surfaceAlt: "rgba(60,40,20,0.08)",
-  border: "rgba(60,40,20,0.16)",
-  divider: "rgba(60,40,20,0.12)",
-  text: "#1A150D",
-  textMuted: "#544738",
-  textDim: "#7A6951",
+  bg: "#F4F4F2",
+  surface: "#FFFFFF",
+  surfaceAlt: "rgba(0,0,0,0.04)",
+  border: "rgba(0,0,0,0.10)",
+  divider: "rgba(0,0,0,0.08)",
+  text: "#1A1A1A",
+  textMuted: "#4B5563",
+  textDim: "#6B7280",
   primary: "#0E7C7B",
   primaryText: "#FFFFFF",
   primarySoftBg: "rgba(14,124,123,0.10)",
   primarySoftBorder: "rgba(14,124,123,0.45)",
   userBubble: "#0E7C7B",
   userBubbleText: "#FFFFFF",
-  aiBubbleBg: "#F8F1E0",
-  aiBubbleBorder: "rgba(60,40,20,0.12)",
-  aiBubbleText: "#1F1B16",
+  aiBubbleBg: "#FFFFFF",
+  aiBubbleBorder: "rgba(0,0,0,0.10)",
+  aiBubbleText: "#1A1A1A",
   success: "#16A34A",
   warning: "#D97706",
   danger: "#DC2626",
