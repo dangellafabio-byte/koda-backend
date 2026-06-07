@@ -6337,6 +6337,14 @@ async def api_dbg_trace(body: dict):
 
 
 # Include the router
+# ============================================================
+# DOCUMENTI LEGALI (giugno 2026)
+# Privacy Policy + Terms of Service hostati come HTML pubblici.
+# URL produzione: https://<railway-domain>/api/legal/{privacy,terms,/}
+# ============================================================
+from legal import legal_router  # noqa: E402
+api_router.include_router(legal_router)
+
 app.include_router(api_router)
 
 # === DEMO SOUNDS (preview only) ============================================
