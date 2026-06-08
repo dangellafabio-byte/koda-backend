@@ -23,10 +23,10 @@ from fastapi.responses import HTMLResponse
 
 legal_router = APIRouter(prefix="/legal", tags=["legal"])
 
-LEGAL_VERSION = "1.1"
+LEGAL_VERSION = "1.2"
 LAST_UPDATED = "8 giugno 2026"
 COMPANY_NAME = "Fabio Dangella"  # Sviluppatore indipendente
-CONTACT_EMAIL = "koda.app.help@gmail.com"  # Email ufficiale supporto Koda
+CONTACT_EMAIL = "hello.koda.support@gmail.com"  # Email ufficiale supporto Koda
 APP_NAME = "Koda"
 
 
