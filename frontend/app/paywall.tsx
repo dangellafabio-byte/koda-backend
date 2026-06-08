@@ -85,8 +85,8 @@ const TIERS: TierInfo[] = [
   },
 ];
 
-const PRIVACY_URL = "https://koda-backend-production-4a34.up.railway.app/legal/privacy";
-const TOS_URL = "https://koda-backend-production-4a34.up.railway.app/legal/terms";
+const PRIVACY_URL = "https://koda-backend-production-4a34.up.railway.app/api/legal/privacy";
+const TOS_URL = "https://koda-backend-production-4a34.up.railway.app/api/legal/terms";
 
 export default function PaywallScreen() {
   const router = useRouter();

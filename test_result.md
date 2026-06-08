@@ -1,4 +1,30 @@
-## SESSIONE 2026-06-08 — SAFETY DOPPIO STRATO + FREEMIUM 3 MSG + PAYWALL UI
+## SESSIONE 2026-06-08 — LEGAL DOCS LIVE + email + version bump
+
+### ✅ Documenti legali pronti per gli store
+- File: `backend/legal.py`
+- **Email aggiornata**: `koda.app.help@gmail.com` (precedente `support@koda-app.io` rimosso)
+- **Versione bump**: 1.0 → **1.1**, data 6 → 8 giugno 2026
+- **3 endpoint live**:
+  - `GET /api/legal/privacy` (10.6 KB HTML self-contained, GDPR-compliant, italiano)
+  - `GET /api/legal/terms` (9.2 KB HTML, EULA + Apple guidelines 3.1.1)
+  - `GET /api/legal/` (indice navigabile)
+- **Caratteristiche**:
+  - HTML self-contained (CSS inline, zero CDN, zero font esterni → review-proof)
+  - Dark mode automatica via `prefers-color-scheme`
+  - Mobile-first (max-width 720px, padding responsive)
+  - Versionati con `LEGAL_VERSION` per tracciare cambi futuri
+- **Paywall aggiornato** (`frontend/app/paywall.tsx`): link Privacy/ToS ora puntano a `/api/legal/...` invece di `/legal/...` (bug fix path).
+
+### 🔗 URL PRODUZIONE (da incollare su App Store Connect, Play Console, RevenueCat)
+- Privacy: https://koda-backend-production-4a34.up.railway.app/api/legal/privacy
+- Termini: https://koda-backend-production-4a34.up.railway.app/api/legal/terms
+- Indice:  https://koda-backend-production-4a34.up.railway.app/api/legal/
+
+(Una volta che Railway sincronizza dal deploy successivo, gli URL sopra saranno live anche in prod.)
+
+---
+
+
 
 ### ✅ NUOVE FEATURE (tutto OTA-ready, no rebuild)
 
