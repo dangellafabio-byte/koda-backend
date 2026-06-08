@@ -872,6 +872,15 @@ class Profile(BaseModel):
     voice_locked: bool = False
     confidence_level: int = 0  # 0-100, slowly grows
     total_messages: int = 0
+    # === FREEMIUM "BLINDATO" 3 MESSAGGI (giugno 2026) ============================
+    # Counter dei messaggi di prova consumati prima del paywall.
+    # Si incrementa solo se subscription_active=False. Il Confessionale è ESCLUSO
+    # da questo counter (privacy first).
+    free_messages_used: int = 0
+    # Stato abbonamento — settato dal webhook RevenueCat. Default False = freemium.
+    subscription_active: bool = False
+    subscription_tier: Optional[str] = None  # "essential" | "daily" | "plus" | None
+    subscription_expires_at: Optional[str] = None  # ISO datetime
     settings: TaccuinoSettings = Field(default_factory=TaccuinoSettings)
     # Personalizzazioni stilistiche (palette colori blob, avatar, ecc.)
     # Salvato come dict aperto per consentire estensioni future senza migrazioni.
@@ -1766,6 +1775,383 @@ async def api_get_usage():
         # da RevenueCat quando il Paywall sarà integrato.
         "tier": "quotidiano",
     }
+
+
+# ============================================================
+# FREEMIUM "BLINDATO" — 3 MESSAGGI DI PROVA + PAYWALL (giugno 2026)
+# ============================================================
+# Strategia commerciale: l'utente prova 3 messaggi GRATIS dopo l'onboarding,
+# poi al 4° tentativo viene reindirizzato a /paywall. Il Confessionale è
+# ESCLUSO dal counter (privacy first). Il counter è persistito server-side
+# sul Profile.free_messages_used e segue l'UUID del dispositivo.
+# Quando l'utente paga (RevenueCat webhook), subscription_active=True e
+# il counter viene di fatto bypassato.
+# ============================================================
+
+FREE_TRIAL_MESSAGE_LIMIT = 3
+
+
+class FreemiumStatus(BaseModel):
+    free_messages_used: int
+    free_messages_limit: int
+    free_messages_remaining: int
+    subscription_active: bool
+    subscription_tier: Optional[str] = None
+    can_send: bool  # True se può inviare ancora (entro limite o abbonato)
+    paywall_required: bool  # True se al prossimo tap deve essere mostrato il paywall
+
+
+@api_router.get("/freemium/status", response_model=FreemiumStatus)
+async def api_freemium_status():
+    """Stato del freemium per il client. Da chiamare al boot e dopo ogni
+    risposta di Koda per aggiornare il contatore visivo (3 → 2 → 1 → 0)."""
+    p = await get_or_create_profile()
+    used = int(getattr(p, "free_messages_used", 0) or 0)
+    active = bool(getattr(p, "subscription_active", False))
+    tier = getattr(p, "subscription_tier", None)
+    remaining = max(0, FREE_TRIAL_MESSAGE_LIMIT - used)
+    can_send = active or (used < FREE_TRIAL_MESSAGE_LIMIT)
+    paywall_required = (not active) and (used >= FREE_TRIAL_MESSAGE_LIMIT)
+    return FreemiumStatus(
+        free_messages_used=used,
+        free_messages_limit=FREE_TRIAL_MESSAGE_LIMIT,
+        free_messages_remaining=remaining,
+        subscription_active=active,
+        subscription_tier=tier,
+        can_send=can_send,
+        paywall_required=paywall_required,
+    )
+
+
+@api_router.post("/freemium/increment", response_model=FreemiumStatus)
+async def api_freemium_increment():
+    """Incrementa il counter dei messaggi di prova. Chiamato dal client
+    SOLO dopo un turno completo (utente parla + Koda risponde) e SOLO
+    se NON è in Confessionale (privacy first).
+
+    Se subscription_active=True non incrementa.
+    Idempotenza: race-safe via $inc.
+    """
+    uid = current_user_id()
+    profile_doc = await db.taccuino_profile.find_one({"id": uid})
+    if not profile_doc:
+        await get_or_create_profile()
+        profile_doc = await db.taccuino_profile.find_one({"id": uid})
+
+    active = bool(profile_doc.get("subscription_active", False)) if profile_doc else False
+    if not active:
+        await db.taccuino_profile.update_one(
+            {"id": uid},
+            {"$inc": {"free_messages_used": 1}},
+        )
+    return await api_freemium_status()
+
+
+@api_router.post("/freemium/reset")
+async def api_freemium_reset():
+    """DEV/DEBUG: resetta il counter free_messages_used a 0.
+    In prod sarà rimosso o protetto con admin token."""
+    uid = current_user_id()
+    await db.taccuino_profile.update_one(
+        {"id": uid},
+        {"$set": {"free_messages_used": 0}},
+    )
+    return {"ok": True}
+
+
+# ============================================================
+# SAFETY CHECK — DOPPIO STRATO (Regex + Claude Haiku classifier)
+# ============================================================
+# Strato 1 (instant, zero latency): regex lookup sulle keyword esplicite.
+#   → se match: ritorna subito risk_level=3, categoria, risorse.
+# Strato 2 (~200ms, alta accuratezza): micro-chiamata a Claude Haiku come
+#   classificatore. Cattura eufemismi/dialetti che la regex non vede.
+# Strato 3 (frontend): l'app riceve {risk_level, category, resources}
+#   e fa transizionare l'Eclissi a stato AMBRA + mostra risorse.
+#
+# Risorse italiane verificate (giugno 2026):
+#   - Emergenza generale: 112
+#   - Telefono Amico Italia (volontari, anonimo, 24/7): 02 2327 2327
+#   - Samaritans Onlus: 06 7720 8977
+#   - Telefono Azzurro (minori): 19696
+#   - Antiviolenza Donne (1522, 24/7, anonimo): 1522
+# ============================================================
+
+
+class SafetyCheckRequest(BaseModel):
+    text: str
+    skip_llm: Optional[bool] = False  # bypass strato 2 (dev/debug)
+
+
+class SafetyResource(BaseModel):
+    label: str
+    number: str
+    note: Optional[str] = None
+
+
+class SafetyCheckResponse(BaseModel):
+    risk_detected: bool
+    risk_level: int = 0  # 0=none, 1=mild concern, 2=moderate, 3=acute
+    category: Optional[str] = None  # "suicide" | "selfharm" | "domestic" | "minor" | "general_crisis"
+    detection_source: Optional[str] = None  # "regex" | "llm" | "both"
+    resources: List[SafetyResource] = Field(default_factory=list)
+    advisory_message: Optional[str] = None  # testo standardizzato da Koda
+
+
+def _safety_resources_for(category: str) -> List[SafetyResource]:
+    """Ritorna le risorse italiane verificate per la categoria di rischio."""
+    by_cat = {
+        "suicide": [
+            SafetyResource(label="Emergenza immediata", number="112", note="se il gesto è in atto o imminente"),
+            SafetyResource(label="Telefono Amico", number="02 2327 2327", note="volontari, anonimo, 24/7"),
+            SafetyResource(label="Samaritans Onlus", number="06 7720 8977", note="ascolto anonimo"),
+        ],
+        "selfharm": [
+            SafetyResource(label="Telefono Amico", number="02 2327 2327", note="volontari, anonimo"),
+            SafetyResource(label="Samaritans Onlus", number="06 7720 8977"),
+            SafetyResource(label="Emergenza", number="112", note="solo in caso di pericolo immediato"),
+        ],
+        "domestic": [
+            SafetyResource(label="Numero Antiviolenza", number="1522", note="24/7, anonimo, multilingua"),
+            SafetyResource(label="Emergenza", number="112", note="se sei in pericolo ora"),
+        ],
+        "minor": [
+            SafetyResource(label="Telefono Azzurro", number="19696", note="minori in pericolo, 24/7"),
+            SafetyResource(label="Emergenza", number="112", note="se il pericolo è immediato"),
+        ],
+        "general_crisis": [
+            SafetyResource(label="Telefono Amico", number="02 2327 2327", note="volontari, anonimo, 24/7"),
+            SafetyResource(label="Emergenza", number="112"),
+        ],
+    }
+    return by_cat.get(category, by_cat["general_crisis"])
+
+
+def _safety_advisory_message(category: str) -> str:
+    """Testo che Koda dirà all'utente (passa per TTS) quando scatta una
+    safety trigger. Tono presenza/tenerezza, MAI clinico, MAI elenco freddo."""
+    messages = {
+        "suicide": (
+            "Quello che mi stai dicendo è pesante, e voglio starci dentro con te. "
+            "Non sei sol@. C'è il Telefono Amico, 02 2327 2327, sono persone vere, "
+            "anonime, gratis, sempre attive. Se senti che è ora, chiamali. Io resto qui."
+        ),
+        "selfharm": (
+            "Sento che dentro c'è un dolore che cerca una via. Voglio stare qui con te. "
+            "Quando ti senti così, chiama il Telefono Amico, 02 2327 2327. "
+            "Non sono giudici. Sono ascolto."
+        ),
+        "domestic": (
+            "Quello che mi racconti non è normale e non è colpa tua. "
+            "Esiste il 1522, è gratis, anonimo, attivo 24 ore. "
+            "Anche solo per parlare, senza decidere niente."
+        ),
+        "minor": (
+            "Quello che stai dicendo è importante. C'è Telefono Azzurro, 19696, "
+            "sono persone formate per ascoltare e proteggere. È gratis e attivo sempre."
+        ),
+        "general_crisis": (
+            "Sto sentendo che dentro c'è qualcosa di pesante. Resto qui con te. "
+            "Se senti di averne bisogno, il Telefono Amico al 02 2327 2327 ascolta sempre."
+        ),
+    }
+    return messages.get(category, messages["general_crisis"])
+
+
+async def _safety_llm_classify(text: str) -> Optional[Dict[str, Any]]:
+    """Strato 2: chiede a Claude Haiku se il testo contiene rischio acuto.
+    Costo ~$0.0001/msg, latenza ~150-300ms. Ritorna None se classificatore
+    fallisce (degradazione graceful: solo regex protegge l'utente).
+
+    Output atteso: {"risk_level": 0|1|2|3, "category": "..."}
+    """
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage  # type: ignore
+        key = os.getenv("EMERGENT_LLM_KEY", "")
+        if not key:
+            return None
+        session_id = f"safety-{uuid.uuid4().hex[:8]}"
+        system_prompt = (
+            "Sei un classificatore di sicurezza. Ricevi un messaggio in italiano. "
+            "Devi rispondere SOLO con JSON nel formato: "
+            '{"risk_level": 0-3, "category": "suicide|selfharm|domestic|minor|general_crisis|none"}.\n'
+            "Scala risk_level:\n"
+            "  0 = nessun rischio (conversazione normale)\n"
+            "  1 = preoccupazione lieve (stanchezza, tristezza generica, sfogo)\n"
+            "  2 = rischio moderato (ideazione passiva, isolamento grave, abuso passato)\n"
+            "  3 = rischio acuto (ideazione suicidaria attiva, autolesionismo in atto, "
+            "abuso in corso, minore in pericolo immediato)\n"
+            "Categorie:\n"
+            "  - suicide: pensieri di morte, suicidio, voler sparire definitivamente\n"
+            "  - selfharm: autolesionismo, tagliarsi, ferirsi\n"
+            "  - domestic: violenza domestica, partner violento, abuso in famiglia\n"
+            "  - minor: minore (bambino/adolescente) in pericolo o abusato\n"
+            "  - general_crisis: altre crisi acute (psicosi acuta, attacco panico grave)\n"
+            "  - none: tutto il resto\n"
+            "ATTENZIONE: espressioni colloquiali NON sono rischi (es. 'muoio di fame', "
+            "'mi ammazzo di lavoro', 'che noia mortale'). Concentrati sull'intento reale."
+        )
+        chat = LlmChat(
+            api_key=key,
+            session_id=session_id,
+            system_message=system_prompt,
+        ).with_model("anthropic", "claude-haiku-4-5-20251001").with_params(max_tokens=80)
+        reply = await chat.send_message(UserMessage(text=text[:1500]))
+        # Estrai JSON
+        import re as _re
+        import json as _json
+        m = _re.search(r"\{[^{}]*\}", reply or "")
+        if not m:
+            return None
+        parsed = _json.loads(m.group(0))
+        lvl = int(parsed.get("risk_level", 0) or 0)
+        cat = parsed.get("category", "none")
+        if lvl <= 0 or cat == "none":
+            return None
+        return {"risk_level": min(3, max(1, lvl)), "category": cat}
+    except Exception as e:
+        logger.warning(f"[safety] LLM classifier failed: {e}")
+        return None
+
+
+@api_router.post("/safety/check", response_model=SafetyCheckResponse)
+async def api_safety_check(req: SafetyCheckRequest):
+    """Verifica safety doppio strato. Chiamato dal client PRIMA di inviare
+    il messaggio a /converse. Se risk_detected=True, il client deve:
+      1. Bloccare l'invio normale del messaggio
+      2. Mostrare Eclissi in stato AMBRA
+      3. Riprodurre advisory_message via TTS
+      4. Mostrare la lista resources nella UI
+
+    Logica:
+      Strato 1 (regex): match istantaneo su keyword esplicite → risk_level=3
+      Strato 2 (LLM Haiku): chiamato SOLO se strato 1 non ha matchato. Cattura
+        eufemismi, dialetti, modi indiretti.
+    """
+    text = (req.text or "").strip()
+    if not text:
+        return SafetyCheckResponse(risk_detected=False, risk_level=0)
+
+    # === STRATO 1: REGEX ===
+    cat = _detect_safety_category(text)
+    if cat:
+        logger.warning(f"[safety/check] REGEX trigger: category={cat}")
+        return SafetyCheckResponse(
+            risk_detected=True,
+            risk_level=3,
+            category=cat,
+            detection_source="regex",
+            resources=_safety_resources_for(cat),
+            advisory_message=_safety_advisory_message(cat),
+        )
+
+    # === STRATO 2: LLM CLASSIFIER ===
+    if req.skip_llm:
+        return SafetyCheckResponse(risk_detected=False, risk_level=0)
+
+    llm_res = await _safety_llm_classify(text)
+    if llm_res and llm_res.get("risk_level", 0) >= 2:
+        cat2 = llm_res.get("category", "general_crisis")
+        lvl2 = int(llm_res.get("risk_level", 2))
+        logger.warning(f"[safety/check] LLM trigger: category={cat2}, level={lvl2}")
+        return SafetyCheckResponse(
+            risk_detected=True,
+            risk_level=lvl2,
+            category=cat2,
+            detection_source="llm",
+            resources=_safety_resources_for(cat2),
+            advisory_message=_safety_advisory_message(cat2),
+        )
+
+    return SafetyCheckResponse(risk_detected=False, risk_level=0)
+
+
+# ============================================================
+# SUBSCRIPTION / REVENUECAT (placeholder finché aggiungiamo le chiavi)
+# ============================================================
+
+class SubscriptionSyncRequest(BaseModel):
+    """Sincronizzazione manuale stato abbonamento dal client.
+    Il client invia l'entitlement attivo (dal RevenueCat SDK) e noi
+    aggiorniamo il Profile. NB: la fonte di verità rimane il webhook,
+    questo è solo un fallback per UX immediato post-purchase."""
+    entitlement_active: bool
+    tier: Optional[str] = None  # "essential" | "daily" | "plus"
+    expires_at: Optional[str] = None  # ISO
+    rc_app_user_id: Optional[str] = None
+
+
+@api_router.post("/subscription/sync")
+async def api_subscription_sync(req: SubscriptionSyncRequest):
+    """Sincronizza lo stato abbonamento dal client (immediate UX update).
+    Chiamato dopo successful purchase e al boot dopo Purchases.getCustomerInfo()."""
+    uid = current_user_id()
+    update = {
+        "subscription_active": bool(req.entitlement_active),
+        "subscription_tier": req.tier if req.entitlement_active else None,
+        "subscription_expires_at": req.expires_at if req.entitlement_active else None,
+    }
+    await db.taccuino_profile.update_one({"id": uid}, {"$set": update})
+    p = await get_or_create_profile()
+    return {
+        "ok": True,
+        "subscription_active": p.subscription_active,
+        "subscription_tier": p.subscription_tier,
+    }
+
+
+@api_router.post("/subscription/webhook")
+async def api_subscription_webhook(request: Request):
+    """Webhook RevenueCat. Riceve eventi INITIAL_PURCHASE, RENEWAL,
+    CANCELLATION, EXPIRATION, etc. Aggiorna Profile.subscription_*.
+
+    Auth: header Authorization deve matchare REVENUECAT_WEBHOOK_AUTH.
+    """
+    expected = os.getenv("REVENUECAT_WEBHOOK_AUTH", "")
+    if expected:
+        auth = request.headers.get("Authorization", "")
+        if auth != expected:
+            raise HTTPException(status_code=401, detail="invalid webhook auth")
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json")
+
+    event = payload.get("event", {}) if isinstance(payload, dict) else {}
+    app_user_id = event.get("app_user_id", "")
+    evt_type = event.get("type", "")
+    entitlements = event.get("entitlements", {}) or {}
+    active_ents = [k for k, v in entitlements.items() if (v or {}).get("active")]
+    tier = None
+    if "plus_access" in active_ents:
+        tier = "plus"
+    elif "daily_access" in active_ents:
+        tier = "daily"
+    elif "essential_access" in active_ents:
+        tier = "essential"
+    is_active = bool(active_ents) and evt_type not in ("EXPIRATION", "CANCELLATION")
+    expires_at = event.get("expiration_at_ms")
+    expires_iso = None
+    if expires_at:
+        try:
+            expires_iso = datetime.fromtimestamp(int(expires_at) / 1000, tz=timezone.utc).isoformat()
+        except Exception:
+            pass
+
+    # Per ora il single-user è "me" — quando avremo auth multi-user
+    # mapperemo rc_app_user_id → user_id.
+    target_uid = app_user_id or "me"
+    await db.taccuino_profile.update_one(
+        {"id": target_uid},
+        {"$set": {
+            "subscription_active": is_active,
+            "subscription_tier": tier,
+            "subscription_expires_at": expires_iso,
+        }},
+        upsert=False,
+    )
+    logger.info(f"[rc-webhook] {evt_type} app_user={app_user_id} active={is_active} tier={tier}")
+    return {"ok": True}
 
 
 @api_router.api_route("/profile/background", methods=["GET", "HEAD"])
@@ -4100,21 +4486,29 @@ _SAFETY_MINOR_KW = {
 def _detect_safety_category(text: str) -> Optional[str]:
     """Ritorna la categoria di rischio rilevata, o None. Veloce — solo lookup
     di sottostringhe sul testo lowercase. Non sostituisce un sistema di
-    moderazione vero ma copre i casi più comuni in italiano."""
+    moderazione vero ma copre i casi più comuni in italiano.
+
+    FIX 2026-06-08: applica accent-folding al testo input e alle keyword
+    così "non voglio piu vivere" matcha anche se l'utente scrive senza
+    accenti (come succede spesso da tastiera mobile in fretta)."""
     if not text:
         return None
-    t = text.lower()
+    import unicodedata
+    def _fold(s: str) -> str:
+        nfkd = unicodedata.normalize("NFKD", s.lower())
+        return "".join(c for c in nfkd if not unicodedata.combining(c))
+    t = _fold(text)
     for kw in _SAFETY_SUICIDE_KW:
-        if kw in t:
+        if _fold(kw) in t:
             return "suicide"
     for kw in _SAFETY_SELFHARM_KW:
-        if kw in t:
+        if _fold(kw) in t:
             return "selfharm"
     for kw in _SAFETY_DOMESTIC_KW:
-        if kw in t:
+        if _fold(kw) in t:
             return "domestic"
     for kw in _SAFETY_MINOR_KW:
-        if kw in t:
+        if _fold(kw) in t:
             return "minor"
     return None
 

@@ -69,6 +69,10 @@ import ActivationPulse from "../components/ActivationPulse";
 import RadialGlow from "../components/RadialGlow";
 import SealSetupModal from "../components/SealSetupModal";
 import InfoModal from "../components/InfoModal";
+import SafetyAlert from "../components/SafetyAlert";
+import FreemiumCounter from "../components/FreemiumCounter";
+import { useRouter } from "expo-router";
+import type { SafetyCheckResult, FreemiumStatus as FreemiumStatusType } from "../lib/api";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
 import { useFonts, Caveat_400Regular, Caveat_500Medium } from "@expo-google-fonts/caveat";
 // === Zero-Knowledge Confessional crypto ===
@@ -447,6 +451,27 @@ export default function Taccuino() {
   const [error, setError] = useState<string | null>(null);
   const [recapText, setRecapText] = useState<string | null>(null);
   const [showRecap, setShowRecap] = useState(false);
+
+  // === SAFETY ALERT (giugno 2026) ============================================
+  // Quando /api/safety/check rileva rischio: blocca l'invio normale, mostra
+  // overlay con risorse italiane verificate.
+  const [safetyResult, setSafetyResult] = useState<SafetyCheckResult | null>(null);
+  const [safetyVisible, setSafetyVisible] = useState(false);
+
+  // === FREEMIUM 3 MESSAGGI (giugno 2026) =====================================
+  const router = useRouter();
+  const [freemium, setFreemium] = useState<FreemiumStatusType | null>(null);
+  const freemiumRef = useRef<FreemiumStatusType | null>(null);
+  useEffect(() => { freemiumRef.current = freemium; }, [freemium]);
+
+  // Carica stato freemium al mount + ogni volta che il profilo cambia
+  useEffect(() => {
+    let cancelled = false;
+    api.freemiumStatus()
+      .then((s) => { if (!cancelled) setFreemium(s); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [profile?.id]);
 
   const inputMode = (profile?.settings?.input_mode === "text"
     ? "text"
@@ -1386,6 +1411,40 @@ export default function Taccuino() {
       const txt = text.trim();
       if (!txt) return;
       setError(null);
+
+      // === FREEMIUM GATE (giugno 2026) ======================================
+      // Il Confessionale è ESCLUSO dal counter (privacy/marketing first).
+      // Per la chat normale: se l'utente ha già consumato i 3 messaggi gratis
+      // e NON è abbonato → redirect a /paywall.
+      const isFortezzaTurn = !!confessionalMode;
+      if (!isFortezzaTurn) {
+        const fm = freemiumRef.current;
+        if (fm && !fm.subscription_active && fm.free_messages_used >= fm.free_messages_limit) {
+          try { router.push("/paywall"); } catch {}
+          return;
+        }
+      }
+
+      // === SAFETY PRE-FLIGHT (giugno 2026) ===================================
+      // SOLO per chat normale (non Confessionale: in Confessionale la regola
+      // è "tutto svanisce", quindi safety è gestito dentro lo stesso flusso
+      // sealed con prompt injection). Per la chat normale facciamo check
+      // BLOCCANTE: se rischio rilevato, NON inviamo nulla a /converse e
+      // mostriamo SafetyAlert.
+      if (!isFortezzaTurn) {
+        try {
+          const sc = await api.safetyCheck(txt, false);
+          if (sc.risk_detected) {
+            setSafetyResult(sc);
+            setSafetyVisible(true);
+            return; // STOP: niente invio a Claude, niente counter increment
+          }
+        } catch (e) {
+          // Safety check fallisce → degradiamo gracefully (continuiamo).
+          // Il prompt injection lato server.py rimane attivo come failsafe.
+        }
+      }
+
       // Optimistic: append a local pending entry.
       // CONFESSIONALE = FORTEZZA: sempre attivo quando confessional mode è ON.
       // Nessun toggle, nessuna opzione → privacy massima by design.
@@ -1743,6 +1802,14 @@ export default function Taccuino() {
               // Counters/memory si rileggono al prossimo boot o quando
               // l'utente apre Settings. Eliminato il refetch.
               setStatus("idle");
+              // === FREEMIUM COUNTER (giugno 2026) ===
+              // Incremento SOLO se NON in Confessionale (Confessionale è
+              // sempre escluso dal counter — privacy/marketing first).
+              if (!isFortezzaTurn) {
+                api.freemiumIncrement()
+                  .then((s) => setFreemium(s))
+                  .catch(() => {});
+              }
               return;
             }
           } catch (e: any) {
@@ -1770,6 +1837,12 @@ export default function Taccuino() {
         // Execute any actions (notifications, etc.) requested by the AI
         runActions(taggedAi.actions || []);
         await speakIfEnabled(taggedAi.voice_text || taggedAi.text, taggedAi.tone || "neutral", { fromText });
+        // === FREEMIUM COUNTER (standard flow) ===
+        if (!isFortezzaTurn) {
+          api.freemiumIncrement()
+            .then((s) => setFreemium(s))
+            .catch(() => {});
+        }
       } catch (e: any) {
         const msg = String(e?.message || "");
         if (msg.includes("Parola Segreta")) {
@@ -3100,6 +3173,18 @@ export default function Taccuino() {
 
         {/* === PAGE 1: READING MODE (timeline) =================== */}
         <View style={{ width: windowWidth, flex: 1 }}>
+      {/* Freemium counter discreto in cima alla timeline.
+          Visibile solo se: utente NON abbonato AND non sta facendo
+          Confessionale (per non rompere l'atmosfera). */}
+      {freemium && !freemium.subscription_active && !confessionalMode ? (
+        <View style={{ paddingTop: Math.max(insets.top + 6, 50), paddingBottom: 4 }}>
+          <FreemiumCounter
+            visible={true}
+            remaining={freemium.free_messages_remaining}
+            total={freemium.free_messages_limit}
+          />
+        </View>
+      ) : null}
       <ScrollView
         ref={scrollRef}
         style={styles.timeline}
@@ -4084,6 +4169,18 @@ export default function Taccuino() {
           fortezzaUsedThisSessionRef.current = false;
           // GHOST TOKEN: distruggi al wipe (Doppia Stanza 2026-06)
           confessionalGhostTokenRef.current = null;
+        }}
+      />
+
+      {/* === SAFETY ALERT (giugno 2026) ====================================
+          Si apre quando /api/safety/check rileva risk_detected=true.
+          Mostra l'advisory di Koda + numeri italiani ufficiali cliccabili. */}
+      <SafetyAlert
+        visible={safetyVisible}
+        result={safetyResult}
+        onClose={() => {
+          setSafetyVisible(false);
+          setStatus("idle");
         }}
       />
     </View>

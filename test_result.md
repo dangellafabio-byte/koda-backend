@@ -1,3 +1,68 @@
+## SESSIONE 2026-06-08 — SAFETY DOPPIO STRATO + FREEMIUM 3 MSG + PAYWALL UI
+
+### ✅ NUOVE FEATURE (tutto OTA-ready, no rebuild)
+
+#### 1. Safety doppio strato (compliance Apple 4.0)
+- **Backend** (`server.py`):
+  - Strato 1: regex con accent-folding (`unicodedata.NFKD`) su keyword italiane.
+  - Strato 2: classificatore Claude Haiku 4.5 (~150-300ms) per eufemismi/dialetti.
+  - Nuovo endpoint `POST /api/safety/check` — risposta `SafetyCheckResponse`.
+  - Categorie: suicide / selfharm / domestic / minor / general_crisis.
+  - Risorse: 112, Telefono Amico 02 2327 2327, Samaritans 06 7720 8977, 1522, Telefono Azzurro 19696.
+- **Frontend**:
+  - `components/SafetyAlert.tsx` — overlay full-screen ambra pulsante + numeri cliccabili (tel:).
+  - `app/index.tsx` — pre-flight safety check PRIMA di `/converse` (solo chat normale, Confessionale escluso).
+- **Test confermati**:
+  - Regex: "non voglio piu vivere" (senza accenti) ✅
+  - LLM: "sarebbe meglio non esserci più" ✅, "torna ubriaco mi tratta male" ✅
+  - No falso positivo: "ammazzato di lavoro che noia mortale" ✅
+
+#### 2. Freemium counter 3 messaggi
+- **Backend**:
+  - Profile model esteso: `free_messages_used`, `subscription_active`, `subscription_tier`, `subscription_expires_at`.
+  - Costante `FREE_TRIAL_MESSAGE_LIMIT = 3`.
+  - Endpoint `GET /api/freemium/status`, `POST /api/freemium/increment`, `POST /api/freemium/reset`.
+  - Logica: Confessionale ESCLUSO dal counter (privacy/marketing first). Race-safe via `$inc`.
+- **Frontend**:
+  - `components/FreemiumCounter.tsx` — pill discreto "N messaggi di prova rimanenti".
+  - `app/index.tsx`: increment dopo turno completo riuscito (sia fast path che standard). Gate al 4° tap → redirect a `/paywall`.
+
+#### 3. Paywall UI dedicata
+- **Nuova rotta `app/paywall.tsx`** (expo-router file-based) — 3 tier:
+  - Essenziale €4.99 / 80 msg
+  - Quotidiano €9.99 / 250 msg (highlighted "PIÙ SCELTO")
+  - Plus €19.99 / 500 msg
+- Trial 3 giorni evidenziato, restore purchases, link Privacy/ToS, gestione abbonamento iOS.
+- Bottoni purchase = placeholder (alert "Pagamento non attivo") finché RevenueCat non integrato.
+
+#### 4. RevenueCat scaffolding backend
+- Endpoint `POST /api/subscription/sync` (client → server post-purchase).
+- Endpoint `POST /api/subscription/webhook` (RevenueCat → server, eventi RENEWAL/CANCELLATION/EXPIRATION).
+- Auth webhook via env `REVENUECAT_WEBHOOK_AUTH`.
+- Mapping entitlements: `essential_access` / `daily_access` / `plus_access` → tier.
+
+### 🟡 IN ATTESA UTENTE — per chiudere RevenueCat
+1. Account RevenueCat (gratis fino a $2.5k MTR): https://app.revenuecat.com
+2. Public API keys iOS + Android (settings → API Keys).
+3. Webhook auth header value (settings → Integrations → Webhooks).
+4. Product IDs configurati su App Store Connect + Play Console.
+5. Decisione: installare `react-native-purchases` (richiede prossimo build EAS).
+
+### ✅ TESTING ESEGUITO
+- Smoke test endpoint: freemium counter 1→2→3→4, safety regex+LLM+no-fp.
+- Screenshot `/paywall` route: UI render OK (430×932 viewport).
+
+### 📁 FILE TOCCATI
+- `backend/server.py` (+400 righe: safety v2 + freemium + RC scaffolding + accent-folding)
+- `frontend/lib/api.ts` (+45 righe: freemium/safety/subscription wrappers + tipi)
+- `frontend/app/index.tsx` (+60 righe: pre-flight safety, counter integration, paywall redirect)
+- `frontend/app/paywall.tsx` (NEW, 268 righe)
+- `frontend/components/SafetyAlert.tsx` (NEW, 128 righe)
+- `frontend/components/FreemiumCounter.tsx` (NEW, 41 righe)
+
+---
+
+
 ## SESSIONE 2026-07 — NATIVE BUILD iOS + ANDROID + FIX VOCE JESSICA
 
 ### ✅ NUOVI FIX BACKEND (pre-build)

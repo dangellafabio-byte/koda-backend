@@ -132,10 +132,40 @@ export type Profile = {
   user_gender?: "m" | "f" | "n"; // default "n"
   confidence_level: number;
   total_messages: number;
+  // === Freemium counter (giugno 2026)
+  free_messages_used?: number;
+  subscription_active?: boolean;
+  subscription_tier?: "essential" | "daily" | "plus" | null;
+  subscription_expires_at?: string | null;
   settings: ProfileSettings;
   memory_summary: string;
   created_at: string;
   updated_at: string;
+};
+
+export type FreemiumStatus = {
+  free_messages_used: number;
+  free_messages_limit: number;
+  free_messages_remaining: number;
+  subscription_active: boolean;
+  subscription_tier: "essential" | "daily" | "plus" | null;
+  can_send: boolean;
+  paywall_required: boolean;
+};
+
+export type SafetyResource = {
+  label: string;
+  number: string;
+  note?: string | null;
+};
+
+export type SafetyCheckResult = {
+  risk_detected: boolean;
+  risk_level: 0 | 1 | 2 | 3;
+  category: "suicide" | "selfharm" | "domestic" | "minor" | "general_crisis" | null;
+  detection_source: "regex" | "llm" | "both" | null;
+  resources: SafetyResource[];
+  advisory_message: string | null;
 };
 
 async function jsonReq<T>(path: string, init?: RequestInit): Promise<T> {
@@ -338,6 +368,47 @@ export const api = {
 
   deleteMemory: (id: string) =>
     jsonReq<{ ok: boolean }>(`/memories/${id}`, { method: "DELETE" }),
+
+  // === FREEMIUM "BLINDATO" 3 messaggi (giugno 2026) ==========================
+  /** Stato corrente del freemium counter. Chiamato al boot e dopo ogni
+   * risposta di Koda per aggiornare il contatore visivo (3 → 2 → 1 → 0). */
+  freemiumStatus: () => jsonReq<FreemiumStatus>("/freemium/status"),
+
+  /** Incrementa il counter messaggi gratis. Da chiamare DOPO un turno
+   * completo (utente + Koda), MA SOLO se NON in Confessionale. */
+  freemiumIncrement: () =>
+    jsonReq<FreemiumStatus>("/freemium/increment", { method: "POST" }),
+
+  /** DEV: resetta counter a 0. */
+  freemiumReset: () =>
+    jsonReq<{ ok: boolean }>("/freemium/reset", { method: "POST" }),
+
+  // === SAFETY CHECK (doppio strato: regex + LLM Haiku) =======================
+  /** Verifica safety PRIMA di mandare il messaggio a /converse.
+   * Se risk_detected=true, il client deve:
+   *   1. Bloccare l'invio normale
+   *   2. Mostrare Eclissi in stato AMBRA
+   *   3. Riprodurre advisory_message via TTS
+   *   4. Mostrare le resources nella UI con numeri cliccabili */
+  safetyCheck: (text: string, skip_llm: boolean = false) =>
+    jsonReq<SafetyCheckResult>("/safety/check", {
+      method: "POST",
+      body: JSON.stringify({ text, skip_llm }),
+    }),
+
+  // === SUBSCRIPTION (RevenueCat) =============================================
+  /** Sincronizza lo stato abbonamento dal client al backend. Chiamato dopo
+   * successful purchase e al boot dopo Purchases.getCustomerInfo(). */
+  subscriptionSync: (payload: {
+    entitlement_active: boolean;
+    tier?: "essential" | "daily" | "plus" | null;
+    expires_at?: string | null;
+    rc_app_user_id?: string;
+  }) =>
+    jsonReq<{ ok: boolean; subscription_active: boolean; subscription_tier: string | null }>(
+      "/subscription/sync",
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
 
   clearMemories: (source?: "chat" | "confessional_abstract") => {
     const q = source ? `?source=${source}` : "";
