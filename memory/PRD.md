@@ -87,3 +87,28 @@ Le persone hanno troppe app per gestire la vita (calendar, finanze, note, salute
 3. **L'AI non è uno strumento, è una presenza**: respira, ha un tono, ricorda.
 4. **Personalizzare una volta, poi sparisce**: il customizer non deve interrompere il flusso emotivo.
 5. **Salvataggio implicito**: l'utente non "salva" mai nulla. Tutto è già lì.
+
+---
+
+## CHANGELOG — Sessione 11 Giugno 2026 (Koda / L'Amico Fraterno)
+
+### Contesto
+L'app è evoluta in "Koda — L'Amico Fraterno": companion vocale empatico con Confessionale zero-knowledge, Crisis Mode a doppio layer, freemium hard paywall (3 messaggi gratis). Backend in produzione su Railway, build iOS via EAS.
+
+### Blocker infrastruttura (P0 — in mano a Emergent Support)
+- Build iOS EAS fallisce con `git rev-parse --show-toplevel exit 128` dentro il container `eas-builder-base:2025101601` (workspace non inizializzato come repo git). NON risolvibile lato codice. Certificato Apple OK (rigenerato dall'utente). Email di escalation inviata a support@emergent.sh con Job ID. In attesa di risposta.
+
+### Implementato in questa sessione (testato ✅)
+1. **Time-decay memoria** (`_load_relevant_memories` in server.py): sostituito bonus recency a gradini (7gg/30gg) con decadimento esponenziale continuo `2.0 * exp(-age_days/30)`. Oggi=+2.0, 30gg=+0.74, 90gg=+0.10. Ricordi vecchi ad alta importanza restano raggiungibili. Test: /app/backend/tests/test_decay_and_export.py (3/3 passati).
+2. **Endpoint GDPR export** `GET /api/export`: esporta profilo + timeline + ricordi + key_facts + entries Confessionale (ancora cifrate, zero-knowledge) come JSON scaricabile (Content-Disposition attachment). User-scoped via X-User-Id. Testato con curl (nuovo utente e legacy "me") + regressione su /profile, /freemium/status, /memories, /timeline — tutto 200.
+
+### NOTA DEPLOY
+Le modifiche sono nel workspace Emergent. Arriveranno in produzione (Railway) al prossimo push via "Save to GitHub".
+
+### Backlog aggiornato
+- P0: risoluzione build iOS EAS (attesa Emergent Support)
+- P1: RevenueCat SDK (attende chiavi API utente + build nativa funzionante)
+- P2: Refactor chat ScrollView → FlatList
+- P2: Overlay dim 10s per OLED
+- P3: Refactor monoliti server.py (~6800 righe) e index.tsx (~5500 righe)
+- expo-notifications disabilitato (serve setup nativo google-services.json)

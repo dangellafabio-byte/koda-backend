@@ -491,7 +491,10 @@ async def _load_relevant_memories(
            score = 3*overlap_tags + 0.5*importance + recency_bonus
       3. Ritorna top-K.
 
-    Recency bonus: ricordi degli ultimi 7gg = +1; 30gg = +0.5; oltre = 0.
+    Recency bonus (time-decay esponenziale): 2.0 * exp(-age_days / 30).
+    Un ricordo di oggi vale ~+2.0, a 30gg ~+0.74, a 90gg ~+0.10.
+    Così i ricordi recenti emergono naturalmente, ma quelli vecchi ad
+    alta importanza restano comunque raggiungibili.
 
     Importante: NON includiamo MAI il concept text grezzo nel calcolo
     (sarebbe troppo specifico), solo i tag — così il match resta
@@ -520,15 +523,13 @@ async def _load_relevant_memories(
             concept_tokens = _tokenize_text(d.get("concept") or "")
             concept_overlap = len(concept_tokens & user_tokens)
             importance = int(d.get("importance") or 5)
-            # Recency
+            # Recency: time-decay esponenziale continuo (~21gg half-life).
+            # Sostituisce il vecchio bonus a gradini: ora ogni giorno conta.
             recency = 0.0
             try:
                 created = datetime.fromisoformat(d["created_at"].replace("Z", "+00:00"))
-                age_days = (now - created).total_seconds() / 86400.0
-                if age_days < 7:
-                    recency = 1.0
-                elif age_days < 30:
-                    recency = 0.5
+                age_days = max(0.0, (now - created).total_seconds() / 86400.0)
+                recency = 2.0 * math.exp(-age_days / 30.0)
             except Exception:
                 pass
             # Score finale
@@ -2457,6 +2458,55 @@ async def api_get_timeline(limit: int = 200):
 async def api_clear_timeline():
     await db.taccuino_timeline.delete_many(_uf())
     return {"ok": True}
+
+
+# ---------- GDPR Data Export (Art. 20 — Right to data portability) ----------
+
+@api_router.get("/export")
+async def api_gdpr_export():
+    """Esporta TUTTI i dati dell'utente corrente in un unico JSON.
+
+    Include: profilo, timeline conversazioni, ricordi, fatti chiave e
+    le entries del Confessionale (queste ultime ANCORA CIFRATE: il server
+    non possiede la chiave — zero-knowledge by design — quindi vengono
+    esportate esattamente come custodite).
+    """
+    uid = current_user_id()
+    profile = await db.taccuino_profile.find_one({"id": uid}, {"_id": 0})
+    timeline = await db.taccuino_timeline.find(_uf(), {"_id": 0}).sort("timestamp", 1).to_list(5000)
+    memories = await db.taccuino_memories.find(_memory_filter(), {"_id": 0}).sort("created_at", 1).to_list(2000)
+    key_facts = await db.taccuino_key_facts.find({}, {"_id": 0}).sort("created_at", 1).to_list(500)
+    confessional = await db.confessional_entries.find({}, {"_id": 0}).sort("ts", 1).to_list(1000)
+
+    export = {
+        "export_info": {
+            "app": "Koda — L'Amico Fraterno",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "user_id": uid,
+            "gdpr_note": (
+                "Esportazione completa dei dati personali ai sensi dell'Art. 20 GDPR. "
+                "Le voci del Confessionale sono cifrate end-to-end con chiave nota solo "
+                "all'utente: il server non puo' leggerle e le esporta cosi' come custodite."
+            ),
+        },
+        "profile": profile,
+        "timeline": timeline,
+        "memories": memories,
+        "key_facts": key_facts,
+        "confessional_entries_encrypted": confessional,
+        "counts": {
+            "timeline": len(timeline),
+            "memories": len(memories),
+            "key_facts": len(key_facts),
+            "confessional_entries": len(confessional),
+        },
+    }
+    filename = f"koda_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
+    return Response(
+        content=json.dumps(export, ensure_ascii=False, indent=2, default=str),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @api_router.post("/converse", response_model=ConverseResponse)
