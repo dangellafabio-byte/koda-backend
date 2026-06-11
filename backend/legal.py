@@ -24,7 +24,7 @@ from fastapi.responses import HTMLResponse
 legal_router = APIRouter(prefix="/legal", tags=["legal"])
 
 LEGAL_VERSION = "1.2"
-LAST_UPDATED = "8 giugno 2026"
+LAST_UPDATED = "11 giugno 2026"
 COMPANY_NAME = "Fabio Dangella"  # Sviluppatore indipendente
 CONTACT_EMAIL = "hello.koda.support@gmail.com"  # Email ufficiale supporto Koda
 APP_NAME = "Koda"
@@ -256,10 +256,10 @@ _PRIVACY_BODY = f"""
 <h2>7. I tuoi diritti</h2>
 <p>Ai sensi del GDPR (artt. 15-22) hai diritto a:</p>
 <ul>
-  <li><strong>Accesso</strong> — chiedere copia dei tuoi dati. Scrivi a <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>.</li>
+  <li><strong>Accesso e Portabilità (artt. 15 e 20)</strong> — direttamente dall'app: Impostazioni → "Scarica i miei dati". Ottieni subito un file JSON completo e leggibile da macchina con profilo, conversazioni e ricordi. Le voci del Confessionale sono incluse così come le custodiamo: cifrate end-to-end, illeggibili senza la tua parola segreta. In alternativa scrivi a <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>.</li>
   <li><strong>Rettifica</strong> — correggere dati inesatti.</li>
   <li><strong>Cancellazione (diritto all'oblio)</strong> — ottenibile direttamente dall'app: Impostazioni → "Cancella tutta la memoria". Effetto immediato.</li>
-  <li><strong>Limitazione</strong> e <strong>portabilità</strong> — esercitabili scrivendoci.</li>
+  <li><strong>Limitazione</strong> — esercitabile scrivendoci.</li>
   <li><strong>Opposizione</strong> — al trattamento per legittimo interesse.</li>
   <li><strong>Reclamo</strong> — al <a href="https://www.garanteprivacy.it">Garante per la Protezione dei Dati Personali</a> (Italia).</li>
 </ul>

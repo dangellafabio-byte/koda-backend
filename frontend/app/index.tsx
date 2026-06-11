@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   ScrollView,
+  FlatList,
   TouchableOpacity,
   TextInput,
   ActivityIndicator,
@@ -530,7 +531,7 @@ export default function Taccuino() {
   }, [profile]);
 
   const recRef = useRef<Recorder | null>(null);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<FlatList<any>>(null);
   // === FIRST-TAP GATE (richiesto utente 2026-05-23) ===
   // Regola: ad ogni cold-start dell'app E ad ogni ritorno dal background,
   // la PRIMA attivazione del microfono deve essere fatta a mano (tap
@@ -2828,6 +2829,47 @@ export default function Taccuino() {
     return out;
   }, [timeline, confessionalMode]);
 
+  // === OLED DIM OVERLAY (risparmio batteria, giugno 2026) ==================
+  // Dopo 10s senza tocchi in modalità voce, un velo quasi-nero copre lo
+  // schermo: sui display OLED i pixel neri sono SPENTI → batteria salvata
+  // durante le lunghe sessioni vocali (keep-awake attivo). Qualsiasi tocco
+  // sullo schermo lo dissolve istantaneamente. Mai attivo con modali aperti
+  // o in modalità testo/lettura.
+  const [dimmed, setDimmed] = useState(false);
+  const dimTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dimAnim = useRef(new Animated.Value(0)).current;
+  const dimAllowed =
+    viewMode === "voice" &&
+    inputMode !== "text" &&
+    !showSettings &&
+    !showOnboarding &&
+    !showRecap &&
+    !showInfo &&
+    !showSealSetup;
+  const resetDimTimer = useCallback(() => {
+    setDimmed(false);
+    if (dimTimerRef.current) clearTimeout(dimTimerRef.current);
+    dimTimerRef.current = setTimeout(() => setDimmed(true), 10000);
+  }, []);
+  useEffect(() => {
+    if (dimAllowed) {
+      resetDimTimer();
+    } else {
+      if (dimTimerRef.current) clearTimeout(dimTimerRef.current);
+      setDimmed(false);
+    }
+    return () => {
+      if (dimTimerRef.current) clearTimeout(dimTimerRef.current);
+    };
+  }, [dimAllowed, resetDimTimer]);
+  useEffect(() => {
+    Animated.timing(dimAnim, {
+      toValue: dimmed ? 1 : 0,
+      duration: dimmed ? 1400 : 150,
+      useNativeDriver: Platform.OS !== "web",
+    }).start();
+  }, [dimmed, dimAnim]);
+
   // Build the screen wrapper with optional background image / gradient
   // === Aurora DISABILITATA (richiesta utente 2026-06) ===
   // Il tema "giorno" è ora STATICO color sabbia. Il layer Aurora animato
@@ -2836,7 +2878,10 @@ export default function Taccuino() {
   const isAurora = false;
   const isLiquid = theme.name === "liquid";
   const screenInner = (
-    <View style={[styles.screen, { backgroundColor: bgValue ? "transparent" : (isAurora ? "#000" : (isLiquid ? "#F4F1EA" : theme.bg)) }]}>
+    <View
+      style={[styles.screen, { backgroundColor: bgValue ? "transparent" : (isAurora ? "#000" : (isLiquid ? "#F4F1EA" : theme.bg)) }]}
+      onTouchStart={dimAllowed ? resetDimTimer : undefined}
+    >
       {/* === LIQUID INVERSION LAYER (richiesta utente 2026-06) ===
           Sfondo bianco-latte denso che si "deforma" attorno
           all'eclissi e si lascia colorare dall'interno dal tone
@@ -3240,25 +3285,50 @@ export default function Taccuino() {
           />
         </View>
       ) : null}
-      <ScrollView
+      {/* === TIMELINE: FlatList (refactor performance giugno 2026) ===
+          Era una ScrollView che renderizzava TUTTI i messaggi → lenta e
+          memory-hungry su chat lunghe. FlatList virtualizza: renderizza
+          solo le righe visibili + finestra. scrollToEnd() resta identico. */}
+      <FlatList
         ref={scrollRef}
+        data={timelineWithSeparators}
+        keyExtractor={(it) => (it.kind === "sep" ? it.key : it.entry.id)}
+        renderItem={({ item: it }) =>
+          it.kind === "sep" ? (
+            <View style={styles.daySeparator}>
+              <View style={styles.daySepLine} />
+              <Text style={styles.daySepText}>{it.label}</Text>
+              <View style={styles.daySepLine} />
+            </View>
+          ) : (
+            <Bubble
+              entry={it.entry}
+              onReplay={replayMessage}
+              onGhost={ghostMessage}
+              aiAvatar={(profile?.settings as any)?.ai_avatar || null}
+              bubbleAccent={bubbleAccent}
+              bubbleStyle={bubbleStyle}
+              textOnBubble={textOnBubble}
+              textSize={textSize}
+              aiFontFamily={aiFontFamily}
+            />
+          )
+        }
         style={styles.timeline}
         contentContainerStyle={[styles.timelineContent, { paddingTop: Math.max(insets.top + 70, 130), paddingBottom: 220 + insets.bottom }]}
         showsVerticalScrollIndicator={false}
         testID="timeline"
         onScroll={onTimelineScroll}
         scrollEventThrottle={32}
-      >
-        {timeline.length === 0 ? (
+        initialNumToRender={20}
+        maxToRenderPerBatch={12}
+        windowSize={9}
+        removeClippedSubviews={Platform.OS !== "web"}
+        ListEmptyComponent={
           <View style={styles.emptyState}>
             {/* === FIX DOPPIO ECLISSI ===
-                Prima qui c'era un EclipseOrb (size 260) nell'emptyState.
-                Ma in modalità voce, la bottom bar ha già un altro orb
-                (size 210) qualche riga sotto → l'utente vedeva DUE eclissi
-                impilate verticalmente. La pagina di voce (Page 0) ha già
-                l'orb principale grande; questa Page 1 (lettura) deve
-                mostrare solo il testo di benvenuto, mantenendo l'orb
-                attivo solo in basso come pulsante tap-to-talk. */}
+                Niente orb qui: la Page 0 ha già l'orb principale e la
+                bottom bar quello tap-to-talk. Solo testo di benvenuto. */}
             <Text style={styles.emptyTitle}>
               {profile?.name ? `Ehi ${profile.name}, sono qui.` : "Sono qui."}
             </Text>
@@ -3266,66 +3336,34 @@ export default function Taccuino() {
               Tutto quello che mi dici resta tra noi.{"\n"}Parla — ti ascolto.
             </Text>
           </View>
-        ) : (
-          timelineWithSeparators.map((it) =>
-            it.kind === "sep" ? (
-              <View key={it.key} style={styles.daySeparator}>
-                <View style={styles.daySepLine} />
-                <Text style={styles.daySepText}>{it.label}</Text>
-                <View style={styles.daySepLine} />
-              </View>
-            ) : (
-              <Bubble
-                key={it.entry.id}
-                entry={it.entry}
-                onReplay={replayMessage}
-                onGhost={ghostMessage}
-                aiAvatar={(profile?.settings as any)?.ai_avatar || null}
-                bubbleAccent={bubbleAccent}
-                bubbleStyle={bubbleStyle}
-                textOnBubble={textOnBubble}
-                textSize={textSize}
-                aiFontFamily={aiFontFamily}
-              />
-            )
-          )
-        )}
-
-        {/* Typing/speaking indicator on the LEFT (like WhatsApp) — appears
-            when AI is thinking, transcribing, or actively speaking. */}
-        {/* Typing indicator on the LEFT (like WhatsApp) — appears ONLY while
-            AI is processing (thinking) or transcribing user audio. NOT during
-            "speaking" (the AI message is already in the timeline at that point). */}
-        {(status === "thinking" || status === "transcribing") && (
-          <View style={[styles.bubbleRow, styles.bubbleRowL]}>
-            {/* AIAvatar rimosso (richiesta utente 2026-06): in text-mode
-                il mini-orb di fianco ai messaggi non aveva più senso
-                visivo. Ora il messaggio Koda è allineato puro a sinistra
-                speculare a quello user a destra. */}
-            <View
-              style={[
-                styles.bubbleAi,
-                {
-                  // === COLORE "THINKING" CICLAMINO (richiesta 2026-06 #7) ===
-                  // Prima era teal #3FB5B0 — l'utente lo percepiva troppo
-                  // simile al verde acqua dell'orb idle/dei suoi messaggi.
-                  // Ora ciclamino vibrante = lo stesso colore evocativo
-                  // dell'orb quando pensa in home screen.
-                  backgroundColor: bubbleStyle === "solid" ? "#EC4899" : "rgba(236,72,153,0.18)",
-                  borderColor: "#EC4899",
-                  borderWidth: bubbleStyle === "glass" ? 1 : 0,
-                },
-              ]}
-            >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 4, height: 18 }}>
-                <TypingDot delay={0} color={bubbleStyle === "solid" ? "#FFFFFF" : "#EC4899"} />
-                <TypingDot delay={150} color={bubbleStyle === "solid" ? "#FFFFFF" : "#EC4899"} />
-                <TypingDot delay={300} color={bubbleStyle === "solid" ? "#FFFFFF" : "#EC4899"} />
+        }
+        ListFooterComponent={
+          /* Typing indicator a sinistra (stile WhatsApp) — SOLO mentre
+             l'AI pensa o trascrive. Non durante "speaking" (il messaggio
+             è già in timeline a quel punto). */
+          status === "thinking" || status === "transcribing" ? (
+            <View style={[styles.bubbleRow, styles.bubbleRowL]}>
+              <View
+                style={[
+                  styles.bubbleAi,
+                  {
+                    // Colore "thinking" ciclamino (richiesta 2026-06 #7)
+                    backgroundColor: bubbleStyle === "solid" ? "#EC4899" : "rgba(236,72,153,0.18)",
+                    borderColor: "#EC4899",
+                    borderWidth: bubbleStyle === "glass" ? 1 : 0,
+                  },
+                ]}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 4, height: 18 }}>
+                  <TypingDot delay={0} color={bubbleStyle === "solid" ? "#FFFFFF" : "#EC4899"} />
+                  <TypingDot delay={150} color={bubbleStyle === "solid" ? "#FFFFFF" : "#EC4899"} />
+                  <TypingDot delay={300} color={bubbleStyle === "solid" ? "#FFFFFF" : "#EC4899"} />
+                </View>
               </View>
             </View>
-          </View>
-        )}
-      </ScrollView>
+          ) : null
+        }
+      />
 
       {/* Bottom area: voice OR text — chosen via settings */}
       <View
@@ -3464,6 +3502,25 @@ export default function Taccuino() {
       </ScrollView>
 
       {/* Onboarding modal */}
+      {/* === OLED DIM OVERLAY ===
+          Velo quasi-nero che scende dopo 10s di inattività in modalità
+          voce. Un tocco qualsiasi lo dissolve (il primo tocco viene
+          assorbito dall'overlay, non passa ai controlli sotto). */}
+      {dimAllowed && dimmed ? (
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFillObject,
+            {
+              backgroundColor: "#000",
+              opacity: dimAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 0.92] }),
+              zIndex: 9999,
+            },
+          ]}
+        >
+          <Pressable testID="oled-dim-overlay" style={{ flex: 1 }} onPress={resetDimTimer} />
+        </Animated.View>
+      ) : null}
+
       <Modal visible={showOnboarding} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.onboardCard}>

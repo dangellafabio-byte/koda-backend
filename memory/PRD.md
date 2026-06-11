@@ -118,3 +118,14 @@ Le modifiche sono nel workspace Emergent. Arriveranno in produzione (Railway) al
    - NOTA: nel preview il click dà errore perché il frontend ha routing forzato verso Railway prod (`detectBackend` in lib/api.ts) che non ha ancora `/api/export`. Funzionerà al prossimo deploy Railway (push via Save to GitHub).
    - NOTA TECNICA: `expo-sharing` è un nuovo modulo nativo → incluso automaticamente nella prossima build EAS iOS/Android.
    - Fix infra locale: cache Metro stale impediva il reload del bundle web — risolto con `rm -rf .metro-cache + restart expo`.
+
+### Aggiornamento 11 Giugno 2026 — sera (batch "fai tutto")
+4. **Pagina legale Privacy aggiornata** (`legal.py`): diritto di Accesso e Portabilità (artt. 15+20) ora cita l'export in-app "Scarica i miei dati"; data documento → 11 giugno 2026. Verificata con curl.
+5. **Refactor chat ScrollView → FlatList** (`index.tsx`): timeline virtualizzata (initialNumToRender 20, windowSize 9, removeClippedSubviews su native). ListEmptyComponent = welcome, ListFooterComponent = typing indicator. `scrollRef` ora `FlatList<any>`, `scrollToEnd` invariato. Verificato rendering messaggi reali in preview.
+6. **Overlay dim OLED** (`index.tsx`): dopo 10s senza tocchi in modalità voce, velo nero 92% (fade 1.4s); qualsiasi tocco lo dissolve (150ms). Disattivo con modali aperti o input testo. testID `oled-dim-overlay`. Testato E2E con Playwright (appare a ~10s, sparisce al tocco).
+
+### ⚠️ Problema ambiente noto (solo preview Emergent, NON tocca produzione)
+Il watcher di Metro NON rileva le modifiche ai file: dopo ogni batch di edit frontend serve `rm -rf /app/frontend/.metro-cache/* && sudo supervisorctl restart expo` per vedere le novità nel preview web.
+
+### Nota osservata (pre-esistente, non bloccante)
+Alcune vecchie entry timeline (6 giugno) mostrano il prefisso grezzo `[TONE:warm]` nel testo — dati storici salvati prima del fix di pulizia lato backend. Eventualmente bonificabili con uno script una-tantum sul DB.
