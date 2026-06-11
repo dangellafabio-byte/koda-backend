@@ -112,3 +112,9 @@ Le modifiche sono nel workspace Emergent. Arriveranno in produzione (Railway) al
 - P2: Overlay dim 10s per OLED
 - P3: Refactor monoliti server.py (~6800 righe) e index.tsx (~5500 righe)
 - expo-notifications disabilitato (serve setup nativo google-services.json)
+
+### Aggiornamento 11 Giugno 2026 — pomeriggio
+3. **Bottone "Scarica i miei dati" (GDPR)** nel modal Impostazioni (`index.tsx`, testID `gdpr-export-btn`, sopra "Cancella tutta la memoria"): chiama `GET /api/export`. Web: download diretto blob. Native: salva in cache (`expo-file-system/legacy`) + share sheet (`expo-sharing`, installato). Verificato visivamente nel preview web.
+   - NOTA: nel preview il click dà errore perché il frontend ha routing forzato verso Railway prod (`detectBackend` in lib/api.ts) che non ha ancora `/api/export`. Funzionerà al prossimo deploy Railway (push via Save to GitHub).
+   - NOTA TECNICA: `expo-sharing` è un nuovo modulo nativo → incluso automaticamente nella prossima build EAS iOS/Android.
+   - Fix infra locale: cache Metro stale impediva il reload del bundle web — risolto con `rm -rf .metro-cache + restart expo`.

@@ -64,6 +64,8 @@ import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
 import KodaSplash from "../components/KodaSplash";
 import KodaTour, { TourStep } from "../components/KodaTour";
 import * as SecureStore from "expo-secure-store";
+import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
 import NeonBorder, { NeonBorderStatus } from "../components/NeonBorder";
 import ActivationPulse from "../components/ActivationPulse";
 import RadialGlow from "../components/RadialGlow";
@@ -2364,6 +2366,59 @@ export default function Taccuino() {
     setShowSettings(false);
   };
 
+  // === EXPORT DATI GDPR (giugno 2026) ======================================
+  // Scarica TUTTI i dati dell'utente dal backend (/api/export) come JSON.
+  // Web: download diretto via blob. Native: salva in cache + share sheet.
+  // Le voci del Confessionale arrivano ANCORA CIFRATE (zero-knowledge).
+  const [exportingData, setExportingData] = useState(false);
+  const downloadMyData = async () => {
+    if (exportingData) return;
+    setExportingData(true);
+    try {
+      const r = await fetch(`${API_BASE}/export`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const jsonText = await r.text();
+      const filename = `koda_dati_${new Date().toISOString().slice(0, 10)}.json`;
+      if (Platform.OS === "web") {
+        // @ts-ignore — DOM disponibile solo su web
+        const blob = new Blob([jsonText], { type: "application/json" });
+        // @ts-ignore
+        const url = URL.createObjectURL(blob);
+        // @ts-ignore
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        // @ts-ignore
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // @ts-ignore
+        URL.revokeObjectURL(url);
+      } else {
+        const fileUri = `${FileSystem.cacheDirectory}${filename}`;
+        await FileSystem.writeAsStringAsync(fileUri, jsonText, {
+          encoding: FileSystem.EncodingType.UTF8,
+        });
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(fileUri, {
+            mimeType: "application/json",
+            dialogTitle: "I tuoi dati Koda",
+          });
+        } else {
+          Alert.alert("Export pronto", `File salvato: ${filename}`);
+        }
+      }
+    } catch (e) {
+      console.warn("gdpr export failed", e);
+      Alert.alert(
+        "Export non riuscito",
+        "Non sono riuscito a scaricare i tuoi dati. Controlla la connessione e riprova."
+      );
+    } finally {
+      setExportingData(false);
+    }
+  };
+
   const toggleAi = async () => {
     if (!profile) return;
     const next = { ...profile, settings: { ...profile.settings, ai_enabled: !profile.settings.ai_enabled } };
@@ -3992,6 +4047,32 @@ export default function Taccuino() {
                 thumbColor="#FFFFFF"
               />
             </View>
+
+            <View style={styles.divider} />
+
+            {/* === SCARICA I MIEI DATI (GDPR Art. 20) ===
+                Esporta profilo, conversazioni, ricordi e voci del
+                Confessionale (queste ultime restano cifrate) in un JSON. */}
+            <TouchableOpacity
+              onPress={downloadMyData}
+              disabled={exportingData}
+              style={[styles.settingRow, { paddingVertical: 14 }]}
+              testID="gdpr-export-btn"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>📦 Scarica i miei dati</Text>
+                <Text style={styles.settingHint}>
+                  Esporta tutto in un file JSON (GDPR): profilo, conversazioni,
+                  ricordi. Le voci del Confessionale restano cifrate — nemmeno
+                  il file le rivela.
+                </Text>
+              </View>
+              {exportingData ? (
+                <ActivityIndicator size="small" color={theme.primary} />
+              ) : (
+                <Ionicons name="download-outline" size={18} color={theme.text + "88"} />
+              )}
+            </TouchableOpacity>
 
             <View style={styles.divider} />
 
