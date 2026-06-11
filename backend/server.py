@@ -6830,6 +6830,44 @@ async def startup_db_client():
         await _ensure_profile_unique_index()
     except Exception as e:
         logger.warning(f"[startup] profile unique index init failed: {e}")
+    # Bonifica una-tantum tag [TONE:x] rimasti nel testo (giugno 2026)
+    try:
+        n = await _cleanup_tone_tags()
+        if n:
+            logger.info(f"[startup] bonifica TONE tags: {n} voci timeline ripulite")
+    except Exception as e:
+        logger.warning(f"[startup] bonifica TONE tags fallita: {e}")
+
+
+_TONE_TAG_RE = re.compile(r"\[TONE:[a-zA-Z_\-]+\]\s*")
+
+
+async def _cleanup_tone_tags() -> int:
+    """Migrazione idempotente: rimuove i prefissi grezzi `[TONE:warm]` ecc.
+
+    Alcune vecchie risposte AI (primi di giugno 2026) sono state salvate in
+    `taccuino_timeline` con il tag di tono non ancora ripulito, visibile
+    in chat. Bonifica `text` e `voice_text`. Gira a ogni avvio ma tocca
+    solo i documenti sporchi → costo ~zero quando il DB è già pulito.
+    """
+    n = 0
+    cursor = db.taccuino_timeline.find(
+        {"$or": [
+            {"text": {"$regex": r"\[TONE:"}},
+            {"voice_text": {"$regex": r"\[TONE:"}},
+        ]},
+        {"_id": 1, "text": 1, "voice_text": 1},
+    )
+    async for doc in cursor:
+        updates = {}
+        for field in ("text", "voice_text"):
+            val = doc.get(field)
+            if val and "[TONE:" in val:
+                updates[field] = _TONE_TAG_RE.sub("", val).strip()
+        if updates:
+            await db.taccuino_timeline.update_one({"_id": doc["_id"]}, {"$set": updates})
+            n += 1
+    return n
 
 
 @app.on_event("shutdown")
