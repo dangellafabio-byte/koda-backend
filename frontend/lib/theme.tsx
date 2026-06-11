@@ -103,40 +103,37 @@ const GIORNO: Palette = {
   name: "giorno",
   label: "Giorno",
   emoji: "☀️",
-  // === FIX 2026-06 v5 (utente: "schermata giorno in GRIGI, qualcosa che
-  // stia bene con i colori dell'oro") ===
-  // Greige minerale: grigi caldi con sottotono sabbia che esaltano il
-  // bagliore champagne/oro dell'Orb e la cornice dorata dell'app, senza
-  // freddezza da "grigio ospedale". Testo quasi-nero caldo. Il primary
-  // resta il blu petrolio signature (orb in ascolto = bubble utente).
+  // === FIX 2026-06 v6 (utente: "fai più grigio") ===
+  // Grigio vero, neutro-freddo appena ammorbidito: via il sottotono sabbia
+  // della v5. L'oro dell'Orb risalta per contrasto sul grigio neutro.
   isDark: false,
-  bg: "#E4E2DC",
-  surface: "#F0EEE8",
+  bg: "#DBDBD9",
+  surface: "#E9E9E7",
   surfaceAlt: "rgba(0,0,0,0.05)",
-  border: "rgba(64,55,38,0.14)",
-  divider: "rgba(64,55,38,0.10)",
-  text: "#2A2722",
-  textMuted: "#5B554B",
-  textDim: "#8B8377",
+  border: "rgba(40,40,36,0.16)",
+  divider: "rgba(40,40,36,0.11)",
+  text: "#262623",
+  textMuted: "#54544F",
+  textDim: "#828279",
   primary: "#0E7C7B",
   primaryText: "#FFFFFF",
   primarySoftBg: "rgba(14,124,123,0.10)",
   primarySoftBorder: "rgba(14,124,123,0.45)",
   userBubble: "#0E7C7B",
   userBubbleText: "#FFFFFF",
-  aiBubbleBg: "#F0EEE8",
-  aiBubbleBorder: "rgba(64,55,38,0.14)",
-  aiBubbleText: "#2A2722",
+  aiBubbleBg: "#E9E9E7",
+  aiBubbleBorder: "rgba(40,40,36,0.16)",
+  aiBubbleText: "#262623",
   success: "#16A34A",
   warning: "#B8860B",
   danger: "#DC2626",
   tone: {
-    neutral: { bg: "#EAE8E2", border: "#CDC9C0" },
-    calm: { bg: "#E2EAEA", border: "#9FBFBE" },
-    warm: { bg: "#F0E8D4", border: "#D6BE85" },
-    energetic: { bg: "#E4EDDD", border: "#A9C796" },
-    concerned: { bg: "#F2E6D4", border: "#DBB97E" },
-    urgent: { bg: "#F4DEDA", border: "#E3A49A" },
+    neutral: { bg: "#E2E2E0", border: "#C5C5C1" },
+    calm: { bg: "#DDE5E5", border: "#9CBAB9" },
+    warm: { bg: "#EAE3D2", border: "#CDB683" },
+    energetic: { bg: "#DFE7DA", border: "#A5C094" },
+    concerned: { bg: "#ECE1D0", border: "#D2B27C" },
+    urgent: { bg: "#EFDCD8", border: "#DDA098" },
   },
 };
 
