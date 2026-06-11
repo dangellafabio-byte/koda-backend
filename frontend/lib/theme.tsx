@@ -103,38 +103,40 @@ const GIORNO: Palette = {
   name: "giorno",
   label: "Giorno",
   emoji: "☀️",
-  // === FIX 2026-06 v4 (utente: "Pietra Zen #F4F4F2 — off-white neutro per
-  // far risaltare al massimo il bagliore champagne dell'Orb senza impastare
-  // la grafica") ===
-  // Sfondo washi paper, zero dominanti cromatiche, atmosfera zen pulita.
+  // === FIX 2026-06 v5 (utente: "schermata giorno in GRIGI, qualcosa che
+  // stia bene con i colori dell'oro") ===
+  // Greige minerale: grigi caldi con sottotono sabbia che esaltano il
+  // bagliore champagne/oro dell'Orb e la cornice dorata dell'app, senza
+  // freddezza da "grigio ospedale". Testo quasi-nero caldo. Il primary
+  // resta il blu petrolio signature (orb in ascolto = bubble utente).
   isDark: false,
-  bg: "#F4F4F2",
-  surface: "#FFFFFF",
-  surfaceAlt: "rgba(0,0,0,0.04)",
-  border: "rgba(0,0,0,0.10)",
-  divider: "rgba(0,0,0,0.08)",
-  text: "#1A1A1A",
-  textMuted: "#4B5563",
-  textDim: "#6B7280",
+  bg: "#E4E2DC",
+  surface: "#F0EEE8",
+  surfaceAlt: "rgba(0,0,0,0.05)",
+  border: "rgba(64,55,38,0.14)",
+  divider: "rgba(64,55,38,0.10)",
+  text: "#2A2722",
+  textMuted: "#5B554B",
+  textDim: "#8B8377",
   primary: "#0E7C7B",
   primaryText: "#FFFFFF",
   primarySoftBg: "rgba(14,124,123,0.10)",
   primarySoftBorder: "rgba(14,124,123,0.45)",
   userBubble: "#0E7C7B",
   userBubbleText: "#FFFFFF",
-  aiBubbleBg: "#FFFFFF",
-  aiBubbleBorder: "rgba(0,0,0,0.10)",
-  aiBubbleText: "#1A1A1A",
+  aiBubbleBg: "#F0EEE8",
+  aiBubbleBorder: "rgba(64,55,38,0.14)",
+  aiBubbleText: "#2A2722",
   success: "#16A34A",
-  warning: "#D97706",
+  warning: "#B8860B",
   danger: "#DC2626",
   tone: {
-    neutral: { bg: "#F1F5F9", border: "#CBD5E1" },
-    calm: { bg: "#E0F2FE", border: "#7DD3FC" },
-    warm: { bg: "#FEF3C7", border: "#FCD34D" },
-    energetic: { bg: "#DCFCE7", border: "#86EFAC" },
-    concerned: { bg: "#FFEDD5", border: "#FDBA74" },
-    urgent: { bg: "#FEE2E2", border: "#FCA5A5" },
+    neutral: { bg: "#EAE8E2", border: "#CDC9C0" },
+    calm: { bg: "#E2EAEA", border: "#9FBFBE" },
+    warm: { bg: "#F0E8D4", border: "#D6BE85" },
+    energetic: { bg: "#E4EDDD", border: "#A9C796" },
+    concerned: { bg: "#F2E6D4", border: "#DBB97E" },
+    urgent: { bg: "#F4DEDA", border: "#E3A49A" },
   },
 };
 

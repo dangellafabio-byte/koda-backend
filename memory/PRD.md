@@ -129,3 +129,7 @@ Il watcher di Metro NON rileva le modifiche ai file: dopo ogni batch di edit fro
 
 ### Nota osservata (pre-esistente, non bloccante)
 Alcune vecchie entry timeline (6 giugno) mostrano il prefisso grezzo `[TONE:warm]` nel testo — dati storici salvati prima del fix di pulizia lato backend. Eventualmente bonificabili con uno script una-tantum sul DB.
+
+### Aggiornamento 11 Giugno 2026 — notte
+7. **Tema Giorno v5 "Grigio Oro"** (`lib/theme.tsx`): da off-white #F4F4F2 a greige minerale (#E4E2DC bg, #F0EEE8 surface, testi quasi-neri caldi #2A2722, toni warm champagne #F0E8D4/#D6BE85). Pensato per sposare il bagliore oro/champagne dell'Orb. Primary resta petrolio #0E7C7B. Verificato visivamente (tema attivato temporaneamente su prod e RIPRISTINATO a "notte").
+8. **Splash cross-fade continuo v4** (`components/KodaSplash.tsx`): eliminato lo "stacco tra colore e colore". Root cause: il reset crossOp.setValue(0) avveniva 1-2 frame prima dell'aggiornamento di curIdx → flash della palette vecchia. Ora 4 cerchi sempre montati + un solo Animated.Value prog (0→4, loop lineare) con opacity triangolari cicliche interpolate: niente reset, niente setState nel loop = zero stacchi per costruzione. Verificato visivamente (blend petrolio→ciclamino a metà fade).

@@ -4,7 +4,7 @@
  * Versione 3 — niente sottotitolo, SVG senza Animated stops, cross-fade
  * fluido tra 4 palette tramite OPACITY di due cerchi sovrapposti.
  */
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 import { View, Text, StyleSheet, Animated, Easing, Pressable, Dimensions } from "react-native";
 import Svg, { Defs, RadialGradient, Stop, Circle } from "react-native-svg";
 
@@ -68,15 +68,17 @@ export default function KodaSplash({ aiName, duration = 10000, onComplete }: Pro
   const nameFade = useRef(new Animated.Value(0)).current;
   const completedRef = useRef(false);
 
-  // Indice della palette attuale (sotto) e successiva (sopra, fade-in).
-  const [curIdx, setCurIdx] = useState(0);
-  // Animated value 0..1 = opacity del cerchio "successivo" sovrapposto.
-  const crossOp = useRef(new Animated.Value(0)).current;
+  // === CROSS-FADE CONTINUO v4 (fix "stacco tra colore e colore") ===
+  // La v3 resettava crossOp.setValue(0) nel callback dell'animazione, ma
+  // l'aggiornamento di curIdx (stato React) arrivava 1-2 frame DOPO il
+  // reset → per quei frame tornava visibile la palette vecchia = flash.
+  // Ora: 4 cerchi SEMPRE montati, un solo Animated.Value `prog` che corre
+  // 0→4 in loop lineare; l'opacity di ogni cerchio è un'interpolazione
+  // triangolare ciclica. Nessun reset, nessun set-state nel loop = nessuno
+  // stacco possibile, per costruzione.
+  const prog = useRef(new Animated.Value(0)).current;
 
   const segmentMs = Math.max(2200, Math.floor(duration / PALETTES.length));
-  // Cross-fade più lungo (95% del segmento) per transizioni "burrose" senza
-  // stacchi percettibili. Easing inOut sotto per ammorbidire ulteriormente.
-  const fadeMs = Math.floor(segmentMs * 0.95);
 
   // === Fade-in iniziale ===
   useEffect(() => {
@@ -95,40 +97,50 @@ export default function KodaSplash({ aiName, duration = 10000, onComplete }: Pro
     }).start();
   }, [fade, orbFade, nameFade]);
 
-  // === Cross-fade loop tra palette consecutive ===
-  // Strategia: due cerchi sovrapposti, "bottom" e "top".
-  // - bottom: palette attuale (PALETTES[curIdx])
-  // - top:    palette successiva (PALETTES[curIdx+1])
-  // Animo l'opacity di top da 0 a 1 in fadeMs ms. Quando finito:
-  //   - aggiorno curIdx = curIdx+1 (così bottom diventa la nuova palette)
-  //   - reset crossOp = 0 istantaneamente (top torna invisibile)
-  //   - ripeto
+  // === Loop continuo del progresso palette (0 → 4, ciclico) ===
+  // Al wrap 4→0 le opacity sono identiche per costruzione (ciclo chiuso),
+  // quindi il riavvio del loop è invisibile.
   useEffect(() => {
-    let alive = true;
-    let timer: any = null;
-    const tick = () => {
-      if (!alive) return;
-      Animated.timing(crossOp, {
-        toValue: 1,
-        duration: fadeMs,
-        // Easing inOut sine = velocità che parte lenta, accelera al centro,
-        // rallenta in uscita. Risultato visivo: NESSUNO stacco percettibile.
-        easing: Easing.inOut(Easing.sin),
+    const loop = Animated.loop(
+      Animated.timing(prog, {
+        toValue: PALETTES.length,
+        duration: segmentMs * PALETTES.length,
+        easing: Easing.linear,
         useNativeDriver: true,
-      }).start(({ finished }) => {
-        if (!alive || !finished) return;
-        // Avanza indice e resetta opacity in modo invisibile
-        setCurIdx((i) => (i + 1) % PALETTES.length);
-        crossOp.setValue(0);
+      })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [prog, segmentMs]);
+
+  // Opacity triangolare ciclica per il cerchio k: picco 1 quando prog === k,
+  // scende a 0 verso i vicini. Il cerchio 0 ha anche il picco al wrap (=N)
+  // così il riavvio del loop è otticamente invisibile.
+  const N = PALETTES.length;
+  const opacityFor = (k: number) => {
+    if (k === 0) {
+      return prog.interpolate({
+        inputRange: [0, 1, N - 1, N],
+        outputRange: [1, 0, 0, 1],
       });
-      timer = setTimeout(tick, segmentMs);
-    };
-    tick();
-    return () => {
-      alive = false;
-      if (timer) clearTimeout(timer);
-    };
-  }, [crossOp, fadeMs, segmentMs]);
+    }
+    const inputRange: number[] = [];
+    const outputRange: number[] = [];
+    if (k - 1 > 0) {
+      inputRange.push(0);
+      outputRange.push(0);
+    }
+    inputRange.push(k - 1, k);
+    outputRange.push(0, 1);
+    if (k + 1 < N) {
+      inputRange.push(k + 1, N);
+      outputRange.push(0, 0);
+    } else {
+      inputRange.push(N);
+      outputRange.push(0);
+    }
+    return prog.interpolate({ inputRange, outputRange });
+  };
 
   // === Fade-out finale ===
   useEffect(() => {
@@ -155,14 +167,13 @@ export default function KodaSplash({ aiName, duration = 10000, onComplete }: Pro
   };
 
   const displayName = (aiName?.trim() || "Koda").trim();
-  const curPalette = PALETTES[curIdx];
-  const nextPalette = PALETTES[(curIdx + 1) % PALETTES.length];
 
   return (
     <Animated.View style={[styles.root, { opacity: fade }]} pointerEvents="auto">
       <Pressable style={StyleSheet.absoluteFill} onPress={handleSkip}>
         <View style={styles.centerWrap}>
-          {/* Eclissi: due cerchi sovrapposti, cross-fade fluido tra palette */}
+          {/* Eclissi: 4 cerchi sempre montati, opacity ciclica continua —
+              cross-fade perpetuo senza reset = zero stacchi di colore. */}
           <Animated.View
             style={{
               opacity: orbFade,
@@ -171,14 +182,14 @@ export default function KodaSplash({ aiName, duration = 10000, onComplete }: Pro
               height: orbSize,
             }}
           >
-            {/* Cerchio "bottom" — palette attuale, sempre piena opacity */}
-            <View style={StyleSheet.absoluteFill}>
-              <OrbCircle palette={curPalette} size={orbSize} />
-            </View>
-            {/* Cerchio "top" — palette successiva, opacity 0→1 (cross-fade) */}
-            <Animated.View style={[StyleSheet.absoluteFill, { opacity: crossOp }]}>
-              <OrbCircle palette={nextPalette} size={orbSize} />
-            </Animated.View>
+            {PALETTES.map((p, k) => (
+              <Animated.View
+                key={p[1]}
+                style={[StyleSheet.absoluteFill, { opacity: opacityFor(k) }]}
+              >
+                <OrbCircle palette={p} size={orbSize} />
+              </Animated.View>
+            ))}
           </Animated.View>
 
           {/* Solo nome AI, niente sottotitolo */}
