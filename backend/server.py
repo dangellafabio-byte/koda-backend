@@ -2890,7 +2890,10 @@ async def api_converse_sealed(
         f"\n"
         f"Questa è una CONFESSIONE SIGILLATA. L'utente è dentro la 'Modalità "
         f"Confessionale' — uno spazio cifrato end-to-end dove sa che può dirti "
-        f"qualunque cosa senza giudizio e senza che esca mai da qui.\n"
+        f"qualunque cosa senza giudizio e senza che esca mai da qui. Se ti chiede "
+        f"'cos'è questo posto / il confessionale', spiegaglielo: è uno spazio "
+        f"sigillato e cifrato dove nulla viene salvato, a sessione chiusa svanisce. "
+        f"NON dire mai 'non so cos'è'.\n"
         f"\n"
         f"=== MEMORIA ===\n"
         f"DENTRO al Confessionale tu RICORDI TUTTE le sessioni passate "
@@ -6129,6 +6132,28 @@ async def api_voiceprint_enroll(
 #   3. Chunked MP3 ostile a iOS → token MP3 statici con Range = AVPlayer OK.
 # ============================================================
 
+def _infer_user_gender(profile: "Profile") -> str:
+    """Genere utente per la declinazione (sei stanco/stanca). Se non è stato
+    dichiarato esplicitamente, lo DEDUCE dal nome (euristica italiana:
+    -a → femmina, -o/-e → maschio, con eccezioni maschili in -a). L'utente
+    può sempre correggere a voce ('sono una donna' / 'sono un uomo')."""
+    g = (getattr(profile, "user_gender", None) or "n").lower()
+    if g in ("m", "f"):
+        return g
+    name = (getattr(profile, "name", None) or "").strip().lower()
+    if not name:
+        return "n"
+    first = name.split()[0]
+    male_a = {"andrea", "luca", "mattia", "nicola", "elia", "battista", "enea", "tobia"}
+    if first in male_a:
+        return "m"
+    if first.endswith("a"):
+        return "f"
+    if first.endswith(("o", "e")):
+        return "m"
+    return "n"
+
+
 def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> str:
     """Prompt CONDENSATO per il fast path — mantiene l'identità essenziale
     di Koda ma rimuove tutte le sezioni ridondanti (umanità calibrata G/F/E/D/C/B/A,
@@ -6143,7 +6168,7 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
         "fr": "français", "de": "deutsch",
     }.get(profile.language or "it", "italiano")
     ai_name = profile.ai_name or "Coda"
-    user_g = (profile.user_gender or "n").lower()
+    user_g = _infer_user_gender(profile)
     ai_g = (profile.ai_gender or "f").lower()
     memory = (profile.memory_summary or "").strip()
     traits = (profile.core_traits or "").strip()
@@ -6221,6 +6246,15 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
         f"accesso a internet'.\n"
         f"\n"
         f"GENERI:\n- {ai_decl}\n- {user_decl}\n"
+        f"Se l'utente ti dice il suo genere ('sono una donna/un uomo', 'sono femmina/maschio') "
+        f"o lo capisci con certezza, EMETTI l'azione user_gender e da quel momento declina di conseguenza.\n"
+        f"\n"
+        f"━━━ IL CONFESSIONALE (lo conosci bene) ━━━\n"
+        f"Hai una 'Modalità Confessionale': uno spazio cifrato end-to-end dove l'utente può "
+        f"dirti qualcosa che resta SOLO tra voi — niente viene salvato sul server, a sessione "
+        f"chiusa svanisce nel nulla. Si attiva col lucchetto in alto. Se l'utente ti CHIEDE "
+        f"cos'è il Confessionale (o 'cos'è questo posto', 'a cosa serve il lucchetto'), "
+        f"SPIEGAGLIELO con parole tue, calde e brevi. NON dire MAI 'non so cos'è'.\n"
         f"\n"
         f"COSA NON FARE MAI: 'Certo!', 'Capisco perfettamente', 'Come posso aiutarti', "
         f"'Sono qui per...', 'Fammi sapere se ti serve altro', elenchi puntati/numerati, "
@@ -6247,6 +6281,7 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
         f"          'auto orario' → value:\"auto-orario\"\n"
         f"  • Nome AI: 'chiamati X' → {{\"type\":\"config\",\"key\":\"ai_name\",\"value\":\"X\"}}\n"
         f"  • Genere AI: 'sii donna/maschio/neutra' → {{\"type\":\"config\",\"key\":\"ai_gender\",\"value\":\"f|m|n\"}}\n"
+        f"  • Genere utente: l'utente dice 'sono una donna/un uomo' → {{\"type\":\"config\",\"key\":\"user_gender\",\"value\":\"f|m|n\"}}\n"
         f"  • Promemoria/timer: {{\"type\":\"schedule_notification\",\"when_iso\":\"<UTC ISO>\",\"title\":\"...\",\"body\":\"...\"}}\n"
         f"Per richieste di cambio colore blob: rispondi onestamente che non è ancora pronto.\n"
         f"\n"

@@ -77,7 +77,7 @@ const TIERS: TierInfo[] = [
     pricePerMonth: "€19,99",
     features: [
       "500 messaggi al mese",
-      "Tutte le voci sbloccate",
+      "Voce premium (Aria o Echo)",
       "Confessionale + Recap settimanali",
       "Memoria lunga + Voiceprint",
       "Supporto prioritario",

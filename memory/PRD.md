@@ -90,6 +90,20 @@ Le persone hanno troppe app per gestire la vita (calendar, finanze, note, salute
 
 ---
 
+## CHANGELOG — Sessione 13 Giugno 2026 (Koda)
+
+8 fix richiesti dall'utente (testa su TestFlight). NOTA DEPLOY: il frontend forza le chiamate API verso Railway prod (lib/api.ts), quindi i fix backend vanno live solo dopo "Save to GitHub" → Railway redeploy; i fix frontend solo dopo "Publish" (OTA/build). Le modifiche NON appaiono su TestFlight finché non si esegue questo deploy — causa della percezione "tutto come prima".
+
+- **OLED dim RIMOSSO** completamente (logica + overlay + onTouchStart) in app/index.tsx. Era percepito come bug (velo nero).
+- **Pager bloccato a metà** tra pagina voce/lettura: aggiunto re-snap forzato su `onScrollEndDrag` + re-align su `onMomentumScrollEnd` (pagingEnabled lasciava il pager incastrato durante i re-render).
+- **`[TONE:warm]` nelle bolle**: il tag contiene ':' e sfuggiva a `_AUDIO_TAG_RE`. Corretto `_strip_audio_tags` (backend, tutti i path) + `stripDisplayTags` difensivo client su meta.reply. Migrazione avvio già pulisce DB.
+- **Freemium gate DISABILITATO** (richiesta utente, RevenueCat non ancora collegato): rimosso redirect a /paywall in index.tsx. Counter resta visibile ma non blocca. Riattivare con RevenueCat.
+- **Tour guidato decentrato**: ora misura coordinate REALI degli elementi voce (handsFree, confessionale, menu, orb, hint) via `measureInWindow` (refs) invece dei calcoli a mano. buildTourSteps è async. Pagina lettura resta approssimata.
+- **Paywall voci ingannevoli**: piano Plus diceva "Tutte le voci sbloccate" ma esistono solo 2 voci (Aria/Echo) per tutti → cambiato in "Voce premium (Aria o Echo)".
+- **Genere utente dedotto dal nome**: nuova `_infer_user_gender(profile)` (euristica IT: -a→f, -o/-e→m, eccezioni maschili in -a). Usata nel fast prompt. Aggiunta azione config `user_gender` per override vocale (client già la gestisce).
+- **Koda conosce il Confessionale**: aggiunto blocco descrittivo nel fast prompt + sealed prompt ("se ti chiede cos'è, spiega; mai 'non so cos'è'"). Verificato live.
+
+
 ## CHANGELOG — Sessione 11 Giugno 2026 (Koda / L'Amico Fraterno)
 
 ### Contesto
