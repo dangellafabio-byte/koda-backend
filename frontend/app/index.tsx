@@ -165,6 +165,18 @@ const NAMED_COLORS: Record<string, string> = {
   fucsia: "#E11D48", lilla: "#C4B5FD", indaco: "#6366F1",
 };
 
+// Rimuove i tag [TONE:xxx] e gli [audio tags] dal testo per la
+// visualizzazione in chat. Difensivo: il backend già pulisce, ma vecchi
+// dati o race possono far arrivare il prefisso grezzo (es. "[TONE:warm] ...").
+function stripDisplayTags(text: string): string {
+  if (!text) return text;
+  return text
+    .replace(/\[\s*TONE\s*:\s*[a-zA-Z_\-]+\s*\]\s*/gi, "")
+    .replace(/\[[a-zA-Zàèéìòùç '_,/-]{1,40}\]/g, "")
+    .replace(/  +/g, " ")
+    .trim();
+}
+
 export default function Taccuino() {
   const insets = useSafeAreaInsets();
   const { theme, themeName, setThemeName, setHours, dayStart, nightStart } = useTheme();
@@ -230,69 +242,98 @@ export default function Taccuino() {
   /** Costruisce gli step del tour usando le coordinate REALI della home
    *  in base a insets e dimensioni schermo. Va chiamato al momento del
    *  lancio per avere coordinate aggiornate (rotazione/foldable safe). */
-  const buildTourSteps = useCallback((): TourStep[] => {
+  /** Misura le coordinate REALI di un elemento UI tramite measureInWindow.
+   *  Risolve null se il nodo non è montato/misurabile. */
+  const measureRef = useCallback(
+    (ref: React.RefObject<any>): Promise<{ x: number; y: number; w: number; h: number } | null> =>
+      new Promise((resolve) => {
+        const node = ref?.current;
+        if (!node || typeof node.measureInWindow !== "function") {
+          resolve(null);
+          return;
+        }
+        let settled = false;
+        try {
+          node.measureInWindow((x: number, y: number, w: number, h: number) => {
+            settled = true;
+            if (w > 0 && h > 0) resolve({ x, y, w, h });
+            else resolve(null);
+          });
+        } catch {
+          resolve(null);
+          return;
+        }
+        setTimeout(() => {
+          if (!settled) resolve(null);
+        }, 400);
+      }),
+    []
+  );
+
+  /** Costruisce gli step del tour. Le coordinate degli elementi della pagina
+   *  voce sono MISURATE dai veri nodi UI (measureInWindow) — prima erano
+   *  calcolate a mano e risultavano decentrate. Fallback al calcolo
+   *  geometrico se la misura non è disponibile. Le aree della pagina lettura
+   *  (non montate al momento del lancio) restano approssimazioni geometriche. */
+  const buildTourSteps = useCallback(async (): Promise<TourStep[]> => {
     const W = tourDims.width;
     const H = tourDims.height;
-    // L'header in index.tsx è a top = Math.max(insets.top + 16, 70).
-    // I bottoni hanno minWidth/minHeight: 44 con paddingHorizontal: 4 sull'header
-    // (paddingHorizontal: 14 sul container, 4 sul btn, icone Ionicons da 22-24px).
-    // Quindi il pulsante è 44×44 centrato attorno all'icona.
-    //   - centro x bottone sinistro: 14 + 22 (metà del btn 44) = 36
-    //   - centro x bottone destro:   W - 14 - 22 = W - 36
-    //   - centro y bottoni:          headerCY  (insets.top + 38)
-    const headerCY = Math.max(insets.top + 16, 70) + 22;
+    const headerCY = Math.max(insets.top + 28, 70) + 22;
     const userName = profile?.user_name || "amico";
-    // Dimensioni reali Orb sullo schermo: 0.78 * W cappato a 360
     const orbSize = Math.min(W * 0.78, 360);
-    const orbCY = H * 0.46; // centro verticale orb (sotto header, sopra hint)
+    const orbCY = H * 0.46;
+    const [hf, conf, menu, orb, hint] = await Promise.all([
+      measureRef(handsFreeBtnRef),
+      measureRef(confessionaleBtnRef),
+      measureRef(menuBtnRef),
+      measureRef(orbBtnRef),
+      measureRef(scrollHintRef),
+    ]);
+    const hfRect = hf || { x: 14, y: headerCY - 22, w: 44, h: 44 };
+    const confRect = conf || { x: W / 2 - 95, y: Math.max(insets.top + 100, 150), w: 190, h: 44 };
+    const menuRect = menu || { x: W - 58, y: headerCY - 22, w: 44, h: 44 };
+    const orbRect = orb || { x: W / 2 - orbSize / 2, y: orbCY - orbSize / 2, w: orbSize, h: orbSize };
+    const hintRect = hint || { x: W / 2 - 110, y: H * 0.8, w: 220, h: 36 };
     return [
       // -------- Pagina VOCE --------
       {
         page: "voice",
-        // Bottone Hands-free (44×44) centrato in (36, headerCY)
-        rect: { x: 14, y: headerCY - 22, w: 44, h: 44 },
+        rect: hfRect,
         label: "Hands-free",
         shape: "circle",
         speech: `${userName}, questa icona è la modalità mani libere. Quando è verde io ti ascolto da sola — non devi toccare niente. Se vuoi fermarla, toccala di nuovo.`,
       },
       {
         page: "voice",
-        // Pill Confessionale: centrata orizzontalmente, larga ~180×42.
-        // Vive nella confessionaleRow sotto l'header, ~headerCY + 36.
-        rect: { x: W / 2 - 95, y: headerCY + 18, w: 190, h: 44 },
+        rect: confRect,
         label: "Confessionale",
         shape: "round",
         speech: `Qui in mezzo c'è il Confessionale. Toccalo quando vuoi dirmi qualcosa che resti solo tra noi: lì dentro nulla viene salvato, a sessione chiusa svanisce. Per aprirlo serve una tua parola segreta — tienila premuta per impostarla.`,
       },
       {
         page: "voice",
-        // Bottone Menu ⋯ (44×44) centrato in (W-36, headerCY)
-        rect: { x: W - 58, y: headerCY - 22, w: 44, h: 44 },
+        rect: menuRect,
         label: "Menu",
         shape: "circle",
         speech: `Questi tre puntini sono il menu. Da lì puoi rifare questa presentazione, cambiare la mia voce, il tema, o cancellare tutta la memoria in un tocco.`,
       },
       {
         page: "voice",
-        // Eclissi al centro — usiamo la dimensione reale
-        rect: { x: W / 2 - orbSize / 2, y: orbCY - orbSize / 2, w: orbSize, h: orbSize },
+        rect: orbRect,
         label: "Eclissi",
         shape: "circle",
         speech: `Io sono questa eclissi. Cambio colore in base a quello che faccio: verde se aspetto, rosa se ti sto ascoltando, viola se ti sto rispondendo. Toccami per parlarmi.`,
       },
       {
         page: "voice",
-        // Stessa eclissi — secondo passaggio sullo STESSO elemento per spiegare
-        // l'INTERRUZIONE / la pausa. Il tour resta sullo stesso punto, cambia solo la voce.
-        rect: { x: W / 2 - orbSize / 2, y: orbCY - orbSize / 2, w: orbSize, h: orbSize },
+        rect: orbRect,
         label: "Interrompimi",
         shape: "circle",
         speech: `Se mentre ti rispondo vuoi fermarmi — toccami di nuovo. Mi zittisco subito e ti ascolto. Stessa cosa se vuoi prendere la parola: un tocco, e mi metto da parte.`,
       },
       {
         page: "voice",
-        // Indicatore "scorri per leggere" — vive in basso sotto l'orb (~H*0.80-0.86)
-        rect: { x: W / 2 - 110, y: H * 0.80, w: 220, h: 36 },
+        rect: hintRect,
         label: "Scorri",
         shape: "round",
         speech: `Vedi la freccia in basso? Scorri lo schermo da destra verso sinistra e trovi tutto quello che ci siamo detti scritto, in ordine.`,
@@ -300,7 +341,6 @@ export default function Taccuino() {
       // -------- Pagina LETTURA --------
       {
         page: "reading",
-        // Area centrale della timeline
         rect: { x: 12, y: H * 0.18, w: W - 24, h: H * 0.40 },
         label: "Lettura",
         shape: "round",
@@ -308,7 +348,6 @@ export default function Taccuino() {
       },
       {
         page: "reading",
-        // Bolla → long-press per Ghost
         rect: { x: 12, y: H * 0.30, w: W - 24, h: 80 },
         label: "Tieni premuto",
         shape: "round",
@@ -316,7 +355,6 @@ export default function Taccuino() {
       },
       {
         page: "reading",
-        // Barra di scrittura in fondo (~ H - 230 → H - 150)
         rect: { x: 12, y: H - 230, w: W - 24, h: 70 },
         label: "Scrittura",
         shape: "round",
@@ -325,13 +363,13 @@ export default function Taccuino() {
       // -------- Chiusura --------
       {
         page: "voice",
-        rect: { x: W / 2 - orbSize / 2, y: orbCY - orbSize / 2, w: orbSize, h: orbSize },
+        rect: orbRect,
         label: "Pronti",
         shape: "circle",
         speech: `Ecco, hai visto tutto. Sono qui, ${userName}. Parlami quando vuoi — anche solo per dirmi ciao.`,
       },
     ];
-  }, [tourDims.width, tourDims.height, insets.top, profile?.user_name]);
+  }, [tourDims.width, tourDims.height, insets.top, profile?.user_name, measureRef]);
 
   // === MIC OFF DURANTE INTRO/TOUR ===
   // Se KodaIntro o il Tour si aprono mentre il mic era attivo (hands-free),
@@ -369,8 +407,9 @@ export default function Taccuino() {
     if (result?.launch_tour) {
       // Costruzione step DOPO che il profilo è stato aggiornato (così il
       // nome utente nel testo del tour è quello giusto).
-      setTimeout(() => {
-        setTourSteps(buildTourSteps());
+      setTimeout(async () => {
+        const steps = await buildTourSteps();
+        setTourSteps(steps);
         setTourActive(true);
       }, 250);
       return;
@@ -546,6 +585,14 @@ export default function Taccuino() {
   const userInteractedRef = useRef<boolean>(false);
   // Pager horizontale: pagina 0 = voce zen, pagina 1 = lettura.
   const pagerRef = useRef<ScrollView>(null);
+  // Refs ai veri elementi UI della pagina voce — usati dal Tour guidato per
+  // misurare le coordinate REALI (measureInWindow) invece di calcolarle a
+  // mano (che risultavano decentrate). Vedi buildTourSteps.
+  const handsFreeBtnRef = useRef<any>(null);
+  const menuBtnRef = useRef<any>(null);
+  const confessionaleBtnRef = useRef<any>(null);
+  const orbBtnRef = useRef<any>(null);
+  const scrollHintRef = useRef<any>(null);
   const [viewMode, setViewMode] = useState<"voice" | "reading">("voice");
   const dimensions = useWindowDimensions();
   // Use window width with sensible fallback (Dimensions.get) for first render
@@ -1415,18 +1462,13 @@ export default function Taccuino() {
       if (!txt) return;
       setError(null);
 
-      // === FREEMIUM GATE (giugno 2026) ======================================
-      // Il Confessionale è ESCLUSO dal counter (privacy/marketing first).
-      // Per la chat normale: se l'utente ha già consumato i 3 messaggi gratis
-      // e NON è abbonato → redirect a /paywall.
+      // === FREEMIUM GATE DISABILITATO (richiesta utente giugno 2026) ========
+      // L'utente non ha ancora collegato RevenueCat, quindi il redirect al
+      // paywall lo bloccherebbe impedendogli di provare l'app. Il gate è
+      // disattivato: il counter "messaggi di prova" resta visibile, ma non
+      // blocca mai. Riattivare quando RevenueCat sarà integrato.
       const isFortezzaTurn = !!confessionalMode;
-      if (!isFortezzaTurn) {
-        const fm = freemiumRef.current;
-        if (fm && !fm.subscription_active && fm.free_messages_used >= fm.free_messages_limit) {
-          try { router.push("/paywall"); } catch {}
-          return;
-        }
-      }
+      // (gate al paywall volutamente rimosso)
 
       // === SAFETY PRE-FLIGHT (giugno 2026) ===================================
       // SOLO per chat normale (non Confessionale: in Confessionale la regola
@@ -1763,7 +1805,7 @@ export default function Taccuino() {
                   const aiEntry: TimelineEntry = {
                     id: `fast-ai-${Date.now()}`,
                     role: "ai",
-                    text: meta.reply || "",
+                    text: stripDisplayTags(meta.reply || ""),
                     voice_text: meta.voice_text || undefined,
                     tone: (meta.tone as Tone) || "warm",
                     timestamp: new Date().toISOString(),
@@ -2829,46 +2871,11 @@ export default function Taccuino() {
     return out;
   }, [timeline, confessionalMode]);
 
-  // === OLED DIM OVERLAY (risparmio batteria, giugno 2026) ==================
-  // Dopo 10s senza tocchi in modalità voce, un velo quasi-nero copre lo
-  // schermo: sui display OLED i pixel neri sono SPENTI → batteria salvata
-  // durante le lunghe sessioni vocali (keep-awake attivo). Qualsiasi tocco
-  // sullo schermo lo dissolve istantaneamente. Mai attivo con modali aperti
-  // o in modalità testo/lettura.
-  const [dimmed, setDimmed] = useState(false);
-  const dimTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dimAnim = useRef(new Animated.Value(0)).current;
-  const dimAllowed =
-    viewMode === "voice" &&
-    inputMode !== "text" &&
-    !showSettings &&
-    !showOnboarding &&
-    !showRecap &&
-    !showInfo &&
-    !showSealSetup;
-  const resetDimTimer = useCallback(() => {
-    setDimmed(false);
-    if (dimTimerRef.current) clearTimeout(dimTimerRef.current);
-    dimTimerRef.current = setTimeout(() => setDimmed(true), 10000);
-  }, []);
-  useEffect(() => {
-    if (dimAllowed) {
-      resetDimTimer();
-    } else {
-      if (dimTimerRef.current) clearTimeout(dimTimerRef.current);
-      setDimmed(false);
-    }
-    return () => {
-      if (dimTimerRef.current) clearTimeout(dimTimerRef.current);
-    };
-  }, [dimAllowed, resetDimTimer]);
-  useEffect(() => {
-    Animated.timing(dimAnim, {
-      toValue: dimmed ? 1 : 0,
-      duration: dimmed ? 1400 : 150,
-      useNativeDriver: Platform.OS !== "web",
-    }).start();
-  }, [dimmed, dimAnim]);
+  // === OLED DIM OVERLAY RIMOSSO (richiesta utente giugno 2026) =============
+  // La riduzione di luminosità per risparmio energetico è stata eliminata
+  // completamente: copriva lo schermo con un velo nero, era percepita come
+  // un bug e non aveva un comportamento corretto. Nessun overlay, nessun
+  // timer.
 
   // Build the screen wrapper with optional background image / gradient
   // === Aurora DISABILITATA (richiesta utente 2026-06) ===
@@ -2880,7 +2887,6 @@ export default function Taccuino() {
   const screenInner = (
     <View
       style={[styles.screen, { backgroundColor: bgValue ? "transparent" : (isAurora ? "#000" : (isLiquid ? "#F4F1EA" : theme.bg)) }]}
-      onTouchStart={dimAllowed ? resetDimTimer : undefined}
     >
       {/* === LIQUID INVERSION LAYER (richiesta utente 2026-06) ===
           Sfondo bianco-latte denso che si "deforma" attorno
@@ -2994,6 +3000,7 @@ export default function Taccuino() {
       >
         {/* Slot sinistro: toggle Hands-Free. */}
         <TouchableOpacity
+          ref={handsFreeBtnRef}
           style={[styles.headerBtn, { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" }]}
           onPress={() => setHandsFreeMode(!handsFree)}
           hitSlop={20}
@@ -3008,6 +3015,7 @@ export default function Taccuino() {
         </TouchableOpacity>
         {/* Slot destro: menu impostazioni (preso dall'old position). */}
         <TouchableOpacity
+          ref={menuBtnRef}
           style={[styles.headerBtn, { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" }]}
           onPress={() => setShowSettings(true)}
           hitSlop={20}
@@ -3035,6 +3043,7 @@ export default function Taccuino() {
                 - la memoria di lungo periodo NON viene aggiornata
                 - a sessione chiusa tutto svanisce dalla RAM */}
           <TouchableOpacity
+            ref={confessionaleBtnRef}
             style={[
               styles.confessionalToggle,
               confessionalMode && styles.confessionalToggleOn,
@@ -3177,10 +3186,29 @@ export default function Taccuino() {
           if (next !== viewMode) setViewMode(next);
         }}
         scrollEventThrottle={16}
+        onScrollEndDrag={(e) => {
+          // === FIX SCHERMO BLOCCATO A METÀ (richiesta utente giugno 2026) ===
+          // Con pagingEnabled, se un re-render (orb/FlatList) avviene durante
+          // lo swipe, il momentum a volte muore e il pager resta incastrato
+          // tra le due pagine. Forziamo lo snap noi alla pagina più vicina
+          // appena l'utente stacca il dito.
+          const x = e.nativeEvent.contentOffset.x;
+          const w = e.nativeEvent.layoutMeasurement.width || windowWidth;
+          if (w === 0) return;
+          const page = x > w / 2 ? 1 : 0;
+          pagerRef.current?.scrollTo({ x: page * w, y: 0, animated: true });
+          setViewMode(page === 0 ? "voice" : "reading");
+        }}
         onMomentumScrollEnd={(e) => {
           const x = e.nativeEvent.contentOffset.x;
           const w = e.nativeEvent.layoutMeasurement.width || windowWidth;
-          setViewMode(Math.round(x / w) === 0 ? "voice" : "reading");
+          if (w === 0) return;
+          const page = Math.round(x / w);
+          // Ri-allinea se il pager si è fermato fuori posizione.
+          if (Math.abs(x - page * w) > 1) {
+            pagerRef.current?.scrollTo({ x: page * w, y: 0, animated: true });
+          }
+          setViewMode(page === 0 ? "voice" : "reading");
         }}
         style={{ flex: 1 }}
         contentContainerStyle={{ flexGrow: 1 }}
@@ -3202,6 +3230,7 @@ export default function Taccuino() {
             {inputMode !== "text" ? (
               <>
                 <Pressable
+                  ref={orbBtnRef}
                   onPress={onBigButton}
                   disabled={status === "transcribing" || status === "thinking"}
                   hitSlop={30}
@@ -3263,7 +3292,7 @@ export default function Taccuino() {
             {/* Hint swipe — solo se ci sono messaggi (altrimenti non ha senso
                 far promettere "scorri per leggere" se non c'è nulla da leggere) */}
             {timeline.length > 0 && inputMode !== "text" ? (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, opacity: 0.55, marginTop: 6 }}>
+              <View ref={scrollHintRef} style={{ flexDirection: "row", alignItems: "center", gap: 6, opacity: 0.55, marginTop: 6 }}>
                 <Ionicons name="chevron-back" size={14} color={theme.text} />
                 <Text style={{ color: theme.text, fontSize: 12 }}>scorri per leggere</Text>
               </View>
@@ -3502,24 +3531,7 @@ export default function Taccuino() {
       </ScrollView>
 
       {/* Onboarding modal */}
-      {/* === OLED DIM OVERLAY ===
-          Velo quasi-nero che scende dopo 10s di inattività in modalità
-          voce. Un tocco qualsiasi lo dissolve (il primo tocco viene
-          assorbito dall'overlay, non passa ai controlli sotto). */}
-      {dimAllowed && dimmed ? (
-        <Animated.View
-          style={[
-            StyleSheet.absoluteFillObject,
-            {
-              backgroundColor: "#000",
-              opacity: dimAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 0.92] }),
-              zIndex: 9999,
-            },
-          ]}
-        >
-          <Pressable testID="oled-dim-overlay" style={{ flex: 1 }} onPress={resetDimTimer} />
-        </Animated.View>
-      ) : null}
+      {/* OLED DIM OVERLAY rimosso (richiesta utente giugno 2026). */}
 
       <Modal visible={showOnboarding} transparent animationType="fade">
         <View style={styles.modalOverlay}>

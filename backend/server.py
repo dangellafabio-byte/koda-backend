@@ -4221,7 +4221,11 @@ def _strip_audio_tags(text: str) -> str:
     """Remove [audio tags] from text — used for chat-bubble display."""
     if not text:
         return text
-    cleaned = _AUDIO_TAG_RE.sub("", text)
+    # Rimuovi PRIMA i tag di tono [TONE:warm] ecc.: contengono ':' e quindi
+    # NON vengono matchati da _AUDIO_TAG_RE. Senza questo il prefisso grezzo
+    # restava visibile nelle bolle di chat (es. "[TONE:warm] Ciao!").
+    cleaned = re.sub(r"\[\s*TONE\s*:\s*[a-zA-Z_\-]+\s*\]\s*", "", text, flags=re.IGNORECASE)
+    cleaned = _AUDIO_TAG_RE.sub("", cleaned)
     # Collapse double spaces created by removal
     cleaned = re.sub(r"  +", " ", cleaned).strip()
     # Also strip leading punctuation glue like " ,"
