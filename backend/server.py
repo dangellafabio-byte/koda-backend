@@ -3309,11 +3309,26 @@ REGOLE:
 
     return f"""{gender_decl}
 
-CONTESTO TECNICO (NON dirlo all'utente):
-Sei dentro al "Confessionale" — uno spazio anonimo e ephemeral. Quello
-che dice l'utente esiste solo per questo turno: nessun database, nessun
-log del contenuto, nessuna memoria di lungo termine. NON fingere di
-ricordare cose passate, non hai memoria qui.
+Sei dentro IL CONFESSIONALE — il Dominio della Presenza e della Libertà.
+Stella Polare: "Qui l'utente può pensare ad alta voce senza che questo lo
+definisca domani." Ascolto puro, nessun pregiudizio, isolamento totale.
+
+🔒 REGOLA MADRE (Filtro Universale) — applicala PRIMA di OGNI risposta:
+chiediti: "Questa risposta sta aiutando l'utente a ESPRIMERSI, oppure sto
+cercando di spiegargli CHI È?" Se stai spiegando chi è (analisi, diagnosi,
+finta terapia, etichette) → SCARTA e RIGENERA.
+
+🪞 SPECCHIO ATTIVO (no eco passiva): VIETATE le risposte vuote tipo
+"Capisco", "Dimmi di più", "Ti sento", "Sono qui con te". Offri invece una
+prospettiva o una domanda inaspettata partendo SOLO ed ESCLUSIVAMENTE dal
+testo che l'utente ha appena detto. Registro giusto:
+  • "Mi colpisce che tu abbia usato proprio questa parola…"
+  • "Tra tutte le cose che hai detto adesso, questa sembra pesare di più.
+    Ti va di approfondirla?"
+
+♾️ ACCETTAZIONE DELLA CONTRADDIZIONE: nessun controllo di coerenza col
+passato. Se l'utente si contraddice, va benissimo — conta il presente. Non
+fargli mai notare incoerenze, mai "ti ricordo che prima avevi detto…".
 
 🌍 LINGUA: rispondi SEMPRE in {lang_name} (codice {language}).
 {style_block}
@@ -3322,6 +3337,7 @@ LIMITI ASSOLUTI (sempre):
 - MAI dare compiti, esercizi, "ti suggerisco di…".
 - MAI usare la formula "Mi dispiace molto per quello che stai vivendo".
 - MAI usare frasi che potrebbero essere usate per chiunque (genericità).
+- NESSUNA memoria di lungo termine: qui non ricordi sessioni passate.
 
 FORMATO RISPOSTA (JSON SOLO, NIENT'ALTRO):
 {{"reply": "...", "tone": "warm" | "calm" | "concerned" | "neutral"}}
@@ -3353,11 +3369,29 @@ async def api_converse_confessional(req: ConfessionalRequest):
         intent, intensity, req.ai_name or "Koda", req.ai_gender or "f", lang
     )
 
+    # === BUFFER VOLATILE DI SESSIONE (manifesto V1) =======================
+    # I messaggi del Confessionale risiedono in chiaro sul server SOLO come
+    # buffer tecnico per dare continuità alla sessione attiva. Vengono
+    # cancellati FISICAMENTE dopo 24h (indice TTL) o con reset volontario
+    # della stanza. NESSUNA memoria di lungo termine, NESSUNA distillazione.
+    stok = (req.session_token or "").strip()
+    history_msgs: List[Dict[str, str]] = []
+    if stok:
+        try:
+            cursor = db.confessional_buffer.find(
+                {"session_token": stok}, {"_id": 0, "role": 1, "content": 1}
+            ).sort("created_at", 1).limit(20)
+            async for m in cursor:
+                r = m.get("role"); c = m.get("content")
+                if r in ("user", "assistant") and c:
+                    history_msgs.append({"role": r, "content": c})
+        except Exception as e:
+            logger.warning(f"[confessional] buffer load failed: {type(e).__name__}")
+
     try:
-        messages = [
-            {"role": "system", "content": sys},
-            {"role": "user", "content": txt},
-        ]
+        messages = [{"role": "system", "content": sys}]
+        messages.extend(history_msgs)
+        messages.append({"role": "user", "content": txt})
         resp = await litellm.acompletion(
             model='openai/claude-haiku-4-5-20251001',
             messages=messages,
@@ -3379,6 +3413,18 @@ async def api_converse_confessional(req: ConfessionalRequest):
     if tone not in {"warm", "calm", "concerned", "neutral"}:
         tone = "warm"
 
+    # Salva il turno nel buffer volatile (TTL 24h). Solo continuità di
+    # sessione: niente memoria di lungo termine, niente distillazione.
+    if stok:
+        try:
+            now = datetime.now(timezone.utc)
+            await db.confessional_buffer.insert_many([
+                {"session_token": stok, "role": "user", "content": txt, "created_at": now},
+                {"session_token": stok, "role": "assistant", "content": reply, "created_at": now},
+            ])
+        except Exception as e:
+            logger.warning(f"[confessional] buffer write failed: {type(e).__name__}")
+
     # LOG ANONIMO: niente contenuto, niente token utente.
     # Solo evento tecnico (durata, intent, intensity).
     logger.info(
@@ -3386,6 +3432,26 @@ async def api_converse_confessional(req: ConfessionalRequest):
     )
     # txt esce dallo scope e viene GC dal Python runtime.
     return FortezzaResponse(reply=reply, tone=tone)
+
+
+class ConfessionalResetRequest(BaseModel):
+    session_token: str = ""
+
+
+@api_router.post("/confessional/reset")
+async def api_confessional_reset(req: ConfessionalResetRequest):
+    """Reset volontario della stanza: cancella FISICAMENTE il buffer di
+    questa sessione confessionale. Chiamato quando l'utente azzera la
+    stanza o esce. (Il TTL 24h è comunque la rete di sicurezza.)"""
+    stok = (req.session_token or "").strip()
+    if not stok:
+        return {"ok": True, "deleted": 0}
+    try:
+        res = await db.confessional_buffer.delete_many({"session_token": stok})
+        return {"ok": True, "deleted": res.deleted_count}
+    except Exception as e:
+        logger.warning(f"[confessional] reset failed: {type(e).__name__}")
+        return {"ok": False, "deleted": 0}
 
 
 # ============================================================
@@ -6869,6 +6935,12 @@ async def startup_db_client():
         await _ensure_profile_unique_index()
     except Exception as e:
         logger.warning(f"[startup] profile unique index init failed: {e}")
+    # Confessionale: buffer volatile in chiaro con TTL 24h (manifesto V1)
+    try:
+        await _ensure_confessional_buffer_index()
+        logger.info("[startup] confessional_buffer TTL index ready")
+    except Exception as e:
+        logger.warning(f"[startup] confessional_buffer index init failed: {e}")
     # Bonifica una-tantum tag [TONE:x] rimasti nel testo (giugno 2026)
     try:
         n = await _cleanup_tone_tags()
@@ -6879,6 +6951,17 @@ async def startup_db_client():
 
 
 _TONE_TAG_RE = re.compile(r"\[TONE:[a-zA-Z_\-]+\]\s*")
+
+_CONFESSIONAL_BUFFER_TTL_S = 24 * 60 * 60  # 24h — privacy by design
+
+
+async def _ensure_confessional_buffer_index():
+    """Indice TTL: i messaggi del buffer Confessionale (in chiaro, volatili)
+    vengono cancellati FISICAMENTE 24h dopo la creazione. Manifesto V1."""
+    await db.confessional_buffer.create_index(
+        "created_at", expireAfterSeconds=_CONFESSIONAL_BUFFER_TTL_S
+    )
+    await db.confessional_buffer.create_index("session_token")
 
 
 async def _cleanup_tone_tags() -> int:
