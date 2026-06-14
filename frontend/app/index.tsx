@@ -74,6 +74,7 @@ import SealSetupModal from "../components/SealSetupModal";
 import InfoModal from "../components/InfoModal";
 import SafetyAlert from "../components/SafetyAlert";
 import FreemiumCounter from "../components/FreemiumCounter";
+import ProactiveOffer from "../components/ProactiveOffer";
 import { useRouter } from "expo-router";
 import type { SafetyCheckResult, FreemiumStatus as FreemiumStatusType } from "../lib/api";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
@@ -4458,6 +4459,7 @@ export default function Taccuino() {
       {neonBorderEl}
       {activationPulseEl}
       {tourOverlay}
+      {!tourActive && !confessionalMode ? <ProactiveOffer theme={theme} /> : null}
     </View>
   );
 }

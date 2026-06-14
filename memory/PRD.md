@@ -172,3 +172,32 @@ Alcune vecchie entry timeline (6 giugno) mostrano il prefisso grezzo `[TONE:warm
 8. **Splash cross-fade continuo v4** (`components/KodaSplash.tsx`): eliminato lo "stacco tra colore e colore". Root cause: il reset crossOp.setValue(0) avveniva 1-2 frame prima dell'aggiornamento di curIdx → flash della palette vecchia. Ora 4 cerchi sempre montati + un solo Animated.Value prog (0→4, loop lineare) con opacity triangolari cicliche interpolate: niente reset, niente setState nel loop = zero stacchi per costruzione. Verificato visivamente (blend petrolio→ciclamino a metà fade).
 
 9. **Bonifica tag [TONE:x]** (`server.py`): migrazione idempotente all'avvio (`_cleanup_tone_tags` nello startup event) che rimuove i prefissi grezzi `[TONE:warm]` ecc. da `text` e `voice_text` in `taccuino_timeline`. Testata in locale: 3 voci sporche → 0, log "[startup] bonifica TONE tags: 3 voci timeline ripulite". Sui dati reali (Atlas) girerà da sola al primo avvio dopo il deploy Railway.
+
+### Aggiornamento 14 Giugno 2026 — Finalizzazione Block E (App Hardening)
+Stato Block E verificato e completato.
+
+**Backend (già nel codice, testato ✅ in locale via curl):**
+- Rate limiting in-memory per-IP sulle rotte `/api` (150 req / 60s → 429). Middleware `_rate_limit_mw` in `server.py`.
+- `POST /api/analytics/track` — eventi anonimi fire-and-forget, persistiti in `analytics_events`. ✅
+- Decision Engine proattivo (Manifesto V1):
+  - `POST /api/decision/heartbeat` — calcola azione proattiva volatile: `OFFER_SPACE` (≥5 sessioni/24h), `OFFER_CHECKIN` (silenzio ≥6gg), `OFFER_REFLECTION` (reflection_hint), altrimenti `DO_NOTHING`. Throttle 20h, rispetto `detox_until`. ✅ (OFFER_SPACE attivato alla 5ª chiamata, OFFER_REFLECTION ok).
+  - `POST /api/decision/feedback` — 3 DISMISSED/NEGATIVE consecutivi → soppressione 30gg (cool-down). ✅
+  - Separa `internal_reason` (telemetria) da `user_reason` (testo umano). Collezione `decision_state` con indice `key` unico.
+- Pagine legali `GET /api/legal/terms` e `/api/legal/privacy` (in `legal.py`). ✅ (HTML renderizzato).
+
+**Frontend (COMPLETATO in questa sessione):**
+- Era il pezzo MANCANTE: i metodi `analyticsTrack`/`decisionHeartbeat`/`decisionFeedback` esistevano in `lib/api.ts` ma NON erano usati dalla UI.
+- Creato `components/ProactiveOffer.tsx`: al mount della schermata principale chiama `analyticsTrack("app_open")` + `decisionHeartbeat()`. Se l'azione ≠ DO_NOTHING mostra una card discreta in alto (safe-area, accent menta, animazione slide/fade) con `user_reason`, bottone "Va bene" (ACCEPTED) e chiudi (DISMISSED) → `decisionFeedback`. Auto-hide 14s. "Graceful failure": se l'endpoint non risponde (404 su Railway non ancora deployato) non appare nulla.
+- Montato in `app/index.tsx` nel return principale: `{!tourActive && !confessionalMode ? <ProactiveOffer theme={theme} /> : null}`. testID: `proactive-offer-card`, `proactive-offer-text`, `proactive-offer-accept`, `proactive-offer-dismiss`.
+- Lint ProactiveOffer pulito. App boot OK (nessun crash).
+
+**⚠️ NOTE DEPLOY CRITICHE:**
+- Il frontend (preview E TestFlight) punta a **Railway prod** (`detectBackend` forza Railway quando l'URL è preview Emergent). Su Railway oggi `decision/heartbeat` e `analytics/track` rispondono **404**: il Block E backend NON è ancora deployato lì.
+- La card proattiva NON è testabile nel preview web (serve login Google per superare l'AuthGate + Railway senza endpoint). Sarà visibile/funzionante solo sulla **build nativa** DOPO che il backend Block E è live su Railway (push via "Save to GitHub" → deploy Railway).
+
+### Backlog aggiornato (14 Giu 2026)
+- P0: Push su GitHub + deploy backend su Railway (per attivare Block E) → poi richiesta build iOS a support@emergent.sh.
+- P1: Validazione Apple Login (solo su build TestFlight reale).
+- P2: Riattivare paywall RevenueCat (ora disattivato per test).
+- P2/P3: Refactor monoliti `server.py` (~7000 righe) e `index.tsx` (~5700 righe).
+
