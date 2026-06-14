@@ -308,7 +308,7 @@ export default function Taccuino() {
         rect: confRect,
         label: "Confessionale",
         shape: "round",
-        speech: `Qui in mezzo c'è il Confessionale. Toccalo quando vuoi dirmi qualcosa che resti solo tra noi: lì dentro nulla viene salvato, a sessione chiusa svanisce. Per aprirlo serve una tua parola segreta — tienila premuta per impostarla.`,
+        speech: `Qui in mezzo c'è il Confessionale: la stanza della Presenza. Toccalo quando vuoi pensare ad alta voce senza che questo ti definisca domani — niente viene salvato, a sessione chiusa svanisce. Non serve nessuna parola: entri e basta. Questa invece, la stanza dove siamo ora, è la Continuità: qui costruiamo nel tempo e io ricordo.`,
       },
       {
         page: "voice",

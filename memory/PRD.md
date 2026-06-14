@@ -98,7 +98,12 @@ Implementato il **Blocco A** del Manifesto V1 (Confessionale ridisegnato). Verif
 - **Frontend**: rimossa la **Parola Segreta** (ingresso libero); nuova **schermata d'ingresso** (🕯️ copy manifesto, Entra/Non ora); all'uscita chiama `/confessional/reset`; flusso sealed reso dormiente. Icona toggle scarlatto.
 - Doc manifesto creati nella root: `decision_engine_v1.md`, `constitutional_principle.md`, `trust_metrics_framework.md`.
 
-PROSSIMI BLOCCHI: B (modelli User/Conversation/Message), C (Auth Apple+Google gate, solo build), D (tour/presentazione doppia stanza), E (rate limiting, ToS/Privacy, analytics, Decision Engine in-app).
+PROSSIMI BLOCCHI: B (modelli User/Conversation/Message), C (Auth Apple+Google gate, solo build), E (rate limiting, ToS/Privacy, analytics, Decision Engine in-app).
+
+### Block D (14 giu) — Tour & Presentazione allineati al manifesto
+- Tour `index.tsx`: tappa Confessionale riscritta (doppia stanza: Presenza vs Continuità, niente parola segreta).
+- `KodaIntro.tsx`: step 7 trasformato da "imposta parola segreta" a schermata informativa sul Confessionale (ingresso libero); voce parlata step 7 + recap aggiornati.
+- `InfoModal.tsx`: verificato, nessuna copy obsoleta.
 
 ---
 

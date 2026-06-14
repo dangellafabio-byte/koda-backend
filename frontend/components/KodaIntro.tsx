@@ -115,7 +115,7 @@ const KODA_LINES: Record<number, string> = {
   4: "Mi chiamo Koda. Ma se vuoi, puoi darmi un altro nome.",
   5: "Una cosa importante: io non ho un viso. Sono una presenza, e prendo la forma di un'eclissi. Sono qui, sempre, anche quando aspetto in silenzio. Dai miei movimenti capirai cosa sto facendo.",
   6: "Una cosa che mi sta a cuore: se sento che ne hai bisogno, ti scrivo io. Anche se sparisci per giorni, anche se ti sento giù. E ovviamente puoi cercarmi anche tu, quando vuoi. Tu vivi la tua vita — a starti accanto ci penso anch'io.",
-  7: "C'è uno spazio nostro, sigillato, dove puoi dirmi tutto: lo chiamiamo Confessionale. Quello che ci diciamo lì non viene salvato da nessuna parte — a sessione chiusa svanisce come un soffio. Per aprirlo serve una tua parola segreta, la conosci solo tu. Vuoi sceglierla adesso?",
+  7: "C'è una stanza solo per il presente: il Confessionale. Lì puoi pensare ad alta voce senza che questo ti definisca domani — non devi essere coerente con ieri, non devi dimostrare nulla. Quello che dici lì non viene salvato né usato per ricordarti: a sessione chiusa svanisce come un soffio. Non serve nessuna parola: entri quando vuoi, con un tocco.",
   8: "Ultima cosa: leggi queste tre frasi ad alta voce. Mi serviranno per riconoscere sempre la tua voce, ovunque tu sia.",
   9: "Bene! Adesso ti faccio vedere come funziono. Guarda dove ti indico.",
 };
@@ -653,52 +653,18 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
             onPrimary={() => { setCheckinMode("auto"); advance(7); }}
           />
         );
-      // -- Step 7: Secret word --
+      // -- Step 7: Il Confessionale (stanza della Presenza, ingresso libero) --
       case 7:
-        if (secretWordChoice === "now") {
-          return (
-            <StepView
-              title="La tua parola."
-              subtitle="Pensaci bene. Solo tu la devi sapere. È la chiave per aprire il Confessionale."
-              showSubtitle={true}
-              primaryLabel="Salva e continua"
-              onPrimary={() => advance(8)}
-              primaryDisabled={secretWordValue.trim().length < 3}
-            >
-              <TextInput
-                style={styles.textInput}
-                value={secretWordValue}
-                onChangeText={setSecretWordValue}
-                placeholder="Una parola (min 3 caratteri)"
-                placeholderTextColor="#52525B"
-                autoFocus
-                autoCorrect={false}
-                secureTextEntry
-                maxLength={50}
-                returnKeyType="done"
-                onSubmitEditing={() => secretWordValue.trim().length >= 3 && advance(8)}
-              />
-            </StepView>
-          );
-        }
         return (
           <StepView
-            title="Confessionale aperto."
+            title="C'è una stanza solo per il presente."
             subtitle={
-              "Il Confessionale è uno spazio sigillato tra noi due. Quello che ci diciamo lì non viene salvato da nessuna parte: a sessione chiusa, svanisce come un soffio. Per aprirlo serve una tua parola segreta — la conosci solo tu.\n\nVuoi impostarla adesso?"
+              "Si chiama Confessionale. È lo spazio dove puoi pensare ad alta voce senza che questo ti definisca domani.\n\nNon devi essere coerente con ieri, non devi dimostrare nulla. Quello che dici lì non viene salvato né usato per ricordarti: a sessione chiusa, svanisce.\n\nNon serve nessuna parola: entri quando vuoi, con un tocco."
             }
-          >
-            <View style={styles.btnGroupVertical}>
-              <ChoiceBtn
-                label="Sì, imposta adesso"
-                onPress={() => setSecretWordChoice("now")}
-              />
-              <ChoiceBtn
-                label="Più tardi"
-                onPress={() => { setSecretWordChoice("later"); advance(8); }}
-              />
-            </View>
-          </StepView>
+            showSubtitle={true}
+            primaryLabel="Ho capito"
+            onPrimary={() => advance(8)}
+          />
         );
       // -- Step 8: Voiceprint enrollment --
       case 8:
@@ -863,7 +829,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         title="Le regole del nostro spazio."
         subtitle={
           "📱  Voce e Scrittura: parla liberamente toccando l'Eclissi, oppure scorri da destra a sinistra per scrivermi in chat.\n\n" +
-          "🔒  Il Confessionale: una stanza blindata e volatile. Quello che ci diciamo lì dentro svanisce come fumo non appena chiudi il lucchetto.\n\n" +
+          "🔒  Il Confessionale: la stanza del presente. Entri con un tocco e quello che ci diciamo lì svanisce come fumo a sessione chiusa — non viene salvato e non ti definisce domani.\n\n" +
           "⚙️  Controllo totale: nelle impostazioni (⋯) puoi attivare i miei check-in, cambiare tema (Giorno/Notte/Auto) o cancellare l'intera memoria in un tap."
         }
         showSubtitle={true}

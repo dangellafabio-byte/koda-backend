@@ -6941,6 +6941,12 @@ async def startup_db_client():
         logger.info("[startup] confessional_buffer TTL index ready")
     except Exception as e:
         logger.warning(f"[startup] confessional_buffer index init failed: {e}")
+    # Block B — fondazione dati V1 (users/conversations/messages + TTL effimeri)
+    try:
+        await _ensure_v1_foundation_indexes()
+        logger.info("[startup] v1 foundation indexes ready")
+    except Exception as e:
+        logger.warning(f"[startup] v1 foundation index init failed: {e}")
     # Bonifica una-tantum tag [TONE:x] rimasti nel testo (giugno 2026)
     try:
         n = await _cleanup_tone_tags()
@@ -6962,6 +6968,49 @@ async def _ensure_confessional_buffer_index():
         "created_at", expireAfterSeconds=_CONFESSIONAL_BUFFER_TTL_S
     )
     await db.confessional_buffer.create_index("session_token")
+
+
+# === BLOCK B — FONDAZIONE DATI V1 (Manifesto) ============================
+# Struttura snella a 3 oggetti. L'inattività si calcola dinamicamente
+# (NOW - last_interaction_at), niente enum di stato complessi.
+class UserModel(BaseModel):
+    id: Optional[str] = None
+    email: str
+    provider: str = ""  # "Apple" | "Google"
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    last_interaction_at: Optional[datetime] = None
+    detox_until: Optional[datetime] = None
+
+
+class ConversationModel(BaseModel):
+    id: Optional[str] = None
+    user_id: str
+    type: str  # "daily_room" | "confessional"
+    memory_policy: str  # "persistent" | "ephemeral"
+    created_at: Optional[datetime] = None
+
+
+class MessageModel(BaseModel):
+    id: Optional[str] = None
+    conversation_id: str
+    role: str  # "user" | "assistant"
+    content: str
+    created_at: Optional[datetime] = None
+    # Valorizzato SOLO per messaggi effimeri (Confessionale): created_at + 24h.
+    # I messaggi persistenti hanno expire_at=None → non scadono mai.
+    expire_at: Optional[datetime] = None
+
+
+async def _ensure_v1_foundation_indexes():
+    """Block B: collezioni snelle users/conversations/messages.
+    TTL sui messaggi EFFIMERI tramite campo expire_at con
+    expireAfterSeconds=0 → Mongo cancella il doc quando NOW >= expire_at.
+    I messaggi persistenti (expire_at=None) non vengono mai toccati."""
+    await db.users.create_index("email", unique=True)
+    await db.conversations.create_index("user_id")
+    await db.messages.create_index("conversation_id")
+    await db.messages.create_index("expire_at", expireAfterSeconds=0)
 
 
 async def _cleanup_tone_tags() -> int:
