@@ -258,6 +258,14 @@ export const api = {
    *  Usato fuori-Confessionale per dare a Koda awareness che "esiste un vault". */
   confessionalCount: () => jsonReq<{ count: number }>("/confessional/count"),
 
+  /** Reset volontario della stanza Confessionale: cancella il buffer di
+   *  sessione sul server (oltre al TTL 24h). Manifesto V1. */
+  confessionalReset: (session_token: string) =>
+    jsonReq<{ ok: boolean; deleted: number }>("/confessional/reset", {
+      method: "POST",
+      body: JSON.stringify({ session_token }),
+    }),
+
   converseSealed: async (
     payload: {
       nonce: string;

@@ -476,6 +476,7 @@ export default function Taccuino() {
   // Senza Parola Segreta, fallback a ephemeral (no DB ma backend vede testo).
   const [hasSeal, setHasSeal] = useState<boolean>(false);
   const [showSealSetup, setShowSealSetup] = useState(false);
+  const [showConfessionalIntro, setShowConfessionalIntro] = useState(false);
   const [sealUnlocking, setSealUnlocking] = useState(false);
   // Re-check seal availability on mount + after any setup/clear.
   useEffect(() => {
@@ -1304,13 +1305,12 @@ export default function Taccuino() {
           } else if (key === "tone_pref" && typeof value === "string") {
             patch.style_preferences = { ...(profile?.style_preferences || {}), tone_pref: value };
           } else if (key === "confessional" && typeof value === "boolean") {
-            // Toggle confessional ON/OFF immediately (no setup if no seal needed for off)
-            if (value && !hasSeal) {
-              setShowSealSetup(true);
-            } else {
-              if (!value) forgetSessionKey();
-              setConfessionalMode(value);
+            // Manifesto V1: nessuna Parola Segreta, ingresso libero.
+            if (!value && confessionalGhostTokenRef.current) {
+              api.confessionalReset(confessionalGhostTokenRef.current).catch(() => {});
+              confessionalGhostTokenRef.current = null;
             }
+            setConfessionalMode(value);
           } else if (key === "notifications" && typeof value === "boolean") {
             patch.settings = { ...(profile?.settings || {}), notifications_enabled: value };
             if (!value) {
@@ -3050,14 +3050,10 @@ export default function Taccuino() {
             ]}
             onPress={async () => {
               if (!confessionalMode) {
-                // Stiamo per ATTIVARE il confessionale.
-                // Se l'utente non ha ancora una Parola Segreta, mostra il setup.
-                const has = await hasSecretWord();
-                setHasSeal(has);
-                if (!has) {
-                  setShowSealSetup(true);
-                  return;
-                }
+                // ATTIVAZIONE — Manifesto V1: nessuna Parola Segreta.
+                // Mostriamo la schermata d'ingresso, poi si entra liberamente.
+                setShowConfessionalIntro(true);
+                return;
               } else {
                 // Disattivando il confessionale: se ho usato la modalità
                 // Fortezza in questa sessione, lancio l'animazione di chiusura
@@ -3070,47 +3066,15 @@ export default function Taccuino() {
                   fortezzaUsedThisSessionRef.current ||
                   timeline.some((e) => e.fortezza);
 
-                // === DISTILLAZIONE ASTRATTA (giugno 2026) ===
-                // Prima di bruciare la sessione, se è stato usato il
-                // Confessionale sigillato (con Parola Segreta), distilla
-                // un concetto astratto dalla sessione e salvalo come
-                // ricordo. Fire-and-forget: non blocchiamo l'animazione.
-                // Strategia: prendi i messaggi confessional locali, cifrali
-                // con la sessionKey corrente, manda al backend. Backend
-                // decifra, estrae il concetto, lo salva, brucia il testo.
-                try {
-                  const confEntries = timeline.filter((e) => e.confessional && e.text);
-                  if (confEntries.length >= 2) { // almeno 1 turno utente+ai
-                    (async () => {
-                      try {
-                        const key = await getSessionKey({ biometric: false });
-                        if (!key) return; // no seal → niente distillazione
-                        const history = confEntries.map((e) => ({
-                          role: e.role,
-                          text: e.text,
-                        }));
-                        const sealed = await sealText(JSON.stringify(history), key);
-                        const keyB64 = keyToBase64(key);
-                        await api.confessionalDistill(
-                          {
-                            history_nonce: sealed.nonce,
-                            history_ciphertext: sealed.ciphertext,
-                            language: profile?.language || "it",
-                          },
-                          keyB64,
-                        );
-                        console.log("[distill] confessional concept saved");
-                      } catch (err) {
-                        console.warn("[distill] failed (non-fatal):", err);
-                      }
-                    })();
-                  }
-                } catch (e) {
-                  // Non fatale: l'utente non se ne accorge
-                  console.warn("[distill] setup failed:", e);
+                // === RESET VOLONTARIO (Manifesto V1) ===
+                // Niente distillazione, niente memoria di lungo termine: il
+                // Confessionale non deve "definirti domani". All'uscita
+                // cancelliamo FISICAMENTE il buffer di sessione sul server
+                // (oltre al TTL 24h di sicurezza).
+                if (confessionalGhostTokenRef.current) {
+                  api.confessionalReset(confessionalGhostTokenRef.current).catch(() => {});
+                  confessionalGhostTokenRef.current = null;
                 }
-
-                forgetSessionKey();
                 if (hasFortezzaMsgs) {
                   setShowFortezzaWipe(true);
                   return; // l'animazione chiuderà confessionalMode al termine
@@ -3118,10 +3082,7 @@ export default function Taccuino() {
               }
               setConfessionalMode((m) => !m);
             }}
-            onLongPress={() => {
-              // Long-press: gestione Parola Segreta (cambio/cancellazione)
-              setShowSealSetup(true);
-            }}
+            onLongPress={undefined}
             hitSlop={10}
             testID="confessional-toggle"
           >
@@ -3130,9 +3091,7 @@ export default function Taccuino() {
               size={16}
               color={
                 confessionalMode
-                  ? hasSeal
-                    ? "#34D399"
-                    : "#FCA5A5"
+                  ? "#FF6B6B"
                   : (theme.isDark ? "#FFFFFFCC" : "rgba(0,0,0,0.8)")
               }
             />
@@ -3140,9 +3099,7 @@ export default function Taccuino() {
               style={[
                 styles.confessionalToggleText,
                 !theme.isDark && !confessionalMode && { color: "rgba(0,0,0,0.85)" },
-                confessionalMode && {
-                  color: hasSeal ? "#34D399" : "#FCA5A5",
-                },
+                confessionalMode && { color: "#FF6B6B" },
               ]}
             >
               {confessionalMode ? "Confessionale" : "Confessionale"}
@@ -4292,6 +4249,41 @@ export default function Taccuino() {
         styles={styles}
         theme={theme}
       />
+
+      {/* Confessionale — Schermata d'ingresso (Manifesto V1).
+          Niente Parola Segreta: si entra liberamente. Questa schermata fissa
+          il "patto" della stanza prima di entrare. */}
+      <Modal
+        visible={showConfessionalIntro}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowConfessionalIntro(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.88)", justifyContent: "center", alignItems: "center", padding: 28 }}>
+          <View style={{ width: "100%", maxWidth: 420, backgroundColor: "#160C12", borderRadius: 24, borderWidth: 1, borderColor: "rgba(255,107,107,0.35)", padding: 28, alignItems: "center" }}>
+            <Text style={{ fontSize: 40, marginBottom: 6 }}>🕯️</Text>
+            <Text style={{ fontSize: 22, fontWeight: "700", color: "#FFE8E8", marginBottom: 16, letterSpacing: 0.3 }}>Il Confessionale</Text>
+            <Text style={{ fontSize: 15.5, lineHeight: 24, color: "rgba(255,255,255,0.82)", textAlign: "center" }}>
+              Qui non devi essere coerente con ciò che hai detto ieri.{"\n"}
+              Non devi difendere una posizione.{"\n"}
+              Non devi dimostrare nulla.{"\n"}
+              Non devi essere la versione migliore di te stesso.{"\n"}{"\n"}
+              Puoi semplicemente essere presente a ciò che senti oggi.{"\n"}
+              Quello che condividi qui non verrà usato per definirti nelle conversazioni future.
+            </Text>
+            <TouchableOpacity
+              onPress={() => { setShowConfessionalIntro(false); setConfessionalMode(true); }}
+              style={{ marginTop: 24, backgroundColor: "#FF6B6B", paddingVertical: 14, paddingHorizontal: 48, borderRadius: 999 }}
+              testID="confessional-enter"
+            >
+              <Text style={{ color: "#1A0A0F", fontWeight: "800", fontSize: 16 }}>Entra</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setShowConfessionalIntro(false)} style={{ marginTop: 12, paddingVertical: 8, paddingHorizontal: 16 }}>
+              <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 14 }}>Non ora</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* RadialGlow — alone radiale che parte dal blob (centro schermo)
           e si propaga verso i bordi. Coerente coi 3 colori del blob:

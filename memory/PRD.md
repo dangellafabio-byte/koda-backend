@@ -90,6 +90,18 @@ Le persone hanno troppe app per gestire la vita (calendar, finanze, note, salute
 
 ---
 
+## CHANGELOG — Sessione 14 Giugno 2026 (Koda V1 — Block A Confessionale)
+
+Implementato il **Blocco A** del Manifesto V1 (Confessionale ridisegnato). Verificato end-to-end sul preview + API.
+- **Backend** (`/converse/confessional`): nuovo prompt manifesto — **Filtro Universale** ("aiuti a esprimersi o spieghi chi è? → scarta"), **Specchio Attivo** (no eco vuota, parte dal testo corrente), **Accettazione della contraddizione**. Verificato via curl.
+- **Buffer volatile** `confessional_buffer` in chiaro + **indice TTL 24h** (continuità di sessione, cancellazione fisica). Endpoint `/confessional/reset` per reset volontario. **Zero memoria a lungo termine** (distillazione rimossa).
+- **Frontend**: rimossa la **Parola Segreta** (ingresso libero); nuova **schermata d'ingresso** (🕯️ copy manifesto, Entra/Non ora); all'uscita chiama `/confessional/reset`; flusso sealed reso dormiente. Icona toggle scarlatto.
+- Doc manifesto creati nella root: `decision_engine_v1.md`, `constitutional_principle.md`, `trust_metrics_framework.md`.
+
+PROSSIMI BLOCCHI: B (modelli User/Conversation/Message), C (Auth Apple+Google gate, solo build), D (tour/presentazione doppia stanza), E (rate limiting, ToS/Privacy, analytics, Decision Engine in-app).
+
+---
+
 ## CHANGELOG — Sessione 13 Giugno 2026 (Koda)
 
 8 fix richiesti dall'utente (testa su TestFlight). NOTA DEPLOY: il frontend forza le chiamate API verso Railway prod (lib/api.ts), quindi i fix backend vanno live solo dopo "Save to GitHub" → Railway redeploy; i fix frontend solo dopo "Publish" (OTA/build). Le modifiche NON appaiono su TestFlight finché non si esegue questo deploy — causa della percezione "tutto come prima".
