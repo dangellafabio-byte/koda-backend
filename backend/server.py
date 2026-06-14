@@ -3618,6 +3618,192 @@ async def auth_logout(response: Response, authorization: Optional[str] = Header(
     return {"ok": True}
 
 
+# ============================================================================
+#  BLOCK E — HARDENING: rate limiting, analytics, Decision Engine proattivo
+# ============================================================================
+import time as _time
+from collections import deque as _deque
+
+_rate_buckets: Dict[str, Any] = {}
+_RATE_LIMIT = 150        # richieste
+_RATE_WINDOW = 60        # secondi
+
+
+@app.middleware("http")
+async def _rate_limit_mw(request: Request, call_next):
+    """Rate limiting base per-IP sulle rotte /api (anti-abuso). In-memory,
+    finestra scorrevole. Limite generoso: non tocca l'uso normale."""
+    try:
+        if request.url.path.startswith("/api"):
+            ip = request.client.host if request.client else "unknown"
+            now = _time.time()
+            dq = _rate_buckets.get(ip)
+            if dq is None:
+                dq = _deque()
+                _rate_buckets[ip] = dq
+            while dq and now - dq[0] > _RATE_WINDOW:
+                dq.popleft()
+            if len(dq) >= _RATE_LIMIT:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(status_code=429,
+                                    content={"detail": "Troppe richieste, riprova tra poco."})
+            dq.append(now)
+    except Exception:
+        pass
+    return await call_next(request)
+
+
+def _as_utc(dt):
+    if dt is None:
+        return None
+    if isinstance(dt, str):
+        try:
+            dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+        except Exception:
+            return None
+    if isinstance(dt, datetime) and dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+class AnalyticsEvent(BaseModel):
+    event: str
+    props: Optional[Dict[str, Any]] = None
+
+
+@api_router.post("/analytics/track")
+async def analytics_track(req: AnalyticsEvent):
+    """Analytics di base sui flussi (anonimo, fire-and-forget)."""
+    try:
+        await db.analytics_events.insert_one({
+            "event": (req.event or "")[:60],
+            "props": req.props or {},
+            "ts": datetime.now(timezone.utc),
+        })
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+class DecisionHeartbeatRequest(BaseModel):
+    client_key: Optional[str] = None
+    reflection_hint: Optional[str] = None
+
+
+class DecisionFeedbackRequest(BaseModel):
+    client_key: Optional[str] = None
+    action: str
+    outcome: str  # ACCEPTED | DISMISSED | NEGATIVE_FEEDBACK
+
+
+async def _decision_key(authorization: Optional[str], cookie_tok: Optional[str],
+                        client_key: Optional[str]):
+    user = await _session_user(authorization, cookie_tok)
+    if user and user.get("email"):
+        return f"u:{user['email']}", user
+    if client_key:
+        return f"c:{client_key}", None
+    return None, None
+
+
+@api_router.post("/decision/heartbeat")
+async def decision_heartbeat(req: DecisionHeartbeatRequest,
+                             authorization: Optional[str] = Header(None),
+                             session_token: Optional[str] = Cookie(None)):
+    """Decision Engine (Manifesto V1). Su apertura app calcola un UserContext
+    volatile e decide UN'azione proattiva (mai prescrittiva). Separa
+    internal_reason (telemetria) da user_reason (testo umano)."""
+    key, user = await _decision_key(authorization, session_token, req.client_key)
+    if not key:
+        return {"action": "DO_NOTHING"}
+    now = datetime.now(timezone.utc)
+    st = await db.decision_state.find_one({"key": key}) or {"key": key}
+    prev_seen = _as_utc(st.get("last_seen_at"))
+    inter = []
+    for t in st.get("interactions", []):
+        tt = _as_utc(t)
+        if tt and (now - tt).total_seconds() < 86400:
+            inter.append(tt)
+    inter.append(now)
+    inter = inter[-50:]
+    silence_days = (now - prev_seen).days if prev_seen else 0
+    detox_until = _as_utc((user or {}).get("detox_until") or st.get("detox_until"))
+    suppressed = st.get("suppressed", {})
+    last_offer_at = _as_utc(st.get("last_offer_at"))
+
+    def is_suppressed(a):
+        u = _as_utc(suppressed.get(a))
+        return bool(u and u > now)
+
+    throttled = bool(last_offer_at and (now - last_offer_at).total_seconds() < 20 * 3600)
+    update = {"last_seen_at": now, "interactions": inter}
+    decision = {"action": "DO_NOTHING"}
+
+    if detox_until and detox_until > now:
+        decision = {"action": "DO_NOTHING"}  # rispetta lo spazio
+    elif not throttled:
+        sc24 = len(inter)
+        if sc24 >= 5 and not is_suppressed("OFFER_SPACE"):
+            decision = {
+                "action": "OFFER_SPACE",
+                "internal_reason": {"interaction_velocity_peak": True, "session_count_24h": sc24},
+                "user_reason": "Abbiamo fatto diverse sessioni intense di recente. Volevo solo ricordarti che, se ne senti il bisogno, puoi staccare dallo schermo in qualsiasi momento.",
+            }
+        elif silence_days >= 6 and not is_suppressed("OFFER_CHECKIN"):
+            last_checkin = _as_utc(st.get("last_checkin_at"))
+            lcd = (now - last_checkin).days if last_checkin else 999
+            decision = {
+                "action": "OFFER_CHECKIN",
+                "internal_reason": {"silence_days": silence_days, "last_checkin_days": lcd},
+                "user_reason": "È da qualche giorno che non ci sentiamo e volevo lasciarti un saluto.",
+            }
+        elif req.reflection_hint and not is_suppressed("OFFER_REFLECTION"):
+            decision = {
+                "action": "OFFER_REFLECTION",
+                "internal_reason": {"memory_trigger_matched": req.reflection_hint},
+                "user_reason": "Nelle scorse settimane accennavi a qualcosa che avevi a cuore; se ti va di riprenderlo per fare il punto, io sono qui.",
+            }
+
+    if decision["action"] != "DO_NOTHING":
+        update["last_offer_at"] = now
+        if decision["action"] == "OFFER_CHECKIN":
+            update["last_checkin_at"] = now
+    await db.decision_state.update_one({"key": key}, {"$set": update}, upsert=True)
+    return decision
+
+
+@api_router.post("/decision/feedback")
+async def decision_feedback(req: DecisionFeedbackRequest,
+                            authorization: Optional[str] = Header(None),
+                            session_token: Optional[str] = Cookie(None)):
+    """Feedback loop: 3 DISMISSED/NEGATIVE consecutivi su un'azione → la
+    sopprimo per 30 giorni (cool-down). Graceful Failure by design."""
+    key, _u = await _decision_key(authorization, session_token, req.client_key)
+    if not key:
+        return {"ok": True}
+    st = await db.decision_state.find_one({"key": key}) or {}
+    streaks = st.get("dismiss_streak", {})
+    suppressed = st.get("suppressed", {})
+    a = req.action
+    if req.outcome in ("DISMISSED", "NEGATIVE_FEEDBACK"):
+        streaks[a] = int(streaks.get(a, 0)) + 1
+        if streaks[a] >= 3:
+            suppressed[a] = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+            streaks[a] = 0
+    else:
+        streaks[a] = 0
+    await db.decision_state.update_one(
+        {"key": key}, {"$set": {"dismiss_streak": streaks, "suppressed": suppressed}}, upsert=True)
+    try:
+        await db.analytics_events.insert_one({
+            "event": "decision_feedback", "props": {"action": a, "outcome": req.outcome},
+            "ts": datetime.now(timezone.utc),
+        })
+    except Exception:
+        pass
+    return {"ok": True}
+
+
 # ============================================================
 # CONFESSIONALE — CHIACCHIERATA EPHEMERAL (intent=chitchat)
 # ============================================================
@@ -7178,6 +7364,8 @@ async def _ensure_v1_foundation_indexes():
     # Sessioni auth (Block C): TTL automatico su expires_at.
     await db.sessions.create_index("session_token", unique=True)
     await db.sessions.create_index("expires_at", expireAfterSeconds=0)
+    # Decision Engine (Block E)
+    await db.decision_state.create_index("key", unique=True)
 
 
 async def _cleanup_tone_tags() -> int:

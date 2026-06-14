@@ -288,6 +288,23 @@ export const api = {
     }),
   authLogout: () => jsonReq<{ ok: boolean }>("/auth/logout", { method: "POST" }),
 
+  // === Block E ===
+  analyticsTrack: (event: string, props?: Record<string, any>) =>
+    jsonReq<{ ok: boolean }>("/analytics/track", {
+      method: "POST",
+      body: JSON.stringify({ event, props }),
+    }),
+  decisionHeartbeat: (reflection_hint?: string) =>
+    jsonReq<{ action: string; user_reason?: string; internal_reason?: any }>(
+      "/decision/heartbeat",
+      { method: "POST", body: JSON.stringify({ reflection_hint }) }
+    ),
+  decisionFeedback: (action: string, outcome: "ACCEPTED" | "DISMISSED" | "NEGATIVE_FEEDBACK") =>
+    jsonReq<{ ok: boolean }>("/decision/feedback", {
+      method: "POST",
+      body: JSON.stringify({ action, outcome }),
+    }),
+
   converseSealed: async (
     payload: {
       nonce: string;
