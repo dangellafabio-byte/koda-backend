@@ -10,12 +10,12 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import hashlib
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from emergentintegrations.llm.openai import OpenAISpeechToText
-from fastapi import UploadFile, File, Form, Header
+from fastapi import UploadFile, File, Form, Header, Cookie
 from fastapi.responses import Response
 
 # === Sealed Confessional crypto (server-side decrypt-in-RAM only) ===
@@ -3452,6 +3452,170 @@ async def api_confessional_reset(req: ConfessionalResetRequest):
     except Exception as e:
         logger.warning(f"[confessional] reset failed: {type(e).__name__}")
         return {"ok": False, "deleted": 0}
+
+
+# ============================================================================
+#  BLOCK C — AUTENTICAZIONE (Apple + Google) — Manifesto V1
+#  Google: Emergent-managed (testabile su preview/web).
+#  Apple: identity token verificato via Apple JWKS (solo build nativa).
+#  Gate obbligatorio lato frontend; backend "affiancato" (i dati esistenti
+#  restano device-based; migrazione per-utente in seguito).
+# ============================================================================
+import secrets as _secrets
+
+_EMERGENT_SESSION_DATA_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
+_APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
+_APPLE_ISS = "https://appleid.apple.com"
+_APPLE_AUD = "com.dangella.koda"
+_SESSION_TTL_DAYS = 7
+_apple_jwks_cache: Dict[str, Any] = {"keys": None, "fetched_at": None}
+
+
+async def _upsert_user(email: str, provider: str) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        await db.users.update_one(
+            {"email": email},
+            {"$set": {"updated_at": now, "last_interaction_at": now,
+                      "provider": provider or existing.get("provider", "")}},
+        )
+    else:
+        await db.users.insert_one({
+            "email": email, "provider": provider,
+            "created_at": now, "updated_at": now,
+            "last_interaction_at": now, "detox_until": None,
+        })
+    return await db.users.find_one({"email": email}, {"_id": 0})
+
+
+async def _create_session(email: str, token: Optional[str] = None) -> str:
+    now = datetime.now(timezone.utc)
+    tok = token or _secrets.token_urlsafe(32)
+    await db.sessions.update_one(
+        {"session_token": tok},
+        {"$set": {"session_token": tok, "email": email, "created_at": now,
+                  "expires_at": now + timedelta(days=_SESSION_TTL_DAYS)}},
+        upsert=True,
+    )
+    return tok
+
+
+async def _session_user(authorization: Optional[str], cookie_tok: Optional[str]) -> Optional[Dict[str, Any]]:
+    tok = None
+    if authorization and authorization.lower().startswith("bearer "):
+        tok = authorization[7:].strip()
+    elif cookie_tok:
+        tok = cookie_tok
+    if not tok:
+        return None
+    sess = await db.sessions.find_one({"session_token": tok})
+    if not sess:
+        return None
+    exp = sess.get("expires_at")
+    if exp is not None and exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if exp is not None and exp < datetime.now(timezone.utc):
+        return None
+    return await db.users.find_one({"email": sess["email"]}, {"_id": 0})
+
+
+class AppleAuthRequest(BaseModel):
+    identity_token: str
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+
+
+@api_router.post("/auth/google/session")
+async def auth_google_session(response: Response, x_session_id: Optional[str] = Header(None)):
+    """Scambia il session_id Emergent (ricevuto dopo l'OAuth Google) con i
+    dati utente, crea/aggiorna lo User e apre una sessione Koda (7gg)."""
+    if not x_session_id:
+        raise HTTPException(status_code=401, detail="missing session id")
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            r = await client.get(_EMERGENT_SESSION_DATA_URL,
+                                  headers={"X-Session-ID": x_session_id})
+    except Exception:
+        raise HTTPException(status_code=502, detail="auth upstream error")
+    if r.status_code != 200:
+        raise HTTPException(status_code=401, detail="invalid session")
+    data = r.json()
+    email = (data.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=401, detail="no email")
+    await _upsert_user(email, "Google")
+    tok = await _create_session(email, data.get("session_token"))
+    response.set_cookie("session_token", tok, httponly=True, secure=True,
+                        samesite="none", max_age=_SESSION_TTL_DAYS * 24 * 3600, path="/")
+    return {"email": email, "name": data.get("name"),
+            "picture": data.get("picture"), "session_token": tok}
+
+
+@api_router.post("/auth/apple")
+async def auth_apple(req: AppleAuthRequest, response: Response):
+    """Verifica l'identity token Apple (RS256 via JWKS, aud=bundle id),
+    crea/aggiorna lo User e apre una sessione Koda. Solo build nativa."""
+    import json as _json
+    import jwt
+    from jwt.algorithms import RSAAlgorithm
+    try:
+        # Aggiorna cache JWKS (max 1h)
+        now = datetime.now(timezone.utc)
+        cached = _apple_jwks_cache.get("keys")
+        fetched = _apple_jwks_cache.get("fetched_at")
+        if not cached or not fetched or (now - fetched).total_seconds() > 3600:
+            async with httpx.AsyncClient(timeout=10) as client:
+                jr = await client.get(_APPLE_JWKS_URL)
+                jr.raise_for_status()
+                cached = jr.json().get("keys", [])
+            _apple_jwks_cache["keys"] = cached
+            _apple_jwks_cache["fetched_at"] = now
+        header = jwt.get_unverified_header(req.identity_token)
+        kid = header.get("kid")
+        key_data = next((k for k in cached if k.get("kid") == kid), None)
+        if not key_data:
+            raise ValueError("apple key not found")
+        public_key = RSAAlgorithm.from_jwk(_json.dumps(key_data))
+        claims = jwt.decode(req.identity_token, public_key, algorithms=["RS256"],
+                            audience=_APPLE_AUD, issuer=_APPLE_ISS)
+    except Exception as e:
+        logger.warning(f"[auth/apple] verify failed: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=401, detail="invalid apple token")
+    email = (claims.get("email") or req.email or "").strip().lower()
+    if not email:
+        sub = claims.get("sub")
+        if not sub:
+            raise HTTPException(status_code=401, detail="no apple identity")
+        email = f"apple_{sub}@privaterelay.koda"
+    await _upsert_user(email, "Apple")
+    tok = await _create_session(email)
+    response.set_cookie("session_token", tok, httponly=True, secure=True,
+                        samesite="none", max_age=_SESSION_TTL_DAYS * 24 * 3600, path="/")
+    return {"email": email, "session_token": tok}
+
+
+@api_router.get("/auth/me")
+async def auth_me(authorization: Optional[str] = Header(None),
+                  session_token: Optional[str] = Cookie(None)):
+    user = await _session_user(authorization, session_token)
+    if not user:
+        raise HTTPException(status_code=401, detail="not authenticated")
+    return user
+
+
+@api_router.post("/auth/logout")
+async def auth_logout(response: Response, authorization: Optional[str] = Header(None),
+                      session_token: Optional[str] = Cookie(None)):
+    tok = None
+    if authorization and authorization.lower().startswith("bearer "):
+        tok = authorization[7:].strip()
+    elif session_token:
+        tok = session_token
+    if tok:
+        await db.sessions.delete_one({"session_token": tok})
+    response.delete_cookie("session_token", path="/")
+    return {"ok": True}
 
 
 # ============================================================
@@ -7011,6 +7175,9 @@ async def _ensure_v1_foundation_indexes():
     await db.conversations.create_index("user_id")
     await db.messages.create_index("conversation_id")
     await db.messages.create_index("expire_at", expireAfterSeconds=0)
+    # Sessioni auth (Block C): TTL automatico su expires_at.
+    await db.sessions.create_index("session_token", unique=True)
+    await db.sessions.create_index("expires_at", expireAfterSeconds=0)
 
 
 async def _cleanup_tone_tags() -> int:

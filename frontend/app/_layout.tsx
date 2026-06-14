@@ -9,6 +9,8 @@ import { ThemeProvider, useTheme, ThemeName } from "../lib/theme";
 import { api } from "../lib/api";
 import { prewarmAudio } from "../lib/speech";
 import { loadProfileCache } from "../lib/localCache";
+import { AuthProvider, useAuth } from "../lib/auth";
+import LoginScreen from "../components/LoginScreen";
 
 // ============================================================
 // BACKEND KEEP-ALIVE 2026-06
@@ -49,6 +51,17 @@ function ThemedShell({ children }: { children: React.ReactNode }) {
       <View style={[styles.root, { backgroundColor: theme.bg }]}>{children}</View>
     </>
   );
+}
+
+function AuthGate({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return <View style={[styles.root, { backgroundColor: "#000000" }]} />;
+  }
+  if (!user) {
+    return <LoginScreen />;
+  }
+  return <>{children}</>;
 }
 
 export default function RootLayout() {
@@ -196,21 +209,25 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={styles.root}>
       <SafeAreaProvider>
-        <ThemeProvider
-          initialName={initialTheme}
-          initialDayStart={dayStart}
-          initialNightStart={nightStart}
-        >
-          <ThemedShell>
-            <Stack
-              screenOptions={{
-                headerShown: false,
-                contentStyle: { backgroundColor: "transparent" },
-                animation: "fade",
-              }}
-            />
-          </ThemedShell>
-        </ThemeProvider>
+        <AuthProvider>
+          <ThemeProvider
+            initialName={initialTheme}
+            initialDayStart={dayStart}
+            initialNightStart={nightStart}
+          >
+            <ThemedShell>
+              <AuthGate>
+                <Stack
+                  screenOptions={{
+                    headerShown: false,
+                    contentStyle: { backgroundColor: "transparent" },
+                    animation: "fade",
+                  }}
+                />
+              </AuthGate>
+            </ThemedShell>
+          </ThemeProvider>
+        </AuthProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

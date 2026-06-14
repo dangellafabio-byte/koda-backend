@@ -13,6 +13,7 @@
     },
     "ios": {
       "supportsTablet": false,
+      "usesAppleSignIn": true,
       "bundleIdentifier": "com.dangella.koda",
       "buildNumber": "3",
       "infoPlist": {
@@ -63,6 +64,7 @@
       "expo-web-browser",
       "expo-font",
       "expo-secure-store",
+      "expo-apple-authentication",
       [
         "expo-audio",
         {

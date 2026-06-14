@@ -168,10 +168,18 @@ export type SafetyCheckResult = {
   advisory_message: string | null;
 };
 
+import { getAuthToken } from "./authToken";
+
 async function jsonReq<T>(path: string, init?: RequestInit): Promise<T> {
+  const __authTok = getAuthToken();
   const r = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      ...(__authTok ? { Authorization: `Bearer ${__authTok}` } : {}),
+      ...(init?.headers || {}),
+    },
   });
   if (!r.ok) {
     const t = await r.text();
@@ -265,6 +273,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ session_token }),
     }),
+
+  // === Auth (Block C) ===
+  authMe: () => jsonReq<{ email: string; provider?: string }>("/auth/me"),
+  authGoogleSession: (sessionId: string) =>
+    jsonReq<{ email: string; name?: string; picture?: string; session_token: string }>(
+      "/auth/google/session",
+      { method: "POST", headers: { "X-Session-ID": sessionId } }
+    ),
+  authApple: (identity_token: string, email?: string, full_name?: string) =>
+    jsonReq<{ email: string; session_token: string }>("/auth/apple", {
+      method: "POST",
+      body: JSON.stringify({ identity_token, email, full_name }),
+    }),
+  authLogout: () => jsonReq<{ ok: boolean }>("/auth/logout", { method: "POST" }),
 
   converseSealed: async (
     payload: {

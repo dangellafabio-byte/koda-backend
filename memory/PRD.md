@@ -98,7 +98,13 @@ Implementato il **Blocco A** del Manifesto V1 (Confessionale ridisegnato). Verif
 - **Frontend**: rimossa la **Parola Segreta** (ingresso libero); nuova **schermata d'ingresso** (🕯️ copy manifesto, Entra/Non ora); all'uscita chiama `/confessional/reset`; flusso sealed reso dormiente. Icona toggle scarlatto.
 - Doc manifesto creati nella root: `decision_engine_v1.md`, `constitutional_principle.md`, `trust_metrics_framework.md`.
 
-PROSSIMI BLOCCHI: B (modelli User/Conversation/Message), C (Auth Apple+Google gate, solo build), E (rate limiting, ToS/Privacy, analytics, Decision Engine in-app).
+PROSSIMI BLOCCHI: E (rate limiting, ToS/Privacy, analytics, Decision Engine in-app).
+
+### Block C (14 giu) — Auth Apple+Google + gate obbligatorio
+- Backend: `/auth/google/session` (Emergent), `/auth/apple` (verifica JWKS, aud=com.dangella.koda), `/auth/me`, `/auth/logout` + sessioni (TTL 7gg). Verificato (401/401/200).
+- Frontend: `lib/authToken.ts`, `lib/auth.tsx` (AuthProvider, Google web-redirect + native WebBrowser, Apple native), `components/LoginScreen.tsx`, gate in `_layout.tsx`. `api.ts` invia Bearer token.
+- `expo-apple-authentication` installato; `app.json`: `usesAppleSignIn:true` + plugin. **Apple validabile solo su build.**
+- Gate verificato sul preview (LoginScreen reso, Google attivo, Apple disabilitato su web).
 
 ### Block D (14 giu) — Tour & Presentazione allineati al manifesto
 - Tour `index.tsx`: tappa Confessionale riscritta (doppia stanza: Presenza vs Continuità, niente parola segreta).
