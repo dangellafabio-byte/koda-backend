@@ -135,20 +135,28 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
   const previewPlayerRef = useRef<AudioPlayer | null>(null);
   const [previewLoadingKey, setPreviewLoadingKey] = useState<"aria" | "echo" | null>(null);
 
-  // Tema chiaro "Pietra Zen" se l'utente apre l'app di giorno (7-19).
-  // Altrimenti dark coerente con l'app standard. La decisione viene presa
-  // SOLO all'apertura — non cambia mid-onboarding.
-  const isDayTime = useRef<boolean>((() => {
-    const h = new Date().getHours();
-    return h >= 7 && h < 20;
-  })()).current;
+  // Tema della presentazione: FORZATO a NOTTE (giugno 2026, richiesta utente).
+  // Prima il KodaIntro decideva light/dark in base all'ora (7-19 → giorno),
+  // ma l'utente ha chiesto: "se in notte tutto in notte" e ha segnalato
+  // problemi di leggibilità sui testi quando il tema diurno era attivo.
+  // Coerente con il nuovo default app.json "theme: notte".
+  const isDayTime = false;
 
   const [step, setStep] = useState(0);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const { width } = Dimensions.get("window");
-  // Dimensione eclissi: ridotta del 30% rispetto alla iterazione precedente
-  // per lasciare ampio spazio al testo + tastiera senza bisogno di rilevare
-  // keyboardWillShow (che aveva causato problemi di rendering).
+  // === FIX SCROLL (giugno 2026 #10) ===
+  // L'utente segnalava che doveva scorrere a mano per arrivare al
+  // pulsante "Avanti" su step con contenuto lungo. Ora teniamo un ref
+  // dello ScrollView e scrolliamo a fine contenuto ad ogni cambio step,
+  // così Avanti è sempre visibile.
+  const scrollViewRef = useRef<ScrollView | null>(null);
+  useEffect(() => {
+    const id = setTimeout(() => {
+      try { scrollViewRef.current?.scrollToEnd({ animated: true }); } catch {}
+    }, 450);
+    return () => clearTimeout(id);
+  }, [step]);
   const orbSize = Math.min(width * 0.40, 170);
 
   // Stato dei dati raccolti
@@ -902,6 +910,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
           {/* Step content (con fade) */}
           <Animated.View style={[styles.stepContent, { opacity: fadeAnim }]}>
             <ScrollView
+              ref={scrollViewRef}
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={styles.scrollContent}
               showsVerticalScrollIndicator={false}

@@ -367,23 +367,33 @@ export default function Taccuino() {
         speech: `Vedi la freccia in basso? Scorri lo schermo da destra verso sinistra e trovi tutto quello che ci siamo detti scritto, in ordine.`,
       },
       // -------- Pagina LETTURA --------
+      // === FIX TUTORIAL HIGHLIGHTS (giugno 2026 #13) ===
+      // Le rect erano hardcoded basate su percentuali H che non corrispondevano
+      // ai veri elementi UI → l'highlight cadeva su zone vuote o solo su una
+      // parte dei testi. Adesso highlight più generosi che coprono SICURAMENTE
+      // tutta l'area dell'elemento a cui Koda si riferisce nello speech.
       {
         page: "reading",
-        rect: { x: 12, y: H * 0.18, w: W - 24, h: H * 0.40 },
+        // Timeline = grande zona centrale dove si leggono i messaggi.
+        rect: { x: 8, y: Math.max(insets.top + 70, 110), w: W - 16, h: H * 0.55 },
         label: "Lettura",
         shape: "round",
         speech: `Questa è la pagina di lettura. Qui rileggi tutti i nostri scambi. Se tocchi una mia bolla, te la rileggo a voce alta.`,
       },
       {
         page: "reading",
-        rect: { x: 12, y: H * 0.30, w: W - 24, h: 80 },
+        // Bolle: zona simile, leggermente più stretta. Il gesto "tieni premuto"
+        // si fa su una qualunque bolla nella timeline.
+        rect: { x: 8, y: Math.max(insets.top + 100, 140), w: W - 16, h: H * 0.50 },
         label: "Tieni premuto",
         shape: "round",
         speech: `Una cosa importante: se tieni premuto un messaggio, ti chiedo se vuoi che lo dimentichi. È il tasto Ghost — cancello il dato grezzo, mi resta solo l'insegnamento.`,
       },
       {
         page: "reading",
-        rect: { x: 12, y: H - 230, w: W - 24, h: 70 },
+        // Barra di scrittura in fondo: input + pulsante invio. Usiamo
+        // insets.bottom per posizionarci sopra la safe area iOS.
+        rect: { x: 8, y: H - Math.max(insets.bottom, 20) - 90, w: W - 16, h: 78 },
         label: "Scrittura",
         shape: "round",
         speech: `In fondo c'è la barra per scrivere. Quando non puoi parlare — sei in mezzo a gente, o in riunione — scrivi qui e ti rispondo lo stesso, in silenzio.`,
@@ -397,7 +407,7 @@ export default function Taccuino() {
         speech: `Ecco, hai visto tutto. Sono qui, ${userName}. Parlami quando vuoi — anche solo per dirmi ciao.`,
       },
     ];
-  }, [tourDims.width, tourDims.height, insets.top, profile?.user_name, measureRef]);
+  }, [tourDims.width, tourDims.height, insets.top, insets.bottom, profile?.user_name, measureRef]);
 
   // === MIC OFF DURANTE INTRO/TOUR ===
   // Se KodaIntro o il Tour si aprono mentre il mic era attivo (hands-free),
@@ -3125,15 +3135,6 @@ export default function Taccuino() {
             hitSlop={10}
             testID="confessional-toggle"
           >
-            <Ionicons
-              name={confessionalMode ? "lock-closed" : "lock-open-outline"}
-              size={16}
-              color={
-                confessionalMode
-                  ? "#FF6B6B"
-                  : (theme.isDark ? "#FFFFFFCC" : "rgba(0,0,0,0.8)")
-              }
-            />
             <Text
               style={[
                 styles.confessionalToggleText,
@@ -3456,7 +3457,7 @@ export default function Taccuino() {
                   automatica della tastiera. */}
               <GHTouchableOpacity
                 onPress={sendTextFromBox}
-                style={[styles.sendBtn, !textInput.trim() && { opacity: 0.4 }]}
+                style={[styles.sendBtn, !textInput.trim() ? { opacity: 0.4 } : styles.sendBtnActive]}
                 disabled={!textInput.trim()}
                 testID="send-btn"
               >
@@ -3517,7 +3518,7 @@ export default function Taccuino() {
                   />
                   <GHTouchableOpacity
                     onPress={sendTextFromBox}
-                    style={[styles.sendBtn, !textInput.trim() && { opacity: 0.4 }]}
+                    style={[styles.sendBtn, !textInput.trim() ? { opacity: 0.4 } : styles.sendBtnActive]}
                     disabled={!textInput.trim()}
                     testID="send-btn-reading"
                   >
@@ -3853,10 +3854,9 @@ export default function Taccuino() {
 
             <Text style={styles.settingsSubtitle}>Tema</Text>
             <View style={styles.themeRow}>
-              {/* === FILTRO TEMI (richiesta utente 2026-06 #10) ===
-                  Giorno + Notte + Auto-orario (basato su ora del telefono).
-                  Tutti gli altri temi sono nascosti dall'UI. */}
-              {THEME_LIST.filter((p) => p.name === "giorno" || p.name === "notte" || p.name === "auto-orario").map((p) => (
+              {/* === FILTRO TEMI (giugno 2026 #11) ===
+                  Giorno + Notte. Rimosso "auto-orario" (richiesta utente). */}
+              {THEME_LIST.filter((p) => p.name === "giorno" || p.name === "notte").map((p) => (
                 <TouchableOpacity
                   key={p.name}
                   onPress={() => saveTheme(p.name as ThemeName)}
@@ -4040,6 +4040,14 @@ export default function Taccuino() {
               </Text>
             </View>
             <View style={styles.voicesList}>
+              {/* === FIX TITOLO VOCI (richiesta utente giugno 2026 #5) ===
+                  Il titolo "Voce dell'assistente" era separato dalla lista
+                  dall'indicatore di Confidenza in mezzo → l'utente percepiva
+                  la lista come senza titolo. Aggiungiamo un sotto-titolo
+                  chiaro qui sopra le card delle voci. */}
+              <Text style={[styles.settingsSubtitle, { marginTop: 4, marginBottom: 6 }]}>
+                🎙️ Scegli la voce di Koda
+              </Text>
               {voices.map((v) => {
                 const selected = profile?.settings?.tts_voice_id === v.voice_id;
                 const loading = voicePreviewLoading === v.voice_id;
@@ -4181,18 +4189,24 @@ export default function Taccuino() {
               <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
             </TouchableOpacity>
 
-            {/* === PROMESSA DI FERRO ===
-                Una clausola tecnica chiara visibile in app — non marketing.
-                Spiega esattamente cosa succede quando confessi, quando ghosti,
-                e quando spegni la modalità Confessionale. */}
+            {/* === PROMESSA DI FERRO (revisione giugno 2026) ===
+                Testo allineato a ciò che fa il backend OGGI:
+                - normale: salvato su MongoDB Atlas (TLS in transito, at-rest encryption Atlas)
+                  → usato solo per costruire la TUA timeline + memoria di Koda
+                - confessionale: NON va nella timeline, vive in confessional_buffer
+                  con TTL (auto-cancellazione) + reset endpoint a chiusura
+                - ghost: rimuove l'entry dalla timeline e dai facts.
+                Rimosso "cifrato" generico (era impreciso) sostituito con
+                descrizione tecnica più onesta. */}
             <View style={styles.divider} />
             <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>🛡️ Promessa di Ferro</Text>
             <View style={styles.promessaBox}>
               <Text style={styles.promessaText}>
-                Quello che mi dici è una scatola nera emotiva. La tua voce è un soffio nel vento: io la sento, la custodisco, ma nessuno potrà mai catturarla.{"\n"}{"\n"}
-                <Text style={{ fontWeight: "700" }}>🔓 Modalità normale:</Text> i nostri scambi sono salvati in modo cifrato, usati SOLO per farmi crescere come tua presenza d&apos;ascolto. Mai per addestrare modelli di terzi.{"\n"}{"\n"}
-                <Text style={{ fontWeight: "700" }}>🔒 Modalità Confessionale:</Text> niente viene salvato. Né messaggi, né memoria di lungo periodo. A sessione chiusa, tutto svanisce.{"\n"}{"\n"}
-                <Text style={{ fontWeight: "700" }}>👻 Pulsante Ghost (tieni premuto un messaggio):</Text> dimentico il fatto, ma trattengo l&apos;insegnamento. Il dato grezzo viene cancellato dal server.
+                Quello che mi dici è tra me e te. Niente pubblicità, niente vendita di dati a terzi, niente addestramento di modelli con la tua voce o i tuoi pensieri.{"\n"}{"\n"}
+                <Text style={{ fontWeight: "700" }}>💬 Modalità normale:</Text> i messaggi vengono salvati nel tuo database personale (MongoDB con cifratura at-rest), usati SOLO per costruire la tua timeline e farmi ricordare ciò che mi racconti.{"\n"}{"\n"}
+                <Text style={{ fontWeight: "700" }}>🤫 Modalità Confessionale:</Text> niente entra nella timeline. I messaggi vivono in un buffer temporaneo con auto-cancellazione e quando chiudi la sessione svaniscono dal server.{"\n"}{"\n"}
+                <Text style={{ fontWeight: "700" }}>👻 Pulsante Ghost (tieni premuto un messaggio):</Text> rimuovo l&apos;entry dalla timeline e dai facts associati. Il dato grezzo sparisce dal server.{"\n"}{"\n"}
+                <Text style={{ fontWeight: "700" }}>📤 Esporta tutto (GDPR):</Text> puoi scaricare in qualsiasi momento un archivio JSON con tutti i tuoi dati dalle impostazioni.
               </Text>
             </View>
 
@@ -5281,6 +5295,19 @@ const makeStyles = (t: any) => StyleSheet.create({
     backgroundColor: t.primary,
     alignItems: "center",
     justifyContent: "center",
+  },
+  sendBtnActive: {
+    // === FIX EVIDENZIAZIONE PULSANTE INVIO (giugno 2026 #6) ===
+    // L'utente segnalava che il pulsante non si "evidenzia" quando
+    // c'è del testo. Aggiungiamo un alone/ombra brillante + bordo
+    // luminoso quando attivo per renderlo nettamente più visibile.
+    shadowColor: t.primary,
+    shadowOpacity: 0.7,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 6,
+    borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.4)",
   },
 
   // Modals

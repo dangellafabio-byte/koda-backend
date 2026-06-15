@@ -327,8 +327,15 @@ const styles = StyleSheet.create({
   // forte (l'unico modo nativo per ottenere un vero glow morbido).
   haloBorder: {
     position: "absolute",
-    borderWidth: 2,
-    borderColor: "#FFFFFF",
+    // === FIX QUADRATO SOTTO (giugno 2026 #12) ===
+    // L'utente vedeva un "quadrato bianco" attorno al target del tour
+    // sia in giorno che in notte. Causa: borderWidth 2px + borderColor
+    // bianco SOLIDO disegnava un contorno netto come uno spillo, e per
+    // bottoni con borderRadius basso appariva come un rettangolo evidente.
+    // Riduciamo a borderWidth 0 → l'effetto highlight resta SOLO via
+    // shadow iOS (alone soffice) e rings semi-trasparenti su Android.
+    borderWidth: 0,
+    borderColor: "transparent",
     backgroundColor: "transparent",
     ...Platform.select({
       ios: {
@@ -341,11 +348,11 @@ const styles = StyleSheet.create({
       default: {},
     }),
   },
-  // Ring 1: leggermente più grande del target, bianco quasi pieno
+  // Ring 1: leggermente più grande del target, bianco più morbido
   haloRing1: {
     position: "absolute",
-    borderWidth: 3,
-    borderColor: "rgba(255,255,255,0.85)",
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.55)",
     backgroundColor: "transparent",
     ...Platform.select({
       ios: {
@@ -357,18 +364,18 @@ const styles = StyleSheet.create({
       default: {},
     }),
   },
-  // Ring 2: ancora più grande, bianco semi-trasparente
+  // Ring 2: ancora più grande, bianco diluito
   haloRing2: {
     position: "absolute",
-    borderWidth: 4,
-    borderColor: "rgba(255,255,255,0.45)",
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.25)",
     backgroundColor: "transparent",
   },
-  // Ring 3: outermost, bianco diluito → effetto sfumato
+  // Ring 3: outermost, quasi invisibile → solo sfumatura
   haloRing3: {
     position: "absolute",
-    borderWidth: 5,
-    borderColor: "rgba(255,255,255,0.18)",
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.10)",
     backgroundColor: "transparent",
   },
   outerRing: {

@@ -109,9 +109,16 @@ let _nativeReady = false;
 //      di silenzio dal momento dell'ultima voce reale continua a
 //      crescere correttamente.
 const SPEECH_THRESHOLD_DB = -32;     // dBFS — bassa per INIZIARE detection voce
-const SUSTAINED_VOICE_DB = -26;      // dBFS — alta per RINFRESCARE lastVoiceAt
+const SUSTAINED_VOICE_DB = -22;      // dBFS — alzata da -26 a -22 (giugno 2026):
+                                     // utente in TestFlight nativo segnala VAD che NON
+                                     // si ferma mai. Causa: rumore di fondo iPhone
+                                     // (mic interno + processing iOS) si attesta
+                                     // a -26/-24 dBFS → SUSTAINED a -26 lo prendeva
+                                     // come "voce" e tenne sempre viva la registrazione.
+                                     // Con -22 solo la voce vera tiene viva la sessione.
 const SILENCE_THRESHOLD_DB = -42;    // dBFS — hysteresis 10 dB
-const SILENCE_DURATION_MS = 1500;    // 1.5s silence after speech → end of utterance
+const SILENCE_DURATION_MS = 1200;    // 1.2s silence after speech → end of utterance
+                                     // (giugno 2026: da 1500 a 1200, più reattivo)
 const MIN_SPEECH_MS = 700;           // need at least 700ms of voice before silence can fire
 const MIN_SPEECH_FRAMES = 3;         // 3 consecutive frames (~210ms) above threshold → real speech
 const METER_POLL_MS = 70;            // ~14Hz sampling
