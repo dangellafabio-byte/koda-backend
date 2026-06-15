@@ -728,7 +728,7 @@ export default function Taccuino() {
           // CACHE: salva il profile aggiornato sul filesystem locale
           // (cold start prossimo = UI istantanea)
           saveProfileCache(p).catch(() => {});
-          const tName = (p.settings?.theme as ThemeName) || "sistema";
+          const tName = (p.settings?.theme as ThemeName) || "notte";
           if (tName !== themeName) setThemeName(tName);
           if (
             typeof p.settings?.day_start_hour === "number" ||
@@ -785,7 +785,7 @@ export default function Taccuino() {
         // Hydrate SOLO se non abbiamo già dati freschi dal network
         if (cachedProfile) {
           setProfile((current) => (current ? current : cachedProfile));
-          const tName = (cachedProfile.settings?.theme as ThemeName) || "sistema";
+          const tName = (cachedProfile.settings?.theme as ThemeName) || "notte";
           setThemeName((cur) => (cur === tName ? cur : tName));
         }
         if (cachedTimeline && cachedTimeline.length > 0) {
@@ -3183,35 +3183,31 @@ export default function Taccuino() {
         }}
         scrollEventThrottle={16}
         onScrollEndDrag={(e) => {
-          // === FIX SCHERMO BLOCCATO A METÀ (richiesta utente giugno 2026) ===
-          // Con pagingEnabled, se un re-render (orb/FlatList) avviene durante
-          // lo swipe, il momentum a volte muore e il pager resta incastrato
-          // tra le due pagine. Forziamo lo snap noi alla pagina più vicina
-          // appena l'utente stacca il dito.
-          const x = e.nativeEvent.contentOffset.x;
+          // === SWIPE FLUIDO (giugno 2026, fix #2) ===
+          // Il fix precedente forzava scrollTo() qui basandosi su x > w/2,
+          // ignorando la VELOCITÀ del gesto. Risultato: uno swipe veloce
+          // ma corto (intent: cambia pagina) veniva rimandato indietro.
+          // Soluzione: leggi il target che iOS ha CALCOLATO DA SOLO con
+          // velocità inclusa (e.nativeEvent.targetContentOffset) — è il
+          // comportamento naturale di iOS pagingEnabled. Noi aggiorniamo
+          // solo il viewMode, NON interferiamo con lo scroll.
+          const target = e.nativeEvent.targetContentOffset?.x;
+          const cur = e.nativeEvent.contentOffset.x;
           const w = e.nativeEvent.layoutMeasurement.width || windowWidth;
           if (w === 0) return;
-          const page = x > w / 2 ? 1 : 0;
-          pagerRef.current?.scrollTo({ x: page * w, y: 0, animated: true });
+          const ref = typeof target === "number" ? target : cur;
+          const page = ref > w / 2 ? 1 : 0;
           setViewMode(page === 0 ? "voice" : "reading");
-          // === SAFETY-NET DOPPIO SNAP (giugno 2026) ===
-          // Su iOS native, in rari casi il momentum nativo "vince" sul nostro
-          // scrollTo() e il pager torna a 30%-70% posizione. Riprogrammiamo
-          // un secondo snap forzato dopo 350ms: se la posizione non è
-          // perfettamente allineata, la realiniamo.
-          setTimeout(() => {
-            try {
-              pagerRef.current?.scrollTo({ x: page * w, y: 0, animated: false });
-            } catch {}
-          }, 350);
         }}
         onMomentumScrollEnd={(e) => {
           const x = e.nativeEvent.contentOffset.x;
           const w = e.nativeEvent.layoutMeasurement.width || windowWidth;
           if (w === 0) return;
           const page = Math.round(x / w);
-          // Ri-allinea se il pager si è fermato fuori posizione.
-          if (Math.abs(x - page * w) > 1) {
+          // Safety-net: snap SOLO se siamo realmente fuori posizione
+          // (es. re-render killato il momentum). Tolleranza 4px così
+          // non interferiamo con la naturale fine del momentum iOS.
+          if (Math.abs(x - page * w) > 4) {
             pagerRef.current?.scrollTo({ x: page * w, y: 0, animated: true });
           }
           setViewMode(page === 0 ? "voice" : "reading");

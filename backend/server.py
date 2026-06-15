@@ -795,7 +795,7 @@ class TaccuinoSettings(BaseModel):
     # chiude da solo dopo 800ms di silenzio. L'utente può disattivarlo a voce
     # ("Coda modalità manuale" / "disattiva hands free") o dal toggle in header.
     hands_free: bool = True
-    theme: str = "sistema"  # "sistema" | "auto-orario" | "notte" | "giorno" | "cielo" | "bosco" | "ciliegia"
+    theme: str = "notte"  # default fissato a "notte" (richiesta utente giugno 2026 — indigo notturno).
     day_start_hour: int = 7   # used when theme = "auto-orario"
     night_start_hour: int = 20  # used when theme = "auto-orario"
     # ElevenLabs TTS settings
@@ -1701,6 +1701,22 @@ async def api_get_profile(request: Request):
     apertura dell'app, indipendentemente da quale bundle stia girando.
     """
     p = await get_or_create_profile()
+    # === MIGRAZIONE TEMA "sistema" → "notte" (giugno 2026) ===
+    # Vecchio default era "sistema" (segue iOS). L'utente vuole partire
+    # SEMPRE in modalità notte (sfondo indaco) indipendentemente da iOS.
+    # Profili creati prima del cambio del default hanno ancora "sistema":
+    # li aggiorniamo a "notte" alla prima lettura.
+    try:
+        if (p.settings.theme or "") == "sistema":
+            p.settings.theme = "notte"
+            await db.taccuino_profile.update_one(
+                {"id": p.id},
+                {"$set": {"settings.theme": "notte"}},
+            )
+    except Exception:
+        # Best-effort: se la migrazione fallisce, il client comunque
+        # forza "notte" come fallback locale.
+        pass
     try:
         bg = p.settings.background or ""
         if bg.startswith("data:") and len(bg) > 2000:
