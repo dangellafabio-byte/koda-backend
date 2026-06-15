@@ -42,6 +42,7 @@ type AuthState = {
   signInGoogle: () => Promise<void>;
   signInApple: () => Promise<void>;
   signOut: () => Promise<void>;
+  refresh: () => Promise<void>;
 };
 
 const AuthCtx = createContext<AuthState>({
@@ -50,6 +51,7 @@ const AuthCtx = createContext<AuthState>({
   signInGoogle: async () => {},
   signInApple: async () => {},
   signOut: async () => {},
+  refresh: async () => {},
 });
 
 export const useAuth = () => useContext(AuthCtx);
@@ -147,7 +149,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthCtx.Provider value={{ user, loading, signInGoogle, signInApple, signOut }}>
+    <AuthCtx.Provider value={{ user, loading, signInGoogle, signInApple, signOut, refresh }}>
       {children}
     </AuthCtx.Provider>
   );

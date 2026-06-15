@@ -276,6 +276,11 @@ export const api = {
 
   // === Auth (Block C) ===
   authMe: () => jsonReq<{ email: string; provider?: string }>("/auth/me"),
+  authDevLogin: () =>
+    jsonReq<{ email: string; name?: string; session_token: string }>(
+      "/auth/dev-login",
+      { method: "POST" }
+    ),
   authGoogleSession: (sessionId: string) =>
     jsonReq<{ email: string; name?: string; picture?: string; session_token: string }>(
       "/auth/google/session",

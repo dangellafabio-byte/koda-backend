@@ -3557,6 +3557,21 @@ class AppleAuthRequest(BaseModel):
     full_name: Optional[str] = None
 
 
+@api_router.post("/auth/dev-login")
+async def auth_dev_login(response: Response):
+    """DEV LOGIN BYPASS (giugno 2026, richiesta utente).
+    Solo per testing su preview web dove l'OAuth Google attraverso il
+    proxy Emergent non riesce a persistere i cookie cross-domain.
+    Crea/usa un utente fisso 'dev@koda.local' e ritorna un session_token.
+    Da rimuovere prima della produzione."""
+    email = "dev@koda.local"
+    await _upsert_user(email, "Dev")
+    tok = await _create_session(email)
+    response.set_cookie("session_token", tok, httponly=True, secure=True,
+                        samesite="none", max_age=_SESSION_TTL_DAYS * 24 * 3600, path="/")
+    return {"email": email, "name": "Tester", "session_token": tok}
+
+
 @api_router.post("/auth/google/session")
 async def auth_google_session(response: Response, x_session_id: Optional[str] = Header(None)):
     """Scambia il session_id Emergent (ricevuto dopo l'OAuth Google) con i

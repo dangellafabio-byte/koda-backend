@@ -10,11 +10,12 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../lib/auth";
+import { api, persistToken } from "../lib/api";
 
 export default function LoginScreen() {
-  const { signInGoogle, signInApple } = useAuth();
+  const { signInGoogle, signInApple, refresh } = useAuth() as any;
   const insets = useSafeAreaInsets();
-  const [busy, setBusy] = useState<null | "google" | "apple">(null);
+  const [busy, setBusy] = useState<null | "google" | "apple" | "dev">(null);
   const [err, setErr] = useState<string | null>(null);
 
   const onGoogle = async () => {
@@ -44,7 +45,27 @@ export default function LoginScreen() {
     }
   };
 
+  // DEV BYPASS: solo su web (preview Emergent), permette di entrare
+  // senza OAuth (i cookie cross-domain del proxy preview rompono il
+  // flusso Google). Da rimuovere prima del go-live in produzione web.
+  const onDevLogin = async () => {
+    setErr(null);
+    setBusy("dev");
+    try {
+      const res: any = await (api as any).authDevLogin();
+      if (res?.session_token) {
+        await persistToken(res.session_token);
+        if (typeof refresh === "function") await refresh();
+      }
+    } catch {
+      setErr("Dev login non riuscito.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const isIOS = Platform.OS === "ios";
+  const isWeb = Platform.OS === "web";
 
   return (
     <View style={[styles.root, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 32 }]}>
@@ -98,6 +119,25 @@ export default function LoginScreen() {
           </View>
         )}
 
+        {isWeb ? (
+          <TouchableOpacity
+            style={[styles.btn, styles.devBtn]}
+            onPress={onDevLogin}
+            disabled={busy !== null}
+            activeOpacity={0.85}
+            testID="login-dev"
+          >
+            {busy === "dev" ? (
+              <ActivityIndicator color="#FCD34D" />
+            ) : (
+              <>
+                <Ionicons name="construct-outline" size={18} color="#FCD34D" />
+                <Text style={styles.devText}>Entra come Tester (solo preview)</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        ) : null}
+
         <Text style={styles.legal}>Accedendo accetti i Termini e la Privacy Policy di Koda.</Text>
       </View>
     </View>
@@ -118,6 +158,8 @@ const styles = StyleSheet.create({
   appleText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
   appleBtnDisabled: { backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.1)" },
   appleTextDisabled: { color: "rgba(255,255,255,0.4)", fontSize: 14, fontWeight: "600" },
+  devBtn: { backgroundColor: "rgba(252, 211, 77, 0.10)", borderWidth: 1, borderColor: "rgba(252, 211, 77, 0.45)", marginTop: 8 },
+  devText: { color: "#FCD34D", fontSize: 14, fontWeight: "700" },
   err: { color: "#FCA5A5", fontSize: 14, textAlign: "center", marginBottom: 4 },
   legal: { color: "rgba(255,255,255,0.35)", fontSize: 12, textAlign: "center", marginTop: 8 },
 });
