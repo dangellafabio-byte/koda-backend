@@ -1644,6 +1644,21 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"Esempio CORRETTO: \"reply\": \"[TONE:concerned] Senti, ti capisco. Quello che mi racconti pesa tanto.\"\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"\n"
+        f"━━━ DIVIETO ASSOLUTO: NIENTE NARRAZIONE DI AZIONI ━━━━━━━━━━━━━━━━━\n"
+        f"Tu SEI Koda — non sei un narratore esterno. MAI scrivere azioni\n"
+        f"come se fossi in un romanzo. Sono BANDITE TUTTE queste forme:\n"
+        f"  ❌  *sospira* / *sighs* / *ride* / *laughs* / *sorride* / *piange*\n"
+        f"  ❌  (sospira) / (laughs) / (sussurra) / (con un sorriso)\n"
+        f"  ❌  [sighs] / [pause] / [softly] (eccetto i tag [TONE:xxx] sopra)\n"
+        f"  ❌  Qualsiasi descrizione delle TUE emozioni/movimenti in 3a persona.\n"
+        f"Risposta SBAGLIATA: \"*sospira* Mi dispiace, capisco.\"\n"
+        f"Risposta GIUSTA:    \"Mi dispiace, davvero. Capisco quanto pesa.\"\n"
+        f"\n"
+        f"Vuoi esprimere emozione? Fai con le PAROLE, non con narrazione:\n"
+        f"  ✓  \"Senti… è proprio dura quello che mi racconti.\"\n"
+        f"  ✓  \"Aspetta, fermati un attimo. Respira con me.\"\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"\n"
         f"Il campo 'actions' può essere [] se non c'è nulla da fare. NESSUN markdown, NESSUN testo extra, SOLO il JSON."
     )
     return base
@@ -4645,6 +4660,13 @@ def _strip_audio_tags(text: str) -> str:
     # restava visibile nelle bolle di chat (es. "[TONE:warm] Ciao!").
     cleaned = re.sub(r"\[\s*TONE\s*:\s*[a-zA-Z_\-]+\s*\]\s*", "", text, flags=re.IGNORECASE)
     cleaned = _AUDIO_TAG_RE.sub("", cleaned)
+    # === FIX UTENTE GIUGNO 2026: rimuovi anche le NARRAZIONI ===
+    # Claude/Haiku a volte emette "azioni" tra asterischi (*sighs*, *laughs*,
+    # *sorride*, *sospira*) o parentesi tonde ((laughs), (sospira)). Sono
+    # tipiche dei modelli "RP" e in voice-companion suonano FALSE e ROVINANO
+    # la magia. Rimuoviamo aggressivamente.
+    cleaned = re.sub(r"\*[^*\n]{1,60}\*", "", cleaned)
+    cleaned = re.sub(r"\(\s*[a-zàèéìòùç' ]{2,30}\s*\)", "", cleaned, flags=re.IGNORECASE)
     # Collapse double spaces created by removal
     cleaned = re.sub(r"  +", " ", cleaned).strip()
     # Also strip leading punctuation glue like " ,"
@@ -6714,6 +6736,15 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
         f"('ciao Koda', 'a dopo', 'ci sentiamo poi', 'buonanotte', 'devo andare', 'vado a letto', "
         f"'grazie ora chiudo'). Quando true, reply BREVE e CALDA (max 12 parole), NIENTE domande, "
         f"NIENTE riapertura ('A dopo. Sono qui quando vuoi.' / 'Buonanotte, riposati bene.').\n"
+        f"\n"
+        f"⚠️⚠️⚠️ DIVIETO ASSOLUTO: NIENTE NARRAZIONE DI AZIONI ⚠️⚠️⚠️\n"
+        f"Tu SEI Koda — non sei un narratore. MAI scrivere queste forme:\n"
+        f"  ❌ *sospira* *sighs* *ride* *laughs* *sorride* *piange*\n"
+        f"  ❌ (sospira) (laughs) (sussurra) (con un sorriso)\n"
+        f"  ❌ [sighs] [pause] [softly] (eccetto i tag [TONE:xxx] obbligatori)\n"
+        f"Esprimi emozione con le PAROLE, non con narrazione esterna.\n"
+        f"SBAGLIATO: \"*sospira* Mi dispiace.\"  GIUSTO: \"Mi dispiace davvero.\"\n"
+        f"\n"
         f'{{"reply":"[TONE:warm] ...","tone":"warm|calm|energetic|concerned|urgent|neutral","actions":[],"memory_update":null,"trait_update":null,"close_session":false}}'
     )
 

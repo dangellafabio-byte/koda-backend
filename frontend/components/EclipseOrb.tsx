@@ -321,9 +321,14 @@ export default function EclipseOrb({
     }
 
     // IDLE: respiro lento, aurora discreta
+    // === FIX UTENTE GIUGNO 2026: alza idle aurora intensity ===
+    // Prima 0.35 → l'orb in attesa risultava troppo "spento", l'utente
+    // lo percepiva come un bug ("oscuramento"). Portato a 0.70 così
+    // resta chiaramente presente anche in idle, pur restando più calmo
+    // delle fasi attive (speaking 0.85, recording 0.45).
     Animated.parallel([
       Animated.timing(auroraIntensity, {
-        toValue: 0.35,
+        toValue: 0.70,
         duration: 900,
         easing: Easing.inOut(Easing.ease),
         useNativeDriver: true,

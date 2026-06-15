@@ -166,15 +166,27 @@ const NAMED_COLORS: Record<string, string> = {
   fucsia: "#E11D48", lilla: "#C4B5FD", indaco: "#6366F1",
 };
 
-// Rimuove i tag [TONE:xxx] e gli [audio tags] dal testo per la
-// visualizzazione in chat. Difensivo: il backend già pulisce, ma vecchi
-// dati o race possono far arrivare il prefisso grezzo (es. "[TONE:warm] ...").
+// Rimuove i tag [TONE:xxx], gli [audio tags], le *narrazioni* tra
+// asterischi (es. *sighs*, *laughs*) e le (azioni) tra parentesi dal
+// testo per la visualizzazione in chat. Difensivo: il backend già
+// pulisce, ma vecchi dati o race possono far arrivare il prefisso
+// grezzo (es. "[TONE:warm] ...", "*sighs* Ciao...").
 function stripDisplayTags(text: string): string {
   if (!text) return text;
   return text
+    // [TONE:warm] e simili
     .replace(/\[\s*TONE\s*:\s*[a-zA-Z_\-]+\s*\]\s*/gi, "")
+    // [audio tags] generici (sospira, ride, gently, ecc.)
     .replace(/\[[a-zA-Zàèéìòùç '_,/-]{1,40}\]/g, "")
+    // *azioni in asterischi* tipiche di output LLM "narrato"
+    // (es. *sighs*, *laughs*, *sospira*, *sorride*)
+    .replace(/\*[^*\n]{1,60}\*/g, "")
+    // (azioni in parentesi tonde) — solo se sembrano descrizioni d'azione,
+    // cioè brevi e in minuscolo/verbo (es. "(laughs)", "(sospira)").
+    // Conservativo: max 30 char, no cifre.
+    .replace(/\(\s*[a-zàèéìòùç' ]{2,30}\s*\)/gi, "")
     .replace(/  +/g, " ")
+    .replace(/\s+([,.;!?])/g, "$1")
     .trim();
 }
 
@@ -244,29 +256,44 @@ export default function Taccuino() {
    *  in base a insets e dimensioni schermo. Va chiamato al momento del
    *  lancio per avere coordinate aggiornate (rotazione/foldable safe). */
   /** Misura le coordinate REALI di un elemento UI tramite measureInWindow.
-   *  Risolve null se il nodo non è montato/misurabile. */
+   *  Risolve null se il nodo non è montato/misurabile.
+   *  RETRY (giugno 2026): su iOS native (TestFlight) il measureInWindow a
+   *  volte ritorna 0/0/0/0 al primo tentativo perché il layout non è
+   *  ancora stabilizzato. Riproviamo fino a 4 volte con backoff di 120ms.*/
   const measureRef = useCallback(
     (ref: React.RefObject<any>): Promise<{ x: number; y: number; w: number; h: number } | null> =>
       new Promise((resolve) => {
-        const node = ref?.current;
-        if (!node || typeof node.measureInWindow !== "function") {
-          resolve(null);
-          return;
-        }
-        let settled = false;
-        try {
-          node.measureInWindow((x: number, y: number, w: number, h: number) => {
-            settled = true;
-            if (w > 0 && h > 0) resolve({ x, y, w, h });
-            else resolve(null);
-          });
-        } catch {
-          resolve(null);
-          return;
-        }
-        setTimeout(() => {
-          if (!settled) resolve(null);
-        }, 400);
+        const attempt = (n: number) => {
+          const node = ref?.current;
+          if (!node || typeof node.measureInWindow !== "function") {
+            resolve(null);
+            return;
+          }
+          let settled = false;
+          try {
+            node.measureInWindow((x: number, y: number, w: number, h: number) => {
+              settled = true;
+              if (w > 0 && h > 0 && (x !== 0 || y !== 0 || n >= 3)) {
+                resolve({ x, y, w, h });
+              } else if (n < 3) {
+                // Retry: layout non ancora pronto
+                setTimeout(() => attempt(n + 1), 120);
+              } else {
+                resolve(w > 0 && h > 0 ? { x, y, w, h } : null);
+              }
+            });
+          } catch {
+            resolve(null);
+            return;
+          }
+          setTimeout(() => {
+            if (!settled) {
+              if (n < 3) attempt(n + 1);
+              else resolve(null);
+            }
+          }, 400);
+        };
+        attempt(0);
       }),
     []
   );
@@ -408,11 +435,16 @@ export default function Taccuino() {
     if (result?.launch_tour) {
       // Costruzione step DOPO che il profilo è stato aggiornato (così il
       // nome utente nel testo del tour è quello giusto).
+      // DELAY AUMENTATO da 250ms a 600ms (giugno 2026): su iOS native
+      // TestFlight il KodaIntro modal impiega ~400ms a fare unmount + il
+      // layout della UI principale necessita di un altro frame per
+      // stabilizzarsi. Con 250ms i measureInWindow tornavano coordinate
+      // sballate → highlights del tour decentrati.
       setTimeout(async () => {
         const steps = await buildTourSteps();
         setTourSteps(steps);
         setTourActive(true);
-      }, 250);
+      }, 600);
       return;
     }
     // Mostra il banner di conferma in home — l'utente ha completato la
@@ -3162,6 +3194,16 @@ export default function Taccuino() {
           const page = x > w / 2 ? 1 : 0;
           pagerRef.current?.scrollTo({ x: page * w, y: 0, animated: true });
           setViewMode(page === 0 ? "voice" : "reading");
+          // === SAFETY-NET DOPPIO SNAP (giugno 2026) ===
+          // Su iOS native, in rari casi il momentum nativo "vince" sul nostro
+          // scrollTo() e il pager torna a 30%-70% posizione. Riprogrammiamo
+          // un secondo snap forzato dopo 350ms: se la posizione non è
+          // perfettamente allineata, la realiniamo.
+          setTimeout(() => {
+            try {
+              pagerRef.current?.scrollTo({ x: page * w, y: 0, animated: false });
+            } catch {}
+          }, 350);
         }}
         onMomentumScrollEnd={(e) => {
           const x = e.nativeEvent.contentOffset.x;
