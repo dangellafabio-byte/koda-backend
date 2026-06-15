@@ -1203,8 +1203,14 @@ export default function Taccuino() {
         } catch {}
         recRef.current = null;
       }
+      const wasSpeaking = status === "speaking";
       setStatus("idle");
-      setError("Si è bloccato un attimo, riprova pure.");
+      // Mostra l'errore SOLO se siamo rimasti bloccati prima/durante l'elaborazione.
+      // Se eravamo in "speaking", il TTS è già stato consegnato all'utente —
+      // mostrare "si è bloccato" è un falso positivo che spaventa inutilmente.
+      if (!wasSpeaking) {
+        setError("Si è bloccato un attimo, riprova pure.");
+      }
     }, ms);
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4732,7 +4738,7 @@ function Bubble({
               pressed && { opacity: 0.85 },
             ]}
           >
-            <Text style={[styles.bubbleUserText, { color: textOnBubble, fontSize: 15 * textSize, lineHeight: 21 * textSize }]}>{entry.text}</Text>
+            <Text style={[styles.bubbleUserText, { color: textOnBubble, fontSize: 15 * textSize, lineHeight: 21 * textSize }]}>{stripDisplayTags(entry.text || "")}</Text>
           </Pressable>
         ) : (
           <Pressable
@@ -4756,7 +4762,7 @@ function Bubble({
                 aiTextFontProps,
               ]}
             >
-              {entry.text}
+              {stripDisplayTags(entry.text || "")}
             </Text>
             {entry.extracted?.amount ? (
               <Text style={[styles.extractMeta, { color: textOnBubble, opacity: 0.85 }]}>
