@@ -5780,26 +5780,67 @@ _WEB_SEARCH_PREFIX_IT = (
     "fammi sapere ", "dimmi che ", "dimmi se ",
 )
 
-def _should_web_search(text: str) -> bool:
+def _should_web_search(text: str, force_open: bool = False) -> bool:
     """Decide euristicamente se la domanda dell'utente richiede una ricerca web.
-    Si attiva solo se Tavily è configurato e il testo:
-      a) è una richiesta esplicita ("cerca X", "cercami X", "googla X", ecc.)
-         all'INIZIO della frase, oppure
-      b) contiene una keyword fattuale specifica (es. "meteo", "che ore sono")
-    e ha lunghezza ≥ 6. Mantiene latenza bassa: in conversazione naturale
-    (es. "stavo facendo una verifica…") NON si attiva."""
+    
+    Quando `force_open=True` (l'utente ha attivato esplicitamente il toggle
+    "Ricerca web" in Impostazioni), siamo MOLTO permissivi: qualsiasi cosa
+    sembri una domanda o una richiesta di informazione attiva Tavily.
+    L'utente ha dato consenso → Koda deve potersi informare LIBERAMENTE.
+    
+    Quando `force_open=False` (toggle OFF): si attiva solo su segnali fortissimi
+    (parole-chiave fattuali esplicite o prefissi come "cerca X")."""
     if not _tavily_client:
         return False
     t = (text or "").strip().lower()
-    # Min length 15: evita chiamate inutili su frasi corte ("che caldo!",
-    # "ok grazie"). Le frasi più lunghe hanno più probabilità di richiedere
-    # dati reali.
+    if len(t) < 6:
+        return False
+
+    # === MODALITÀ APERTA — toggle ON ===
+    if force_open:
+        # Punto di domanda esplicito → sempre cerca.
+        if "?" in t:
+            return True
+        # Parole interrogative italiane (a inizio frase o con spazio prima).
+        question_words = (
+            "cosa ", "che cosa ", "che ", "quanto ", "quanti ", "quanta ", "quante ",
+            "quando ", "dove ", "chi ", "come ", "perché ", "perche ",
+            "qual ", "quale ", "quali ",
+        )
+        if any(t.startswith(q) for q in question_words):
+            return True
+        if any(f" {q}" in t for q in question_words):
+            return True
+        # Verbi di richiesta info ("dimmi", "spiegami", "raccontami", ecc.)
+        info_verbs = (
+            "dimmi ", "spiegami ", "raccontami ", "dammi ", "dammi info ",
+            "voglio sapere ", "vorrei sapere ", "fammi sapere ", "sai ",
+            "conosci ", "hai notizie ", "novità su ", "info su ",
+        )
+        if any(v in t for v in info_verbs):
+            return True
+        # Trigger espliciti (cerca, googla, ecc.)
+        if any(t.startswith(p) for p in _WEB_SEARCH_PREFIX_IT):
+            return True
+        # Keyword fattuali specifiche (lista esistente)
+        if any(k in t for k in _WEB_SEARCH_TRIGGERS_IT):
+            return True
+        # Se non matcha nessun pattern ma c'è un nome proprio (parola con
+        # maiuscola iniziale che NON sia ad inizio frase) → cerca lo stesso.
+        original = (text or "").strip()
+        words = original.split()
+        for i, w in enumerate(words):
+            if i == 0:
+                continue  # prima parola maiuscola è normale (inizio frase)
+            if len(w) >= 3 and w[0].isupper() and w[1:].islower():
+                return True
+        return False
+
+    # === MODALITÀ CONSERVATIVA — toggle OFF (default storico) ===
     if len(t) < 15:
         return False
-    # (a) Richiesta esplicita all'inizio della frase
     if any(t.startswith(p) for p in _WEB_SEARCH_PREFIX_IT):
         return True
-    # (b) Keyword fattuale specifica
     return any(k in t for k in _WEB_SEARCH_TRIGGERS_IT)
 
 
@@ -5832,38 +5873,35 @@ def _tavily_cache_set(query: str, brief: Optional[str]) -> None:
             if now - _tavily_cache[k][0] > _TAVILY_CACHE_TTL_S:
                 _tavily_cache.pop(k, None)
 
-async def _tavily_search_brief(query: str, max_results: int = 2, timeout_s: float = 4.0) -> Optional[str]:
+async def _tavily_search_brief(query: str, max_results: int = 3, timeout_s: float = 3.5, open_internet: bool = False) -> Optional[str]:
     """Esegue una ricerca Tavily con timeout aggressivo e restituisce un brief
     testuale che Claude può usare come contesto. Ritorna None se Tavily fallisce
     o va in timeout — in quel caso Claude risponde senza il contesto fresco.
-    Usa una cache in-memory di 5 minuti per ridurre re-query (giugno 2026:
-    timeout tagliato da 8s→4s, max_results 4→2, cache 60s→300s — riduce la
-    latenza percepita di 300-500ms quando il search si attiva).
+    Usa una cache in-memory di 5 minuti per ridurre re-query.
 
-    PRIVACY: la ricerca è ristretta a una whitelist di domini italiani
-    autorevoli (testate giornalistiche, Wikipedia, servizi meteo certificati)
-    per evitare leak di contesto a siti random o tracker pubblicitari."""
+    Quando `open_internet=True` (utente ha attivato il toggle): la ricerca
+    è LIBERA su tutta la rete (niente whitelist domini). Quando False: ristretta
+    a una whitelist italiana — fallback safety per quando Tavily venisse chiamato
+    senza consenso esplicito."""
     if not _tavily_client:
         return None
-    # Cache check
-    cache_key = (query or "").strip().lower()[:200]
+    cache_key = f"{'open' if open_internet else 'closed'}|{(query or '').strip().lower()[:200]}"
     cached = _tavily_cache_get(cache_key)
     if cached is not None:
         logger.info(f"[tavily] cache HIT for query: {query[:60]}")
         return cached
     try:
         async with asyncio.timeout(timeout_s):
-            res = await _tavily_client.search(
+            search_kwargs = dict(
                 query=query,
                 max_results=max_results,
                 search_depth="basic",
                 include_answer=True,
-                # WHITELIST domini certificati — riduce leak e migliora qualità.
-                # Mix tra news IT (ansa, repubblica, corriere, ilsole24ore, lastampa),
-                # broadcasters (rainews, sky tg24), reference (wikipedia it/en,
-                # treccani), meteo certificati (meteo.it, ilmeteo.it, 3bmeteo,
-                # protezione civile), e finanza (borsa italiana, sole24ore).
-                include_domains=[
+                timeout=timeout_s,
+            )
+            if not open_internet:
+                # Modalità conservativa: whitelist domini italiani autorevoli.
+                search_kwargs["include_domains"] = [
                     "ansa.it", "repubblica.it", "corriere.it", "ilsole24ore.com",
                     "lastampa.it", "rainews.it", "tg24.sky.it", "agi.it",
                     "tgcom24.mediaset.it", "ilfattoquotidiano.it",
@@ -5874,9 +5912,11 @@ async def _tavily_search_brief(query: str, max_results: int = 2, timeout_s: floa
                     "borsaitaliana.it", "milanofinanza.it",
                     "coingecko.com", "coinmarketcap.com",
                     "gov.it", "europa.eu",
-                ],
-                timeout=timeout_s,
-            )
+                ]
+            # Quando open_internet=True: NIENTE include_domains → Tavily cerca
+            # liberamente su tutto il web. L'utente ha dato consenso esplicito
+            # via toggle "Ricerca web" in Impostazioni.
+            res = await _tavily_client.search(**search_kwargs)
     except (asyncio.TimeoutError, TimeoutError):
         logger.warning(f"[tavily] timeout after {timeout_s}s for query: {query[:60]}")
         _tavily_cache_set(cache_key, None)  # cache anche il None per non riprovare in loop
@@ -6230,9 +6270,12 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
     # ~1-3s solo quando serve davvero. MAI nel flusso confessionale (è un
     # endpoint separato /converse/sealed che non passa di qui).
     web_search_brief: Optional[str] = None
-    if _should_web_search(text):
-        logger.info(f"[web-search] triggering Tavily for query: {text[:80]}")
-        web_search_brief = await _tavily_search_brief(text, max_results=4)
+    # Stesso comportamento del flusso fast: se l'utente ha attivato il toggle,
+    # ricerca LIBERA su tutto internet (open_internet=True, niente whitelist).
+    ws_enabled = bool(getattr(profile.settings, "web_search_enabled", True))
+    if ws_enabled and _should_web_search(text, force_open=True):
+        logger.info(f"[web-search] triggering Tavily (open internet) for query: {text[:80]}")
+        web_search_brief = await _tavily_search_brief(text, max_results=3, timeout_s=3.5, open_internet=True)
         if web_search_brief:
             logger.info(f"[web-search] got brief ({len(web_search_brief)} chars)")
 
@@ -6839,6 +6882,22 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
         f"Esprimi emozione con le PAROLE, non con narrazione esterna.\n"
         f"SBAGLIATO: \"*sospira* Mi dispiace.\"  GIUSTO: \"Mi dispiace davvero.\"\n"
         f"\n"
+        f"⚠️⚠️⚠️ DIVIETO ASSOLUTO: NIENTE 'RIFORMULA' / 'NON CAPISCO' ⚠️⚠️⚠️\n"
+        f"MAI rifiutare di rispondere chiedendo all'utente di riformulare. MAI dire:\n"
+        f"  ❌ \"Non ho capito, puoi ripetere?\"\n"
+        f"  ❌ \"Puoi chiedermelo in un altro modo?\"\n"
+        f"  ❌ \"Dimmelo meglio così ti rispondo\"\n"
+        f"  ❌ \"Non sono sicura di aver capito cosa intendi\"\n"
+        f"INTERPRETA l'intent dell'utente anche se la frase è ambigua, ellittica, "
+        f"scritta velocemente o piena di errori. Fai del tuo meglio con quello che hai. "
+        f"Se davvero non sai un dato fattuale (e RISULTATI WEB SEARCH non te lo dà), "
+        f"dillo con UNA frase breve e onesta ('non ho questa info aggiornata, però...') "
+        f"e prosegui con quello che SAI o con una domanda CONCRETA mirata. "
+        f"MAI fermare la conversazione, MAI mettere palla in mano all'utente.\n"
+        f"\n"
+        f"⚠️ IMMEDIATEZZA: risposte CORTE e SUBITO. Max 2-3 frasi per turno conversazionale. "
+        f"Niente preamboli ('Ottima domanda', 'Vediamo un po'', 'Allora'). Vai dritto al punto.\n"
+        f"\n"
         f'{{"reply":"[TONE:warm] ...","tone":"warm|calm|energetic|concerned|urgent|neutral","actions":[],"memory_update":null,"trait_update":null,"close_session":false}}'
     )
 
@@ -6989,20 +7048,17 @@ async def _fast_pipeline_task(
         # viene salvato comunque). Se Tavily fallisce/timeout → continua senza.
         # PRIVACY: rispetta il toggle utente `settings.web_search_enabled` —
         # se l'utente lo disattiva da Impostazioni, Tavily NON viene MAI chiamato.
-        # GEO: la whitelist domini è italiana e i trigger sono in italiano.
-        # Per utenti con language != "it" Tavily viene disabilitato finché
-        # non rilasceremo la versione multilingua (v1.1).
+        # Quando il toggle è ON: ricerca LIBERA su tutto internet (niente
+        # whitelist domini, trigger permissivi) — Koda può rispondere su
+        # qualsiasi argomento real-time. L'utente ha dato consenso esplicito.
         web_search_brief: Optional[str] = None
         ws_enabled = bool(getattr(profile.settings, "web_search_enabled", True))
-        is_italian = (getattr(profile, "language", "it") or "it").lower().startswith("it")
         if not ws_enabled:
             logger.info(f"[fast {session_id[:8]}] web-search disabled by user — skip")
-        elif not is_italian:
-            logger.info(f"[fast {session_id[:8]}] web-search skipped — non-Italian user (lang={profile.language})")
-        elif _should_web_search(text):
-            logger.info(f"[fast {session_id[:8]}] web-search triggered for: {text[:80]}")
+        elif _should_web_search(text, force_open=True):
+            logger.info(f"[fast {session_id[:8]}] web-search triggered (open internet) for: {text[:80]}")
             t_search = time.time()
-            web_search_brief = await _tavily_search_brief(text, max_results=2, timeout_s=4.0)
+            web_search_brief = await _tavily_search_brief(text, max_results=3, timeout_s=3.5, open_internet=True)
             logger.info(f"[fast {session_id[:8]}] web-search done in {(time.time()-t_search)*1000:.0f}ms, brief={'yes' if web_search_brief else 'no'}")
 
         user_payload_parts = []
@@ -7031,8 +7087,8 @@ async def _fast_pipeline_task(
             stream=True,
             api_key=EMERGENT_LLM_KEY,
             api_base='https://integrations.emergentagent.com/llm',
-            max_tokens=400,
-            timeout=25,
+            max_tokens=280,
+            timeout=18,
         )
 
         extractor = _ReplyExtractor()
