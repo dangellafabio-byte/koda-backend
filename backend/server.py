@@ -4534,7 +4534,19 @@ CURATED_VOICES = [
 #
 # I filler sono brevi e neutri — non interrompono la conversazione anche se
 # il LLM è velocissimo (la frase reale "copre" il filler con un piccolo overlap).
-_FILLER_PHRASES_IT = ["Mh.", "Eh.", "Allora.", "Sì sì.", "Mh sì.", "Ah."]
+# Frasi più LUNGHE (giugno 2026 v2) per coprire l'intera finestra di latenza
+# del LLM (1-2s). I filler brevi tipo "Mh." duravano 200-300ms e lasciavano
+# un gap silenzioso prima della vera risposta. Questi frasi pseudo-pensiero
+# (800-1200ms) si sovrappongono con l'arrivo della prima frase reale,
+# eliminando il gap percepito completamente.
+_FILLER_PHRASES_IT = [
+    "Mh, fammi pensare un attimo.",
+    "Eh, allora vediamo.",
+    "Ah, ok, aspetta.",
+    "Mh sì, dunque...",
+    "Ok, allora ti dico.",
+    "Mh, vediamo un po'.",
+]
 # Map: voice_id -> List[str] (audio tokens già pre-generati)
 _FILLER_CACHE: Dict[str, List[str]] = {}
 _FILLER_GEN_LOCKS: Dict[str, asyncio.Lock] = {}
@@ -5897,51 +5909,25 @@ def _should_web_search(text: str, force_open: bool = False) -> bool:
             "che ne pensi", "secondo te", "tu cosa pensi", "tu che dici",
             "raccontami di te", "parlami di te",
         )
-        # Per opinioni personali ("che ne pensi", "secondo te") NIENTE search,
-        # qualunque sia la lunghezza — è dialogo, non richiesta info.
         opinion_markers = ("che ne pensi", "secondo te", "tu cosa pensi", "tu che dici")
         if any(p in t for p in opinion_markers):
             return False
         if any(p in t for p in intro_phrases) and len(t) < 30:
             return False
-        # Punto di domanda esplicito → quasi sempre cerca.
-        if "?" in t:
-            # ma solo se la frase è abbastanza informativa (≥10 char) e non un
-            # mini-saluto del tipo "ehi?", "ok?", "ok bro?"
-            return len(t) >= 10
-        # Parole interrogative italiane (a inizio frase o con spazio prima).
-        question_words = (
-            "cosa ", "che cosa ", "che ", "quanto ", "quanti ", "quanta ", "quante ",
-            "quando ", "dove ", "chi ", "come ", "perché ", "perche ",
-            "qual ", "quale ", "quali ",
-        )
-        if any(t.startswith(q) for q in question_words):
+        # === STRATEGIA AGGRESSIVA (giugno 2026 v3) ===
+        # Lo STT (Deepgram) trascrive sempre in MINUSCOLO, quindi il check
+        # "capitalizzata" non funziona. Cambio approccio: se la frase è ≥ 10
+        # caratteri e NON è conversazionale (vedi sopra), Tavily VA SEMPRE
+        # chiamato. L'utente ha attivato il toggle → vuole accesso real-time.
+        # Cache da 5 min limita il costo. False positives = qualche chiamata
+        # in più, false negatives = "non so" frustrato → preferiamo i primi.
+        if len(t) >= 10:
             return True
-        if any(f" {q}" in t for q in question_words):
+        # Sotto i 10 char (es. "ehi?", "ok?") → solo trigger espliciti.
+        if "?" in t and len(t) >= 6:
             return True
-        # Verbi di richiesta info ("dimmi", "spiegami", "raccontami", ecc.)
-        info_verbs = (
-            "dimmi ", "spiegami ", "raccontami ", "dammi ", "dammi info ",
-            "voglio sapere ", "vorrei sapere ", "fammi sapere ", "sai ",
-            "conosci ", "hai notizie ", "novità su ", "info su ",
-        )
-        if any(v in t for v in info_verbs):
-            return True
-        # Trigger espliciti (cerca, googla, ecc.)
         if any(t.startswith(p) for p in _WEB_SEARCH_PREFIX_IT):
             return True
-        # Keyword fattuali specifiche (lista esistente)
-        if any(k in t for k in _WEB_SEARCH_TRIGGERS_IT):
-            return True
-        # Se non matcha nessun pattern ma c'è un nome proprio (parola con
-        # maiuscola iniziale che NON sia ad inizio frase) → cerca lo stesso.
-        original = (text or "").strip()
-        words = original.split()
-        for i, w in enumerate(words):
-            if i == 0:
-                continue  # prima parola maiuscola è normale (inizio frase)
-            if len(w) >= 3 and w[0].isupper() and w[1:].islower():
-                return True
         return False
 
     # === MODALITÀ CONSERVATIVA — toggle OFF (default storico) ===
