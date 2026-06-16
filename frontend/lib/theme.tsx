@@ -293,21 +293,31 @@ export const THEMES: Record<Exclude<ThemeName, "sistema">, Palette> = {
 };
 
 // Pseudo-palette per il selettore "Auto" — non è un vero tema visivo:
-// quando selezionato, themeName diventa "sistema" e resolveTheme()
-// sceglie GIORNO o NOTTE in base a iOS Appearance.
-const SISTEMA_PSEUDO: Palette = {
+// quando selezionato, themeName diventa "auto-orario" e il ThemeProvider
+// alterna GIORNO/NOTTE in base all'ORA REALE del giorno (default 7:00 →
+// 20:00 giorno, 20:00 → 7:00 notte). Indipendente dal dark-mode di iOS.
+const AUTO_ORARIO_PSEUDO: Palette = {
   ...NOTTE,
-  name: "sistema",
+  name: "auto-orario",
   label: "Auto",
   emoji: "🔄",
 };
 
-export const THEME_LIST: Palette[] = [GIORNO, NOTTE, SISTEMA_PSEUDO, LIQUID, CIELO, BOSCO, CILIEGIA];
+export const THEME_LIST: Palette[] = [GIORNO, NOTTE, AUTO_ORARIO_PSEUDO, LIQUID, CIELO, BOSCO, CILIEGIA];
 
 export function resolveTheme(name: ThemeName | undefined | null): Palette {
+  // Retrocompatibilità: vecchi profili con "sistema" usano lo schema di
+  // sistema iOS; nuovi profili con "auto-orario" usano l'ora reale (gestito
+  // nel Provider, qui torniamo solo il fallback NOTTE).
   if (!name || name === "sistema") {
     const sysDark = Appearance.getColorScheme() === "dark";
     return sysDark ? NOTTE : GIORNO;
+  }
+  if (name === "auto-orario") {
+    // Il vero switch giorno/notte è gestito dal Provider con i `dayStart`/
+    // `nightStart` correnti. Qui torniamo NOTTE come fallback "sicuro".
+    const h = new Date().getHours();
+    return h >= 7 && h < 20 ? GIORNO : NOTTE;
   }
   return THEMES[name] || NOTTE;
 }

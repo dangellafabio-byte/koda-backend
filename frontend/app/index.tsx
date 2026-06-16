@@ -2590,22 +2590,30 @@ export default function Taccuino() {
   // When profile loads (or its checkin settings change), reconcile the
   // scheduled local notifications:
   //   - "off"     → cancel any pending check-in
-  //   - "morning" → ensure morning slot is scheduled with fresh AI text
-  //   - "evening" → ensure evening slot is scheduled
-  //   - "both"    → both
+  //   - any non-off value → Koda decide AUTONOMAMENTE: schedula mattina E sera
+  //     con orari RANDOMIZZATI ogni giorno (mattina 8:00-10:30, sera 20:00-22:30).
+  //
+  // Il "libero arbitrio" di Koda è simulato randomizzando l'orario all'interno
+  // di finestre umane plausibili → non sembra una sveglia, sembra un gesto suo.
   // The actual content is generated server-side via /checkin/generate so
   // each notification feels personal (uses memory + last messages).
   const lastCheckinSyncRef = useRef<string | null>(null);
   useEffect(() => {
     if (!profile) return;
     const mode = (profile.settings as any)?.checkin_mode || "off";
-    const morningTime = (profile.settings as any)?.checkin_morning_time || "08:30";
-    const eveningTime = (profile.settings as any)?.checkin_evening_time || "21:30";
-    // Skip resync if nothing relevant changed (avoids hitting the LLM on
-    // every render when other settings are tweaked).
-    const sig = `${mode}|${morningTime}|${eveningTime}`;
+    // Sig basata SOLO su mode + giorno corrente — così randomizziamo gli
+    // orari ogni nuovo giorno (e non a ogni cambio settings).
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const sig = `${mode}|${todayKey}`;
     if (lastCheckinSyncRef.current === sig) return;
     lastCheckinSyncRef.current = sig;
+
+    // Picker di orario randomico in una finestra plausibile.
+    const randomTime = (minH: number, maxH: number): string => {
+      const h = minH + Math.floor(Math.random() * (maxH - minH + 1));
+      const m = Math.floor(Math.random() * 60);
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    };
 
     (async () => {
       if (mode === "off") {
@@ -2613,17 +2621,14 @@ export default function Taccuino() {
         return;
       }
       const localHour = new Date().getHours();
-      const wantMorning = mode === "morning" || mode === "both";
-      const wantEvening = mode === "evening" || mode === "both";
+      // ON → Koda decide entrambi i momenti, mattina e sera, con orario random.
+      const morningTime = randomTime(8, 10);   // tra 08:00 e 10:59
+      const eveningTime = randomTime(20, 22);  // tra 20:00 e 22:59
 
-      // Cancel slots that aren't wanted anymore
-      if (!wantMorning) await cancelCheckin("morning");
-      if (!wantEvening) await cancelCheckin("evening");
-
-      // Schedule the wanted slots — generate fresh content for each
-      const slots: Array<["morning" | "evening", string]> = [];
-      if (wantMorning) slots.push(["morning", morningTime]);
-      if (wantEvening) slots.push(["evening", eveningTime]);
+      const slots: Array<["morning" | "evening", string]> = [
+        ["morning", morningTime],
+        ["evening", eveningTime],
+      ];
       for (const [slot, hhmm] of slots) {
         try {
           const c = await api.generateCheckin(slot, localHour);
@@ -2641,7 +2646,7 @@ export default function Taccuino() {
         }
       }
     })();
-  }, [profile?.settings?.checkin_mode, profile?.settings?.checkin_morning_time, profile?.settings?.checkin_evening_time, profile?.id]);
+  }, [profile?.settings?.checkin_mode, profile?.id]);
 
   // === Tap-on-checkin-notification handler =====================
   // When the user taps a check-in notification, the app foregrounds; we
@@ -3807,97 +3812,39 @@ export default function Taccuino() {
                 Il selettore voce è stato rimosso dall'UI. Resta la
                 voce di default impostata dal backend. */}
 
-            {/* === Proactive Check-in opt-in ============================
-                Coda raggiunge l'utente di sua iniziativa la mattina e/o la
-                sera con una piccola frase personale. Niente push remoto:
-                tutto via notifica locale + LLM call al momento di scheduling. */}
+            {/* === Proactive Check-in opt-in (giugno 2026 — libero arbitrio) =
+                Toggle binario: quando ON, Koda decide AUTONOMAMENTE quando
+                scriverti (mattina / sera / nessuna delle due, secondo il
+                contesto e il bisogno). Niente orari impostabili dall'utente:
+                è una scelta di Koda, non una sveglia. */}
             <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 10 }]}>
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.settingLabel}>💌 Koda mi scrive</Text>
                   <Text style={styles.settingHint}>
-                    Quando vuoi, ti faccio un piccolo check-in di mia iniziativa.
+                    Quando attivo, Koda ti scrive di sua iniziativa, quando sente
+                    che sia il momento giusto. Non è una sveglia — è un gesto suo.
                   </Text>
                 </View>
+                <Switch
+                  value={((profile?.settings as any)?.checkin_mode || "off") !== "off"}
+                  onValueChange={async (on) => {
+                    if (!profile) return;
+                    // ON → "both" (Koda decide mattina o sera secondo necessità).
+                    // OFF → "off" (nessun check-in proattivo).
+                    const nextMode = on ? "both" : "off";
+                    const nextSettings = { ...profile.settings, checkin_mode: nextMode } as any;
+                    setProfile({ ...profile, settings: nextSettings });
+                    try {
+                      await api.updateProfile({ settings: nextSettings });
+                    } catch {}
+                  }}
+                  trackColor={{ false: theme.muted + "55", true: bubbleAccent.color }}
+                  thumbColor="#fff"
+                />
               </View>
-              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                {([
-                  { id: "off", label: "Mai", emoji: "🚫" },
-                  { id: "morning", label: "Mattina", emoji: "🌅" },
-                  { id: "evening", label: "Sera", emoji: "🌙" },
-                  { id: "both", label: "Entrambi", emoji: "✨" },
-                ] as const).map((opt) => {
-                  const cur = (profile?.settings as any)?.checkin_mode || "off";
-                  const active = cur === opt.id;
-                  return (
-                    <TouchableOpacity
-                      key={opt.id}
-                      onPress={async () => {
-                        if (!profile) return;
-                        const nextSettings = { ...profile.settings, checkin_mode: opt.id } as any;
-                        setProfile({ ...profile, settings: nextSettings });
-                        try {
-                          await api.updateProfile({ settings: nextSettings });
-                        } catch {}
-                      }}
-                      style={[
-                        styles.modeBtn,
-                        { paddingHorizontal: 12, paddingVertical: 8, flexDirection: "row", alignItems: "center", gap: 6 },
-                        active && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
-                      ]}
-                    >
-                      <Text style={{ fontSize: 14 }}>{opt.emoji}</Text>
-                      <Text style={[styles.modeBtnText, active && { color: bubbleAccent.color, fontWeight: "700" }]}>
-                        {opt.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-              {((profile?.settings as any)?.checkin_mode || "off") !== "off" ? (
-                <View style={{ flexDirection: "row", gap: 12, marginTop: 4 }}>
-                  {(["morning", "evening"] as const).filter((s) => {
-                    const m = (profile?.settings as any)?.checkin_mode;
-                    return m === "both" || m === s;
-                  }).map((slot) => {
-                    const key = slot === "morning" ? "checkin_morning_time" : "checkin_evening_time";
-                    const def = slot === "morning" ? "08:30" : "21:30";
-                    const cur = (profile?.settings as any)?.[key] || def;
-                    return (
-                      <View key={slot} style={{ flex: 1 }}>
-                        <Text style={[styles.settingHint, { marginBottom: 4, fontSize: 11 }]}>
-                          {slot === "morning" ? "🌅 Mattina" : "🌙 Sera"}
-                        </Text>
-                        <TextInput
-                          value={cur}
-                          onChangeText={(txt) => {
-                            if (!profile) return;
-                            const nextSettings = { ...profile.settings, [key]: txt } as any;
-                            setProfile({ ...profile, settings: nextSettings });
-                          }}
-                          onBlur={async () => {
-                            if (!profile) return;
-                            const v = String((profile.settings as any)[key] || def).trim();
-                            const ok = /^\d{1,2}:\d{2}$/.test(v);
-                            const nextSettings = { ...profile.settings, [key]: ok ? v : def } as any;
-                            setProfile({ ...profile, settings: nextSettings });
-                            try {
-                              await api.updateProfile({ settings: nextSettings });
-                            } catch {}
-                          }}
-                          placeholder={def}
-                          placeholderTextColor={theme.muted}
-                          style={[styles.input, { paddingVertical: 8, fontSize: 15 }]}
-                          keyboardType="numbers-and-punctuation"
-                          maxLength={5}
-                        />
-                      </View>
-                    );
-                  })}
-                </View>
-              ) : null}
               <Text style={[styles.settingHint, { fontSize: 11, marginTop: 2, fontStyle: "italic" }]}>
-                Le notifiche sono locali — niente esce dal telefono se non al momento di generare la frase.
+                Notifiche locali, niente esce dal telefono se non al momento di generare la frase.
               </Text>
             </View>
 
@@ -3939,10 +3886,11 @@ export default function Taccuino() {
 
             <Text style={styles.settingsSubtitle}>Tema</Text>
             <View style={styles.themeRow}>
-              {/* === FILTRO TEMI (giugno 2026 #11+ #9 v2) ===
-                  Chiaro (giorno) + Scuro (notte) + Sistema (segue iOS).
-                  Etichette UI: "Chiaro / Scuro / Auto" su richiesta utente. */}
-              {THEME_LIST.filter((p) => p.name === "giorno" || p.name === "notte" || p.name === "sistema").map((p) => (
+              {/* === FILTRO TEMI (giugno 2026 — "Auto" = orario reale) ===
+                  Chiaro (giorno) + Scuro (notte) + Auto (alterna in base
+                  all'ORA REALE del telefono: 7:00–20:00 chiaro, altrimenti
+                  scuro). NON segue più il dark-mode di iOS. */}
+              {THEME_LIST.filter((p) => p.name === "giorno" || p.name === "notte" || p.name === "auto-orario").map((p) => (
                 <TouchableOpacity
                   key={p.name}
                   onPress={() => saveTheme(p.name as ThemeName)}
