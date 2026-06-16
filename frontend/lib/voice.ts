@@ -117,12 +117,10 @@ const SUSTAINED_VOICE_DB = -24;      // dBFS — alzata da -22 a -24 (giugno 202
                                      // tenere viva la registrazione su rumore di
                                      // fondo. -24 è il sweet spot per iPhone moderno.
 const SILENCE_THRESHOLD_DB = -42;    // dBFS — hysteresis 8 dB rispetto a sustained
-const SILENCE_DURATION_MS = 900;     // 0.9s silence after speech → end of utterance
-                                     // (giugno 2026 v3: da 1200 a 900ms — l'utente
-                                     // segnala che a volte non si accorge che ha
-                                     // smesso. Con 900ms diventa più reattivo, e la
-                                     // hysteresis più ampia + sustained -24dB evitano
-                                     // di tagliare a metà su pause naturali.)
+const SILENCE_DURATION_MS = 700;     // 0.7s silence after speech → end of utterance
+                                     // (giugno 2026 v4: da 900 a 700ms — target
+                                     // < 1s percepito. Hysteresis ampia + sustained
+                                     // -24dB evitano comunque tagli a metà.)
 const MIN_SPEECH_MS = 500;           // need at least 500ms of voice before silence can fire
                                      // (giugno 2026: da 700 a 500ms — parole brevi
                                      // 'sì', 'ok', 'no' non vengono ignorate)

@@ -4511,6 +4511,86 @@ CURATED_VOICES = [
     {"voice_id": "dJwiFcjz9zW5Pge7G8AG", "name": "Echo", "description": "Profonda e avvolgente — voce maschile, riflessione, eco interiore, intimità.", "gender": "maschile", "accent": "italiano"},
 ]
 
+# ============================================================================
+# FILLER AUDIO PRE-GENERATI (giugno 2026 — "ChatGPT Voice trick")
+# ============================================================================
+# Per dare al utente la sensazione di una risposta IMMEDIATA, generiamo una
+# manciata di brevissimi mp3 ("Mh.", "Eh.", "Allora.", "Mh sì.") per ciascuna
+# voce all'avvio dell'app (lazy: alla prima richiesta per quella voce). Quando
+# l'utente preme l'orb, il client suona SUBITO un filler casuale (~300ms) mentre
+# il LLM elabora la risposta vera. Risultato: la latenza percepita scende da
+# 2-3s a circa 300-500ms. Il filler viene fade-out quando arriva la prima frase.
+#
+# I filler sono brevi e neutri — non interrompono la conversazione anche se
+# il LLM è velocissimo (la frase reale "copre" il filler con un piccolo overlap).
+_FILLER_PHRASES_IT = ["Mh.", "Eh.", "Allora.", "Sì sì.", "Mh sì.", "Ah."]
+# Map: voice_id -> List[str] (audio tokens già pre-generati)
+_FILLER_CACHE: Dict[str, List[str]] = {}
+_FILLER_GEN_LOCKS: Dict[str, asyncio.Lock] = {}
+
+
+async def _ensure_fillers_for_voice(voice_id: str) -> List[str]:
+    """Lazy-generate i filler audio per una voce, una sola volta per processo.
+    Idempotente, thread-safe via lock per-voice. Se ElevenLabs è giù, ritorna []
+    (il client semplicemente non avrà filler — il flusso resta funzionale)."""
+    if voice_id in _FILLER_CACHE:
+        return _FILLER_CACHE[voice_id]
+    # Lock per evitare double-generate concorrenti sulla stessa voce
+    lock = _FILLER_GEN_LOCKS.setdefault(voice_id, asyncio.Lock())
+    async with lock:
+        if voice_id in _FILLER_CACHE:
+            return _FILLER_CACHE[voice_id]
+        # Recupera il client ElevenLabs lazy (è una factory locale).
+        try:
+            el = _get_eleven_client()
+        except Exception:
+            el = None
+        if not el:
+            _FILLER_CACHE[voice_id] = []
+            return []
+        tokens: List[str] = []
+        # Voice settings calmi e neutri — il filler deve sembrare un "Mh"
+        # casuale, non un evento drammatico.
+        vs = {"stability": 0.6, "similarity_boost": 0.75, "style": 0.0, "use_speaker_boost": True}
+        for phrase in _FILLER_PHRASES_IT:
+            try:
+                def _gen(phrase_inner=phrase, el_inner=el):
+                    audio = bytearray()
+                    gen = el_inner.text_to_speech.convert(
+                        text=phrase_inner,
+                        voice_id=voice_id,
+                        model_id="eleven_flash_v2_5",
+                        output_format="mp3_44100_128",
+                        voice_settings=vs,
+                    )
+                    for c in gen:
+                        if c:
+                            audio.extend(c)
+                    return bytes(audio)
+                audio_bytes = await asyncio.to_thread(_gen)
+                if audio_bytes:
+                    tok = await _store_tts_audio(audio_bytes)
+                    tokens.append(tok)
+            except Exception as e:
+                logger.warning(f"[filler] couldn't gen '{phrase}' for voice {voice_id}: {e}")
+        _FILLER_CACHE[voice_id] = tokens
+        logger.info(f"[filler] generated {len(tokens)} fillers for voice {voice_id}")
+        return tokens
+
+
+async def _get_random_filler_token(voice_id: str) -> Optional[str]:
+    """Restituisce un token random per la voice_id richiesta. Se la cache è
+    vuota, la popola lazy. Best-effort: ritorna None se nulla è disponibile."""
+    import random as _rnd
+    try:
+        tokens = await _ensure_fillers_for_voice(voice_id)
+        if not tokens:
+            return None
+        return _rnd.choice(tokens)
+    except Exception as e:
+        logger.warning(f"[filler] random pick failed: {e}")
+        return None
+
 
 class TTSRequest(BaseModel):
     text: str
@@ -6169,9 +6249,40 @@ def _pop_first_sentence(buf: str) -> tuple[str, str]:
     sentence = buf[:end].strip()
     rest = buf[end:]
     if len(sentence) < 2:
-        # Too short — keep accumulating
         return ("", buf)
     return (sentence, rest)
+
+
+# === EARLY-FIRST-CHUNK (giugno 2026 v5 — sub-2s percepiti) ===
+# Per la PRIMA frase splittiamo aggressivamente al primo soft-break (virgola,
+# punto e virgola, due punti, em-dash) dopo MIN_FIRST_CHUNK_CHARS caratteri.
+# Così il TTS può iniziare a generare audio mentre il LLM continua a streamare
+# il resto della frase. Risparmio reale: 400-700ms di primo audio percepito.
+# Le frasi successive (idx >= 1) usano la logica normale (punto/punto-int).
+_EARLY_CHUNK_RE = re.compile(r'[,;:—–]\s')
+MIN_FIRST_CHUNK_CHARS = 22  # sweet spot: abbastanza per suonare naturale, non taglia troppo
+
+
+def _pop_first_chunk_aggressive(buf: str) -> tuple[str, str]:
+    """Variante 'speedy' di _pop_first_sentence usata SOLO per la prima frase
+    della risposta. Splitta al primo soft-break (virgola, due punti, em-dash)
+    dopo almeno 22 char, OPPURE — se incontrato — al primo punto/punto-int."""
+    # Prima cerchiamo terminatori forti (priorità più alta = naturale)
+    sent, rest = _pop_first_sentence(buf)
+    if sent:
+        return sent, rest
+    # Altrimenti cerca soft-break dopo MIN_FIRST_CHUNK_CHARS
+    if len(buf) < MIN_FIRST_CHUNK_CHARS:
+        return ("", buf)
+    m = _EARLY_CHUNK_RE.search(buf, MIN_FIRST_CHUNK_CHARS)
+    if not m:
+        return ("", buf)
+    end = m.end()
+    chunk = buf[:end].strip()
+    rest = buf[end:]
+    if len(chunk) < MIN_FIRST_CHUNK_CHARS:
+        return ("", buf)
+    return (chunk, rest)
 
 
 async def _stream_tts_for_sentence(
@@ -7146,7 +7257,14 @@ async def _fast_pipeline_task(
                 sentence_buf += new_chars
                 full_reply_chars.append(new_chars)
                 while True:
-                    sent, rest = _pop_first_sentence(sentence_buf)
+                    # SOLO sulla prima frase usiamo l'early-chunk aggressivo:
+                    # splittiamo al primo soft-break (virgola, due punti, em-dash)
+                    # dopo ~22 char, così il TTS può iniziare prima.
+                    # Dalla seconda frase in poi → boundary tradizionale.
+                    if sentence_idx == 0:
+                        sent, rest = _pop_first_chunk_aggressive(sentence_buf)
+                    else:
+                        sent, rest = _pop_first_sentence(sentence_buf)
                     if not sent:
                         break
                     sentence_buf = rest
@@ -7286,6 +7404,11 @@ async def api_converse_fast_start(req: FastStartRequest):
     """Kick off a fast-path conversation. Returns session_id immediately;
     the client then polls /converse-fast/poll/{session_id}?since=N for
     sentence-tokens and metadata.
+
+    Include anche `filler_token`: un breve mp3 (~200-400ms) "Mh", "Eh", "Allora"
+    pre-generato per la voce dell'utente. Il client lo suona SUBITO mentre il
+    LLM elabora → l'utente percepisce una risposta IMMEDIATA (sub-300ms). Quando
+    arriva la prima vera frase, il client fa fade-out del filler e attacca.
     """
     if not EMERGENT_LLM_KEY:
         raise HTTPException(status_code=500, detail="LLM key not configured")
@@ -7306,7 +7429,26 @@ async def api_converse_fast_start(req: FastStartRequest):
         audio_duration_ms=req.audio_duration_ms,
     ))
 
-    return {"session_id": session_id}
+    # Resolve voce dell'utente per scegliere il filler giusto.
+    filler_token = None
+    try:
+        profile = await get_or_create_profile()
+        voice_id = getattr(profile.settings, "tts_voice_id", None) or "tCOJUYBo86m5v7hppDc7"
+        # Migrazione voci legacy gestita inline (la mappa principale è locale a
+        # un'altra funzione): redirigi i 3 voice_id deprecati alla nuova Aria.
+        _legacy_voice_map = {
+            "pFZP5JQG7iQjIQuC4Bku": "tCOJUYBo86m5v7hppDc7",
+            "q1GF5A2kzAOPv9d5TQEy": "tCOJUYBo86m5v7hppDc7",
+            "PponuEVSg4RZBO08kPzE": "tCOJUYBo86m5v7hppDc7",
+            "nPczCjzI2devNBz1zQrb": "dJwiFcjz9zW5Pge7G8AG",
+        }
+        voice_id = _legacy_voice_map.get(voice_id, voice_id)
+        filler_token = await _get_random_filler_token(voice_id)
+    except Exception as e:
+        logger.warning(f"[filler] couldn't pick filler token: {e}")
+        filler_token = None
+
+    return {"session_id": session_id, "filler_token": filler_token}
 
 
 @api_router.get("/converse-fast/poll/{session_id}")

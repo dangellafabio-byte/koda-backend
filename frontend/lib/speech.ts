@@ -660,6 +660,13 @@ export async function fastConverse(
     if (!sid || typeof sid !== "string") {
       return { ok: false, error: "no session_id from server" };
     }
+    // === FILLER AUDIO (giugno 2026 — ChatGPT Voice trick) ===
+    // Il server ci consegna un brevissimo mp3 ("Mh.", "Eh.", "Allora.") che
+    // possiamo suonare SUBITO mentre il LLM elabora. Latenza percepita: ~300ms.
+    // L'inseriamo come primo elemento della tokenQueue così il player lo
+    // suonerà normalmente, e il `firstAudioFired` si attiva al filler →
+    // l'orb si "anima" già con un suono naturale.
+    const fillerToken: string | null = typeof startData?.filler_token === "string" ? startData.filler_token : null;
 
     // 2) Long-poll loop. Maintains a queue of pending tokens to play.
     let cursor = 0;
@@ -668,8 +675,22 @@ export async function fastConverse(
     let firstAudioFired = false;
     let pollError: string | null = null;
 
-    const tokenQueue: { i: number; token: string; text: string }[] = [];
+    const tokenQueue: { i: number; token: string; text: string; waveform?: number[] | null; window_ms?: number; isFiller?: boolean }[] = [];
     let resolveTokenWait: (() => void) | null = null;
+
+    // Se il backend ci ha dato un filler_token, lo accodiamo SUBITO (prima
+    // del polling) così il player lo suona immediatamente — l'utente sente
+    // Koda "rispondere" entro 200-400ms invece di 2-3s di silenzio.
+    if (fillerToken && !opts.ephemeral) {
+      tokenQueue.push({
+        i: -1,
+        token: fillerToken,
+        text: "",
+        waveform: null,
+        window_ms: 60,
+        isFiller: true,
+      });
+    }
 
     const waitForToken = () =>
       new Promise<void>((resolve) => {
