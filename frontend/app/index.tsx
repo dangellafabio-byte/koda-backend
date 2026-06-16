@@ -244,6 +244,11 @@ export default function Taccuino() {
   // cosa fa. Auto-avanzamento al termine di ogni voce.
   const [tourActive, setTourActive] = useState(false);
   const [tourSteps, setTourSteps] = useState<TourStep[]>([]);
+  // === Tour step tracker (giugno 2026, round 5) ===
+  // Sappiamo quale step del tour è attivo per sincronizzare gli
+  // overlay nella pagina di lettura (messaggi finti + simulazione
+  // tieni-premuto) col narrato di Koda.
+  const [tourCurrentStep, setTourCurrentStep] = useState<{ idx: number; label?: string; page?: string } | null>(null);
   const tourDims = useWindowDimensions();
   // Mirror del tourActive in ref — serve per leggere il valore aggiornato
   // dentro setTimeout/closure che sono stati schedulati PRIMA che il tour
@@ -484,6 +489,29 @@ export default function Taccuino() {
   // entrano nel memory_summary di lungo periodo, e a fine sessione (chiusura
   // app o toggle off) spariscono dalla RAM.
   const [confessionalMode, setConfessionalMode] = useState(false);
+  // === EFFETTO USCITA CONFESSIONALE (giugno 2026, suggerimento ChatGPT) ===
+  // driftOut: translateY -12, opacity 1→0 in 220ms. Quando il toggle Confessional
+  // passa da ON a OFF, i messaggi confessional NON spariscono di colpo: prima
+  // vengono animati per 220ms (con confessionalExiting=true), poi sparire.
+  const [confessionalExiting, setConfessionalExiting] = useState(false);
+  const confessionalDriftAnim = useRef(new Animated.Value(0)).current;
+  const prevConfessionalRef = useRef(false);
+  useEffect(() => {
+    // Trigger driftOut SOLO sulla transizione true → false (uscita).
+    if (prevConfessionalRef.current && !confessionalMode) {
+      setConfessionalExiting(true);
+      confessionalDriftAnim.setValue(0);
+      Animated.timing(confessionalDriftAnim, {
+        toValue: 1,
+        duration: 220,
+        easing: Easing.in(Easing.ease),
+        useNativeDriver: true,
+      }).start(() => {
+        setConfessionalExiting(false);
+      });
+    }
+    prevConfessionalRef.current = confessionalMode;
+  }, [confessionalMode, confessionalDriftAnim]);
   // FORTEZZA: stato dell'animazione di chiusura (fiamma + sigillo).
   // Si attiva quando l'utente esce dal confessionale dopo aver scambiato
   // almeno un messaggio in modalità Fortezza. Al termine, wipe locale.
@@ -2892,11 +2920,13 @@ export default function Taccuino() {
   // ricompaiono colorati in violetto (vedi ChatBubble) per essere
   // immediatamente riconoscibili come "messaggi protetti".
   const timelineWithSeparators = useMemo(() => {
-    const out: Array<{ kind: "sep"; key: string; label: string } | { kind: "msg"; entry: TimelineEntry }> = [];
+    const out: Array<{ kind: "sep"; key: string; label: string } | { kind: "msg"; entry: TimelineEntry } | { kind: "msg-mock"; entry: TimelineEntry; held?: boolean }> = [];
     let lastDay = "";
     for (const e of timeline) {
       // Privacy filter: nascondi le entry confessional quando il toggle è OFF.
-      if (e.confessional && !confessionalMode) continue;
+      // === DRIFTOUT: durante l'animazione di uscita (220ms) tieni visibili
+      // le entry confessional in modo che possano essere animate fuori. ===
+      if (e.confessional && !confessionalMode && !confessionalExiting) continue;
       const d = new Date(e.timestamp);
       const dayKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
       if (dayKey !== lastDay) {
@@ -2905,8 +2935,29 @@ export default function Taccuino() {
       }
       out.push({ kind: "msg", entry: e });
     }
+    // === MESSAGGI FINTI TOUR (richiesta utente giugno 2026 round 5) ===
+    // Quando il tour è attivo nella pagina di lettura, mostriamo 3 bolle
+    // d'esempio realistiche così l'highlight di "tieni premuto" ha qualcosa
+    // di concreto su cui appoggiarsi (e non un cerchio finto su area vuota).
+    // Lo step "Tieni premuto" attiva l'animazione held sulla 2a bolla.
+    if (tourActive && tourCurrentStep?.page === "reading") {
+      const nowTs = new Date().toISOString();
+      const heldNow = tourCurrentStep.label === "Tieni premuto";
+      const mocks: TimelineEntry[] = [
+        { id: "mock-tour-1", role: "user",  text: "Stanotte non ho dormito.",        timestamp: nowTs, tone: "neutral", actions: [] } as any,
+        { id: "mock-tour-2", role: "ai",    text: "Mi spiace. Vuoi raccontarmi?",    timestamp: nowTs, tone: "warm",    actions: [] } as any,
+        { id: "mock-tour-3", role: "user",  text: "Sì, mi sento solo ultimamente.",  timestamp: nowTs, tone: "neutral", actions: [] } as any,
+      ];
+      // Solo se il timeline reale è vuoto, prepende un separatore "Oggi".
+      if (out.length === 0) {
+        out.push({ kind: "sep", key: "sep-tour", label: "Oggi" });
+      }
+      for (const m of mocks) {
+        out.push({ kind: "msg-mock", entry: m, held: heldNow && m.id === "mock-tour-3" });
+      }
+    }
     return out;
-  }, [timeline, confessionalMode]);
+  }, [timeline, confessionalMode, confessionalExiting, tourActive, tourCurrentStep]);
 
   // === OLED DIM OVERLAY RIMOSSO (richiesta utente giugno 2026) =============
   // La riduzione di luminosità per risparmio energetico è stata eliminata
@@ -3320,18 +3371,64 @@ export default function Taccuino() {
               <Text style={styles.daySepText}>{it.label}</Text>
               <View style={styles.daySepLine} />
             </View>
+          ) : it.kind === "msg-mock" ? (
+            // Bolla finta del tour: stesso look ma con effetto "tenuta premuta"
+            // (scale 0.96 + outline + opacità lampeggiante) quando held=true.
+            <View
+              style={{
+                transform: [{ scale: it.held ? 0.96 : 1 }],
+                opacity: it.held ? 0.92 : 1,
+              }}
+            >
+              <View
+                style={
+                  it.held
+                    ? {
+                        borderWidth: 2,
+                        borderColor: "#FCD34D",
+                        borderRadius: 22,
+                        marginHorizontal: 8,
+                      }
+                    : undefined
+                }
+              >
+                <Bubble
+                  entry={it.entry as any}
+                  onReplay={() => {}}
+                  onGhost={() => {}}
+                  aiAvatar={(profile?.settings as any)?.ai_avatar || null}
+                  bubbleAccent={bubbleAccent}
+                  bubbleStyle={bubbleStyle}
+                  textOnBubble={textOnBubble}
+                  textSize={textSize}
+                  aiFontFamily={aiFontFamily}
+                />
+              </View>
+            </View>
           ) : (
-            <Bubble
-              entry={it.entry}
-              onReplay={replayMessage}
-              onGhost={ghostMessage}
-              aiAvatar={(profile?.settings as any)?.ai_avatar || null}
-              bubbleAccent={bubbleAccent}
-              bubbleStyle={bubbleStyle}
-              textOnBubble={textOnBubble}
-              textSize={textSize}
-              aiFontFamily={aiFontFamily}
-            />
+            // === Wrappa con Animated.View per il driftOut su entry confessional ===
+            (() => {
+              const isConfExiting = confessionalExiting && (it.entry as any).confessional;
+              const translateY = confessionalDriftAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -12] });
+              const opacity = confessionalDriftAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0] });
+              return (
+                <Animated.View
+                  style={isConfExiting ? { transform: [{ translateY }], opacity } : undefined}
+                >
+                  <Bubble
+                    entry={it.entry}
+                    onReplay={replayMessage}
+                    onGhost={ghostMessage}
+                    aiAvatar={(profile?.settings as any)?.ai_avatar || null}
+                    bubbleAccent={bubbleAccent}
+                    bubbleStyle={bubbleStyle}
+                    textOnBubble={textOnBubble}
+                    textSize={textSize}
+                    aiFontFamily={aiFontFamily}
+                  />
+                </Animated.View>
+              );
+            })()
           )
         }
         style={styles.timeline}
@@ -4469,6 +4566,9 @@ export default function Taccuino() {
   const tourOverlay = tourActive ? (
     <KodaTour
       steps={tourSteps}
+      onStepChange={(idx, step) => {
+        setTourCurrentStep(step ? { idx, label: step.label, page: step.page } : null);
+      }}
       // === FIX VOCE COERENTE TOUR (richiesta utente giugno 2026) ===
       // Prima usavamo solo tts_voice_id (campo legacy che KodaIntro NON
       // popola). Ora preferisco la mappatura da koda_voice (campo nuovo,

@@ -49,9 +49,13 @@ interface Props {
   onPageChange?: (page: Page) => void;
   /** ElevenLabs voice id to use (current Koda voice). Falls back to default. */
   voiceId?: string | null;
+  /** Called every time the active step changes — utile per il parent per
+   *  fare overlay sincronizzati con il narrato (es. messaggi finti nella
+   *  pagina di lettura, simulazione tieni-premuto). */
+  onStepChange?: (idx: number, step: TourStep | null) => void;
 }
 
-export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: Props) {
+export default function KodaTour({ steps, onComplete, onPageChange, voiceId, onStepChange }: Props) {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const [idx, setIdx] = useState(0);
@@ -104,6 +108,8 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
       return;
     }
     const step = steps[idx];
+    // Notifica al parent il cambio step (per overlay/messaggi finti sincronizzati).
+    try { if (onStepChange) onStepChange(idx, step); } catch {}
     // Switch home pager to the right page if needed (handled by parent).
     if (onPageChange) onPageChange(step.page);
     let cancelled = false;
