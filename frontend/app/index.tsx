@@ -324,79 +324,67 @@ export default function Taccuino() {
     const hintRect = hint || { x: W / 2 - 110, y: H * 0.8, w: 220, h: 36 };
     return [
       // -------- Pagina VOCE --------
+      // === FIX TESTI TOUR (richiesta utente giugno 2026 round 2) ===
+      // Riscritti: BREVI, EASY, no caramello. 1-2 frasi per step. Tono
+      // amichevole ma diretto, no melenso. Rimosso riferimento "lucchetto"
+      // dal Confessionale (ora non c'è più l'icona). Niente parole doppie
+      // tra step contigui.
       {
         page: "voice",
         rect: hfRect,
         label: "Hands-free",
         shape: "circle",
-        speech: `${userName}, questa icona è la modalità mani libere. Quando è verde io ti ascolto da sola — non devi toccare niente. Se vuoi fermarla, toccala di nuovo.`,
+        speech: `Questa è la modalità mani libere, ${userName}. Quando è attiva ti ascolto io. Toccala per fermarla.`,
       },
       {
         page: "voice",
         rect: confRect,
         label: "Confessionale",
         shape: "round",
-        speech: `Qui in mezzo c'è il Confessionale: la stanza della Presenza. Toccalo quando vuoi pensare ad alta voce senza che questo ti definisca domani — niente viene salvato, a sessione chiusa svanisce. Non serve nessuna parola: entri e basta. Questa invece, la stanza dove siamo ora, è la Continuità: qui costruiamo nel tempo e io ricordo.`,
+        speech: `Qui è il Confessionale: parli e poi tutto sparisce, niente memoria. Per i pensieri che vuoi liberare e basta.`,
       },
       {
         page: "voice",
         rect: menuRect,
         label: "Menu",
         shape: "circle",
-        speech: `Questi tre puntini sono il menu. Da lì puoi rifare questa presentazione, cambiare la mia voce, il tema, o cancellare tutta la memoria in un tocco.`,
+        speech: `Da qui: voce, tema, memoria. Tutto quello che vuoi cambiare.`,
       },
       {
         page: "voice",
         rect: orbRect,
         label: "Eclissi",
         shape: "circle",
-        speech: `Io sono questa eclissi. Cambio colore in base a quello che faccio: verde se aspetto, rosa se ti sto ascoltando, viola se ti sto rispondendo. Toccami per parlarmi.`,
-      },
-      {
-        page: "voice",
-        rect: orbRect,
-        label: "Interrompimi",
-        shape: "circle",
-        speech: `Se mentre ti rispondo vuoi fermarmi — toccami di nuovo. Mi zittisco subito e ti ascolto. Stessa cosa se vuoi prendere la parola: un tocco, e mi metto da parte.`,
+        speech: `Questa sono io. Toccami per parlarti, ritoccami per fermarmi.`,
       },
       {
         page: "voice",
         rect: hintRect,
         label: "Scorri",
         shape: "round",
-        speech: `Vedi la freccia in basso? Scorri lo schermo da destra verso sinistra e trovi tutto quello che ci siamo detti scritto, in ordine.`,
+        speech: `Scorri verso sinistra: trovi tutta la nostra chat scritta.`,
       },
       // -------- Pagina LETTURA --------
-      // === FIX TUTORIAL HIGHLIGHTS (giugno 2026 #13) ===
-      // Le rect erano hardcoded basate su percentuali H che non corrispondevano
-      // ai veri elementi UI → l'highlight cadeva su zone vuote o solo su una
-      // parte dei testi. Adesso highlight più generosi che coprono SICURAMENTE
-      // tutta l'area dell'elemento a cui Koda si riferisce nello speech.
       {
         page: "reading",
-        // Timeline = grande zona centrale dove si leggono i messaggi.
         rect: { x: 8, y: Math.max(insets.top + 70, 110), w: W - 16, h: H * 0.55 },
         label: "Lettura",
         shape: "round",
-        speech: `Questa è la pagina di lettura. Qui rileggi tutti i nostri scambi. Se tocchi una mia bolla, te la rileggo a voce alta.`,
+        speech: `Qui rileggi tutto. Tocca una bolla per risentirmi a voce.`,
       },
       {
         page: "reading",
-        // Bolle: zona simile, leggermente più stretta. Il gesto "tieni premuto"
-        // si fa su una qualunque bolla nella timeline.
         rect: { x: 8, y: Math.max(insets.top + 100, 140), w: W - 16, h: H * 0.50 },
         label: "Tieni premuto",
         shape: "round",
-        speech: `Una cosa importante: se tieni premuto un messaggio, ti chiedo se vuoi che lo dimentichi. È il tasto Ghost — cancello il dato grezzo, mi resta solo l'insegnamento.`,
+        speech: `Tieni premuto un messaggio per cancellarlo. Sparisce dal mio ricordo.`,
       },
       {
         page: "reading",
-        // Barra di scrittura in fondo: input + pulsante invio. Usiamo
-        // insets.bottom per posizionarci sopra la safe area iOS.
         rect: { x: 8, y: H - Math.max(insets.bottom, 20) - 90, w: W - 16, h: 78 },
         label: "Scrittura",
         shape: "round",
-        speech: `In fondo c'è la barra per scrivere. Quando non puoi parlare — sei in mezzo a gente, o in riunione — scrivi qui e ti rispondo lo stesso, in silenzio.`,
+        speech: `Quando non puoi parlare, scrivi qui. Ti rispondo in silenzio.`,
       },
       // -------- Chiusura --------
       {
@@ -404,7 +392,7 @@ export default function Taccuino() {
         rect: orbRect,
         label: "Pronti",
         shape: "circle",
-        speech: `Ecco, hai visto tutto. Sono qui, ${userName}. Parlami quando vuoi — anche solo per dirmi ciao.`,
+        speech: `Ecco, è tutto. Sono qui, ${userName}.`,
       },
     ];
   }, [tourDims.width, tourDims.height, insets.top, insets.bottom, profile?.user_name, measureRef]);
@@ -1384,8 +1372,8 @@ export default function Taccuino() {
               zen: "sistema",
               sistema: "sistema",
               automatico: "sistema",
-              "auto-orario": "auto-orario",
-              auto: "auto-orario",
+              auto: "sistema", // === FIX giugno 2026: "Auto" ora = sistema (segue iOS)
+              "auto-orario": "sistema", // alias legacy → "sistema"
               cielo: "cielo",
               azzurro: "cielo",
               bosco: "bosco",
@@ -3854,9 +3842,10 @@ export default function Taccuino() {
 
             <Text style={styles.settingsSubtitle}>Tema</Text>
             <View style={styles.themeRow}>
-              {/* === FILTRO TEMI (giugno 2026 #11) ===
-                  Giorno + Notte. Rimosso "auto-orario" (richiesta utente). */}
-              {THEME_LIST.filter((p) => p.name === "giorno" || p.name === "notte").map((p) => (
+              {/* === FILTRO TEMI (giugno 2026 #11+ #9 v2) ===
+                  Chiaro (giorno) + Scuro (notte) + Sistema (segue iOS).
+                  Etichette UI: "Chiaro / Scuro / Auto" su richiesta utente. */}
+              {THEME_LIST.filter((p) => p.name === "giorno" || p.name === "notte" || p.name === "sistema").map((p) => (
                 <TouchableOpacity
                   key={p.name}
                   onPress={() => saveTheme(p.name as ThemeName)}
@@ -4480,7 +4469,17 @@ export default function Taccuino() {
   const tourOverlay = tourActive ? (
     <KodaTour
       steps={tourSteps}
-      voiceId={profile?.settings?.tts_voice_id || null}
+      // === FIX VOCE COERENTE TOUR (richiesta utente giugno 2026) ===
+      // Prima usavamo solo tts_voice_id (campo legacy che KodaIntro NON
+      // popola). Ora preferisco la mappatura da koda_voice (campo nuovo,
+      // popolato in onboarding con "aria" o "echo") → ElevenLabs ID.
+      // Fallback a tts_voice_id se koda_voice mancante.
+      voiceId={(() => {
+        const k = ((profile?.settings as any)?.koda_voice || "").toLowerCase();
+        if (k === "aria" || k === "eco") return "pFZP5JQG7iQjIQuC4Bku"; // Lily
+        if (k === "echo") return "nPczCjzI2devNBz1zQrb"; // Brian
+        return (profile?.settings as any)?.tts_voice_id || "pFZP5JQG7iQjIQuC4Bku";
+      })()}
       onPageChange={(page) => {
         const w = tourDims.width;
         try {

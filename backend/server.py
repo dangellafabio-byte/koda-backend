@@ -5708,17 +5708,40 @@ except Exception as _e:
 # "trova", "cerca") sono state rimosse — vengono richiamate SOLO se sono
 # *all'inizio* della frase (vedi _should_web_search).
 _WEB_SEARCH_TRIGGERS_IT = (
-    "notizie", "ultim'ora", "ultima ora", "prezzo di", "quanto costa",
+    # === Notizie / attualità ===
+    "notizie", "notizia", "ultim'ora", "ultima ora", "ultime ore",
+    "news", "ultime", "in tempo reale", "succede in italia", "succede nel mondo",
+    "che succede", "cosa succede", "cosa è successo", "cos'è successo",
+    "cosa sta succedendo", "che sta succedendo",
+    # === Avverbi temporali "fresco" (richiesta utente giugno 2026) ===
+    # Espansione massiccia: prima i trigger erano troppo ristretti — l'utente
+    # diceva "informazione di oggi" o "notizia attuale" e Tavily NON
+    # scattava. Ora copriamo tutte le varianti italiane del "fresco/attuale".
+    "oggi", "stamattina", "stasera", "stanotte",
+    "attuale", "attuali", "attualmente", "adesso", "al momento",
+    "in questo momento", "proprio ora", "ora come ora",
+    "fresco", "fresca", "recente", "recenti", "ultimo", "ultima",
+    # === Prezzi / mercati ===
+    "prezzo di", "prezzo del", "prezzo dello", "prezzo della", "quanto costa",
+    "quanto vale", "valore di", "valore del", "valore della",
+    "borsa", "azioni", "criptovaluta", "criptovalute", "bitcoin", "ethereum",
+    "cambio", "dollaro", "euro vale",
+    # === Meteo ===
     "meteo", "previsioni meteo", "che tempo fa", "che tempo c'è",
-    # Constatazioni meteo/giornata — l'utente sta facendo small talk sul
-    # mondo reale, Koda deve poter "guardare fuori" per condividere:
     "bella giornata", "brutta giornata", "che giornata", "giornata di sole",
     "giornata di pioggia", "che caldo", "che freddo", "piove", "che pioggia",
     "che sole", "che vento", "c'è il sole", "splende il sole", "fuori c'è",
-    "ricetta", "news", "ultime", "ha vinto", "risultato di", "campionato",
-    "borsa", "criptovalute", "bitcoin",
-    "che ore sono", "che giorno", "che data",
+    # === Sport ===
+    "ha vinto", "ha perso", "risultato di", "risultato della", "risultati di",
+    "campionato", "serie a", "champions",
+    # === Tempo / data ===
+    "che ore sono", "che giorno", "che data", "che giorno è",
     "anno corrente", "anno attuale", "in questo momento nel mondo",
+    # === Ricette / how-to ===
+    "ricetta", "come si fa", "come faccio",
+    # === Verifiche / informazioni ===
+    "informazione", "informazioni", "info su", "info sulla", "info sul",
+    "ultime informazioni", "info aggiornate",
 )
 # Trigger di INIZIO frase: "cerca X", "cercami X", "trovami X" — mai dentro al testo
 _WEB_SEARCH_PREFIX_IT = (

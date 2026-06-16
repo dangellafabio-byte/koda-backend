@@ -499,6 +499,14 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         koda_voice: aiGender === "f" ? "aria" : "echo",
         settings: {
           checkin_mode: checkinMode,
+          // === FIX VOCE COERENTE (giugno 2026) ===
+          // Salviamo ANCHE tts_voice_id qui, mappato direttamente dalla
+          // scelta della voce, così tutti i flussi (tour, fast converse,
+          // legacy converse, intro replay) usano la STESSA voce e non
+          // ci sono incoerenze tra l'onboarding e il tour.
+          tts_voice_id: aiGender === "f"
+            ? "pFZP5JQG7iQjIQuC4Bku" // Lily (Aria — chiara/limpida)
+            : "nPczCjzI2devNBz1zQrb", // Brian (Echo — profonda/avvolgente)
         },
       };
       // Pick voice_id based on gender
@@ -1104,7 +1112,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
-    paddingBottom: 32,
+    paddingBottom: 16, // === FIX (giugno 2026 #10): 32 → 16 per ridurre scroll
     justifyContent: "flex-start",
   },
   stepView: {
@@ -1112,19 +1120,19 @@ const styles = StyleSheet.create({
   },
   title: {
     color: "#FAFAFA",
-    fontSize: 28,
+    fontSize: 24, // === FIX (giugno 2026 #10): 28 → 24 per ridurre altezza
     fontWeight: "300",
     letterSpacing: 0.3,
-    marginBottom: 12,
+    marginBottom: 8, // 12 → 8
     textAlign: "center",
   },
   subtitle: {
     color: "#A1A1AA",
-    fontSize: 16,
-    lineHeight: 24,
+    fontSize: 14, // === FIX (giugno 2026 #10): 16 → 14
+    lineHeight: 20, // 24 → 20
     textAlign: "center",
     fontWeight: "300",
-    marginBottom: 28,
+    marginBottom: 18, // 28 → 18
   },
   textInput: {
     backgroundColor: "#18181B",

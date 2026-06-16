@@ -56,7 +56,7 @@ export type Palette = {
 
 const NOTTE: Palette = {
   name: "notte",
-  label: "Notte",
+  label: "Scuro",
   emoji: "🌙",
   isDark: true,
   // === FIX 2026-06 (richiesta utente) ===
@@ -101,7 +101,7 @@ const NOTTE: Palette = {
 
 const GIORNO: Palette = {
   name: "giorno",
-  label: "Giorno",
+  label: "Chiaro",
   emoji: "☀️",
   // === FIX 2026-06 v6 (utente: "fai più grigio") ===
   // Grigio vero, neutro-freddo appena ammorbidito: via il sottotono sabbia
@@ -292,7 +292,17 @@ export const THEMES: Record<Exclude<ThemeName, "sistema">, Palette> = {
   ciliegia: CILIEGIA,
 };
 
-export const THEME_LIST: Palette[] = [GIORNO, LIQUID, NOTTE, CIELO, BOSCO, CILIEGIA];
+// Pseudo-palette per il selettore "Auto" — non è un vero tema visivo:
+// quando selezionato, themeName diventa "sistema" e resolveTheme()
+// sceglie GIORNO o NOTTE in base a iOS Appearance.
+const SISTEMA_PSEUDO: Palette = {
+  ...NOTTE,
+  name: "sistema",
+  label: "Auto",
+  emoji: "🔄",
+};
+
+export const THEME_LIST: Palette[] = [GIORNO, NOTTE, SISTEMA_PSEUDO, LIQUID, CIELO, BOSCO, CILIEGIA];
 
 export function resolveTheme(name: ThemeName | undefined | null): Palette {
   if (!name || name === "sistema") {
