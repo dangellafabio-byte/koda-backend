@@ -97,8 +97,8 @@ const VOICEPRINT_PHRASES = [
 // Mappa stabile tra brand (aria/echo) e ElevenLabs voice_id.
 // Tenuto qui sincrono col backend (KODA_VOICES in server.py).
 const BRAND_VOICE_IDS = {
-  aria: "pFZP5JQG7iQjIQuC4Bku",   // Lily — chiara, leggera
-  echo: "nPczCjzI2devNBz1zQrb",   // Brian — profonda, avvolgente
+  aria: "q1GF5A2kzAOPv9d5TQEy",   // Koda Aria — voce unica generata via ElevenLabs Voice Design
+  echo: "PponuEVSg4RZBO08kPzE",   // Koda Echo — voce unica generata via ElevenLabs Voice Design
 } as const;
 
 // Voce di fallback per la presentazione (PRIMA che l'utente scelga in M2):
@@ -505,8 +505,8 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
           // legacy converse, intro replay) usano la STESSA voce e non
           // ci sono incoerenze tra l'onboarding e il tour.
           tts_voice_id: aiGender === "f"
-            ? "pFZP5JQG7iQjIQuC4Bku" // Lily (Aria — chiara/limpida)
-            : "nPczCjzI2devNBz1zQrb", // Brian (Echo — profonda/avvolgente)
+            ? "q1GF5A2kzAOPv9d5TQEy" // Koda Aria (Voice Design)
+            : "PponuEVSg4RZBO08kPzE", // Koda Echo (Voice Design)
         },
       };
       // Pick voice_id based on gender

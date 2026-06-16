@@ -1717,6 +1717,25 @@ async def api_get_profile(request: Request):
         # Best-effort: se la migrazione fallisce, il client comunque
         # forza "notte" come fallback locale.
         pass
+    # === MIGRAZIONE VOCI ElevenLabs → Voice Design Koda (giugno 2026) ===
+    # Vecchie voci (Lily, Brian) ora sostituite con le voci uniche generate
+    # via ElevenLabs Voice Design (Koda Aria, Koda Echo). Migra i profili
+    # esistenti per usare le nuove voci automaticamente.
+    _VOICE_MIGRATION_MAP = {
+        "pFZP5JQG7iQjIQuC4Bku": "q1GF5A2kzAOPv9d5TQEy",  # Lily → Koda Aria
+        "nPczCjzI2devNBz1zQrb": "PponuEVSg4RZBO08kPzE",  # Brian → Koda Echo
+    }
+    try:
+        old_vid = getattr(p.settings, "tts_voice_id", "") or ""
+        if old_vid in _VOICE_MIGRATION_MAP:
+            new_vid = _VOICE_MIGRATION_MAP[old_vid]
+            p.settings.tts_voice_id = new_vid
+            await db.taccuino_profile.update_one(
+                {"id": p.id},
+                {"$set": {"settings.tts_voice_id": new_vid}},
+            )
+    except Exception:
+        pass
     try:
         bg = p.settings.background or ""
         if bg.startswith("data:") and len(bg) > 2000:
@@ -4485,8 +4504,8 @@ def _get_eleven_client():
 # Curated list of voices that work well for Italian.
 # (voice_id, display name, short description, gender)
 CURATED_VOICES = [
-    {"voice_id": "pFZP5JQG7iQjIQuC4Bku", "name": "Aria", "description": "Limpida e fresca — spazio, respiro, apertura.", "gender": "neutro", "accent": "italiano"},
-    {"voice_id": "nPczCjzI2devNBz1zQrb", "name": "Echo", "description": "Profonda e avvolgente — riflessione, eco interiore, intimità.", "gender": "neutro", "accent": "italiano"},
+    {"voice_id": "q1GF5A2kzAOPv9d5TQEy", "name": "Aria", "description": "Limpida e fresca — spazio, respiro, apertura.", "gender": "neutro", "accent": "italiano"},
+    {"voice_id": "PponuEVSg4RZBO08kPzE", "name": "Echo", "description": "Profonda e avvolgente — riflessione, eco interiore, intimità.", "gender": "neutro", "accent": "italiano"},
 ]
 
 
@@ -4787,17 +4806,17 @@ def _has_audio_tags(text: str) -> bool:
 # ============================================================
 
 KODA_VOICES: Dict[str, Dict[str, str]] = {
-    # ARIA — Lily (ElevenLabs pFZP5JQG7iQjIQuC4Bku). Limpida, fresca,
+    # ARIA — Lily (ElevenLabs q1GF5A2kzAOPv9d5TQEy). Limpida, fresca,
     # evoca spazio/respiro/leggerezza/apertura. Asessuata nel framing.
     "aria": {
-        "voice_id": "pFZP5JQG7iQjIQuC4Bku",
+        "voice_id": "q1GF5A2kzAOPv9d5TQEy",
         "label": "Aria",
         "description": "Limpida e fresca — spazio, respiro, apertura.",
     },
-    # ECHO — Brian (ElevenLabs nPczCjzI2devNBz1zQrb). Profonda, calda,
+    # ECHO — Brian (ElevenLabs PponuEVSg4RZBO08kPzE). Profonda, calda,
     # avvolgente. Evoca riflessione, eco interiore, intimità. Asessuata.
     "echo": {
-        "voice_id": "nPczCjzI2devNBz1zQrb",
+        "voice_id": "PponuEVSg4RZBO08kPzE",
         "label": "Echo",
         "description": "Profonda e avvolgente — riflessione, eco interiore, intimità.",
     },
