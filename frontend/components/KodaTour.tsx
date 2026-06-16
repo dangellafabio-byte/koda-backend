@@ -22,7 +22,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Svg, { Defs, Mask, Rect as SvgRect, Circle as SvgCircle, RoundedRect } from "react-native-svg";
+import Svg, { Defs, Mask, Rect as SvgRect, Circle as SvgCircle } from "react-native-svg";
 import { SpeechMod } from "../lib/speech";
 
 type Page = "voice" | "reading";
@@ -213,7 +213,7 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId, onS
                 fill="black"
               />
             ) : (
-              <RoundedRect
+              <SvgRect
                 x={ringX}
                 y={ringY}
                 width={ringW}
