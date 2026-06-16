@@ -4577,7 +4577,7 @@ export default function Taccuino() {
       voiceId={(() => {
         const k = ((profile?.settings as any)?.koda_voice || "").toLowerCase();
         if (k === "aria" || k === "eco") return "q1GF5A2kzAOPv9d5TQEy"; // Koda Aria
-        if (k === "echo") return "PponuEVSg4RZBO08kPzE"; // Koda Echo
+        if (k === "echo") return "dJwiFcjz9zW5Pge7G8AG"; // Koda Echo
         return (profile?.settings as any)?.tts_voice_id || "q1GF5A2kzAOPv9d5TQEy";
       })()}
       onPageChange={(page) => {

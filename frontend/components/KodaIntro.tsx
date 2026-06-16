@@ -98,7 +98,7 @@ const VOICEPRINT_PHRASES = [
 // Tenuto qui sincrono col backend (KODA_VOICES in server.py).
 const BRAND_VOICE_IDS = {
   aria: "q1GF5A2kzAOPv9d5TQEy",   // Koda Aria — voce unica generata via ElevenLabs Voice Design
-  echo: "PponuEVSg4RZBO08kPzE",   // Koda Echo — voce unica generata via ElevenLabs Voice Design
+  echo: "dJwiFcjz9zW5Pge7G8AG",   // Koda Echo — voce unica generata via ElevenLabs Voice Design
 } as const;
 
 // Voce di fallback per la presentazione (PRIMA che l'utente scelga in M2):
@@ -506,7 +506,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
           // ci sono incoerenze tra l'onboarding e il tour.
           tts_voice_id: aiGender === "f"
             ? "q1GF5A2kzAOPv9d5TQEy" // Koda Aria (Voice Design)
-            : "PponuEVSg4RZBO08kPzE", // Koda Echo (Voice Design)
+            : "dJwiFcjz9zW5Pge7G8AG", // Koda Echo (Voice Design)
         },
       };
       // Pick voice_id based on gender

@@ -1723,7 +1723,8 @@ async def api_get_profile(request: Request):
     # esistenti per usare le nuove voci automaticamente.
     _VOICE_MIGRATION_MAP = {
         "pFZP5JQG7iQjIQuC4Bku": "q1GF5A2kzAOPv9d5TQEy",  # Lily → Koda Aria
-        "nPczCjzI2devNBz1zQrb": "PponuEVSg4RZBO08kPzE",  # Brian → Koda Echo
+        "nPczCjzI2devNBz1zQrb": "dJwiFcjz9zW5Pge7G8AG",  # Brian → Koda Echo (v2)
+        "PponuEVSg4RZBO08kPzE": "dJwiFcjz9zW5Pge7G8AG",  # Echo v1 → Echo v2 (più maschile)
     }
     try:
         old_vid = getattr(p.settings, "tts_voice_id", "") or ""
@@ -4505,7 +4506,7 @@ def _get_eleven_client():
 # (voice_id, display name, short description, gender)
 CURATED_VOICES = [
     {"voice_id": "q1GF5A2kzAOPv9d5TQEy", "name": "Aria", "description": "Limpida e fresca — spazio, respiro, apertura.", "gender": "neutro", "accent": "italiano"},
-    {"voice_id": "PponuEVSg4RZBO08kPzE", "name": "Echo", "description": "Profonda e avvolgente — riflessione, eco interiore, intimità.", "gender": "neutro", "accent": "italiano"},
+    {"voice_id": "dJwiFcjz9zW5Pge7G8AG", "name": "Echo", "description": "Profonda e avvolgente — riflessione, eco interiore, intimità.", "gender": "neutro", "accent": "italiano"},
 ]
 
 
@@ -4813,10 +4814,10 @@ KODA_VOICES: Dict[str, Dict[str, str]] = {
         "label": "Aria",
         "description": "Limpida e fresca — spazio, respiro, apertura.",
     },
-    # ECHO — Brian (ElevenLabs PponuEVSg4RZBO08kPzE). Profonda, calda,
+    # ECHO — Brian (ElevenLabs dJwiFcjz9zW5Pge7G8AG). Profonda, calda,
     # avvolgente. Evoca riflessione, eco interiore, intimità. Asessuata.
     "echo": {
-        "voice_id": "PponuEVSg4RZBO08kPzE",
+        "voice_id": "dJwiFcjz9zW5Pge7G8AG",
         "label": "Echo",
         "description": "Profonda e avvolgente — riflessione, eco interiore, intimità.",
     },
@@ -5222,7 +5223,8 @@ async def api_tts(req: TTSRequest):
                 voice_id=voice_id,
                 model_id=model,
                 output_format="mp3_44100_128",
-                voice_settings=voice_settings,
+                                language_code="it",
+voice_settings=voice_settings,
             )
             # CRITICAL: disable text normalization for v3 so ellipses, em-dashes,
             # trailing dots, and disfluencies ("ehm…", "boh…") are PRESERVED as
@@ -5244,7 +5246,8 @@ async def api_tts(req: TTSRequest):
                     voice_id=voice_id,
                     model_id="eleven_flash_v2_5",
                     output_format="mp3_44100_128",
-                    voice_settings=voice_settings,
+                                        language_code="it",
+voice_settings=voice_settings,
                 )
                 audio_data = b""
                 for chunk in audio_gen:
@@ -5411,7 +5414,8 @@ async def api_tts_bridge(style: str = "generico", i: int = 0, voice_id: Optional
             voice_id=vid,
             model_id="eleven_flash_v2_5",
             output_format="mp3_44100_128",
-            voice_settings={
+                        language_code="it",
+voice_settings={
                 "stability": 0.45,
                 "similarity_boost": 0.85,
                 "style": 0.50,
@@ -5489,7 +5493,8 @@ async def api_tts_prepare(req: TTSRequest):
                 voice_id=voice_id,
                 model_id=model,
                 output_format="mp3_44100_128",
-                voice_settings=voice_settings,
+                                language_code="it",
+voice_settings=voice_settings,
             )
             if use_v3:
                 # Preserve disfluencies, ellipses, em-dashes verbatim
@@ -5508,7 +5513,8 @@ async def api_tts_prepare(req: TTSRequest):
                     voice_id=voice_id,
                     model_id="eleven_flash_v2_5",
                     output_format="mp3_44100_128",
-                    voice_settings=voice_settings,
+                                        language_code="it",
+voice_settings=voice_settings,
                 )
                 audio_data = b""
                 for chunk in audio_gen:
@@ -5596,7 +5602,8 @@ async def _tts_stream_impl(
             voice_id=vid,
             model_id=model,
             output_format="mp3_44100_128",
-            voice_settings=voice_settings,
+                        language_code="it",
+voice_settings=voice_settings,
         )
         if use_v3:
             kwargs["apply_text_normalization"] = "off"
@@ -5614,7 +5621,8 @@ async def _tts_stream_impl(
                     voice_id=vid,
                     model_id="eleven_flash_v2_5",
                     output_format="mp3_44100_128",
-                    voice_settings=voice_settings,
+                                        language_code="it",
+voice_settings=voice_settings,
                 )
                 stream = client_el.text_to_speech.stream(**fb_kwargs)
                 for chunk in stream:
