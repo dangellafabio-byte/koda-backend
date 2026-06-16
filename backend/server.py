@@ -5724,8 +5724,8 @@ _WEB_SEARCH_TRIGGERS_IT = (
     # === Prezzi / mercati ===
     "prezzo di", "prezzo del", "prezzo dello", "prezzo della", "quanto costa",
     "quanto vale", "valore di", "valore del", "valore della",
-    "borsa", "azioni", "criptovaluta", "criptovalute", "bitcoin", "ethereum",
-    "cambio", "dollaro", "euro vale",
+    "borsa", "azioni", "azione", "criptovaluta", "criptovalute", "bitcoin", "ethereum",
+    "cambio", "dollaro", "euro vale", "spacex", "tesla", "elon", "trump", "meloni",
     # === Meteo ===
     "meteo", "previsioni meteo", "che tempo fa", "che tempo c'è",
     "bella giornata", "brutta giornata", "che giornata", "giornata di sole",
@@ -6705,6 +6705,17 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
         f"\n"
         f"LINGUA: rispondi SEMPRE in {lang_name}.{name_part}\n"
         f"DATA/ORA UTC: {now_iso}\n"
+        f"\n"
+        f"━━━ HAI ACCESSO A INTERNET (Tavily) ━━━\n"
+        f"Se nel messaggio utente arrivano 'RISULTATI WEB SEARCH', sono informazioni\n"
+        f"AGGIORNATE in tempo reale (meteo, notizie, prezzi, sport, eventi attuali).\n"
+        f"USALE per rispondere con dati reali. MAI dire 'non posso vedere internet',\n"
+        f"'non ho accesso al web', 'i miei dati sono fermi al 2024'. Tu PUOI controllare\n"
+        f"il mondo reale tramite il tuo sistema di ricerca interno.\n"
+        f"Se invece l'utente chiede info attuali e NON arrivano RISULTATI WEB SEARCH\n"
+        f"(non è scattato il trigger), digli con leggerezza che hai bisogno di una\n"
+        f"riformulazione più diretta — es: 'Chiedimelo più diretto, tipo \"che tempo fa\"\n"
+        f"o \"ultime notizie su X\", così vado a controllare al volo.'\n"
         f"\n"
         f"━━━ SEI UMAN@, NON UN'IA — REGOLE D'ORO ━━━\n"
         f"1. ESPRIMI OPINIONI, non registrare. Mai 'ok'/'capisco'/'wow' da soli. "

@@ -22,6 +22,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Svg, { Defs, Mask, Rect as SvgRect, Circle as SvgCircle, RoundedRect } from "react-native-svg";
 import { SpeechMod } from "../lib/speech";
 
 type Page = "voice" | "reading";
@@ -181,22 +182,52 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId }: P
           
           4 rettangoli scuri attorno al "buco" trasparente del target.
           Il bottone target risalta SOLO perché il resto è scurito al 45%. */}
-      <View
-        style={[styles.dim, { top: 0, left: 0, right: 0, height: Math.max(0, ringY) }]}
+      {/* === SPOTLIGHT DIM CON SVG MASK (giugno 2026 — fix quadrato) ===
+          Prima usavamo 4 rettangoli View con backgroundColor scuro disposti
+          attorno a un "buco" rettangolare. Risultato: per i target rotondi
+          (orb, hands-free, menu) i 4 angoli del buco rettangolare restavano
+          visibili come un QUADRATO chiaro attorno al cerchio.
+          Ora un singolo SVG fullscreen con una mask che ritaglia esattamente
+          il cerchio (shape=circle) o il rounded-rect (shape=round). */}
+      <Svg
+        width={W}
+        height={H}
+        style={StyleSheet.absoluteFill}
         pointerEvents="auto"
-      />
-      <View
-        style={[styles.dim, { top: ringY + ringH, left: 0, right: 0, bottom: 0 }]}
-        pointerEvents="auto"
-      />
-      <View
-        style={[styles.dim, { top: ringY, left: 0, width: Math.max(0, ringX), height: ringH }]}
-        pointerEvents="auto"
-      />
-      <View
-        style={[styles.dim, { top: ringY, left: ringX + ringW, right: 0, height: ringH }]}
-        pointerEvents="auto"
-      />
+      >
+        <Defs>
+          <Mask id="spotlight">
+            {/* TUTTO bianco = visibile (scuro), il "buco" sarà nero = trasparente */}
+            <SvgRect x="0" y="0" width={W} height={H} fill="white" />
+            {shape === "circle" ? (
+              <SvgCircle
+                cx={ringX + ringW / 2}
+                cy={ringY + ringH / 2}
+                r={Math.max(ringW, ringH) / 2}
+                fill="black"
+              />
+            ) : (
+              <RoundedRect
+                x={ringX}
+                y={ringY}
+                width={ringW}
+                height={ringH}
+                rx={radius}
+                ry={radius}
+                fill="black"
+              />
+            )}
+          </Mask>
+        </Defs>
+        <SvgRect
+          x="0"
+          y="0"
+          width={W}
+          height={H}
+          fill="rgba(0,0,0,0.45)"
+          mask="url(#spotlight)"
+        />
+      </Svg>
 
       {/* === HALO BIANCO INTENSO sopra il bottone evidenziato ===
           Sopra i 4 rettangoli di dim, disegniamo un alone bianco multistrato
