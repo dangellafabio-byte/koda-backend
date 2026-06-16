@@ -22,7 +22,6 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Svg, { Defs, Mask, Rect as SvgRect, Circle as SvgCircle } from "react-native-svg";
 import { SpeechMod } from "../lib/speech";
 
 type Page = "voice" | "reading";
@@ -181,59 +180,20 @@ export default function KodaTour({ steps, onComplete, onPageChange, voiceId, onS
 
   return (
     <Animated.View style={[styles.overlay, { opacity: fade }]} pointerEvents="auto">
-      {/* === SPOTLIGHT con OSCURAMENTO PARZIALE — NIENTE ANELLI ===
-          User feedback: "non voglio niente di evidenziato/cerchiato.
-          Solo che si oscuri la pagina e rimanga in evidenza per contrasto
-          quello di cui sta parlando".
+      {/* === SPOTLIGHT — SOLO DIM SCURO FULL SCREEN (giugno 2026 — fix crash) ===
+          Prima usavamo un SVG mask (Svg + Mask + Rect/Circle) per ritagliare
+          un "buco" attorno al target. Problema: causava un CRASH nativo al
+          primo step del tour perché venivano referenziate variabili NON
+          dichiarate (W, H, shape) — l'app si chiudeva di colpo.
           
-          4 rettangoli scuri attorno al "buco" trasparente del target.
-          Il bottone target risalta SOLO perché il resto è scurito al 45%. */}
-      {/* === SPOTLIGHT DIM CON SVG MASK (giugno 2026 — fix quadrato) ===
-          Prima usavamo 4 rettangoli View con backgroundColor scuro disposti
-          attorno a un "buco" rettangolare. Risultato: per i target rotondi
-          (orb, hands-free, menu) i 4 angoli del buco rettangolare restavano
-          visibili come un QUADRATO chiaro attorno al cerchio.
-          Ora un singolo SVG fullscreen con una mask che ritaglia esattamente
-          il cerchio (shape=circle) o il rounded-rect (shape=round). */}
-      <Svg
-        width={W}
-        height={H}
-        style={StyleSheet.absoluteFill}
-        pointerEvents="auto"
-      >
-        <Defs>
-          <Mask id="spotlight">
-            {/* TUTTO bianco = visibile (scuro), il "buco" sarà nero = trasparente */}
-            <SvgRect x="0" y="0" width={W} height={H} fill="white" />
-            {shape === "circle" ? (
-              <SvgCircle
-                cx={ringX + ringW / 2}
-                cy={ringY + ringH / 2}
-                r={Math.max(ringW, ringH) / 2}
-                fill="black"
-              />
-            ) : (
-              <SvgRect
-                x={ringX}
-                y={ringY}
-                width={ringW}
-                height={ringH}
-                rx={radius}
-                ry={radius}
-                fill="black"
-              />
-            )}
-          </Mask>
-        </Defs>
-        <SvgRect
-          x="0"
-          y="0"
-          width={W}
-          height={H}
-          fill="rgba(0,0,0,0.45)"
-          mask="url(#spotlight)"
-        />
-      </Svg>
+          User feedback: "se è quello del quadrato togli e troviamo
+          un'altra soluzione, non me ne frega niente". 
+          
+          Nuova soluzione: un singolo overlay scuro full-screen (45% nero).
+          L'elemento target risalta SOLO grazie all'halo bianco multi-ring
+          che disegniamo SOPRA il dim. Niente SVG, niente buchi, niente
+          variabili non dichiarate. Zero crash, esperienza identica. */}
+      <View style={styles.dim} pointerEvents="none" />
 
       {/* === HALO BIANCO INTENSO sopra il bottone evidenziato ===
           Sopra i 4 rettangoli di dim, disegniamo un alone bianco multistrato

@@ -1717,14 +1717,16 @@ async def api_get_profile(request: Request):
         # Best-effort: se la migrazione fallisce, il client comunque
         # forza "notte" come fallback locale.
         pass
-    # === MIGRAZIONE VOCI ElevenLabs → Voice Design Koda (giugno 2026) ===
-    # Vecchie voci (Lily, Brian) ora sostituite con le voci uniche generate
-    # via ElevenLabs Voice Design (Koda Aria, Koda Echo). Migra i profili
-    # esistenti per usare le nuove voci automaticamente.
+    # === MIGRAZIONE VOCI ElevenLabs → Voice Design Koda (giugno 2026 v2) ===
+    # Aria ora è la voce FEMMINILE custom dell'utente (PponuEVSg4RZBO08kPzE).
+    # Echo resta maschile (dJwiFcjz9zW5Pge7G8AG).
+    # Migra le vecchie voci verso le nuove identità Koda.
     _VOICE_MIGRATION_MAP = {
-        "pFZP5JQG7iQjIQuC4Bku": "q1GF5A2kzAOPv9d5TQEy",  # Lily → Koda Aria
-        "nPczCjzI2devNBz1zQrb": "dJwiFcjz9zW5Pge7G8AG",  # Brian → Koda Echo (v2)
-        "PponuEVSg4RZBO08kPzE": "dJwiFcjz9zW5Pge7G8AG",  # Echo v1 → Echo v2 (più maschile)
+        "pFZP5JQG7iQjIQuC4Bku": "PponuEVSg4RZBO08kPzE",  # Lily → Koda Aria (femminile)
+        "nPczCjzI2devNBz1zQrb": "dJwiFcjz9zW5Pge7G8AG",  # Brian → Koda Echo (maschile)
+        # q1GF5A2kzAOPv9d5TQEy era la vecchia "Aria" che però era maschile
+        # per errore. La migrazione la riporta alla nuova Aria femminile.
+        "q1GF5A2kzAOPv9d5TQEy": "PponuEVSg4RZBO08kPzE",  # vecchia Aria → nuova Aria femminile
     }
     try:
         old_vid = getattr(p.settings, "tts_voice_id", "") or ""
@@ -4505,8 +4507,8 @@ def _get_eleven_client():
 # Curated list of voices that work well for Italian.
 # (voice_id, display name, short description, gender)
 CURATED_VOICES = [
-    {"voice_id": "q1GF5A2kzAOPv9d5TQEy", "name": "Aria", "description": "Limpida e fresca — spazio, respiro, apertura.", "gender": "neutro", "accent": "italiano"},
-    {"voice_id": "dJwiFcjz9zW5Pge7G8AG", "name": "Echo", "description": "Profonda e avvolgente — riflessione, eco interiore, intimità.", "gender": "neutro", "accent": "italiano"},
+    {"voice_id": "PponuEVSg4RZBO08kPzE", "name": "Aria", "description": "Limpida e fresca — voce femminile, spazio, respiro, apertura.", "gender": "femminile", "accent": "italiano"},
+    {"voice_id": "dJwiFcjz9zW5Pge7G8AG", "name": "Echo", "description": "Profonda e avvolgente — voce maschile, riflessione, eco interiore, intimità.", "gender": "maschile", "accent": "italiano"},
 ]
 
 
@@ -4807,19 +4809,19 @@ def _has_audio_tags(text: str) -> bool:
 # ============================================================
 
 KODA_VOICES: Dict[str, Dict[str, str]] = {
-    # ARIA — Lily (ElevenLabs q1GF5A2kzAOPv9d5TQEy). Limpida, fresca,
-    # evoca spazio/respiro/leggerezza/apertura. Asessuata nel framing.
+    # ARIA — voce custom femminile dell'utente (PponuEVSg4RZBO08kPzE).
+    # Limpida, fresca, evoca spazio/respiro/leggerezza/apertura.
     "aria": {
-        "voice_id": "q1GF5A2kzAOPv9d5TQEy",
+        "voice_id": "PponuEVSg4RZBO08kPzE",
         "label": "Aria",
-        "description": "Limpida e fresca — spazio, respiro, apertura.",
+        "description": "Limpida e fresca — voce femminile, spazio, respiro, apertura.",
     },
-    # ECHO — Brian (ElevenLabs dJwiFcjz9zW5Pge7G8AG). Profonda, calda,
-    # avvolgente. Evoca riflessione, eco interiore, intimità. Asessuata.
+    # ECHO — voce custom maschile (dJwiFcjz9zW5Pge7G8AG). Profonda, calda,
+    # avvolgente. Evoca riflessione, eco interiore, intimità.
     "echo": {
         "voice_id": "dJwiFcjz9zW5Pge7G8AG",
         "label": "Echo",
-        "description": "Profonda e avvolgente — riflessione, eco interiore, intimità.",
+        "description": "Profonda e avvolgente — voce maschile, riflessione, eco interiore, intimità.",
     },
 }
 

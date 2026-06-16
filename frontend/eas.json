@@ -38,11 +38,25 @@
       "ios": {
         "resourceClass": "m-medium"
       },
+      "android": {
+        "buildType": "app-bundle"
+      },
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app"
       },
       "channel": "production"
+    },
+    "preview-android": {
+      "extends": "preview",
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app"
+      },
+      "channel": "preview"
     }
   },
   "submit": {
