@@ -181,8 +181,19 @@ from fastapi.responses import HTMLResponse as _HTMLResponse
 @app.get("/api/dev/open", response_class=_HTMLResponse)
 async def dev_open_in_expo():
     """One-tap page: open Expo Go directly. The user just visits this URL
-    from Safari and taps the big button — no manual URL entry needed."""
-    exp_url = "exp://app-finder-408.ngrok.io"
+    from Safari and taps the big button — no manual URL entry needed.
+
+    L'URL Expo Go è ora costruito da env vars (EXPO_TUNNEL_SUBDOMAIN /
+    EXPO_PACKAGER_HOSTNAME) così funziona in ogni ambiente (dev, preview,
+    production) senza hardcoding."""
+    tunnel_sub = os.environ.get("EXPO_TUNNEL_SUBDOMAIN")
+    packager_host = os.environ.get("EXPO_PACKAGER_HOSTNAME", "").replace("https://", "").replace("http://", "").rstrip("/")
+    if tunnel_sub:
+        exp_url = f"exp://{tunnel_sub}.ngrok.io"
+    elif packager_host:
+        exp_url = f"exp://{packager_host}"
+    else:
+        exp_url = "exp://localhost:8081"
     return f"""
     <!DOCTYPE html>
     <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
