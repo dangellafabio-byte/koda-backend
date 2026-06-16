@@ -108,18 +108,24 @@ let _nativeReady = false;
 //      frame corrente c'è un picco di rumore (es. tosse), il timer
 //      di silenzio dal momento dell'ultima voce reale continua a
 //      crescere correttamente.
-const SPEECH_THRESHOLD_DB = -32;     // dBFS — bassa per INIZIARE detection voce
-const SUSTAINED_VOICE_DB = -22;      // dBFS — alzata da -26 a -22 (giugno 2026):
-                                     // utente in TestFlight nativo segnala VAD che NON
-                                     // si ferma mai. Causa: rumore di fondo iPhone
-                                     // (mic interno + processing iOS) si attesta
-                                     // a -26/-24 dBFS → SUSTAINED a -26 lo prendeva
-                                     // come "voce" e tenne sempre viva la registrazione.
-                                     // Con -22 solo la voce vera tiene viva la sessione.
-const SILENCE_THRESHOLD_DB = -42;    // dBFS — hysteresis 10 dB
-const SILENCE_DURATION_MS = 1200;    // 1.2s silence after speech → end of utterance
-                                     // (giugno 2026: da 1500 a 1200, più reattivo)
-const MIN_SPEECH_MS = 700;           // need at least 700ms of voice before silence can fire
+const SPEECH_THRESHOLD_DB = -34;     // dBFS — più sensibile per INIZIARE detection voce
+                                     // (giugno 2026: era -32, abbassata di 2dB così
+                                     // parole sussurrate/morbide vengono prese subito)
+const SUSTAINED_VOICE_DB = -24;      // dBFS — alzata da -22 a -24 (giugno 2026 v2):
+                                     // bilanciamento per NON tagliare voce naturale
+                                     // (respiri brevi, pause tra parole) ma neanche
+                                     // tenere viva la registrazione su rumore di
+                                     // fondo. -24 è il sweet spot per iPhone moderno.
+const SILENCE_THRESHOLD_DB = -42;    // dBFS — hysteresis 8 dB rispetto a sustained
+const SILENCE_DURATION_MS = 900;     // 0.9s silence after speech → end of utterance
+                                     // (giugno 2026 v3: da 1200 a 900ms — l'utente
+                                     // segnala che a volte non si accorge che ha
+                                     // smesso. Con 900ms diventa più reattivo, e la
+                                     // hysteresis più ampia + sustained -24dB evitano
+                                     // di tagliare a metà su pause naturali.)
+const MIN_SPEECH_MS = 500;           // need at least 500ms of voice before silence can fire
+                                     // (giugno 2026: da 700 a 500ms — parole brevi
+                                     // 'sì', 'ok', 'no' non vengono ignorate)
 const MIN_SPEECH_FRAMES = 3;         // 3 consecutive frames (~210ms) above threshold → real speech
 const METER_POLL_MS = 70;            // ~14Hz sampling
 const HARD_CAP_MS = 60_000;          // absolute max recording length
