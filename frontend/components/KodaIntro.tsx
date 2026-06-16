@@ -97,7 +97,7 @@ const VOICEPRINT_PHRASES = [
 // Mappa stabile tra brand (aria/echo) e ElevenLabs voice_id.
 // Tenuto qui sincrono col backend (KODA_VOICES in server.py).
 const BRAND_VOICE_IDS = {
-  aria: "PponuEVSg4RZBO08kPzE",   // Koda Aria — voce femminile custom ElevenLabs
+  aria: "tCOJUYBo86m5v7hppDc7",   // Koda Aria — voce femminile custom ElevenLabs
   echo: "dJwiFcjz9zW5Pge7G8AG",   // Koda Echo — voce maschile custom ElevenLabs
 } as const;
 
@@ -505,7 +505,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
           // legacy converse, intro replay) usano la STESSA voce e non
           // ci sono incoerenze tra l'onboarding e il tour.
           tts_voice_id: aiGender === "f"
-            ? "PponuEVSg4RZBO08kPzE" // Koda Aria (voce femminile)
+            ? "tCOJUYBo86m5v7hppDc7" // Koda Aria (voce femminile)
             : "dJwiFcjz9zW5Pge7G8AG", // Koda Echo (voce maschile)
         },
       };
