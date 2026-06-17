@@ -1,16 +1,15 @@
 /**
- * /paywall — Rotta dedicata per il paywall "Hard Paywall + Freemium Blindato".
+ * /paywall — V1 Spec (giugno 2026): Premium UNICO a 4,99€/mese o 39,99€/anno.
  *
- * Strategia (giugno 2026):
- *   1. L'utente ha 3 messaggi gratuiti dopo l'onboarding
- *   2. Al 4° tentativo viene reindirizzato qui da index.tsx
- *   3. Mostriamo i 3 tier (Essential / Daily / Plus) + trial 3 giorni
- *   4. Bottoni acquisto → RevenueCat SDK (da integrare appena Fabio ci dà le chiavi)
- *   5. Restore Purchases obbligatorio per App Store review
+ * Strategia V1:
+ *   - "Parlare è sempre gratuito" → Stanza dello Sfogo illimitata anche per FREE
+ *   - FREE: Stanza Quotidiana con memoria 3 giorni, voce standard
+ *   - PREMIUM (mensile o annuale): sblocca memoria completa, voce premium,
+ *     check-in proattivi, ricerca web
+ *   - Grandfathering attivo per gli utenti iniziali
  *
- * NOTA: SDK RevenueCat non ancora installato. Per ora i bottoni mostrano
- * un placeholder. Quando configureremo react-native-purchases, l'unico file
- * da toccare sarà questo + un nuovo lib/revenuecat.ts.
+ * Bottoni acquisto → RevenueCat SDK (da integrare appena ricevuta la
+ * iOS public key). Per ora i bottoni mostrano un placeholder.
  */
 import React, { useEffect, useState } from "react";
 import {
@@ -28,60 +27,29 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../lib/theme";
 import { api } from "../lib/api";
 
-type TierId = "essential" | "daily" | "plus";
+type PlanId = "monthly" | "yearly";
 
-type TierInfo = {
-  id: TierId;
-  name: string;
-  tagline: string;
-  monthlyMessages: number;
-  pricePerMonth: string; // placeholder finché RC non ci dà il prezzo locale
-  features: string[];
-  highlighted?: boolean;
+type PlanInfo = {
+  id: PlanId;
+  label: string;        // es. "Mensile"
+  price: string;        // es. "4,99 €"
+  priceUnit: string;    // es. "/mese"
+  hint?: string;        // es. "33% di risparmio"
 };
 
-const TIERS: TierInfo[] = [
+const PLANS: PlanInfo[] = [
   {
-    id: "essential",
-    name: "Essenziale",
-    tagline: "Per chi vuole solo l'ascolto",
-    monthlyMessages: 80,
-    pricePerMonth: "€4,99",
-    features: [
-      "80 messaggi vocali/testo al mese",
-      "Voce premium (Aria o Theo)",
-      "Sfogo illimitato",
-      "Memoria astratta (Ricordi)",
-    ],
+    id: "yearly",
+    label: "Annuale",
+    price: "39,99 €",
+    priceUnit: "/anno",
+    hint: "Equivalente a 3,33 € al mese · risparmi 20 €",
   },
   {
-    id: "daily",
-    name: "Quotidiano",
-    tagline: "Per accompagnarti ogni giorno",
-    monthlyMessages: 250,
-    pricePerMonth: "€9,99",
-    features: [
-      "250 messaggi al mese",
-      "Voce premium (Aria o Theo)",
-      "Sfogo illimitato",
-      "Memoria + Voiceprint",
-      "Check-in proattivi",
-    ],
-    highlighted: true,
-  },
-  {
-    id: "plus",
-    name: "Plus",
-    tagline: "Per chi vive Koda come una pratica",
-    monthlyMessages: 500,
-    pricePerMonth: "€19,99",
-    features: [
-      "500 messaggi al mese",
-      "Voce premium (Aria o Theo)",
-      "Sfogo + Recap settimanali",
-      "Memoria lunga + Voiceprint",
-      "Supporto prioritario",
-    ],
+    id: "monthly",
+    label: "Mensile",
+    price: "4,99 €",
+    priceUnit: "/mese",
   },
 ];
 
@@ -92,7 +60,7 @@ export default function PaywallScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { theme } = useTheme();
-  const [selectedTier, setSelectedTier] = useState<TierId>("daily");
+  const [selectedPlan, setSelectedPlan] = useState<PlanId>("yearly");
   const [loading, setLoading] = useState(false);
   const [used, setUsed] = useState<number | null>(null);
 
@@ -107,11 +75,13 @@ export default function PaywallScreen() {
     setLoading(true);
     try {
       // === PLACEHOLDER fino a integrazione react-native-purchases ===
-      // Quando RC sarà attivo:
+      // Quando RC sarà attivo, qui chiameremo:
       //   const offerings = await Purchases.getOfferings();
-      //   const pkg = offerings.current?.availablePackages.find(p => p.identifier.includes(selectedTier));
+      //   const pkg = offerings.current?.availablePackages.find(p =>
+      //     p.identifier.includes(selectedPlan)
+      //   );
       //   const { customerInfo } = await Purchases.purchasePackage(pkg);
-      //   await api.subscriptionSync({ entitlement_active: true, tier: selectedTier, ... });
+      //   await api.subscriptionSync({ entitlement_active: true, plan: selectedPlan, ... });
       //   router.back();
       Alert.alert(
         "Pagamento non ancora attivo",
@@ -129,7 +99,7 @@ export default function PaywallScreen() {
     // === PLACEHOLDER ===
     // Quando RC sarà attivo:
     //   const customerInfo = await Purchases.restorePurchases();
-    //   if (customerInfo.entitlements.active['daily_access']) router.back();
+    //   if (customerInfo.entitlements.active['premium']) router.back();
     Alert.alert(
       "Ripristino acquisti",
       "Il ripristino sarà disponibile dopo l'attivazione di RevenueCat sul prossimo build nativo."
@@ -137,10 +107,10 @@ export default function PaywallScreen() {
   };
 
   const handleClose = () => {
-    // Solo back: l'utente NON può tornare alla chat senza pagare (se used >= 3 e non subscribed)
-    // Per ora permettiamo back per testing. In produzione blocchermo se !subscribed.
     if (router.canGoBack()) router.back();
   };
+
+  const selected = PLANS.find((p) => p.id === selectedPlan)!;
 
   return (
     <View style={[styles.root, { backgroundColor: theme.bg }]}>
@@ -148,7 +118,7 @@ export default function PaywallScreen() {
         contentContainerStyle={{
           paddingTop: insets.top + 20,
           paddingBottom: insets.bottom + 40,
-          paddingHorizontal: 20,
+          paddingHorizontal: 24,
         }}
         showsVerticalScrollIndicator={false}
       >
@@ -159,65 +129,66 @@ export default function PaywallScreen() {
           </Pressable>
         </View>
 
-        {/* Title block */}
+        {/* === V1 SPEC — Titolo + claim ufficiale === */}
         <View style={styles.titleBlock}>
-          <Text style={[styles.title, { color: theme.text }]}>Resta con Koda</Text>
-          <Text style={[styles.subtitle, { color: theme.textDim }]}>
-            {used !== null && used >= 3
-              ? "Hai usato i tuoi 3 messaggi di prova. Da qui in poi, continuiamo solo se decidi che io meriti il tuo tempo davvero."
-              : "Scegli il piano. Cancella quando vuoi."}
+          <Text style={[styles.title, { color: theme.text }]}>Parlare è sempre gratuito.</Text>
+          <Text style={[styles.body, { color: theme.textDim }]}>
+            La Stanza dello Sfogo resterà sempre aperta a tutti.{"\n\n"}
+            Koda Premium esiste per chi desidera{" "}
+            <Text style={{ color: theme.text, fontWeight: "600" }}>costruire continuità nel tempo</Text>.
           </Text>
         </View>
 
-        {/* Trial highlight */}
-        <View style={[styles.trialBox, { borderColor: theme.primary + "55", backgroundColor: theme.primary + "10" }]}>
-          <Text style={[styles.trialTitle, { color: theme.text }]}>3 giorni gratis</Text>
-          <Text style={[styles.trialNote, { color: theme.textDim }]}>
-            Provi senza pagare. Rinnovo automatico solo se decidi di restare. Cancelli quando vuoi in 2 tap dalle impostazioni del telefono.
+        {/* Lista benefici Premium */}
+        <View style={[styles.benefitsBox, { borderColor: theme.border, backgroundColor: theme.surface }]}>
+          <Benefit theme={theme} icon="🧭" text="Ricordare ciò che conta." />
+          <Benefit theme={theme} icon="🪡" text="Ritrovare i propri fili." />
+          <Benefit theme={theme} icon="🌱" text="Accorgersi di quanto sei cambiato lungo il cammino." />
+          <View style={[styles.benefitsDivider, { backgroundColor: theme.border }]} />
+          <Text style={[styles.benefitsListTitle, { color: theme.textDim }]}>Sblocchi:</Text>
+          <Text style={[styles.benefitsList, { color: theme.text }]}>
+            • Memoria completa della Stanza Quotidiana{"\n"}
+            • Continuità illimitata{"\n"}
+            • Voce premium (Aria o Theo){"\n"}
+            • Check-in proattivi{"\n"}
+            • Ricerca web in tempo reale
           </Text>
         </View>
 
-        {/* Tier cards */}
-        <View style={{ marginTop: 24, gap: 14 }}>
-          {TIERS.map((tier) => {
-            const selected = selectedTier === tier.id;
+        {/* Plan cards (Annuale highlighted by default) */}
+        <View style={{ marginTop: 24, gap: 12 }}>
+          {PLANS.map((plan) => {
+            const isSel = selectedPlan === plan.id;
             return (
               <Pressable
-                key={tier.id}
-                onPress={() => setSelectedTier(tier.id)}
+                key={plan.id}
+                onPress={() => setSelectedPlan(plan.id)}
                 style={[
-                  styles.tierCard,
+                  styles.planCard,
                   {
-                    borderColor: selected ? theme.primary : theme.border,
-                    backgroundColor: selected ? theme.primary + "15" : theme.surface,
+                    borderColor: isSel ? theme.primary : theme.border,
+                    backgroundColor: isSel ? theme.primary + "15" : theme.surface,
                   },
-                  tier.highlighted && !selected && { borderColor: theme.primary + "55" },
                 ]}
               >
-                <View style={styles.tierHeader}>
+                <View style={styles.planHeader}>
                   <View style={{ flex: 1 }}>
                     <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                      <Text style={[styles.tierName, { color: theme.text }]}>{tier.name}</Text>
-                      {tier.highlighted && (
+                      <Text style={[styles.planLabel, { color: theme.text }]}>{plan.label}</Text>
+                      {plan.id === "yearly" && (
                         <View style={[styles.popularBadge, { backgroundColor: theme.primary }]}>
-                          <Text style={styles.popularText}>più scelto</Text>
+                          <Text style={styles.popularText}>migliore</Text>
                         </View>
                       )}
                     </View>
-                    <Text style={[styles.tierTagline, { color: theme.textDim }]}>{tier.tagline}</Text>
+                    {plan.hint && (
+                      <Text style={[styles.planHint, { color: theme.textDim }]}>{plan.hint}</Text>
+                    )}
                   </View>
                   <View style={{ alignItems: "flex-end" }}>
-                    <Text style={[styles.tierPrice, { color: theme.text }]}>{tier.pricePerMonth}</Text>
-                    <Text style={[styles.tierPriceUnit, { color: theme.textDim }]}>/mese</Text>
+                    <Text style={[styles.planPrice, { color: theme.text }]}>{plan.price}</Text>
+                    <Text style={[styles.planPriceUnit, { color: theme.textDim }]}>{plan.priceUnit}</Text>
                   </View>
-                </View>
-                <View style={{ marginTop: 10, gap: 4 }}>
-                  {tier.features.map((f, i) => (
-                    <Text key={i} style={[styles.tierFeature, { color: theme.text }]}>
-                      <Text style={{ color: theme.primary }}>·  </Text>
-                      {f}
-                    </Text>
-                  ))}
                 </View>
               </Pressable>
             );
@@ -234,17 +205,24 @@ export default function PaywallScreen() {
           ]}
         >
           <Text style={[styles.ctaText, { color: theme.bg }]}>
-            {loading ? "Apertura pagamento…" : "Inizia 3 giorni gratis"}
+            {loading ? "Apertura pagamento…" : `Resta con Koda — ${selected.price}${selected.priceUnit}`}
           </Text>
         </Pressable>
         <Text style={[styles.disclaim, { color: theme.textDim }]}>
-          Poi {TIERS.find((t) => t.id === selectedTier)?.pricePerMonth}/mese. Rinnovo automatico. Cancella quando vuoi.
+          Rinnovo automatico. Cancella quando vuoi in 2 tap dalle impostazioni del telefono.
         </Text>
 
         {/* Restore */}
         <Pressable onPress={handleRestore} style={styles.restore}>
           <Text style={[styles.restoreText, { color: theme.text }]}>Ripristina acquisti</Text>
         </Pressable>
+
+        {used !== null && used >= 3 && (
+          <Text style={[styles.usedNote, { color: theme.textDim }]}>
+            Hai usato i tuoi {used} messaggi di prova della Stanza Quotidiana.
+            La Stanza dello Sfogo resta aperta.
+          </Text>
+        )}
 
         {/* Legal */}
         <View style={styles.legalRow}>
@@ -269,31 +247,44 @@ export default function PaywallScreen() {
   );
 }
 
+function Benefit({ theme, icon, text }: { theme: any; icon: string; text: string }) {
+  return (
+    <View style={styles.benefitRow}>
+      <Text style={styles.benefitIcon}>{icon}</Text>
+      <Text style={[styles.benefitText, { color: theme.text }]}>{text}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1 },
   closeRow: { flexDirection: "row", justifyContent: "flex-end", marginBottom: 8 },
   closeX: { fontSize: 22, padding: 6 },
-  titleBlock: { marginTop: 8, marginBottom: 18 },
-  title: { fontSize: 30, fontWeight: "600", letterSpacing: -0.5 },
-  subtitle: { fontSize: 15, lineHeight: 22, marginTop: 8 },
-  trialBox: { borderWidth: 1, borderRadius: 14, padding: 14, marginTop: 8 },
-  trialTitle: { fontSize: 17, fontWeight: "600" },
-  trialNote: { fontSize: 13, lineHeight: 19, marginTop: 4 },
-  tierCard: { borderWidth: 1.5, borderRadius: 16, padding: 16 },
-  tierHeader: { flexDirection: "row", alignItems: "flex-start" },
-  tierName: { fontSize: 18, fontWeight: "600" },
-  tierTagline: { fontSize: 13, marginTop: 2 },
-  tierPrice: { fontSize: 20, fontWeight: "700" },
-  tierPriceUnit: { fontSize: 11, marginTop: -2 },
-  tierFeature: { fontSize: 14, lineHeight: 21 },
+  titleBlock: { marginTop: 8, marginBottom: 16 },
+  title: { fontSize: 28, fontWeight: "700", letterSpacing: -0.5, lineHeight: 34 },
+  body: { fontSize: 16, lineHeight: 24, marginTop: 14 },
+  benefitsBox: { borderWidth: 1, borderRadius: 16, padding: 18, marginTop: 4 },
+  benefitRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, paddingVertical: 4 },
+  benefitIcon: { fontSize: 18, lineHeight: 24 },
+  benefitText: { fontSize: 15, lineHeight: 22, flex: 1, fontWeight: "500" },
+  benefitsDivider: { height: StyleSheet.hairlineWidth, marginVertical: 12 },
+  benefitsListTitle: { fontSize: 12, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 },
+  benefitsList: { fontSize: 13.5, lineHeight: 22 },
+  planCard: { borderWidth: 1.5, borderRadius: 14, padding: 14 },
+  planHeader: { flexDirection: "row", alignItems: "flex-start" },
+  planLabel: { fontSize: 17, fontWeight: "600" },
+  planHint: { fontSize: 12.5, marginTop: 3 },
+  planPrice: { fontSize: 22, fontWeight: "700" },
+  planPriceUnit: { fontSize: 11, marginTop: -1 },
   popularBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 },
   popularText: { color: "#000", fontSize: 10, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5 },
   cta: { borderRadius: 16, paddingVertical: 16, alignItems: "center", marginTop: 24, minHeight: 56, justifyContent: "center" },
   ctaText: { fontSize: 16, fontWeight: "700" },
-  disclaim: { fontSize: 11, textAlign: "center", marginTop: 8, lineHeight: 16 },
+  disclaim: { fontSize: 11.5, textAlign: "center", marginTop: 10, lineHeight: 17 },
   restore: { marginTop: 18, alignItems: "center", padding: 10 },
   restoreText: { fontSize: 14, fontWeight: "500", textDecorationLine: "underline" },
-  legalRow: { flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 16, flexWrap: "wrap" },
+  usedNote: { fontSize: 12, textAlign: "center", marginTop: 16, lineHeight: 18, fontStyle: "italic" },
+  legalRow: { flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 18, flexWrap: "wrap" },
   legalLink: { fontSize: 12, textDecorationLine: "underline" },
   legalDot: { fontSize: 12 },
 });

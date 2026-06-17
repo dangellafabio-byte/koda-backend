@@ -844,8 +844,8 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       <StepView
         title="Le regole del nostro spazio."
         subtitle={
-          "📱  Voce e Scrittura: parla liberamente toccando l'Eclissi, oppure scorri da destra a sinistra per scrivermi in chat.\n\n" +
-          "🌬️  La Stanza dello Sfogo: un posto dove un pensiero può uscire senza dover rimanere. Entri con un tocco; quello che ci diciamo lì svanisce a sessione chiusa — non viene salvato e non ti definisce domani.\n\n" +
+          "🌿  Stanza Quotidiana: qui io ricordo e unisco i punti nel tempo. Parli a voce toccando l'Eclissi, o scrivi scorrendo da destra a sinistra. Quello che ci diciamo qui costruisce continuità.\n\n" +
+          "🌬️  Stanza dello Sfogo: un posto dove un pensiero può uscire senza dover rimanere. Entri con un tocco; quello che ci diciamo lì svanisce a sessione chiusa — non viene salvato e non ti definisce domani.\n\n" +
           "⚙️  Controllo totale: nelle impostazioni (⋯) puoi attivare i miei check-in, cambiare tema (Giorno/Notte/Auto) o cancellare l'intera memoria in un tap."
         }
         showSubtitle={true}
