@@ -129,7 +129,7 @@ export default function SealSetupModal({
                 color={hasSeal ? "#34D399" : theme.primary}
               />
               <Text style={s.title}>
-                {hasSeal ? "Parola Segreta" : "Crea Confessionale"}
+                {hasSeal ? "Parola Segreta" : "Apri la Stanza dello Sfogo"}
               </Text>
             </View>
             <TouchableOpacity onPress={onClose} hitSlop={10}>
@@ -140,17 +140,16 @@ export default function SealSetupModal({
           {!hasSeal ? (
             <>
               <Text style={s.body}>
-                La <Text style={s.bold}>Parola Segreta</Text> cifra le tue
-                confessioni{" "}
+                La <Text style={s.bold}>Parola Segreta</Text> cifra i tuoi
+                sfoghi{" "}
                 <Text style={s.bold}>direttamente sul tuo telefono</Text>. Ogni
                 messaggio viaggia cifrato, e neanche i nostri server vedono
                 qualcosa in chiaro nei log.
               </Text>
               <Text style={s.bodySmall}>
-                ⚠️ Se la dimentichi non potremo recuperarla. Le confessioni non
-                sono salvate (vivono solo in RAM) quindi non c'è bisogno di
-                ricordarla per "leggerle dopo" — serve solo per cifrare il
-                trasporto.
+                ⚠️ Se la dimentichi non potremo recuperarla. Lo Sfogo non
+                viene salvato (vive solo in RAM) quindi non serve ricordarla
+                per "leggere dopo" — serve solo per cifrare il trasporto.
               </Text>
               <TextInput
                 style={s.input}

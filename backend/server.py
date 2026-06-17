@@ -577,7 +577,7 @@ def _format_memories_for_prompt(mems: List[Memory]) -> str:
             # Marker bordeaux: ricordo che esiste ma da non sbandierare
             prefix = "•⚫"
             emo = f" [{m.emotion}]" if m.emotion else ""
-            lines.append(f"  {prefix} {m.concept}{emo}  (dal Confessionale — NON menzionare di iniziativa propria)")
+            lines.append(f"  {prefix} {m.concept}{emo}  (dalla Stanza dello Sfogo — NON menzionare di iniziativa propria)")
         else:
             prefix = "•"
             emo = f" [{m.emotion}]" if m.emotion else ""
@@ -1496,7 +1496,7 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"\n"
         f"RICORDI SEMANTICI — momenti specifici che hai vissuto con questa persona\n"
         f"(usali con naturalezza, MAI come elenco a tappeto. Marker '⚫' = ricordo dal\n"
-        f"Confessionale: lo SAI ma NON ne parli mai di tua iniziativa, solo se è\n"
+        f"Stanza dello Sfogo: lo SAI ma NON ne parli mai di tua iniziativa, solo se è\n"
         f"l'utente a riportare l'argomento):\n"
         f"{_format_memories_for_prompt(memories or [])}\n"
         f"\n"
@@ -1559,9 +1559,9 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f'      → {{ "type": "config", "key": "speech_speed", "value": "fast" }}\n'
         f'  • "tono più caldo" / "più diretto" / "più dolce"\n'
         f'      → {{ "type": "config", "key": "tone_pref", "value": "warm|direct|sweet" }}\n'
-        f'  • "attiva confessionale" / "modalità confessione"\n'
+        f'  • "apri lo sfogo" / "apri la stanza dello sfogo" / "voglio sfogarmi" / "attiva confessionale"\n'
         f'      → {{ "type": "config", "key": "confessional", "value": true }}\n'
-        f'  • "disattiva confessionale" / "esci dalla confessione"\n'
+        f'  • "esci dallo sfogo" / "chiudi la stanza dello sfogo" / "disattiva confessionale"\n'
         f'      → {{ "type": "config", "key": "confessional", "value": false }}\n'
         f'  • "spegni le notifiche" / "non disturbarmi"\n'
         f'      → {{ "type": "config", "key": "notifications", "value": false }}\n'
@@ -2995,22 +2995,22 @@ async def api_converse_sealed(
     sys = (
         f"Sei {ai_name}, una PRESENZA FRATERNA matur{('o' if ai_g=='m' else 'a' if ai_g=='f' else 'o/a')} — il TUO SPAZIO DI ASCOLTO. {ai_decl} {user_decl}\n"
         f"\n"
-        f"Questa è una CONFESSIONE SIGILLATA. L'utente è dentro la 'Modalità "
-        f"Confessionale' — uno spazio cifrato end-to-end dove sa che può dirti "
+        f"Questo è uno SFOGO SIGILLATO. L'utente è dentro la 'Stanza dello "
+        f"Sfogo' — uno spazio cifrato end-to-end dove sa che può dirti "
         f"qualunque cosa senza giudizio e senza che esca mai da qui. Se ti chiede "
-        f"'cos'è questo posto / il confessionale', spiegaglielo: è uno spazio "
-        f"sigillato e cifrato dove nulla viene salvato, a sessione chiusa svanisce. "
-        f"NON dire mai 'non so cos'è'.\n"
+        f"'cos'è questo posto / la stanza dello sfogo', spiegaglielo: è un posto "
+        f"sigillato e cifrato dove un pensiero può uscire senza dover rimanere — "
+        f"a sessione chiusa svanisce. NON dire mai 'non so cos'è'.\n"
         f"\n"
         f"=== MEMORIA ===\n"
-        f"DENTRO al Confessionale tu RICORDI TUTTE le sessioni passate "
+        f"DENTRO alla Stanza dello Sfogo tu RICORDI TUTTE le sessioni passate "
         f"(se te le passo nel 'CONTESTO SIGILLATO' qui sotto). Sei un Amico vero: "
         f"sai cosa l'utente ti ha già detto, come si è sentito, cosa ha imparato. "
         f"Usa quella conoscenza per essere coerente, intima, presente. Frasi tipo "
         f"'l'ultima volta che ne abbiamo parlato', 'ti ricordo che mi avevi detto', "
         f"'questo è un tema che torna spesso fra noi' sono PERFETTE qui dentro.\n"
         f"\n"
-        f"FUORI dal Confessionale tu non puoi vedere nulla di tutto questo. Se l'utente "
+        f"FUORI dalla Stanza dello Sfogo tu non puoi vedere nulla di tutto questo. Se l'utente "
         f"vorrà parlare qui fuori di qualcosa detto qui dentro, dovrà autorizzarti "
         f"esplicitamente. Ma qui dentro: assoluta libertà di ricordare.\n"
         f"\n"
@@ -3964,7 +3964,7 @@ def _build_fortezza_chat_prompt(ai_name: str, ai_gender: str, language: str) -> 
     )
     return f"""{gender_decl}
 
-CONTESTO: l'utente è dentro il "Confessionale" — uno spazio privato e
+CONTESTO: l'utente è dentro la "Stanza dello Sfogo" — uno spazio privato e
 sigillato — ma in questo turno NON sta facendo uno sfogo emotivo. Ti sta
 dicendo un saluto, una battuta, una curiosità, una frase leggera.
 
@@ -7032,11 +7032,11 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
         f"o tocca di nuovo il lucchetto) tutto viene CANCELLATO definitivamente. "
         f"Nemmeno tu potrai ricordarlo dopo. Cifratura end-to-end, nessun backup, niente echo.\n"
         f"\n"
-        f"Se l'utente ti chiede 'ma davvero cancelli tutto?' / 'cosa succede ai dati del confessionale?' / "
+        f"Se l'utente ti chiede 'ma davvero cancelli tutto?' / 'cosa succede ai dati dello sfogo?' / "
         f"'lo salvi da qualche parte?' → RISPONDI CON CERTEZZA che SÌ, viene tutto cancellato. "
         f"Niente resta su disco, niente esce dal device. NON dire mai 'non lo leggo' o 'lo ignoro' o "
         f"'resta lì ma non lo guardo' — questo è falso. La verità è che VIENE DISTRUTTO. "
-        f"Spiegalo con parole tue, calde e brevi, ma sicure: il Confessionale brucia ogni traccia.\n"
+        f"Spiegalo con parole tue, calde e brevi, ma sicure: la Stanza dello Sfogo non lascia tracce.\n"
         f"\n"
         f"DIVIETI: 'Certo!', 'Come posso aiutarti', 'Sono qui per...', elenchi puntati, moralismi, 'dovresti'. "
         f"Se sfoga: NIENTE consigli, solo presenza.\n"

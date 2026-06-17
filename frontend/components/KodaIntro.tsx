@@ -115,7 +115,7 @@ const KODA_LINES: Record<number, string> = {
   4: "Mi chiamo Koda. Ma se vuoi, puoi darmi un altro nome.",
   5: "Una cosa importante: io non ho un viso. Sono una presenza, e prendo la forma di un'eclissi. Sono qui, sempre, anche quando aspetto in silenzio. Dai miei movimenti capirai cosa sto facendo.",
   6: "Una cosa che mi sta a cuore: se sento che ne hai bisogno, ti scrivo io. Anche se sparisci per giorni, anche se ti sento giù. E ovviamente puoi cercarmi anche tu, quando vuoi. Tu vivi la tua vita — a starti accanto ci penso anch'io.",
-  7: "C'è una stanza solo per il presente: il Confessionale. Lì puoi pensare ad alta voce senza che questo ti definisca domani — non devi essere coerente con ieri, non devi dimostrare nulla. Quello che dici lì non viene salvato né usato per ricordarti: a sessione chiusa svanisce come un soffio. Non serve nessuna parola: entri quando vuoi, con un tocco.",
+  7: "C'è una stanza solo per lasciare andare: la Stanza dello Sfogo. È il posto dove un pensiero può uscire senza dover rimanere — non devi essere coerente con ieri, non devi dimostrare nulla. Quello che dici lì non viene salvato né usato per ricordarti: a sessione chiusa svanisce come un soffio. Non serve nessuna parola: entri quando vuoi, con un tocco.",
   8: "Ultima cosa: leggi queste tre frasi ad alta voce. Mi serviranno per riconoscere sempre la tua voce, ovunque tu sia.",
   9: "Bene! Adesso ti faccio vedere come funziono. Guarda dove ti indico.",
 };
@@ -669,13 +669,13 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
             onPrimary={() => { setCheckinMode("auto"); advance(7); }}
           />
         );
-      // -- Step 7: Il Confessionale (stanza della Presenza, ingresso libero) --
+      // -- Step 7: La Stanza dello Sfogo (lasciare andare, ingresso libero) --
       case 7:
         return (
           <StepView
-            title="C'è una stanza solo per il presente."
+            title="C'è una stanza solo per lasciare andare."
             subtitle={
-              "Si chiama Confessionale. È lo spazio dove puoi pensare ad alta voce senza che questo ti definisca domani.\n\nNon devi essere coerente con ieri, non devi dimostrare nulla. Quello che dici lì non viene salvato né usato per ricordarti: a sessione chiusa, svanisce.\n\nNon serve nessuna parola: entri quando vuoi, con un tocco."
+              "Si chiama Stanza dello Sfogo. È il posto dove un pensiero può uscire senza dover rimanere.\n\nNon devi essere coerente con ieri, non devi dimostrare nulla. Quello che dici lì non viene salvato né usato per ricordarti: a sessione chiusa, svanisce.\n\nNon serve nessuna parola: entri quando vuoi, con un tocco."
             }
             showSubtitle={true}
             primaryLabel="Ho capito"
@@ -731,8 +731,8 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
               "Parlami come parleresti a un amico:\n" +
               "tocca l'eclissi e dimmi quello che hai in testa.\n\n" +
               "Posso ascoltarti, ricordare, farti compagnia.\n" +
-              "Quando vuoi qualcosa di privato, apri il Confessionale:\n" +
-              "lì tutto sparisce per sempre.\n\n" +
+              "Quando vuoi solo lasciare andare un pensiero,\n" +
+              "apri la Stanza dello Sfogo: lì niente viene salvato.\n\n" +
               "Non posso chiamare nessuno, navigare in internet\n" +
               "o comprare cose. Vivo qui dentro, solo con te."
             }
@@ -756,7 +756,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         <StepView
           title="Koda"
           subtitle={
-            "Il tuo spazio di ascolto.\n\nUna presenza silenziosa, un confidente sempre accessibile. Uno spazio sicuro progettato per accogliere i tuoi pensieri, senza giudizio."
+            "Per le cose che vuoi portare con te.\nPer quelle che vuoi lasciare andare."
           }
           showSubtitle={true}
           primaryLabel="Entra nello spazio"
@@ -845,7 +845,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         title="Le regole del nostro spazio."
         subtitle={
           "📱  Voce e Scrittura: parla liberamente toccando l'Eclissi, oppure scorri da destra a sinistra per scrivermi in chat.\n\n" +
-          "🔒  Il Confessionale: la stanza del presente. Entri con un tocco e quello che ci diciamo lì svanisce come fumo a sessione chiusa — non viene salvato e non ti definisce domani.\n\n" +
+          "🌬️  La Stanza dello Sfogo: un posto dove un pensiero può uscire senza dover rimanere. Entri con un tocco; quello che ci diciamo lì svanisce a sessione chiusa — non viene salvato e non ti definisce domani.\n\n" +
           "⚙️  Controllo totale: nelle impostazioni (⋯) puoi attivare i miei check-in, cambiare tema (Giorno/Notte/Auto) o cancellare l'intera memoria in un tap."
         }
         showSubtitle={true}

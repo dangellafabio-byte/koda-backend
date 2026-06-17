@@ -44,9 +44,9 @@ const SECTIONS = (aiName: string): Section[] => [
   },
   {
     icon: "lock-closed-outline",
-    title: "Privacy & Confessionale",
+    title: "Privacy & Stanza dello Sfogo",
     examples: [
-      `"Attiva confessionale" / "Disattiva"`,
+      `"Apri lo Sfogo" / "Esci dallo Sfogo"`,
       `"Dimentica l'ultima cosa che ti ho detto"`,
       `"Dimentica tutto quello che sai su mio fratello"`,
       `"Cancella tutta la cronologia"`,

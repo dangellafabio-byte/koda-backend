@@ -72,7 +72,7 @@ export default function LoginScreen() {
       <View style={styles.center}>
         <View style={styles.orb} />
         <Text style={styles.brand}>Koda</Text>
-        <Text style={styles.tagline}>Il tuo amico fraterno.{"\n"}Presente, non invadente.</Text>
+        <Text style={styles.tagline}>Per le cose che vuoi portare con te.{"\n"}Per quelle che vuoi lasciare andare.</Text>
       </View>
 
       <View style={styles.bottom}>

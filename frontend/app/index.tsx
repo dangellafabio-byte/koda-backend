@@ -346,7 +346,7 @@ export default function Taccuino() {
         rect: confRect,
         label: "Confessionale",
         shape: "round",
-        speech: `Qui è il Confessionale: parli e poi tutto sparisce, niente memoria. Per i pensieri che vuoi liberare e basta.`,
+        speech: `La Stanza dello Sfogo: un posto dove un pensiero può uscire senza dover rimanere. Quello che ci diciamo qui non viene salvato.`,
       },
       {
         page: "voice",
@@ -1648,7 +1648,7 @@ export default function Taccuino() {
             setStatus("idle");
             // Rimuovi user optimistic — l'utente decida se riprovare
             setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
-            setError("Confessionale temporaneamente non disponibile.");
+            setError("Stanza dello Sfogo temporaneamente non disponibile.");
             setTimeout(() => setError(null), 4000);
           }
           return; // skip vecchi flow
@@ -1769,7 +1769,7 @@ export default function Taccuino() {
             console.warn("[sealed] POST failed:", postErr);
             setStatus("idle");
             setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
-            setError("Confessionale: rete bloccata. Riprova tra un attimo.");
+            setError("Stanza dello Sfogo: rete bloccata. Riprova tra un attimo.");
             setTimeout(() => setError(null), 5000);
             return;
           }
@@ -3251,7 +3251,7 @@ export default function Taccuino() {
                 confessionalMode && { color: "#FF6B6B" },
               ]}
             >
-              {confessionalMode ? "Confessionale" : "Confessionale"}
+              {confessionalMode ? "Stanza dello Sfogo" : "Stanza dello Sfogo"}
             </Text>
           </TouchableOpacity>
         </View>
@@ -4113,7 +4113,7 @@ export default function Taccuino() {
 
             {/* === INDICATORE CONFIDENZA (richiesta utente 2026-06, opt B) ===
                 Read-only. Mostra al volo a che fase relazionale è Koda.
-                Cresce di +1 ad ogni messaggio fuori dal Confessionale.
+                Cresce di +1 ad ogni messaggio fuori dalla Stanza dello Sfogo.
                 0-10 = appena conosciuti, 100 = confidenza totale. */}
             <View style={styles.confidenceRow} testID="confidence-indicator">
               <Text style={styles.confidenceLabel}>
@@ -4135,7 +4135,7 @@ export default function Taccuino() {
                 />
               </View>
               <Text style={[styles.settingsHint, { fontSize: 11, marginTop: 4, fontStyle: "italic" }]}>
-                Cresce automaticamente man mano che parliamo. I messaggi del Confessionale non contano.
+                Cresce automaticamente man mano che parliamo. I messaggi della Stanza dello Sfogo non contano.
               </Text>
             </View>
             <View style={styles.voicesList}>
@@ -4241,7 +4241,7 @@ export default function Taccuino() {
                 <Text style={styles.settingLabel}>📦 Scarica i miei dati</Text>
                 <Text style={styles.settingHint}>
                   Esporta tutto in un file JSON (GDPR): profilo, conversazioni,
-                  ricordi. Le voci del Confessionale restano cifrate — nemmeno
+                  ricordi. Le voci della Stanza dello Sfogo restano cifrate — nemmeno
                   il file le rivela.
                 </Text>
               </View>
@@ -4303,7 +4303,7 @@ export default function Taccuino() {
               <Text style={styles.promessaText}>
                 Quello che mi dici è tra me e te. Niente pubblicità, niente vendita di dati a terzi, niente addestramento di modelli con la tua voce o i tuoi pensieri.{"\n"}{"\n"}
                 <Text style={{ fontWeight: "700" }}>💬 Modalità normale:</Text> i messaggi vengono salvati nel tuo database personale (MongoDB con cifratura at-rest), usati SOLO per costruire la tua timeline e farmi ricordare ciò che mi racconti.{"\n"}{"\n"}
-                <Text style={{ fontWeight: "700" }}>🤫 Modalità Confessionale:</Text> niente entra nella timeline. I messaggi vivono in un buffer temporaneo con auto-cancellazione e quando chiudi la sessione svaniscono dal server.{"\n"}{"\n"}
+                <Text style={{ fontWeight: "700" }}>🌬️ Stanza dello Sfogo:</Text> niente entra nella timeline. I messaggi vivono in un buffer temporaneo con auto-cancellazione e quando chiudi la sessione svaniscono dal server.{"\n"}{"\n"}
                 <Text style={{ fontWeight: "700" }}>👻 Pulsante Ghost (tieni premuto un messaggio):</Text> rimuovo l&apos;entry dalla timeline e dai facts associati. Il dato grezzo sparisce dal server.{"\n"}{"\n"}
                 <Text style={{ fontWeight: "700" }}>📤 Esporta tutto (GDPR):</Text> puoi scaricare in qualsiasi momento un archivio JSON con tutti i tuoi dati dalle impostazioni.
               </Text>
@@ -4420,7 +4420,7 @@ export default function Taccuino() {
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.88)", justifyContent: "center", alignItems: "center", padding: 28 }}>
           <View style={{ width: "100%", maxWidth: 420, backgroundColor: "#160C12", borderRadius: 24, borderWidth: 1, borderColor: "rgba(255,107,107,0.35)", padding: 28, alignItems: "center" }}>
             <Text style={{ fontSize: 40, marginBottom: 6 }}>🕯️</Text>
-            <Text style={{ fontSize: 22, fontWeight: "700", color: "#FFE8E8", marginBottom: 16, letterSpacing: 0.3 }}>Il Confessionale</Text>
+            <Text style={{ fontSize: 22, fontWeight: "700", color: "#FFE8E8", marginBottom: 16, letterSpacing: 0.3 }}>La Stanza dello Sfogo</Text>
             <Text style={{ fontSize: 15.5, lineHeight: 24, color: "rgba(255,255,255,0.82)", textAlign: "center" }}>
               Qui non devi essere coerente con ciò che hai detto ieri.{"\n"}
               Non devi difendere una posizione.{"\n"}

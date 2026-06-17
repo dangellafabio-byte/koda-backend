@@ -50,7 +50,7 @@ const TIERS: TierInfo[] = [
     features: [
       "80 messaggi vocali/testo al mese",
       "Voce premium (Aria o Theo)",
-      "Confessionale illimitato",
+      "Sfogo illimitato",
       "Memoria astratta (Ricordi)",
     ],
   },
@@ -63,7 +63,7 @@ const TIERS: TierInfo[] = [
     features: [
       "250 messaggi al mese",
       "Voce premium (Aria o Theo)",
-      "Confessionale illimitato",
+      "Sfogo illimitato",
       "Memoria + Voiceprint",
       "Check-in proattivi",
     ],
@@ -78,7 +78,7 @@ const TIERS: TierInfo[] = [
     features: [
       "500 messaggi al mese",
       "Voce premium (Aria o Theo)",
-      "Confessionale + Recap settimanali",
+      "Sfogo + Recap settimanali",
       "Memoria lunga + Voiceprint",
       "Supporto prioritario",
     ],
