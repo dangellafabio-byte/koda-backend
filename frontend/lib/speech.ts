@@ -590,6 +590,47 @@ export type FastConverseResult = {
   error?: string;
 };
 
+// ============================================================
+// FILLER POOL (giugno 2026 v3 — sostenibile, mai silenzio)
+// Pre-caricato all'avvio dell'app. Quando l'utente preme l'orb e
+// finisce di parlare, il client può accodare 1 o più filler dal pool
+// in loop random finché non arriva la vera prima frase.
+// ============================================================
+let _FILLER_POOL: string[] = [];
+let _FILLER_POOL_VOICE: string | null = null;
+
+/** Precarica il pool di filler audio per la voce data. Chiamare all'avvio
+ *  app (in index.tsx dopo aver risolto il profilo) e quando l'utente
+ *  cambia voce in Impostazioni. */
+export async function preloadFillerPool(voiceId: string, apiBase: string): Promise<void> {
+  if (_FILLER_POOL_VOICE === voiceId && _FILLER_POOL.length > 0) return;
+  try {
+    const resp = await fetch(
+      `${apiBase.replace(/\/$/, "")}/api/fillers?voice_id=${encodeURIComponent(voiceId)}`,
+      { method: "GET" }
+    );
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (Array.isArray(data?.tokens) && data.tokens.length > 0) {
+      _FILLER_POOL = data.tokens.filter((t: any) => typeof t === "string" && t.length > 0);
+      _FILLER_POOL_VOICE = voiceId;
+      console.log(`[FillerPool] preloaded ${_FILLER_POOL.length} tokens for voice ${voiceId}`);
+    }
+  } catch (e) {
+    console.warn("[FillerPool] preload failed:", e);
+  }
+}
+
+/** Random pick dal pool, escludendo (se possibile) un token già usato. */
+function pickRandomFiller(excludeToken?: string | null): string | null {
+  if (_FILLER_POOL.length === 0) return null;
+  const candidates = excludeToken
+    ? _FILLER_POOL.filter((t) => t !== excludeToken)
+    : _FILLER_POOL;
+  const arr = candidates.length > 0 ? candidates : _FILLER_POOL;
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 async function _playStaticTokenSequential(
   token: string,
   onAudioStart?: () => void,
@@ -660,12 +701,14 @@ export async function fastConverse(
     if (!sid || typeof sid !== "string") {
       return { ok: false, error: "no session_id from server" };
     }
-    // === FILLER AUDIO (giugno 2026 — ChatGPT Voice trick) ===
-    // Il server ci consegna un brevissimo mp3 ("Mh.", "Eh.", "Allora.") che
-    // possiamo suonare SUBITO mentre il LLM elabora. Latenza percepita: ~300ms.
-    // L'inseriamo come primo elemento della tokenQueue così il player lo
-    // suonerà normalmente, e il `firstAudioFired` si attiva al filler →
-    // l'orb si "anima" già con un suono naturale.
+    // === FILLER POOL (giugno 2026 v3 — sostenibile, mai silenzio) ===
+    // Strategia: il backend nel response del POST ci consegna UN filler_token
+    // (random, già pre-generato server-side). Inoltre, all'avvio dell'app
+    // abbiamo precaricato in memoria TUTTI i token filler (vedi
+    // preloadFillerPool). Usiamo il filler del response come PRIMO della
+    // coda (è random già selezionato dal server). Più sotto, se la prima
+    // vera frase tarda, accodiamo altri filler dal pool locale per coprire
+    // il gap → mai più silenzio.
     const fillerToken: string | null = typeof startData?.filler_token === "string" ? startData.filler_token : null;
 
     // 2) Long-poll loop. Maintains a queue of pending tokens to play.
@@ -707,6 +750,42 @@ export async function fastConverse(
       if (resolveTokenWait) resolveTokenWait();
     };
 
+    // === FILLER BRIDGE (giugno 2026 v3 — sostenibile) ===
+    // Se la prima vera frase TARDA più del solito (>1.6s dopo l'invio),
+    // accodiamo un secondo filler random dal pool locale per coprire il
+    // gap. Continuiamo finché non arriva il primo "sentence" reale.
+    // Limite: max 3 filler concatenati totali (incluso il primo del server)
+    // così non si accumulano se tutto va male.
+    let firstRealSentence = false;
+    let extraFillersAdded = 0;
+    const MAX_EXTRA_FILLERS = 2;
+    const FILLER_BRIDGE_TIMEOUT_MS = 1500;
+    let lastFillerToken: string | null = fillerToken;
+    const bridgeInterval: any = setInterval(() => {
+      if (firstRealSentence || extraFillersAdded >= MAX_EXTRA_FILLERS) {
+        clearInterval(bridgeInterval);
+        return;
+      }
+      // Se la coda è vuota o ha solo filler già suonati, accoda un bridge.
+      const hasRealQueued = tokenQueue.some((x) => !x.isFiller);
+      if (!hasRealQueued) {
+        const nextTok = pickRandomFiller(lastFillerToken);
+        if (nextTok) {
+          lastFillerToken = nextTok;
+          extraFillersAdded += 1;
+          tokenQueue.push({
+            i: -1 - extraFillersAdded,
+            token: nextTok,
+            text: "",
+            waveform: null,
+            window_ms: 60,
+            isFiller: true,
+          });
+          notifyTokenWait();
+        }
+      }
+    }, FILLER_BRIDGE_TIMEOUT_MS);
+
     // Pollster — runs in parallel with the audio player.
     const pollster = (async () => {
       while (!ac.signal.aborted && !pollingDone) {
@@ -735,6 +814,9 @@ export async function fastConverse(
                 waveform: Array.isArray(ev.waveform) ? ev.waveform : null,
                 window_ms: typeof ev.window_ms === "number" ? ev.window_ms : 60,
               });
+              // Prima frase REALE arrivata → stop bridge filler.
+              firstRealSentence = true;
+              try { clearInterval(bridgeInterval); } catch {}
               notifyTokenWait();
             } else if (ev?.type === "meta") {
               meta = {
@@ -821,6 +903,7 @@ export async function fastConverse(
     return { ok: false, error: String(e?.message || e) };
   } finally {
     clearTimeout(hardTimer);
+    try { clearInterval(bridgeInterval); } catch {}
     if (currentAbort === ac) currentAbort = null;
     speakingNow = false;
   }

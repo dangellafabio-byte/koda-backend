@@ -43,7 +43,7 @@ import {
   Tone,
 } from "../lib/api";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
-import { SpeechMod, unlockSpeech, setDefaultVoiceId } from "../lib/speech";
+import { SpeechMod, unlockSpeech, setDefaultVoiceId, preloadFillerPool } from "../lib/speech";
 import { startThinkingSound, stopThinkingSound } from "../lib/thinkingSound";
 import { classifyEmotion, classifyIntent, secureWipeStrings } from "../lib/emotionClassifier";
 import {
@@ -764,6 +764,14 @@ export default function Taccuino() {
           }
           if (p.settings?.tts_voice_id) {
             setDefaultVoiceId(p.settings.tts_voice_id);
+            // Precarica il pool di filler per questa voce (one-shot, in
+            // background). Fa SÌ che quando l'utente preme l'orb e finisce
+            // di parlare, il primo filler suoni IMMEDIATAMENTE da cache
+            // locale, senza round-trip al server.
+            preloadFillerPool(
+              p.settings.tts_voice_id,
+              process.env.EXPO_PUBLIC_BACKEND_URL || ""
+            ).catch(() => {});
           }
           if (!p.onboarded) setShowOnboarding(true);
           else if (p.settings?.input_mode !== "text") {

@@ -4534,18 +4534,19 @@ CURATED_VOICES = [
 #
 # I filler sono brevi e neutri — non interrompono la conversazione anche se
 # il LLM è velocissimo (la frase reale "copre" il filler con un piccolo overlap).
-# Frasi più LUNGHE (giugno 2026 v2) per coprire l'intera finestra di latenza
-# del LLM (1-2s). I filler brevi tipo "Mh." duravano 200-300ms e lasciavano
-# un gap silenzioso prima della vera risposta. Questi frasi pseudo-pensiero
-# (800-1200ms) si sovrappongono con l'arrivo della prima frase reale,
-# eliminando il gap percepito completamente.
+# Filler "loop pool" (giugno 2026 v3): brevi e variegati, pensati per essere
+# CONCATENATI dal client in loop random finché non arriva la prima vera frase.
+# Mix di interiezioni brevi (~400ms) e pensieri leggeri (~1s) — il client
+# preferisce i più lunghi all'inizio e i brevi se serve riempire altri buchi.
 _FILLER_PHRASES_IT = [
-    "Mh, fammi pensare un attimo.",
-    "Eh, allora vediamo.",
-    "Ah, ok, aspetta.",
-    "Mh sì, dunque...",
-    "Ok, allora ti dico.",
-    "Mh, vediamo un po'.",
+    "Mh, allora vediamo.",
+    "Eh, fammi pensare un attimo.",
+    "Ah, ok aspetta.",
+    "Sì, dunque...",
+    "Mh, certo.",
+    "Allora, ti dico.",
+    "Eh sì, vediamo.",
+    "Ok, aspetta un secondo.",
 ]
 # Map: voice_id -> List[str] (audio tokens già pre-generati)
 _FILLER_CACHE: Dict[str, List[str]] = {}
@@ -4613,6 +4614,17 @@ async def _get_random_filler_token(voice_id: str) -> Optional[str]:
     except Exception as e:
         logger.warning(f"[filler] random pick failed: {e}")
         return None
+
+
+async def _get_all_filler_tokens(voice_id: str) -> List[str]:
+    """Restituisce TUTTI i filler token per la voce data. Usato per il
+    pre-fetch lato client all'avvio dell'app — così quando l'utente preme
+    l'orb, i filler sono già pronti localmente (0ms di rete)."""
+    try:
+        return await _ensure_fillers_for_voice(voice_id)
+    except Exception as e:
+        logger.warning(f"[filler] get_all failed: {e}")
+        return []
 
 
 class TTSRequest(BaseModel):
@@ -5298,6 +5310,29 @@ async def api_list_voices():
     in onboarding (voice_locked), niente più voci custom o ElevenLabs raw."""
     client_el = _get_eleven_client()
     return {"voices": list(CURATED_VOICES), "enabled": bool(client_el)}
+
+
+@api_router.get("/fillers")
+async def api_fillers(voice_id: Optional[str] = None):
+    """Restituisce TUTTI i filler token già pre-generati per una voce.
+    Il client li scarica all'avvio dell'app (one-time), li mette in cache
+    LOCALE, e quando l'utente preme l'orb e finisce di parlare ne suona
+    uno random IN LOCALE senza alcun round-trip server. Latenza filler: ~0ms.
+    
+    Inoltre il client può concatenare PIÙ filler in loop random finché non
+    arriva la prima vera frase → "presenza sostenibile", mai silenzio.
+    
+    Se voice_id non è passato, usa Aria femminile come default."""
+    vid = voice_id or "tCOJUYBo86m5v7hppDc7"
+    _legacy = {
+        "pFZP5JQG7iQjIQuC4Bku": "tCOJUYBo86m5v7hppDc7",
+        "q1GF5A2kzAOPv9d5TQEy": "tCOJUYBo86m5v7hppDc7",
+        "PponuEVSg4RZBO08kPzE": "tCOJUYBo86m5v7hppDc7",
+        "nPczCjzI2devNBz1zQrb": "dJwiFcjz9zW5Pge7G8AG",
+    }
+    vid = _legacy.get(vid, vid)
+    tokens = await _get_all_filler_tokens(vid)
+    return {"tokens": tokens, "voice_id": vid, "count": len(tokens)}
 
 
 @api_router.post("/tts")
