@@ -1857,47 +1857,100 @@ export default function Taccuino() {
             // arriva (di solito poco dopo il primo token audio).
             let capturedMeta: any = null;
 
-            const result = await SpeechMod.fastConverse(txt, {
-              ephemeral: confessionalMode,
-              onAudioStart: () => {
-                speakingStarted = true;
-                clearTimeout(watchdog);
-                setStatus("speaking");
-              },
-              onMeta: (meta) => {
-                capturedMeta = meta;
-                // Sostituisci l'ottimistico user entry con uno "finale" e
-                // aggiungi l'AI entry SUBITO — così la chat è aggiornata
-                // mentre l'audio sta ancora suonando le frasi rimanenti.
-                try {
-                  const userFinal: TimelineEntry = {
-                    ...optimistic,
-                    id: `fast-u-${Date.now()}`,
-                    confessional: confessionalMode || undefined,
-                  };
-                  const aiEntry: TimelineEntry = {
-                    id: `fast-ai-${Date.now()}`,
-                    role: "ai",
-                    text: stripDisplayTags(meta.reply || ""),
-                    voice_text: meta.voice_text || undefined,
-                    tone: (meta.tone as Tone) || "warm",
-                    timestamp: new Date().toISOString(),
-                    actions: meta.actions || undefined,
-                    confessional: confessionalMode || undefined,
-                  };
-                  setTimeline((prev) => {
-                    const filtered = prev.filter((e) => e.id !== optimistic.id);
-                    return [...filtered, userFinal, aiEntry];
-                  });
-                  // Esegui le actions richieste (theme change, ecc.).
-                  if (Array.isArray(meta.actions) && meta.actions.length > 0) {
-                    runActions(meta.actions as any[]);
+            const result = await (async () => {
+              // === FASE 1 (giugno 2026): WebSocket prima, HTTP poll come fallback ===
+              // Il WS elimina il delay del long-polling (~100-300ms per evento)
+              // e il secondo HTTP roundtrip per scaricare /api/tts/audio/{token}.mp3
+              // (~150-300ms per frase). Stima: TTFT percepito ~1.0-1.4s vs ~1.7-2.2s.
+              //
+              // Se il WS fallisce (rete instabile, server old, infra che blocca
+              // wss://), ripieghiamo automaticamente sul vecchio fastConverse
+              // HTTP-poll senza perdere il messaggio.
+              try {
+                const wsResult = await SpeechMod.fastConverseWS(txt, {
+                  ephemeral: confessionalMode,
+                  onAudioStart: () => {
+                    speakingStarted = true;
+                    clearTimeout(watchdog);
+                    setStatus("speaking");
+                  },
+                  onMeta: (meta) => {
+                    capturedMeta = meta;
+                    try {
+                      const userFinal: TimelineEntry = {
+                        ...optimistic,
+                        id: `fast-u-${Date.now()}`,
+                        confessional: confessionalMode || undefined,
+                      };
+                      const aiEntry: TimelineEntry = {
+                        id: `fast-ai-${Date.now()}`,
+                        role: "ai",
+                        text: stripDisplayTags(meta.reply || ""),
+                        voice_text: meta.voice_text || undefined,
+                        tone: (meta.tone as Tone) || "warm",
+                        timestamp: new Date().toISOString(),
+                        actions: meta.actions || undefined,
+                        confessional: confessionalMode || undefined,
+                      };
+                      setTimeline((prev) => {
+                        const filtered = prev.filter((e) => e.id !== optimistic.id);
+                        return [...filtered, userFinal, aiEntry];
+                      });
+                      if (Array.isArray(meta.actions) && meta.actions.length > 0) {
+                        runActions(meta.actions as any[]);
+                      }
+                    } catch (e) {
+                      console.warn("[ws] onMeta handler error:", e);
+                    }
+                  },
+                });
+                if (wsResult.ok) return wsResult;
+                console.warn("[ws] failed (", wsResult.error, ") → falling back to HTTP poll");
+                // Se l'audio aveva già iniziato, non ripetiamo (la risposta è già parziale).
+                // Se non era partito niente, lasciamo che il fallback parta da capo.
+                if (speakingStarted) return wsResult;
+              } catch (e) {
+                console.warn("[ws] exception (", String(e), ") → falling back to HTTP poll");
+              }
+              // HTTP fallback
+              return await SpeechMod.fastConverse(txt, {
+                ephemeral: confessionalMode,
+                onAudioStart: () => {
+                  speakingStarted = true;
+                  clearTimeout(watchdog);
+                  setStatus("speaking");
+                },
+                onMeta: (meta) => {
+                  capturedMeta = meta;
+                  try {
+                    const userFinal: TimelineEntry = {
+                      ...optimistic,
+                      id: `fast-u-${Date.now()}`,
+                      confessional: confessionalMode || undefined,
+                    };
+                    const aiEntry: TimelineEntry = {
+                      id: `fast-ai-${Date.now()}`,
+                      role: "ai",
+                      text: stripDisplayTags(meta.reply || ""),
+                      voice_text: meta.voice_text || undefined,
+                      tone: (meta.tone as Tone) || "warm",
+                      timestamp: new Date().toISOString(),
+                      actions: meta.actions || undefined,
+                      confessional: confessionalMode || undefined,
+                    };
+                    setTimeline((prev) => {
+                      const filtered = prev.filter((e) => e.id !== optimistic.id);
+                      return [...filtered, userFinal, aiEntry];
+                    });
+                    if (Array.isArray(meta.actions) && meta.actions.length > 0) {
+                      runActions(meta.actions as any[]);
+                    }
+                  } catch (e) {
+                    console.warn("[fast] onMeta handler error:", e);
                   }
-                } catch (e) {
-                  console.warn("[fast] onMeta handler error:", e);
-                }
-              },
-            });
+                },
+              });
+            })();
             clearTimeout(watchdog);
             if (watchdogTriggered) return;
             if (!result.ok) {

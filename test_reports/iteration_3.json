@@ -1,0 +1,42 @@
+{
+  "summary": "Fase 1 WebSocket pipeline testing complete. All 6 backend tests PASS (6/6, 100%). The new /api/converse-ws streams session → sentence(+binary MP3) → meta → done in the exact protocol specified, and the existing HTTP polling endpoints (/api/converse-fast/start + /poll) keep working as fallback. Echo→Theo rename is correctly wired in both CURATED_VOICES (name='Theo') and KODA_VOICES (keys 'theo' AND 'echo' both → voice_id dJwiFcjz9zW5Pge7G8AG, label 'Theo'). Real ElevenLabs + Claude (via emergent) were hit; full WS roundtrip took ~3.4s (TTFT 905ms, FIRST AUDIO 3246ms, 2 sentences). No mocking.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/converse-ws (and /api/converse-fast/*)", "issue": "ffprobe/avprobe is NOT installed in the container, so pydub fails to decode MP3 for waveform extraction. Every sentence frame is emitted with waveform=[] (empty array). Log line: '[waveform] MP3 decode failed: [Errno 2] No such file or directory: ffprobe'. The frontend visualization gets no waveform data, but audio playback and the sentence/meta/done flow are unaffected. Fix: apt-get install -y ffmpeg in the container (ffmpeg ships ffprobe)."},
+      {"endpoint": "server.py startup/shutdown", "issue": "Uses deprecated @app.on_event('startup'/'shutdown'); FastAPI recommends lifespan context. Non-blocking warning only."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_fase1_ws.py",
+    "/app/test_reports/pytest/fase1_ws.xml"
+  ],
+  "action_items": [
+    "Install ffmpeg in the runtime image so pydub can decode MP3 → real waveforms in sentence frames (currently always empty list).",
+    "Optional cleanup: migrate FastAPI startup/shutdown to lifespan handlers (deprecation warnings only)."
+  ],
+  "critical_code_review_comments": [
+    "_converse_ws_handler (server.py:7597) — correct ordering: accept → wait_for(receive_text, 10s) → JSON parse → validate text → create session → send 'session' frame → run _fast_pipeline_task with emit callback → send 'done' → close. Errors send {'type':'error','message':...} and close cleanly. Good.",
+    "_emit() (server.py:7646) packs (header + binary) atomically per sentence and sets audio_bytes=len(audio_bytes). Verified header.audio_bytes == len(binary_frame) on all received sentences during the live test.",
+    "_fast_pipeline_task (server.py:7078) was refactored cleanly: emit is optional, Mongo persistence still happens via _publish→_fast_session_append even when emit is set, so the HTTP poll fallback keeps full parity.",
+    "KODA_VOICES (server.py:4926) — 'theo' and 'echo' both map to the same voice_id and same label 'Theo' as required for backward compat with stored profiles.",
+    "CURATED_VOICES (server.py:4520) — male voice dJwiFcjz9zW5Pge7G8AG has name 'Theo' (renamed from Echo).",
+    "Note: /api/voice/options exposes BOTH 'theo' and 'echo' as separate options (same voice_id). For the onboarding UI this means the user will see a duplicate 'Theo' card. If that's undesirable for new users, consider filtering the legacy 'echo' alias from the /voice/options response while still accepting it in writes. (Not in scope of this fase 1 review — flagging only.)"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_fase1_ws.py",
+    "/app/backend/tests/pytest.ini"
+  ],
+  "success_rate": {"backend": "100% (6/6)", "frontend": "not tested (per request)"},
+  "seed_data_creation": "None. Tests use ephemeral=true so no timeline entries persist. fast_sessions docs are created (auto-TTL by existing index).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/test_fase1_ws.py -v. Tests target HTTP/WS at localhost:8001 (override via env KODA_TEST_HTTP_BASE / KODA_TEST_WS_BASE). Real LLM/TTS calls — each WS happy-path costs ~3s and a few cents. ffprobe missing is a known minor issue (empty waveform); if main agent installs ffmpeg, no test changes needed because the test asserts only that audio_bytes header matches binary frame length, not the waveform content.",
+  "rca_of_issue": "N/A — all required behaviors verified end-to-end against real backend services. The empty-waveform observation is a pre-existing container limitation (no ffprobe), not introduced by Fase 1."
+}

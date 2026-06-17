@@ -21,8 +21,9 @@ import {
   setIsAudioActiveAsync,
 } from "expo-audio";
 import { Platform } from "react-native";
+import * as FileSystem from "expo-file-system/legacy";
 import type { Tone } from "./api";
-import { API_BASE } from "./api";
+import { API_BASE, BACKEND } from "./api";
 import { startReactiveWaveform, stopReactiveWaveform } from "./audioReactivity";
 
 let speakingNow = false;
@@ -881,6 +882,274 @@ export async function fastConverse(
   }
 }
 
+// ============================================================
+// FASE 1 — STREAMING via WebSocket (giugno 2026)
+// ============================================================
+// fastConverseWS — versione WebSocket di fastConverse. Latenza target
+// ~30-50% inferiore rispetto al long-polling: niente ciclo Mongo-poll
+// (~100-300ms per evento), niente secondo HTTP roundtrip per scaricare
+// /api/tts/audio/{token}.mp3 (~150-300ms per frase). I byte audio
+// arrivano direttamente nel binary frame del WS, vengono scritti in un
+// file temporaneo locale e suonati immediatamente.
+//
+// Fallback automatico: se il WS fallisce (connessione caduta, errore,
+// timeout), fastConverseWS ritorna { ok:false, error:"ws-failed", ... }
+// e il chiamante può ripiegare su fastConverse (HTTP poll) senza
+// perdere il messaggio.
+// ============================================================
+
+function _buildWsUrl(): string {
+  // BACKEND è del tipo https://...railway.app o http://localhost:8001
+  // Conversione robusta: http→ws, https→wss.
+  // Se window.location ha protocollo "https:", la regex copre già il caso.
+  const base = BACKEND || "";
+  if (base.startsWith("https://")) return "wss://" + base.slice("https://".length);
+  if (base.startsWith("http://")) return "ws://" + base.slice("http://".length);
+  // Web preview senza prefisso: si appoggia all'origin corrente.
+  if (typeof window !== "undefined" && window.location) {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${window.location.host}`;
+  }
+  // Ultimo fallback insicuro ma operativo per i test locali.
+  return "ws://localhost:8001";
+}
+
+function _bytesToBase64(bytes: Uint8Array): string {
+  // Encode binario → base64 senza dipendere da Buffer (non incluso in RN).
+  // Per file MP3 piccoli (<200KB) è velocissimo (~5-15ms).
+  let bin = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)) as any);
+  }
+  // btoa è globale su web; su RN moderno (Hermes) è disponibile via polyfill.
+  if (typeof btoa === "function") return btoa(bin);
+  // Fallback manuale (RN Hermes < 0.74 senza polyfill).
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let out = "";
+  let i = 0;
+  while (i < bin.length) {
+    const a = bin.charCodeAt(i++);
+    const b = i < bin.length ? bin.charCodeAt(i++) : -1;
+    const c = i < bin.length ? bin.charCodeAt(i++) : -1;
+    const b1 = a >> 2;
+    const b2 = ((a & 3) << 4) | (b >= 0 ? b >> 4 : 0);
+    const b3 = b >= 0 ? (((b & 15) << 2) | (c >= 0 ? c >> 6 : 0)) : 64;
+    const b4 = c >= 0 ? c & 63 : 64;
+    out += chars[b1] + chars[b2] + (b3 === 64 ? "=" : chars[b3]) + (b4 === 64 ? "=" : chars[b4]);
+  }
+  return out;
+}
+
+async function _writeMp3ToFile(bytes: Uint8Array, idx: number): Promise<string | null> {
+  // Su web preferiamo un blob URL (vedi _playMp3BytesWeb più sotto).
+  if (Platform.OS === "web") return null;
+  try {
+    const dir = (FileSystem as any).cacheDirectory;
+    if (!dir) return null;
+    const path = `${dir}koda_ws_${Date.now()}_${idx}.mp3`;
+    const b64 = _bytesToBase64(bytes);
+    await (FileSystem as any).writeAsStringAsync(path, b64, {
+      encoding: (FileSystem as any).EncodingType?.Base64 ?? "base64",
+    });
+    return path;
+  } catch (e) {
+    console.warn("[ws] writeMp3ToFile failed:", e);
+    return null;
+  }
+}
+
+async function _playMp3BytesWeb(bytes: Uint8Array, onStart?: () => void): Promise<boolean> {
+  try {
+    // Copia sicura in un nuovo ArrayBuffer (evita problemi di tipo
+    // ArrayBufferLike vs ArrayBuffer su strict TS).
+    const ab = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(ab).set(bytes);
+    try { onStart?.(); } catch {}
+    return await playElevenLabsWeb(ab);
+  } catch (e) {
+    console.warn("[ws] playMp3BytesWeb failed:", e);
+    return false;
+  }
+}
+
+export async function fastConverseWS(
+  text: string,
+  opts: {
+    ephemeral?: boolean;
+    audioDurationMs?: number;
+    onAudioStart?: () => void;
+    onMeta?: (meta: FastConverseMeta) => void;
+    timeoutMs?: number;
+  } = {}
+): Promise<FastConverseResult> {
+  const timeoutMs = opts.timeoutMs ?? 45000;
+
+  stopAllPlayback();
+  speakingNow = true;
+  await prewarmAudio();
+
+  const ac = new AbortController();
+  currentAbort = ac;
+
+  const wsUrl = `${_buildWsUrl()}/api/converse-ws`;
+  let ws: WebSocket | null = null;
+  let pendingSentence: any | null = null; // header in attesa del binary frame
+  type SentenceItem = {
+    i: number;
+    bytes: Uint8Array;
+    waveform: number[] | null;
+    window_ms: number;
+  };
+  const sentenceQueue: SentenceItem[] = [];
+  let resolveTokenWait: (() => void) | null = null;
+  let metaCaptured: FastConverseMeta | undefined;
+  let firstAudioFired = false;
+  let pollingDone = false;
+  let pollError: string | null = null;
+
+  const notify = () => { if (resolveTokenWait) { resolveTokenWait(); resolveTokenWait = null; } };
+  const waitForToken = () => new Promise<void>((resolve) => {
+    if (sentenceQueue.length > 0 || pollingDone || pollError) { resolve(); return; }
+    resolveTokenWait = resolve;
+  });
+
+  const hardTimer = setTimeout(() => {
+    try { ac.abort(); } catch {}
+    try { ws?.close(); } catch {}
+  }, timeoutMs);
+
+  try {
+    ws = new WebSocket(wsUrl);
+    ws.binaryType = "arraybuffer";
+  } catch (e) {
+    clearTimeout(hardTimer);
+    speakingNow = false;
+    return { ok: false, error: `ws-construct-failed: ${String(e)}` };
+  }
+
+  ws.onopen = () => {
+    try {
+      ws?.send(JSON.stringify({
+        text,
+        ephemeral: !!opts.ephemeral,
+        audio_duration_ms: opts.audioDurationMs,
+      }));
+    } catch (e) {
+      pollError = `ws-send-failed: ${String(e)}`;
+      pollingDone = true;
+      notify();
+    }
+  };
+
+  ws.onmessage = (ev: MessageEvent) => {
+    try {
+      if (typeof ev.data === "string") {
+        const msg = JSON.parse(ev.data);
+        if (msg?.type === "sentence") {
+          // Aspetta il binary frame successivo per i bytes.
+          pendingSentence = msg;
+        } else if (msg?.type === "meta") {
+          metaCaptured = {
+            reply: msg.reply || "",
+            voice_text: msg.voice_text ?? null,
+            tone: (msg.tone as Tone) ?? null,
+            actions: Array.isArray(msg.actions) ? msg.actions : [],
+          };
+          try { opts.onMeta?.(metaCaptured); } catch {}
+        } else if (msg?.type === "error") {
+          pollError = String(msg.message || "ws-error");
+          pollingDone = true;
+          notify();
+        } else if (msg?.type === "done") {
+          pollingDone = true;
+          notify();
+        } else if (msg?.type === "session") {
+          // ignored: utile per debug
+        }
+      } else {
+        // Binary frame → bytes audio della frase precedente.
+        const u8 = ev.data instanceof ArrayBuffer
+          ? new Uint8Array(ev.data)
+          : new Uint8Array((ev.data as any));
+        if (pendingSentence) {
+          sentenceQueue.push({
+            i: pendingSentence.i || 0,
+            bytes: u8,
+            waveform: Array.isArray(pendingSentence.waveform) ? pendingSentence.waveform : null,
+            window_ms: typeof pendingSentence.window_ms === "number" ? pendingSentence.window_ms : 60,
+          });
+          pendingSentence = null;
+          notify();
+        } else {
+          console.warn("[ws] binary frame without header — discarded");
+        }
+      }
+    } catch (e) {
+      console.warn("[ws] onmessage parse error:", e);
+    }
+  };
+
+  ws.onerror = (ev: Event) => {
+    console.warn("[ws] onerror:", ev);
+    if (!pollError) pollError = "ws-network-error";
+    pollingDone = true;
+    notify();
+  };
+
+  ws.onclose = () => {
+    pollingDone = true;
+    notify();
+  };
+
+  // Player loop: consume bytes → write to file (native) → play.
+  try {
+    while (!ac.signal.aborted) {
+      if (sentenceQueue.length === 0) {
+        if (pollingDone || pollError) break;
+        await waitForToken();
+        continue;
+      }
+      const item = sentenceQueue.shift()!;
+      const fireStart = () => {
+        if (!firstAudioFired) {
+          firstAudioFired = true;
+          try { opts.onAudioStart?.(); } catch {}
+        }
+        try {
+          if (item.waveform && item.waveform.length > 0) {
+            startReactiveWaveform(item.waveform, item.window_ms || 60);
+          }
+        } catch {}
+      };
+      try {
+        if (Platform.OS === "web") {
+          await _playMp3BytesWeb(item.bytes, fireStart);
+        } else {
+          const path = await _writeMp3ToFile(item.bytes, item.i);
+          if (!path) {
+            console.warn("[ws] file write returned null — skipping playback");
+            continue;
+          }
+          await playElevenLabsNativeFromUrl(path, fireStart);
+        }
+      } catch (e) {
+        console.warn("[ws] sentence playback failed:", e);
+      }
+      if (ac.signal.aborted) break;
+    }
+  } finally {
+    try { ws?.close(); } catch {}
+    clearTimeout(hardTimer);
+    if (currentAbort === ac) currentAbort = null;
+    speakingNow = false;
+  }
+
+  if (ac.signal.aborted) return { ok: false, error: "aborted" };
+  if (pollError) return { ok: false, error: pollError, meta: metaCaptured };
+  return { ok: true, meta: metaCaptured };
+}
+
 // ---------- Public API ----------
 export const SpeechMod = {
   isSpeaking(): boolean {
@@ -893,6 +1162,7 @@ export const SpeechMod = {
     setDefaultVoiceId(id);
   },
   fastConverse,
+  fastConverseWS,
   /**
    * Play an already-generated audio stream from a URL (e.g. the new
    * /api/converse-stream-audio endpoint). Bypasses ElevenLabs/text logic —

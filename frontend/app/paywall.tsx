@@ -49,7 +49,7 @@ const TIERS: TierInfo[] = [
     pricePerMonth: "€4,99",
     features: [
       "80 messaggi vocali/testo al mese",
-      "Voce premium (Aria o Echo)",
+      "Voce premium (Aria o Theo)",
       "Confessionale illimitato",
       "Memoria astratta (Ricordi)",
     ],
@@ -62,7 +62,7 @@ const TIERS: TierInfo[] = [
     pricePerMonth: "€9,99",
     features: [
       "250 messaggi al mese",
-      "Voce premium (Aria o Echo)",
+      "Voce premium (Aria o Theo)",
       "Confessionale illimitato",
       "Memoria + Voiceprint",
       "Check-in proattivi",
@@ -77,7 +77,7 @@ const TIERS: TierInfo[] = [
     pricePerMonth: "€19,99",
     features: [
       "500 messaggi al mese",
-      "Voce premium (Aria o Echo)",
+      "Voce premium (Aria o Theo)",
       "Confessionale + Recap settimanali",
       "Memoria lunga + Voiceprint",
       "Supporto prioritario",

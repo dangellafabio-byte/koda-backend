@@ -4519,7 +4519,7 @@ def _get_eleven_client():
 # (voice_id, display name, short description, gender)
 CURATED_VOICES = [
     {"voice_id": "tCOJUYBo86m5v7hppDc7", "name": "Aria", "description": "Limpida e fresca — voce femminile, spazio, respiro, apertura.", "gender": "femminile", "accent": "italiano"},
-    {"voice_id": "dJwiFcjz9zW5Pge7G8AG", "name": "Echo", "description": "Profonda e avvolgente — voce maschile, riflessione, eco interiore, intimità.", "gender": "maschile", "accent": "italiano"},
+    {"voice_id": "dJwiFcjz9zW5Pge7G8AG", "name": "Theo", "description": "Profonda e avvolgente — timbro maschile, riflessione, eco interiore, intimità.", "gender": "maschile", "accent": "italiano"},
 ]
 
 # ============================================================================
@@ -4931,12 +4931,19 @@ KODA_VOICES: Dict[str, Dict[str, str]] = {
         "label": "Aria",
         "description": "Limpida e fresca — voce femminile, spazio, respiro, apertura.",
     },
-    # ECHO — voce custom maschile (dJwiFcjz9zW5Pge7G8AG). Profonda, calda,
+    # THEO — timbro custom maschile (dJwiFcjz9zW5Pge7G8AG). Profondo, caldo,
     # avvolgente. Evoca riflessione, eco interiore, intimità.
+    # Nota: l'identità è e resta SEMPRE "Koda" — Aria/Theo sono solo timbri.
+    # Vecchia chiave "echo" mantenuta per retrocompatibilità con profili salvati.
+    "theo": {
+        "voice_id": "dJwiFcjz9zW5Pge7G8AG",
+        "label": "Theo",
+        "description": "Profondo e avvolgente — timbro maschile, riflessione, eco interiore, intimità.",
+    },
     "echo": {
         "voice_id": "dJwiFcjz9zW5Pge7G8AG",
-        "label": "Echo",
-        "description": "Profonda e avvolgente — voce maschile, riflessione, eco interiore, intimità.",
+        "label": "Theo",
+        "description": "Profondo e avvolgente — timbro maschile, riflessione, eco interiore, intimità.",
     },
 }
 
@@ -7073,12 +7080,31 @@ async def _fast_pipeline_task(
     text: str,
     ephemeral: bool,
     audio_duration_ms: Optional[int],
+    emit: Optional[Any] = None,
 ):
     """Background task: streamma Claude con prompt condensato, frase per
     frase chiama ElevenLabs Flash v2.5, salva ogni MP3 come token e
     appende eventi alla sessione in MongoDB.
+
+    Se `emit` è fornito (async callable: `await emit(event_dict, audio_bytes=None)`),
+    viene chiamato DIRETTAMENTE per ogni evento, bypassando il salvataggio
+    su Mongo (usato dall'endpoint WebSocket per evitare il delay di polling).
     """
     t0 = time.time()
+
+    async def _publish(event: dict, audio_bytes: Optional[bytes] = None):
+        # Mongo persist (long-poll fallback) + optional direct emit (WS path).
+        # Errori loggati ma non bloccanti.
+        if emit is not None:
+            try:
+                await emit(event, audio_bytes)
+            except Exception as e:
+                logger.warning(f"[fast/ws] emit failed: {e}")
+        try:
+            await _fast_session_append(session_id, event)
+        except Exception as e:
+            logger.warning(f"[fast] mongo append failed: {e}")
+
     try:
         profile = await get_or_create_profile()
 
@@ -7102,7 +7128,7 @@ async def _fast_pipeline_task(
 
         client_el = _get_eleven_client()
         if client_el is None:
-            await _fast_session_append(session_id, {"type": "error", "message": "TTS unavailable"})
+            await _publish({"type": "error", "message": "TTS unavailable"})
             await _fast_session_mark_done(session_id)
             return
 
@@ -7270,14 +7296,14 @@ async def _fast_pipeline_task(
                         window_ms = wf.get("window_ms", 60)
                 except Exception as e:
                     logger.warning(f"[fast] waveform compute failed: {e}")
-                await _fast_session_append(session_id, {
+                await _publish({
                     "type": "sentence",
                     "i": idx,
                     "token": token,
                     "text": clean,
                     "waveform": waveform,
                     "window_ms": window_ms,
-                })
+                }, audio_bytes=audio_bytes)
             except Exception as e:
                 logger.error(f"[fast] sentence gen error: {e}")
 
@@ -7416,7 +7442,7 @@ async def _fast_pipeline_task(
         total_ms = int((time.time() - t0) * 1000)
         logger.info(f"[fast {session_id[:8]}] DONE in {total_ms}ms ({sentence_idx} sentences)")
 
-        await _fast_session_append(session_id, {
+        await _publish({
             "type": "meta",
             "reply": reply_text,
             "voice_text": voice_text_full if voice_text_full != reply_text else None,
@@ -7429,7 +7455,7 @@ async def _fast_pipeline_task(
     except Exception as e:
         logger.error(f"[fast {session_id[:8]}] pipeline error: {e}")
         try:
-            await _fast_session_append(session_id, {"type": "error", "message": str(e)[:200]})
+            await _publish({"type": "error", "message": str(e)[:200]})
         finally:
             await _fast_session_mark_done(session_id)
 
@@ -7535,6 +7561,162 @@ async def api_converse_fast_poll(session_id: str, since: int = 0, timeout: float
         "next": len(events),
         "done": bool((sess or {}).get("done", False)),
     }
+
+
+# ============================================================
+# FASE 1 — STREAMING PIPELINE via WebSocket (giugno 2026)
+# ============================================================
+# Trasporto a bassa latenza per la fast pipeline. Sostituisce il long-poll
+# (delay ~100-300ms per evento) con un push diretto via WebSocket.
+#
+# Wire protocol:
+#   Client → Server (testo JSON, primo frame):
+#     {"text": "...", "ephemeral": false, "audio_duration_ms": null}
+#   Server → Client:
+#     Text frame: {"type":"sentence","i":int,"text":str,"waveform":[...],
+#                  "window_ms":int,"audio_bytes":int,"mime":"audio/mpeg"}
+#     Binary frame (segue immediatamente): bytes audio MP3 della frase.
+#     Text frame: {"type":"meta","reply":...,"voice_text":...,"tone":...,
+#                  "actions":[...],"close_session":bool}
+#     Text frame: {"type":"error","message":"..."}
+#     Text frame: {"type":"done"}
+#
+# Guadagno latenza:
+#   • Skip polling delay (~100-300ms per evento).
+#   • Skip secondo HTTP roundtrip per scaricare /api/tts/audio/{token}.mp3
+#     (~100-300ms per frase). I bytes audio sono inviati direttamente.
+#   • Mongo è SECONDARIO: salva comunque gli eventi così il fallback
+#     /converse-fast/poll resta funzionante in caso il WS fallisca.
+#
+# Il WS è disponibile sia con prefisso /api (per coerenza con l'ingress
+# Kubernetes che redirige /api/* al backend) sia su root come backup.
+# ============================================================
+from fastapi import WebSocket, WebSocketDisconnect  # noqa: E402
+
+
+async def _converse_ws_handler(websocket: WebSocket):
+    """Gestore WebSocket per la fast pipeline. Implementa il protocollo
+    descritto sopra. Una connessione = una conversazione (one-shot).
+    """
+    await websocket.accept()
+    try:
+        # 1) Riceve il primo frame JSON con la query utente.
+        try:
+            raw = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+        except asyncio.TimeoutError:
+            await websocket.send_json({"type": "error", "message": "no input within 10s"})
+            await websocket.close()
+            return
+        try:
+            req = json.loads(raw)
+        except json.JSONDecodeError:
+            await websocket.send_json({"type": "error", "message": "invalid JSON"})
+            await websocket.close()
+            return
+
+        text = (req.get("text") or "").strip()
+        if not text:
+            await websocket.send_json({"type": "error", "message": "empty text"})
+            await websocket.close()
+            return
+        if not EMERGENT_LLM_KEY:
+            await websocket.send_json({"type": "error", "message": "LLM key not configured"})
+            await websocket.close()
+            return
+
+        ephemeral = bool(req.get("ephemeral", False))
+        audio_duration_ms = req.get("audio_duration_ms")
+        if audio_duration_ms is not None:
+            try:
+                audio_duration_ms = int(audio_duration_ms)
+            except (TypeError, ValueError):
+                audio_duration_ms = None
+
+        await _ensure_fast_session_indexes()
+        session_id = uuid.uuid4().hex
+        await _fast_session_create(session_id)
+
+        # Notifica subito al client il session_id (utile per debug e
+        # per il fallback HTTP poll in caso il WS muoia a metà).
+        await websocket.send_json({"type": "session", "session_id": session_id})
+
+        # Emit callback: invia i frame al client via WS.
+        client_alive = True
+
+        async def _emit(event: dict, audio_bytes: Optional[bytes] = None):
+            nonlocal client_alive
+            if not client_alive:
+                return
+            try:
+                if event.get("type") == "sentence" and audio_bytes:
+                    # Prepara header con dimensione del payload binario
+                    # che segue immediatamente in un binary frame.
+                    header = {
+                        "type": "sentence",
+                        "i": event.get("i"),
+                        "text": event.get("text"),
+                        "waveform": event.get("waveform"),
+                        "window_ms": event.get("window_ms"),
+                        "audio_bytes": len(audio_bytes),
+                        "mime": "audio/mpeg",
+                    }
+                    await websocket.send_json(header)
+                    await websocket.send_bytes(audio_bytes)
+                else:
+                    await websocket.send_json(event)
+            except (WebSocketDisconnect, RuntimeError) as e:
+                client_alive = False
+                logger.info(f"[ws {session_id[:8]}] client disconnected during emit: {e}")
+
+        # Esegue la pipeline. emit pubblica direttamente al client; lo
+        # storage su Mongo continua a girare per fallback.
+        try:
+            await _fast_pipeline_task(
+                session_id=session_id,
+                text=text,
+                ephemeral=ephemeral,
+                audio_duration_ms=audio_duration_ms,
+                emit=_emit,
+            )
+        except Exception as e:
+            logger.error(f"[ws {session_id[:8]}] pipeline crashed: {e}")
+            if client_alive:
+                try:
+                    await websocket.send_json({"type": "error", "message": str(e)[:200]})
+                except Exception:
+                    pass
+
+        # Segnale di terminazione.
+        if client_alive:
+            try:
+                await websocket.send_json({"type": "done"})
+            except Exception:
+                pass
+    except WebSocketDisconnect:
+        logger.info("[ws] client disconnected (early)")
+    except Exception as e:
+        logger.error(f"[ws] unexpected error: {e}")
+        try:
+            await websocket.send_json({"type": "error", "message": "server error"})
+        except Exception:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+@app.websocket("/api/converse-ws")
+async def api_converse_ws(websocket: WebSocket):
+    """WebSocket endpoint per la fast pipeline (latenza minima)."""
+    await _converse_ws_handler(websocket)
+
+
+# Backup path senza /api per setup di test diretti / locali.
+@app.websocket("/converse-ws")
+async def converse_ws_root(websocket: WebSocket):
+    await _converse_ws_handler(websocket)
 
 
 # ============================================================

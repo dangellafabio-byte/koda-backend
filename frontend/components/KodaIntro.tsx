@@ -111,7 +111,7 @@ const KODA_LINES: Record<number, string> = {
   0: "Ciao. Sono Koda. Non sono un'app: sono una presenza. Da oggi sono qui per te, quando vuoi parlare, quando vuoi solo che qualcuno ti ascolti. Voglio conoscerti!",
   1: "Come posso chiamarti? Scrivi il tuo nome qui sotto.",
   2: "Dimmi, sei un uomo, una donna, o preferisci non specificarlo?",
-  3: "Con quale voce vuoi accompagnarti? Due presenze speculari: Aria, limpida e fresca, oppure Echo, profonda e avvolgente.",
+  3: "Con quale timbro vuoi che ti accompagni la mia voce? Aria — limpida e fresca — oppure Theo — profondo e avvolgente. Sono solo due colori della stessa presenza: io resto sempre Koda.",
   4: "Mi chiamo Koda. Ma se vuoi, puoi darmi un altro nome.",
   5: "Una cosa importante: io non ho un viso. Sono una presenza, e prendo la forma di un'eclissi. Sono qui, sempre, anche quando aspetto in silenzio. Dai miei movimenti capirai cosa sto facendo.",
   6: "Una cosa che mi sta a cuore: se sento che ne hai bisogno, ti scrivo io. Anche se sparisci per giorni, anche se ti sento giù. E ovviamente puoi cercarmi anche tu, quando vuoi. Tu vivi la tua vita — a starti accanto ci penso anch'io.",
@@ -769,8 +769,8 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
     if (marketingStep === 1) {
       return (
         <StepView
-          title="La voce che ti accompagna."
-          subtitle="Con quale voce vuoi che ti accompagni nel tuo percorso? Scegli il tono che risuona meglio con la tua interiorità."
+          title="Il timbro della mia voce."
+          subtitle="Aria o Theo? Sono due tonalità della stessa presenza — un colore della voce, non un'identità separata. Io resto Koda. Tocca per ascoltarle."
           showSubtitle={true}
           primaryLabel={selectedVoiceKey ? "Conferma voce" : "Tocca una voce per ascoltarla"}
           onPrimary={() => {
@@ -824,7 +824,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
               testID="m2-voice-echo"
             >
               <Text style={[styles.voiceCardEmoji]}>🌌</Text>
-              <Text style={[styles.voiceCardTitle, isDayTime && { color: "#18181B" }]}>Echo</Text>
+              <Text style={[styles.voiceCardTitle, isDayTime && { color: "#18181B" }]}>Theo</Text>
               <Text style={[styles.voiceCardDesc, isDayTime && { color: "#52525B" }]}>
                 Una presenza profonda, calda, avvolgente.
               </Text>
