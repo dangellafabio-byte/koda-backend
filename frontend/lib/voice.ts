@@ -124,13 +124,12 @@ const _IS_ANDROID = Platform.OS === "android";
 const SPEECH_THRESHOLD_DB = _IS_ANDROID ? -26 : -38;     // sopra → voce presente
 const SUSTAINED_VOICE_DB  = _IS_ANDROID ? -22 : -34;     // sopra → rinfresca lastVoiceAt
 const SILENCE_THRESHOLD_DB = _IS_ANDROID ? -30 : -42;    // sotto → reset aggressivo frame counter
-const SILENCE_DURATION_MS = 550;     // 0.55s silence after speech → end of utterance
-                                     // (giugno 2026 v7 / ChatGPT sprint)
-                                     // ridotto da 900 a 550ms — taglia
-                                     // ~350ms al tempo di fine turno
-                                     // percepito. Sotto i 500ms si rischia
-                                     // di tagliare pause naturali tra
-                                     // frasi; 550ms è il compromesso.
+const SILENCE_DURATION_MS = 600;     // 0.6s silence after speech → end of utterance
+                                     // (giugno 2026 v8 / ChatGPT sprint v2)
+                                     // 900 → 550 → 600: il 550 era leggermente
+                                     // sotto il sweet spot raccomandato (~600-650ms).
+                                     // 600ms taglia ~300ms vs la baseline storica
+                                     // senza tagliare pause naturali del parlato.
 const MIN_SPEECH_MS = 500;           // need at least 500ms of voice before silence can fire
                                      // (giugno 2026: da 700 a 500ms — parole brevi
                                      // 'sì', 'ok', 'no' non vengono ignorate)

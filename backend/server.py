@@ -3083,7 +3083,11 @@ async def api_converse_sealed(
         messages.extend(history_msgs)
         messages.append({"role": "user", "content": plaintext})
         resp = await litellm.acompletion(
-            model='openai/claude-haiku-4-5-20251001',
+            # === V1 LATENCY SWITCH (giugno 2026) ===
+            # Stanza dello Sfogo passa a gpt-5.4-mini: TTFT misurato ~500ms
+            # vs ~820ms di Claude Haiku 4.5 sul nostro proxy Emergent.
+            # Risparmio ~320ms percepiti.
+            model='openai/gpt-5.4-mini',
             messages=messages,
             api_key=EMERGENT_LLM_KEY,
             api_base='https://integrations.emergentagent.com/llm',
@@ -7288,7 +7292,13 @@ async def _fast_pipeline_task(
         logger.info(f"[KODA_TIMING] LLM_START sid={session_id[:8]} prompt_chars={len(sys_prompt)}")
 
         stream = await litellm.acompletion(
-            model='openai/claude-haiku-4-5-20251001',
+            # === V1 LATENCY SWITCH (giugno 2026) ===
+            # Fast pipeline (Stanza Quotidiana streaming) passa a gpt-5.4-mini.
+            # TTFT misurato sul proxy Emergent: ~500ms vs ~820ms di Haiku 4.5.
+            # Risparmio ~320ms reali al "primo audio" per ogni turno.
+            # gpt-5.4-mini è un modello small/fast OpenAI con qualità
+            # conversazionale alta — perfetto per la natura empatica di Koda.
+            model='openai/gpt-5.4-mini',
             messages=[
                 {'role': 'system', 'content': sys_prompt},
                 {'role': 'user', 'content': user_payload},
