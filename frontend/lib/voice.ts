@@ -108,20 +108,22 @@ let _nativeReady = false;
 //      frame corrente c'è un picco di rumore (es. tosse), il timer
 //      di silenzio dal momento dell'ultima voce reale continua a
 //      crescere correttamente.
-const SPEECH_THRESHOLD_DB = -38;     // dBFS — abbassata da -34 a -38 (giugno 2026 v5)
-                                     // per essere più sensibile con auricolari/AirPods
-                                     // BT (mic di livello significativamente più basso
-                                     // del mic interno iPhone).
-const SUSTAINED_VOICE_DB = -34;      // dBFS — (giugno 2026 v7 / ChatGPT sprint)
-                                     // abbassata da -28 a -34. Il -28 era
-                                     // troppo aggressivo con AirPods/BT:
-                                     // SNR basso → la voce reale spesso
-                                     // sotto -28 → lastVoiceAt non si
-                                     // rinfrescava → chiusure premature.
-                                     // -34 mantiene esclusione del rumore
-                                     // di fondo (-38/-42) ma cattura voce
-                                     // anche con microfoni Bluetooth.
-const SILENCE_THRESHOLD_DB = -42;    // dBFS — hysteresis 8 dB rispetto a sustained
+// === SOGLIE VAD — PLATFORM-AWARE (giugno 2026 v8 / Android fix) ===
+// Su iOS expo-audio riporta `metering` in dBFS già correttamente normalizzato
+// (-160..0): rumore di stanza tipico -38/-42 dBFS, voce -10/-25 dBFS.
+//
+// Su Android la scala dB è derivata da MediaRecorder.getMaxAmplitude() e il
+// FLOOR del rumore tende a essere più alto (-22/-18 dBFS in stanza normale).
+// Le soglie iOS sono troppo basse → VAD scambia il rumore di fondo per voce
+// → lastVoiceAt non scade mai → fine-turno mai → utente "non sente quando
+// smetto di parlare".
+//
+// Fix: tutte le soglie shiftate di +12 dB su Android. Soglie iOS lasciate
+// invariate per non rompere il comportamento già validato.
+const _IS_ANDROID = Platform.OS === "android";
+const SPEECH_THRESHOLD_DB = _IS_ANDROID ? -26 : -38;     // sopra → voce presente
+const SUSTAINED_VOICE_DB  = _IS_ANDROID ? -22 : -34;     // sopra → rinfresca lastVoiceAt
+const SILENCE_THRESHOLD_DB = _IS_ANDROID ? -30 : -42;    // sotto → reset aggressivo frame counter
 const SILENCE_DURATION_MS = 550;     // 0.55s silence after speech → end of utterance
                                      // (giugno 2026 v7 / ChatGPT sprint)
                                      // ridotto da 900 a 550ms — taglia
