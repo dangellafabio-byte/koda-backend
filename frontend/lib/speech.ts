@@ -750,41 +750,13 @@ export async function fastConverse(
       if (resolveTokenWait) resolveTokenWait();
     };
 
-    // === FILLER BRIDGE (giugno 2026 v3 — sostenibile) ===
-    // Se la prima vera frase TARDA più del solito (>1.6s dopo l'invio),
-    // accodiamo un secondo filler random dal pool locale per coprire il
-    // gap. Continuiamo finché non arriva il primo "sentence" reale.
-    // Limite: max 3 filler concatenati totali (incluso il primo del server)
-    // così non si accumulano se tutto va male.
+    // === BRIDGE FILLER DISABILITATO (giugno 2026 v4) ===
+    // Il bridge filler concatenato (più filler in loop) accumulava in coda
+    // creando attese di 20+ secondi quando il LLM tardava un po'. Tornato al
+    // comportamento semplice: SOLO il filler iniziale dal server, poi attendi
+    // la prima frase reale. Niente concatenazione automatica.
+    const bridgeInterval: any = null;
     let firstRealSentence = false;
-    let extraFillersAdded = 0;
-    const MAX_EXTRA_FILLERS = 2;
-    const FILLER_BRIDGE_TIMEOUT_MS = 1500;
-    let lastFillerToken: string | null = fillerToken;
-    const bridgeInterval: any = setInterval(() => {
-      if (firstRealSentence || extraFillersAdded >= MAX_EXTRA_FILLERS) {
-        clearInterval(bridgeInterval);
-        return;
-      }
-      // Se la coda è vuota o ha solo filler già suonati, accoda un bridge.
-      const hasRealQueued = tokenQueue.some((x) => !x.isFiller);
-      if (!hasRealQueued) {
-        const nextTok = pickRandomFiller(lastFillerToken);
-        if (nextTok) {
-          lastFillerToken = nextTok;
-          extraFillersAdded += 1;
-          tokenQueue.push({
-            i: -1 - extraFillersAdded,
-            token: nextTok,
-            text: "",
-            waveform: null,
-            window_ms: 60,
-            isFiller: true,
-          });
-          notifyTokenWait();
-        }
-      }
-    }, FILLER_BRIDGE_TIMEOUT_MS);
 
     // Pollster — runs in parallel with the audio player.
     const pollster = (async () => {

@@ -108,19 +108,21 @@ let _nativeReady = false;
 //      frame corrente c'è un picco di rumore (es. tosse), il timer
 //      di silenzio dal momento dell'ultima voce reale continua a
 //      crescere correttamente.
-const SPEECH_THRESHOLD_DB = -34;     // dBFS — più sensibile per INIZIARE detection voce
-                                     // (giugno 2026: era -32, abbassata di 2dB così
-                                     // parole sussurrate/morbide vengono prese subito)
-const SUSTAINED_VOICE_DB = -24;      // dBFS — alzata da -22 a -24 (giugno 2026 v2):
-                                     // bilanciamento per NON tagliare voce naturale
-                                     // (respiri brevi, pause tra parole) ma neanche
-                                     // tenere viva la registrazione su rumore di
-                                     // fondo. -24 è il sweet spot per iPhone moderno.
+const SPEECH_THRESHOLD_DB = -38;     // dBFS — abbassata da -34 a -38 (giugno 2026 v5)
+                                     // per essere più sensibile con auricolari/AirPods
+                                     // BT (mic di livello significativamente più basso
+                                     // del mic interno iPhone).
+const SUSTAINED_VOICE_DB = -28;      // dBFS — abbassata da -24 a -28 (giugno 2026 v5)
+                                     // stesso motivo: auricolari hanno SNR diverso.
+                                     // Bilancia "sente la voce" su AirPods senza falsare
+                                     // troppo sul mic interno (rumore di fondo iPhone
+                                     // si attesta a ~-30 dBFS, -28 lo esclude).
 const SILENCE_THRESHOLD_DB = -42;    // dBFS — hysteresis 8 dB rispetto a sustained
-const SILENCE_DURATION_MS = 700;     // 0.7s silence after speech → end of utterance
-                                     // (giugno 2026 v4: da 900 a 700ms — target
-                                     // < 1s percepito. Hysteresis ampia + sustained
-                                     // -24dB evitano comunque tagli a metà.)
+const SILENCE_DURATION_MS = 900;     // 0.9s silence after speech → end of utterance
+                                     // (giugno 2026 v5 — rollback): 700ms era
+                                     // troppo aggressivo, tagliava pause naturali.
+                                     // 900ms è il sweet spot tra reattività e
+                                     // tolleranza alle pause normali nel parlato.
 const MIN_SPEECH_MS = 500;           // need at least 500ms of voice before silence can fire
                                      // (giugno 2026: da 700 a 500ms — parole brevi
                                      // 'sì', 'ok', 'no' non vengono ignorate)
