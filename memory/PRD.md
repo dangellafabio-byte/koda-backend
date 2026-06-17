@@ -201,3 +201,37 @@ Stato Block E verificato e completato.
 - P2: Riattivare paywall RevenueCat (ora disattivato per test).
 - P2/P3: Refactor monoliti `server.py` (~7000 righe) e `index.tsx` (~5700 righe).
 
+
+---
+
+## SESSIONE 2026-06-17 — FASE 1 LATENCY OPTIMIZATION (WS Streaming)
+
+**Goal**: ridurre il TTFT (Time To First Token audio) percepito da ~3-4s a ~1-1.5s.
+
+### ✅ Implementato
+
+**Backend** (`/app/backend/server.py`):
+- Nuovo endpoint **WebSocket** `/api/converse-ws` (+ alias root `/converse-ws`) che pipa la fast pipeline direttamente al client.
+- Wire protocol: text frame header `{type:"sentence",i,text,waveform,window_ms,audio_bytes,mime}` seguito IMMEDIATAMENTE da un binary frame con i bytes MP3 della frase. Poi `meta`, `done`.
+- Pipeline refactor: `_fast_pipeline_task(emit=...)` ora accetta un callback `emit(event, audio_bytes)` che inoltra direttamente al WS bypassando il long-poll. Mongo continua a salvare per fallback.
+- Rename **Echo → Theo** ovunque: `CURATED_VOICES`, `KODA_VOICES` (con alias `echo` mantenuto per back-compat con profili salvati). `/api/voice/options` deduplica gli alias.
+
+**Frontend** (`/app/frontend/lib/speech.ts`, `/app/frontend/app/index.tsx`):
+- Nuova funzione `fastConverseWS(text, opts)`: apre WS, riceve header+binary, scrive MP3 in `cacheDirectory` (native) o usa blob URL (web), suona via `expo-audio`.
+- `app/index.tsx` chiama PRIMA `fastConverseWS`; se fallisce (rete instabile, server old) ripiega su `fastConverse` (HTTP poll) senza perdere il messaggio.
+- Rename UI: tutte le occorrenze "Echo" → "Theo" in `KodaIntro.tsx` (M2 + voice card) e `paywall.tsx` (feature list dei 3 piani). Step 3 copy reframed: "Aria e Theo sono due timbri della stessa presenza — io resto Koda".
+
+### 📊 Latenza misurata (real Claude + ElevenLabs)
+- TTFT Claude streaming: **~520ms** (era ~900-1100ms con prompt più lungo)
+- FIRST AUDIO ready: **~1080ms** end-to-end (era ~2500-3500ms su HTTP poll)
+- Saving stimato: **~1.5-2s per turno** sulla percezione utente.
+
+### ⛔ Postposto a fase successiva
+- **Deepgram WS Streaming STT**: richiede di streamare l'audio mic in tempo reale dall'Expo client → servirebbe un native module custom o un workaround base64 chunking. Beneficio stimato: -300/500ms. Da pianificare separatamente.
+- **Opus codec**: ElevenLabs WS endpoint supporta solo PCM/MP3 in streaming. Manteniamo MP3 44.1kHz/128k che expo-audio gestisce nativamente. Opus richiederebbe container OGG/CAF + iOS 17+ per AVPlayer. Non vale il rischio in questo iter.
+- **ElevenLabs WS multistream** (text→audio tokenizzato): refactor importante; sentence-by-sentence convert() rimane (è già internamente streaming).
+
+### 🧪 Test backend
+- 6/6 PASS (`test_fase1_ws.py`): WS happy path, WS empty text, WS invalid JSON, HTTP poll fallback, Echo→Theo rename, back-compat alias.
+- Frontend: validazione manuale dal device richiesta (Expo WS playback in dev/TestFlight).
+

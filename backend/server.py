@@ -4844,21 +4844,27 @@ def _strip_audio_tags(text: str) -> str:
 
 @api_router.get("/voice/options")
 async def api_get_voice_options():
-    """Lista le voci disponibili per l'onboarding ("eco" e "aria"). 
+    """Lista le voci disponibili per l'onboarding ("aria" e "theo").
     Restituisce label + descrizione (NON l'ID ElevenLabs — quello è interno).
-    Usato dal frontend per costruire la schermata di scelta voce."""
-    return {
-        "options": [
-            {
-                "key": k,
-                "label": v["label"],
-                "description": v["description"],
-                # URL del preview audio TTS — generato on-demand
-                "preview_url": f"/api/voice/preview/{k}",
-            }
-            for k, v in KODA_VOICES.items()
-        ]
-    }
+    Usato dal frontend per costruire la schermata di scelta voce.
+
+    Deduplica gli alias (es. "echo" → stesso voice_id di "theo") così che
+    il frontend mostri SOLO le opzioni canoniche. Il backend continua però
+    ad accettare l'alias nei profili salvati (back-compat)."""
+    seen_ids: set[str] = set()
+    options = []
+    for k, v in KODA_VOICES.items():
+        vid = v.get("voice_id")
+        if vid in seen_ids:
+            continue
+        seen_ids.add(vid)
+        options.append({
+            "key": k,
+            "label": v["label"],
+            "description": v["description"],
+            "preview_url": f"/api/voice/preview/{k}",
+        })
+    return {"options": options}
 
 
 @api_router.get("/voice/preview/{voice_key}")
