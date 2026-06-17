@@ -702,15 +702,10 @@ export async function fastConverse(
     if (!sid || typeof sid !== "string") {
       return { ok: false, error: "no session_id from server" };
     }
-    // === FILLER POOL (giugno 2026 v3 — sostenibile, mai silenzio) ===
-    // Strategia: il backend nel response del POST ci consegna UN filler_token
-    // (random, già pre-generato server-side). Inoltre, all'avvio dell'app
-    // abbiamo precaricato in memoria TUTTI i token filler (vedi
-    // preloadFillerPool). Usiamo il filler del response come PRIMO della
-    // coda (è random già selezionato dal server). Più sotto, se la prima
-    // vera frase tarda, accodiamo altri filler dal pool locale per coprire
-    // il gap → mai più silenzio.
-    const fillerToken: string | null = typeof startData?.filler_token === "string" ? startData.filler_token : null;
+    // === FILLER RIMOSSO (giugno 2026 v6) ===
+    // Il filler audio è stato eliminato dal client e dal backend. Mostra
+    // solo lo stato visuale (orb che pulsa) durante l'attesa. La prima
+    // vera frase arriva in ~1.5-2s.
 
     // 2) Long-poll loop. Maintains a queue of pending tokens to play.
     let cursor = 0;
@@ -721,20 +716,6 @@ export async function fastConverse(
 
     const tokenQueue: { i: number; token: string; text: string; waveform?: number[] | null; window_ms?: number; isFiller?: boolean }[] = [];
     let resolveTokenWait: (() => void) | null = null;
-
-    // Se il backend ci ha dato un filler_token, lo accodiamo SUBITO (prima
-    // del polling) così il player lo suona immediatamente — l'utente sente
-    // Koda "rispondere" entro 200-400ms invece di 2-3s di silenzio.
-    if (fillerToken && !opts.ephemeral) {
-      tokenQueue.push({
-        i: -1,
-        token: fillerToken,
-        text: "",
-        waveform: null,
-        window_ms: 60,
-        isFiller: true,
-      });
-    }
 
     const waitForToken = () =>
       new Promise<void>((resolve) => {

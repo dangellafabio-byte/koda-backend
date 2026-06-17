@@ -7522,10 +7522,9 @@ async def api_converse_fast_start(req: FastStartRequest):
     the client then polls /converse-fast/poll/{session_id}?since=N for
     sentence-tokens and metadata.
 
-    Include anche `filler_token`: un breve mp3 (~200-400ms) "Mh", "Eh", "Allora"
-    pre-generato per la voce dell'utente. Il client lo suona SUBITO mentre il
-    LLM elabora → l'utente percepisce una risposta IMMEDIATA (sub-300ms). Quando
-    arriva la prima vera frase, il client fa fade-out del filler e attacca.
+    NOTE (giugno 2026 v6): il filler audio è stato RIMOSSO. La prima vera
+    frase arriva in ~1.5-2s e il client mostra uno stato visuale (orb che
+    pulsa) durante l'attesa. Niente più audio di riempimento.
     """
     if not EMERGENT_LLM_KEY:
         raise HTTPException(status_code=500, detail="LLM key not configured")
@@ -7546,30 +7545,9 @@ async def api_converse_fast_start(req: FastStartRequest):
         audio_duration_ms=req.audio_duration_ms,
     ))
 
-    # Resolve voce dell'utente per scegliere il filler giusto.
-    filler_token = None
-    try:
-        profile = await get_or_create_profile()
-        voice_id = getattr(profile.settings, "tts_voice_id", None) or "tCOJUYBo86m5v7hppDc7"
-        # Migrazione voci legacy gestita inline (la mappa principale è locale a
-        # un'altra funzione): redirigi i 3 voice_id deprecati alla nuova Aria.
-        _legacy_voice_map = {
-            "pFZP5JQG7iQjIQuC4Bku": "tCOJUYBo86m5v7hppDc7",
-            "q1GF5A2kzAOPv9d5TQEy": "tCOJUYBo86m5v7hppDc7",
-            "PponuEVSg4RZBO08kPzE": "tCOJUYBo86m5v7hppDc7",
-            "nPczCjzI2devNBz1zQrb": "dJwiFcjz9zW5Pge7G8AG",
-        }
-        voice_id = _legacy_voice_map.get(voice_id, voice_id)
-        # NON bloccante: se la cache filler è ancora vuota (cold start del
-        # backend), ritorniamo None subito invece di aspettare 1.5s che
-        # ElevenLabs generi 8 filler MP3. Il warm-up avviene in background
-        # al boot — pochi secondi dopo è già pronto per i turni successivi.
-        filler_token = await _get_random_filler_token(voice_id, allow_generate=False)
-    except Exception as e:
-        logger.warning(f"[filler] couldn't pick filler token: {e}")
-        filler_token = None
-
-    return {"session_id": session_id, "filler_token": filler_token}
+    # filler_token: sempre None (campo mantenuto per compatibilità API col
+    # client; il client legacy lo ignorerà).
+    return {"session_id": session_id, "filler_token": None}
 
 
 @api_router.get("/converse-fast/poll/{session_id}")
@@ -7857,25 +7835,8 @@ async def startup_db_client():
             logger.info(f"[startup] bonifica TONE tags: {n} voci timeline ripulite")
     except Exception as e:
         logger.warning(f"[startup] bonifica TONE tags fallita: {e}")
-
-    # === FILLER WARM-UP (giugno 2026 v5) ===
-    # Pre-genera in background i filler audio per le voci canoniche, così
-    # il primo turno dopo restart non paga il cold-start ElevenLabs (~1.5s).
-    # Fire-and-forget: se ElevenLabs è giù, l'app continua a funzionare
-    # (senza filler — il pipeline è progettato per essere resiliente).
-    async def _warmup_fillers():
-        try:
-            # Piccolo delay per non rallentare l'app startup (Uvicorn ready).
-            await asyncio.sleep(0.5)
-            for vid in ("tCOJUYBo86m5v7hppDc7", "dJwiFcjz9zW5Pge7G8AG"):
-                try:
-                    tokens = await _ensure_fillers_for_voice(vid)
-                    logger.info(f"[startup/filler] warm-up done for {vid[:10]}…: {len(tokens)} tokens")
-                except Exception as e:
-                    logger.warning(f"[startup/filler] warm-up failed for {vid[:10]}…: {e}")
-        except Exception as e:
-            logger.warning(f"[startup/filler] warmup crashed: {e}")
-    asyncio.create_task(_warmup_fillers())
+    # NOTA: il warm-up filler è stato rimosso (giugno 2026 v6) — il filler
+    # audio non viene più usato. Vedi commento in /converse-fast/start.
 
 
 _TONE_TAG_RE = re.compile(r"\[TONE:[a-zA-Z_\-]+\]\s*")

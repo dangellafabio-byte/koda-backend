@@ -764,14 +764,9 @@ export default function Taccuino() {
           }
           if (p.settings?.tts_voice_id) {
             setDefaultVoiceId(p.settings.tts_voice_id);
-            // Precarica il pool di filler per questa voce (one-shot, in
-            // background). Fa SÌ che quando l'utente preme l'orb e finisce
-            // di parlare, il primo filler suoni IMMEDIATAMENTE da cache
-            // locale, senza round-trip al server.
-            preloadFillerPool(
-              p.settings.tts_voice_id,
-              process.env.EXPO_PUBLIC_BACKEND_URL || ""
-            ).catch(() => {});
+            // FILLER RIMOSSO (giugno 2026 v6): niente più preload pool —
+            // la prima frase reale arriva in ~1.5-2s, basta lo stato
+            // visuale dell'orb durante l'attesa.
           }
           if (!p.onboarded) setShowOnboarding(true);
           else if (p.settings?.input_mode !== "text") {
