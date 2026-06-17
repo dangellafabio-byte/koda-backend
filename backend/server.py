@@ -670,6 +670,13 @@ async def transcribe_deepgram(audio: UploadFile = File(...), language: str = For
         if len(data) == 0:
             raise HTTPException(status_code=400, detail="Empty audio")
 
+        # === KODA TIMING (ChatGPT sprint giugno 2026) ===
+        # DEEPGRAM_START marca l'istante in cui iniziamo la chiamata HTTP
+        # a Deepgram. Il differenziale con DEEPGRAM_END nel client mostra
+        # latenza network + decode + transcribe.
+        _kt_dg_start = time.time()
+        logger.info(f"[KODA_TIMING] DEEPGRAM_START audio_bytes={len(data)}")
+
         # Determina il mimetype dal nome file
         name = (audio.filename or "").lower()
         mimetype = "audio/mp4"  # default per .m4a iOS
@@ -720,10 +727,12 @@ async def transcribe_deepgram(audio: UploadFile = File(...), language: str = For
         except Exception:
             transcript = ""
         cleaned = _clean_whisper_output(transcript.strip())
+        _kt_dg_ms = int((time.time() - _kt_dg_start) * 1000)
         logger.info(
             f"[deepgram] audio_bytes={len(data)} mime={mimetype} "
             f"raw={transcript[:120]!r} cleaned={cleaned[:120]!r}"
         )
+        logger.info(f"[KODA_TIMING] DEEPGRAM_END deepgram_ms={_kt_dg_ms} chars={len(cleaned)}")
         return {"text": cleaned}
     except HTTPException:
         raise
@@ -7258,6 +7267,7 @@ async def _fast_pipeline_task(
 
         t_llm_start = time.time()
         logger.info(f"[fast {session_id[:8]}] LLM start, prompt {len(sys_prompt)} chars")
+        logger.info(f"[KODA_TIMING] LLM_START sid={session_id[:8]} prompt_chars={len(sys_prompt)}")
 
         stream = await litellm.acompletion(
             model='openai/claude-haiku-4-5-20251001',
@@ -7324,6 +7334,8 @@ async def _fast_pipeline_task(
                 audio_bytes = await asyncio.to_thread(_do_tts)
                 tts_ms = int((time.time() - t_tts) * 1000)
                 logger.info(f"[fast] sentence idx={idx} chars={len(clean)} tts_ms={tts_ms} mp3_bytes={len(audio_bytes)}")
+                if idx == 0:
+                    logger.info(f"[KODA_TIMING] TTS_START sid={session_id[:8]} idx=0 chars={len(clean)} tts_ms={tts_ms}")
                 if not audio_bytes:
                     logger.warning(f"[fast] empty TTS for sentence idx={idx}")
                     return
@@ -7332,6 +7344,7 @@ async def _fast_pipeline_task(
                     first_audio_logged = True
                     total_first = int((time.time() - t0) * 1000)
                     logger.info(f"[fast {session_id[:8]}] FIRST AUDIO ready: {total_first}ms (tts={tts_ms}ms)")
+                    logger.info(f"[KODA_TIMING] FIRST_AUDIO sid={session_id[:8]} total_ms={total_first} tts_ms={tts_ms}")
                 # === ORB REATTIVO (richiesta utente 2026-06 #3) ===
                 # Computiamo l'envelope RMS della frase per permettere all'orb
                 # di pulsare in sincrono con sillabe/accenti/cadenza reale.
@@ -7369,6 +7382,7 @@ async def _fast_pipeline_task(
             if not ttft_logged:
                 ttft_logged = True
                 logger.info(f"[fast {session_id[:8]}] TTFT: {int((time.time() - t_llm_start)*1000)}ms")
+                logger.info(f"[KODA_TIMING] LLM_TTFT sid={session_id[:8]} ttft_ms={int((time.time() - t_llm_start)*1000)}")
             new_chars = extractor.feed(piece)
             if new_chars:
                 sentence_buf += new_chars

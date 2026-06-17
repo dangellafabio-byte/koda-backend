@@ -112,17 +112,23 @@ const SPEECH_THRESHOLD_DB = -38;     // dBFS — abbassata da -34 a -38 (giugno 
                                      // per essere più sensibile con auricolari/AirPods
                                      // BT (mic di livello significativamente più basso
                                      // del mic interno iPhone).
-const SUSTAINED_VOICE_DB = -28;      // dBFS — abbassata da -24 a -28 (giugno 2026 v5)
-                                     // stesso motivo: auricolari hanno SNR diverso.
-                                     // Bilancia "sente la voce" su AirPods senza falsare
-                                     // troppo sul mic interno (rumore di fondo iPhone
-                                     // si attesta a ~-30 dBFS, -28 lo esclude).
+const SUSTAINED_VOICE_DB = -34;      // dBFS — (giugno 2026 v7 / ChatGPT sprint)
+                                     // abbassata da -28 a -34. Il -28 era
+                                     // troppo aggressivo con AirPods/BT:
+                                     // SNR basso → la voce reale spesso
+                                     // sotto -28 → lastVoiceAt non si
+                                     // rinfrescava → chiusure premature.
+                                     // -34 mantiene esclusione del rumore
+                                     // di fondo (-38/-42) ma cattura voce
+                                     // anche con microfoni Bluetooth.
 const SILENCE_THRESHOLD_DB = -42;    // dBFS — hysteresis 8 dB rispetto a sustained
-const SILENCE_DURATION_MS = 900;     // 0.9s silence after speech → end of utterance
-                                     // (giugno 2026 v5 — rollback): 700ms era
-                                     // troppo aggressivo, tagliava pause naturali.
-                                     // 900ms è il sweet spot tra reattività e
-                                     // tolleranza alle pause normali nel parlato.
+const SILENCE_DURATION_MS = 550;     // 0.55s silence after speech → end of utterance
+                                     // (giugno 2026 v7 / ChatGPT sprint)
+                                     // ridotto da 900 a 550ms — taglia
+                                     // ~350ms al tempo di fine turno
+                                     // percepito. Sotto i 500ms si rischia
+                                     // di tagliare pause naturali tra
+                                     // frasi; 550ms è il compromesso.
 const MIN_SPEECH_MS = 500;           // need at least 500ms of voice before silence can fire
                                      // (giugno 2026: da 700 a 500ms — parole brevi
                                      // 'sì', 'ok', 'no' non vengono ignorate)
@@ -395,6 +401,29 @@ export async function startRecording(): Promise<Recorder> {
     throw e;
   }
   const startedAt = Date.now();
+  // === TIMING LOG (ChatGPT sprint giugno 2026) ===
+  console.log(`[KODA_TIMING] VOICE_START 0ms`);
+
+  // === VAD DEBUG TELEMETRIA (ChatGPT sprint giugno 2026) ===
+  // Log opzionale di tutti gli step del VAD per capire perché alcune
+  // registrazioni si chiudono in modo strano. Attivabile via env var
+  // EXPO_PUBLIC_VAD_DEBUG=true (default ON per il debug, va spento
+  // in release stabile). Log sample-throttled a 3 al secondo per non
+  // saturare la console.
+  const VAD_DEBUG = String(process.env.EXPO_PUBLIC_VAD_DEBUG ?? "true").toLowerCase() === "true";
+  let lastDebugLogAt = 0;
+  const vadLog = (label: string, extra: Record<string, any> = {}) => {
+    if (!VAD_DEBUG) return;
+    const now = Date.now();
+    // Throttle dei `speech_refresh` (alta frequenza), gli eventi
+    // discreti (speech_start / silence_detected / recording_stopped)
+    // sempre.
+    const isHF = label === "speech_refresh";
+    if (isHF && now - lastDebugLogAt < 350) return;
+    if (isHF) lastDebugLogAt = now;
+    const pairs = Object.entries(extra).map(([k, v]) => `${k}=${v}`).join(" ");
+    console.log(`[KODA_VAD] ${label} t=${now - startedAt}ms ${pairs}`);
+  };
 
   // ===== VAD state =====
   let speechStartFired = false;
@@ -427,52 +456,36 @@ export async function startRecording(): Promise<Recorder> {
       // Hard cap on recording length
       if (now - startedAt > HARD_CAP_MS) {
         vadStopped = true;
+        vadLog("recording_stopped", { reason: "HARD_CAP_MS", db });
         if (silenceCb) try { silenceCb(); } catch {}
         return;
       }
       if (db > SPEECH_THRESHOLD_DB) {
         consecutiveVoiceFrames++;
-        // Only mark "speech started" after enough consecutive voice frames.
-        // This kills false positives from TV / brief background noises.
         if (consecutiveVoiceFrames >= MIN_SPEECH_FRAMES && !speechStartFired) {
           speechStartFired = true;
           firstSpeechAt = now - MIN_SPEECH_FRAMES * METER_POLL_MS;
-          lastVoiceAt = now;  // init at speech start
+          lastVoiceAt = now;
+          vadLog("speech_start", { db });
           if (speechStartCb) try { speechStartCb(); } catch {}
         }
-        // FIX VAD 2026-06-27 PM: rinfresca lastVoiceAt SOLO se la voce è
-        // chiaramente sopra l'ambiente (db > SUSTAINED_VOICE_DB).
-        // Rumore di stanza tra -32 e -26 dBFS NON tiene viva la
-        // registrazione → il timer di silenzio può finalmente partire
-        // quando l'utente smette davvero di parlare.
         if (speechStartFired && db > SUSTAINED_VOICE_DB) {
           lastVoiceAt = now;
+          vadLog("speech_refresh", { db });
         }
       } else {
-        // === SILENCE/HYSTERESIS DETECTION (riscritto 2026-05-22) ===
-        // Vecchia versione: richiedeva dB < SILENCE_THRESHOLD_DB per contare
-        // silenzio. Risultato: se il rumore di fondo era a -42 dBFS (tipico
-        // di una stanza qualsiasi), il VAD restava in "hysteresis zone" per
-        // SEMPRE e onSilence non scattava mai → utente doveva cliccare a mano.
-        // Nuova logica: "non-voce" = sotto SPEECH_THRESHOLD. Conta silenzio
-        // basandosi su tempo trascorso da ultima voce, non su secondo
-        // threshold artificiale. SILENCE_THRESHOLD_DB resta solo per
-        // diagnostica (reset più aggressivo del contatore frame).
         if (db < SILENCE_THRESHOLD_DB) {
-          consecutiveVoiceFrames = 0; // reset più aggressivo se davvero quieto
+          consecutiveVoiceFrames = 0;
         }
       }
-      // FIX VAD 2026-06-27 PM: il check del silenzio è ora FUORI
-      // dall'if/else. Gira ad ogni frame e si basa solo su quanto è
-      // vecchio lastVoiceAt. Anche se nel frame corrente c'è un picco
-      // di rumore (tosse, click, ronzio), il tempo trascorso dall'ultima
-      // VOCE REALE continua a crescere → il silenzio scatta correttamente.
       if (speechStartFired && firstSpeechAt && lastVoiceAt) {
         const speechElapsed = now - firstSpeechAt;
         if (speechElapsed >= MIN_SPEECH_MS) {
           const silenceFor = now - lastVoiceAt;
           if (silenceFor >= SILENCE_DURATION_MS) {
             vadStopped = true;
+            vadLog("silence_detected", { db, silence_ms: silenceFor });
+            vadLog("recording_stopped", { reason: "VAD_TIMEOUT", db });
             if (silenceCb) try { silenceCb(); } catch {}
           }
         }
@@ -488,6 +501,10 @@ export async function startRecording(): Promise<Recorder> {
     stopped = true;
     vadStopped = true;
     clearInterval(vadInterval);
+    // TIMING (ChatGPT sprint): la registrazione si è chiusa, qualunque
+    // sia la causa (VAD, tap manuale, hard cap). VOICE_END è il
+    // momento in cui smettiamo di catturare audio dal mic.
+    console.log(`[KODA_TIMING] VOICE_END ${Date.now() - startedAt}ms (recording_ms=${Date.now() - startedAt})`);
 
     // === FIX RACE CONDITION 2026-05-25 ===
     // ROOT CAUSE: subito dopo clearInterval(), una callback già schedulata

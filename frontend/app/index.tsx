@@ -2304,12 +2304,20 @@ export default function Taccuino() {
         return;
       }
       const fd = buildFormData(res);
+      // === KODA TIMING (ChatGPT sprint giugno 2026) ===
+      // Marker temporale per misurare upload + Deepgram. Lo log usa
+      // performance.now() per precisione sub-millisecondo. Stampato come
+      // "[KODA_TIMING] LABEL Xms" così è grep-abile sui log device.
+      const _kt_upload_start = Date.now();
+      console.log(`[KODA_TIMING] UPLOAD_START @${_kt_upload_start}`);
       // Fase 4 Step 1: usiamo Deepgram Nova-3 (più veloce e accurato di Whisper).
       // Fallback automatico a /transcribe (Whisper) se Deepgram fallisce.
       let r = await fetch(`${API_BASE}/transcribe-deepgram`, {
         method: "POST",
         body: fd,
       });
+      const _kt_deepgram_done = Date.now();
+      console.log(`[KODA_TIMING] UPLOAD_END+DEEPGRAM_END @${_kt_deepgram_done} (upload+stt_ms=${_kt_deepgram_done - _kt_upload_start})`);
       if (!r.ok) {
         console.warn(`[transcribe] Deepgram failed (${r.status}), fallback to Whisper`);
         // Ricreo FormData perché il body è già stato consumato
