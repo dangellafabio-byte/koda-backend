@@ -1750,6 +1750,26 @@ async def api_get_profile(request: Request):
             )
     except Exception:
         pass
+    # === MIGRAZIONE COERENZA VOCE (giugno 2026 v4) ===
+    # Sincronizza settings.tts_voice_id con la voce risolta da koda_voice.
+    # Prima i due campi potevano divergere → utente sentiva voce femminile
+    # in chat normale (backend usa koda_voice → _resolve_voice_id) e
+    # MASCHILE nel Confessionale (client usa settings.tts_voice_id).
+    # Fonte di verità: koda_voice (scelto in onboarding, lockato).
+    try:
+        canonical_vid = _resolve_voice_id(p)
+        if canonical_vid and (p.settings.tts_voice_id or "") != canonical_vid:
+            logger.info(
+                f"[profile/migrate] voice mismatch — koda_voice={p.koda_voice} → {canonical_vid}, "
+                f"old tts_voice_id={p.settings.tts_voice_id}. Syncing."
+            )
+            p.settings.tts_voice_id = canonical_vid
+            await db.taccuino_profile.update_one(
+                {"id": p.id},
+                {"$set": {"settings.tts_voice_id": canonical_vid}},
+            )
+    except Exception as e:
+        logger.warning(f"[profile/migrate] voice sync failed: {e}")
     try:
         bg = p.settings.background or ""
         if bg.startswith("data:") and len(bg) > 2000:
@@ -2273,6 +2293,20 @@ async def api_update_profile(update: ProfileUpdate):
             logger.info(f"[profile] koda_voice change rejected (locked). current={p.koda_voice}, attempted={update.koda_voice}")
         elif update.koda_voice in KODA_VOICES:
             p.koda_voice = update.koda_voice
+            # === FIX VOCE COERENTE (giugno 2026 v2) ===
+            # Sincronizza ANCHE settings.tts_voice_id con la voce risolta da
+            # koda_voice. Prima i due campi vivevano vite separate: il
+            # fast/converse-ws usava _resolve_voice_id(koda_voice), mentre
+            # il flusso Confessionale (speakIfEnabled → /api/tts) usava
+            # settings.tts_voice_id → POTEVANO DIVERGERE → utente sentiva
+            # voce femminile in chat e maschile nel Confessionale.
+            try:
+                resolved_vid = _resolve_voice_id(p)
+                if (p.settings.tts_voice_id or "") != resolved_vid:
+                    p.settings.tts_voice_id = resolved_vid
+                    logger.info(f"[profile] tts_voice_id synced to koda_voice → {resolved_vid}")
+            except Exception as e:
+                logger.warning(f"[profile] failed to sync tts_voice_id: {e}")
             # Quando si chiude l'onboarding (update.onboarded=True), blocca
             # la voce. Se l'utente non setta onboarded ma cambia voce a
             # raffica in preview, lasciamo libero finché non chiude.

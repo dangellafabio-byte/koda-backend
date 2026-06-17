@@ -1858,61 +1858,67 @@ export default function Taccuino() {
             let capturedMeta: any = null;
 
             const result = await (async () => {
-              // === FASE 1 (giugno 2026): WebSocket prima, HTTP poll come fallback ===
-              // Il WS elimina il delay del long-polling (~100-300ms per evento)
-              // e il secondo HTTP roundtrip per scaricare /api/tts/audio/{token}.mp3
-              // (~150-300ms per frase). Stima: TTFT percepito ~1.0-1.4s vs ~1.7-2.2s.
+              // === FASE 1 (giugno 2026): WebSocket OPT-IN tramite env var ===
+              // EXPO_PUBLIC_USE_WS_CONVERSE=true → tenta WS; altrimenti
+              // HTTP polling diretto (path stabile, comportamento storico).
               //
-              // Se il WS fallisce (rete instabile, server old, infra che blocca
-              // wss://), ripieghiamo automaticamente sul vecchio fastConverse
-              // HTTP-poll senza perdere il messaggio.
-              try {
-                const wsResult = await SpeechMod.fastConverseWS(txt, {
-                  ephemeral: confessionalMode,
-                  onAudioStart: () => {
-                    speakingStarted = true;
-                    clearTimeout(watchdog);
-                    setStatus("speaking");
-                  },
-                  onMeta: (meta) => {
-                    capturedMeta = meta;
-                    try {
-                      const userFinal: TimelineEntry = {
-                        ...optimistic,
-                        id: `fast-u-${Date.now()}`,
-                        confessional: confessionalMode || undefined,
-                      };
-                      const aiEntry: TimelineEntry = {
-                        id: `fast-ai-${Date.now()}`,
-                        role: "ai",
-                        text: stripDisplayTags(meta.reply || ""),
-                        voice_text: meta.voice_text || undefined,
-                        tone: (meta.tone as Tone) || "warm",
-                        timestamp: new Date().toISOString(),
-                        actions: meta.actions || undefined,
-                        confessional: confessionalMode || undefined,
-                      };
-                      setTimeline((prev) => {
-                        const filtered = prev.filter((e) => e.id !== optimistic.id);
-                        return [...filtered, userFinal, aiEntry];
-                      });
-                      if (Array.isArray(meta.actions) && meta.actions.length > 0) {
-                        runActions(meta.actions as any[]);
+              // Il WS è disattivato di default finché non confermiamo che
+              // wss:// passa attraverso l'infra Emergent / Cloudflare in
+              // produzione. Quando fallisce sotto Cloudflare, l'utente
+              // aspettava il timeout intero (~25s) prima del fallback.
+              //
+              // Quando ON: fail-fast a 1.5s. Se entro 1.5s NON arriva
+              // almeno un frame dal server, droppiamo il WS e cadiamo
+              // immediatamente su HTTP poll (~1.7s totali invece di 25s).
+              const useWS = String(process.env.EXPO_PUBLIC_USE_WS_CONVERSE || "").toLowerCase() === "true";
+              if (useWS) {
+                try {
+                  const wsResult = await SpeechMod.fastConverseWS(txt, {
+                    ephemeral: confessionalMode,
+                    timeoutMs: 1500,
+                    onAudioStart: () => {
+                      speakingStarted = true;
+                      clearTimeout(watchdog);
+                      setStatus("speaking");
+                    },
+                    onMeta: (meta) => {
+                      capturedMeta = meta;
+                      try {
+                        const userFinal: TimelineEntry = {
+                          ...optimistic,
+                          id: `fast-u-${Date.now()}`,
+                          confessional: confessionalMode || undefined,
+                        };
+                        const aiEntry: TimelineEntry = {
+                          id: `fast-ai-${Date.now()}`,
+                          role: "ai",
+                          text: stripDisplayTags(meta.reply || ""),
+                          voice_text: meta.voice_text || undefined,
+                          tone: (meta.tone as Tone) || "warm",
+                          timestamp: new Date().toISOString(),
+                          actions: meta.actions || undefined,
+                          confessional: confessionalMode || undefined,
+                        };
+                        setTimeline((prev) => {
+                          const filtered = prev.filter((e) => e.id !== optimistic.id);
+                          return [...filtered, userFinal, aiEntry];
+                        });
+                        if (Array.isArray(meta.actions) && meta.actions.length > 0) {
+                          runActions(meta.actions as any[]);
+                        }
+                      } catch (e) {
+                        console.warn("[ws] onMeta handler error:", e);
                       }
-                    } catch (e) {
-                      console.warn("[ws] onMeta handler error:", e);
-                    }
-                  },
-                });
-                if (wsResult.ok) return wsResult;
-                console.warn("[ws] failed (", wsResult.error, ") → falling back to HTTP poll");
-                // Se l'audio aveva già iniziato, non ripetiamo (la risposta è già parziale).
-                // Se non era partito niente, lasciamo che il fallback parta da capo.
-                if (speakingStarted) return wsResult;
-              } catch (e) {
-                console.warn("[ws] exception (", String(e), ") → falling back to HTTP poll");
+                    },
+                  });
+                  if (wsResult.ok) return wsResult;
+                  console.warn("[ws] failed (", wsResult.error, ") → falling back to HTTP poll");
+                  if (speakingStarted) return wsResult;
+                } catch (e) {
+                  console.warn("[ws] exception (", String(e), ") → falling back to HTTP poll");
+                }
               }
-              // HTTP fallback
+              // HTTP path (default + fallback)
               return await SpeechMod.fastConverse(txt, {
                 ephemeral: confessionalMode,
                 onAudioStart: () => {
@@ -3209,12 +3215,6 @@ export default function Taccuino() {
                 setShowConfessionalIntro(true);
                 return;
               } else {
-                // Disattivando il confessionale: lanciamo SEMPRE l'animazione
-                // di chiusura (release / closure) — sia dalla Home (solo
-                // Eclissi) sia dalla chat. Il confessionale è un'ESPERIENZA,
-                // non un thread di messaggi, quindi il rituale di rilascio
-                // ha senso anche senza scambi.
-
                 // === RESET VOLONTARIO (Manifesto V1) ===
                 // Niente distillazione, niente memoria di lungo termine: il
                 // Confessionale non deve "definirti domani". All'uscita
@@ -3224,9 +3224,16 @@ export default function Taccuino() {
                   api.confessionalReset(confessionalGhostTokenRef.current).catch(() => {});
                   confessionalGhostTokenRef.current = null;
                 }
-                // === ANIMAZIONE DI CHIUSURA SEMPRE ATTIVA (giugno 2026 v4) ===
-                setShowFortezzaWipe(true);
-                return; // l'animazione chiuderà confessionalMode al termine
+                // === ANIMAZIONE DI CHIUSURA — DISATTIVATA (giugno 2026 v5) ===
+                // L'utente non era soddisfatta né del vecchio rituale "burn"
+                // né della nuova "release" sostitutiva. Per ora usciamo SENZA
+                // orpelli grafici (wipe diretto e ritorno alla Home).
+                // L'animazione tornerà quando avremo deciso insieme cosa
+                // mostrare. La pulizia dei dati (timeline.filter, ref reset,
+                // confessionalMode=false) avviene comunque qui.
+                setTimeline((prev) => prev.filter((e) => !e.fortezza));
+                fortezzaUsedThisSessionRef.current = false;
+                confessionalGhostTokenRef.current = null;
               }
               setConfessionalMode((m) => !m);
             }}
