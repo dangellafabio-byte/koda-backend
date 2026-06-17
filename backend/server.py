@@ -4636,11 +4636,21 @@ async def _ensure_fillers_for_voice(voice_id: str) -> List[str]:
         return tokens
 
 
-async def _get_random_filler_token(voice_id: str) -> Optional[str]:
+async def _get_random_filler_token(voice_id: str, *, allow_generate: bool = True) -> Optional[str]:
     """Restituisce un token random per la voice_id richiesta. Se la cache è
-    vuota, la popola lazy. Best-effort: ritorna None se nulla è disponibile."""
+    vuota, la popola lazy. Best-effort: ritorna None se nulla è disponibile.
+
+    Args:
+        allow_generate: se False, NON tenta la generazione lazy quando la
+        cache è vuota — ritorna immediatamente None. Usato dall'endpoint
+        /converse-fast/start per evitare di bloccare la risposta per ~1.5s
+        durante il cold-start (quando la cache è ancora vuota). Il warm-up
+        avviene in background al boot del backend (vedi _warmup_fillers).
+    """
     import random as _rnd
     try:
+        if not allow_generate and voice_id not in _FILLER_CACHE:
+            return None
         tokens = await _ensure_fillers_for_voice(voice_id)
         if not tokens:
             return None
@@ -7550,7 +7560,11 @@ async def api_converse_fast_start(req: FastStartRequest):
             "nPczCjzI2devNBz1zQrb": "dJwiFcjz9zW5Pge7G8AG",
         }
         voice_id = _legacy_voice_map.get(voice_id, voice_id)
-        filler_token = await _get_random_filler_token(voice_id)
+        # NON bloccante: se la cache filler è ancora vuota (cold start del
+        # backend), ritorniamo None subito invece di aspettare 1.5s che
+        # ElevenLabs generi 8 filler MP3. Il warm-up avviene in background
+        # al boot — pochi secondi dopo è già pronto per i turni successivi.
+        filler_token = await _get_random_filler_token(voice_id, allow_generate=False)
     except Exception as e:
         logger.warning(f"[filler] couldn't pick filler token: {e}")
         filler_token = None
@@ -7843,6 +7857,25 @@ async def startup_db_client():
             logger.info(f"[startup] bonifica TONE tags: {n} voci timeline ripulite")
     except Exception as e:
         logger.warning(f"[startup] bonifica TONE tags fallita: {e}")
+
+    # === FILLER WARM-UP (giugno 2026 v5) ===
+    # Pre-genera in background i filler audio per le voci canoniche, così
+    # il primo turno dopo restart non paga il cold-start ElevenLabs (~1.5s).
+    # Fire-and-forget: se ElevenLabs è giù, l'app continua a funzionare
+    # (senza filler — il pipeline è progettato per essere resiliente).
+    async def _warmup_fillers():
+        try:
+            # Piccolo delay per non rallentare l'app startup (Uvicorn ready).
+            await asyncio.sleep(0.5)
+            for vid in ("tCOJUYBo86m5v7hppDc7", "dJwiFcjz9zW5Pge7G8AG"):
+                try:
+                    tokens = await _ensure_fillers_for_voice(vid)
+                    logger.info(f"[startup/filler] warm-up done for {vid[:10]}…: {len(tokens)} tokens")
+                except Exception as e:
+                    logger.warning(f"[startup/filler] warm-up failed for {vid[:10]}…: {e}")
+        except Exception as e:
+            logger.warning(f"[startup/filler] warmup crashed: {e}")
+    asyncio.create_task(_warmup_fillers())
 
 
 _TONE_TAG_RE = re.compile(r"\[TONE:[a-zA-Z_\-]+\]\s*")
