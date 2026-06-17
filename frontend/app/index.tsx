@@ -3209,16 +3209,11 @@ export default function Taccuino() {
                 setShowConfessionalIntro(true);
                 return;
               } else {
-                // Disattivando il confessionale: se ho usato la modalità
-                // Fortezza in questa sessione, lancio l'animazione di chiusura
-                // (fiamma + sigillo) che, una volta finita, wipa i messaggi
-                // local-fortezza dalla timeline → "dato grezzo cancellato".
-                // FIX 2026-06: uso il ref invece di timeline.some() perché
-                // la timeline viene re-fetchata dal backend e i messaggi
-                // Fortezza locali sparivano → l'animazione non partiva mai.
-                const hasFortezzaMsgs =
-                  fortezzaUsedThisSessionRef.current ||
-                  timeline.some((e) => e.fortezza);
+                // Disattivando il confessionale: lanciamo SEMPRE l'animazione
+                // di chiusura (release / closure) — sia dalla Home (solo
+                // Eclissi) sia dalla chat. Il confessionale è un'ESPERIENZA,
+                // non un thread di messaggi, quindi il rituale di rilascio
+                // ha senso anche senza scambi.
 
                 // === RESET VOLONTARIO (Manifesto V1) ===
                 // Niente distillazione, niente memoria di lungo termine: il
@@ -3229,10 +3224,9 @@ export default function Taccuino() {
                   api.confessionalReset(confessionalGhostTokenRef.current).catch(() => {});
                   confessionalGhostTokenRef.current = null;
                 }
-                if (hasFortezzaMsgs) {
-                  setShowFortezzaWipe(true);
-                  return; // l'animazione chiuderà confessionalMode al termine
-                }
+                // === ANIMAZIONE DI CHIUSURA SEMPRE ATTIVA (giugno 2026 v4) ===
+                setShowFortezzaWipe(true);
+                return; // l'animazione chiuderà confessionalMode al termine
               }
               setConfessionalMode((m) => !m);
             }}
@@ -4446,18 +4440,18 @@ export default function Taccuino() {
             💜 Magenta    = speaking        (sto parlando io) */}
       <RadialGlow status={status as any} />
 
-      {/* CONFESSIONALE FORTEZZA — animazione di chiusura (fiamma + sigillo).
-          Si attiva quando l'utente esce dal confessionale dopo aver scambiato
-          almeno un messaggio in modalità Fortezza. 3 secondi di rituale
-          visivo, poi wipe locale di tutte le voci fortezza. */}
+      {/* CONFESSIONALE — animazione di CHIUSURA (release / closure 2026-06 v4).
+          Si attiva SEMPRE quando l'utente esce dal confessionale, sia dalla
+          Home (solo Eclissi) sia dalla chat. Non è "distruzione", è "rilascio":
+          respiro dell'eclissi → dissolvenza dell'ambiente → ritorno al
+          presente. Durata ~1.7s. */}
       <FortezzaCloseEffect
         visible={showFortezzaWipe}
-        labels={{
-          sealed: "🔒 Sigillato. Resta tra te e te.",
-          confirmation: "Dato grezzo cancellato per sempre.",
-        }}
+        scrimColor={theme.bg}
+        orbColor="#7FE0C4"
         onComplete={() => {
           // WIPE: rimuovi tutte le voci marcate fortezza dalla timeline
+          // (se non ce ne sono, è no-op — l'animazione gira comunque).
           setTimeline((prev) => prev.filter((e) => !e.fortezza));
           setShowFortezzaWipe(false);
           setConfessionalMode(false);
