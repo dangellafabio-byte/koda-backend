@@ -7481,6 +7481,45 @@ async def _fast_pipeline_task(
         # language drift (Koda che risponde in spagnolo). Cerca questo
         # log se l'utente segnala la lingua sbagliata.
         logger.info(f"[KODA_LANG_CHECK] sid={session_id[:8]} reply_first80={full_reply[:80]!r}")
+        # === DETECT AUTOMATICO LINGUA SBAGLIATA (Livello 3) ===
+        # Euristica leggera basata su parole tipiche delle 4 lingue principali.
+        # Se la reply contiene marker forti di una lingua diversa da quella
+        # del profilo, log CRITICAL così possiamo correlare con segnalazioni
+        # utente. Nessuna azione automatica per ora (no regenerate, no
+        # translate) — vogliamo prima capire la FREQUENZA reale del bug.
+        # Se dai log emerge alta frequenza, attiveremo regenerate o switch
+        # a Claude Haiku 4.5.
+        expected_lang = (profile.language or "it").lower()
+        # Marker forti (parole brevi MOLTO frequenti, basso false-positive).
+        # Cerchiamo come parole intere ai bordi (spazi/inizio/punctuation).
+        import re as _re
+        reply_lower = " " + full_reply.lower() + " "
+        lang_markers = {
+            "es": [r"\bhola\b", r"\bcómo\b", r"\bestás\b", r"\bgracias\b",
+                   r"\bbueno\b", r"\bsí\b", r"\bque\b ", r"\bdónde\b",
+                   r"\bestoy\b", r"\bquiero\b", r"\bpuedo\b", r"\bmañana\b",
+                   r"\bporque\b"],
+            "en": [r"\bhello\b", r"\bhow are you\b", r"\bthank you\b",
+                   r"\bgoing\b", r"\bwould\b", r"\bcouldn't\b",
+                   r"\bi'm\b", r"\bwhat\b", r"\bthat\b"],
+            "fr": [r"\bbonjour\b", r"\bmerci\b", r"\bcomment\b",
+                   r"\bvous\b", r"\bje suis\b", r"\bje\b"],
+        }
+        for code, patterns in lang_markers.items():
+            if code == expected_lang:
+                continue
+            for pat in patterns:
+                if _re.search(pat, reply_lower):
+                    logger.warning(
+                        f"[KODA_LANG_MISMATCH] sid={session_id[:8]} "
+                        f"expected={expected_lang} detected={code} "
+                        f"matched_pattern={pat!r} "
+                        f"reply_first120={full_reply[:120]!r}"
+                    )
+                    break
+            else:
+                continue
+            break
         data = extract_json(extractor.full_buffer) or {}
         tone = (data.get("tone") or "warm").lower()
         if tone not in {"calm", "energetic", "concerned", "urgent", "warm", "neutral"}:
