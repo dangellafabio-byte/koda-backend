@@ -699,6 +699,10 @@ export async function fastConverse(
   let tFirstAudio: number | null = null;
   let tDone: number | null = null;
   let sentenceCount = 0;
+  // Catturati dal meta event: identità path/modello effettivamente usati
+  // dal backend. Permettono di intercettare fallback silenziosi.
+  let summaryModel: string = "?";
+  let summaryPath: string = "?";
   let summaryFinalized = false;
   const finalizeSummary = (errMsg?: string) => {
     if (summaryFinalized) return;
@@ -707,12 +711,16 @@ export async function fastConverse(
     const ms = (v: number | null) => (v == null ? "?" : String(v - t0));
     const status = errMsg ? `err=${errMsg.slice(0, 40)}` : "ok";
     // UNA RIGA CONSOLIDATA — copiabile direttamente in tabella.
-    // Campi: total | recording_ms | start_ack | first_audio | meta | done | sentences | status
+    // Campi: model | path | total | recording_ms | transcript_chars |
+    //        start_ack | first_audio | meta | done | sentences | status
     const recMs = opts.recordingDurationMs;
     console.log(
-      `[KODA_SUMMARY] total=${total}ms recording_ms=${recMs ?? "?"} start_ack=${ms(tStartAck)}ms ` +
-        `first_audio=${ms(tFirstAudio)}ms meta=${ms(tMeta)}ms ` +
-        `done=${ms(tDone)}ms sentences=${sentenceCount} ${status}`
+      `[KODA_SUMMARY] model=${summaryModel} path=${summaryPath} ` +
+        `total=${total}ms recording_ms=${recMs ?? "?"} ` +
+        `transcript_chars=${text.length} ` +
+        `start_ack=${ms(tStartAck)}ms first_audio=${ms(tFirstAudio)}ms ` +
+        `meta=${ms(tMeta)}ms done=${ms(tDone)}ms ` +
+        `sentences=${sentenceCount} ${status}`
     );
   };
 
@@ -813,6 +821,11 @@ export async function fastConverse(
               notifyTokenWait();
             } else if (ev?.type === "meta") {
               tMeta = Date.now();
+              // Catturiamo model e path se forniti dal backend (per
+              // [KODA_SUMMARY]). Default "?" se il server è una vecchia
+              // versione che non li espone.
+              if (typeof ev.model === "string") summaryModel = ev.model;
+              if (typeof ev.path === "string") summaryPath = ev.path;
               meta = {
                 reply: ev.reply || "",
                 voice_text: ev.voice_text ?? null,

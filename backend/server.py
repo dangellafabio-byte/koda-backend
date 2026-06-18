@@ -7537,6 +7537,13 @@ async def _fast_pipeline_task(
             "tone": ai_entry.tone,
             "actions": parsed_actions,
             "close_session": close_session,
+            # === KODA_SUMMARY metric (sprint v11) ===
+            # Esposizione esplicita di path/modello così il client può
+            # loggarli nel [KODA_SUMMARY]. Permette di accorgersi a colpo
+            # d'occhio se il fast path è caduto su un fallback interno
+            # senza dover correlare log backend e frontend.
+            "model": "gpt-5.4-mini",
+            "path": "fast",
         })
         await _fast_session_mark_done(session_id)
 
