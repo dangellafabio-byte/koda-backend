@@ -681,6 +681,36 @@ export async function fastConverse(
     try { ac.abort(); } catch {}
   }, timeoutMs);
 
+  // === KODA_SUMMARY METRICS (sprint giugno 2026) ===
+  // Tracciamo ogni step in modo che alla fine possiamo emettere UNA riga
+  // riassuntiva pronta per essere copiata nella tabella di analisi:
+  //   t0: invio richiesta /start
+  //   tStartAck: server ha accettato la richiesta (200 OK con session_id)
+  //   tMeta: arrivata la metadata (LLM ha finito di rispondere)
+  //   tFirstAudio: il primo MP3 ha iniziato davvero a suonare (orecchio utente)
+  //   tDone: il polling è finito (tutte le frasi ricevute)
+  const t0 = Date.now();
+  let tStartAck: number | null = null;
+  let tMeta: number | null = null;
+  let tFirstAudio: number | null = null;
+  let tDone: number | null = null;
+  let sentenceCount = 0;
+  let summaryFinalized = false;
+  const finalizeSummary = (errMsg?: string) => {
+    if (summaryFinalized) return;
+    summaryFinalized = true;
+    const total = Date.now() - t0;
+    const ms = (v: number | null) => (v == null ? "?" : String(v - t0));
+    const status = errMsg ? `err=${errMsg.slice(0, 40)}` : "ok";
+    // UNA RIGA CONSOLIDATA — copiabile direttamente in tabella.
+    // Campi: total | start_ack | first_audio | meta | done | sentences | status
+    console.log(
+      `[KODA_SUMMARY] total=${total}ms start_ack=${ms(tStartAck)}ms ` +
+        `first_audio=${ms(tFirstAudio)}ms meta=${ms(tMeta)}ms ` +
+        `done=${ms(tDone)}ms sentences=${sentenceCount} ${status}`
+    );
+  };
+
   try {
     // 1) Start the session.
     const startResp = await fetch(`${API_BASE}/converse-fast/start`, {
@@ -695,13 +725,16 @@ export async function fastConverse(
     });
     if (!startResp.ok) {
       const errText = await startResp.text().catch(() => "");
+      finalizeSummary(`start_${startResp.status}`);
       return { ok: false, error: `start failed: ${startResp.status} ${errText.slice(0, 200)}` };
     }
     const startData = await startResp.json();
     const sid = startData?.session_id;
     if (!sid || typeof sid !== "string") {
+      finalizeSummary("no_sid");
       return { ok: false, error: "no session_id from server" };
     }
+    tStartAck = Date.now();
     // === FILLER RIMOSSO (giugno 2026 v6) ===
     // Il filler audio è stato eliminato dal client e dal backend. Mostra
     // solo lo stato visuale (orb che pulsa) durante l'attesa. La prima
@@ -768,11 +801,13 @@ export async function fastConverse(
                 waveform: Array.isArray(ev.waveform) ? ev.waveform : null,
                 window_ms: typeof ev.window_ms === "number" ? ev.window_ms : 60,
               });
+              sentenceCount++;
               // Prima frase REALE arrivata → stop bridge filler.
               firstRealSentence = true;
               try { clearInterval(bridgeInterval); } catch {}
               notifyTokenWait();
             } else if (ev?.type === "meta") {
+              tMeta = Date.now();
               meta = {
                 reply: ev.reply || "",
                 voice_text: ev.voice_text ?? null,
@@ -789,6 +824,7 @@ export async function fastConverse(
           }
           if (data?.done) {
             pollingDone = true;
+            tDone = Date.now();
             notifyTokenWait();
             break;
           }
@@ -816,6 +852,7 @@ export async function fastConverse(
         const fireStart = !firstAudioFired
           ? () => {
               firstAudioFired = true;
+              tFirstAudio = Date.now();
               try { opts.onAudioStart?.(); } catch {}
               // === ORB REATTIVO (2026-06 #3) ===
               // Avvio del driver waveform sincronizzato con la prima frase.
@@ -846,14 +883,21 @@ export async function fastConverse(
     await Promise.all([pollster, player]);
 
     if (ac.signal.aborted) {
+      finalizeSummary("aborted");
       return { ok: false, error: "aborted" };
     }
     if (pollError) {
+      finalizeSummary(pollError);
       return { ok: false, error: pollError, meta };
     }
+    finalizeSummary();
     return { ok: true, meta };
   } catch (e: any) {
-    if (ac.signal.aborted) return { ok: false, error: "aborted" };
+    if (ac.signal.aborted) {
+      finalizeSummary("aborted");
+      return { ok: false, error: "aborted" };
+    }
+    finalizeSummary(String(e?.message || e));
     return { ok: false, error: String(e?.message || e) };
   } finally {
     clearTimeout(hardTimer);
