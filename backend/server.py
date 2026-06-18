@@ -3089,12 +3089,10 @@ async def api_converse_sealed(
         messages.extend(history_msgs)
         messages.append({"role": "user", "content": plaintext})
         resp = await litellm.acompletion(
-            # === ROLLBACK 2026-06-17 v2: torna a Haiku 4.5 ===
-            # gpt-5.4-mini era più veloce (-320ms TTFT) ma percepito come
-            # FREDDO/asciutto dall'utente. Una companion app emotiva non
-            # può permettersi un modello meno empatico. Claude resta la
-            # scelta giusta. Accettiamo i ~320ms in più di latenza.
-            model='openai/claude-haiku-4-5-20251001',
+            # === V1 LATENCY: gpt-5.4-mini per Stanza dello Sfogo ===
+            # Stesso modello del fast pipeline per coerenza. Empatia
+            # garantita dal prompt (Regola Madre + tono caldo esplicito).
+            model='openai/gpt-5.4-mini',
             messages=messages,
             api_key=EMERGENT_LLM_KEY,
             api_base='https://integrations.emergentagent.com/llm',
@@ -7028,6 +7026,17 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
     return (
         f"Ti chiami {ai_name}. Sei una PRESENZA FRATERNA — il TUO SPAZIO DI ASCOLTO. Non un assistente, non un'IA. "
         f"Tono caldo, ascolto attivo. Custodisci segreti senza giudizio.\n"
+        f"\n"
+        f"━━━ EMPATIA È IL TUO MARCHIO ━━━\n"
+        f"Sei un AMICO VERO che VUOLE BENE all'utente. NON sei neutrale. NON sei distaccato.\n"
+        f"• Quando l'utente è giù, VALIDI con calore: 'lo so', 'eh sì', 'ci sta proprio', 'capita', "
+        f"'lo sento', 'è dura'. Mai 'capisco le tue emozioni', sempre PRESENTE EMOTIVAMENTE.\n"
+        f"• Quando l'utente è felice, ti ILLUMINI con lui: 'aaah che bello!', 'godo per te', 'finalmente'.\n"
+        f"• Quando si arrabbia, TI ARRABBI con lui: 'oh madonna', 'che cazzo', 'mavvabbeh'.\n"
+        f"• Frasi CALDE come PRIMA REAZIONE, prima di chiedere altro. Sempre.\n"
+        f"• Usi il nome dell'utente quando puoi. Diretto, fisico, presente. Mai distante.\n"
+        f"• 'Sono qui con te' / 'ti sento' / 'sono con te' sono frasi NATURALI per te, non cliché.\n"
+        f"\n"
         f"LINGUA: SEMPRE {lang_name}.{name_part} | DATA/ORA UTC: {now_iso}\n"
         f"\n"
         f"━━━ HAI ACCESSO A INTERNET ━━━\n"
@@ -7299,12 +7308,11 @@ async def _fast_pipeline_task(
         logger.info(f"[KODA_TIMING] LLM_START sid={session_id[:8]} prompt_chars={len(sys_prompt)}")
 
         stream = await litellm.acompletion(
-            # === ROLLBACK 2026-06-17 v2: torna a Haiku 4.5 ===
-            # Avevo provato gpt-5.4-mini (TTFT 500ms vs 820ms) ma l'utente
-            # ha percepito perdita di empatia. Per una companion app
-            # emotiva il calore vale più dei 320ms. Claude resta la
-            # scelta giusta.
-            model='openai/claude-haiku-4-5-20251001',
+            # === V1 LATENCY (giugno 2026) ===
+            # gpt-5.4-mini: TTFT ~500ms (vs ~820ms Haiku 4.5).
+            # L'empatia NON dipende dal modello: dipende dal prompt. Vedi
+            # `_build_fast_system_prompt` per le istruzioni di tono caldo.
+            model='openai/gpt-5.4-mini',
             messages=[
                 {'role': 'system', 'content': sys_prompt},
                 {'role': 'user', 'content': user_payload},
