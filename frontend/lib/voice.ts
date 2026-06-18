@@ -449,6 +449,28 @@ export async function startRecording(): Promise<Recorder> {
   let dynSpeechThreshold = SPEECH_THRESHOLD_DB;
   let dynSustainedThreshold = SUSTAINED_VOICE_DB;
 
+  // === FAILSAFE SILENCE DETECTOR (sprint giugno 2026 v10) ===
+  // ROOT CAUSE storico: in ambienti rumorosi (TV, ventilatore, riverbero
+  // dello stesso speaker dell'iPhone che riproduce Koda), il db medio
+  // resta sopra dynSustainedThreshold → lastVoiceAt rinfresca ad ogni
+  // frame → silence_detected MAI scatta → utente deve premere bottone.
+  //
+  // FIX: oltre al rilevatore "tempo dall'ultima voce", introduciamo un
+  // SECONDO rilevatore basato sulla DENSITÀ di voce: percentuale di frame
+  // ad alta intensità (>= dynSustained) negli ultimi 2 secondi. Se sotto
+  // il 30%, consideriamo che l'utente non sta più parlando "davvero" anche
+  // se ci sono picchi sporadici di rumore.
+  const VOICE_DENSITY_WINDOW_MS = 2000;
+  const VOICE_DENSITY_MIN_PCT = 0.30;
+  const FAILSAFE_AFTER_MIN_SPEECH_MS = 2500; // attivo solo dopo 2.5s di registrazione
+  const recentFrames: { t: number; voice: boolean }[] = [];
+
+  // === HEARTBEAT DIAGNOSTICO (sprint v10) ===
+  // Ogni 500ms emettiamo una riga riassuntiva dello stato VAD per
+  // capire ESATTAMENTE perché lastVoiceAt continua a rinfrescare in
+  // ambienti dove l'hands-free non chiude.
+  let lastHeartbeatAt = 0;
+
   // === IMPORTANT: `stopped` deve essere dichiarata PRIMA del setInterval ===
   let stopped = false;
 
@@ -462,25 +484,61 @@ export async function startRecording(): Promise<Recorder> {
         try { meterCb(db, dynSpeechThreshold); } catch {}
       }
       const now = Date.now();
-      // Calibrazione noise floor: solo prima che parta la voce, finché
-      // siamo dentro la finestra iniziale.
-      if (!speechStartFired && now - startedAt < CALIB_WINDOW_MS) {
+
+      // Track recent frames for density-based failsafe.
+      const isVoiceFrame = db > dynSustainedThreshold;
+      recentFrames.push({ t: now, voice: isVoiceFrame });
+      // Slide window: drop frames older than 2s.
+      while (recentFrames.length > 0 && now - recentFrames[0].t > VOICE_DENSITY_WINDOW_MS) {
+        recentFrames.shift();
+      }
+
+      // === CALIBRAZIONE NOISE FLOOR ROBUSTA (v10) ===
+      // Step 1 (originale): nei primi 350ms PRIMA di speech_start.
+      // Step 2 (NUOVO): se speech parte subito e non abbiamo abbastanza
+      // sample, continuiamo a raccogliere fino a 1500ms — il p20 dei
+      // sample include comunque le pause respiratorie e le code di parola
+      // (sotto il livello di voce), che approssimano il floor.
+      const CALIB_EXTENDED_MS = 1500;
+      if (now - startedAt < CALIB_EXTENDED_MS) {
         if (db > -100 && db < 0) calibSamples.push(db);
-      } else if (!speechStartFired && noiseFloor === null && calibSamples.length >= 3) {
-        // Floor = mediana dei sample iniziali (più robusta della media).
+      }
+      // Calcola noise floor: appena disponibile (almeno 5 sample) e non
+      // ancora calcolato. Funziona SIA prima che dopo speech_start.
+      if (noiseFloor === null && calibSamples.length >= 5 &&
+          (now - startedAt > CALIB_WINDOW_MS || (!speechStartFired && calibSamples.length >= 5))) {
         const sorted = [...calibSamples].sort((a, b) => a - b);
-        noiseFloor = sorted[Math.floor(sorted.length / 2)];
-        // Adatta solo SE il rumore è significativamente sopra la baseline
-        // statica. Se l'ambiente è silenzioso (-50 dB), non scendere sotto
-        // le soglie statiche già validate.
+        // Usa il 20° percentile come stima del floor (più robusta della mediana
+        // quando la finestra include già qualche frame di voce).
+        const p20 = sorted[Math.max(0, Math.floor(sorted.length * 0.2))];
+        noiseFloor = p20;
         dynSpeechThreshold = Math.max(SPEECH_THRESHOLD_DB, noiseFloor + 6);
         dynSustainedThreshold = Math.max(SUSTAINED_VOICE_DB, noiseFloor + 10);
         vadLog("noise_calibrated", {
           floor: noiseFloor.toFixed(1),
           speech_th: dynSpeechThreshold.toFixed(1),
           sustained_th: dynSustainedThreshold.toFixed(1),
+          samples: calibSamples.length,
+          phase: speechStartFired ? "post_speech" : "pre_speech",
         });
       }
+
+      // === HEARTBEAT (ogni 500ms) — diagnostica completa ===
+      if (VAD_DEBUG && now - lastHeartbeatAt >= 500) {
+        lastHeartbeatAt = now;
+        const voiceAge = lastVoiceAt ? (now - lastVoiceAt) : null;
+        const voiceCount = recentFrames.filter(f => f.voice).length;
+        const density = recentFrames.length > 0 ? voiceCount / recentFrames.length : 0;
+        console.log(
+          `[KODA_VAD] heartbeat t=${now - startedAt}ms db=${db.toFixed(1)} ` +
+          `spk_th=${dynSpeechThreshold.toFixed(1)} sus_th=${dynSustainedThreshold.toFixed(1)} ` +
+          `floor=${noiseFloor !== null ? noiseFloor.toFixed(1) : "null"} ` +
+          `voice_age=${voiceAge !== null ? voiceAge + "ms" : "n/a"} ` +
+          `density=${(density * 100).toFixed(0)}% ` +
+          `speech_started=${speechStartFired}`
+        );
+      }
+
       // Hard cap on recording length
       if (now - startedAt > HARD_CAP_MS) {
         vadStopped = true;
@@ -506,16 +564,40 @@ export async function startRecording(): Promise<Recorder> {
           consecutiveVoiceFrames = 0;
         }
       }
+      // === STOP CONDITION #1 (originale): tempo dall'ultima voce ===
       if (speechStartFired && firstSpeechAt && lastVoiceAt) {
         const speechElapsed = now - firstSpeechAt;
         if (speechElapsed >= MIN_SPEECH_MS) {
           const silenceFor = now - lastVoiceAt;
           if (silenceFor >= SILENCE_DURATION_MS) {
             vadStopped = true;
-            vadLog("silence_detected", { db, silence_ms: silenceFor });
+            vadLog("silence_detected", { db, silence_ms: silenceFor, reason: "last_voice_age" });
             vadLog("recording_stopped", { reason: "VAD_TIMEOUT", db });
             if (silenceCb) try { silenceCb(); } catch {}
+            return;
           }
+        }
+      }
+      // === STOP CONDITION #2 (NUOVO failsafe v10): densità voce bassa ===
+      // Se l'utente ha già parlato per >2.5s E la densità di frame con
+      // voce reale negli ultimi 2s è < 30%, consideriamo concluso il
+      // turno anche se ci sono picchi sporadici di rumore (TV/eco/respiro
+      // che impediscono al rilevatore #1 di scattare).
+      if (speechStartFired && firstSpeechAt &&
+          now - firstSpeechAt >= FAILSAFE_AFTER_MIN_SPEECH_MS &&
+          recentFrames.length >= 20) {
+        const voiceCount = recentFrames.filter(f => f.voice).length;
+        const density = voiceCount / recentFrames.length;
+        if (density < VOICE_DENSITY_MIN_PCT) {
+          vadStopped = true;
+          vadLog("silence_detected", {
+            db,
+            reason: "density_failsafe",
+            density: (density * 100).toFixed(0) + "%",
+          });
+          vadLog("recording_stopped", { reason: "VAD_DENSITY_FAILSAFE", db });
+          if (silenceCb) try { silenceCb(); } catch {}
+          return;
         }
       }
     } catch (e) {

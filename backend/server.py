@@ -2704,7 +2704,24 @@ async def api_converse(req: ConverseRequest):
             system_message=system_prompt,
         ).with_model("anthropic", "claude-haiku-4-5-20251001")  # HAIKU 4.5 = ~2× più veloce, near-frontier intelligence
         msg = UserMessage(text=user_payload)
+        # === [KODA_TIMING] (sprint giugno 2026 v10) ===
+        # Log path-aware: questo è il path STANDARD /converse (fallback
+        # quando fast path fallisce, oppure chat scritta). USA un prompt
+        # COMPLETAMENTE diverso da fast (lungo ~10k chars) e modello
+        # Claude Haiku invece di gpt-5.4-mini. Se vediamo questo log
+        # frequente durante voce, vuol dire che il fast path sta fallendo.
+        _kt_llm_start = time.time()
+        logger.info(
+            f"[KODA_TIMING] LLM_START_STANDARD path=/converse "
+            f"prompt_chars={len(system_prompt)} model=claude-haiku-4-5 "
+            f"ephemeral={req.ephemeral}"
+        )
         raw = await chat.send_message(msg)
+        logger.info(
+            f"[KODA_TIMING] LLM_END_STANDARD path=/converse "
+            f"elapsed_ms={int((time.time() - _kt_llm_start) * 1000)} "
+            f"reply_chars={len(raw or '')}"
+        )
     except Exception as e:
         logger.error(f"LLM converse error: {e}")
         raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")
