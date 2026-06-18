@@ -3021,23 +3021,29 @@ async def api_converse_sealed(
         f"('eccoci di nuovo qui', 'lo sapevo che tornavi su questo') — mai con asprezza, "
         f"sempre con tenerezza.\n"
         f"\n"
-        f"=== REGOLA MADRE (V1 spec, giugno 2026) ===\n"
+        f"=== REGOLA MADRE (V1 spec, giugno 2026 — v2 calibrata) ===\n"
         f"Prima di ogni risposta, chiediti SEMPRE:\n"
-        f"  «Questa risposta sta aiutando l'utente a esprimersi,\n"
-        f"   oppure sta cercando di spiegargli chi è?»\n"
+        f"  «Sto aiutando l'utente a esprimersi, OPPURE sto cercando di\n"
+        f"   incasellarlo dentro un'etichetta psicologica?»\n"
         f"\n"
-        f"Se la tua risposta cerca di DIAGNOSTICARE, INTERPRETARE LA PERSONA, "
-        f"ETICHETTARLA o fare PSEUDO-TERAPIA → SCARTA e RIGENERA.\n"
+        f"DEVI sempre: ascoltare · validare ciò che sente · riflettere "
+        f"con calore · porre domande aperte · usare frasi come 'capisco "
+        f"che sia pesante', 'ci sta che ti senta così', 'è normale provare "
+        f"questo' (validazione emotiva, sempre incoraggiata).\n"
         f"\n"
-        f"DEVI: ascoltare · riflettere · evidenziare elementi del discorso · "
-        f"porre domande aperte · favorire l'espressione.\n"
+        f"NON DEVI MAI: incasellare l'utente in categorie diagnostiche "
+        f"('hai un disturbo ansioso', 'soffri di…', 'sei una persona ansiosa/depressa/"
+        f"borderline'), interpretare schemi inconsci ('questo è il tuo "
+        f"schema di attaccamento', 'rievochi una figura paterna'), fare "
+        f"psicologia spiccia con definizioni dell'identità ('sei una persona "
+        f"che ha bisogno di…').\n"
         f"\n"
-        f"NON DEVI: etichettare · diagnosticare · 'capisco che tu sia ansiosa/depressa/insicura' · "
-        f"'questo è il tuo schema di attaccamento' · 'sei una persona che…' · "
-        f"definire l'identità dell'utente al posto suo.\n"
+        f"Differenza chiave: VALIDARE un'emozione del momento (sempre giusto, "
+        f"caldo) ≠ DEFINIRE chi è l'utente (mai, anche se sembra empatico).\n"
         f"\n"
-        f"Frase guida: questa è la STANZA DELLO SFOGO. Qui un pensiero esce e non resta. "
-        f"Il tuo compito è fare SPAZIO, non riempirlo di interpretazioni.\n"
+        f"Frase guida: questa è la STANZA DELLO SFOGO. Qui un pensiero esce "
+        f"e non resta. Il tuo compito è fare SPAZIO con calore, non riempirlo "
+        f"di interpretazioni psicologiche.\n"
         f"\n"
         f"Rispondi SEMPRE in {lang_name}. MOLTO breve (1-3 frasi). Tono caldo, presenza pura. "
         f"Apri con UNA tag emotiva ([gently], [warmly], [thoughtful], [softly]) e MAX una "
@@ -3083,11 +3089,12 @@ async def api_converse_sealed(
         messages.extend(history_msgs)
         messages.append({"role": "user", "content": plaintext})
         resp = await litellm.acompletion(
-            # === V1 LATENCY SWITCH (giugno 2026) ===
-            # Stanza dello Sfogo passa a gpt-5.4-mini: TTFT misurato ~500ms
-            # vs ~820ms di Claude Haiku 4.5 sul nostro proxy Emergent.
-            # Risparmio ~320ms percepiti.
-            model='openai/gpt-5.4-mini',
+            # === ROLLBACK 2026-06-17 v2: torna a Haiku 4.5 ===
+            # gpt-5.4-mini era più veloce (-320ms TTFT) ma percepito come
+            # FREDDO/asciutto dall'utente. Una companion app emotiva non
+            # può permettersi un modello meno empatico. Claude resta la
+            # scelta giusta. Accettiamo i ~320ms in più di latenza.
+            model='openai/claude-haiku-4-5-20251001',
             messages=messages,
             api_key=EMERGENT_LLM_KEY,
             api_base='https://integrations.emergentagent.com/llm',
@@ -7292,13 +7299,12 @@ async def _fast_pipeline_task(
         logger.info(f"[KODA_TIMING] LLM_START sid={session_id[:8]} prompt_chars={len(sys_prompt)}")
 
         stream = await litellm.acompletion(
-            # === V1 LATENCY SWITCH (giugno 2026) ===
-            # Fast pipeline (Stanza Quotidiana streaming) passa a gpt-5.4-mini.
-            # TTFT misurato sul proxy Emergent: ~500ms vs ~820ms di Haiku 4.5.
-            # Risparmio ~320ms reali al "primo audio" per ogni turno.
-            # gpt-5.4-mini è un modello small/fast OpenAI con qualità
-            # conversazionale alta — perfetto per la natura empatica di Koda.
-            model='openai/gpt-5.4-mini',
+            # === ROLLBACK 2026-06-17 v2: torna a Haiku 4.5 ===
+            # Avevo provato gpt-5.4-mini (TTFT 500ms vs 820ms) ma l'utente
+            # ha percepito perdita di empatia. Per una companion app
+            # emotiva il calore vale più dei 320ms. Claude resta la
+            # scelta giusta.
+            model='openai/claude-haiku-4-5-20251001',
             messages=[
                 {'role': 'system', 'content': sys_prompt},
                 {'role': 'user', 'content': user_payload},

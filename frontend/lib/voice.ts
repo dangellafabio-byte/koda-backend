@@ -108,32 +108,27 @@ let _nativeReady = false;
 //      frame corrente c'è un picco di rumore (es. tosse), il timer
 //      di silenzio dal momento dell'ultima voce reale continua a
 //      crescere correttamente.
-// === SOGLIE VAD — PLATFORM-AWARE (giugno 2026 v8 / Android fix) ===
+// === SOGLIE VAD — PLATFORM-AWARE (giugno 2026 v9) ===
 // Su iOS expo-audio riporta `metering` in dBFS già correttamente normalizzato
 // (-160..0): rumore di stanza tipico -38/-42 dBFS, voce -10/-25 dBFS.
 //
 // Su Android la scala dB è derivata da MediaRecorder.getMaxAmplitude() e il
 // FLOOR del rumore tende a essere più alto (-22/-18 dBFS in stanza normale).
 // Le soglie iOS sono troppo basse → VAD scambia il rumore di fondo per voce
-// → lastVoiceAt non scade mai → fine-turno mai → utente "non sente quando
-// smetto di parlare".
+// → lastVoiceAt non scade mai → fine-turno mai.
 //
-// Fix: tutte le soglie shiftate di +12 dB su Android. Soglie iOS lasciate
-// invariate per non rompere il comportamento già validato.
+// AURICOLARI/BT: livello voce significativamente più basso del mic interno.
+// SPEECH_THRESHOLD iOS abbassata da -38 a -42 dBFS per catturare anche voci
+// pacate/lontane dal mic. SUSTAINED da -34 a -36 per non perdere la voce
+// durante pause brevi. Frame counter da 3 a 2 (~140ms) per essere più
+// reattivi all'inizio del parlato.
 const _IS_ANDROID = Platform.OS === "android";
-const SPEECH_THRESHOLD_DB = _IS_ANDROID ? -26 : -38;     // sopra → voce presente
-const SUSTAINED_VOICE_DB  = _IS_ANDROID ? -22 : -34;     // sopra → rinfresca lastVoiceAt
-const SILENCE_THRESHOLD_DB = _IS_ANDROID ? -30 : -42;    // sotto → reset aggressivo frame counter
+const SPEECH_THRESHOLD_DB = _IS_ANDROID ? -26 : -42;     // sopra → voce presente
+const SUSTAINED_VOICE_DB  = _IS_ANDROID ? -22 : -36;     // sopra → rinfresca lastVoiceAt
+const SILENCE_THRESHOLD_DB = _IS_ANDROID ? -30 : -46;    // sotto → reset aggressivo frame counter
 const SILENCE_DURATION_MS = 600;     // 0.6s silence after speech → end of utterance
-                                     // (giugno 2026 v8 / ChatGPT sprint v2)
-                                     // 900 → 550 → 600: il 550 era leggermente
-                                     // sotto il sweet spot raccomandato (~600-650ms).
-                                     // 600ms taglia ~300ms vs la baseline storica
-                                     // senza tagliare pause naturali del parlato.
-const MIN_SPEECH_MS = 500;           // need at least 500ms of voice before silence can fire
-                                     // (giugno 2026: da 700 a 500ms — parole brevi
-                                     // 'sì', 'ok', 'no' non vengono ignorate)
-const MIN_SPEECH_FRAMES = 3;         // 3 consecutive frames (~210ms) above threshold → real speech
+const MIN_SPEECH_MS = 500;           // 500ms minimo di voce prima che silence possa scattare
+const MIN_SPEECH_FRAMES = 2;         // 2 frame consecutivi (~140ms) → reagisce a voce bassa
 const METER_POLL_MS = 70;            // ~14Hz sampling
 const HARD_CAP_MS = 60_000;          // absolute max recording length
 
@@ -437,11 +432,24 @@ export async function startRecording(): Promise<Recorder> {
   let silenceCb: (() => void) | null = null;
   let meterCb: ((db: number, threshold?: number | null) => void) | null = null;
 
-  // === IMPORTANT: `stopped` deve essere dichiarata PRIMA del setInterval
-  // perché il guard sotto la controlla (insieme a vadStopped/vadPaused).
-  // Senza, una callback orfana già schedulata può eseguire dopo
-  // recorder.release() e bloccare il JS thread sul bridge nativo iOS.
-  // Vedi root cause analysis nel safeStop() più sotto. ===
+  // === NOISE FLOOR ADAPTIVE (giugno 2026 v9) ===
+  // Calibra il VAD sul rumore ambientale dei primi 350ms di registrazione.
+  // Quando l'utente è in un ambiente rumoroso (furgone, ufficio aperto, bar),
+  // il rumore continuo può superare SPEECH_THRESHOLD_DB e impedire al timer
+  // di silenzio di scattare → la registrazione non finisce mai.
+  //
+  // Logica: nei primi N frames (≈350ms) prima che parta la voce, raccogliamo
+  // i sample dB e calcoliamo il floor. Poi shiftiamo dinamicamente:
+  //    speechThreshold  = max(STATIC_THRESHOLD, noise_floor + 6 dB)
+  //    sustainedThreshold = max(STATIC_SUSTAINED, noise_floor + 10 dB)
+  // così la voce deve essere SOPRA il rumore di fondo per contare.
+  const CALIB_WINDOW_MS = 350;
+  let noiseFloor: number | null = null;
+  const calibSamples: number[] = [];
+  let dynSpeechThreshold = SPEECH_THRESHOLD_DB;
+  let dynSustainedThreshold = SUSTAINED_VOICE_DB;
+
+  // === IMPORTANT: `stopped` deve essere dichiarata PRIMA del setInterval ===
   let stopped = false;
 
   const vadInterval = setInterval(() => {
@@ -451,9 +459,28 @@ export async function startRecording(): Promise<Recorder> {
       if (!st || !st.isRecording) return;
       const db: number = typeof st.metering === "number" ? st.metering : -100;
       if (meterCb) {
-        try { meterCb(db, SPEECH_THRESHOLD_DB); } catch {}
+        try { meterCb(db, dynSpeechThreshold); } catch {}
       }
       const now = Date.now();
+      // Calibrazione noise floor: solo prima che parta la voce, finché
+      // siamo dentro la finestra iniziale.
+      if (!speechStartFired && now - startedAt < CALIB_WINDOW_MS) {
+        if (db > -100 && db < 0) calibSamples.push(db);
+      } else if (!speechStartFired && noiseFloor === null && calibSamples.length >= 3) {
+        // Floor = mediana dei sample iniziali (più robusta della media).
+        const sorted = [...calibSamples].sort((a, b) => a - b);
+        noiseFloor = sorted[Math.floor(sorted.length / 2)];
+        // Adatta solo SE il rumore è significativamente sopra la baseline
+        // statica. Se l'ambiente è silenzioso (-50 dB), non scendere sotto
+        // le soglie statiche già validate.
+        dynSpeechThreshold = Math.max(SPEECH_THRESHOLD_DB, noiseFloor + 6);
+        dynSustainedThreshold = Math.max(SUSTAINED_VOICE_DB, noiseFloor + 10);
+        vadLog("noise_calibrated", {
+          floor: noiseFloor.toFixed(1),
+          speech_th: dynSpeechThreshold.toFixed(1),
+          sustained_th: dynSustainedThreshold.toFixed(1),
+        });
+      }
       // Hard cap on recording length
       if (now - startedAt > HARD_CAP_MS) {
         vadStopped = true;
@@ -461,16 +488,16 @@ export async function startRecording(): Promise<Recorder> {
         if (silenceCb) try { silenceCb(); } catch {}
         return;
       }
-      if (db > SPEECH_THRESHOLD_DB) {
+      if (db > dynSpeechThreshold) {
         consecutiveVoiceFrames++;
         if (consecutiveVoiceFrames >= MIN_SPEECH_FRAMES && !speechStartFired) {
           speechStartFired = true;
           firstSpeechAt = now - MIN_SPEECH_FRAMES * METER_POLL_MS;
           lastVoiceAt = now;
-          vadLog("speech_start", { db });
+          vadLog("speech_start", { db, dyn_th: dynSpeechThreshold.toFixed(1) });
           if (speechStartCb) try { speechStartCb(); } catch {}
         }
-        if (speechStartFired && db > SUSTAINED_VOICE_DB) {
+        if (speechStartFired && db > dynSustainedThreshold) {
           lastVoiceAt = now;
           vadLog("speech_refresh", { db });
         }
