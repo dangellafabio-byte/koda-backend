@@ -7289,6 +7289,21 @@ async def _fast_pipeline_task(
                 + web_search_brief
             )
         user_payload_parts.append(f"UTENTE: {text}")
+        # === BUG LINGUA — RINFORZO USER MESSAGE (sprint v12 #2) ===
+        # gpt-5.4-mini ignora l'istruzione di lingua nel system anche
+        # quando è la PRIMA riga (testato con utente Lorenzo, 18/6/2026:
+        # rispondeva ancora in spagnolo). I modelli "mini" rispettano
+        # meglio le istruzioni nel USER message, specialmente alla FINE
+        # del payload (è l'ultima cosa che leggono prima di rispondere).
+        # Qui mettiamo un reminder breve ma assertivo come ultima istruzione.
+        lang_reminder = {
+            "it": "🇮🇹 Rispondi ESCLUSIVAMENTE in ITALIANO. Mai spagnolo. Mai inglese.",
+            "en": "🇬🇧 Reply ONLY in ENGLISH. Never in another language.",
+            "es": "🇪🇸 Responde SOLO en ESPAÑOL.",
+            "fr": "🇫🇷 Réponds UNIQUEMENT en FRANÇAIS.",
+            "de": "🇩🇪 Antworte AUSSCHLIESSLICH auf DEUTSCH.",
+        }.get(profile.language or "it", "Rispondi solo in italiano.")
+        user_payload_parts.append(lang_reminder)
         user_payload_parts.append('Rispondi SOLO col JSON, "reply" come primo campo.')
         user_payload = "\n\n".join(user_payload_parts)
 
@@ -7461,6 +7476,11 @@ async def _fast_pipeline_task(
                 pass
 
         full_reply = ''.join(full_reply_chars).strip() or "..."
+        # === DIAG LINGUA (sprint v12 #2) ===
+        # Logghiamo i primi 80 char della reply per detect rapido di
+        # language drift (Koda che risponde in spagnolo). Cerca questo
+        # log se l'utente segnala la lingua sbagliata.
+        logger.info(f"[KODA_LANG_CHECK] sid={session_id[:8]} reply_first80={full_reply[:80]!r}")
         data = extract_json(extractor.full_buffer) or {}
         tone = (data.get("tone") or "warm").lower()
         if tone not in {"calm", "energetic", "concerned", "urgent", "warm", "neutral"}:
