@@ -662,6 +662,10 @@ export async function fastConverse(
     onAudioStart?: () => void;
     onMeta?: (meta: FastConverseMeta) => void;
     timeoutMs?: number;  // overall hard timeout (default 45s)
+    // === KODA_SUMMARY METRIC (sprint v11) ===
+    // Durata in ms della registrazione utente che ha generato `text`.
+    // Solo per scopi di logging — non viene inviata al backend.
+    recordingDurationMs?: number;
   } = {}
 ): Promise<FastConverseResult> {
   const timeoutMs = opts.timeoutMs ?? 45000;
@@ -703,9 +707,10 @@ export async function fastConverse(
     const ms = (v: number | null) => (v == null ? "?" : String(v - t0));
     const status = errMsg ? `err=${errMsg.slice(0, 40)}` : "ok";
     // UNA RIGA CONSOLIDATA — copiabile direttamente in tabella.
-    // Campi: total | start_ack | first_audio | meta | done | sentences | status
+    // Campi: total | recording_ms | start_ack | first_audio | meta | done | sentences | status
+    const recMs = opts.recordingDurationMs;
     console.log(
-      `[KODA_SUMMARY] total=${total}ms start_ack=${ms(tStartAck)}ms ` +
+      `[KODA_SUMMARY] total=${total}ms recording_ms=${recMs ?? "?"} start_ack=${ms(tStartAck)}ms ` +
         `first_audio=${ms(tFirstAudio)}ms meta=${ms(tMeta)}ms ` +
         `done=${ms(tDone)}ms sentences=${sentenceCount} ${status}`
     );

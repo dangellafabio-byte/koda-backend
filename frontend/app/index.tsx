@@ -630,6 +630,15 @@ export default function Taccuino() {
   }, [profile]);
 
   const recRef = useRef<Recorder | null>(null);
+  // === RECORDING DURATION TRACKING (sprint giugno 2026 v11) ===
+  // Catturiamo il timestamp di avvio recording così possiamo includerlo
+  // nel [KODA_SUMMARY] come recording_duration_ms. Permette di distinguere
+  // a colpo d'occhio: A) registrazione troppo breve (utente non parla
+  // abbastanza prima della chiusura VAD); B) pipeline lenta (recording
+  // ok ma backend impiega tempo). Senza questa metrica devi correlare
+  // [KODA_TIMING] VOICE_END con [KODA_SUMMARY] = laborioso.
+  const recordingStartedAtRef = useRef<number | null>(null);
+  const lastRecordingDurationMsRef = useRef<number | null>(null);
   const scrollRef = useRef<FlatList<any>>(null);
   // === FIRST-TAP GATE (richiesto utente 2026-05-23) ===
   // Regola: ad ogni cold-start dell'app E ad ogni ritorno dal background,
@@ -1916,6 +1925,7 @@ export default function Taccuino() {
               // HTTP path (default + fallback)
               return await SpeechMod.fastConverse(txt, {
                 ephemeral: confessionalMode,
+                recordingDurationMs: lastRecordingDurationMsRef.current ?? undefined,
                 onAudioStart: () => {
                   speakingStarted = true;
                   clearTimeout(watchdog);
@@ -2163,6 +2173,9 @@ export default function Taccuino() {
       }
       const rec = await startRecording();
       recRef.current = rec;
+      // === RECORDING DURATION (sprint v11) ===
+      // Cattura timestamp avvio per misura recording_duration_ms nel SUMMARY.
+      recordingStartedAtRef.current = Date.now();
       // Wire live meter for debug visualization
       if (rec.onMeter) {
         rec.onMeter((db: number, threshold?: number | null) => {
@@ -2243,6 +2256,13 @@ export default function Taccuino() {
     // stale-closure bugs when called from the silence-detection callback)
     const current = recRef.current;
     if (!current) return;
+    // === RECORDING DURATION (sprint v11) ===
+    // Capture duration at the EXACT moment of stop, before any async work.
+    // Used by [KODA_SUMMARY] downstream.
+    if (recordingStartedAtRef.current !== null) {
+      lastRecordingDurationMsRef.current = Date.now() - recordingStartedAtRef.current;
+      recordingStartedAtRef.current = null;
+    }
     // FIX 2 (RCA): NON azzeriamo recRef.current PRIMA dell'await.
     // Prima nullavamo subito, ma se current.stop() lancia/blocca, la
     // sessione audio iOS resta in playAndRecord → la prossima registrazione
