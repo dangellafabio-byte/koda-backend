@@ -4329,6 +4329,37 @@ export default function Taccuino() {
               </Text>
             </View>
 
+            {/* === DIAGNOSTICA (sprint v12) ===
+                Schermata di debug accessibile direttamente da iPhone.
+                Permette di vedere/copiare/condividere gli ultimi log
+                [KODA_VAD], [KODA_TIMING], [KODA_SUMMARY] senza bisogno
+                di Mac + Console.app. Critico per la diagnosi del VAD
+                quando l'utente testa su TestFlight. */}
+            <TouchableOpacity
+              style={{
+                marginTop: 16,
+                paddingVertical: 12,
+                paddingHorizontal: 14,
+                backgroundColor: theme.text + "0c",
+                borderRadius: 10,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+              onPress={() => {
+                closeSettings();
+                setTimeout(() => router.push("/diagnostics"), 200);
+              }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <Ionicons name="bug-outline" size={18} color={theme.text + "99"} />
+                <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500" }}>
+                  Diagnostica
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={theme.text + "66"} />
+            </TouchableOpacity>
+
             {/* === VERSIONE APP ===
                 Footer minimale (senza expo-application per evitare
                 crash su build che non l'avevano linkato nativamente).

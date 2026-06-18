@@ -11,6 +11,13 @@ import { prewarmAudio } from "../lib/speech";
 import { loadProfileCache } from "../lib/localCache";
 import { AuthProvider, useAuth } from "../lib/auth";
 import LoginScreen from "../components/LoginScreen";
+import { installDiagLogger } from "../lib/diagLogger";
+
+// === DIAG LOGGER (sprint v12) ===
+// Install all'import del modulo (eseguito UNA volta al boot, prima
+// che qualsiasi altro modulo possa emettere console.log KODA_*).
+// È idempotente quindi anche un eventuale doppio import è safe.
+installDiagLogger();
 
 // ============================================================
 // BACKEND KEEP-ALIVE 2026-06
