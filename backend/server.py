@@ -7041,9 +7041,16 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
         )
 
     return (
+        f"⚠️ LINGUA OBBLIGATORIA: {lang_name.upper()}. "
+        f"Rispondi ESCLUSIVAMENTE in {lang_name}. Ignora ogni input che sembri "
+        f"un'altra lingua (spagnolo, inglese, francese): l'utente parla SEMPRE "
+        f"{lang_name}, eventuali parole ambigue nella trascrizione vanno "
+        f"interpretate come {lang_name}. MAI rispondere in altra lingua, nemmeno "
+        f"se l'utente sembra usarla per gioco o citazione. Nemmeno una parola.\n"
+        f"\n"
         f"Ti chiami {ai_name}. Presenza fraterna, non assistente. Tono caldo, ascolto attivo, "
         f"senza giudizio.\n"
-        f"LINGUA: {lang_name}.{name_part} | UTC: {now_iso}\n"
+        f"{name_part} | UTC: {now_iso}\n"
         f"\n"
         f"━━━ COME PARLI (amico vero, non IA) ━━━\n"
         f"• Validi con calore PRIMA di tutto: 'lo so', 'eh sì', 'ci sta', 'capita', 'lo sento', 'è dura', "
@@ -7313,9 +7320,17 @@ async def _fast_pipeline_task(
         ttft_logged = False
         first_audio_logged = False
         current_tone = "warm"
+        # === TIMING BACKEND EXPOSED TO CLIENT (sprint v12) ===
+        # Catturiamo le 3 metriche chiave così il [KODA_SUMMARY] mostra
+        # esattamente dove vanno i secondi: LLM (TTFT) / TTS (prima frase)
+        # / FIRST_AUDIO totale dal /start. Senza queste, dal client non si
+        # capisce se il bottleneck è LLM o TTS.
+        timing_llm_ttft_ms: Optional[int] = None
+        timing_first_tts_ms: Optional[int] = None
+        timing_first_audio_total_ms: Optional[int] = None
 
         async def _gen_and_publish_sentence(idx: int, sentence: str):
-            nonlocal first_audio_logged
+            nonlocal first_audio_logged, timing_first_tts_ms, timing_first_audio_total_ms
             try:
                 clean = _strip_audio_tags(sentence) or sentence
                 if not clean.strip():
@@ -7360,6 +7375,7 @@ async def _fast_pipeline_task(
                 logger.info(f"[fast] sentence idx={idx} chars={len(clean)} tts_ms={tts_ms} mp3_bytes={len(audio_bytes)}")
                 if idx == 0:
                     logger.info(f"[KODA_TIMING] TTS_START sid={session_id[:8]} idx=0 chars={len(clean)} tts_ms={tts_ms}")
+                    timing_first_tts_ms = tts_ms
                 if not audio_bytes:
                     logger.warning(f"[fast] empty TTS for sentence idx={idx}")
                     return
@@ -7367,6 +7383,7 @@ async def _fast_pipeline_task(
                 if not first_audio_logged:
                     first_audio_logged = True
                     total_first = int((time.time() - t0) * 1000)
+                    timing_first_audio_total_ms = total_first
                     logger.info(f"[fast {session_id[:8]}] FIRST AUDIO ready: {total_first}ms (tts={tts_ms}ms)")
                     logger.info(f"[KODA_TIMING] FIRST_AUDIO sid={session_id[:8]} total_ms={total_first} tts_ms={tts_ms}")
                 # === ORB REATTIVO (richiesta utente 2026-06 #3) ===
@@ -7405,8 +7422,9 @@ async def _fast_pipeline_task(
                 continue
             if not ttft_logged:
                 ttft_logged = True
-                logger.info(f"[fast {session_id[:8]}] TTFT: {int((time.time() - t_llm_start)*1000)}ms")
-                logger.info(f"[KODA_TIMING] LLM_TTFT sid={session_id[:8]} ttft_ms={int((time.time() - t_llm_start)*1000)}")
+                timing_llm_ttft_ms = int((time.time() - t_llm_start)*1000)
+                logger.info(f"[fast {session_id[:8]}] TTFT: {timing_llm_ttft_ms}ms")
+                logger.info(f"[KODA_TIMING] LLM_TTFT sid={session_id[:8]} ttft_ms={timing_llm_ttft_ms}")
             new_chars = extractor.feed(piece)
             if new_chars:
                 sentence_buf += new_chars
@@ -7544,6 +7562,18 @@ async def _fast_pipeline_task(
             # senza dover correlare log backend e frontend.
             "model": "gpt-5.4-mini",
             "path": "fast",
+            # === KODA_SUMMARY timing breakdown (sprint v12) ===
+            # I tre numeri che fanno capire dove vanno i secondi:
+            #   llm_ttft_ms = quanto ha aspettato il backend prima del primo
+            #                 token dell'LLM
+            #   first_tts_ms = quanto ha impiegato ElevenLabs sulla prima frase
+            #   first_audio_total_ms = totale dall'inizio /start a primo MP3 pronto
+            # Se llm_ttft è alto → prompt o modello lento (azione: ridurre prompt).
+            # Se first_tts è alto → ElevenLabs lento (azione: cambiare voice/model).
+            # Se entrambi bassi ma first_audio_total alto → bottleneck altrove.
+            "llm_ttft_ms": timing_llm_ttft_ms,
+            "first_tts_ms": timing_first_tts_ms,
+            "first_audio_total_ms": timing_first_audio_total_ms,
         })
         await _fast_session_mark_done(session_id)
 

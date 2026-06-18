@@ -703,6 +703,12 @@ export async function fastConverse(
   // dal backend. Permettono di intercettare fallback silenziosi.
   let summaryModel: string = "?";
   let summaryPath: string = "?";
+  // === KODA_SUMMARY timing breakdown server-side (sprint v12) ===
+  // Catturati dal meta event: i tre numeri che fanno capire dove vanno
+  // i secondi nel backend. Diagnostica chirurgica del bottleneck.
+  let summaryLlmTtftMs: number | null = null;
+  let summaryFirstTtsMs: number | null = null;
+  let summaryFirstAudioTotalMs: number | null = null;
   let summaryFinalized = false;
   const finalizeSummary = (errMsg?: string) => {
     if (summaryFinalized) return;
@@ -712,12 +718,16 @@ export async function fastConverse(
     const status = errMsg ? `err=${errMsg.slice(0, 40)}` : "ok";
     // UNA RIGA CONSOLIDATA — copiabile direttamente in tabella.
     // Campi: model | path | total | recording_ms | transcript_chars |
+    //        llm_ttft | first_tts | first_audio_srv |
     //        start_ack | first_audio | meta | done | sentences | status
     const recMs = opts.recordingDurationMs;
     console.log(
       `[KODA_SUMMARY] model=${summaryModel} path=${summaryPath} ` +
         `total=${total}ms recording_ms=${recMs ?? "?"} ` +
         `transcript_chars=${text.length} ` +
+        `llm_ttft=${summaryLlmTtftMs ?? "?"}ms ` +
+        `first_tts=${summaryFirstTtsMs ?? "?"}ms ` +
+        `first_audio_srv=${summaryFirstAudioTotalMs ?? "?"}ms ` +
         `start_ack=${ms(tStartAck)}ms first_audio=${ms(tFirstAudio)}ms ` +
         `meta=${ms(tMeta)}ms done=${ms(tDone)}ms ` +
         `sentences=${sentenceCount} ${status}`
@@ -826,6 +836,10 @@ export async function fastConverse(
               // versione che non li espone.
               if (typeof ev.model === "string") summaryModel = ev.model;
               if (typeof ev.path === "string") summaryPath = ev.path;
+              // === Timing breakdown server-side (sprint v12) ===
+              if (typeof ev.llm_ttft_ms === "number") summaryLlmTtftMs = ev.llm_ttft_ms;
+              if (typeof ev.first_tts_ms === "number") summaryFirstTtsMs = ev.first_tts_ms;
+              if (typeof ev.first_audio_total_ms === "number") summaryFirstAudioTotalMs = ev.first_audio_total_ms;
               meta = {
                 reply: ev.reply || "",
                 voice_text: ev.voice_text ?? null,

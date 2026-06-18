@@ -202,6 +202,14 @@ function buildHandsFreePreset() {
       bitRate: 32000,
       outputFormat: "mpeg4",
       audioEncoder: "aac",
+      // === FIX METERING ANDROID 2026-06-28 ===
+      // Dai log del telefono Android della partner: db=-100.0 per tutti
+      // gli 11.6 secondi di registrazione. La flag top-level
+      // `isMeteringEnabled: true` non viene letta dal recorder Android
+      // di expo-audio: va specificata DENTRO la sezione android. Senza
+      // questa, recorder.getStatus().metering ritorna sempre -100 →
+      // VAD inerte → hands-free inutilizzabile.
+      isMeteringEnabled: true,
     },
     ios: {
       ...(base.ios || {}),
