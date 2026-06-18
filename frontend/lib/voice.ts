@@ -128,7 +128,20 @@ const SUSTAINED_VOICE_DB  = _IS_ANDROID ? -22 : -36;     // sopra → rinfresca 
 const SILENCE_THRESHOLD_DB = _IS_ANDROID ? -30 : -46;    // sotto → reset aggressivo frame counter
 const SILENCE_DURATION_MS = 600;     // 0.6s silence after speech → end of utterance
 const MIN_SPEECH_MS = 500;           // 500ms minimo di voce prima che silence possa scattare
-const MIN_SPEECH_FRAMES = 2;         // 2 frame consecutivi (~140ms) → reagisce a voce bassa
+// === FIX FALSI POSITIVI 2026-06-28 (post 20 test hands-free) ===
+// I 20 test hanno dimostrato che il VAD ora chiude da solo (bug storico
+// risolto). Ma è emerso un bug secondario: in stanza silenziosa, se
+// l'utente NON parla subito, capita che un micro-rumore (click delle
+// dita sul telefono, fruscio dei vestiti, vibrazione tavolo) duri 100-
+// 150ms — sufficiente con MIN_SPEECH_FRAMES=2 (140ms) per scatenare un
+// falso positivo di speech_start. Da lì il VAD aspetta SILENCE_DURATION_MS
+// (600ms) e chiude → audio contiene solo il click → Deepgram vuoto →
+// "Non ti ho sentito".
+//
+// Fix: 2 → 4 (280ms). Un click/fruscio NON dura 280ms continuativi.
+// Una "Ciao" reale dura 300-500ms → la soglia resta comodamente
+// raggiungibile per voce vera, ma filtra i rumori brevi.
+const MIN_SPEECH_FRAMES = 4;         // 4 frame consecutivi (~280ms) → filtra click/fruscii brevi
 const METER_POLL_MS = 70;            // ~14Hz sampling
 const HARD_CAP_MS = 60_000;          // absolute max recording length
 
@@ -561,6 +574,17 @@ export async function startRecording(): Promise<Recorder> {
         }
       } else {
         if (db < SILENCE_THRESHOLD_DB) {
+          // === DIAGNOSTICA FALSI POSITIVI (sprint v10) ===
+          // Se avevamo accumulato qualche frame "voce" ma non abbiamo
+          // raggiunto MIN_SPEECH_FRAMES → è probabilmente un click/fruscio
+          // breve. Lo logghiamo per vedere quanti ne stiamo filtrando.
+          if (consecutiveVoiceFrames > 0 && consecutiveVoiceFrames < MIN_SPEECH_FRAMES && !speechStartFired) {
+            vadLog("false_speech_filtered", {
+              frames: consecutiveVoiceFrames,
+              needed: MIN_SPEECH_FRAMES,
+              db,
+            });
+          }
           consecutiveVoiceFrames = 0;
         }
       }
