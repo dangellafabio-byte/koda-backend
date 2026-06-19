@@ -3410,6 +3410,66 @@ export default function Taccuino() {
                 <Text style={[styles.statusLabel, styles.statusLabelOnBg, { fontSize: 16, marginTop: 8 }]}>
                   {aiPaused ? "AI in pausa" : ""}
                 </Text>
+                {/* === PTT FALLBACK BUTTON (Fix #3 — 2026-06) ===
+                    Press-and-hold per registrazione manuale garantita.
+                    Bypassa il VAD: utile quando l'ambiente rumoroso (auto,
+                    furgone, traffico) confonde il VAD e la registrazione
+                    parte/si ferma in modo errato. Disponibile sia in
+                    hands-free che manuale (è una rete di sicurezza). */}
+                {status !== "transcribing" && status !== "thinking" ? (
+                  <Pressable
+                    onPressIn={async () => {
+                      userInteractedRef.current = true;
+                      if (recRef.current) return; // già registrando, no-op
+                      try { SpeechMod.stop(); } catch {}
+                      // Forza non-autoStop: il VAD non chiuderà mai da solo
+                      // → solo il release del dito chiude la registrazione.
+                      try { await startTalkInternal(false); } catch {}
+                    }}
+                    onPressOut={async () => {
+                      if (recRef.current) {
+                        try { await stopTalk(); } catch {}
+                      }
+                    }}
+                    hitSlop={16}
+                    testID="ptt-btn"
+                    accessibilityLabel="Tieni premuto per parlare"
+                    style={({ pressed }) => [
+                      {
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 8,
+                        paddingVertical: 10,
+                        paddingHorizontal: 18,
+                        borderRadius: 999,
+                        marginTop: 6,
+                        backgroundColor: pressed
+                          ? (theme.isDark ? "rgba(52,211,153,0.20)" : "rgba(52,211,153,0.18)")
+                          : (theme.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)"),
+                        borderWidth: StyleSheet.hairlineWidth,
+                        borderColor: pressed
+                          ? "#34D399"
+                          : (theme.isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.10)"),
+                        transform: [{ scale: pressed ? 0.97 : 1 }],
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name="mic"
+                      size={14}
+                      color={theme.isDark ? "rgba(255,255,255,0.75)" : "rgba(0,0,0,0.65)"}
+                    />
+                    <Text
+                      style={{
+                        color: theme.isDark ? "rgba(255,255,255,0.75)" : "rgba(0,0,0,0.65)",
+                        fontSize: 12,
+                        letterSpacing: 0.3,
+                      }}
+                    >
+                      Tieni premuto per parlare
+                    </Text>
+                  </Pressable>
+                ) : null}
               </>
             ) : (
               <>

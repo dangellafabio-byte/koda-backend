@@ -117,6 +117,35 @@ const MIN_SPEECH_FRAMES = 3;         // 3 consecutive frames (~210ms) above thre
 const METER_POLL_MS = 70;            // ~14Hz sampling
 const HARD_CAP_MS = 60_000;          // absolute max recording length
 
+// ============ CAPPED ADAPTIVE VAD (Fix #1 — 2026-06) ============
+// Problema osservato in produzione (log utente, furgone):
+//   - silenzio reale: -45 / -50 dBFS
+//   - rumore furgone: -25 / -32 dBFS (PIÙ ALTO della SILENCE_THRESHOLD_DB statica)
+//   - voce utente: -20 / -10 dBFS
+// → Con soglie statiche, il VAD vede SEMPRE "non-silenzio" in furgone e
+//   non chiude mai la registrazione (recording_ms 11+ secondi → fail).
+//
+// Soluzione (basata sui dati di log, NON intuitiva):
+//   1) Per i primi CALIBRATION_MS della registrazione, raccogliamo il dB
+//      ambientale (mediana, robusta a piccoli picchi).
+//   2) Se mediana > ADAPTIVE_TRIGGER_DB (-38) → ambiente rumoroso →
+//      attiviamo soglie adattive.
+//      silenceThreshold = min(floor + 6dB, ADAPTIVE_CAP_SILENCE_DB).
+//      Il cap garantisce che la soglia NON salga MAI sopra il livello
+//      della voce umana media (-28 dBFS).
+//   3) Se mediana ≤ -38 → ambiente silenzioso → soglie statiche (lo
+//      stato attuale, verificato funzionante).
+//   4) Safety: se mediana > -20 dBFS (probabilmente l'utente sta già
+//      parlando durante la calibrazione) → fallback su statiche, non
+//      ci fidiamo della misura.
+const CALIBRATION_MS = 400;              // primi 400ms = solo misura noise floor
+const ADAPTIVE_TRIGGER_DB = -38;         // floor > -38 → attiva adattivo
+const ADAPTIVE_SAFETY_ABORT_DB = -20;    // floor > -20 → utente sta parlando, NON usare adattivo
+const ADAPTIVE_OFFSET_DB = 6;            // silence = floor + 6dB
+const ADAPTIVE_CAP_SILENCE_DB = -28;     // mai sopra -28 (voce umana media)
+const ADAPTIVE_HYSTERESIS_DB = 4;        // speech = silence - 4dB
+const ADAPTIVE_CAP_SUSTAINED_DB = -22;   // sustained mai sopra -22
+
 /**
  * Pre-warm the microphone: request permission and pre-configure the audio
  * session so the first tap-to-talk feels instant (no permission dialog,
@@ -174,6 +203,12 @@ function buildHandsFreePreset() {
       bitRate: 32000,
       outputFormat: "mpeg4",
       audioEncoder: "aac",
+      // === FIX 2026-06: bug Android metering "-100 dB sempre" ===
+      // Su Android, `recorder.getStatus().metering` restituiva sempre -100
+      // perché il flag isMeteringEnabled DEVE essere dentro il preset
+      // `android: {}` (non basta a livello root). Senza questo, il VAD
+      // hands-free era completamente rotto su Android.
+      isMeteringEnabled: true,
     },
     ios: {
       ...(base.ios || {}),
@@ -394,6 +429,15 @@ export async function startRecording(): Promise<Recorder> {
   let silenceCb: (() => void) | null = null;
   let meterCb: ((db: number, threshold?: number | null) => void) | null = null;
 
+  // ===== CAPPED ADAPTIVE VAD state (Fix #1 — 2026-06) =====
+  // Soglie effettive (verranno aggiornate dopo calibrazione se serve).
+  let speechThresholdEff = SPEECH_THRESHOLD_DB;
+  let silenceThresholdEff = SILENCE_THRESHOLD_DB;
+  let sustainedThresholdEff = SUSTAINED_VOICE_DB;
+  // Buffer di calibrazione: dB raccolti nei primi CALIBRATION_MS.
+  const calibrationSamples: number[] = [];
+  let calibrationDone = false;
+
   // === IMPORTANT: `stopped` deve essere dichiarata PRIMA del setInterval
   // perché il guard sotto la controlla (insieme a vadStopped/vadPaused).
   // Senza, una callback orfana già schedulata può eseguire dopo
@@ -408,7 +452,7 @@ export async function startRecording(): Promise<Recorder> {
       if (!st || !st.isRecording) return;
       const db: number = typeof st.metering === "number" ? st.metering : -100;
       if (meterCb) {
-        try { meterCb(db, SPEECH_THRESHOLD_DB); } catch {}
+        try { meterCb(db, speechThresholdEff); } catch {}
       }
       const now = Date.now();
       // Hard cap on recording length
@@ -417,7 +461,51 @@ export async function startRecording(): Promise<Recorder> {
         if (silenceCb) try { silenceCb(); } catch {}
         return;
       }
-      if (db > SPEECH_THRESHOLD_DB) {
+
+      // ============ CALIBRATION PHASE (Fix #1) ============
+      // Per i primi CALIBRATION_MS misuriamo il livello ambientale.
+      // Durante questa finestra il VAD NON considera ancora "speech start"
+      // — vogliamo prima sapere quanto è rumoroso l'ambiente.
+      if (!calibrationDone) {
+        const elapsed = now - startedAt;
+        // Filtro: scarta sample fuori range (metering glitch / saturazione voce)
+        if (db > -90 && db < -5) {
+          calibrationSamples.push(db);
+        }
+        if (elapsed >= CALIBRATION_MS) {
+          calibrationDone = true;
+          // Mediana = robusta a singoli picchi (es. tosse, click)
+          let noiseFloor: number;
+          if (calibrationSamples.length >= 3) {
+            const sorted = [...calibrationSamples].sort((a, b) => a - b);
+            noiseFloor = sorted[Math.floor(sorted.length / 2)];
+          } else {
+            noiseFloor = -50; // pochi sample → assume silenzio
+          }
+          if (noiseFloor > ADAPTIVE_SAFETY_ABORT_DB) {
+            // Troppo rumoroso: probabilmente utente STA GIÀ parlando.
+            // Non ci fidiamo della misura → usa statiche (baseline noto).
+            adaptiveMode = false;
+            console.log(`[VAD_CALIB] floor=${noiseFloor.toFixed(1)}dB n=${calibrationSamples.length} mode=static-safety-abort speech=${speechThresholdEff} silence=${silenceThresholdEff} sustained=${sustainedThresholdEff}`);
+          } else if (noiseFloor > ADAPTIVE_TRIGGER_DB) {
+            // Ambiente rumoroso (es. furgone, auto, traffico): attiva adattivo.
+            adaptiveMode = true;
+            silenceThresholdEff = Math.min(noiseFloor + ADAPTIVE_OFFSET_DB, ADAPTIVE_CAP_SILENCE_DB);
+            speechThresholdEff = silenceThresholdEff - ADAPTIVE_HYSTERESIS_DB;
+            sustainedThresholdEff = Math.min(silenceThresholdEff + ADAPTIVE_HYSTERESIS_DB, ADAPTIVE_CAP_SUSTAINED_DB);
+            console.log(`[VAD_CALIB] floor=${noiseFloor.toFixed(1)}dB n=${calibrationSamples.length} mode=adaptive speech=${speechThresholdEff} silence=${silenceThresholdEff} sustained=${sustainedThresholdEff}`);
+          } else {
+            // Ambiente silenzioso (-38 dBFS o inferiore): le statiche funzionano.
+            adaptiveMode = false;
+            console.log(`[VAD_CALIB] floor=${noiseFloor.toFixed(1)}dB n=${calibrationSamples.length} mode=static-quiet speech=${speechThresholdEff} silence=${silenceThresholdEff} sustained=${sustainedThresholdEff}`);
+          }
+        }
+        // Durante calibration, non avviare la macchina a stati voce/silenzio
+        return;
+      }
+
+      // ============ NORMAL VAD (post-calibration) ============
+      if (db > speechThresholdEff) {
         consecutiveVoiceFrames++;
         // Only mark "speech started" after enough consecutive voice frames.
         // This kills false positives from TV / brief background noises.
@@ -427,33 +515,28 @@ export async function startRecording(): Promise<Recorder> {
           lastVoiceAt = now;  // init at speech start
           if (speechStartCb) try { speechStartCb(); } catch {}
         }
-        // FIX VAD 2026-06-27 PM: rinfresca lastVoiceAt SOLO se la voce è
-        // chiaramente sopra l'ambiente (db > SUSTAINED_VOICE_DB).
-        // Rumore di stanza tra -32 e -26 dBFS NON tiene viva la
-        // registrazione → il timer di silenzio può finalmente partire
-        // quando l'utente smette davvero di parlare.
-        if (speechStartFired && db > SUSTAINED_VOICE_DB) {
+        // Rinfresca lastVoiceAt SOLO se la voce è chiaramente sopra
+        // l'ambiente (db > sustainedThresholdEff). In adattivo questo è
+        // calcolato dinamicamente; il rumore di fondo non tiene più
+        // viva la registrazione → il timer di silenzio può partire.
+        if (speechStartFired && db > sustainedThresholdEff) {
           lastVoiceAt = now;
         }
       } else {
-        // === SILENCE/HYSTERESIS DETECTION (riscritto 2026-05-22) ===
-        // Vecchia versione: richiedeva dB < SILENCE_THRESHOLD_DB per contare
-        // silenzio. Risultato: se il rumore di fondo era a -42 dBFS (tipico
-        // di una stanza qualsiasi), il VAD restava in "hysteresis zone" per
-        // SEMPRE e onSilence non scattava mai → utente doveva cliccare a mano.
-        // Nuova logica: "non-voce" = sotto SPEECH_THRESHOLD. Conta silenzio
-        // basandosi su tempo trascorso da ultima voce, non su secondo
-        // threshold artificiale. SILENCE_THRESHOLD_DB resta solo per
-        // diagnostica (reset più aggressivo del contatore frame).
-        if (db < SILENCE_THRESHOLD_DB) {
-          consecutiveVoiceFrames = 0; // reset più aggressivo se davvero quieto
+        // === SILENCE/HYSTERESIS DETECTION ===
+        // "non-voce" = sotto speechThresholdEff. Conta silenzio basandosi
+        // su tempo trascorso da ultima voce, non su secondo threshold
+        // artificiale. silenceThresholdEff resta solo per reset più
+        // aggressivo del contatore frame.
+        if (db < silenceThresholdEff) {
+          consecutiveVoiceFrames = 0;
         }
       }
-      // FIX VAD 2026-06-27 PM: il check del silenzio è ora FUORI
-      // dall'if/else. Gira ad ogni frame e si basa solo su quanto è
-      // vecchio lastVoiceAt. Anche se nel frame corrente c'è un picco
-      // di rumore (tosse, click, ronzio), il tempo trascorso dall'ultima
-      // VOCE REALE continua a crescere → il silenzio scatta correttamente.
+      // Il check del silenzio è FUORI dall'if/else. Gira ad ogni frame
+      // e si basa solo su quanto è vecchio lastVoiceAt. Anche se nel
+      // frame corrente c'è un picco di rumore (tosse, click, ronzio),
+      // il tempo trascorso dall'ultima VOCE REALE continua a crescere
+      // → il silenzio scatta correttamente.
       if (speechStartFired && firstSpeechAt && lastVoiceAt) {
         const speechElapsed = now - firstSpeechAt;
         if (speechElapsed >= MIN_SPEECH_MS) {
