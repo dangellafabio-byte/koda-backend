@@ -2350,6 +2350,14 @@ export default function Taccuino() {
       if (!r.ok) throw new Error("transcribe");
       const data = await r.json();
       const txt = (data.text || "").trim();
+      // === KODA_STT CLIENT LOG (sprint giugno 2026 — RCA "Koda parla spagnolo") ===
+      // Il backend logga [KODA_STT] con text+lang+confidence, MA quei log
+      // sono Python (server-side) e l'utente non li vede su /diagnostics.
+      // Qui logghiamo lo stesso text lato client così è copiabile dal
+      // pannello diagnostics dell'app. Se vediamo:
+      //   [KODA_STT_CLIENT] text="hola como estas" → Deepgram sbaglia foneticamente
+      //   [KODA_STT_CLIENT] text="ciao come stai" → STT OK, problema nel prompt LLM
+      console.log(`[KODA_STT_CLIENT] text=${JSON.stringify(txt)} chars=${txt.length}`);
       const cls = classifyTranscript(txt);
       if (cls !== "ok") {
         // === DIAGNOSTIC LOG (fix 2026-06 cold-start) ===
