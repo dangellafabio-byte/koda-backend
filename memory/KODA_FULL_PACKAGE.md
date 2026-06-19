@@ -4,6 +4,27 @@ Documento sintetico per analisi esterna (Claude, ChatGPT, sviluppatori terzi).
 
 ---
 
+## ⚠️ DA LEGGERE PRIMA DI QUALSIASI LAVORO V2
+
+**Esiste un documento congelato dal fondatore con i principi architetturali per V2:**  
+👉 `/app/memory/V2_ARCHITECTURAL_PRINCIPLES.md`
+
+Contiene:
+- **Regola d'oro priorità:** VAD → STT → Latenza prima di tutto il resto
+- Confidence-gating degli insight
+- Eccezione safety nella Stanza Sfogo
+- Principio "stati vs identità" (Koda non dice chi sei, capisce come stai oggi)
+
+**Da NON implementare ora.** Da rileggere SOLO dopo che i 4 KPI audio sono verdi:
+1. Hands-free > 95% affidabile
+2. Nessuna chiusura anticipata
+3. Nessun "non ti ho sentito" falso
+4. Latenza percepita < 3-4 secondi
+
+L'agente dev deve citare quel documento ogni volta che la conversazione devia su scoring, insight, personalità o memoria avanzata.
+
+---
+
 ## 1. PRODOTTO
 
 **Nome:** Koda (alias progetto: "L'Amico Fraterno").  
