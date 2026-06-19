@@ -108,40 +108,12 @@ let _nativeReady = false;
 //      frame corrente c'è un picco di rumore (es. tosse), il timer
 //      di silenzio dal momento dell'ultima voce reale continua a
 //      crescere correttamente.
-// === SOGLIE VAD — PLATFORM-AWARE (giugno 2026 v9) ===
-// Su iOS expo-audio riporta `metering` in dBFS già correttamente normalizzato
-// (-160..0): rumore di stanza tipico -38/-42 dBFS, voce -10/-25 dBFS.
-//
-// Su Android la scala dB è derivata da MediaRecorder.getMaxAmplitude() e il
-// FLOOR del rumore tende a essere più alto (-22/-18 dBFS in stanza normale).
-// Le soglie iOS sono troppo basse → VAD scambia il rumore di fondo per voce
-// → lastVoiceAt non scade mai → fine-turno mai.
-//
-// AURICOLARI/BT: livello voce significativamente più basso del mic interno.
-// SPEECH_THRESHOLD iOS abbassata da -38 a -42 dBFS per catturare anche voci
-// pacate/lontane dal mic. SUSTAINED da -34 a -36 per non perdere la voce
-// durante pause brevi. Frame counter da 3 a 2 (~140ms) per essere più
-// reattivi all'inizio del parlato.
-const _IS_ANDROID = Platform.OS === "android";
-const SPEECH_THRESHOLD_DB = _IS_ANDROID ? -26 : -42;     // sopra → voce presente
-const SUSTAINED_VOICE_DB  = _IS_ANDROID ? -22 : -36;     // sopra → rinfresca lastVoiceAt
-const SILENCE_THRESHOLD_DB = _IS_ANDROID ? -30 : -46;    // sotto → reset aggressivo frame counter
-const SILENCE_DURATION_MS = 600;     // 0.6s silence after speech → end of utterance
-const MIN_SPEECH_MS = 500;           // 500ms minimo di voce prima che silence possa scattare
-// === FIX FALSI POSITIVI 2026-06-28 (post 20 test hands-free) ===
-// I 20 test hanno dimostrato che il VAD ora chiude da solo (bug storico
-// risolto). Ma è emerso un bug secondario: in stanza silenziosa, se
-// l'utente NON parla subito, capita che un micro-rumore (click delle
-// dita sul telefono, fruscio dei vestiti, vibrazione tavolo) duri 100-
-// 150ms — sufficiente con MIN_SPEECH_FRAMES=2 (140ms) per scatenare un
-// falso positivo di speech_start. Da lì il VAD aspetta SILENCE_DURATION_MS
-// (600ms) e chiude → audio contiene solo il click → Deepgram vuoto →
-// "Non ti ho sentito".
-//
-// Fix: 2 → 4 (280ms). Un click/fruscio NON dura 280ms continuativi.
-// Una "Ciao" reale dura 300-500ms → la soglia resta comodamente
-// raggiungibile per voce vera, ma filtra i rumori brevi.
-const MIN_SPEECH_FRAMES = 4;         // 4 frame consecutivi (~280ms) → filtra click/fruscii brevi
+const SPEECH_THRESHOLD_DB = -32;     // dBFS — bassa per INIZIARE detection voce
+const SUSTAINED_VOICE_DB = -26;      // dBFS — alta per RINFRESCARE lastVoiceAt
+const SILENCE_THRESHOLD_DB = -42;    // dBFS — hysteresis 10 dB
+const SILENCE_DURATION_MS = 1500;    // 1.5s silence after speech → end of utterance
+const MIN_SPEECH_MS = 700;           // need at least 700ms of voice before silence can fire
+const MIN_SPEECH_FRAMES = 3;         // 3 consecutive frames (~210ms) above threshold → real speech
 const METER_POLL_MS = 70;            // ~14Hz sampling
 const HARD_CAP_MS = 60_000;          // absolute max recording length
 
@@ -202,14 +174,6 @@ function buildHandsFreePreset() {
       bitRate: 32000,
       outputFormat: "mpeg4",
       audioEncoder: "aac",
-      // === FIX METERING ANDROID 2026-06-28 ===
-      // Dai log del telefono Android della partner: db=-100.0 per tutti
-      // gli 11.6 secondi di registrazione. La flag top-level
-      // `isMeteringEnabled: true` non viene letta dal recorder Android
-      // di expo-audio: va specificata DENTRO la sezione android. Senza
-      // questa, recorder.getStatus().metering ritorna sempre -100 →
-      // VAD inerte → hands-free inutilizzabile.
-      isMeteringEnabled: true,
     },
     ios: {
       ...(base.ios || {}),
@@ -418,29 +382,6 @@ export async function startRecording(): Promise<Recorder> {
     throw e;
   }
   const startedAt = Date.now();
-  // === TIMING LOG (ChatGPT sprint giugno 2026) ===
-  console.log(`[KODA_TIMING] VOICE_START 0ms`);
-
-  // === VAD DEBUG TELEMETRIA (ChatGPT sprint giugno 2026) ===
-  // Log opzionale di tutti gli step del VAD per capire perché alcune
-  // registrazioni si chiudono in modo strano. Attivabile via env var
-  // EXPO_PUBLIC_VAD_DEBUG=true (default ON per il debug, va spento
-  // in release stabile). Log sample-throttled a 3 al secondo per non
-  // saturare la console.
-  const VAD_DEBUG = String(process.env.EXPO_PUBLIC_VAD_DEBUG ?? "true").toLowerCase() === "true";
-  let lastDebugLogAt = 0;
-  const vadLog = (label: string, extra: Record<string, any> = {}) => {
-    if (!VAD_DEBUG) return;
-    const now = Date.now();
-    // Throttle dei `speech_refresh` (alta frequenza), gli eventi
-    // discreti (speech_start / silence_detected / recording_stopped)
-    // sempre.
-    const isHF = label === "speech_refresh";
-    if (isHF && now - lastDebugLogAt < 350) return;
-    if (isHF) lastDebugLogAt = now;
-    const pairs = Object.entries(extra).map(([k, v]) => `${k}=${v}`).join(" ");
-    console.log(`[KODA_VAD] ${label} t=${now - startedAt}ms ${pairs}`);
-  };
 
   // ===== VAD state =====
   let speechStartFired = false;
@@ -453,68 +394,12 @@ export async function startRecording(): Promise<Recorder> {
   let silenceCb: (() => void) | null = null;
   let meterCb: ((db: number, threshold?: number | null) => void) | null = null;
 
-  // === NOISE FLOOR ADAPTIVE (giugno 2026 v9) ===
-  // Calibra il VAD sul rumore ambientale dei primi 350ms di registrazione.
-  // Quando l'utente è in un ambiente rumoroso (furgone, ufficio aperto, bar),
-  // il rumore continuo può superare SPEECH_THRESHOLD_DB e impedire al timer
-  // di silenzio di scattare → la registrazione non finisce mai.
-  //
-  // Logica: nei primi N frames (≈350ms) prima che parta la voce, raccogliamo
-  // i sample dB e calcoliamo il floor. Poi shiftiamo dinamicamente:
-  //    speechThreshold  = max(STATIC_THRESHOLD, noise_floor + 6 dB)
-  //    sustainedThreshold = max(STATIC_SUSTAINED, noise_floor + 10 dB)
-  // così la voce deve essere SOPRA il rumore di fondo per contare.
-  const CALIB_WINDOW_MS = 350;
-  let noiseFloor: number | null = null;
-  const calibSamples: number[] = [];
-  // Tracking dello span temporale dei sample (sprint v13 — diagnostico)
-  let calibSamplesFirstAt: number = 0;
-  let calibSamplesLastAt: number = 0;
-  let dynSpeechThreshold = SPEECH_THRESHOLD_DB;
-  let dynSustainedThreshold = SUSTAINED_VOICE_DB;
-
-  // === FAILSAFE SILENCE DETECTOR (sprint giugno 2026 v10) ===
-  // ROOT CAUSE storico: in ambienti rumorosi (TV, ventilatore, riverbero
-  // dello stesso speaker dell'iPhone che riproduce Koda), il db medio
-  // resta sopra dynSustainedThreshold → lastVoiceAt rinfresca ad ogni
-  // frame → silence_detected MAI scatta → utente deve premere bottone.
-  //
-  // FIX: oltre al rilevatore "tempo dall'ultima voce", introduciamo un
-  // SECONDO rilevatore basato sulla DENSITÀ di voce: percentuale di frame
-  // ad alta intensità (>= dynSustained) negli ultimi 2 secondi. Se sotto
-  // il 30%, consideriamo che l'utente non sta più parlando "davvero" anche
-  // se ci sono picchi sporadici di rumore.
-  const VOICE_DENSITY_WINDOW_MS = 2000;
-  const VOICE_DENSITY_MIN_PCT = 0.30;
-  const FAILSAFE_AFTER_MIN_SPEECH_MS = 2500; // attivo solo dopo 2.5s di registrazione
-  const recentFrames: { t: number; voice: boolean }[] = [];
-
-  // === HEARTBEAT DIAGNOSTICO (sprint v10) ===
-  // Ogni 500ms emettiamo una riga riassuntiva dello stato VAD per
-  // capire ESATTAMENTE perché lastVoiceAt continua a rinfrescare in
-  // ambienti dove l'hands-free non chiude.
-  let lastHeartbeatAt = 0;
-
-  // === IMPORTANT: `stopped` deve essere dichiarata PRIMA del setInterval ===
+  // === IMPORTANT: `stopped` deve essere dichiarata PRIMA del setInterval
+  // perché il guard sotto la controlla (insieme a vadStopped/vadPaused).
+  // Senza, una callback orfana già schedulata può eseguire dopo
+  // recorder.release() e bloccare il JS thread sul bridge nativo iOS.
+  // Vedi root cause analysis nel safeStop() più sotto. ===
   let stopped = false;
-  // === CALIBRATION FIX (sprint v14, post-Lorenzo audit 19/6) ===
-  // Numero di sample raccolti PRIMA che speech_start scattasse.
-  // Questi sono gli unici sample garantiti puliti (silenzio reale).
-  // I sample raccolti DOPO speech_start contengono voce e contaminerebbero
-  // il floor → soglie sbagliate (bug dimostrato dai log del 19/6).
-  let preSpeechSampleCount: number = 0;
-  let calibSkipped: boolean = false;
-  // === SPEECH DB STATISTICS (sprint v13, post-Claude audit) ===
-  // Claude ha giustamente rilevato che non sappiamo se la voce reale
-  // dell'utente supera o no la dynSustainedThreshold. Tracciamo peak e
-  // avg di TUTTI i frame tra speech_start e silence_detected, e li
-  // pubblichiamo nel log silence_detected per analisi rigorosa.
-  let speechDbPeak: number = -100;
-  let speechDbSum: number = 0;
-  let speechDbCount: number = 0;
-  // Quanti frame durante la "voce" sono effettivamente sopra la soglia
-  // sustained — se sono pochi, la formula floor+10 è troppo aggressiva.
-  let speechFramesAboveSustained: number = 0;
 
   const vadInterval = setInterval(() => {
     if (vadStopped || vadPaused || stopped) return;
@@ -523,219 +408,60 @@ export async function startRecording(): Promise<Recorder> {
       if (!st || !st.isRecording) return;
       const db: number = typeof st.metering === "number" ? st.metering : -100;
       if (meterCb) {
-        try { meterCb(db, dynSpeechThreshold); } catch {}
+        try { meterCb(db, SPEECH_THRESHOLD_DB); } catch {}
       }
       const now = Date.now();
-
-      // Track recent frames for density-based failsafe.
-      const isVoiceFrame = db > dynSustainedThreshold;
-      recentFrames.push({ t: now, voice: isVoiceFrame });
-      // Slide window: drop frames older than 2s.
-      while (recentFrames.length > 0 && now - recentFrames[0].t > VOICE_DENSITY_WINDOW_MS) {
-        recentFrames.shift();
-      }
-
-      // === CALIBRAZIONE NOISE FLOOR — fix sprint v13 (post-audit ChatGPT+Claude) ===
-      // Step 1 (originale): nei primi 1500ms raccogliamo sample.
-      // Step 2 (FIX): il trigger di calcolo aspetta UNO dei due eventi:
-      //   (a) sono passati realmente 1500ms (CALIB_EXTENDED_MS) → floor pulito
-      //   (b) speech_start è scattato → forza calibrazione tardiva sui sample
-      //       che abbiamo (floor stimato, potenzialmente contaminato dalla voce).
-      // Prima la condizione era un OR ridondante che faceva scattare il calcolo
-      // appena hai 5 sample (~400ms), bypassando completamente CALIB_EXTENDED_MS.
-      // Bug confermato da log: noise_calibrated sempre a t=408-419ms invece
-      // dei 1500ms dichiarati.
-      const CALIB_EXTENDED_MS = 1500;
-      if (now - startedAt < CALIB_EXTENDED_MS) {
-        if (db > -100 && db < 0) {
-          calibSamples.push(db);
-          // Traccia quanti sample sono stati raccolti PRIMA di speech_start.
-          // Questo è il dato chiave per il fix v14: quando speech_start
-          // scatta, tutto ciò che sta nei primi `preSpeechSampleCount`
-          // indici di calibSamples è silenzio puro (utilizzabile per floor).
-          // Quello che viene dopo è voce (da scartare).
-          if (!speechStartFired) preSpeechSampleCount = calibSamples.length;
-          if (calibSamplesFirstAt === 0) calibSamplesFirstAt = now;
-          calibSamplesLastAt = now;
-        }
-      }
-      // === CALIBRAZIONE — fix sprint v14 (post-Lorenzo audit 19/6) ===
-      // Tre casi:
-      //   (A) Attesa completa: sono passati 1500ms reali → calibra su TUTTI
-      //       i sample raccolti (tutti pre-speech se utente in silenzio,
-      //       altrimenti il blocco viene gestito da B).
-      //   (B) speech_start scattato in anticipo: calibra usando SOLO i
-      //       sample pre-speech. Se sono ≥3 → floor pulito; se sono <3 →
-      //       NON calibrare affatto, lascia soglie statiche (default iOS/Android).
-      //   (C) Nessuno dei due eventi è ancora occorso → aspetta.
-      //
-      // Razionale: il bug 19/6 dimostrava che calibrare DOPO speech_start
-      // su sample contaminati produce floor sporco (-32 invece di -50) e
-      // soglie inutilizzabili. Adesso scartiamo i sample contaminati.
-      if (noiseFloor === null && !calibSkipped) {
-        const calibReady = (
-          now - startedAt >= CALIB_EXTENDED_MS    // caso (A)
-          || speechStartFired                      // caso (B)
-        );
-        if (calibReady) {
-          // Quali sample usare?
-          const usePreSpeechOnly = speechStartFired && (now - startedAt < CALIB_EXTENDED_MS);
-          const samplesForCalib = usePreSpeechOnly
-            ? calibSamples.slice(0, preSpeechSampleCount)
-            : calibSamples;
-
-          if (samplesForCalib.length >= 3) {
-            const sorted = [...samplesForCalib].sort((a, b) => a - b);
-            const p20 = sorted[Math.max(0, Math.floor(sorted.length * 0.2))];
-            noiseFloor = p20;
-            dynSpeechThreshold = Math.max(SPEECH_THRESHOLD_DB, noiseFloor + 6);
-            dynSustainedThreshold = Math.max(SUSTAINED_VOICE_DB, noiseFloor + 4);
-            vadLog("noise_calibrated", {
-              floor: noiseFloor.toFixed(1),
-              speech_th: dynSpeechThreshold.toFixed(1),
-              sustained_th: dynSustainedThreshold.toFixed(1),
-              samples_used: samplesForCalib.length,
-              samples_total: calibSamples.length,
-              pre_speech_count: preSpeechSampleCount,
-              sample_span_ms: calibSamplesLastAt - calibSamplesFirstAt,
-              phase: speechStartFired ? "post_speech" : "pre_speech",
-              source: usePreSpeechOnly ? "pre_speech_only" : "full_window",
-              elapsed_ms: now - startedAt,
-            });
-          } else {
-            // Pochi sample pre-speech (utente parlava subito): NON calibrare.
-            // Lascia soglie statiche. Marca calibSkipped per evitare loop.
-            calibSkipped = true;
-            vadLog("noise_calib_skipped", {
-              reason: "insufficient_pre_speech_samples",
-              pre_speech_count: preSpeechSampleCount,
-              elapsed_ms: now - startedAt,
-              static_speech_th: dynSpeechThreshold.toFixed(1),
-              static_sustained_th: dynSustainedThreshold.toFixed(1),
-            });
-          }
-        }
-      }
-
-      // === HEARTBEAT (ogni 500ms) — diagnostica completa ===
-      if (VAD_DEBUG && now - lastHeartbeatAt >= 500) {
-        lastHeartbeatAt = now;
-        const voiceAge = lastVoiceAt ? (now - lastVoiceAt) : null;
-        const voiceCount = recentFrames.filter(f => f.voice).length;
-        const density = recentFrames.length > 0 ? voiceCount / recentFrames.length : 0;
-        console.log(
-          `[KODA_VAD] heartbeat t=${now - startedAt}ms db=${db.toFixed(1)} ` +
-          `spk_th=${dynSpeechThreshold.toFixed(1)} sus_th=${dynSustainedThreshold.toFixed(1)} ` +
-          `floor=${noiseFloor !== null ? noiseFloor.toFixed(1) : "null"} ` +
-          `voice_age=${voiceAge !== null ? voiceAge + "ms" : "n/a"} ` +
-          `density=${(density * 100).toFixed(0)}% ` +
-          `speech_started=${speechStartFired}`
-        );
-      }
-
       // Hard cap on recording length
       if (now - startedAt > HARD_CAP_MS) {
         vadStopped = true;
-        vadLog("recording_stopped", { reason: "HARD_CAP_MS", db });
         if (silenceCb) try { silenceCb(); } catch {}
         return;
       }
-      if (db > dynSpeechThreshold) {
+      if (db > SPEECH_THRESHOLD_DB) {
         consecutiveVoiceFrames++;
+        // Only mark "speech started" after enough consecutive voice frames.
+        // This kills false positives from TV / brief background noises.
         if (consecutiveVoiceFrames >= MIN_SPEECH_FRAMES && !speechStartFired) {
           speechStartFired = true;
           firstSpeechAt = now - MIN_SPEECH_FRAMES * METER_POLL_MS;
-          lastVoiceAt = now;          vadLog("speech_start", { db, dyn_th: dynSpeechThreshold.toFixed(1) });
+          lastVoiceAt = now;  // init at speech start
           if (speechStartCb) try { speechStartCb(); } catch {}
         }
-        if (speechStartFired && db > dynSustainedThreshold) {
+        // FIX VAD 2026-06-27 PM: rinfresca lastVoiceAt SOLO se la voce è
+        // chiaramente sopra l'ambiente (db > SUSTAINED_VOICE_DB).
+        // Rumore di stanza tra -32 e -26 dBFS NON tiene viva la
+        // registrazione → il timer di silenzio può finalmente partire
+        // quando l'utente smette davvero di parlare.
+        if (speechStartFired && db > SUSTAINED_VOICE_DB) {
           lastVoiceAt = now;
-          vadLog("speech_refresh", { db });
-        }
-        // === STAT TRACKING (sprint v13) ===
-        // Tracciamo db reali durante la voce per analisi peak/avg.
-        // Funziona indipendentemente dal fatto che superi sustained o no:
-        // ci interessa il livello effettivo della voce dell'utente.
-        if (speechStartFired) {
-          if (db > speechDbPeak) speechDbPeak = db;
-          speechDbSum += db;
-          speechDbCount += 1;
-          if (db > dynSustainedThreshold) speechFramesAboveSustained += 1;
         }
       } else {
+        // === SILENCE/HYSTERESIS DETECTION (riscritto 2026-05-22) ===
+        // Vecchia versione: richiedeva dB < SILENCE_THRESHOLD_DB per contare
+        // silenzio. Risultato: se il rumore di fondo era a -42 dBFS (tipico
+        // di una stanza qualsiasi), il VAD restava in "hysteresis zone" per
+        // SEMPRE e onSilence non scattava mai → utente doveva cliccare a mano.
+        // Nuova logica: "non-voce" = sotto SPEECH_THRESHOLD. Conta silenzio
+        // basandosi su tempo trascorso da ultima voce, non su secondo
+        // threshold artificiale. SILENCE_THRESHOLD_DB resta solo per
+        // diagnostica (reset più aggressivo del contatore frame).
         if (db < SILENCE_THRESHOLD_DB) {
-          // === DIAGNOSTICA FALSI POSITIVI (sprint v10) ===
-          // Se avevamo accumulato qualche frame "voce" ma non abbiamo
-          // raggiunto MIN_SPEECH_FRAMES → è probabilmente un click/fruscio
-          // breve. Lo logghiamo per vedere quanti ne stiamo filtrando.
-          if (consecutiveVoiceFrames > 0 && consecutiveVoiceFrames < MIN_SPEECH_FRAMES && !speechStartFired) {
-            vadLog("false_speech_filtered", {
-              frames: consecutiveVoiceFrames,
-              needed: MIN_SPEECH_FRAMES,
-              db,
-            });
-          }
-          consecutiveVoiceFrames = 0;
+          consecutiveVoiceFrames = 0; // reset più aggressivo se davvero quieto
         }
       }
-      // === STOP CONDITION #1 (originale): tempo dall'ultima voce ===
+      // FIX VAD 2026-06-27 PM: il check del silenzio è ora FUORI
+      // dall'if/else. Gira ad ogni frame e si basa solo su quanto è
+      // vecchio lastVoiceAt. Anche se nel frame corrente c'è un picco
+      // di rumore (tosse, click, ronzio), il tempo trascorso dall'ultima
+      // VOCE REALE continua a crescere → il silenzio scatta correttamente.
       if (speechStartFired && firstSpeechAt && lastVoiceAt) {
         const speechElapsed = now - firstSpeechAt;
         if (speechElapsed >= MIN_SPEECH_MS) {
           const silenceFor = now - lastVoiceAt;
           if (silenceFor >= SILENCE_DURATION_MS) {
             vadStopped = true;
-            // === STAT DUMP (sprint v13) ===
-            const speechDbAvg = speechDbCount > 0 ? (speechDbSum / speechDbCount) : 0;
-            const aboveSustainedPct = speechDbCount > 0
-              ? (speechFramesAboveSustained / speechDbCount) * 100
-              : 0;
-            vadLog("silence_detected", {
-              db,
-              silence_ms: silenceFor,
-              reason: "last_voice_age",
-              speech_db_peak: speechDbPeak.toFixed(1),
-              speech_db_avg: speechDbAvg.toFixed(1),
-              speech_frames: speechDbCount,
-              above_sustained_pct: aboveSustainedPct.toFixed(0) + "%",
-              sustained_th: dynSustainedThreshold.toFixed(1),
-            });
-            vadLog("recording_stopped", { reason: "VAD_TIMEOUT", db });
             if (silenceCb) try { silenceCb(); } catch {}
-            return;
           }
-        }
-      }
-      // === STOP CONDITION #2 (NUOVO failsafe v10): densità voce bassa ===
-      // Se l'utente ha già parlato per >2.5s E la densità di frame con
-      // voce reale negli ultimi 2s è < 30%, consideriamo concluso il
-      // turno anche se ci sono picchi sporadici di rumore (TV/eco/respiro
-      // che impediscono al rilevatore #1 di scattare).
-      if (speechStartFired && firstSpeechAt &&
-          now - firstSpeechAt >= FAILSAFE_AFTER_MIN_SPEECH_MS &&
-          recentFrames.length >= 20) {
-        const voiceCount = recentFrames.filter(f => f.voice).length;
-        const density = voiceCount / recentFrames.length;
-        if (density < VOICE_DENSITY_MIN_PCT) {
-          vadStopped = true;
-          // === STAT DUMP (sprint v13) ===
-          const speechDbAvg = speechDbCount > 0 ? (speechDbSum / speechDbCount) : 0;
-          const aboveSustainedPct = speechDbCount > 0
-            ? (speechFramesAboveSustained / speechDbCount) * 100
-            : 0;
-          vadLog("silence_detected", {
-            db,
-            reason: "density_failsafe",
-            density: (density * 100).toFixed(0) + "%",
-            speech_db_peak: speechDbPeak.toFixed(1),
-            speech_db_avg: speechDbAvg.toFixed(1),
-            speech_frames: speechDbCount,
-            above_sustained_pct: aboveSustainedPct.toFixed(0) + "%",
-            sustained_th: dynSustainedThreshold.toFixed(1),
-          });
-          vadLog("recording_stopped", { reason: "VAD_DENSITY_FAILSAFE", db });
-          if (silenceCb) try { silenceCb(); } catch {}
-          return;
         }
       }
     } catch (e) {
@@ -749,10 +475,6 @@ export async function startRecording(): Promise<Recorder> {
     stopped = true;
     vadStopped = true;
     clearInterval(vadInterval);
-    // TIMING (ChatGPT sprint): la registrazione si è chiusa, qualunque
-    // sia la causa (VAD, tap manuale, hard cap). VOICE_END è il
-    // momento in cui smettiamo di catturare audio dal mic.
-    console.log(`[KODA_TIMING] VOICE_END ${Date.now() - startedAt}ms (recording_ms=${Date.now() - startedAt})`);
 
     // === FIX RACE CONDITION 2026-05-25 ===
     // ROOT CAUSE: subito dopo clearInterval(), una callback già schedulata
