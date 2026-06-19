@@ -525,33 +525,45 @@ export async function startRecording(): Promise<Recorder> {
         recentFrames.shift();
       }
 
-      // === CALIBRAZIONE NOISE FLOOR ROBUSTA (v10) ===
-      // Step 1 (originale): nei primi 350ms PRIMA di speech_start.
-      // Step 2 (NUOVO): se speech parte subito e non abbiamo abbastanza
-      // sample, continuiamo a raccogliere fino a 1500ms — il p20 dei
-      // sample include comunque le pause respiratorie e le code di parola
-      // (sotto il livello di voce), che approssimano il floor.
+      // === CALIBRAZIONE NOISE FLOOR — fix sprint v13 (post-audit ChatGPT+Claude) ===
+      // Step 1 (originale): nei primi 1500ms raccogliamo sample.
+      // Step 2 (FIX): il trigger di calcolo aspetta UNO dei due eventi:
+      //   (a) sono passati realmente 1500ms (CALIB_EXTENDED_MS) → floor pulito
+      //   (b) speech_start è scattato → forza calibrazione tardiva sui sample
+      //       che abbiamo (floor stimato, potenzialmente contaminato dalla voce).
+      // Prima la condizione era un OR ridondante che faceva scattare il calcolo
+      // appena hai 5 sample (~400ms), bypassando completamente CALIB_EXTENDED_MS.
+      // Bug confermato da log: noise_calibrated sempre a t=408-419ms invece
+      // dei 1500ms dichiarati.
       const CALIB_EXTENDED_MS = 1500;
       if (now - startedAt < CALIB_EXTENDED_MS) {
         if (db > -100 && db < 0) calibSamples.push(db);
       }
-      // Calcola noise floor: appena disponibile (almeno 5 sample) e non
-      // ancora calcolato. Funziona SIA prima che dopo speech_start.
-      if (noiseFloor === null && calibSamples.length >= 5 &&
-          (now - startedAt > CALIB_WINDOW_MS || (!speechStartFired && calibSamples.length >= 5))) {
+      if (noiseFloor === null && calibSamples.length >= 5 && (
+          now - startedAt >= CALIB_EXTENDED_MS    // (a) attesa completa
+          || speechStartFired                       // (b) parla subito → forza
+      )) {
         const sorted = [...calibSamples].sort((a, b) => a - b);
         // Usa il 20° percentile come stima del floor (più robusta della mediana
         // quando la finestra include già qualche frame di voce).
         const p20 = sorted[Math.max(0, Math.floor(sorted.length * 0.2))];
         noiseFloor = p20;
+        // === FIX FORMULA SOGLIE — sprint v13 ===
+        // SPEECH: floor + 6 → invariato (funziona bene dai log)
+        // SUSTAINED: floor + 10 → floor + 4 (era troppo aggressivo, tagliava
+        // la voce media reale a -27/-28 dB con floor a -32).
+        // Dai log: speech_db_avg=-27.9 con sustained_th=-22.4 → above_sustained_pct=50%.
+        // Con +4 invece di +10, la stessa situazione darebbe sustained_th=-28.4
+        // → above_sustained_pct realisticamente >70-80%.
         dynSpeechThreshold = Math.max(SPEECH_THRESHOLD_DB, noiseFloor + 6);
-        dynSustainedThreshold = Math.max(SUSTAINED_VOICE_DB, noiseFloor + 10);
+        dynSustainedThreshold = Math.max(SUSTAINED_VOICE_DB, noiseFloor + 4);
         vadLog("noise_calibrated", {
           floor: noiseFloor.toFixed(1),
           speech_th: dynSpeechThreshold.toFixed(1),
           sustained_th: dynSustainedThreshold.toFixed(1),
           samples: calibSamples.length,
           phase: speechStartFired ? "post_speech" : "pre_speech",
+          elapsed_ms: now - startedAt,
         });
       }
 
