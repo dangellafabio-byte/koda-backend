@@ -494,6 +494,17 @@ export async function startRecording(): Promise<Recorder> {
 
   // === IMPORTANT: `stopped` deve essere dichiarata PRIMA del setInterval ===
   let stopped = false;
+  // === SPEECH DB STATISTICS (sprint v13, post-Claude audit) ===
+  // Claude ha giustamente rilevato che non sappiamo se la voce reale
+  // dell'utente supera o no la dynSustainedThreshold. Tracciamo peak e
+  // avg di TUTTI i frame tra speech_start e silence_detected, e li
+  // pubblichiamo nel log silence_detected per analisi rigorosa.
+  let speechDbPeak: number = -100;
+  let speechDbSum: number = 0;
+  let speechDbCount: number = 0;
+  // Quanti frame durante la "voce" sono effettivamente sopra la soglia
+  // sustained — se sono pochi, la formula floor+10 è troppo aggressiva.
+  let speechFramesAboveSustained: number = 0;
 
   const vadInterval = setInterval(() => {
     if (vadStopped || vadPaused || stopped) return;
@@ -572,13 +583,22 @@ export async function startRecording(): Promise<Recorder> {
         if (consecutiveVoiceFrames >= MIN_SPEECH_FRAMES && !speechStartFired) {
           speechStartFired = true;
           firstSpeechAt = now - MIN_SPEECH_FRAMES * METER_POLL_MS;
-          lastVoiceAt = now;
-          vadLog("speech_start", { db, dyn_th: dynSpeechThreshold.toFixed(1) });
+          lastVoiceAt = now;          vadLog("speech_start", { db, dyn_th: dynSpeechThreshold.toFixed(1) });
           if (speechStartCb) try { speechStartCb(); } catch {}
         }
         if (speechStartFired && db > dynSustainedThreshold) {
           lastVoiceAt = now;
           vadLog("speech_refresh", { db });
+        }
+        // === STAT TRACKING (sprint v13) ===
+        // Tracciamo db reali durante la voce per analisi peak/avg.
+        // Funziona indipendentemente dal fatto che superi sustained o no:
+        // ci interessa il livello effettivo della voce dell'utente.
+        if (speechStartFired) {
+          if (db > speechDbPeak) speechDbPeak = db;
+          speechDbSum += db;
+          speechDbCount += 1;
+          if (db > dynSustainedThreshold) speechFramesAboveSustained += 1;
         }
       } else {
         if (db < SILENCE_THRESHOLD_DB) {
@@ -603,7 +623,21 @@ export async function startRecording(): Promise<Recorder> {
           const silenceFor = now - lastVoiceAt;
           if (silenceFor >= SILENCE_DURATION_MS) {
             vadStopped = true;
-            vadLog("silence_detected", { db, silence_ms: silenceFor, reason: "last_voice_age" });
+            // === STAT DUMP (sprint v13) ===
+            const speechDbAvg = speechDbCount > 0 ? (speechDbSum / speechDbCount) : 0;
+            const aboveSustainedPct = speechDbCount > 0
+              ? (speechFramesAboveSustained / speechDbCount) * 100
+              : 0;
+            vadLog("silence_detected", {
+              db,
+              silence_ms: silenceFor,
+              reason: "last_voice_age",
+              speech_db_peak: speechDbPeak.toFixed(1),
+              speech_db_avg: speechDbAvg.toFixed(1),
+              speech_frames: speechDbCount,
+              above_sustained_pct: aboveSustainedPct.toFixed(0) + "%",
+              sustained_th: dynSustainedThreshold.toFixed(1),
+            });
             vadLog("recording_stopped", { reason: "VAD_TIMEOUT", db });
             if (silenceCb) try { silenceCb(); } catch {}
             return;
@@ -622,10 +656,20 @@ export async function startRecording(): Promise<Recorder> {
         const density = voiceCount / recentFrames.length;
         if (density < VOICE_DENSITY_MIN_PCT) {
           vadStopped = true;
+          // === STAT DUMP (sprint v13) ===
+          const speechDbAvg = speechDbCount > 0 ? (speechDbSum / speechDbCount) : 0;
+          const aboveSustainedPct = speechDbCount > 0
+            ? (speechFramesAboveSustained / speechDbCount) * 100
+            : 0;
           vadLog("silence_detected", {
             db,
             reason: "density_failsafe",
             density: (density * 100).toFixed(0) + "%",
+            speech_db_peak: speechDbPeak.toFixed(1),
+            speech_db_avg: speechDbAvg.toFixed(1),
+            speech_frames: speechDbCount,
+            above_sustained_pct: aboveSustainedPct.toFixed(0) + "%",
+            sustained_th: dynSustainedThreshold.toFixed(1),
           });
           vadLog("recording_stopped", { reason: "VAD_DENSITY_FAILSAFE", db });
           if (silenceCb) try { silenceCb(); } catch {}
