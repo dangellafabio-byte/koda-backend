@@ -467,6 +467,9 @@ export async function startRecording(): Promise<Recorder> {
   const CALIB_WINDOW_MS = 350;
   let noiseFloor: number | null = null;
   const calibSamples: number[] = [];
+  // Tracking dello span temporale dei sample (sprint v13 — diagnostico)
+  let calibSamplesFirstAt: number = 0;
+  let calibSamplesLastAt: number = 0;
   let dynSpeechThreshold = SPEECH_THRESHOLD_DB;
   let dynSustainedThreshold = SUSTAINED_VOICE_DB;
 
@@ -537,7 +540,16 @@ export async function startRecording(): Promise<Recorder> {
       // dei 1500ms dichiarati.
       const CALIB_EXTENDED_MS = 1500;
       if (now - startedAt < CALIB_EXTENDED_MS) {
-        if (db > -100 && db < 0) calibSamples.push(db);
+        if (db > -100 && db < 0) {
+          calibSamples.push(db);
+          // Tracciamo il PRIMO timestamp di raccolta per misurare lo "span"
+          // reale dei sample. Senza questo non sappiamo se i 5 sample sono
+          // distribuiti su 350ms (normale) o se sono compressi su 100ms
+          // (es. polling errato) o sparpagliati su 1400ms (calibrazione
+          // tardiva post-speech).
+          if (calibSamplesFirstAt === 0) calibSamplesFirstAt = now;
+          calibSamplesLastAt = now;
+        }
       }
       if (noiseFloor === null && calibSamples.length >= 5 && (
           now - startedAt >= CALIB_EXTENDED_MS    // (a) attesa completa
@@ -562,6 +574,10 @@ export async function startRecording(): Promise<Recorder> {
           speech_th: dynSpeechThreshold.toFixed(1),
           sustained_th: dynSustainedThreshold.toFixed(1),
           samples: calibSamples.length,
+          // Span temporale dei sample (sprint v13): distingue raccolta
+          // distribuita (normale, span ~300-1500ms) da raccolta compressa
+          // (anomalia, span <100ms) o anomalmente lunga (polling buggy).
+          sample_span_ms: calibSamplesLastAt - calibSamplesFirstAt,
           phase: speechStartFired ? "post_speech" : "pre_speech",
           elapsed_ms: now - startedAt,
         });
