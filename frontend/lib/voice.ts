@@ -497,6 +497,13 @@ export async function startRecording(): Promise<Recorder> {
 
   // === IMPORTANT: `stopped` deve essere dichiarata PRIMA del setInterval ===
   let stopped = false;
+  // === CALIBRATION FIX (sprint v14, post-Lorenzo audit 19/6) ===
+  // Numero di sample raccolti PRIMA che speech_start scattasse.
+  // Questi sono gli unici sample garantiti puliti (silenzio reale).
+  // I sample raccolti DOPO speech_start contengono voce e contaminerebbero
+  // il floor → soglie sbagliate (bug dimostrato dai log del 19/6).
+  let preSpeechSampleCount: number = 0;
+  let calibSkipped: boolean = false;
   // === SPEECH DB STATISTICS (sprint v13, post-Claude audit) ===
   // Claude ha giustamente rilevato che non sappiamo se la voce reale
   // dell'utente supera o no la dynSustainedThreshold. Tracciamo peak e
@@ -542,45 +549,72 @@ export async function startRecording(): Promise<Recorder> {
       if (now - startedAt < CALIB_EXTENDED_MS) {
         if (db > -100 && db < 0) {
           calibSamples.push(db);
-          // Tracciamo il PRIMO timestamp di raccolta per misurare lo "span"
-          // reale dei sample. Senza questo non sappiamo se i 5 sample sono
-          // distribuiti su 350ms (normale) o se sono compressi su 100ms
-          // (es. polling errato) o sparpagliati su 1400ms (calibrazione
-          // tardiva post-speech).
+          // Traccia quanti sample sono stati raccolti PRIMA di speech_start.
+          // Questo è il dato chiave per il fix v14: quando speech_start
+          // scatta, tutto ciò che sta nei primi `preSpeechSampleCount`
+          // indici di calibSamples è silenzio puro (utilizzabile per floor).
+          // Quello che viene dopo è voce (da scartare).
+          if (!speechStartFired) preSpeechSampleCount = calibSamples.length;
           if (calibSamplesFirstAt === 0) calibSamplesFirstAt = now;
           calibSamplesLastAt = now;
         }
       }
-      if (noiseFloor === null && calibSamples.length >= 5 && (
-          now - startedAt >= CALIB_EXTENDED_MS    // (a) attesa completa
-          || speechStartFired                       // (b) parla subito → forza
-      )) {
-        const sorted = [...calibSamples].sort((a, b) => a - b);
-        // Usa il 20° percentile come stima del floor (più robusta della mediana
-        // quando la finestra include già qualche frame di voce).
-        const p20 = sorted[Math.max(0, Math.floor(sorted.length * 0.2))];
-        noiseFloor = p20;
-        // === FIX FORMULA SOGLIE — sprint v13 ===
-        // SPEECH: floor + 6 → invariato (funziona bene dai log)
-        // SUSTAINED: floor + 10 → floor + 4 (era troppo aggressivo, tagliava
-        // la voce media reale a -27/-28 dB con floor a -32).
-        // Dai log: speech_db_avg=-27.9 con sustained_th=-22.4 → above_sustained_pct=50%.
-        // Con +4 invece di +10, la stessa situazione darebbe sustained_th=-28.4
-        // → above_sustained_pct realisticamente >70-80%.
-        dynSpeechThreshold = Math.max(SPEECH_THRESHOLD_DB, noiseFloor + 6);
-        dynSustainedThreshold = Math.max(SUSTAINED_VOICE_DB, noiseFloor + 4);
-        vadLog("noise_calibrated", {
-          floor: noiseFloor.toFixed(1),
-          speech_th: dynSpeechThreshold.toFixed(1),
-          sustained_th: dynSustainedThreshold.toFixed(1),
-          samples: calibSamples.length,
-          // Span temporale dei sample (sprint v13): distingue raccolta
-          // distribuita (normale, span ~300-1500ms) da raccolta compressa
-          // (anomalia, span <100ms) o anomalmente lunga (polling buggy).
-          sample_span_ms: calibSamplesLastAt - calibSamplesFirstAt,
-          phase: speechStartFired ? "post_speech" : "pre_speech",
-          elapsed_ms: now - startedAt,
-        });
+      // === CALIBRAZIONE — fix sprint v14 (post-Lorenzo audit 19/6) ===
+      // Tre casi:
+      //   (A) Attesa completa: sono passati 1500ms reali → calibra su TUTTI
+      //       i sample raccolti (tutti pre-speech se utente in silenzio,
+      //       altrimenti il blocco viene gestito da B).
+      //   (B) speech_start scattato in anticipo: calibra usando SOLO i
+      //       sample pre-speech. Se sono ≥3 → floor pulito; se sono <3 →
+      //       NON calibrare affatto, lascia soglie statiche (default iOS/Android).
+      //   (C) Nessuno dei due eventi è ancora occorso → aspetta.
+      //
+      // Razionale: il bug 19/6 dimostrava che calibrare DOPO speech_start
+      // su sample contaminati produce floor sporco (-32 invece di -50) e
+      // soglie inutilizzabili. Adesso scartiamo i sample contaminati.
+      if (noiseFloor === null && !calibSkipped) {
+        const calibReady = (
+          now - startedAt >= CALIB_EXTENDED_MS    // caso (A)
+          || speechStartFired                      // caso (B)
+        );
+        if (calibReady) {
+          // Quali sample usare?
+          const usePreSpeechOnly = speechStartFired && (now - startedAt < CALIB_EXTENDED_MS);
+          const samplesForCalib = usePreSpeechOnly
+            ? calibSamples.slice(0, preSpeechSampleCount)
+            : calibSamples;
+
+          if (samplesForCalib.length >= 3) {
+            const sorted = [...samplesForCalib].sort((a, b) => a - b);
+            const p20 = sorted[Math.max(0, Math.floor(sorted.length * 0.2))];
+            noiseFloor = p20;
+            dynSpeechThreshold = Math.max(SPEECH_THRESHOLD_DB, noiseFloor + 6);
+            dynSustainedThreshold = Math.max(SUSTAINED_VOICE_DB, noiseFloor + 4);
+            vadLog("noise_calibrated", {
+              floor: noiseFloor.toFixed(1),
+              speech_th: dynSpeechThreshold.toFixed(1),
+              sustained_th: dynSustainedThreshold.toFixed(1),
+              samples_used: samplesForCalib.length,
+              samples_total: calibSamples.length,
+              pre_speech_count: preSpeechSampleCount,
+              sample_span_ms: calibSamplesLastAt - calibSamplesFirstAt,
+              phase: speechStartFired ? "post_speech" : "pre_speech",
+              source: usePreSpeechOnly ? "pre_speech_only" : "full_window",
+              elapsed_ms: now - startedAt,
+            });
+          } else {
+            // Pochi sample pre-speech (utente parlava subito): NON calibrare.
+            // Lascia soglie statiche. Marca calibSkipped per evitare loop.
+            calibSkipped = true;
+            vadLog("noise_calib_skipped", {
+              reason: "insufficient_pre_speech_samples",
+              pre_speech_count: preSpeechSampleCount,
+              elapsed_ms: now - startedAt,
+              static_speech_th: dynSpeechThreshold.toFixed(1),
+              static_sustained_th: dynSustainedThreshold.toFixed(1),
+            });
+          }
+        }
       }
 
       // === HEARTBEAT (ogni 500ms) — diagnostica completa ===
