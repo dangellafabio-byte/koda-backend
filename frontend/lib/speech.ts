@@ -704,11 +704,22 @@ export async function fastConverse(
   let summaryModel: string = "?";
   let summaryPath: string = "?";
   // === KODA_SUMMARY timing breakdown server-side (sprint v12) ===
-  // Catturati dal meta event: i tre numeri che fanno capire dove vanno
-  // i secondi nel backend. Diagnostica chirurgica del bottleneck.
   let summaryLlmTtftMs: number | null = null;
   let summaryFirstTtsMs: number | null = null;
   let summaryFirstAudioTotalMs: number | null = null;
+
+  // === KODA_POLL METRICS (sprint giugno 2026 — RCA gap server↔client) ===
+  // Gap osservato dai log utente: first_audio_srv=2.3s vs first_audio=11s
+  // (client). Differenza fino a 9 secondi senza spiegazione.
+  // Logghiamo OGNI poll request/response + tempi chiave per identificare
+  // dove si perdono i secondi (rete, JSON parse, AVPlayer buffer).
+  let pollReqCount = 0;       // numero totale di POST /poll
+  let pollEmptyCount = 0;     // poll che tornano 0 eventi (timeout server)
+  let pollErrorCount = 0;     // poll falliti / 5xx / network error
+  let pollTotalWaitMs = 0;    // somma del tempo speso DENTRO le fetch /poll
+  let tFirstSentenceEvent: number | null = null;  // quando il client RICEVE il primo evento sentence
+  let tFirstPlayStart: number | null = null;      // quando il player chiama play() sul primo token
+
   let summaryFinalized = false;
   const finalizeSummary = (errMsg?: string) => {
     if (summaryFinalized) return;
@@ -716,10 +727,6 @@ export async function fastConverse(
     const total = Date.now() - t0;
     const ms = (v: number | null) => (v == null ? "?" : String(v - t0));
     const status = errMsg ? `err=${errMsg.slice(0, 40)}` : "ok";
-    // UNA RIGA CONSOLIDATA — copiabile direttamente in tabella.
-    // Campi: model | path | total | recording_ms | transcript_chars |
-    //        llm_ttft | first_tts | first_audio_srv |
-    //        start_ack | first_audio | meta | done | sentences | status
     const recMs = opts.recordingDurationMs;
     console.log(
       `[KODA_SUMMARY] model=${summaryModel} path=${summaryPath} ` +
@@ -731,6 +738,20 @@ export async function fastConverse(
         `start_ack=${ms(tStartAck)}ms first_audio=${ms(tFirstAudio)}ms ` +
         `meta=${ms(tMeta)}ms done=${ms(tDone)}ms ` +
         `sentences=${sentenceCount} ${status}`
+    );
+    // === KODA_POLL_SUMMARY — bottleneck server↔client ===
+    // GAP DIAGNOSI:
+    //   first_sentence - first_audio_srv = ritardo "server pronto → client riceve evento"
+    //                                       (se grande: rete o long-poll che si stalla)
+    //   first_play - first_sentence     = ritardo "client riceve → player chiama play()"
+    //                                       (se grande: JS event loop bloccato)
+    //   first_audio - first_play        = ritardo "player.play() → primo frame audio"
+    //                                       (se grande: AVPlayer buffering MP3 dal CDN)
+    console.log(
+      `[KODA_POLL_SUMMARY] polls=${pollReqCount} empty=${pollEmptyCount} ` +
+        `err=${pollErrorCount} poll_wait=${pollTotalWaitMs}ms ` +
+        `first_sentence=${ms(tFirstSentenceEvent)}ms ` +
+        `first_play=${ms(tFirstPlayStart)}ms`
     );
   };
 
@@ -799,12 +820,18 @@ export async function fastConverse(
     // Pollster — runs in parallel with the audio player.
     const pollster = (async () => {
       while (!ac.signal.aborted && !pollingDone) {
+        const _pollT0 = Date.now();
+        pollReqCount++;
         try {
           const r = await fetch(
             `${API_BASE}/converse-fast/poll/${sid}?since=${cursor}&timeout=4`,
             { signal: ac.signal }
           );
+          const _pollDur = Date.now() - _pollT0;
+          pollTotalWaitMs += _pollDur;
           if (!r.ok) {
+            pollErrorCount++;
+            console.log(`[KODA_POLL] req=${pollReqCount} status=${r.status} dur=${_pollDur}ms cursor=${cursor} t=${Date.now() - t0}ms`);
             pollError = `poll ${r.status}`;
             pollingDone = true;
             notifyTokenWait();
@@ -812,11 +839,15 @@ export async function fastConverse(
           }
           const data = await r.json();
           const evts: any[] = data?.events || [];
+          if (evts.length === 0) pollEmptyCount++;
+          console.log(`[KODA_POLL] req=${pollReqCount} status=200 dur=${_pollDur}ms cursor=${cursor}→${data?.next} events=${evts.length} done=${!!data?.done} t=${Date.now() - t0}ms`);
           cursor = typeof data?.next === "number" ? data.next : cursor + evts.length;
           for (const ev of evts) {
             if (ev?.type === "sentence" && ev.token) {
-              // === 2026-06 #3: passo waveform + window_ms al consumer
-              //     così l'orb può pulsare in sincrono con sillabe reali. ===
+              // Cattura timestamp ARRIVO primo evento sentence (per RCA gap server↔client)
+              if (tFirstSentenceEvent === null) {
+                tFirstSentenceEvent = Date.now();
+              }
               tokenQueue.push({
                 i: ev.i || 0,
                 token: ev.token,
@@ -831,12 +862,8 @@ export async function fastConverse(
               notifyTokenWait();
             } else if (ev?.type === "meta") {
               tMeta = Date.now();
-              // Catturiamo model e path se forniti dal backend (per
-              // [KODA_SUMMARY]). Default "?" se il server è una vecchia
-              // versione che non li espone.
               if (typeof ev.model === "string") summaryModel = ev.model;
               if (typeof ev.path === "string") summaryPath = ev.path;
-              // === Timing breakdown server-side (sprint v12) ===
               if (typeof ev.llm_ttft_ms === "number") summaryLlmTtftMs = ev.llm_ttft_ms;
               if (typeof ev.first_tts_ms === "number") summaryFirstTtsMs = ev.first_tts_ms;
               if (typeof ev.first_audio_total_ms === "number") summaryFirstAudioTotalMs = ev.first_audio_total_ms;
@@ -861,11 +888,15 @@ export async function fastConverse(
             break;
           }
         } catch (e: any) {
+          const _pollDur = Date.now() - _pollT0;
+          pollTotalWaitMs += _pollDur;
           if (ac.signal.aborted) {
             pollingDone = true;
             notifyTokenWait();
             break;
           }
+          pollErrorCount++;
+          console.log(`[KODA_POLL] req=${pollReqCount} status=NETERR dur=${_pollDur}ms cursor=${cursor} err=${String(e?.message || e).slice(0, 60)} t=${Date.now() - t0}ms`);
           // Transient network error — short backoff then retry.
           await new Promise((res) => setTimeout(res, 250));
         }
@@ -881,6 +912,12 @@ export async function fastConverse(
           continue;
         }
         const { token, waveform, window_ms } = tokenQueue.shift()!;
+        // Marca quando il player effettivamente parte sul primo token
+        // (utile per separare "ho ricevuto evento" da "ho chiamato play()").
+        if (tFirstPlayStart === null) {
+          tFirstPlayStart = Date.now();
+          console.log(`[KODA_POLL] first_play_kick t=${Date.now() - t0}ms (sentence_recv→play=${tFirstSentenceEvent ? Date.now() - tFirstSentenceEvent : "?"}ms)`);
+        }
         const fireStart = !firstAudioFired
           ? () => {
               firstAudioFired = true;

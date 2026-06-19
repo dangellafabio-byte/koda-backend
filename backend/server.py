@@ -716,14 +716,25 @@ async def transcribe_deepgram(audio: UploadFile = File(...), language: str = For
             raise HTTPException(status_code=502, detail=f"Deepgram error {r.status_code}")
         payload = r.json()
         transcript = ""
+        dg_confidence: float | None = None
+        dg_detected_lang: str | None = None
         try:
-            transcript = (
+            alt0 = (
                 payload.get("results", {})
                 .get("channels", [{}])[0]
                 .get("alternatives", [{}])[0]
-                .get("transcript", "")
-                or ""
             )
+            transcript = alt0.get("transcript", "") or ""
+            # Confidence è 0-1 (Deepgram). Utile per intercettare audio rumoroso.
+            if isinstance(alt0.get("confidence"), (int, float)):
+                dg_confidence = float(alt0["confidence"])
+            # Detected language: presente solo se detect_language=true; qui forziamo
+            # `language=it`, quindi tipicamente null. Lo logghiamo lo stesso per
+            # intercettare eventuali fallback del modello.
+            ch0 = payload.get("results", {}).get("channels", [{}])[0]
+            dl = ch0.get("detected_language") or payload.get("results", {}).get("detected_language")
+            if isinstance(dl, str):
+                dg_detected_lang = dl
         except Exception:
             transcript = ""
         cleaned = _clean_whisper_output(transcript.strip())
@@ -731,6 +742,23 @@ async def transcribe_deepgram(audio: UploadFile = File(...), language: str = For
         logger.info(
             f"[deepgram] audio_bytes={len(data)} mime={mimetype} "
             f"raw={transcript[:120]!r} cleaned={cleaned[:120]!r}"
+        )
+        # === KODA_STT — riga dedicata per RCA "Koda risponde in spagnolo" ===
+        # UNA riga, easy-to-grep, con:
+        #   text         → cosa Deepgram ha effettivamente trascritto (cleaned)
+        #   lang_req     → lingua FORZATA da noi (it)
+        #   lang_det     → lingua RILEVATA da Deepgram (di solito null perché forziamo)
+        #   conf         → confidence 0-1 (sotto 0.6 = audio ambiguo / rumoroso)
+        #   chars        → lunghezza testo finale
+        # Se vediamo: lang_req=it text="hola como estas" → Deepgram sta sbagliando
+        # foneticamente (italiano scambiato per spagnolo) o c'è un mismatch nei param.
+        # Se vediamo: lang_req=it text="ciao come stai" e GPT risponde spagnolo →
+        # il problema è nel prompt / system message LLM, NON nello STT.
+        logger.info(
+            f"[KODA_STT] text={cleaned[:200]!r} lang_req={language or 'it'} "
+            f"lang_det={dg_detected_lang or 'null'} "
+            f"conf={dg_confidence if dg_confidence is not None else '?'} "
+            f"chars={len(cleaned)} stt_ms={_kt_dg_ms}"
         )
         logger.info(f"[KODA_TIMING] DEEPGRAM_END deepgram_ms={_kt_dg_ms} chars={len(cleaned)}")
         return {"text": cleaned}
