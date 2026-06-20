@@ -128,8 +128,43 @@ async function ensureModelDownloaded(
 /**
  * Inizializza l'inferenza ONNX. Idempotente — chiamabile più volte.
  * Ritorna lo status per UI di diagnostica.
+ *
+ * ⚠️ KILL-SWITCH (Fabio escalation 2026-06-20 v7) ⚠️
+ * `onnxruntime-react-native@1.24.3` è documentato INCOMPATIBILE con
+ * `newArchEnabled: true` (Fabric/TurboModules) — il modulo crasha
+ * via JSI quando si chiama InferenceSession.create() su iOS.
+ * Issue Microsoft: github.com/microsoft/onnxruntime/issues/17623
+ * Guida Expo ufficiale: raccomanda di disabilitare NewArch.
+ *
+ * Soluzione scelta: NON chiamare il modulo nativo finché non passiamo
+ * a una libreria compatibile (react-native-fast-tflite) in una sessione
+ * futura. Questo fix è OTA-deliverable: viaggia via Expo Updates senza
+ * richiedere una nuova build TestFlight.
  */
 export async function loadSileroVadModel(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _onProgress?: (received: number, total: number) => void
+): Promise<ModelLoadStatus> {
+  return {
+    ok: false,
+    error:
+      "Silero VAD temporaneamente disattivato.\n\n" +
+      "Causa: onnxruntime-react-native (v1.24.3) non è compatibile con " +
+      "New Architecture iOS (Fabric/TurboModules) — issue Microsoft #17623. " +
+      "Il caricamento del modello crasha l'app via JSI.\n\n" +
+      "Verrà ripristinato in una build futura migrando il PoC a " +
+      "react-native-fast-tflite (compatibile NewArch) con la versione " +
+      "TFLite ufficiale di Silero VAD.\n\n" +
+      "Nessun impatto sull'app principale: il VAD volumetrico in voice.ts " +
+      "continua a funzionare regolarmente.",
+  };
+}
+
+/**
+ * @deprecated Killed (vedi loadSileroVadModel kill-switch). Mantenuto per
+ *   compatibilità di import; non chiama il modulo nativo. Ritorna sempre 0.
+ */
+export async function loadSileroVadModelLegacy(
   onProgress?: (received: number, total: number) => void
 ): Promise<ModelLoadStatus> {
   if (_session) {
