@@ -13,27 +13,10 @@
 
 import React, { useState, useRef, useEffect } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, Platform } from "react-native";
+import { useAudioRecorder, ExpoAudioStreamModule } from "@siteed/audio-studio";
 
 import { isVadLoaded } from "./silero";
 import { SileroStreamEngine, pcm16BeBase64ToFloat32 } from "./sileroStream";
-
-// === Lazy require @siteed/audio-studio (P1 Fase 2) ===
-// Static import top-level di @siteed/audio-studio crasha sul bundle web
-// con "Cannot read properties of undefined (reading 'install')". Usiamo
-// require() solo al primo uso → su web il bundle non lo carica mai e
-// l'errore non si verifica. La versione .web.tsx mostra solo lo stub.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _audioStudio: any = null;
-function getAudioStudio(): any {
-  if (Platform.OS === "web") {
-    throw new Error("@siteed/audio-studio non disponibile su web");
-  }
-  if (!_audioStudio) {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    _audioStudio = require("@siteed/audio-studio");
-  }
-  return _audioStudio;
-}
 
 export type StreamingSectionProps = {
   modelReady: boolean;
@@ -49,10 +32,7 @@ export function StreamingSection({ modelReady }: StreamingSectionProps) {
   const [history, setHistory] = useState<number[]>(new Array(60).fill(0));
   const [error, setError] = useState<string | null>(null);
   const engineRef = useRef<SileroStreamEngine | null>(null);
-  // useAudioRecorder via lazy require — su web mai chiamato (componente
-  // viene risolto da .web.tsx stub).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const recorder = (getAudioStudio().useAudioRecorder as () => any)();
+  const recorder = useAudioRecorder();
   const recorderStartedRef = useRef(false);
 
   const handleStart = async () => {
@@ -62,7 +42,7 @@ export function StreamingSection({ modelReady }: StreamingSectionProps) {
       return;
     }
     try {
-      const perm = await getAudioStudio().ExpoAudioStreamModule.requestPermissionsAsync();
+      const perm = await ExpoAudioStreamModule.requestPermissionsAsync();
       if (perm?.status !== "granted") {
         setError("Permesso microfono negato. Vai in Impostazioni iOS per abilitarlo.");
         return;

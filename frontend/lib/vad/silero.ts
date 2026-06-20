@@ -47,27 +47,7 @@
 
 import { Asset } from "expo-asset";
 import * as FileSystem from "expo-file-system/legacy";
-import { Platform } from "react-native";
-
-// === Lazy require di onnxruntime-react-native (P1 Fase 1) ===
-// Il modulo è nativo-only e crasha sul bundle web ("Cannot read properties
-// of undefined (reading 'install')") quando importato top-level con
-// `import { InferenceSession }`. Lazy require lo carica SOLO al primo uso
-// → su web il chiamante riceve un errore amichevole invece di rompere
-// l'intero bundle. La versione web (silero.web.ts) viene risolta da
-// Metro automaticamente quando disponibile.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _ort: any = null;
-function getOrt(): any {
-  if (Platform.OS === "web") {
-    throw new Error("onnxruntime-react-native non disponibile su web");
-  }
-  if (!_ort) {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    _ort = require("onnxruntime-react-native");
-  }
-  return _ort;
-}
+import { InferenceSession, Tensor } from "onnxruntime-react-native";
 
 import { BACKEND } from "../api";
 
@@ -82,7 +62,7 @@ export const CHUNK_SIZE = 512;     // samples per chunk (32ms @ 16kHz)
 export const STATE_DIMS = [2, 1, 128] as const; // [num_layers, batch, hidden_size]
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _session: any = null;
+let _session: InferenceSession | null = null;
 let _state: Float32Array | null = null;
 
 export type ModelLoadStatus = {
@@ -162,15 +142,24 @@ export async function loadSileroVadModel(
   }
   const start = Date.now();
   try {
+    // === Log granulari step-by-step (diag crash 2026-06-20) ===
+    // Se l'app crasha durante il load del modello, questi log ci dicono
+    // a che step si è rotto (visibili in /diagnostics se l'app non
+    // crasha completamente; comunque il try/catch sotto cattura tutto).
+    console.log("[KODA_VAD_LOAD] step 1: ensureModelDownloaded start");
     const path = await ensureModelDownloaded(onProgress);
+    console.log(`[KODA_VAD_LOAD] step 2: got path=${path.substring(0, 60)}`);
     const info = await FileSystem.getInfoAsync(path);
+    console.log(`[KODA_VAD_LOAD] step 3: file exists=${info.exists}, size=${info.exists ? info.size : "?"}`);
     // Asset.fromURI: alcune versioni di onnxruntime-react-native richiedono
     // il path "puro" senza il prefisso "file://". Strippiamo prudentemente.
     const cleanPath = path.startsWith("file://") ? path.replace(/^file:\/\//, "") : path;
-    const session = await getOrt().InferenceSession.create(cleanPath, {
+    console.log(`[KODA_VAD_LOAD] step 4: calling InferenceSession.create with cleanPath=${cleanPath.substring(0, 60)}`);
+    const session = await InferenceSession.create(cleanPath, {
       // executionProviders: ['cpu'] è default su iOS. Future: 'coreml' per
       // accelerazione GPU/NPU se disponibile (lo testeremo in Fase 2).
     });
+    console.log(`[KODA_VAD_LOAD] step 5: session created, inputs=${session.inputNames.join(",")} outputs=${session.outputNames.join(",")}`);
     _session = session;
     // Reset state al primo load
     _state = new Float32Array(STATE_DIMS[0] * STATE_DIMS[1] * STATE_DIMS[2]);
@@ -188,6 +177,7 @@ export async function loadSileroVadModel(
     };
   } catch (e: any) {
     console.warn("[silero-vad] loadSileroVadModel error:", e);
+    console.warn(`[KODA_VAD_LOAD] FAILED with: ${e?.message || String(e)}`);
     return {
       ok: false,
       error: e?.message || String(e),
@@ -210,10 +200,9 @@ export async function runVadInference(chunk: Float32Array): Promise<number> {
   if (chunk.length !== CHUNK_SIZE) {
     throw new Error(`chunk size mismatch: got ${chunk.length}, expected ${CHUNK_SIZE}`);
   }
-  const ort = getOrt();
-  const inputTensor = new ort.Tensor("float32", chunk, [1, CHUNK_SIZE]);
-  const stateTensor = new ort.Tensor("float32", _state, STATE_DIMS as unknown as number[]);
-  const srTensor = new ort.Tensor("int64", new BigInt64Array([BigInt(SAMPLE_RATE)]), []);
+  const inputTensor = new Tensor("float32", chunk, [1, CHUNK_SIZE]);
+  const stateTensor = new Tensor("float32", _state, STATE_DIMS as unknown as number[]);
+  const srTensor = new Tensor("int64", new BigInt64Array([BigInt(SAMPLE_RATE)]), []);
   const results = await _session.run({
     input: inputTensor,
     state: stateTensor,
