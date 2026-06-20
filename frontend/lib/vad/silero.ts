@@ -47,7 +47,27 @@
 
 import { Asset } from "expo-asset";
 import * as FileSystem from "expo-file-system/legacy";
-import { InferenceSession, Tensor } from "onnxruntime-react-native";
+import { Platform } from "react-native";
+
+// === Lazy require di onnxruntime-react-native (P1 Fase 1) ===
+// Il modulo è nativo-only e crasha sul bundle web ("Cannot read properties
+// of undefined (reading 'install')") quando importato top-level con
+// `import { InferenceSession }`. Lazy require lo carica SOLO al primo uso
+// → su web il chiamante riceve un errore amichevole invece di rompere
+// l'intero bundle. La versione web (silero.web.ts) viene risolta da
+// Metro automaticamente quando disponibile.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _ort: any = null;
+function getOrt(): any {
+  if (Platform.OS === "web") {
+    throw new Error("onnxruntime-react-native non disponibile su web");
+  }
+  if (!_ort) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _ort = require("onnxruntime-react-native");
+  }
+  return _ort;
+}
 
 import { BACKEND } from "../api";
 
@@ -61,7 +81,8 @@ export const SAMPLE_RATE = 16_000; // 16 kHz (alternativa: 8000)
 export const CHUNK_SIZE = 512;     // samples per chunk (32ms @ 16kHz)
 export const STATE_DIMS = [2, 1, 128] as const; // [num_layers, batch, hidden_size]
 
-let _session: InferenceSession | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _session: any = null;
 let _state: Float32Array | null = null;
 
 export type ModelLoadStatus = {
@@ -146,7 +167,7 @@ export async function loadSileroVadModel(
     // Asset.fromURI: alcune versioni di onnxruntime-react-native richiedono
     // il path "puro" senza il prefisso "file://". Strippiamo prudentemente.
     const cleanPath = path.startsWith("file://") ? path.replace(/^file:\/\//, "") : path;
-    const session = await InferenceSession.create(cleanPath, {
+    const session = await getOrt().InferenceSession.create(cleanPath, {
       // executionProviders: ['cpu'] è default su iOS. Future: 'coreml' per
       // accelerazione GPU/NPU se disponibile (lo testeremo in Fase 2).
     });
@@ -189,9 +210,10 @@ export async function runVadInference(chunk: Float32Array): Promise<number> {
   if (chunk.length !== CHUNK_SIZE) {
     throw new Error(`chunk size mismatch: got ${chunk.length}, expected ${CHUNK_SIZE}`);
   }
-  const inputTensor = new Tensor("float32", chunk, [1, CHUNK_SIZE]);
-  const stateTensor = new Tensor("float32", _state, STATE_DIMS as unknown as number[]);
-  const srTensor = new Tensor("int64", new BigInt64Array([BigInt(SAMPLE_RATE)]), []);
+  const ort = getOrt();
+  const inputTensor = new ort.Tensor("float32", chunk, [1, CHUNK_SIZE]);
+  const stateTensor = new ort.Tensor("float32", _state, STATE_DIMS as unknown as number[]);
+  const srTensor = new ort.Tensor("int64", new BigInt64Array([BigInt(SAMPLE_RATE)]), []);
   const results = await _session.run({
     input: inputTensor,
     state: stateTensor,

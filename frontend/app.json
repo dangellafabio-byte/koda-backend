@@ -82,6 +82,15 @@
           "locationAlwaysAndWhenInUsePermission": "Sapere la tua città per risposte più contestuali"
         }
       ],
+      [
+        "@siteed/audio-studio",
+        {
+          "iosBackgroundModes": {
+            "useVoiceProcessing": false
+          },
+          "microphonePermission": "Per registrare la tua voce in streaming e darti risposte naturali"
+        }
+      ],
       "expo-asset",
       "onnxruntime-react-native"
     ],

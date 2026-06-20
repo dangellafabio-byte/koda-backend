@@ -42,6 +42,10 @@ import {
   isVadLoaded,
   type ModelLoadStatus,
 } from "../lib/vad/silero";
+// Platform-specific via Metro resolution:
+//  - lib/vad/streamingSection.tsx (mobile, full implementation)
+//  - lib/vad/streamingSection.web.tsx (web stub)
+import { StreamingSection } from "../lib/vad/streamingSection";
 
 export default function DiagnosticsVadScreen() {
   const insets = useSafeAreaInsets();
@@ -187,8 +191,10 @@ export default function DiagnosticsVadScreen() {
           </View>
         )}
 
+        {status?.ok && <StreamingSection modelReady={true} />}
+
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>3. Reset cache (debug)</Text>
+          <Text style={styles.sectionTitle}>4. Reset cache (debug)</Text>
           <TouchableOpacity
             style={[styles.btn, styles.btnGhost]}
             onPress={handleClear}
@@ -346,5 +352,69 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 10,
     fontStyle: "italic",
+  },
+  // === Live streaming UI (P1 Fase 2) ===
+  liveBlock: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(255,255,255,0.08)",
+  },
+  liveNumberRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  liveBigNumber: {
+    fontSize: 48,
+    fontWeight: "300",
+    fontVariant: ["tabular-nums"],
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace" }) as any,
+  },
+  liveLabel: {
+    color: "#7E8A9B",
+    fontSize: 11,
+    marginTop: 4,
+  },
+  speechBadge: {
+    backgroundColor: "rgba(61,220,151,0.15)",
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: "rgba(61,220,151,0.4)",
+  },
+  speechBadgeText: {
+    color: "#3DDC97",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  probBarBg: {
+    height: 12,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderRadius: 6,
+    overflow: "hidden",
+    marginBottom: 16,
+    position: "relative",
+  },
+  probBarFg: {
+    height: "100%",
+    borderRadius: 6,
+  },
+  threshMarker: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    width: 2,
+    opacity: 0.5,
+  },
+  sparkline: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    height: 60,
+    marginVertical: 12,
+    paddingHorizontal: 4,
   },
 });
