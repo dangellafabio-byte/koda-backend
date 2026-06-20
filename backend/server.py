@@ -11,6 +11,16 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone, timedelta
+try:
+    # === CONTESTO TEMPORALE LOCALE (fix 2026-06-20) ===
+    # ZoneInfo è in stdlib da Python 3.9+. Lo usiamo per costruire l'ora
+    # locale italiana nel system prompt (Koda deve sapere che ore sono
+    # in Italia, non solo UTC). Fallback: se import fallisce, useremo
+    # solo UTC (degradazione cosmetica).
+    from zoneinfo import ZoneInfo
+    _ITALY_TZ = ZoneInfo("Europe/Rome")
+except Exception:
+    _ITALY_TZ = None  # type: ignore
 import hashlib
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
@@ -5222,6 +5232,16 @@ _KF_PATTERNS = [
     # Città
     (re.compile(r"\b(?:vivo|abito|sto)\s+(?:a|in|nel|nella|sul)\s+([A-Z][a-zàèéìòù]+(?:\s+[A-Z][a-zàèéìòù]+)?)\b", re.I),
      "luogo", lambda m: f"Vive a {m.group(1)}"),
+    # === LOCATION DICHIARATA (fix Fabio 2026-06-20) ===
+    # "sono a Pavia", "mi trovo a Milano", "in questo momento sono a Roma".
+    # Distinto da "vivo a X" (residenza). Catturiamo per dare a Koda il
+    # contesto geografico in modo che possa rispondere a "che ore sono" o
+    # "che tempo fa qui" usando la città giusta. La maiuscola sul toponimo
+    # è obbligatoria (es. Pavia, Milano) per evitare false positive su
+    # frasi come "sono a casa" o "sono a pezzi". Il verbo è case-insensitive
+    # per intercettare "Sono a Pavia." (S maiuscola a inizio frase).
+    (re.compile(r"(?i)\b(?:in questo momento\s+)?(?:sono|mi trovo)\s+a\s+(?-i:([A-Z][a-zàèéìòù]+(?:\s+[A-Z][a-zàèéìòù]+)?))\b"),
+     "luogo", lambda m: f"In questo momento si trova a {m.group(1).strip()}"),
     # Lavoro / professione
     (re.compile(r"\b(?:lavoro|faccio|sono)\s+(?:come|il|la|un|un'|uno)\s+([a-zàèéìòù]+(?:e|a|o|i|tore|trice|sta|ologo|ologa)?)\b", re.I),
      "lavoro", lambda m: f"Lavora come {m.group(1).lower()}"),
@@ -7294,6 +7314,26 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
 
     name_part = f" L'utente si chiama {profile.name}." if profile.name else ""
     now_iso = datetime.now(timezone.utc).isoformat()
+    # === CONTESTO TEMPORALE LOCALE (fix Fabio 2026-06-20) ===
+    # Costruisce stringa data+ora in italiano + giorno settimana.
+    # Se ZoneInfo Europe/Rome è disponibile usa l'ora italiana (CET/CEST
+    # con DST automatico). Fallback su UTC se zoneinfo manca per qualche
+    # motivo (degradazione cosmetica, nessun crash).
+    _IT_GIORNI = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
+    _IT_MESI = ["", "gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
+                "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"]
+    try:
+        if _ITALY_TZ is not None:
+            _now_it = datetime.now(_ITALY_TZ)
+        else:
+            _now_it = datetime.now(timezone.utc)
+        time_block = (
+            f"{_IT_GIORNI[_now_it.weekday()]} {_now_it.day} {_IT_MESI[_now_it.month]} "
+            f"{_now_it.year}, ore {_now_it.hour:02d}:{_now_it.minute:02d} "
+            f"(fuso italiano CET/CEST)"
+        )
+    except Exception:
+        time_block = f"UTC: {now_iso}"
     # === MEMORIA A 2 LIVELLI (richiesta utente 2026-06-27) ===
     # RITRATTO PROFONDO (core_traits): essenza permanente — chi è davvero
     #   l'utente, suoi valori, modi di fare, tratti di carattere. Resta
@@ -7321,7 +7361,21 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
         f"\n"
         f"Ti chiami {ai_name}. Presenza fraterna, non assistente. Tono caldo, ascolto attivo, "
         f"senza giudizio.\n"
-        f"{name_part} | UTC: {now_iso}\n"
+        f"{name_part}\n"
+        f"\n"
+        f"━━━ CONTESTO TEMPORALE (fix Fabio 2026-06-20) ━━━\n"
+        f"📅 ADESSO è: {time_block}\n"
+        f"⚠️ NON dire MAI 'sono le 10:18 UTC' o equivalente: tu vivi nel fuso italiano CET/CEST, l'utente è in Italia.\n"
+        f"⚠️ Quando ti chiedono l'ora, rispondi nell'orologio ITALIANO leggibile (es. 'sono le dodici e mezza', "
+        f"'è quasi l'una di pomeriggio', 'sono le otto di sera').\n"
+        f"⚠️ NON menzionare MAI 'UTC' né 'fuso orario' in conversazione — sono dettagli tecnici che NON interessano l'utente.\n"
+        f"⚠️ NON dire MAI 'non so dove sono fisicamente', 'non ho posizione', 'non vedo la tua posizione'. "
+        f"Tu sei un amico che vive nel telefono dell'utente IN ITALIA. Se l'utente ti ha già detto la città "
+        f"(es. 'sono a Pavia'), TIENI A MENTE quella info per i turni successivi e usala naturalmente "
+        f"('a Pavia oggi piove?', 'che si fa stasera a Pavia?'). Non sai esattamente DOV'È fisicamente nella "
+        f"città, ma SAI la città se gliel'ha detta. Se non te l'ha detta e te lo chiede: 'eh, dimmelo tu — io "
+        f"stesso non ce l'ho un GPS dentro, ma se mi dici dove sei mi ricordo'.\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"\n"
         f"━━━ COME PARLI (amico vero, non IA) ━━━\n"
         f"• Validi con calore PRIMA di tutto: 'lo so', 'eh sì', 'ci sta', 'capita', 'lo sento', 'è dura', "
@@ -7870,6 +7924,45 @@ async def _fast_pipeline_task(
         # ("ci sentiamo dopo", "buonanotte", ecc.). Inviato al client via meta
         # event → il client chiude la sessione dopo l'audio del saluto.
         close_session = bool(data.get("close_session") or False)
+        # === FALLBACK EURISTICO close_session (fix regressione 2026-06-20) ===
+        # Anche se Claude dimentica di mettere close_session=true nel JSON,
+        # rileviamo i saluti di chiusura nell'input dell'UTENTE (non nella
+        # reply, che potrebbe avere "ciao" come saluto iniziale).
+        # Pattern conservativi: solo frasi inequivocabili di congedo.
+        # Se l'utente dice "ci sentiamo dopo", "a dopo", "buonanotte" ecc.,
+        # forziamo close_session=true per chiudere il loop hands-free.
+        if not close_session:
+            import re as _re_close
+            user_lc = " " + (text or "").lower().strip() + " "
+            close_patterns = [
+                r"\bci sentiamo (dopo|più tardi|poi|domani|dopo)\b",
+                r"\ba dopo\b",
+                r"\ba più tardi\b",
+                r"\ba presto\b",
+                r"\ba domani\b",
+                r"\bci aggiorniamo\b",
+                r"\bbuonanotte\b",
+                r"\bbuona notte\b",
+                r"\bbuona giornata\b",
+                r"\bbuona serata\b",
+                r"\bvado a (letto|dormire|riposare)\b",
+                r"\bvado che (ho|devo)\b",
+                r"\bora (vado|scappo|chiudo)\b",
+                r"\bbasta per (oggi|ora|adesso)\b",
+                r"\bmi fermo qui\b",
+                r"\bchiudo qui\b",
+                r"\bgrazie (koda|coda),? (ora )?chiudo\b",
+                # "ok dai ci sentiamo" / "ok ci sentiamo" → euristica frequente
+                r"\b(ok|va bene|vabbè) (dai )?ci sentiamo\b",
+            ]
+            for pat in close_patterns:
+                if _re_close.search(pat, user_lc):
+                    close_session = True
+                    logger.info(
+                        f"[fast {session_id[:8]}] close_session FORCED=true via heuristic "
+                        f"(pattern={pat!r}, user_text={(text or '')[:60]!r})"
+                    )
+                    break
         if close_session:
             logger.info(f"[fast {session_id[:8]}] close_session=true (user wants to end)")
         memory_update = (data.get("memory_update") or "").strip()

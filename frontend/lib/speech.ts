@@ -583,6 +583,14 @@ export type FastConverseMeta = {
   voice_text?: string | null;
   tone?: Tone | null;
   actions?: any[];
+  /**
+   * === CLOSE SESSION (fix regressione 2026-06-20) ===
+   * Backend imposta `true` quando l'utente saluta per chiudere
+   * ("ci sentiamo dopo", "a dopo", "ciao Koda", "buonanotte", ecc.).
+   * Il client DEVE smettere di ascoltare dopo aver suonato la reply
+   * finale, altrimenti continua in loop ("non ti sento, parla pure").
+   */
+  close_session?: boolean;
 };
 
 export type FastConverseResult = {
@@ -906,7 +914,14 @@ export async function fastConverse(
                 voice_text: ev.voice_text ?? null,
                 tone: (ev.tone as Tone) ?? null,
                 actions: Array.isArray(ev.actions) ? ev.actions : [],
+                // === CLOSE SESSION (fix regressione 2026-06-20) ===
+                // Backend dice "true" su saluto di chiusura → il caller
+                // (index.tsx) deve fermare il loop di registrazione auto.
+                close_session: !!ev.close_session,
               };
+              if (ev.close_session) {
+                console.log("[KODA_CLOSE_SESSION] backend requested session end");
+              }
               try { opts.onMeta?.(meta); } catch {}
             } else if (ev?.type === "waveform_update") {
               // === FIX 2026-06-20: waveform "late" ===

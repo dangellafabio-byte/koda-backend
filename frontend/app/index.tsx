@@ -612,6 +612,17 @@ export default function Taccuino() {
   const [listenBanner, setListenBanner] = useState<string | null>(null);
   const firstListenShownRef = useRef(false);
   const listenBannerTimerRef = useRef<any>(null);
+
+  // === CLOSE SESSION PAUSE (fix regressione 2026-06-20) ===
+  // Quando l'utente saluta per chiudere ("ci sentiamo dopo", "ciao Koda",
+  // "buonanotte"…) il backend imposta `close_session=true` nel meta event.
+  // Il client DEVE smettere di ascoltare automaticamente per NON entrare
+  // nel loop "non ti sento, parla pure" anche dopo che l'utente se n'è
+  // andato. Reset solo quando l'utente tappa di nuovo l'orb (intent
+  // esplicito di riprendere la conversazione).
+  const [closeSessionPause, setCloseSessionPause] = useState(false);
+  const closeSessionPauseRef = useRef(false);
+  useEffect(() => { closeSessionPauseRef.current = closeSessionPause; }, [closeSessionPause]);
   const setHandsFreeMode = useCallback(async (on: boolean) => {
     if (!profile) return;
     const next = {
@@ -1507,6 +1518,17 @@ export default function Taccuino() {
     if (!userInteractedRef.current) return;
     if (status !== "idle") return;
     if (!profile) return;
+    // === CLOSE SESSION PAUSE (fix regressione 2026-06-20) ===
+    // L'utente ha appena salutato per chiudere ("ci sentiamo dopo", "ciao
+    // Koda"…). Il backend ha settato close_session=true e il client lo ha
+    // catturato. NON riaccendere il mic automaticamente. L'utente deve
+    // tappare esplicitamente l'orb per riprendere. Senza questa guardia
+    // il loop hands-free riapriva il mic dopo 450ms e poi mostrava
+    // "non ti sento" anche se l'utente era già andato via.
+    if (closeSessionPauseRef.current) {
+      console.log("[KODA_CLOSE_SESSION] hands-free loop suppressed (waiting for user tap)");
+      return;
+    }
     if (showOnboarding) return;
     // CRITICAL: showColorIntro può essere `null` (in fase di caricamento da
     // SecureStore). Se attivassimo il mic in quei millisecondi, l'audio
@@ -1917,6 +1939,12 @@ export default function Taccuino() {
                         if (Array.isArray(meta.actions) && meta.actions.length > 0) {
                           runActions(meta.actions as any[]);
                         }
+                        // === CLOSE SESSION (path WS — fix 2026-06-20) ===
+                        if (meta.close_session) {
+                          console.log("[KODA_CLOSE_SESSION] (ws) meta.close_session=true → pausing hands-free loop");
+                          setCloseSessionPause(true);
+                          closeSessionPauseRef.current = true;
+                        }
                       } catch (e) {
                         console.warn("[ws] onMeta handler error:", e);
                       }
@@ -1962,6 +1990,16 @@ export default function Taccuino() {
                     });
                     if (Array.isArray(meta.actions) && meta.actions.length > 0) {
                       runActions(meta.actions as any[]);
+                    }
+                    // === CLOSE SESSION (fix regressione 2026-06-20) ===
+                    // Backend ha rilevato un saluto di chiusura. Sospendi
+                    // il loop hands-free: il prossimo `useEffect` che
+                    // valuta `closeSessionPauseRef` non riaccenderà il mic.
+                    // L'utente dovrà tappare l'orb per riprendere.
+                    if (meta.close_session) {
+                      console.log("[KODA_CLOSE_SESSION] meta.close_session=true → pausing hands-free loop");
+                      setCloseSessionPause(true);
+                      closeSessionPauseRef.current = true;
                     }
                   } catch (e) {
                     console.warn("[fast] onMeta handler error:", e);
@@ -2568,6 +2606,15 @@ export default function Taccuino() {
     if (status === "idle") {
       // Tap to start. If conversation_mode is on, turn the loop ON
       if (conversationOn) setConvActive(true);
+      // === RESET CLOSE SESSION PAUSE ===
+      // L'utente aveva salutato e il loop hands-free era stato sospeso.
+      // Ora ha tappato di nuovo l'orb → intent esplicito di riprendere.
+      // Sblocchiamo il loop e ripartiamo dalla registrazione.
+      if (closeSessionPauseRef.current) {
+        console.log("[KODA_CLOSE_SESSION] user tapped — resuming hands-free loop");
+        setCloseSessionPause(false);
+        closeSessionPauseRef.current = false;
+      }
       startTalk();
     } else if (status === "speaking") {
       // Stop AI voice and immediately start recording — single tap interrupts and listens
