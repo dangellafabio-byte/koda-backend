@@ -1037,6 +1037,17 @@ async def get_or_create_profile() -> Profile:
     settata dal middleware da header `X-User-Id`. Default "me" per backwards
     compat con build vecchie senza header.
 
+    === FIX LINGUA SPAGNOLA DEFINITIVO (Fabio escalation 2026-06-20 v5) ===
+    L'app Koda è ITALIAN-ONLY at this stage. Se un profilo ha
+    `language != "it"` (es. impostato per errore mesi fa, o auto-rilevato
+    da audio spagnolo rumoroso in passato), il system prompt diceva
+    esplicitamente "Responde SOLO en ESPAÑOL" → Claude obbediva → utente
+    sentiva spagnolo da MESI.
+    SAFETY NET: ad ogni get_or_create_profile() forziamo `language="it"`
+    e persistiamo l'update nel DB. Idempotente: se è già "it" non tocca.
+    Quando un giorno supporteremo multi-lingua DAVVERO (Fase 2), questo
+    blocco verrà sostituito da uno switch su lingue supportate.
+
     MIGRAZIONE AUTOMATICA "me" → UUID:
     Al PRIMO accesso di un nuovo UUID al backend, se NON esiste un profilo
     con quell'id MA esiste il profilo legacy "me" non ancora reclamato
@@ -1059,7 +1070,26 @@ async def get_or_create_profile() -> Profile:
     doc = await db.taccuino_profile.find_one({"id": uid}, {"_id": 0})
     if doc:
         try:
-            return Profile(**doc)
+            p = Profile(**doc)
+            # === SAFETY NET LINGUA (2026-06-20) ===
+            # Forza language="it" se è stato impostato erroneamente a
+            # qualcos'altro. Auto-correzione + persistenza nel DB.
+            if (p.language or "").lower() != "it":
+                old_lang = p.language
+                p.language = "it"
+                try:
+                    await db.taccuino_profile.update_one(
+                        {"id": uid},
+                        {"$set": {"language": "it"}}
+                    )
+                    logger.warning(
+                        f"[lang-safety] AUTO-CORRECTED profile.language: "
+                        f"{old_lang!r} → 'it' for uid={uid[:8]}... "
+                        f"(causava bug spagnolo nel prompt). Persisted to DB."
+                    )
+                except Exception as e:
+                    logger.warning(f"[lang-safety] DB update failed: {e}")
+            return p
         except Exception:
             pass  # Corrupt doc — recreate
 
@@ -2309,7 +2339,20 @@ async def api_get_profile_background():
 async def api_update_profile(update: ProfileUpdate):
     p = await get_or_create_profile()
     if update.language is not None:
-        p.language = update.language
+        # === GUARD LINGUA (Fabio escalation 2026-06-20 v5) ===
+        # L'app è ITALIAN-ONLY. Rifiutiamo qualsiasi tentativo del client
+        # di settare lingue diverse. Questo previene il ricomparire del
+        # bug spagnolo se per qualche motivo il client invia "es" (bug
+        # di onboarding, auto-detection STT errata, vecchi build legacy).
+        # Log esplicito così se accade lo vediamo nei diagnostics.
+        requested = (update.language or "").lower().strip()
+        if requested == "it":
+            p.language = "it"
+        else:
+            logger.warning(
+                f"[lang-guard] REJECTED client request to set language={requested!r} "
+                f"(app is Italian-only). Keeping p.language={p.language!r}."
+            )
     if update.name is not None:
         p.name = update.name
     if update.ai_name is not None:
