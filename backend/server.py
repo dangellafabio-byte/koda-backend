@@ -1107,6 +1107,31 @@ async def get_or_create_profile() -> Profile:
                     )
                 except Exception as e:
                     logger.warning(f"[lang-safety] DB update failed: {e}")
+            # === SAFETY NET GENDER↔VOICE COERENTE (giugno 2026 v6) ===
+            # Profili già nel DB possono avere koda_voice="theo" (maschile)
+            # ma ai_gender="f" (femminile) — eredità di build vecchie in cui
+            # la voce poteva essere cambiata senza aggiornare il genere.
+            # Risultato: Theo (voce maschile) dice "sono pronta", "non sono
+            # sicura", "sono stata". Auto-correzione + persistenza nel DB.
+            try:
+                expected_g = _ai_gender_from_voice(p.koda_voice)
+                if p.ai_gender != expected_g:
+                    old_g = p.ai_gender
+                    p.ai_gender = expected_g
+                    try:
+                        await db.taccuino_profile.update_one(
+                            {"id": uid},
+                            {"$set": {"ai_gender": expected_g}}
+                        )
+                        logger.warning(
+                            f"[gender-safety] AUTO-CORRECTED ai_gender: "
+                            f"{old_g!r} → {expected_g!r} for uid={uid[:8]}... "
+                            f"(koda_voice={p.koda_voice}). Persisted to DB."
+                        )
+                    except Exception as e:
+                        logger.warning(f"[gender-safety] DB update failed: {e}")
+            except Exception as e:
+                logger.warning(f"[gender-safety] check failed: {e}")
             return p
         except Exception:
             pass  # Corrupt doc — recreate
@@ -1225,8 +1250,12 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
     if ai_g == "m":
         ai_decl = (
             f"TU SEI MASCHIO (ti chiami {ai_name}). Quando parli di TE STESSO usa SEMPRE il MASCHILE: "
-            f"'sono qui', 'sono contento', 'sarei curioso', 'sono pronto', 'mi sento pronto'. "
-            f"MAI 'contenta/curiosa/pronta' parlando di te. Questo è ASSOLUTO."
+            f"'sono qui', 'sono contento', 'sarei curioso', 'sono pronto', 'mi sento pronto', "
+            f"'sono stato', 'mi sono sentito', 'sono felice di sentirti', 'eccomi, sono qua', "
+            f"'sono sicuro', 'sono tranquillo', 'non sono riuscito', 'non ti ho sentito'. "
+            f"MAI 'contenta/curiosa/pronta/stata/sentita/sicura/tranquilla/riuscita' parlando di te. "
+            f"Questo è ASSOLUTO. La voce con cui parli è MASCHILE — non scivolare nel femminile "
+            f"per inerzia narrativa."
         )
     elif ai_g == "f":
         ai_decl = (
@@ -2410,6 +2439,21 @@ async def api_update_profile(update: ProfileUpdate):
                     logger.info(f"[profile] tts_voice_id synced to koda_voice → {resolved_vid}")
             except Exception as e:
                 logger.warning(f"[profile] failed to sync tts_voice_id: {e}")
+            # === FIX GENDER SYNC (giugno 2026 v6) ===
+            # Quando l'utente cambia la voce (es. Aria→Theo dalle Impostazioni)
+            # senza toccare esplicitamente ai_gender, il prompt del LLM
+            # continuava a dire "Tu sei FEMMINA" → Theo (maschile) diceva
+            # "sono pronta", "non sono sicura", "sono stata". Adesso il
+            # genere segue la voce, sempre. Se il client invia esplicitamente
+            # ai_gender NELLA STESSA chiamata, quello prevale (già applicato sopra).
+            if update.ai_gender is None:
+                inferred_g = _ai_gender_from_voice(p.koda_voice)
+                if p.ai_gender != inferred_g:
+                    logger.info(
+                        f"[profile] ai_gender auto-sync: {p.ai_gender} → {inferred_g} "
+                        f"(triggered by koda_voice={p.koda_voice})"
+                    )
+                    p.ai_gender = inferred_g
             # Onboarding completato: marchiamo voice_locked=True ma è ora
             # puramente informativo (non blocca più i cambi). Lo lasciamo
             # per retrocompatibilità con eventuali client che lo leggono.
@@ -2479,6 +2523,19 @@ async def api_update_profile(update: ProfileUpdate):
                             f"[profile] reverse-sync koda_voice: {old_kv} → {matched_key} "
                             f"(triggered by settings.tts_voice_id={incoming_vid})"
                         )
+                    # === FIX GENDER SYNC reverse-path (giugno 2026 v6) ===
+                    # Stesso problema della sync diretta: dalle Impostazioni
+                    # il client cambia solo tts_voice_id. Se l'utente non
+                    # ha settato ai_gender esplicitamente in questa stessa
+                    # chiamata, allineiamo il genere alla voce risultante.
+                    if matched_key and update.ai_gender is None:
+                        inferred_g = _ai_gender_from_voice(p.koda_voice)
+                        if p.ai_gender != inferred_g:
+                            logger.info(
+                                f"[profile] ai_gender auto-sync (reverse): {p.ai_gender} → {inferred_g} "
+                                f"(triggered by tts_voice_id={incoming_vid} → koda_voice={p.koda_voice})"
+                            )
+                            p.ai_gender = inferred_g
             except Exception as e:
                 logger.warning(f"[profile] reverse-sync koda_voice failed: {e}")
     if update.style_preferences is not None:
@@ -5288,6 +5345,27 @@ def _resolve_voice_id(profile: "Profile") -> str:
         key = "aria"
     voice = KODA_VOICES.get(key) or KODA_VOICES["aria"]
     return voice["voice_id"]
+
+
+def _ai_gender_from_voice(koda_voice: Optional[str]) -> str:
+    """Mappa koda_voice → ai_gender per la declinazione grammaticale.
+    
+    Fix (giugno 2026): quando l'utente cambia voce nelle Impostazioni
+    (es. da Aria a Theo) il sistema aggiornava solo koda_voice, lasciando
+    ai_gender="f" obsoleto. Risultato: voce maschile di Theo che dice
+    'sono pronta', 'sono stata', 'non sono sicura'. Ora la sincronia è
+    automatica e centralizzata in questo helper.
+    
+    Mapping:
+      aria, eco (legacy) → "f"
+      theo, echo (alias) → "m"
+      None/vuoto → "f" (failsafe storico)
+    """
+    key = (koda_voice or "aria").strip().lower()
+    if key in ("theo", "echo"):
+        return "m"
+    # aria / eco / fallback → femminile
+    return "f"
 
 
 # ============================================================

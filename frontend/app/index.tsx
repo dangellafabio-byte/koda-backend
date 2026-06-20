@@ -362,7 +362,7 @@ export default function Taccuino() {
         rect: orbRect,
         label: "Eclissi",
         shape: "circle",
-        speech: `Questa sono io. Toccami per parlarti, ritoccami per fermarmi.`,
+        speech: `Eccomi. Toccami per parlarti, ritoccami per fermarmi.`,
       },
       {
         page: "voice",
@@ -2123,14 +2123,14 @@ export default function Taccuino() {
   const awarenessLinesNoAudio = [
     "[gently] Scusa, non ti ho sentito bene. Puoi ripetere?",
     "[softly] Eh, non ho capito — c'è un po' di rumore qui?",
-    "[warmly] Aspetta, riprova — non sono riuscita a sentirti.",
+    "[warmly] Aspetta, riprova — non ho sentito bene.",
     "[thoughtful] Mmh, ho sentito solo silenzio. Dimmi pure.",
     "[gently] Ti sento appena. Avvicinati o riprova quando puoi.",
   ];
   const awarenessLinesGarbled = [
     "[thoughtful] Ho sentito qualcosa ma non chiaro — puoi ripetere?",
     "[gently] Mi sembra che ci sia rumore. Riprova quando puoi.",
-    "[softly] Non sono sicura di aver capito — dimmi di nuovo?",
+    "[softly] Non ho capito bene — dimmi di nuovo?",
   ];
   const awarenessLinesPartial = (what: string) => [
     `[thoughtful] Ho sentito solo "${what}" — è quello che hai detto?`,
