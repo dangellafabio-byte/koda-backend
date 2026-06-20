@@ -7531,6 +7531,12 @@ async def _fast_pipeline_task(
         timing_llm_ttft_ms: Optional[int] = None
         timing_first_tts_ms: Optional[int] = None
         timing_first_audio_total_ms: Optional[int] = None
+        # === KODA_SUMMARY metric pulita (sprint 2026-06-20) ===
+        # Misura il timestamp REALE in cui il primo evento sentence è in
+        # Mongo (consegnabile al client). NB: differente da
+        # timing_first_audio_total_ms che misura solo "MP3 salvato in cache".
+        # Array mutable per permettere assegnazione da closure interna.
+        nonlocal_first_publish_ms: List[Optional[int]] = [None]
 
         async def _gen_and_publish_sentence(idx: int, sentence: str):
             nonlocal first_audio_logged, timing_first_tts_ms, timing_first_audio_total_ms
@@ -7589,28 +7595,60 @@ async def _fast_pipeline_task(
                     timing_first_audio_total_ms = total_first
                     logger.info(f"[fast {session_id[:8]}] FIRST AUDIO ready: {total_first}ms (tts={tts_ms}ms)")
                     logger.info(f"[KODA_TIMING] FIRST_AUDIO sid={session_id[:8]} total_ms={total_first} tts_ms={tts_ms}")
-                # === ORB REATTIVO (richiesta utente 2026-06 #3) ===
-                # Computiamo l'envelope RMS della frase per permettere all'orb
-                # di pulsare in sincrono con sillabe/accenti/cadenza reale.
-                # ~16Hz (window 60ms) è abbastanza per cogliere il ritmo
-                # senza generare payload eccessivi.
-                waveform = None
-                window_ms = 60
+                # === FIX 2026-06-20 — Publish PRIMA del waveform compute ===
+                # RCA (PM Claude): "first_audio_srv" misurava QUI, ma il
+                # _publish reale (che mette l'evento in Mongo) avveniva DOPO
+                # _compute_waveform_rms (~1.3-1.5s) → il client poll vedeva
+                # l'evento solo 1.3-1.5s dopo che il backend pensava di
+                # averlo "consegnato". Su prima frase: -1.3s su first_audio
+                # per ogni turno. Cumulativo nella conversazione.
+                #
+                # Strategia: pubblichiamo SUBITO l'evento "sentence" con
+                # waveform=null (il client inizia a scaricare/suonare il
+                # MP3 immediatamente). Poi calcoliamo il waveform e lo
+                # emettiamo come evento separato "waveform_update" che il
+                # client applica all'orb. Se waveform fallisce, l'orb usa
+                # animazione default → degradazione cosmetica only.
+                #
+                # NB: la metrica "first_audio_srv" qui sopra (timestamp t0
+                # → MP3 cached) NON misura più "primo audio consegnato al
+                # client". Ora misura "primo audio salvato in cache". Per
+                # il timestamp reale "consegnato al client" vedi
+                # `event_published_srv` nel meta event (post-publish).
+                event_published_ms: Optional[int] = None
+                try:
+                    await _publish({
+                        "type": "sentence",
+                        "i": idx,
+                        "token": token,
+                        "text": clean,
+                        "waveform": None,           # ← inviato dopo via waveform_update
+                        "window_ms": 60,
+                    }, audio_bytes=audio_bytes)
+                    if idx == 0:
+                        event_published_ms = int((time.time() - t0) * 1000)
+                        # Memorizzo nel meta scope esterno tramite nonlocal
+                        nonlocal_first_publish_ms[0] = event_published_ms
+                        logger.info(f"[KODA_TIMING] FIRST_PUBLISH sid={session_id[:8]} total_ms={event_published_ms}")
+                except Exception as e:
+                    logger.error(f"[fast] publish sentence failed: {e}")
+                    return
+
+                # Waveform compute fuori dal percorso critico: il client
+                # ha già iniziato a scaricare l'MP3 mentre noi calcoliamo
+                # l'envelope.
                 try:
                     wf = await asyncio.to_thread(_compute_waveform_rms, audio_bytes)
                     if wf and wf.get("waveform"):
-                        waveform = wf["waveform"]
-                        window_ms = wf.get("window_ms", 60)
+                        await _publish({
+                            "type": "waveform_update",
+                            "i": idx,
+                            "token": token,
+                            "waveform": wf["waveform"],
+                            "window_ms": wf.get("window_ms", 60),
+                        })
                 except Exception as e:
                     logger.warning(f"[fast] waveform compute failed: {e}")
-                await _publish({
-                    "type": "sentence",
-                    "i": idx,
-                    "token": token,
-                    "text": clean,
-                    "waveform": waveform,
-                    "window_ms": window_ms,
-                }, audio_bytes=audio_bytes)
             except Exception as e:
                 logger.error(f"[fast] sentence gen error: {e}")
 
@@ -7827,6 +7865,16 @@ async def _fast_pipeline_task(
             "llm_ttft_ms": timing_llm_ttft_ms,
             "first_tts_ms": timing_first_tts_ms,
             "first_audio_total_ms": timing_first_audio_total_ms,
+            # === FIX 2026-06-20 (richiesta PM Claude): metrica onesta ===
+            # `first_audio_total_ms` (alias storico: `first_audio_srv`) mente:
+            # marca il timestamp del MP3 in cache, NON quello del publish in
+            # Mongo. Per evitare di fidarci di una metrica al momento sbagliato,
+            # esponiamo `event_published_ms` (a.k.a. `event_published_srv`):
+            # il timestamp REALE in cui il primo evento "sentence" è entrato
+            # in Mongo, ovvero quando il client poll può davvero vederlo.
+            # Differenza tra i due = costo della pipeline post-cache (publish,
+            # eventuale waveform compute residuo, $push Mongo).
+            "event_published_ms": nonlocal_first_publish_ms[0],
         })
         await _fast_session_mark_done(session_id)
 

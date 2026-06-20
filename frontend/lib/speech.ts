@@ -707,6 +707,11 @@ export async function fastConverse(
   let summaryLlmTtftMs: number | null = null;
   let summaryFirstTtsMs: number | null = null;
   let summaryFirstAudioTotalMs: number | null = null;
+  // === FIX 2026-06-20 (PM Claude richiesta): metrica onesta ===
+  // `first_audio_total_ms` (alias storico `first_audio_srv`) marca solo
+  // "MP3 in cache", NON "evento pubblicato e visibile al client". Quello
+  // vero arriva con `event_published_ms`. Diff = costo publish+waveform.
+  let summaryEventPublishedMs: number | null = null;
 
   // === KODA_POLL METRICS (sprint giugno 2026 — RCA gap server↔client) ===
   // Gap osservato dai log utente: first_audio_srv=2.3s vs first_audio=11s
@@ -734,7 +739,8 @@ export async function fastConverse(
         `transcript_chars=${text.length} ` +
         `llm_ttft=${summaryLlmTtftMs ?? "?"}ms ` +
         `first_tts=${summaryFirstTtsMs ?? "?"}ms ` +
-        `first_audio_srv=${summaryFirstAudioTotalMs ?? "?"}ms ` +
+        `audio_cached_srv=${summaryFirstAudioTotalMs ?? "?"}ms ` +
+        `event_published_srv=${summaryEventPublishedMs ?? "?"}ms ` +
         `start_ack=${ms(tStartAck)}ms first_audio=${ms(tFirstAudio)}ms ` +
         `meta=${ms(tMeta)}ms done=${ms(tDone)}ms ` +
         `sentences=${sentenceCount} ${status}`
@@ -867,6 +873,7 @@ export async function fastConverse(
               if (typeof ev.llm_ttft_ms === "number") summaryLlmTtftMs = ev.llm_ttft_ms;
               if (typeof ev.first_tts_ms === "number") summaryFirstTtsMs = ev.first_tts_ms;
               if (typeof ev.first_audio_total_ms === "number") summaryFirstAudioTotalMs = ev.first_audio_total_ms;
+              if (typeof ev.event_published_ms === "number") summaryEventPublishedMs = ev.event_published_ms;
               meta = {
                 reply: ev.reply || "",
                 voice_text: ev.voice_text ?? null,
@@ -874,6 +881,17 @@ export async function fastConverse(
                 actions: Array.isArray(ev.actions) ? ev.actions : [],
               };
               try { opts.onMeta?.(meta); } catch {}
+            } else if (ev?.type === "waveform_update") {
+              // === FIX 2026-06-20: waveform "late" ===
+              // Il backend ora pubblica la sentence SUBITO (waveform=null)
+              // e poi emette l'envelope RMS in un evento separato per
+              // togliere ~1.3s dal percorso critico di first_audio.
+              // Al momento ignoriamo i waveform tardivi: la prima frase
+              // userà l'animazione default (degradazione cosmetica come
+              // dichiarato nel piano). Quando vorremo applicare anche
+              // l'envelope tardivo, useremo questo branch per inviare
+              // il payload all'orb via callback dedicata.
+              // (Lo logghiamo a basso volume per non spammare il summary.)
             } else if (ev?.type === "error") {
               pollError = String(ev.message || "server error");
               pollingDone = true;
