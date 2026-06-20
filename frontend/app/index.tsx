@@ -44,6 +44,7 @@ import {
 } from "../lib/api";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId, preloadFillerPool } from "../lib/speech";
+import { preloadOfflineClips, isOfflineNow, playRandomOfflineClip } from "../lib/offlineClips";
 import { startThinkingSound, stopThinkingSound } from "../lib/thinkingSound";
 import { classifyEmotion, classifyIntent, secureWipeStrings } from "../lib/emotionClassifier";
 import {
@@ -776,6 +777,12 @@ export default function Taccuino() {
             // FILLER RIMOSSO (giugno 2026 v6): niente più preload pool —
             // la prima frase reale arriva in ~1.5-2s, basta lo stato
             // visuale dell'orb durante l'attesa.
+            // === OFFLINE CLIPS (sprint 2026-06-20) ===
+            // Pre-scarica le 3 clip "sono qui, ma offline" per la voce
+            // attiva. Funziona solo se il primo avvio è online. Idempotente.
+            try {
+              preloadOfflineClips(p.settings.tts_voice_id).catch(() => {});
+            } catch {}
           }
           if (!p.onboarded) setShowOnboarding(true);
           else if (p.settings?.input_mode !== "text") {
@@ -2324,6 +2331,40 @@ export default function Taccuino() {
         return;
       }
       const fd = buildFormData(res);
+      // === OFFLINE INTERCEPT (sprint 2026-06-20) ===
+      // Prima di tentare STT/LLM, verifico se siamo offline. Se sì, NON
+      // chiamiamo Deepgram (fallirebbe con un timeout di 30s), ma riproduco
+      // una delle 3 clip offline pre-cachate. Mantiene l'illusione di
+      // presenza: Koda non scompare, dice "sono qui, ma offline".
+      // Se le clip non sono ancora cachate (primo avvio offline), fallback
+      // al banner di errore esistente.
+      try {
+        if (await isOfflineNow()) {
+          console.log("[OfflineClips] detected offline before STT — playing clip");
+          setStatus("speaking");
+          const voiceId = (profile?.settings as any)?.tts_voice_id || "";
+          const played = await playRandomOfflineClip(voiceId);
+          setStatus("idle");
+          if (!played) {
+            setError("Sei offline 📡");
+            setTimeout(() => setError(null), 2500);
+          }
+          // Auto-restart se in hands-free conversation mode
+          if (profile?.settings?.input_mode !== "text" && convActiveRef.current) {
+            setTimeout(() => {
+              if (convActiveRef.current && !recRef.current) {
+                startTalkInternal(true).catch(() => {});
+              }
+            }, 800);
+          }
+          return;
+        }
+      } catch (e) {
+        // Se il check offline fallisce per qualunque motivo, continuiamo
+        // normalmente (la rete è il caso più comune).
+        console.warn("[OfflineClips] offline check failed:", e);
+      }
+
       // === KODA TIMING (ChatGPT sprint giugno 2026) ===
       // Marker temporale per misurare upload + Deepgram. Lo log usa
       // performance.now() per precisione sub-millisecondo. Stampato come
@@ -2807,6 +2848,8 @@ export default function Taccuino() {
     const next = { ...profile, settings: { ...profile.settings, tts_voice_id: voiceId } };
     setProfile(next);
     setDefaultVoiceId(voiceId);
+    // === OFFLINE CLIPS — preload per la nuova voce (idempotente) ===
+    try { preloadOfflineClips(voiceId).catch(() => {}); } catch {}
     try {
       await api.updateProfile({ settings: next.settings } as any);
     } catch {}

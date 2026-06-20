@@ -5975,6 +5975,157 @@ async def api_tts_audio(token: str, request: Request):
     )
 
 
+# ============================================================================
+# OFFLINE CLIPS — "Sono qui, ma limitato" (sprint 2026-06-20)
+# ============================================================================
+# Tre clip audio pre-generate per ciascuna voce (Aria/Theo) che il client
+# scarica una sola volta al boot e cacha localmente in
+# FileSystem.documentDirectory/koda_offline/.
+#
+# Quando l'utente parla SENZA connessione, invece di lasciare l'app in
+# silenzio o mostrare un errore tecnico, il client riproduce una di queste
+# clip random — con la STESSA voce personalizzata di Koda — per mantenere
+# l'illusione di presenza ("Koda è ancora qui, solo che è offline").
+#
+# Le clip sono generate UNA SOLA VOLTA via ElevenLabs e cachate in MongoDB
+# in modo permanente (TTL escluso). Tutti gli utenti con la stessa voce
+# riusano le stesse clip → zero costo extra ElevenLabs in produzione.
+# ============================================================================
+
+OFFLINE_CLIP_TEXTS: List[str] = [
+    "Ti ascolto, ma adesso sono offline. Riconnettiti quando puoi, parliamo meglio.",
+    "Mi dispiace, senza connessione non riesco ad accedere alle tue memorie. Sono qui, ma limitato.",
+    "Sono qui per te. Ma ho bisogno di internet per risponderti davvero. Riprovami online.",
+]
+
+# Versione cache: bump per invalidare le clip salvate (es. se cambi le frasi).
+OFFLINE_CLIP_VERSION = "v1"
+
+
+async def _get_or_generate_offline_clip(voice_id: str, idx: int) -> Optional[str]:
+    """Restituisce il token (UUID hex) della clip offline per (voice_id, idx).
+    Se non esiste già in cache, la genera via ElevenLabs e la salva.
+    Cache permanente (no TTL) — le clip sono asset di sistema, non TTS utente.
+
+    Args:
+        voice_id: ElevenLabs voice_id (es. "tCOJUYBo86m5v7hppDc7" per Aria)
+        idx: indice 0-2 nella lista OFFLINE_CLIP_TEXTS
+
+    Returns:
+        token str se OK, None se generazione fallita.
+    """
+    if idx < 0 or idx >= len(OFFLINE_CLIP_TEXTS):
+        return None
+    text = OFFLINE_CLIP_TEXTS[idx]
+    cache_key = f"offline-{OFFLINE_CLIP_VERSION}-{voice_id}-{idx}"
+
+    # 1) Cache hit?
+    existing = await db.offline_clips.find_one({"key": cache_key}, {"token": 1, "_id": 0})
+    if existing and existing.get("token"):
+        # Verifico che il token sia ancora servibile (presente in tts_audio_cache).
+        # Se il TTL della cache TTS l'ha rimosso, rigenero.
+        audio_check = await _fetch_tts_audio(existing["token"])
+        if audio_check is not None:
+            return existing["token"]
+
+    # 2) Genera via ElevenLabs (Flash v2.5 — più veloce, sufficiente per messaggi
+    #    brevi e neutri).
+    client_el = _get_eleven_client()
+    if client_el is None:
+        logger.warning("[offline_clips] ElevenLabs not configured")
+        return None
+
+    try:
+        # Tono "calm" — coerente con un messaggio offline pacato, non urgente.
+        vs = _voice_settings_for_tone("calm", None, None)
+
+        def _do_tts():
+            audio = bytearray()
+            gen = client_el.text_to_speech.convert(
+                text=text,
+                voice_id=voice_id,
+                model_id="eleven_flash_v2_5",
+                output_format="mp3_44100_128",
+                voice_settings=vs,
+            )
+            for chunk in gen:
+                if chunk:
+                    audio.extend(chunk)
+            return bytes(audio)
+
+        audio_bytes = await asyncio.to_thread(_do_tts)
+        if not audio_bytes:
+            logger.warning(f"[offline_clips] empty TTS for voice={voice_id} idx={idx}")
+            return None
+
+        # Salva sia in tts_audio_cache (per servirla via /api/tts/audio/{token}.mp3)
+        # sia nella mapping permanente offline_clips.
+        token = await _store_tts_audio(audio_bytes)
+        await db.offline_clips.update_one(
+            {"key": cache_key},
+            {"$set": {
+                "key": cache_key,
+                "voice_id": voice_id,
+                "idx": idx,
+                "text": text,
+                "token": token,
+                "version": OFFLINE_CLIP_VERSION,
+                "created_at": datetime.now(timezone.utc),
+                "size": len(audio_bytes),
+            }},
+            upsert=True,
+        )
+        logger.info(f"[offline_clips] generated voice={voice_id} idx={idx} bytes={len(audio_bytes)} token={token[:8]}")
+        return token
+    except Exception as e:
+        logger.error(f"[offline_clips] generation failed voice={voice_id} idx={idx}: {e}")
+        return None
+
+
+@api_router.get("/offline-clips/manifest")
+async def api_offline_clips_manifest(voice_id: str):
+    """Restituisce il manifest delle 3 clip offline per la voce specificata.
+    Il client lo chiama al boot (o al cambio voce) per scaricare i file
+    e cacharli localmente. Da quel momento può usare le clip senza rete.
+
+    Response:
+        {
+            "version": "v1",
+            "voice_id": "tCOJUYBo86m5v7hppDc7",
+            "clips": [
+                {"idx": 0, "text": "...", "url": "/api/tts/audio/<token>.mp3"},
+                {"idx": 1, "text": "...", "url": "..."},
+                {"idx": 2, "text": "...", "url": "..."}
+            ]
+        }
+    """
+    vid = (voice_id or "").strip()
+    if not vid:
+        raise HTTPException(status_code=400, detail="voice_id required")
+
+    clips = []
+    for idx in range(len(OFFLINE_CLIP_TEXTS)):
+        token = await _get_or_generate_offline_clip(vid, idx)
+        if not token:
+            # Se una clip fallisce, ritorniamo comunque le altre.
+            # Il client le riprodurrà random tra quelle disponibili.
+            continue
+        clips.append({
+            "idx": idx,
+            "text": OFFLINE_CLIP_TEXTS[idx],
+            "url": f"/api/tts/audio/{token}.mp3",
+        })
+
+    if not clips:
+        raise HTTPException(status_code=500, detail="No offline clips generated")
+
+    return {
+        "version": OFFLINE_CLIP_VERSION,
+        "voice_id": vid,
+        "clips": clips,
+    }
+
+
 # ============================================================
 # CONVERSE-STREAM-AUDIO — Step 2b (Fase 4): sub-2s end-to-end latency
 #
@@ -7340,11 +7491,18 @@ async def _fast_pipeline_task(
         logger.info(f"[KODA_TIMING] LLM_START sid={session_id[:8]} prompt_chars={len(sys_prompt)}")
 
         stream = await litellm.acompletion(
-            # === V1 LATENCY (giugno 2026) ===
-            # gpt-5.4-mini: TTFT ~500ms (vs ~820ms Haiku 4.5).
-            # L'empatia NON dipende dal modello: dipende dal prompt. Vedi
-            # `_build_fast_system_prompt` per le istruzioni di tono caldo.
-            model='openai/gpt-5.4-mini',
+            # === FIX LINGUA SPAGNOLA (sprint 2026-06-20) ===
+            # gpt-5.4-mini IGNORA i language constraint anche con prompt
+            # rinforzato 🇮🇹 alla fine del user payload. Verificato da log
+            # utente: transcript italiano perfetto ("Ciao Coda, come stai")
+            # → risposta in spagnolo. Problema noto dei modelli "mini":
+            # instruction-following debole sui constraint linguistici.
+            # Switch a Claude Haiku 4.5 che rispetta i language constraint.
+            # TTFT: ~820ms (vs ~500ms di gpt-5.4-mini) → +320ms per turn,
+            # ma garantisce italiano stabile turn dopo turn.
+            # L'empatia non cambia (dipende dal prompt, vedi
+            # _build_fast_system_prompt per le istruzioni di tono caldo).
+            model='openai/claude-haiku-4-5-20251001',
             messages=[
                 {'role': 'system', 'content': sys_prompt},
                 {'role': 'user', 'content': user_payload},
