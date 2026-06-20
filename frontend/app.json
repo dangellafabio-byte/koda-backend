@@ -85,10 +85,20 @@
       [
         "@siteed/audio-studio",
         {
+          "enableBackgroundAudio": false,
+          "enableNotifications": false,
+          "enablePhoneStateHandling": false,
+          "enableDeviceDetection": false,
           "iosBackgroundModes": {
-            "useVoiceProcessing": false
+            "useVoIP": false,
+            "useAudio": false,
+            "useProcessing": false,
+            "useLocation": false,
+            "useExternalAccessory": false
           },
-          "microphonePermission": "Per registrare la tua voce in streaming e darti risposte naturali"
+          "iosConfig": {
+            "microphoneUsageDescription": "Per registrare la tua voce in streaming e darti risposte naturali"
+          }
         }
       ],
       "expo-asset",
