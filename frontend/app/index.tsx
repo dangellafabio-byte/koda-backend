@@ -2053,6 +2053,14 @@ export default function Taccuino() {
   const emptyTurnsRef = useRef(0); // n. vuoti consecutivi nel loop conversazione
   const lastAwarenessIdx = useRef(-1);
 
+  // === OFFLINE CLIPS ANTI-LOOP (sprint 2026-06-20) ===
+  // Conta clip offline consecutive riprodotte senza che la rete sia tornata.
+  // Dopo N=3 clip consecutive l'utente ha capito che è offline → usciamo dal
+  // loop hands-free per non bombardarlo di clip. Tornerà a parlare quando
+  // vuole con un tap manuale dell'orb.
+  const offlineClipsInRowRef = useRef(0);
+  const MAX_OFFLINE_CLIPS_IN_ROW = 3;
+
   // Frasi varie per "non ho sentito" — ruotiamo per non sembrare un bot
   const awarenessLinesNoAudio = [
     "[gently] Scusa, non ti ho sentito bene. Puoi ripetere?",
@@ -2336,20 +2344,48 @@ export default function Taccuino() {
       // chiamiamo Deepgram (fallirebbe con un timeout di 30s), ma riproduco
       // una delle 3 clip offline pre-cachate. Mantiene l'illusione di
       // presenza: Koda non scompare, dice "sono qui, ma offline".
-      // Se le clip non sono ancora cachate (primo avvio offline), fallback
-      // al banner di errore esistente.
+      //
+      // ANTI-LOOP (Claude PM feedback 2026-06-20): dopo
+      // MAX_OFFLINE_CLIPS_IN_ROW clip consecutive senza che la rete sia
+      // tornata, esco dal loop hands-free. L'utente ha capito, non lo
+      // bombardiamo. Riprenderà con un tap manuale.
+      //
+      // CASO PRIMO AVVIO OFFLINE: se le clip non sono ancora cachate
+      // (l'app è stata avviata per la prima volta senza rete) NON
+      // resto in loop — esco subito da hands-free e mostro banner
+      // chiaro "Niente connessione — riprova quando sei online".
       try {
         if (await isOfflineNow()) {
+          const voiceId = (profile?.settings as any)?.tts_voice_id || "";
           console.log("[OfflineClips] detected offline before STT — playing clip");
           setStatus("speaking");
-          const voiceId = (profile?.settings as any)?.tts_voice_id || "";
           const played = await playRandomOfflineClip(voiceId);
           setStatus("idle");
+
           if (!played) {
-            setError("Sei offline 📡");
-            setTimeout(() => setError(null), 2500);
+            // Clip non disponibili (primo avvio offline). Banner persistente
+            // + esci da hands-free per evitare un loop vuoto.
+            console.log("[OfflineClips] no cached clips — exiting hands-free with banner");
+            setConvActive(false);
+            offlineClipsInRowRef.current = 0;
+            setError("Niente connessione — Koda è offline. Riprova quando torni online.");
+            setTimeout(() => setError(null), 4500);
+            return;
           }
-          // Auto-restart se in hands-free conversation mode
+
+          // Clip riprodotta. Conta e decide se continuare il loop.
+          offlineClipsInRowRef.current += 1;
+          if (offlineClipsInRowRef.current >= MAX_OFFLINE_CLIPS_IN_ROW) {
+            // Abbiamo già detto N volte "sono offline". Basta.
+            console.log("[OfflineClips] max clips reached — exiting hands-free");
+            setConvActive(false);
+            offlineClipsInRowRef.current = 0;
+            setError("Sei offline 📡 — tocca l'orb quando torna la connessione.");
+            setTimeout(() => setError(null), 4500);
+            return;
+          }
+
+          // Auto-restart hands-free per il prossimo turno.
           if (profile?.settings?.input_mode !== "text" && convActiveRef.current) {
             setTimeout(() => {
               if (convActiveRef.current && !recRef.current) {
@@ -2358,6 +2394,11 @@ export default function Taccuino() {
             }, 800);
           }
           return;
+        }
+        // Siamo online — reset counter offline (utile se l'utente ha avuto
+        // un mini-blackout e poi è tornato online).
+        if (offlineClipsInRowRef.current > 0) {
+          offlineClipsInRowRef.current = 0;
         }
       } catch (e) {
         // Se il check offline fallisce per qualunque motivo, continuiamo
