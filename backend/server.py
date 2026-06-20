@@ -3134,10 +3134,12 @@ async def api_converse_sealed(
         messages.extend(history_msgs)
         messages.append({"role": "user", "content": plaintext})
         resp = await litellm.acompletion(
-            # === V1 LATENCY: gpt-5.4-mini per Stanza dello Sfogo ===
-            # Stesso modello del fast pipeline per coerenza. Empatia
-            # garantita dal prompt (Regola Madre + tono caldo esplicito).
-            model='openai/gpt-5.4-mini',
+            # === FIX 2026-06-20: Italian language constraint ===
+            # gpt-5.4-mini ignorava i language constraint anche con prompt
+            # rinforzato. La Stanza dello Sfogo è ad alto carico emotivo:
+            # una risposta in spagnolo qui è un rompi-illusione totale.
+            # Switch a Claude Haiku 4.5 (rispetta lingua + empatia robusta).
+            model='openai/claude-haiku-4-5-20251001',
             messages=messages,
             api_key=EMERGENT_LLM_KEY,
             api_base='https://integrations.emergentagent.com/llm',
@@ -7805,7 +7807,13 @@ async def _fast_pipeline_task(
             # loggarli nel [KODA_SUMMARY]. Permette di accorgersi a colpo
             # d'occhio se il fast path è caduto su un fallback interno
             # senza dover correlare log backend e frontend.
-            "model": "gpt-5.4-mini",
+            # === FIX 2026-06-20 (PM Claude RCA) ===
+            # Era hardcoded "gpt-5.4-mini" anche dopo il cambio modello
+            # → il client logava il modello vecchio nei [KODA_SUMMARY]
+            # creando ambiguità ("il fix è davvero attivo?"). Allineato
+            # a claude-haiku-4-5 che è il modello effettivamente in uso
+            # nel fast pipeline (vedi riga ~3360 litellm.acompletion).
+            "model": "claude-haiku-4-5",
             "path": "fast",
             # === KODA_SUMMARY timing breakdown (sprint v12) ===
             # I tre numeri che fanno capire dove vanno i secondi:
