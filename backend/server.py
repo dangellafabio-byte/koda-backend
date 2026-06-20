@@ -7957,6 +7957,19 @@ async def _fast_pipeline_task(
             #   profile_lang='it' ma reply spagnolo → bug Claude/prompt
             "profile_lang": (profile.language or "it"),
             "reply_preview": full_reply[:120],
+            # === DIAG TTS LANGUAGE (Fabio escalation 2026-06-20 v2) ===
+            # Dopo il fix `language_code="it"` su tutte le chiamate ElevenLabs,
+            # esponiamo nel meta event esattamente cosa abbiamo passato al TTS
+            # così su /diagnostics possiamo verificare a colpo d'occhio:
+            #   tts_voice_id = Aria (tCOJUYBo...) o Theo (dJwiFcjz...)?
+            #   tts_lang     = "it" come deve essere?
+            #   koda_voice   = il brand effettivamente risolto
+            # Se tts_lang != "it" → il fix non è arrivato a qualche path.
+            # Se voice_id non corrisponde a Aria/Theo → voice_id orfano.
+            "tts_voice_id": voice_id,
+            "tts_lang": (profile.language or "it"),
+            "tts_model": "eleven_flash_v2_5",
+            "koda_voice": (profile.koda_voice or "aria"),
         })
         await _fast_session_mark_done(session_id)
 

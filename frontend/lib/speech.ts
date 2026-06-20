@@ -881,10 +881,24 @@ export async function fastConverse(
               //   2. Confrontare il testo che Claude HA GENERATO con quello
               //      che SENTE: se reply_preview è in italiano ma sente
               //      spagnolo → bug TTS. Se entrambi spagnolo → bug LLM/profilo.
-              if (typeof ev.profile_lang === "string" || typeof ev.reply_preview === "string") {
+              // === DIAG TTS LANGUAGE 2026-06-20 v2 ===
+              // Dopo aver forzato language_code="it" su tutte le chiamate
+              // ElevenLabs, vogliamo VEDERE su /diagnostics ESATTAMENTE
+              // quale voice_id + lang è stato usato per la risposta.
+              // Se l'utente sente spagnolo ma vede tts_lang="it" e
+              // tts_voice_id=Aria → bug nel modello ElevenLabs (escalation).
+              if (
+                typeof ev.profile_lang === "string" ||
+                typeof ev.reply_preview === "string" ||
+                typeof ev.tts_voice_id === "string"
+              ) {
                 console.log(
                   `[KODA_LLM_OUT_CLIENT] profile_lang=${ev.profile_lang ?? "?"} ` +
-                  `reply_preview=${JSON.stringify(ev.reply_preview ?? "").slice(0, 200)}`
+                  `koda_voice=${ev.koda_voice ?? "?"} ` +
+                  `tts_voice_id=${(ev.tts_voice_id ?? "?").toString().slice(0, 12)}... ` +
+                  `tts_lang=${ev.tts_lang ?? "?"} ` +
+                  `tts_model=${ev.tts_model ?? "?"} ` +
+                  `reply_preview=${JSON.stringify(ev.reply_preview ?? "").slice(0, 160)}`
                 );
               }
               meta = {
