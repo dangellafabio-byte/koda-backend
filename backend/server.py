@@ -2320,16 +2320,21 @@ async def api_update_profile(update: ProfileUpdate):
         p.user_gender = update.user_gender
     if update.onboarded is not None:
         p.onboarded = update.onboarded
-    # === KODA VOICE — lock dopo prima scelta ============================
-    # Strategia "Trova la tua Koda": l'utente sceglie eco o aria UNA volta
-    # durante l'onboarding. Da quel momento, voice_locked diventa True e
-    # ogni tentativo successivo di cambiare koda_voice viene IGNORATO
-    # silenziosamente (non lanciamo errore per non rompere client legacy).
+    # === KODA VOICE — cambio libero da impostazioni (fix giugno 2026 v4) =
+    # Strategia precedente: scelta UNA volta in onboarding, lock perpetuo.
+    # Problema: le Impostazioni espongono un selettore voci → l'utente
+    # cambiava voce → il backend rifiutava silenziosamente → UI mostrava
+    # Aria selezionata ma la chat continuava a usare Theo (voice_locked).
+    # Soluzione: rimuoviamo il rigetto del voice_locked. L'utente può
+    # cambiare voce in qualsiasi momento dalle Impostazioni — è un suo
+    # diritto e il selettore esiste apposta. Sincronizziamo sempre i due
+    # campi (koda_voice ↔ settings.tts_voice_id) per evitare divergenze.
     if update.koda_voice is not None:
-        if p.voice_locked:
-            logger.info(f"[profile] koda_voice change rejected (locked). current={p.koda_voice}, attempted={update.koda_voice}")
-        elif update.koda_voice in KODA_VOICES:
+        if update.koda_voice in KODA_VOICES:
+            old_voice = p.koda_voice
             p.koda_voice = update.koda_voice
+            if old_voice != update.koda_voice:
+                logger.info(f"[profile] koda_voice changed: {old_voice} → {update.koda_voice} (voice_locked ignored)")
             # === FIX VOCE COERENTE (giugno 2026 v2) ===
             # Sincronizza ANCHE settings.tts_voice_id con la voce risolta da
             # koda_voice. Prima i due campi vivevano vite separate: il
@@ -2344,12 +2349,12 @@ async def api_update_profile(update: ProfileUpdate):
                     logger.info(f"[profile] tts_voice_id synced to koda_voice → {resolved_vid}")
             except Exception as e:
                 logger.warning(f"[profile] failed to sync tts_voice_id: {e}")
-            # Quando si chiude l'onboarding (update.onboarded=True), blocca
-            # la voce. Se l'utente non setta onboarded ma cambia voce a
-            # raffica in preview, lasciamo libero finché non chiude.
+            # Onboarding completato: marchiamo voice_locked=True ma è ora
+            # puramente informativo (non blocca più i cambi). Lo lasciamo
+            # per retrocompatibilità con eventuali client che lo leggono.
             if update.onboarded is True:
                 p.voice_locked = True
-                logger.info(f"[profile] voice_locked=True with koda_voice={p.koda_voice}")
+                logger.info(f"[profile] voice_locked=True with koda_voice={p.koda_voice} (informativo, non bloccante)")
     if update.settings is not None:
         # FIX 2026-07: merge per campo invece di sostituzione totale.
         # Prima: `p.settings = new_settings` ricostruiva un TaccuinoSettings
@@ -2377,6 +2382,44 @@ async def api_update_profile(update: ProfileUpdate):
             except Exception as e:
                 logger.warning(f"[profile] settings merge fallita ({e}), uso current")
                 p.settings = TaccuinoSettings(**{**TaccuinoSettings().model_dump(), **current})
+            # === FIX A (giugno 2026 v4): reverse-sync tts_voice_id → koda_voice
+            # Quando il client cambia voce dalle Impostazioni invia solo
+            # settings.tts_voice_id (es. "tCOJUYBo..." per Aria). Il flusso
+            # di chat però usa _resolve_voice_id(profile) che legge SOLO
+            # koda_voice → divergenza: UI dice Aria, chat usa Theo.
+            # Cerchiamo la chiave KODA_VOICES corrispondente al voice_id
+            # appena salvato e aggiorniamo anche koda_voice. Bypass del
+            # voice_locked: l'utente ha esplicitamente cambiato voce nelle
+            # Impostazioni → è intent chiaro, non un accidente.
+            try:
+                incoming_vid = incoming.get("tts_voice_id") if isinstance(incoming, dict) else None
+                if incoming_vid:
+                    # Mappa inversa: voice_id ElevenLabs → chiave brand.
+                    # Se più chiavi puntano allo stesso voice_id (es. "echo"
+                    # e "theo"), preferiamo la chiave canonica (non l'alias
+                    # retrocompatibile). Le canoniche sono "aria" e "theo".
+                    canonical_keys = ("aria", "theo")
+                    matched_key = None
+                    for k in canonical_keys:
+                        v = KODA_VOICES.get(k)
+                        if v and v.get("voice_id") == incoming_vid:
+                            matched_key = k
+                            break
+                    if matched_key is None:
+                        # Fallback: scansione completa (include alias legacy)
+                        for k, v in KODA_VOICES.items():
+                            if v.get("voice_id") == incoming_vid:
+                                matched_key = k
+                                break
+                    if matched_key and p.koda_voice != matched_key:
+                        old_kv = p.koda_voice
+                        p.koda_voice = matched_key
+                        logger.info(
+                            f"[profile] reverse-sync koda_voice: {old_kv} → {matched_key} "
+                            f"(triggered by settings.tts_voice_id={incoming_vid})"
+                        )
+            except Exception as e:
+                logger.warning(f"[profile] reverse-sync koda_voice failed: {e}")
     if update.style_preferences is not None:
         # Merge profondo: nuovi valori sovrascrivono quelli esistenti senza
         # cancellare le altre chiavi (es. cambiare solo "recording" lascia
@@ -4702,6 +4745,7 @@ async def _ensure_fillers_for_voice(voice_id: str) -> List[str]:
                         voice_id=voice_id,
                         model_id="eleven_flash_v2_5",
                         output_format="mp3_44100_128",
+                        language_code="it",  # FIX bug spagnolo (giugno 2026 v4)
                         voice_settings=vs,
                     )
                     for c in gen:
@@ -5020,6 +5064,7 @@ async def api_voice_preview(voice_key: str):
             for chunk in client_el.text_to_speech.convert(
                 text=preview_text, voice_id=voice_id,
                 model_id="eleven_flash_v2_5", output_format="mp3_44100_128",
+                language_code="it",  # FIX bug spagnolo (giugno 2026 v4)
             ):
                 if chunk:
                     audio.extend(chunk)
@@ -6048,6 +6093,7 @@ async def _get_or_generate_offline_clip(voice_id: str, idx: int) -> Optional[str
                 voice_id=voice_id,
                 model_id="eleven_flash_v2_5",
                 output_format="mp3_44100_128",
+                language_code="it",  # FIX bug spagnolo (giugno 2026 v4)
                 voice_settings=vs,
             )
             for chunk in gen:
@@ -6631,6 +6677,7 @@ async def _stream_tts_for_sentence(
                 voice_id=voice_id,
                 model_id=model_id,
                 output_format="mp3_44100_128",
+                language_code="it",  # FIX bug spagnolo (giugno 2026 v4)
                 voice_settings=voice_settings,
             )
             stream = client_el.text_to_speech.stream(**kwargs)
@@ -7559,11 +7606,24 @@ async def _fast_pipeline_task(
 
                 def _do_tts():
                     audio = bytearray()
+                    # === FIX BUG SPAGNOLO (giugno 2026 v4) ===
+                    # eleven_flash_v2_5 è multilingue: SENZA language_code
+                    # esplicito, ElevenLabs auto-detecta la lingua dal testo.
+                    # Parole italiane comuni a entrambe le lingue ("tempo",
+                    # "casa", "anche", "amore", "ricordo") confondevano il
+                    # detector → output spesso in spagnolo. Forziamo "it".
+                    # Risolviamo la lingua dal profilo (con fallback "it").
+                    tts_lang = (getattr(profile, "language", None) or "it").lower()
+                    # ElevenLabs accetta ISO 639-1 (es. "it", "en", "es"). Se
+                    # arriva qualcosa di strano, fallback su "it".
+                    if not (isinstance(tts_lang, str) and len(tts_lang) == 2):
+                        tts_lang = "it"
                     kwargs = dict(
                         text=clean_tts,
                         voice_id=voice_id,
                         model_id=model_id,
                         output_format="mp3_44100_128",  # 128kbps qualità piena, niente chipmunk
+                        language_code=tts_lang,  # FORZA la lingua, no auto-detect
                         voice_settings=vs,
                         # NIENTE optimize_streaming_latency: anche valore 2
                         # poteva causare artefatti "chipmunk" su Flash v2.5
