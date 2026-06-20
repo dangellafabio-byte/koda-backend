@@ -874,6 +874,19 @@ export async function fastConverse(
               if (typeof ev.first_tts_ms === "number") summaryFirstTtsMs = ev.first_tts_ms;
               if (typeof ev.first_audio_total_ms === "number") summaryFirstAudioTotalMs = ev.first_audio_total_ms;
               if (typeof ev.event_published_ms === "number") summaryEventPublishedMs = ev.event_published_ms;
+              // === DIAG SPAGNOLO 2026-06-20 ===
+              // Log immediato di profile_lang + preview reply. Una riga
+              // chiara visibile su /diagnostics. Permette a Fabio di:
+              //   1. Vedere SUBITO se profile.language è "es" (causa root)
+              //   2. Confrontare il testo che Claude HA GENERATO con quello
+              //      che SENTE: se reply_preview è in italiano ma sente
+              //      spagnolo → bug TTS. Se entrambi spagnolo → bug LLM/profilo.
+              if (typeof ev.profile_lang === "string" || typeof ev.reply_preview === "string") {
+                console.log(
+                  `[KODA_LLM_OUT_CLIENT] profile_lang=${ev.profile_lang ?? "?"} ` +
+                  `reply_preview=${JSON.stringify(ev.reply_preview ?? "").slice(0, 200)}`
+                );
+              }
               meta = {
                 reply: ev.reply || "",
                 voice_text: ev.voice_text ?? null,

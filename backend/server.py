@@ -7702,10 +7702,22 @@ async def _fast_pipeline_task(
                 pass
 
         full_reply = ''.join(full_reply_chars).strip() or "..."
-        # === DIAG LINGUA (sprint v12 #2) ===
-        # Logghiamo i primi 80 char della reply per detect rapido di
-        # language drift (Koda che risponde in spagnolo). Cerca questo
-        # log se l'utente segnala la lingua sbagliata.
+        # === DIAG LINGUA (sprint 2026-06-20 escalation) ===
+        # Fabio segnala: "TUTTE le risposte sono in spagnolo, SEMPRE, da
+        # mesi". Pattern deterministico → bug nel prompt o nel profilo,
+        # NON drift random del modello.
+        # Loggo ESPLICITAMENTE profile.language perché se è "es" il prompt
+        # stesso dice "Rispondi in español" (vedi _build_fast_system_prompt).
+        # Loggo anche i primi 150 char della reply per identificare il
+        # pattern e correlare con segnalazioni utente nel diag client.
+        profile_lang = (profile.language or "it")
+        logger.info(
+            f"[KODA_LLM_OUT] sid={session_id[:8]} "
+            f"profile_lang={profile_lang!r} "
+            f"model=claude-haiku-4-5 "
+            f"reply_first150={full_reply[:150]!r} "
+            f"chars={len(full_reply)}"
+        )
         logger.info(f"[KODA_LANG_CHECK] sid={session_id[:8]} reply_first80={full_reply[:80]!r}")
         # === DETECT AUTOMATICO LINGUA SBAGLIATA (Livello 3) ===
         # Euristica leggera basata su parole tipiche delle 4 lingue principali.
@@ -7875,6 +7887,16 @@ async def _fast_pipeline_task(
             # Differenza tra i due = costo della pipeline post-cache (publish,
             # eventuale waveform compute residuo, $push Mongo).
             "event_published_ms": nonlocal_first_publish_ms[0],
+            # === DIAG SPAGNOLO (Fabio escalation 2026-06-20) ===
+            # Fabio segnala "TUTTE le risposte sempre in spagnolo da mesi".
+            # Esponiamo profile_lang + i primi 120 char della reply nel meta
+            # event così il client può loggarli nei diagnostics dell'app
+            # SENZA dover accedere ai log Python server-side.
+            # Se nei log diag client vediamo:
+            #   profile_lang='es' → bug profilo (qualcuno l'ha settato a es)
+            #   profile_lang='it' ma reply spagnolo → bug Claude/prompt
+            "profile_lang": (profile.language or "it"),
+            "reply_preview": full_reply[:120],
         })
         await _fast_session_mark_done(session_id)
 
