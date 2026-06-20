@@ -20,8 +20,11 @@
         "NSMicrophoneUsageDescription": "Per ascoltare la tua voce e parlare con Koda",
         "NSPhotoLibraryUsageDescription": "Per scegliere immagini di sfondo personalizzate",
         "NSSpeechRecognitionUsageDescription": "Per trascrivere quello che dici a Koda",
+        "NSLocationWhenInUseUsageDescription": "Sapere la tua città per risposte più contestuali",
         "ITSAppUsesNonExemptEncryption": false,
-        "UIBackgroundModes": ["audio"]
+        "UIBackgroundModes": [
+          "audio"
+        ]
       }
     },
     "android": {
@@ -38,7 +41,9 @@
         "SCHEDULE_EXACT_ALARM",
         "READ_MEDIA_IMAGES",
         "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS"
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
@@ -71,7 +76,14 @@
           "microphonePermission": "Per ascoltare la tua voce e parlare con Koda"
         }
       ],
-      "expo-asset"
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Sapere la tua città per risposte più contestuali"
+        }
+      ],
+      "expo-asset",
+      "onnxruntime-react-native"
     ],
     "experiments": {
       "typedRoutes": true

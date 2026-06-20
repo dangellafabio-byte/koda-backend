@@ -193,6 +193,13 @@ export const api = {
   resetEverything: () =>
     jsonReq<{ ok: boolean; message: string }>("/profile", { method: "DELETE" }),
 
+  /** Salva la città dell'utente come key_fact (one-shot al boot — P2 Fabio 2026-06-20). */
+  postLocationContext: (payload: { city: string; region?: string; country?: string }) =>
+    jsonReq<{ ok: boolean; city?: string; fact?: string; error?: string }>("/profile/location-context", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
   getTimeline: (limit = 200) =>
     jsonReq<TimelineEntry[]>(`/timeline?limit=${limit}`),
   clearTimeline: () => jsonReq<{ ok: boolean }>("/timeline", { method: "DELETE" }),

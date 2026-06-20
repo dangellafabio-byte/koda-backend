@@ -127,6 +127,18 @@ export default function DiagnosticsScreen() {
         )}
       </ScrollView>
 
+      {/* === Link a Diagnostica VAD (P1 Fase 1 Fabio 2026-06-20) ===
+          Pagina isolata per testare il caricamento del modello Silero VAD.
+          Visibile sempre in pagina /diagnostics — nessun gate. */}
+      <TouchableOpacity
+        style={styles.vadLinkBtn}
+        onPress={() => router.push("/diagnostics-vad" as any)}
+        testID="open-vad-diagnostics"
+      >
+        <Ionicons name="pulse-outline" size={16} color="#7dd3fc" />
+        <Text style={styles.vadLinkLabel}>Diagnostica Neural VAD (PoC Fase 1) →</Text>
+      </TouchableOpacity>
+
       <View style={styles.actionsRow}>
         <TouchableOpacity style={styles.actionBtn} onPress={handleCopy}>
           <Ionicons name="copy-outline" size={18} color="#fff" />
@@ -186,6 +198,22 @@ const styles = StyleSheet.create({
     color: "#888",
     fontSize: 11,
     marginTop: 2,
+  },
+  vadLinkBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#1a2030",
+    backgroundColor: "rgba(125, 211, 252, 0.06)",
+    gap: 8,
+  },
+  vadLinkLabel: {
+    color: "#7dd3fc",
+    fontSize: 13,
+    fontWeight: "500",
   },
   logScroll: {
     flex: 1,

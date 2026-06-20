@@ -853,6 +853,14 @@ class TaccuinoSettings(BaseModel):
     # chiude da solo dopo 800ms di silenzio. L'utente può disattivarlo a voce
     # ("Coda modalità manuale" / "disattiva hands free") o dal toggle in header.
     hands_free: bool = True
+    # === GEOLOCATION (P2 Fabio 2026-06-20) ===
+    # Toggle utente: se True, all'avvio dell'app il client chiede il
+    # permesso location, fa una getCurrentPositionAsync UNA volta e
+    # invia la città al backend via /api/profile/location-context.
+    # Default FALSE: l'utente deve esplicitamente abilitarlo nelle
+    # Impostazioni per evitare prompt permessi non richiesti al primo
+    # avvio (UX rispettosa della privacy).
+    geolocation_enabled: bool = False
     theme: str = "notte"  # default fissato a "notte" (richiesta utente giugno 2026 — indigo notturno).
     day_start_hour: int = 7   # used when theme = "auto-orario"
     night_start_hour: int = 20  # used when theme = "auto-orario"
@@ -2500,6 +2508,96 @@ async def api_reset_profile():
     except Exception as e:
         logger.warning(f"[reset] memories delete failed: {e}")
     return {"ok": True, "message": "Memoria cancellata."}
+
+
+# ============================================================
+# LOCATION CONTEXT — geolocation one-shot al boot dell'app
+# (fix Fabio 2026-06-20 — P2 toggle geolocation in Impostazioni)
+# ============================================================
+
+class LocationContextIn(BaseModel):
+    """Payload per /api/profile/location-context. La città è
+    auto-detected dal client via expo-location + reverseGeocodeAsync."""
+    city: str
+    region: Optional[str] = None
+    country: Optional[str] = None
+
+
+@api_router.post("/profile/location-context")
+async def api_location_context(payload: LocationContextIn):
+    """Salva la città dell'utente come key_fact temporaneo.
+
+    Strategia: ogni boot dell'app col toggle geolocation_enabled=true
+    invoca questo endpoint. Sovrascriviamo il fact esistente di categoria
+    "luogo_geo" se presente (deduplicazione su categoria) per evitare di
+    accumulare 1 fatto per ogni boot.
+
+    Distinto da "luogo" (residenza dichiarata a voce) — la categoria
+    "luogo_geo" è SOLO per posizione GPS one-shot.
+
+    Non blocca mai il chiamante: anche se il salvataggio fallisce, l'app
+    continua a funzionare (key_facts dichiarati a voce sono indipendenti).
+    """
+    city = (payload.city or "").strip()
+    if not city or len(city) > 80:
+        raise HTTPException(status_code=400, detail="city missing or too long")
+    try:
+        # Rimuovi key_fact precedenti di categoria luogo_geo (1 solo per profilo)
+        await db.taccuino_key_facts.delete_many({"category": "luogo_geo"})
+        # Inserisci il nuovo
+        fact_text = f"In questo momento si trova a {city}"
+        if payload.region and payload.region != city:
+            fact_text += f" ({payload.region})"
+        doc = {
+            "id": str(uuid.uuid4()),
+            "fact": fact_text,
+            "category": "luogo_geo",
+            "source_text": f"GPS reverse-geocode: city={city} region={payload.region or '?'} country={payload.country or '?'}",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.taccuino_key_facts.insert_one(doc)
+        logger.info(f"[location-context] saved: {fact_text}")
+        return {"ok": True, "city": city, "fact": fact_text}
+    except Exception as e:
+        logger.warning(f"[location-context] save failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+# ============================================================
+# STATIC ASSETS — servono il modello Silero VAD ONNX
+# (P1 Fase 1 Fabio 2026-06-20 — Neural VAD PoC)
+# ============================================================
+
+_SILERO_VAD_PATH = Path(__file__).parent / "static_assets" / "silero_vad.onnx"
+
+
+@api_router.get("/assets/silero_vad.onnx")
+async def api_get_silero_vad():
+    """Restituisce il modello Silero VAD v5 (Apache 2.0).
+
+    Il client lo scarica UNA volta al primo uso e lo cacha in
+    documentDirectory locale. Successivi avvi non toccano la rete.
+
+    File: 2.3MB, ONNX ir_version=8, opset=16.
+    Inputs: input (audio chunk), state (LSTM hidden), sr (sample rate)
+    Outputs: output (speech probability [0..1]), stateN (new state)
+
+    Compatibile con onnxruntime-react-native 1.24.x.
+    """
+    from fastapi.responses import FileResponse
+    if not _SILERO_VAD_PATH.exists():
+        raise HTTPException(status_code=404, detail="silero_vad.onnx not found on server")
+    return FileResponse(
+        path=str(_SILERO_VAD_PATH),
+        media_type="application/octet-stream",
+        filename="silero_vad.onnx",
+        headers={
+            # Cache-Control: il file è immutable (versione modello fissata).
+            # 1 anno di cache + immutable hint per i CDN.
+            "Cache-Control": "public, max-age=31536000, immutable",
+        },
+    )
+
 
 
 # ============================================================
@@ -7791,21 +7889,29 @@ async def _fast_pipeline_task(
                     logger.error(f"[fast] publish sentence failed: {e}")
                     return
 
-                # Waveform compute fuori dal percorso critico: il client
-                # ha già iniziato a scaricare l'MP3 mentre noi calcoliamo
-                # l'envelope.
-                try:
-                    wf = await asyncio.to_thread(_compute_waveform_rms, audio_bytes)
-                    if wf and wf.get("waveform"):
-                        await _publish({
-                            "type": "waveform_update",
-                            "i": idx,
-                            "token": token,
-                            "waveform": wf["waveform"],
-                            "window_ms": wf.get("window_ms", 60),
-                        })
-                except Exception as e:
-                    logger.warning(f"[fast] waveform compute failed: {e}")
+                # === P3 (2026-06-20): waveform_update DISABILITATO ===
+                # Il client cattura ma IGNORA i waveform_update (vedi
+                # speech.ts riga 926-936). Pubblicarli mantiene il poll
+                # loop aperto inutilmente per 3-5s in più → metrica
+                # "total" gonfiata, log /diagnostics sporcati, CPU spesa
+                # per nulla (decode MP3 + calcolo RMS).
+                # Soluzione: skippiamo completamente il calcolo + publish.
+                # Se in futuro vorremo riattivare l'envelope per sync orb,
+                # basta togliere il commento. Il client è già pronto a
+                # consumarlo (branch `waveform_update` esiste già).
+                #
+                # try:
+                #     wf = await asyncio.to_thread(_compute_waveform_rms, audio_bytes)
+                #     if wf and wf.get("waveform"):
+                #         await _publish({
+                #             "type": "waveform_update",
+                #             "i": idx,
+                #             "token": token,
+                #             "waveform": wf["waveform"],
+                #             "window_ms": wf.get("window_ms", 60),
+                #         })
+                # except Exception as e:
+                #     logger.warning(f"[fast] waveform compute failed: {e}")
             except Exception as e:
                 logger.error(f"[fast] sentence gen error: {e}")
 

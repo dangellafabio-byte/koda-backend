@@ -22,6 +22,7 @@ import {
   Alert,
   AppState,
   Switch,
+  Linking,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { TouchableOpacity as GHTouchableOpacity } from "react-native-gesture-handler";
@@ -798,6 +799,25 @@ export default function Taccuino() {
           if (!p.onboarded) setShowOnboarding(true);
           else if (p.settings?.input_mode !== "text") {
             prewarmMic().catch(() => {});
+          }
+          // === GEOLOCATION ONE-SHOT (P2 Fabio 2026-06-20) ===
+          // Se l'utente ha abilitato il toggle nelle Impostazioni,
+          // facciamo UN getCurrentPosition + reverse-geocode → invio
+          // città al backend come key_fact. Strategia:
+          //  - silenzioso (no Alert se permesso negato — l'utente l'ha
+          //    già scelto attivando il toggle, sa cosa fa)
+          //  - non-blocking (parallelo, fire-and-forget)
+          //  - una sola volta per cold-start dell'app (no watchPosition)
+          if ((p.settings as any)?.geolocation_enabled === true) {
+            (async () => {
+              try {
+                const { fetchLocationOnce } = await import("../lib/geolocation");
+                const res = await fetchLocationOnce();
+                console.log(`[KODA_GEO] boot result: ${JSON.stringify(res).slice(0, 200)}`);
+              } catch (e) {
+                console.warn("[KODA_GEO] boot fetch failed:", e);
+              }
+            })();
           }
           return; // success
         } catch (e) {
@@ -4379,6 +4399,68 @@ export default function Taccuino() {
                   try {
                     await api.updateProfile({ settings: nextSettings });
                   } catch {}
+                }}
+                trackColor={{ false: "rgba(255,255,255,0.18)", true: "#0E7C7B" }}
+                thumbColor="#FFFFFF"
+              />
+            </View>
+
+            {/* === GEOLOCATION TOGGLE (P2 Fabio 2026-06-20) ===
+                Quando attivo: al boot dell'app il client chiede il
+                permesso location (UNA volta) e fa una getCurrentPosition
+                + reverse-geocode → invia la città al backend come key_fact
+                di categoria "luogo_geo". Permette a Koda di rispondere
+                a "che ore sono qui?" o "che tempo fa?" usando la città
+                giusta.
+                Default OFF — l'utente abilita esplicitamente per privacy.
+                Strategia ONE-SHOT: nessun watchPosition, nessun tracking
+                in background. Solo 1 fix per sessione foreground. */}
+            <View style={[styles.settingRow, { flexDirection: "row", alignItems: "center", justifyContent: "space-between" }]}>
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text style={styles.settingLabel}>📍 Condividi la mia città</Text>
+                <Text style={styles.settingHint}>
+                  Una volta sola all'avvio. Koda saprà solo la città (es. Pavia),
+                  non la posizione esatta. Serve per risposte tipo "che ore sono
+                  qui?". Tutto resta locale.
+                </Text>
+              </View>
+              <Switch
+                value={(profile?.settings as any)?.geolocation_enabled === true}
+                onValueChange={async (on) => {
+                  if (!profile) return;
+                  const nextSettings = { ...profile.settings, geolocation_enabled: on } as any;
+                  setProfile({ ...profile, settings: nextSettings });
+                  try {
+                    await api.updateProfile({ settings: nextSettings });
+                  } catch {}
+                  // === Trigger immediato quando l'utente attiva il toggle ===
+                  // Se attiva ORA, chiediamo subito permesso + città (non
+                  // serve aspettare il prossimo cold-start). Se rifiuta,
+                  // il toggle resta visivamente ON nelle impostazioni ma
+                  // la chiamata fallirà gentilmente al prossimo boot.
+                  if (on) {
+                    try {
+                      const { fetchLocationOnce } = await import("../lib/geolocation");
+                      const res = await fetchLocationOnce({ forceRequest: true });
+                      if (res.ok) {
+                        console.log(`[KODA_GEO] location attivata: ${res.city}`);
+                      } else if (res.reason === "blocked") {
+                        // Mostriamo un alert con bottone "Apri Impostazioni"
+                        Alert.alert(
+                          "Permesso bloccato",
+                          "Per condividere la città devi abilitare la posizione di Koda nelle Impostazioni del telefono.",
+                          [
+                            { text: "Annulla", style: "cancel" },
+                            { text: "Apri Impostazioni", onPress: () => Linking.openSettings() },
+                          ]
+                        );
+                      } else if (res.reason === "denied") {
+                        console.log("[KODA_GEO] permesso negato");
+                      }
+                    } catch (e) {
+                      console.warn("[KODA_GEO] fetchLocationOnce error:", e);
+                    }
+                  }
                 }}
                 trackColor={{ false: "rgba(255,255,255,0.18)", true: "#0E7C7B" }}
                 thumbColor="#FFFFFF"
