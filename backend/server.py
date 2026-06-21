@@ -25,7 +25,7 @@ import hashlib
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from emergentintegrations.llm.openai import OpenAISpeechToText
-from fastapi import UploadFile, File, Form, Header, Cookie
+from fastapi import UploadFile, File, Form, Header, Cookie, Query
 from fastapi.responses import Response
 
 # === Sealed Confessional crypto (server-side decrypt-in-RAM only) ===
@@ -2654,6 +2654,78 @@ async def api_get_silero_vad():
             "Cache-Control": "public, max-age=31536000, immutable",
         },
     )
+
+
+# ============================================================
+# === SILERO VAD SERVER-SIDE PROBE (Opzione 2 Fabio 2026-06-20 v8) ===
+# ============================================================
+# Dopo 4 build TestFlight fallite sul VAD on-device (onnxruntime-react-native
+# incompatibile con NewArch), VALIDIAMO l'algoritmo qui sul backend.
+# Test via curl PRIMA di qualsiasi nuova build.
+#
+# Path: POST /api/vad/probe
+# Input: multipart/form-data, field "file" = audio (wav/m4a/mp3/aac/...)
+# Output: dict con speech_prob_mean/max, segments, durata, latenze
+# ============================================================
+
+@api_router.post("/vad/probe")
+async def api_vad_probe(
+    file: UploadFile = File(...),
+    threshold: float = Query(0.5, ge=0.0, le=1.0),
+):
+    """Probe Silero VAD su un file audio caricato dal client.
+
+    Esempi curl:
+      # Memo vocale iPhone (M4A) — voce nel furgone col motore acceso:
+      curl -X POST "$BACKEND/api/vad/probe" -F "file=@van_voice.m4a"
+
+      # Solo rumore motore senza voce:
+      curl -X POST "$BACKEND/api/vad/probe" -F "file=@van_engine_only.m4a"
+
+      # Con soglia custom (default 0.5):
+      curl -X POST "$BACKEND/api/vad/probe?threshold=0.3" -F "file=@audio.wav"
+
+    Esito atteso (per validare che Silero funzioni nel TUO furgone):
+      • Solo motore acceso:      speech_prob_mean ≈ 0.02-0.10, speech_ratio < 0.1
+      • Tua voce + motore:       speech_prob_mean ≈ 0.5-0.9, speech_ratio > 0.5
+      • Differenza chiara fra i due valori = Silero "vede" la tua voce
+        nonostante il motore → tesi confermata, vale TFLite on-device futuro.
+    """
+    try:
+        from services.vad_silero import probe_audio
+    except Exception as imp_err:
+        logger.exception("[vad-probe] cannot import services.vad_silero")
+        raise HTTPException(status_code=500, detail=f"vad module unavailable: {imp_err}")
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="missing filename")
+
+    audio_bytes = await file.read()
+    if len(audio_bytes) == 0:
+        raise HTTPException(status_code=400, detail="empty file")
+    if len(audio_bytes) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="file too large (>50MB)")
+
+    try:
+        result = probe_audio(
+            audio_bytes=audio_bytes,
+            declared_filename=file.filename,
+            threshold=threshold,
+        )
+    except ValueError as ve:
+        # Errori di decoding (formato non riconosciuto)
+        raise HTTPException(status_code=415, detail=str(ve))
+    except Exception as e:
+        logger.exception("[vad-probe] inference failed")
+        raise HTTPException(status_code=500, detail=f"probe failed: {e}")
+
+    logger.info(
+        f"[vad-probe] file={file.filename!r} size={len(audio_bytes)}B "
+        f"dur={result['duration_s']}s speech_ratio={result['speech_ratio']} "
+        f"prob_mean={result['speech_prob_mean']} segments={len(result['segments'])} "
+        f"infer={result['inference_ms']}ms decode={result['decode_ms']}ms"
+    )
+    return result
 
 
 
