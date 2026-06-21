@@ -209,6 +209,18 @@ function buildHandsFreePreset() {
       // `android: {}` (non basta a livello root). Senza questo, il VAD
       // hands-free era completamente rotto su Android.
       isMeteringEnabled: true,
+      // === FIX 2026-06-21 v10 (Fabio escalation Voice Processing) ===
+      // `audioSource: "voice_communication"` → MediaRecorder.AudioSource.
+      // VOICE_COMMUNICATION (l'API che Google Meet/WhatsApp/Telegram usano
+      // per le chiamate). Attiva i filtri DSP del dispositivo:
+      //   - Acoustic Echo Cancellation (AEC)
+      //   - Noise Suppression (NS) → motore furgone, vento, traffico
+      //   - Automatic Gain Control (AGC) → sussurri amplificati
+      // Questi filtri girano sul chip audio del telefono (~0 latenza, 0
+      // costo CPU). Equivalente Android del Voice Processing iOS.
+      // Doc expo-audio confirms: "It will take advantage of echo
+      // cancellation or automatic gain control if available."
+      audioSource: "voice_communication",
     },
     ios: {
       ...(base.ios || {}),

@@ -1,0 +1,25 @@
+diff --git a/node_modules/expo-audio/ios/AudioModule.swift b/node_modules/expo-audio/ios/AudioModule.swift
+index 938f985..b100217 100644
+--- a/node_modules/expo-audio/ios/AudioModule.swift
++++ b/node_modules/expo-audio/ios/AudioModule.swift
+@@ -575,9 +575,18 @@ public class AudioModule: Module {
+     }
+ 
+     if sessionOptions.isEmpty {
+-      try session.setCategory(category, mode: .default)
++      // === KODA PATCH 2026-06-21 v10 (Voice Processing) ===
++      // Quando si registra, usa .voiceChat invece di .default per attivare
++      // l'AudioUnit Voice Processing nativo iOS (AEC + NS + AGC). Stesso
++      // preset usato da Siri/FaceTime/WhatsApp. Pulisce automaticamente
++      // rumore motore furgone/vento, mantiene la voce. Solo .playAndRecord
++      // supporta .voiceChat → fallback a .default per le altre categorie.
++      let recordingMode: AVAudioSession.Mode = (category == .playAndRecord) ? .voiceChat : .default
++      try session.setCategory(category, mode: recordingMode)
+     } else {
+-      try session.setCategory(category, options: sessionOptions)
++      // === KODA PATCH 2026-06-21 v10 (Voice Processing, ramo options) ===
++      let recordingMode: AVAudioSession.Mode = (category == .playAndRecord) ? .voiceChat : .default
++      try session.setCategory(category, mode: recordingMode, options: sessionOptions)
+     }
+   }
+ 
