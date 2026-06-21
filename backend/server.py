@@ -74,7 +74,7 @@ api_router = APIRouter(prefix="/api")
 # Da rimuovere dopo che Fabio's iPhone ha reclamato correttamente "me".
 # Protetto da secret token inviato in header X-Admin-Secret.
 # ============================================================================
-_ADMIN_SECRET = "fabio-koda-cleanup-2026"
+_ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "")
 
 
 @api_router.post("/admin/release-stale-claim")
