@@ -155,24 +155,48 @@ def probe_audio(
     audio_bytes: bytes,
     declared_filename: Optional[str] = None,
     threshold: float = 0.5,
+    *,
+    early_exit_prob: float = 0.9,
+    early_exit_consecutive: int = 3,
+    subsample_after_seconds: float = 8.0,
+    subsample_factor: int = 2,
+    time_budget_ms: float = 2500.0,
 ) -> dict:
     """Analizza un audio e ritorna probabilità VAD + segmenti.
 
     threshold: soglia per considerare un frame "speech" (default Silero=0.5).
 
+    PERFORMANCE TUNING (Fabio escalation 2026-06-21, dopo log timeout 3.5s):
+      - early_exit_prob/consecutive: ESCE non appena trova N frame consecutivi
+        con prob >= soglia di confidenza alta. Caso tipico "Ciao Koda, mi
+        senti?" → esce in 200-400ms invece di processare l'intero clip.
+        Imposta early_exit_prob>=1 per disabilitare.
+      - subsample_after_seconds + subsample_factor: per audio LUNGHI (>N sec),
+        analizza solo un frame ogni K. Garantisce copertura completa del clip
+        (anche caso "pausa 25s + parlato finale") in tempo dimezzato. Imposta
+        subsample_factor=1 per disabilitare.
+      - time_budget_ms: hard-cap sull'inferenza. Se l'audio è così lungo che
+        sforerebbe il budget, ritorna comunque la decisione parziale (ratio
+        calcolato sui frame processati). Garantisce che il client non vada
+        MAI in fallback-timeout (timeout client = 3500ms).
+
     Returns:
       {
         "model": "silero_vad_v5",
-        "duration_s": float,
+        "duration_s": float,                # durata totale audio
+        "analyzed_duration_s": float,       # quanto effettivamente analizzato
         "original_sr": int,
-        "total_frames": int,
+        "total_frames": int,                # frame effettivamente processati
+        "frames_skipped_subsample": int,    # quanti frame skippati per subsample
         "speech_frames": int,
         "speech_ratio": float (0..1),
         "speech_prob_mean": float,
         "speech_prob_max": float,
-        "segments": [{"start_s": float, "end_s": float, "peak_prob": float}, ...],
+        "segments": [...],
         "inference_ms": float,
         "decode_ms": float,
+        "early_exit": bool,                 # true se uscita anticipata per voce trovata
+        "budget_exceeded": bool,            # true se uscito per time budget
       }
     """
     t_decode_start = time.time()
@@ -189,19 +213,68 @@ def probe_audio(
     sr_input = np.array(SR_TARGET, dtype=np.int64)
     # Pad finale per avere frame multipli di CHUNK_SIZE
     n_full = len(pcm) - (len(pcm) % CHUNK_SIZE)
-    for i in range(0, n_full, CHUNK_SIZE):
+    total_audio_frames = n_full // CHUNK_SIZE  # quanti frame TEORICI avrebbe il clip
+
+    # ─── SUBSAMPLE ATTIVO? ──────────────────────────────────────────────
+    # Per audio > N secondi, processiamo 1 frame ogni K. Lo stato LSTM viene
+    # comunque aggiornato solo coi frame processati: non è esattamente come
+    # processare tutto, ma su clip lunghi (>8s) la probabilità VAD è
+    # localmente coerente per centinaia di ms, quindi saltare ~32ms ogni
+    # 64ms non degrada la rilevazione di voce sostenuta.
+    effective_step = subsample_factor if duration_s > subsample_after_seconds and subsample_factor > 1 else 1
+    frames_skipped = 0
+
+    # ─── EARLY-EXIT TRACKER ─────────────────────────────────────────────
+    consecutive_high = 0
+    early_exit = False
+    budget_exceeded = False
+    time_budget_s = time_budget_ms / 1000.0
+
+    for k, i in enumerate(range(0, n_full, CHUNK_SIZE * effective_step)):
+        # Hard budget check ogni 10 frame (evita overhead time.time() ad ogni frame)
+        if k > 0 and k % 10 == 0:
+            if (time.time() - t_inf_start) >= time_budget_s:
+                budget_exceeded = True
+                break
+
         chunk = pcm[i:i + CHUNK_SIZE].reshape(1, -1)
         out, state = sess.run(
             None,
             {"input": chunk, "state": state, "sr": sr_input},
         )
-        probs.append(float(out[0][0]))
+        p = float(out[0][0])
+        probs.append(p)
+
+        # Early-exit: trovata voce confermata? esci subito.
+        if early_exit_prob < 1.0:
+            if p >= early_exit_prob:
+                consecutive_high += 1
+                if consecutive_high >= early_exit_consecutive:
+                    early_exit = True
+                    break
+            else:
+                consecutive_high = 0
+
+    # Conteggio frame skippati dal subsample (solo informativo per log)
+    if effective_step > 1:
+        frames_skipped = total_audio_frames - len(probs)
+
     inference_ms = (time.time() - t_inf_start) * 1000
+    analyzed_duration_s = (len(probs) * CHUNK_SIZE * effective_step) / float(SR_TARGET)
 
     probs_arr = np.array(probs, dtype=np.float32) if probs else np.zeros(0, dtype=np.float32)
     speech_mask = probs_arr >= threshold
     speech_frames = int(speech_mask.sum())
     total_frames = len(probs)
+
+    # Tempo (in secondi) per frame processato. Con subsample, ogni frame
+    # rappresenta CHUNK_SIZE * effective_step samples.
+    frame_step_seconds = (CHUNK_SIZE * effective_step) / float(SR_TARGET)
+
+    # PARAMETRI ROBUST SPEECH DETECTION (vedi commento sotto, dopo segments):
+    MIN_ROBUST_DURATION_S = 0.20  # almeno 200ms di voce continua
+    MIN_ROBUST_PEAK = 0.80
+    MIN_ROBUST_RATIO_FLOOR = 0.20  # forza ratio almeno a questo se robust speech presente
 
     # Segmenta i frame "speech" contigui
     segments = []
@@ -219,29 +292,56 @@ def probe_audio(
                     seg_peak = p
             elif p < threshold and in_seg:
                 segments.append({
-                    "start_s": round(seg_start_idx * CHUNK_SIZE / SR_TARGET, 3),
-                    "end_s": round(idx * CHUNK_SIZE / SR_TARGET, 3),
+                    "start_s": round(seg_start_idx * frame_step_seconds, 3),
+                    "end_s": round(idx * frame_step_seconds, 3),
                     "peak_prob": round(float(seg_peak), 4),
                 })
                 in_seg = False
         if in_seg:
             segments.append({
-                "start_s": round(seg_start_idx * CHUNK_SIZE / SR_TARGET, 3),
-                "end_s": round(total_frames * CHUNK_SIZE / SR_TARGET, 3),
+                "start_s": round(seg_start_idx * frame_step_seconds, 3),
+                "end_s": round(total_frames * frame_step_seconds, 3),
                 "peak_prob": round(float(seg_peak), 4),
             })
+
+    # ─── ROBUST SPEECH DETECTION (Fabio 2026-06-21) ─────────────────────
+    # PROBLEMA RISCONTRATO NEI TEST: il ratio `speech_frames/total_frames`
+    # falsifica i casi "silenzio lungo + voce alla fine" (es. l'utente
+    # esita 25s, poi parla 5s → ratio 0.06, sotto soglia client 0.15, ma
+    # Silero ha rilevato voce nettissima con prob>0.88).
+    # FIX: se troviamo almeno un segmento "robusto" (>=200ms continui di
+    # voce con peak>=0.8), forziamo il ratio a un floor di 0.20. Così la
+    # logica client (threshold=0.15 su speech_ratio) continua a funzionare
+    # senza modifiche frontend.
+    has_robust_speech = any(
+        (seg["end_s"] - seg["start_s"]) >= MIN_ROBUST_DURATION_S
+        and seg["peak_prob"] >= MIN_ROBUST_PEAK
+        for seg in segments
+    )
+    raw_speech_ratio = speech_frames / max(total_frames, 1)
+    effective_speech_ratio = (
+        max(raw_speech_ratio, MIN_ROBUST_RATIO_FLOOR)
+        if has_robust_speech else raw_speech_ratio
+    )
 
     return {
         "model": "silero_vad_v5",
         "duration_s": round(duration_s, 3),
+        "analyzed_duration_s": round(analyzed_duration_s, 3),
         "original_sr": original_sr,
         "total_frames": total_frames,
+        "frames_skipped_subsample": frames_skipped,
+        "subsample_factor": effective_step,
         "speech_frames": speech_frames,
-        "speech_ratio": round(speech_frames / max(total_frames, 1), 4),
+        "speech_ratio": round(effective_speech_ratio, 4),
+        "raw_speech_ratio": round(raw_speech_ratio, 4),  # ratio originale per debug
+        "has_robust_speech": has_robust_speech,
         "speech_prob_mean": round(float(probs_arr.mean()) if total_frames else 0.0, 4),
         "speech_prob_max": round(float(probs_arr.max()) if total_frames else 0.0, 4),
         "segments": segments,
         "threshold": threshold,
         "inference_ms": round(inference_ms, 1),
         "decode_ms": round(decode_ms, 1),
+        "early_exit": early_exit,
+        "budget_exceeded": budget_exceeded,
     }
