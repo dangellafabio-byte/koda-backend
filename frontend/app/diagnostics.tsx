@@ -127,17 +127,13 @@ export default function DiagnosticsScreen() {
         )}
       </ScrollView>
 
-      {/* === Link a Diagnostica VAD (P1 Fase 1 Fabio 2026-06-20) ===
-          Pagina isolata per testare il caricamento del modello Silero VAD.
-          Visibile sempre in pagina /diagnostics — nessun gate. */}
-      <TouchableOpacity
-        style={styles.vadLinkBtn}
-        onPress={() => router.push("/diagnostics-vad" as any)}
-        testID="open-vad-diagnostics"
-      >
-        <Ionicons name="pulse-outline" size={16} color="#7dd3fc" />
-        <Text style={styles.vadLinkLabel}>Diagnostica Neural VAD (PoC Fase 1) →</Text>
-      </TouchableOpacity>
+      {/* === Link a Diagnostica VAD RIMOSSO (Fabio 2026-06-21) ===
+          Il bottone "Diagnostica Neural VAD" è stato rimosso perché la pagina
+          /diagnostics-vad importava @siteed/audio-studio + onnxruntime-react-native
+          e crashava l'app su iOS dopo l'abbandono dell'approccio ONNX nativo.
+          Il VAD ora gira lato server (Plan C, /api/vad/probe).
+          Il file diagnostics-vad.tsx è conservato come .OLD-onnx.tsx.bak per
+          riferimento futuro (eventuale migrazione TFLite). */}
 
       <View style={styles.actionsRow}>
         <TouchableOpacity style={styles.actionBtn} onPress={handleCopy}>
@@ -199,22 +195,8 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 2,
   },
-  vadLinkBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#1a2030",
-    backgroundColor: "rgba(125, 211, 252, 0.06)",
-    gap: 8,
-  },
-  vadLinkLabel: {
-    color: "#7dd3fc",
-    fontSize: 13,
-    fontWeight: "500",
-  },
+  // vadLinkBtn / vadLinkLabel rimossi insieme al bottone "Diagnostica Neural
+  // VAD" (Fabio 2026-06-21). Mantenuti solo come reference storica nel commit.
   logScroll: {
     flex: 1,
     backgroundColor: "#000",

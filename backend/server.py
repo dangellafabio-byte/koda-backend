@@ -6974,8 +6974,14 @@ async def _stream_tts_for_sentence(
 ):
     """Async generator that yields MP3 byte chunks for one sentence.
 
-    Bridges ElevenLabs' SYNC streaming generator into asyncio land via a
-    background thread + asyncio.Queue.
+    ⚠️ DEAD CODE WARNING (Fabio 2026-06-21):
+    Questa funzione usa `text_to_speech.stream(...)` che NON ESISTE in
+    SDK ElevenLabs 1.9.0. Viene chiamata solo dall'endpoint legacy
+    `/converse-stream-audio` che il client NON usa più (sostituito da
+    `/converse-fast` → `_gen_and_publish_sentence`). Lasciata in piedi
+    per compatibilità storica del modulo. La continuità di prosodia
+    `previous_text` è implementata invece in `_gen_and_publish_sentence`,
+    il VERO codepath attivo.
     """
     loop = asyncio.get_event_loop()
     queue: asyncio.Queue = asyncio.Queue(maxsize=64)
@@ -7912,6 +7918,9 @@ async def _fast_pipeline_task(
         sentence_buf = ""
         full_reply_chars: List[str] = []
         sentence_idx = 0
+        # PROSODY CONTINUITY (Fabio 2026-06-21): tiene la frase appena
+        # sintetizzata per passarla come `previous_text` alla successiva.
+        _prev_sentence_for_tts: Optional[str] = None
         ttft_logged = False
         first_audio_logged = False
         current_tone = "warm"
@@ -7930,7 +7939,7 @@ async def _fast_pipeline_task(
         # Array mutable per permettere assegnazione da closure interna.
         nonlocal_first_publish_ms: List[Optional[int]] = [None]
 
-        async def _gen_and_publish_sentence(idx: int, sentence: str):
+        async def _gen_and_publish_sentence(idx: int, sentence: str, previous_text: Optional[str] = None):
             nonlocal first_audio_logged, timing_first_tts_ms, timing_first_audio_total_ms
             try:
                 clean = _strip_audio_tags(sentence) or sentence
@@ -7974,6 +7983,17 @@ async def _fast_pipeline_task(
                         # poteva causare artefatti "chipmunk" su Flash v2.5
                         # secondo feedback utente. Default ElevenLabs (1) OK.
                     )
+                    # === PROSODY CONTINUITY (Fabio 2026-06-21) ===
+                    # Passiamo a ElevenLabs il testo della frase precedente
+                    # come CONTESTO (NON sintetizzato!). Il modello lo usa per
+                    # generare una prosodia coerente tra le clip, eliminando
+                    # i "salti" di energia che Fabio percepiva (es. frase 1
+                    # "Scalea, bella!" entusiasta vs frase 2 descrittiva con
+                    # tono diverso). Verificato compatibile con
+                    # eleven_flash_v2_5 + SDK 1.9.0.
+                    # Trim a 1000 char per non sprecare token nel contesto.
+                    if previous_text:
+                        kwargs["previous_text"] = previous_text[-1000:]
                     try:
                         gen = client_el.text_to_speech.convert(**kwargs)
                         for chunk in gen:
@@ -8096,16 +8116,27 @@ async def _fast_pipeline_task(
                         break
                     sentence_buf = rest
                     if sent.strip():
-                        task = asyncio.create_task(_gen_and_publish_sentence(sentence_idx, sent))
+                        # PROSODY CONTINUITY (Fabio 2026-06-21): la frase
+                        # PRECEDENTE viene passata a ElevenLabs come `previous_text`
+                        # per dare contesto prosodico (no salti di energia tra
+                        # frase 1 e frase 2). _prev_sentence_for_tts contiene
+                        # il testo della frase letta più di recente.
+                        task = asyncio.create_task(_gen_and_publish_sentence(
+                            sentence_idx, sent, previous_text=_prev_sentence_for_tts or None,
+                        ))
                         sentence_tasks.append(task)
+                        _prev_sentence_for_tts = sent
                         sentence_idx += 1
             if extractor.reply_finished:
                 break
 
         tail = sentence_buf.strip()
         if tail:
-            task = asyncio.create_task(_gen_and_publish_sentence(sentence_idx, tail))
+            task = asyncio.create_task(_gen_and_publish_sentence(
+                sentence_idx, tail, previous_text=_prev_sentence_for_tts or None,
+            ))
             sentence_tasks.append(task)
+            _prev_sentence_for_tts = tail
             sentence_idx += 1
 
         if sentence_tasks:
