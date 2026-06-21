@@ -8841,13 +8841,16 @@ async def _cleanup_tone_tags() -> int:
     solo i documenti sporchi → costo ~zero quando il DB è già pulito.
     """
     n = 0
+    # FIX 2026-06-21 v14 (deployment_agent blocker): aggiunto .limit(1000) per
+    # cap query unbounded (causava warning startup-timeout). Se ci sono >1000
+    # doc sporchi, vengono ripuliti gradualmente nei restart successivi.
     cursor = db.taccuino_timeline.find(
         {"$or": [
             {"text": {"$regex": r"\[TONE:"}},
             {"voice_text": {"$regex": r"\[TONE:"}},
         ]},
         {"_id": 1, "text": 1, "voice_text": 1},
-    )
+    ).limit(1000)
     async for doc in cursor:
         updates = {}
         for field in ("text", "voice_text"):
