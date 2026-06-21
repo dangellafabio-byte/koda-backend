@@ -13,7 +13,9 @@ elevenlabs==1.9.0
 PyNaCl==1.5.0
 tavily-python==0.5.0
 # deploy-trigger 1780578239
-av==17.1.0
+# av==17.1.0  ← RIMOSSO 2026-06-21 v13: serviva solo a Silero VAD (decode m4a→PCM
+# per Silero). Disabilitato Silero (onnxruntime bloccato), pyav non serve più
+# e richiede libav system libs che il build container Emergent potrebbe non avere.
 imageio-ffmpeg==0.6.0
 # onnxruntime==1.27.0  ← RIMOSSO 2026-06-21 v12: bloccato dalla policy Emergent
 # (ML libs vietate sui 250m CPU / 1Gi). Silero VAD disabilitato → stub fail-open
