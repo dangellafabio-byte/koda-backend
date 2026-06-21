@@ -52,6 +52,6 @@ env/
 backend/voiceprint_data/
 backend/sound_samples/
 
-# === Env locale (non serve in produzione, Railway inietta le sue) ===
-backend/.env
-.env
+# === Env locale: ATTENZIONE → Emergent inietta i suoi .env al deploy,
+# ma il file deve essere INCLUSO nel build context per essere sovrascritto.
+# NON ignorare backend/.env o .env (deployment_agent BLOCKER 2026-06-21).
