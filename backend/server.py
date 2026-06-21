@@ -2694,8 +2694,45 @@ async def api_vad_probe(
     try:
         from services.vad_silero import probe_audio
     except Exception as imp_err:
-        logger.exception("[vad-probe] cannot import services.vad_silero")
-        raise HTTPException(status_code=500, detail=f"vad module unavailable: {imp_err}")
+        # === STUB FAIL-OPEN (Fabio 2026-06-21 v12, deploy unblock) ===
+        # `onnxruntime` rimosso da requirements.txt perché bloccato dalla policy
+        # Emergent (ML libs vietate sui 250m CPU / 1Gi memory del cluster).
+        # Quando Silero non è disponibile, ritorniamo un risultato FAIL-OPEN:
+        # speech_ratio=1.0 (= "c'è voce, processa") → silenceGate.ts lato client
+        # legge ratio >= 0.15 e lascia passare l'audio a Deepgram. Equivale a
+        # disattivare il gate, ma in modo trasparente per il client esistente.
+        # Voice Processing iOS/Android continua a pulire l'audio alla fonte,
+        # quindi il "secondo gate" Silero non è critico per la qualità.
+        logger.warning(
+            f"[vad-probe] services.vad_silero unavailable ({imp_err}); "
+            f"returning FAIL-OPEN stub (speech_ratio=1.0). Voice Processing "
+            f"iOS/Android handles noise filtering at OS level."
+        )
+        # Leggi il file solo per validazione (size, formato)
+        audio_bytes = await file.read()
+        if not audio_bytes:
+            raise HTTPException(status_code=400, detail="empty file")
+        return {
+            "model": "stub-fail-open",
+            "duration_s": 0.0,
+            "analyzed_duration_s": 0.0,
+            "original_sr": 0,
+            "total_frames": 0,
+            "frames_skipped_subsample": 0,
+            "subsample_factor": 1,
+            "speech_frames": 0,
+            "speech_ratio": 1.0,         # → client legge >= 0.15 → PASS
+            "raw_speech_ratio": 1.0,
+            "has_robust_speech": True,
+            "speech_prob_mean": 1.0,
+            "speech_prob_max": 1.0,
+            "segments": [],
+            "threshold": threshold,
+            "inference_ms": 0.0,
+            "decode_ms": 0.0,
+            "early_exit": False,
+            "budget_exceeded": False,
+        }
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="missing filename")

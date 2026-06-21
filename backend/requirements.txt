@@ -15,5 +15,7 @@ tavily-python==0.5.0
 # deploy-trigger 1780578239
 av==17.1.0
 imageio-ffmpeg==0.6.0
-onnxruntime==1.27.0
+# onnxruntime==1.27.0  ← RIMOSSO 2026-06-21 v12: bloccato dalla policy Emergent
+# (ML libs vietate sui 250m CPU / 1Gi). Silero VAD disabilitato → stub fail-open
+# in /api/vad/probe. Voice Processing iOS/Android filtra il rumore alla fonte.
 soundfile==0.14.0
