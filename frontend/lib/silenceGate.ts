@@ -57,7 +57,8 @@ export type GateDecision = {
     | "fallback-disabled"
     | "fallback-http-error"
     | "fallback-network-error"
-    | "fallback-timeout";
+    | "fallback-timeout"
+    | "fallback-long-audio";
   /** dettaglio numerico da Silero se la chiamata è riuscita. */
   probe: SileroProbeResult | null;
   /** millisecondi totali del round-trip (per [KODA_TIMING]). */
@@ -75,10 +76,22 @@ export type CheckOpts = {
    *  - voce in furgone motore acceso: 0.49
    *  → 0.15 è un margine prudente che evita falsi negativi (parole brevi/sussurri). */
   threshold?: number;
-  /** timeout massimo per la chiamata. Default 3500ms — sufficiente per audio fino a ~15s. */
+  /** timeout massimo per la chiamata. Default 8000ms — esteso da 3500ms a 8000ms
+   *  (Fabio 2026-06-21 v9): nei log reali dal furgone, audio lunghi (>20s) NON
+   *  raggiungevano il backend entro 3500ms a causa di upload cellular lento
+   *  (500KB su 4G ballerino in movimento richiede 3-7s). Con 8s abbiamo margine
+   *  realistico. Il bypass-long-audio (vedi sotto) evita comunque che il gate
+   *  rallenti gli audio molto lunghi. */
   timeoutMs?: number;
   /** se false, la gate è bypassata (decisione = "hasSpeech: true"). */
   enabled?: boolean;
+  /** durata della registrazione in ms. Se fornita e > bypassIfDurationMsAbove,
+   *  bypass del VAD probe (l'utente ha parlato a lungo intenzionalmente → quasi
+   *  certamente voce). Evita spreco di upload cellular per audio lunghi. */
+  durationMs?: number;
+  /** Default 20000ms (20s): sopra questa durata, skip VAD probe. Imposta 0 o
+   *  Number.POSITIVE_INFINITY per disabilitare il bypass. (Fabio 2026-06-21 v9) */
+  bypassIfDurationMsAbove?: number;
 };
 
 /**
@@ -89,13 +102,32 @@ export type CheckOpts = {
 export async function checkHasSpeech(opts: CheckOpts): Promise<GateDecision> {
   const start = Date.now();
   const threshold = opts.threshold ?? 0.15;
-  const timeoutMs = opts.timeoutMs ?? 3500;
+  const timeoutMs = opts.timeoutMs ?? 8000;
   const enabled = opts.enabled !== false; // default ON
+  // Default bypass: 20s. Audio sopra questa durata bypassano il VAD probe
+  // perché su rete cellular l'upload del multipart sfora il timeout e
+  // l'utente ha quasi certamente parlato intenzionalmente.
+  const bypassIfDurationMsAbove = opts.bypassIfDurationMsAbove ?? 20000;
 
   if (!enabled) {
     return {
       hasSpeech: true,
       reason: "fallback-disabled",
+      probe: null,
+      latency_ms: 0,
+    };
+  }
+  // BYPASS LONG AUDIO (Fabio 2026-06-21 v9): se sappiamo che la registrazione
+  // è durata >N secondi, NON inviamo il file al gate (l'upload via cellular
+  // sforerebbe comunque il timeout). Trattamento: hasSpeech=true, latency=0.
+  if (
+    typeof opts.durationMs === "number" &&
+    bypassIfDurationMsAbove > 0 &&
+    opts.durationMs > bypassIfDurationMsAbove
+  ) {
+    return {
+      hasSpeech: true,
+      reason: "fallback-long-audio",
       probe: null,
       latency_ms: 0,
     };

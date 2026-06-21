@@ -2419,8 +2419,17 @@ export default function Taccuino() {
         mime: res.mime,
         filename: res.filename,
         threshold: 0.15, // speech_ratio >= 0.15 ⇒ passa
-        timeoutMs: 3500, // fail-open dopo 3.5s
+        // FABIO 2026-06-21 v9: timeout esteso 3500→8000ms perché su rete
+        // cellular in furgone l'upload di audio grandi (500KB-1MB) sfora
+        // i 3.5s. In parallelo, audio >20s vengono bypassati direttamente
+        // (vedi durationMs sotto) per non aspettare comunque 8s a vuoto.
+        timeoutMs: 8000,
         enabled: sileroGateEnabled,
+        // Passa la durata della registrazione: il gate decide se fare
+        // bypass diretto (audio molto lungo → quasi certamente voce
+        // intenzionale, non vale la pena uploadare al gate).
+        durationMs: lastRecordingDurationMsRef.current ?? undefined,
+        bypassIfDurationMsAbove: 20000, // 20s
       });
       logGateDecision(gate);
       console.log(`[KODA_TIMING] SILERO_GATE_MS=${Date.now() - _kt_gate_start}`);
