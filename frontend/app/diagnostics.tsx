@@ -127,12 +127,17 @@ export default function DiagnosticsScreen() {
         )}
       </ScrollView>
 
-      {/* === Link a Diagnostica VAD — RIMOSSO (Fabio 2026-06-20 v7) ===
-          Il pulsante apriva /diagnostics-vad → "Carica modello" crashava
-          l'app a causa dell'incompatibilità onnxruntime-react-native + 
-          newArchEnabled. La pagina /diagnostics-vad resta nel codice 
-          per uso futuro (Fase 2/3 quando migreremo a react-native-fast-tflite), 
-          ma non è più raggiungibile dalla UI. */}
+      {/* === Link a Diagnostica VAD (P1 Fase 1 Fabio 2026-06-20) ===
+          Pagina isolata per testare il caricamento del modello Silero VAD.
+          Visibile sempre in pagina /diagnostics — nessun gate. */}
+      <TouchableOpacity
+        style={styles.vadLinkBtn}
+        onPress={() => router.push("/diagnostics-vad" as any)}
+        testID="open-vad-diagnostics"
+      >
+        <Ionicons name="pulse-outline" size={16} color="#7dd3fc" />
+        <Text style={styles.vadLinkLabel}>Diagnostica Neural VAD (PoC Fase 1) →</Text>
+      </TouchableOpacity>
 
       <View style={styles.actionsRow}>
         <TouchableOpacity style={styles.actionBtn} onPress={handleCopy}>
