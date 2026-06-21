@@ -101,8 +101,7 @@
           }
         }
       ],
-      "expo-asset",
-      "onnxruntime-react-native"
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true
