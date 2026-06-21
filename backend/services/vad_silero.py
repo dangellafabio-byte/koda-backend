@@ -271,10 +271,28 @@ def probe_audio(
     # rappresenta CHUNK_SIZE * effective_step samples.
     frame_step_seconds = (CHUNK_SIZE * effective_step) / float(SR_TARGET)
 
-    # PARAMETRI ROBUST SPEECH DETECTION (vedi commento sotto, dopo segments):
-    MIN_ROBUST_DURATION_S = 0.20  # almeno 200ms di voce continua
-    MIN_ROBUST_PEAK = 0.80
-    MIN_ROBUST_RATIO_FLOOR = 0.20  # forza ratio almeno a questo se robust speech presente
+    # ─── ROBUST SPEECH DETECTION (Fabio 2026-06-21 v11) ─────────────────
+    # PROBLEMA RISCONTRATO NEI TEST DI CAMPO (post Voice Processing attivo):
+    # Voice Processing iOS/Android pulisce così bene l'audio che la voce
+    # "vera" occupa solo il 5-12% della registrazione (il resto è silenzio
+    # vero, non più rumore di fondo che teneva alto il ratio). Frasi brevi
+    # come "Ciao Koda" (600-800ms) su audio di 4-5s → ratio 0.05-0.12 →
+    # sotto soglia 0.15 → falso negativo.
+    #
+    # FIX v11: regola "voice anywhere" — se Silero trova ANCHE UN SOLO
+    # frame con prob >= STRONG_PEAK (default 0.85), considera voce
+    # confermata. Un frame a 0.85 = 32ms di "voce ad alta certezza", il
+    # che richiede che il modello DSP della rete LSTM abbia visto una
+    # transizione consonante-vocale tipica del parlato umano. Non è
+    # disturbo random.
+    #
+    # In aggiunta manteniamo il vecchio criterio "segmento robusto"
+    # (>=N ms continui di voce) come secondo gate, con soglia ridotta a
+    # 80ms (durata minima di un fonema vocale tipico).
+    MIN_ROBUST_DURATION_S = 0.08      # almeno 80ms di voce continua (era 0.20)
+    MIN_ROBUST_PEAK = 0.70            # peak segmento (era 0.80, allentato)
+    STRONG_FRAME_PEAK = 0.85          # se ANCHE 1 frame >= 0.85 → voce confermata
+    MIN_ROBUST_RATIO_FLOOR = 0.20     # forza ratio almeno a questo se voce trovata
 
     # Segmenta i frame "speech" contigui
     segments = []
@@ -304,20 +322,21 @@ def probe_audio(
                 "peak_prob": round(float(seg_peak), 4),
             })
 
-    # ─── ROBUST SPEECH DETECTION (Fabio 2026-06-21) ─────────────────────
-    # PROBLEMA RISCONTRATO NEI TEST: il ratio `speech_frames/total_frames`
-    # falsifica i casi "silenzio lungo + voce alla fine" (es. l'utente
-    # esita 25s, poi parla 5s → ratio 0.06, sotto soglia client 0.15, ma
-    # Silero ha rilevato voce nettissima con prob>0.88).
-    # FIX: se troviamo almeno un segmento "robusto" (>=200ms continui di
-    # voce con peak>=0.8), forziamo il ratio a un floor di 0.20. Così la
-    # logica client (threshold=0.15 su speech_ratio) continua a funzionare
-    # senza modifiche frontend.
-    has_robust_speech = any(
+    # ─── ROBUST SPEECH DETECTION (Fabio 2026-06-21 v11) ─────────────────
+    # Due criteri OR per dichiarare "voce confermata":
+    #   1. SEGMENTO ROBUSTO: almeno un segmento di voce continua >= 80ms
+    #      con peak >= 0.70 (un fonema vocale tipico)
+    #   2. STRONG FRAME: almeno un singolo frame con prob >= 0.85 (voce
+    #      ad altissima certezza, identificata dal modello LSTM)
+    # Se uno qualsiasi dei due è vero, forziamo ratio a floor 0.20 in
+    # modo che il client (threshold 0.15) consideri "voce presente".
+    has_robust_segment = any(
         (seg["end_s"] - seg["start_s"]) >= MIN_ROBUST_DURATION_S
         and seg["peak_prob"] >= MIN_ROBUST_PEAK
         for seg in segments
     )
+    has_strong_frame = float(probs_arr.max()) >= STRONG_FRAME_PEAK if total_frames else False
+    has_robust_speech = has_robust_segment or has_strong_frame
     raw_speech_ratio = speech_frames / max(total_frames, 1)
     effective_speech_ratio = (
         max(raw_speech_ratio, MIN_ROBUST_RATIO_FLOOR)
