@@ -13,3 +13,7 @@ elevenlabs==1.9.0
 PyNaCl==1.5.0
 tavily-python==0.5.0
 # deploy-trigger 1780578239
+av==17.1.0
+imageio-ffmpeg==0.6.0
+onnxruntime==1.27.0
+soundfile==0.14.0

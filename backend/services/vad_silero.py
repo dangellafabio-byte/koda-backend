@@ -27,9 +27,9 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import av  # type: ignore
 import numpy as np
 import soundfile as sf
-from pydub import AudioSegment
 
 logger = logging.getLogger("silero_vad")
 
@@ -76,14 +76,15 @@ def _decode_audio_to_pcm16k_mono_f32(
     audio_bytes: bytes,
     declared_filename: Optional[str] = None,
 ) -> tuple[np.ndarray, int]:
-    """Decodifica QUALSIASI audio (wav/m4a/mp3/aac/ogg/flac/...) in
+    """Decodifica QUALSIASI audio (wav/m4a/mp3/aac/ogg/flac/webm/...) in
     float32 mono 16kHz. Strategia a 2 livelli:
-      1. soundfile (veloce, WAV/FLAC/OGG nativi)
-      2. pydub + ffmpeg (tutto il resto: M4A iPhone Voice Memo, MP3, AAC...)
+      1. soundfile (veloce, WAV/FLAC/OGG nativi) — primo tentativo
+      2. pyav (FFmpeg native binding self-contained, NESSUNA dipendenza
+         da binari di sistema) — fallback per M4A iPhone Voice Memo, MP3, AAC, ecc.
 
     Ritorna (audio_float32_array, sample_rate_originale_for_debug).
     """
-    # Tentativo 1: soundfile (WAV diretto)
+    # Tentativo 1: soundfile (WAV diretto, veloce)
     try:
         with io.BytesIO(audio_bytes) as buf:
             data, sr = sf.read(buf, dtype="float32", always_2d=False)
@@ -92,36 +93,57 @@ def _decode_audio_to_pcm16k_mono_f32(
         original_sr = int(sr)
         logger.info(f"[silero-vad] decoded via soundfile: sr={sr}, len={len(data)} samples")
     except Exception as sf_err:
-        # Tentativo 2: pydub (ffmpeg per M4A/MP3/AAC iPhone)
-        logger.info(f"[silero-vad] soundfile failed ({sf_err}), trying pydub+ffmpeg…")
+        # Tentativo 2: pyav (self-contained ffmpeg) per M4A/MP3/AAC iPhone
+        logger.info(f"[silero-vad] soundfile failed ({sf_err}), trying pyav…")
         try:
-            seg = AudioSegment.from_file(io.BytesIO(audio_bytes))
-            # Pydub usa int16 per default; lo lasciamo lavorare nel suo formato
-            # e poi normalizziamo.
-            seg = seg.set_channels(1)  # mono
-            original_sr = seg.frame_rate
-            samples_i16 = np.array(seg.get_array_of_samples(), dtype=np.int16)
-            data = (samples_i16.astype(np.float32) / 32768.0).copy()
-            logger.info(f"[silero-vad] decoded via pydub+ffmpeg: sr={original_sr}, len={len(data)}")
-        except Exception as pd_err:
+            container = av.open(io.BytesIO(audio_bytes))
+            audio_streams = container.streams.audio
+            if not audio_streams:
+                raise ValueError("no audio stream found")
+            stream = audio_streams[0]
+            original_sr = int(stream.codec_context.sample_rate or SR_TARGET)
+            # Resampler PyAV interno: converte direttamente a float32 mono 16kHz
+            # Questo evita un secondo resample step più giù (più veloce + qualità migliore).
+            resampler = av.audio.resampler.AudioResampler(
+                format="flt",
+                layout="mono",
+                rate=SR_TARGET,
+            )
+            chunks = []
+            for frame in container.decode(stream):
+                for out_frame in resampler.resample(frame):
+                    arr = out_frame.to_ndarray()
+                    # AudioResampler con layout="mono" ritorna shape (1, N) → squeezeamo
+                    if arr.ndim == 2:
+                        arr = arr[0]
+                    chunks.append(arr.astype(np.float32, copy=False))
+            container.close()
+            if not chunks:
+                raise ValueError("decoded zero audio frames")
+            data = np.concatenate(chunks)
+            logger.info(
+                f"[silero-vad] decoded via pyav: original_sr={original_sr}, "
+                f"resampled_to={SR_TARGET}, len={len(data)} samples"
+            )
+            # Già a SR_TARGET grazie al resampler PyAV → skip block resample
+            return data, original_sr
+        except Exception as av_err:
             raise ValueError(
-                f"Cannot decode audio (tried soundfile + pydub). "
-                f"soundfile_err={sf_err}; pydub_err={pd_err}"
+                f"Cannot decode audio (tried soundfile + pyav). "
+                f"soundfile_err={sf_err}; pyav_err={av_err}"
             )
 
-    # Resample a 16kHz se serve (usando numpy linear interp, basta per VAD)
+    # Resample a 16kHz se serve (path solo per WAV/FLAC non a 16kHz)
     if original_sr != SR_TARGET:
         ratio = SR_TARGET / float(original_sr)
         new_len = int(len(data) * ratio)
-        # Usa scipy se disponibile (qualità migliore), altrimenti linear numpy
         try:
             from scipy.signal import resample_poly
-            # GCD-based polyphase = qualità decente, no scipy.signal.resample (FFT) costoso
             from math import gcd
             g = gcd(SR_TARGET, original_sr)
             data = resample_poly(data, SR_TARGET // g, original_sr // g).astype(np.float32)
         except Exception:
-            # Fallback: interp lineare numpy
+            # Fallback: interp lineare numpy (qualità ridotta ma sempre meglio di niente)
             x_old = np.linspace(0, 1, len(data))
             x_new = np.linspace(0, 1, new_len)
             data = np.interp(x_new, x_old, data).astype(np.float32)

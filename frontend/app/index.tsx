@@ -44,6 +44,7 @@ import {
   Tone,
 } from "../lib/api";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
+import { checkHasSpeech, logGateDecision } from "../lib/silenceGate";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId, preloadFillerPool } from "../lib/speech";
 import { preloadOfflineClips, isOfflineNow, playRandomOfflineClip } from "../lib/offlineClips";
 import { startThinkingSound, stopThinkingSound } from "../lib/thinkingSound";
@@ -2397,6 +2398,73 @@ export default function Taccuino() {
         return;
       }
       const fd = buildFormData(res);
+      // === SILERO VAD GATE (Plan C, Fabio escalation 2026-06-20 v8) ===
+      // Prima di consumare Deepgram + Claude + ElevenLabs, chiediamo a
+      // Silero (server-side, già validato sui memo del furgone di Fabio
+      // con motore acceso: speech_prob_max=0.9996) se nell'audio c'è
+      // veramente parlato umano. Se Silero dice "no, solo rumore":
+      // SHORT-CIRCUIT — niente STT, niente LLM, niente TTS, ri-ascolto
+      // come per il classico "non ti ho sentito".
+      //
+      // SAFE-FALLBACK garantito: se la rete è giù / backend non risponde
+      // / timeout, la gate ritorna {hasSpeech: true} e proseguiamo come
+      // prima. Zero regressioni possibili.
+      //
+      // KILL-SWITCH: settings.silero_gate_enabled === false → bypass totale.
+      const sileroGateEnabled = (profile?.settings as any)?.silero_gate_enabled !== false;
+      const _kt_gate_start = Date.now();
+      const gate = await checkHasSpeech({
+        uri: res.uri,
+        blob: res.blob,
+        mime: res.mime,
+        filename: res.filename,
+        threshold: 0.15, // speech_ratio >= 0.15 ⇒ passa
+        timeoutMs: 3500, // fail-open dopo 3.5s
+        enabled: sileroGateEnabled,
+      });
+      logGateDecision(gate);
+      console.log(`[KODA_TIMING] SILERO_GATE_MS=${Date.now() - _kt_gate_start}`);
+
+      if (!gate.hasSpeech) {
+        // Silero certifica: era rumore di sottofondo, non voce. Non
+        // disturbiamo l'utente con un "Non ti ho sentito" pesante —
+        // semplicemente rilanciamo il listen (hands-free) o usciamo
+        // (manual mode). Same path della guardia client-side "no audio".
+        console.log(
+          `[KODA_VAD_GATE] BLOCKED — ratio=${gate.probe?.speech_ratio.toFixed(3)} ` +
+          `(threshold=0.15). Skipping STT/LLM/TTS.`
+        );
+        if (convActiveRef.current) {
+          // Non conta come "vuoto" pieno (sappiamo che era solo rumore),
+          // ma incrementiamo lo stesso il counter per evitare loop infiniti
+          // in casi degeneri (microfono guasto, ambiente troppo rumoroso).
+          emptyTurnsRef.current += 1;
+          if (emptyTurnsRef.current >= 4) {
+            setConvActive(false);
+            emptyTurnsRef.current = 0;
+            await speakAwareness(pickLine(awarenessLoopExit));
+            return;
+          }
+          // Feedback breve specifico per "solo rumore"
+          setError("Solo rumore, non ho sentito una voce 🤔");
+          setTimeout(() => setError(null), 2000);
+          setStatus("idle");
+          if (profile?.settings?.input_mode !== "text") {
+            setTimeout(() => {
+              if (convActiveRef.current && !recRef.current) {
+                startTalkInternal(true).catch(() => {});
+              }
+            }, 600);
+          }
+          return;
+        }
+        // Manual mode: feedback breve, niente parlato
+        setError("Solo rumore, non ho sentito una voce 🤔");
+        setTimeout(() => setError(null), 2500);
+        setStatus("idle");
+        return;
+      }
+      // === FINE SILERO GATE ===
       // === OFFLINE INTERCEPT (sprint 2026-06-20) ===
       // Prima di tentare STT/LLM, verifico se siamo offline. Se sì, NON
       // chiamiamo Deepgram (fallirebbe con un timeout di 30s), ma riproduco
