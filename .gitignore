@@ -86,3 +86,6 @@ credentials.json
 # .env / .env.* / *.env RIMOSSI (Fabio 2026-06-21 v14, post 4° deploy fail):
 # le righe erano state riaggiunte automaticamente. Devono restare ASSENTI
 # perché Emergent richiede i file .env nel build context per iniettarli al deploy.
+.env
+.env.*
+*.env
