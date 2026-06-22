@@ -27,6 +27,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { TouchableOpacity as GHTouchableOpacity } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
 import { FlashList } from "@shopify/flash-list";
+import LatencyOverlay from "../components/LatencyOverlay";
+import { traceStart, traceMark } from "../lib/latencyTracer";
 import * as ImagePicker from "expo-image-picker";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { LinearGradient } from "expo-linear-gradient";
@@ -194,6 +196,23 @@ function stripDisplayTags(text: string): string {
     .replace(/\(\s*[a-zàèéìòùç' ]{2,30}\s*\)/gi, "")
     .replace(/  +/g, " ")
     .replace(/\s+([,.;!?])/g, "$1")
+    .trim();
+}
+
+// === FIX #11 (2026-06-22 v8) ===
+// Variante "soft" di stripDisplayTags per il PERCORSO TTS DEL REPLAY.
+// Quando ri-giochi un messaggio AI già nella timeline, vogliamo che
+// ElevenLabs riproduca con la STESSA prosody della prima riproduzione,
+// inclusi gli audio tags `[sigh]`, `[laughs]`, `[whispered]` che il
+// backend mette esplicitamente in `voice_text` (vedi server.py:1009).
+// stripDisplayTags rimuoveva TUTTI i bracket tag → prosody piatta al replay.
+// Questa funzione rimuove SOLO il meta-marker `[TONE:xxx]` (= nostro tag
+// interno, non interpretato da ElevenLabs) preservando gli audio tags.
+function stripToneMarkerOnly(text: string): string {
+  if (!text) return text;
+  return text
+    .replace(/\[\s*TONE\s*:\s*[a-zA-Z_\-]+\s*\]\s*/gi, "")
+    .replace(/  +/g, " ")
     .trim();
 }
 
@@ -1420,7 +1439,9 @@ export default function Taccuino() {
       // Il conversation_mode hands-free è disabilitato (causa di freeze su iOS).
       // Arriverà nella Fase 4 con Deepgram + dev build.
       setStatus("speaking");
+      traceMark("tts:request");
       await SpeechMod.speak(text, { language: langTag, tone });
+      traceMark("tts:end");
       setStatus("idle");
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1631,6 +1652,10 @@ export default function Taccuino() {
 
   const sendText = useCallback(
     async (text: string, opts?: { fromText?: boolean }) => {
+      // === #9 LATENCY TRACE (2026-06-22 v8) ===
+      // T0 = momento esatto in cui parte l'intento di invio.
+      traceStart();
+      traceMark("sendText:enter");
       // FIX 2026-07: se l'utente sta SCRIVENDO (input da tastiera),
       // Koda risponde anche lei SOLO IN TESTO — niente TTS.
       // Motivo: se l'utente scrive, è probabile in contesto pubblico/notte
@@ -1648,29 +1673,12 @@ export default function Taccuino() {
       const isFortezzaTurn = !!confessionalMode;
       // (gate al paywall volutamente rimosso)
 
-      // === SAFETY PRE-FLIGHT (giugno 2026) ===================================
-      // SOLO per chat normale (non Confessionale: in Confessionale la regola
-      // è "tutto svanisce", quindi safety è gestito dentro lo stesso flusso
-      // sealed con prompt injection). Per la chat normale facciamo check
-      // BLOCCANTE: se rischio rilevato, NON inviamo nulla a /converse e
-      // mostriamo SafetyAlert.
-      if (!isFortezzaTurn) {
-        try {
-          const sc = await api.safetyCheck(txt, false);
-          if (sc.risk_detected) {
-            setSafetyResult(sc);
-            setSafetyVisible(true);
-            return; // STOP: niente invio a Claude, niente counter increment
-          }
-        } catch (e) {
-          // Safety check fallisce → degradiamo gracefully (continuiamo).
-          // Il prompt injection lato server.py rimane attivo come failsafe.
-        }
-      }
-
-      // Optimistic: append a local pending entry.
-      // CONFESSIONALE = FORTEZZA: sempre attivo quando confessional mode è ON.
-      // Nessun toggle, nessuna opzione → privacy massima by design.
+      // === OPTIMISTIC UI FIRST (Fix #10 — 2026-06-22 v8) ===
+      // PRIMA mostriamo la bolla all'utente (latenza visiva = zero come
+      // WhatsApp), POI facciamo il safety check in parallelo. Se la
+      // safety blocca, rimuoviamo la bolla con animazione + alert.
+      // Vecchio comportamento: await safety PRIMA di setTimeline → ritardo
+      // visivo di 200-500ms tra il tap e l'apparizione del messaggio.
       const isFortezza = !!confessionalMode;
       const optimistic: TimelineEntry = {
         id: `local-${Date.now()}`,
@@ -1688,6 +1696,36 @@ export default function Taccuino() {
       requestForceScroll();
       setTimeline((prev) => [...prev, optimistic]);
       setStatus("thinking");
+      traceMark("optimistic_shown");
+
+      // === SAFETY PRE-FLIGHT (post-optimistic) ===
+      // SOLO per chat normale (non Confessionale: in Confessionale la regola
+      // è "tutto svanisce", quindi safety è gestito dentro lo stesso flusso
+      // sealed con prompt injection). Per la chat normale facciamo check
+      // BLOCCANTE: se rischio rilevato, NON inviamo nulla a /converse,
+      // RIMUOVIAMO la bolla optimistic e mostriamo SafetyAlert.
+      if (!isFortezzaTurn) {
+        try {
+          traceMark("safety:request");
+          const sc = await api.safetyCheck(txt, false);
+          traceMark("safety:response");
+          if (sc.risk_detected) {
+            // Rimuovi la bolla optimistic (l'utente vedrà la sua bolla
+            // sparire con il default unmount della FlashList, e subito
+            // l'alert di safety prende il focus)
+            setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
+            setStatus("idle");
+            setSafetyResult(sc);
+            setSafetyVisible(true);
+            return; // STOP: niente invio a Claude, niente counter increment
+          }
+        } catch (e) {
+          // Safety check fallisce → degradiamo gracefully (continuiamo).
+          // Il prompt injection lato server.py rimane attivo come failsafe.
+        }
+      }
+      // NB: la creazione di optimistic + setTimeline è già avvenuta sopra.
+      // Da qui in poi si procede col flusso di invio vero e proprio.
       try {
         // === CONFESSIONALE FORTEZZA (Zero-Knowledge) ===
         // Se attivo: classifica emozione ON-DEVICE, manda solo il codice
@@ -2125,6 +2163,7 @@ export default function Taccuino() {
         // === STANDARD FLOW (fallback) ===
         // === STANDARD FLOW (con o senza ephemeral) ===
         const res = await api.converse(txt, undefined, { ephemeral: confessionalMode });
+        traceMark("converse:response");
         // Replace optimistic with real, then add AI entry.
         // Se siamo in confessionale, marca le entry come `confessional`
         // così la timeline le filtra/colora correttamente.
@@ -3140,15 +3179,15 @@ export default function Taccuino() {
     try {
       const langTag = profile?.language === "it" ? "it-IT" : profile?.language || "it-IT";
       await unlockSpeech();
-      // === FIX #1 REPLAY TTS (2026-06-22 v6) ===
-      // Prima passavamo direttamente entry.voice_text (o entry.text) al
-      // TTS. Su messaggi vecchi o con race condition col backend, il
-      // marker grezzo [TONE:warm] o gli audio tags [sigh] potevano essere
-      // ancora nel testo → TTS leggeva ad alta voce "tono caldo".
-      // Ora puliamo SEMPRE prima del TTS, identicamente a quanto fatto
-      // per il display in chat. stripDisplayTags rimuove TONE, [audio],
-      // *azioni*, (parentesi descrittive).
-      const ttsText = stripDisplayTags(entry.voice_text || entry.text);
+      // === FIX #1 + #11 REPLAY TTS (2026-06-22 v8) ===
+      // Bug #1 risolto: non leggere ad alta voce "[TONE:warm]".
+      // Bug #11 risolto: preservare gli audio tags ElevenLabs ([sigh],
+      // [laughs], [whispered]) che il backend mette in voice_text per
+      // dare prosody migliore al TTS — la prima riproduzione li usava,
+      // il replay con stripDisplayTags li perdeva → prosody piatta.
+      // Soluzione: stripToneMarkerOnly rimuove solo il meta-marker TONE,
+      // preservando i bracket tag legittimi per ElevenLabs.
+      const ttsText = stripToneMarkerOnly(entry.voice_text || entry.text);
       await SpeechMod.speak(ttsText, {
         language: langTag,
         tone: (entry.tone as Tone) || "neutral",
@@ -3304,6 +3343,27 @@ export default function Taccuino() {
   const forceScrollUntilRef = useRef<number>(0);
   const requestForceScroll = useCallback(() => {
     forceScrollUntilRef.current = Date.now() + 15000;
+  }, []);
+
+  // === #9 DEBUG LATENZA (Fix 2026-06-22 v8) ===
+  // Overlay nascosto attivabile con 5 tap rapidi sul contatore Freemium
+  // (sempre visibile in alto). Mostra la timeline T0..T_end del turno
+  // corrente, utile per misurare la latenza reale nel furgone senza Mac.
+  const [latencyDebugVisible, setLatencyDebugVisible] = useState(false);
+  const tapCountRef = useRef(0);
+  const tapFirstAtRef = useRef(0);
+  const onSecretDebugTap = useCallback(() => {
+    const now = Date.now();
+    if (now - tapFirstAtRef.current > 2000) {
+      // Reset finestra di 2s
+      tapCountRef.current = 0;
+      tapFirstAtRef.current = now;
+    }
+    tapCountRef.current += 1;
+    if (tapCountRef.current >= 5) {
+      tapCountRef.current = 0;
+      setLatencyDebugVisible((v) => !v);
+    }
   }, []);
   // === MISURAZIONE BOTTOM BAR (Fix 2026-06-22 v3) ===
   // Misuriamo l'altezza REALE della bottom bar tramite onLayout invece di
@@ -3802,14 +3862,41 @@ export default function Taccuino() {
           Visibile solo se: utente NON abbonato AND non sta facendo
           Confessionale (per non rompere l'atmosfera). */}
       {freemium && !freemium.subscription_active && !confessionalMode ? (
-        <View style={{ paddingTop: Math.max(insets.top + 6, 50), paddingBottom: 4 }}>
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={onSecretDebugTap}
+          style={{ paddingTop: Math.max(insets.top + 6, 50), paddingBottom: 4 }}
+        >
           <FreemiumCounter
             visible={true}
             remaining={freemium.free_messages_remaining}
             total={freemium.free_messages_limit}
           />
-        </View>
+        </TouchableOpacity>
       ) : null}
+      {/* === #9 DEBUG TAP ZONE (Fix 2026-06-22 v8) ===
+          Zona invisibile 60×60 in alto a destra: 5 tap rapidi (entro 2s)
+          aprono/chiudono l'overlay di debug latenza. È un fallback al
+          tap sul Freemium counter (che potrebbe non essere visibile se
+          l'utente è abbonato). */}
+      <TouchableOpacity
+        onPress={onSecretDebugTap}
+        activeOpacity={1}
+        style={{
+          position: "absolute",
+          top: Math.max(insets.top, 20),
+          right: 8,
+          width: 60,
+          height: 60,
+          zIndex: 50,
+        }}
+        accessibilityLabel="debug-tap-zone"
+        testID="debug-tap-zone"
+      />
+      <LatencyOverlay
+        visible={latencyDebugVisible}
+        onClose={() => setLatencyDebugVisible(false)}
+      />
       {/* === TIMELINE: FlashList (refactor 2026-06-22 v5) ===
           Migrato da FlatList a @shopify/flash-list per risolvere
           definitivamente i bug di virtualizzazione:
