@@ -83,9 +83,19 @@ android-sdk/
 credentials.json
 *.key
 .credentials
-# .env / .env.* / *.env RIMOSSI (Fabio 2026-06-21 v14, post 4° deploy fail):
-# le righe erano state riaggiunte automaticamente. Devono restare ASSENTI
-# perché Emergent richiede i file .env nel build context per iniettarli al deploy.
-.env
-.env.*
-*.env
+# ⚠️ ATTENZIONE Fabio 2026-06-21 v15 (dopo 7 deploy fail):
+# NON aggiungere .env / .env.* / *.env qui sotto, Emergent ha bisogno dei
+# file .env nel build context. Le righe sono state RIAGGIUNTE 2 volte
+# da tool automatico → ogni volta deploy fail. Verificare con:
+#   grep -E "^\\.env" /app/.gitignore  (deve essere zero match).
+
+# === Build cache & artifacts (Fabio 2026-06-21 v15, deploy unblock) ===
+# .metro-cache/ era 189MB di cache locale che gonfiava il build context
+# fino a far fallire l'upload dello snapshot al pipeline Emergent.
+.metro-cache/
+.metro-cache
+**/.metro-cache/
+
+# === Archive directory: file morti tenuti per reference futura ===
+_archive/
+**/_archive/

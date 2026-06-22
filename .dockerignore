@@ -55,3 +55,23 @@ backend/sound_samples/
 # === Env locale: ATTENZIONE → Emergent inietta i suoi .env al deploy,
 # ma il file deve essere INCLUSO nel build context per essere sovrascritto.
 # NON ignorare backend/.env o .env (deployment_agent BLOCKER 2026-06-21).
+
+# === Build cache & artifacts (Fabio 2026-06-21 v15, post 7° deploy fail) ===
+# Cartelle che NON devono mai entrare nel build context Emergent — facevano
+# fallire l'upload dello snapshot per timeout (1.1GB → 813MB).
+frontend/.metro-cache/
+frontend/dist/
+frontend/.expo/
+scripts/output/
+
+# === Archive: codice rimosso ma conservato per reference ===
+**/_archive/
+backend/_archive/
+frontend/_archive/
+
+# === Backend pycache (può sfuggire al pattern globale) ===
+backend/__pycache__/
+backend/**/__pycache__/
+
+# === Patches: necessario per patch-package, MA non per il backend Docker ===
+frontend/patches/
