@@ -29,7 +29,7 @@ const fs = require("fs");
 const path = require("path");
 const { withDangerousMod } = require("@expo/config-plugins");
 
-const KODA_PATCH_MARKER = "KODA PATCH 2026-06-21 v10 (Voice Processing)";
+const KODA_PATCH_MARKER = "KODA PATCH 2026-06-22 v11 (Voice Processing + speaker route)";
 
 const OLD_BLOCK = `    if sessionOptions.isEmpty {
       try session.setCategory(category, mode: .default)
@@ -47,10 +47,21 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
       // supporta .voiceChat → fallback a .default per le altre categorie.
       let recordingMode: AVAudioSession.Mode = (category == .playAndRecord) ? .voiceChat : .default
       try session.setCategory(category, mode: recordingMode)
+      // === KODA v11 FIX (2026-06-22): routing audio allo SPEAKER ===
+      // .voiceChat di default routa l'output all'EARPIECE (auricolare in
+      // alto, come una chiamata vocale). Per sentire Koda dallo speaker
+      // grande senza il telefono all'orecchio, forziamo overrideOutputAudioPort.
+      // .defaultToSpeaker option non basta con .voiceChat — serve l'override.
+      if category == .playAndRecord {
+        try? session.overrideOutputAudioPort(.speaker)
+      }
     } else {
       // === ${KODA_PATCH_MARKER} (ramo options) ===
       let recordingMode: AVAudioSession.Mode = (category == .playAndRecord) ? .voiceChat : .default
       try session.setCategory(category, mode: recordingMode, options: sessionOptions)
+      if category == .playAndRecord {
+        try? session.overrideOutputAudioPort(.speaker)
+      }
     }
   }`;
 
