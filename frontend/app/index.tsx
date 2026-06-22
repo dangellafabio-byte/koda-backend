@@ -3311,6 +3311,13 @@ export default function Taccuino() {
         setTimeout(() => {
           try { fl.scrollToEnd({ animated: false }); } catch {}
         }, 300);
+        // Round 5: copre l'animazione tastiera iOS (~250ms) + jitter
+        // su device più lenti. Garantisce che se l'utente tap-a il FAB
+        // MENTRE la tastiera sta ancora aprendo, il padding finale è
+        // già applicato e l'ultimo round arriva DAVVERO in fondo.
+        setTimeout(() => {
+          try { fl.scrollToEnd({ animated: false }); } catch {}
+        }, 550);
       });
     } catch {}
   }, []);
