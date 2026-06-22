@@ -3234,6 +3234,11 @@ export default function Taccuino() {
   // leggendo i messaggi vecchi).
   const [isNearBottom, setIsNearBottom] = useState(true);
   const isNearBottomRef = useRef(true);
+  // Tracking dell'altezza del contenuto per distinguere "contenuto cresciuto"
+  // (nuovo messaggio → auto-scroll) da "contenuto riassestato" (FlatList
+  // virtualizzazione, riapertura app, layout reflow → NON scrollare,
+  // sennò entriamo in loop perpetuo come riportato dall'utente).
+  const lastContentHeightRef = useRef(0);
   const onTimelineScroll = useCallback((e: any) => {
     const y = e?.nativeEvent?.contentOffset?.y ?? 0;
     const layoutH = e?.nativeEvent?.layoutMeasurement?.height ?? 0;
@@ -3255,10 +3260,14 @@ export default function Taccuino() {
       setIsNearBottom(near);
     }
   }, []);
-  // Handler per scroll-to-bottom manuale (FAB tap)
+  // Handler per scroll-to-bottom manuale (FAB tap) — animato e idempotente
   const scrollToBottom = useCallback((animated = true) => {
     try {
       scrollRef.current?.scrollToEnd({ animated });
+      // Forziamo lo stato "near bottom" subito: previene flicker del FAB
+      // tra il tap e l'evento di scroll che lo nasconderebbe.
+      isNearBottomRef.current = true;
+      setIsNearBottom(true);
     } catch {}
   }, []);
 
@@ -3797,17 +3806,37 @@ export default function Taccuino() {
           )
         }
         style={styles.timeline}
-        contentContainerStyle={[styles.timelineContent, { paddingTop: Math.max(insets.top + 70, 130), paddingBottom: 220 + insets.bottom }]}
+        contentContainerStyle={[styles.timelineContent, {
+          paddingTop: Math.max(insets.top + 70, 130),
+          // === FIX FAB scroll-to-bottom (2026-06-22) ===
+          // In modalità text, l'utente vuole vedere l'ULTIMO messaggio di
+          // Koda subito sopra la barra di scrittura, senza un grosso vuoto.
+          // Il bottomBar in text mode è ~80px (input ~50 + padding ~28),
+          // quindi paddingBottom 100 + insets è la quantità giusta per
+          // far chiudere lo scrollToEnd con la bolla appena sopra l'input.
+          // In modalità voice il padding deve essere maggiore (220) per
+          // lasciare spazio all'orb-tap area.
+          paddingBottom: (inputMode === "text" ? 100 : 220) + insets.bottom,
+        }]}
         showsVerticalScrollIndicator={false}
         testID="timeline"
         onScroll={onTimelineScroll}
         scrollEventThrottle={32}
-        onContentSizeChange={() => {
-          // === FIX BOUNCE LOOP (2026-06-22) ===
-          // Quando il contenuto cresce (stream tokens, bolla nuova),
-          // ri-scrolliamo SOLO se l'utente era già vicino al fondo.
-          // animated:false evita intersezioni di animazioni.
-          if (isNearBottomRef.current) {
+        onContentSizeChange={(_w, h) => {
+          // === FIX LOOP DI SCROLL (2026-06-22 v2) ===
+          // Utente ha riportato che lo scroll riprende ad andare da solo
+          // dopo aver riaperto l'app (background→foreground). Causa:
+          // FlatList con removeClippedSubviews monta/smonta items al
+          // resume → onContentSizeChange spara più volte con altezze
+          // oscillanti → ogni evento triggerava scrollToEnd → loop.
+          //
+          // Fix: scrollToEnd SOLO se l'altezza è AUMENTATA di almeno
+          // 4px (= nuovo contenuto reale, non semplice reflow di
+          // virtualizzazione). Soglia 4px filtra le micro-oscillazioni
+          // di sub-pixel rounding senza perdere i nuovi messaggi.
+          const grew = h > lastContentHeightRef.current + 4;
+          lastContentHeightRef.current = h;
+          if (grew && isNearBottomRef.current) {
             try { scrollRef.current?.scrollToEnd({ animated: false }); } catch {}
           }
         }}
