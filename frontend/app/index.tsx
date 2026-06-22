@@ -1262,12 +1262,22 @@ export default function Taccuino() {
   }, [status, pulse]);
 
   // Auto-scroll to bottom on new entries
+  // === FIX BOUNCE LOOP (2026-06-22) ===
+  // Prima usavamo animated:true con setTimeout 80ms. Risultato: durante lo
+  // streaming dei messaggi (tone/content updates), più scrollToEnd animati
+  // si sovrapponevano misurando height vecchie → la timeline rimbalzava
+  // su/giù all'infinito. Ora:
+  //   - animated:false → snap istantaneo, no intersezioni di animazione
+  //   - solo se l'utente è già vicino al fondo (rispetta chi legge sopra)
+  //   - re-fired anche su onContentSizeChange per messaggi che crescono
   useEffect(() => {
-    setTimeout(() => {
+    if (!isNearBottomRef.current) return;
+    const id = setTimeout(() => {
       try {
-        scrollRef.current?.scrollToEnd({ animated: true });
+        scrollRef.current?.scrollToEnd({ animated: false });
       } catch {}
-    }, 80);
+    }, 30);
+    return () => clearTimeout(id);
   }, [timeline.length]);
 
   // === STATE WATCHDOG ===
@@ -3216,8 +3226,18 @@ export default function Taccuino() {
   const [scrollPeek, setScrollPeek] = useState(0);
   const lastScrollY = useRef(0);
   const scrollDecayTimer = useRef<any>(null);
+  // === SCROLL-TO-BOTTOM FAB STATE (Fix 2026-06-22) ===
+  // Tracciamo se l'utente è vicino al fondo della timeline. Se SÌ →
+  // auto-scroll sui nuovi messaggi (idempotente, animated:false → niente
+  // intersezione di animazioni → niente bounce loop). Se NO → mostriamo
+  // un FAB "↓" e NON forziamo lo scroll (rispettiamo l'utente che sta
+  // leggendo i messaggi vecchi).
+  const [isNearBottom, setIsNearBottom] = useState(true);
+  const isNearBottomRef = useRef(true);
   const onTimelineScroll = useCallback((e: any) => {
     const y = e?.nativeEvent?.contentOffset?.y ?? 0;
+    const layoutH = e?.nativeEvent?.layoutMeasurement?.height ?? 0;
+    const contentH = e?.nativeEvent?.contentSize?.height ?? 0;
     const delta = y - lastScrollY.current;
     lastScrollY.current = y;
     // Coda peeks UP when user scrolls up (looking back), DOWN when scrolling down
@@ -3227,6 +3247,19 @@ export default function Taccuino() {
     });
     if (scrollDecayTimer.current) clearTimeout(scrollDecayTimer.current);
     scrollDecayTimer.current = setTimeout(() => setScrollPeek(0), 350);
+    // distanza dal fondo: se >120px → mostra FAB, altrimenti nascondilo.
+    const distFromBottom = Math.max(0, contentH - (y + layoutH));
+    const near = distFromBottom < 120;
+    if (near !== isNearBottomRef.current) {
+      isNearBottomRef.current = near;
+      setIsNearBottom(near);
+    }
+  }, []);
+  // Handler per scroll-to-bottom manuale (FAB tap)
+  const scrollToBottom = useCallback((animated = true) => {
+    try {
+      scrollRef.current?.scrollToEnd({ animated });
+    } catch {}
   }, []);
 
   // === Caveat handwritten font — used for AI replies to evoke "diary
@@ -3769,6 +3802,15 @@ export default function Taccuino() {
         testID="timeline"
         onScroll={onTimelineScroll}
         scrollEventThrottle={32}
+        onContentSizeChange={() => {
+          // === FIX BOUNCE LOOP (2026-06-22) ===
+          // Quando il contenuto cresce (stream tokens, bolla nuova),
+          // ri-scrolliamo SOLO se l'utente era già vicino al fondo.
+          // animated:false evita intersezioni di animazioni.
+          if (isNearBottomRef.current) {
+            try { scrollRef.current?.scrollToEnd({ animated: false }); } catch {}
+          }
+        }}
         initialNumToRender={20}
         maxToRenderPerBatch={12}
         windowSize={9}
@@ -3813,6 +3855,41 @@ export default function Taccuino() {
           ) : null
         }
       />
+
+      {/* === SCROLL-TO-BOTTOM FAB (2026-06-22) ===
+          Visibile SOLO quando l'utente è scrollato verso l'alto (>120px
+          dal fondo). Permette di rientrare in fondo con un tap, senza
+          dover scorrere manualmente la conversazione. Posizionato
+          appena sopra la bottom bar, allineato a destra. */}
+      {!isNearBottom && timeline.length > 0 ? (
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.scrollFabContainer,
+            {
+              bottom: (inputMode === "text" ? 88 : 132) + Math.max(insets.bottom, 14)
+                + (kbHeight > 0 ? kbHeight - insets.bottom : 0),
+            },
+          ]}
+        >
+          <TouchableOpacity
+            onPress={() => scrollToBottom(true)}
+            activeOpacity={0.85}
+            style={[
+              styles.scrollFab,
+              {
+                backgroundColor: bubbleAccent.color || theme.primary,
+                borderColor: "rgba(255,255,255,0.18)",
+              },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Scorri in basso ai messaggi recenti"
+            testID="scroll-to-bottom-fab"
+          >
+            <Ionicons name="arrow-down" size={22} color={theme.primaryText || "#FFFFFF"} />
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       {/* Bottom area: voice OR text — chosen via settings */}
       <View
@@ -5579,6 +5656,25 @@ const makeStyles = (t: any) => StyleSheet.create({
     bottom: 0,
     paddingHorizontal: 20,
     backgroundColor: "transparent",
+  },
+  // === SCROLL-TO-BOTTOM FAB (2026-06-22) ===
+  scrollFabContainer: {
+    position: "absolute",
+    right: 18,
+    alignItems: "flex-end",
+  },
+  scrollFab: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 6,
   },
   // === FIX 2026-06 (richiesta utente: "Come chiami l'amico nero, mettilo bianco") ===
   // Lo stile styles.input non era definito → TextInput "Come chiami l'amico"

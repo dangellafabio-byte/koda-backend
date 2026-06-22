@@ -138,7 +138,17 @@ const HARD_CAP_MS = 60_000;          // absolute max recording length
 //   4) Safety: se mediana > -20 dBFS (probabilmente l'utente sta già
 //      parlando durante la calibrazione) → fallback su statiche, non
 //      ci fidiamo della misura.
-const CALIBRATION_MS = 400;              // primi 400ms = solo misura noise floor
+// === AGC WARM-UP (Fix 2026-06-22) ===
+// Quando attiviamo iOS Voice Processing (.voiceChat) o Android
+// voice_communication, l'Automatic Gain Control hardware impiega
+// ~500-800ms a stabilizzarsi. Se calibriamo il noiseFloor SUBITO,
+// catturiamo dB falsati dall'AGC ancora in transizione → noiseFloor
+// alto → soglia di silenzio mai raggiunta → la registrazione NON si
+// chiude al primo turno. Soluzione: ignorare i primi AGC_WARMUP_MS
+// di sample e iniziare la calibrazione solo dopo. La durata totale
+// di "calibrazione" diventa AGC_WARMUP_MS + CALIBRATION_MS.
+const AGC_WARMUP_MS = 700;               // tempo per stabilizzare AGC nativo
+const CALIBRATION_MS = 400;              // dopo warm-up: 400ms per misurare noise floor
 const ADAPTIVE_TRIGGER_DB = -38;         // floor > -38 → attiva adattivo
 const ADAPTIVE_SAFETY_ABORT_DB = -20;    // floor > -20 → utente sta parlando, NON usare adattivo
 const ADAPTIVE_OFFSET_DB = 6;            // silence = floor + 6dB
@@ -474,17 +484,25 @@ export async function startRecording(): Promise<Recorder> {
         return;
       }
 
-      // ============ CALIBRATION PHASE (Fix #1) ============
-      // Per i primi CALIBRATION_MS misuriamo il livello ambientale.
+      // ============ CALIBRATION PHASE (Fix #1 + AGC Warm-up 2026-06-22) ============
+      // Per i primi AGC_WARMUP_MS ignoriamo TUTTO (AGC nativo si stabilizza).
+      // Dopo: per CALIBRATION_MS misuriamo il livello ambientale.
       // Durante questa finestra il VAD NON considera ancora "speech start"
       // — vogliamo prima sapere quanto è rumoroso l'ambiente.
       if (!calibrationDone) {
         const elapsed = now - startedAt;
+        // Skip totalmente i sample durante il warm-up dell'AGC: l'AGC nativo
+        // (iOS .voiceChat / Android voice_communication) ha bisogno di
+        // 500-800ms per stabilizzarsi; durante quel periodo il metering
+        // è inaffidabile e farebbe credere ad un noise floor altissimo.
+        if (elapsed < AGC_WARMUP_MS) {
+          return;
+        }
         // Filtro: scarta sample fuori range (metering glitch / saturazione voce)
         if (db > -90 && db < -5) {
           calibrationSamples.push(db);
         }
-        if (elapsed >= CALIBRATION_MS) {
+        if (elapsed >= AGC_WARMUP_MS + CALIBRATION_MS) {
           calibrationDone = true;
           // Mediana = robusta a singoli picchi (es. tosse, click)
           let noiseFloor: number;
