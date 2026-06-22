@@ -8,8 +8,7 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "lint": "expo lint",
-    "postinstall": "patch-package"
+    "lint": "expo lint"
   },
   "dependencies": {
     "@babel/runtime": "^7.20.6",
@@ -20,7 +19,6 @@
     "@react-navigation/elements": "^2.3.8",
     "@react-navigation/native": "^7.1.6",
     "@react-navigation/native-stack": "^7.3.10",
-    "@siteed/audio-studio": "^3.2.1",
     "expo": "~54.0.35",
     "expo-apple-authentication": "~8.0.8",
     "expo-application": "~7.0.8",
@@ -53,7 +51,6 @@
     "expo-system-ui": "~6.0.9",
     "expo-updates": "~29.0.18",
     "expo-web-browser": "~15.0.11",
-    "onnxruntime-react-native": "^1.24.3",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
@@ -75,8 +72,6 @@
     "@types/react": "~19.1.0",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
-    "patch-package": "^8.0.1",
-    "postinstall-postinstall": "^2.1.0",
     "typescript": "~5.9.3"
   },
   "private": true,

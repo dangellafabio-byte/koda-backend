@@ -83,25 +83,6 @@
           "locationAlwaysAndWhenInUsePermission": "Sapere la tua città per risposte più contestuali"
         }
       ],
-      [
-        "@siteed/audio-studio",
-        {
-          "enableBackgroundAudio": false,
-          "enableNotifications": false,
-          "enablePhoneStateHandling": false,
-          "enableDeviceDetection": false,
-          "iosBackgroundModes": {
-            "useVoIP": false,
-            "useAudio": false,
-            "useProcessing": false,
-            "useLocation": false,
-            "useExternalAccessory": false
-          },
-          "iosConfig": {
-            "microphoneUsageDescription": "Per registrare la tua voce in streaming e darti risposte naturali"
-          }
-        }
-      ],
       "expo-asset"
     ],
     "experiments": {
