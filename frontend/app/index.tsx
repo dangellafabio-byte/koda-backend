@@ -1280,6 +1280,22 @@ export default function Taccuino() {
     return () => clearTimeout(id);
   }, [timeline.length]);
 
+  // === FIX KEYBOARD SHIFT (2026-06-22 v4) ===
+  // Quando la tastiera si apre/chiude o cambia altezza (suggerimenti,
+  // emoji panel, ecc.), il paddingBottom della timeline si aggiorna ma
+  // la posizione di scroll resta la stessa → l'ultimo messaggio finisce
+  // dietro l'input. Re-scroll se l'utente era vicino al fondo, così
+  // l'ultima bolla resta SEMPRE visibile sopra la barra di scrittura.
+  useEffect(() => {
+    if (!isNearBottomRef.current) return;
+    const id = setTimeout(() => {
+      try {
+        scrollRef.current?.scrollToEnd({ animated: false });
+      } catch {}
+    }, 50);
+    return () => clearTimeout(id);
+  }, [kbHeight, bottomBarHeight]);
+
   // === STATE WATCHDOG ===
   // Se la macchina a stati rimane in recording/transcribing/thinking/speaking
   // per più del massimo ragionevole, la ripristiniamo. CRITICO: in stato
@@ -3262,14 +3278,40 @@ export default function Taccuino() {
       setIsNearBottom(near);
     }
   }, []);
-  // Handler per scroll-to-bottom manuale (FAB tap) — animato e idempotente
-  const scrollToBottom = useCallback((animated = true) => {
+  // Handler per scroll-to-bottom manuale (FAB tap)
+  // === FIX SCROLL "A STEP" (2026-06-22 v4) ===
+  // Bug riportato: il FAB scrolla solo ~10 messaggi per tap invece di
+  // arrivare in fondo. Causa: FlatList virtualizzata con
+  // initialNumToRender=20 → scrollToEnd raggiunge solo l'ULTIMO item
+  // RENDERIZZATO, non l'ultimo reale. Ogni scroll trigger-a la render
+  // dei prossimi 10-12 items, e così via.
+  //
+  // Fix: scrolliamo a step ripetuti (3 round) lasciando alla FlatList
+  // il tempo di renderizzare i nuovi items tra un round e l'altro.
+  // Tutti animated:false → istantaneo, l'utente vede un solo "salto"
+  // pulito invece dello scroll a scatti.
+  const scrollToBottom = useCallback((_animated = true) => {
+    const fl = scrollRef.current;
+    if (!fl) return;
     try {
-      scrollRef.current?.scrollToEnd({ animated });
-      // Forziamo lo stato "near bottom" subito: previene flicker del FAB
-      // tra il tap e l'evento di scroll che lo nasconderebbe.
+      // Forza subito lo stato "near bottom" per nascondere il FAB
       isNearBottomRef.current = true;
       setIsNearBottom(true);
+      // Round 1: scroll iniziale (carica i prossimi items)
+      fl.scrollToEnd({ animated: false });
+      // Round 2: dopo un frame, i nuovi items sono renderizzati → ri-scroll
+      requestAnimationFrame(() => {
+        try { fl.scrollToEnd({ animated: false }); } catch {}
+        // Round 3: dopo 100ms gestisce bolle Caveat multi-riga che
+        // misurano l'altezza in modo asincrono
+        setTimeout(() => {
+          try { fl.scrollToEnd({ animated: false }); } catch {}
+        }, 100);
+        // Round 4: safety net per chat lunghe (>100 msg)
+        setTimeout(() => {
+          try { fl.scrollToEnd({ animated: false }); } catch {}
+        }, 300);
+      });
     } catch {}
   }, []);
 
@@ -3810,13 +3852,14 @@ export default function Taccuino() {
         style={styles.timeline}
         contentContainerStyle={[styles.timelineContent, {
           paddingTop: Math.max(insets.top + 70, 130),
-          // === FIX PADDING DINAMICO (2026-06-22 v3) ===
-          // Usiamo l'altezza REALE della bottom bar (misurata via onLayout
-          // sotto) + un piccolo margine (12px) per assicurare che l'ultima
-          // bolla non venga MAI tagliata dietro l'input "Scrivi qui...".
-          // Vale sia in modalità text (input ~50-80px) sia voice (orb ~200px)
-          // perché onLayout misura sempre il valore reale.
-          paddingBottom: bottomBarHeight + 12,
+          // === FIX PADDING DINAMICO KEYBOARD-AWARE (2026-06-22 v4) ===
+          // onLayout misura il bottomBar SOLO quando la View cambia
+          // dimensione, NON quando la tastiera la sposta in alto (è solo
+          // un marginBottom). Aggiungiamo kbHeight per coprire l'area
+          // dietro la tastiera quando aperta — così l'ultima bolla resta
+          // sempre sopra l'input qualunque sia lo stato della tastiera.
+          paddingBottom: bottomBarHeight + 12
+            + (kbHeight > 0 ? kbHeight - insets.bottom : 0),
         }]}
         showsVerticalScrollIndicator={false}
         testID="timeline"
