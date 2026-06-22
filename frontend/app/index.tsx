@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   ScrollView,
-  FlatList,
   TouchableOpacity,
   TextInput,
   ActivityIndicator,
@@ -27,6 +26,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { TouchableOpacity as GHTouchableOpacity } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
+import { FlashList } from "@shopify/flash-list";
 import * as ImagePicker from "expo-image-picker";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { LinearGradient } from "expo-linear-gradient";
@@ -657,7 +657,7 @@ export default function Taccuino() {
   // [KODA_TIMING] VOICE_END con [KODA_SUMMARY] = laborioso.
   const recordingStartedAtRef = useRef<number | null>(null);
   const lastRecordingDurationMsRef = useRef<number | null>(null);
-  const scrollRef = useRef<FlatList<any>>(null);
+  const scrollRef = useRef<FlashList<any>>(null);
   // === FIRST-TAP GATE (richiesto utente 2026-05-23) ===
   // Regola: ad ogni cold-start dell'app E ad ogni ritorno dal background,
   // la PRIMA attivazione del microfono deve essere fatta a mano (tap
@@ -3279,46 +3279,20 @@ export default function Taccuino() {
     }
   }, []);
   // Handler per scroll-to-bottom manuale (FAB tap)
-  // === FIX SCROLL "A STEP" (2026-06-22 v4) ===
-  // Bug riportato: il FAB scrolla solo ~10 messaggi per tap invece di
-  // arrivare in fondo. Causa: FlatList virtualizzata con
-  // initialNumToRender=20 → scrollToEnd raggiunge solo l'ULTIMO item
-  // RENDERIZZATO, non l'ultimo reale. Ogni scroll trigger-a la render
-  // dei prossimi 10-12 items, e così via.
-  //
-  // Fix: scrolliamo a step ripetuti (3 round) lasciando alla FlatList
-  // il tempo di renderizzare i nuovi items tra un round e l'altro.
-  // Tutti animated:false → istantaneo, l'utente vede un solo "salto"
-  // pulito invece dello scroll a scatti.
-  const scrollToBottom = useCallback((_animated = true) => {
+  // === FIX SCROLL "A STEP" — RISOLTO ALLA RADICE (2026-06-22 v5) ===
+  // Prima con FlatList: scrollToEnd raggiungeva solo l'ultimo item
+  // RENDERIZZATO (initialNumToRender=20) → ogni tap caricava 10-12 items
+  // → step-scrolling fastidioso.
+  // Ora con FlashList: cell recycling invece di mount/unmount.
+  // scrollToEnd raggiunge sempre il fondo reale in UN colpo. Niente
+  // workaround multi-round, niente setTimeout — basta una chiamata.
+  const scrollToBottom = useCallback((animated = true) => {
     const fl = scrollRef.current;
     if (!fl) return;
     try {
-      // Forza subito lo stato "near bottom" per nascondere il FAB
       isNearBottomRef.current = true;
       setIsNearBottom(true);
-      // Round 1: scroll iniziale (carica i prossimi items)
-      fl.scrollToEnd({ animated: false });
-      // Round 2: dopo un frame, i nuovi items sono renderizzati → ri-scroll
-      requestAnimationFrame(() => {
-        try { fl.scrollToEnd({ animated: false }); } catch {}
-        // Round 3: dopo 100ms gestisce bolle Caveat multi-riga che
-        // misurano l'altezza in modo asincrono
-        setTimeout(() => {
-          try { fl.scrollToEnd({ animated: false }); } catch {}
-        }, 100);
-        // Round 4: safety net per chat lunghe (>100 msg)
-        setTimeout(() => {
-          try { fl.scrollToEnd({ animated: false }); } catch {}
-        }, 300);
-        // Round 5: copre l'animazione tastiera iOS (~250ms) + jitter
-        // su device più lenti. Garantisce che se l'utente tap-a il FAB
-        // MENTRE la tastiera sta ancora aprendo, il padding finale è
-        // già applicato e l'ultimo round arriva DAVVERO in fondo.
-        setTimeout(() => {
-          try { fl.scrollToEnd({ animated: false }); } catch {}
-        }, 550);
-      });
+      fl.scrollToEnd({ animated });
     } catch {}
   }, []);
 
@@ -3781,11 +3755,17 @@ export default function Taccuino() {
           />
         </View>
       ) : null}
-      {/* === TIMELINE: FlatList (refactor performance giugno 2026) ===
-          Era una ScrollView che renderizzava TUTTI i messaggi → lenta e
-          memory-hungry su chat lunghe. FlatList virtualizza: renderizza
-          solo le righe visibili + finestra. scrollToEnd() resta identico. */}
-      <FlatList
+      {/* === TIMELINE: FlashList (refactor 2026-06-22 v5) ===
+          Migrato da FlatList a @shopify/flash-list per risolvere
+          definitivamente i bug di virtualizzazione:
+          - FAB "a step" (scrollToEnd fermava all'ultimo item renderizzato):
+            FlashList ricicla le celle invece di smontarle, quindi
+            scrollToEnd raggiunge sempre la fine reale in un colpo.
+          - Loop di scroll dopo riapertura app (onContentSizeChange
+            oscillante): niente più mount/unmount continui, niente
+            oscillazioni di altezza.
+          API identica a FlatList — nessuna feature visiva persa. */}
+      <FlashList
         ref={scrollRef}
         data={timelineWithSeparators}
         keyExtractor={(it) => (it.kind === "sep" ? it.key : it.entry.id)}
@@ -3856,8 +3836,10 @@ export default function Taccuino() {
             })()
           )
         }
-        style={styles.timeline}
-        contentContainerStyle={[styles.timelineContent, {
+        getItemType={(it) =>
+          it.kind === "sep" ? "sep" : it.kind === "msg-mock" ? "mock" : "msg"
+        }
+        contentContainerStyle={{
           paddingTop: Math.max(insets.top + 70, 130),
           // === FIX PADDING DINAMICO KEYBOARD-AWARE (2026-06-22 v4) ===
           // onLayout misura il bottomBar SOLO quando la View cambia
@@ -3867,15 +3849,12 @@ export default function Taccuino() {
           // sempre sopra l'input qualunque sia lo stato della tastiera.
           paddingBottom: bottomBarHeight + 12
             + (kbHeight > 0 ? kbHeight - insets.bottom : 0),
-        }]}
+          paddingHorizontal: 16,
+        }}
         showsVerticalScrollIndicator={false}
         testID="timeline"
         onScroll={onTimelineScroll}
         scrollEventThrottle={32}
-        initialNumToRender={20}
-        maxToRenderPerBatch={12}
-        windowSize={9}
-        removeClippedSubviews={Platform.OS !== "web"}
         ListEmptyComponent={
           <View style={styles.emptyState}>
             {/* === FIX DOPPIO ECLISSI ===
