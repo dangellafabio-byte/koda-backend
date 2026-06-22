@@ -1271,10 +1271,20 @@ export default function Taccuino() {
   //   - solo se l'utente è già vicino al fondo (rispetta chi legge sopra)
   //   - re-fired anche su onContentSizeChange per messaggi che crescono
   useEffect(() => {
-    if (!isNearBottomRef.current) return;
+    // === FIX #4 FORCE SCROLL ON USER SEND (2026-06-22 v6) ===
+    // Se siamo nella finestra "force scroll" (utente ha appena inviato),
+    // scrolla COMUNQUE in fondo anche se l'utente era scrollato indietro.
+    // Altrimenti rispetta isNearBottom (= solo scroll passivo).
+    const inForceWindow = Date.now() < forceScrollUntilRef.current;
+    if (!inForceWindow && !isNearBottomRef.current) return;
     const id = setTimeout(() => {
       try {
         scrollRef.current?.scrollToEnd({ animated: false });
+        // Se eravamo in force-window, ora siamo certi di essere in fondo
+        if (inForceWindow) {
+          isNearBottomRef.current = true;
+          setIsNearBottom(true);
+        }
       } catch {}
     }, 30);
     return () => clearTimeout(id);
@@ -1383,12 +1393,23 @@ export default function Taccuino() {
 
   const speakIfEnabled = useCallback(
     async (text: string, tone: TimelineEntry["tone"], opts?: { fromText?: boolean }) => {
+      // === FIX #5 STATUS STUCK ON THINKING (2026-06-22 v6) ===
+      // Bug: dopo che Koda ha terminato la risposta, status restava su
+      // "thinking" → TypingDots continuavano a pulsare → dopo 25s il
+      // watchdog faceva apparire un finto errore "Si è bloccato".
+      // Causa: nei due early-return sotto (fromText o voice_response off)
+      // non resettavamo lo status, lasciandolo a "thinking" dal sendText.
+      // Fix: marca esplicitamente idle prima di uscire.
       // FIX 2026-07: se la richiesta proviene dalla tastiera (input testo),
       // NON parlare. L'utente probabilmente è in un contesto dove non vuole
       // audio (notte, pubblico). Risponde solo a video.
-      if (opts?.fromText) return;
+      if (opts?.fromText) {
+        setStatus("idle");
+        return;
+      }
       if (!profile?.settings.voice_response) {
         // PIANO A: auto-reopen del mic disabilitato. L'utente tappa per parlare.
+        setStatus("idle");
         return;
       }
       const lang = profile?.language || "it";
@@ -1659,6 +1680,12 @@ export default function Taccuino() {
         confessional: confessionalMode || undefined,
         fortezza: isFortezza || undefined,
       };
+      // === FIX #4 (2026-06-22 v6) ===
+      // Marca l'inizio di una "force scroll window": il messaggio utente
+      // E la risposta successiva (anche se tarda 10-15s) devono SEMPRE
+      // far scrollare in fondo, anche se l'utente stava rileggendo i
+      // messaggi vecchi. Override del check "isNearBottom" passivo.
+      requestForceScroll();
       setTimeline((prev) => [...prev, optimistic]);
       setStatus("thinking");
       try {
@@ -2758,13 +2785,20 @@ export default function Taccuino() {
   // Debounce per evitare doppio-invio quando passiamo a onPressIn (vedi
   // commento sul TouchableOpacity del send button).
   const lastSendRef = useRef<number>(0);
-  const sendTextFromBox = () => {
+  const sendTextFromBox = (overrideText?: string) => {
     // Anti-doppio-tap: ignora i tentativi a meno di 300ms l'uno dall'altro.
     const now = Date.now();
     if (now - lastSendRef.current < 300) return;
     lastSendRef.current = now;
-    if (!textInput.trim()) return;
-    const txt = textInput;
+    // === FIX ENTER DA TASTIERA (2026-06-22 v6) ===
+    // Prima leggevamo `textInput` via closure dopo un setTimeout(0). Il
+    // closure ha il valore di un render OLD, e in combinazione con
+    // setTextInput(clean) prima del setTimeout, su iOS multiline poteva
+    // succedere che il send non partisse o partisse col valore sbagliato.
+    // Ora accettiamo un override opzionale: l'handler dell'Enter passa
+    // direttamente la stringa pulita, senza dipendere dallo state.
+    const txt = (overrideText !== undefined ? overrideText : textInput);
+    if (!txt.trim()) return;
     setTextInput("");
     Keyboard.dismiss();
     // FIX 2026-07: marca come "from text" → Koda risponde SOLO in testo,
@@ -3106,7 +3140,16 @@ export default function Taccuino() {
     try {
       const langTag = profile?.language === "it" ? "it-IT" : profile?.language || "it-IT";
       await unlockSpeech();
-      await SpeechMod.speak(entry.voice_text || entry.text, {
+      // === FIX #1 REPLAY TTS (2026-06-22 v6) ===
+      // Prima passavamo direttamente entry.voice_text (o entry.text) al
+      // TTS. Su messaggi vecchi o con race condition col backend, il
+      // marker grezzo [TONE:warm] o gli audio tags [sigh] potevano essere
+      // ancora nel testo → TTS leggeva ad alta voce "tono caldo".
+      // Ora puliamo SEMPRE prima del TTS, identicamente a quanto fatto
+      // per il display in chat. stripDisplayTags rimuove TONE, [audio],
+      // *azioni*, (parentesi descrittive).
+      const ttsText = stripDisplayTags(entry.voice_text || entry.text);
+      await SpeechMod.speak(ttsText, {
         language: langTag,
         tone: (entry.tone as Tone) || "neutral",
       });
@@ -3250,6 +3293,18 @@ export default function Taccuino() {
   // leggendo i messaggi vecchi).
   const [isNearBottom, setIsNearBottom] = useState(true);
   const isNearBottomRef = useRef(true);
+  // === FORCE SCROLL WINDOW (Fix #4 — 2026-06-22 v6) ===
+  // Quando l'utente invia un messaggio (o riceve una risposta dopo un
+  // suo invio), VUOLE vedere il nuovo messaggio anche se stava
+  // scrollando indietro a rileggere. Apriamo una "finestra" di 15s
+  // dall'invio durante la quale ogni setTimeline forza lo scroll in
+  // fondo, ignorando il check isNearBottom (che vale solo per i
+  // messaggi "passivi", es. risposta inattesa quando l'utente non sta
+  // scrivendo). La finestra si chiude appena status → idle.
+  const forceScrollUntilRef = useRef<number>(0);
+  const requestForceScroll = useCallback(() => {
+    forceScrollUntilRef.current = Date.now() + 15000;
+  }, []);
   // === MISURAZIONE BOTTOM BAR (Fix 2026-06-22 v3) ===
   // Misuriamo l'altezza REALE della bottom bar tramite onLayout invece di
   // indovinarla. Così l'ultimo messaggio in fondo finisce ESATTAMENTE
@@ -3915,7 +3970,7 @@ export default function Taccuino() {
             },
           ]}
         >
-          <TouchableOpacity
+          <GHTouchableOpacity
             onPress={() => scrollToBottom(true)}
             activeOpacity={0.85}
             style={[
@@ -3930,7 +3985,7 @@ export default function Taccuino() {
             testID="scroll-to-bottom-fab"
           >
             <Ionicons name="arrow-down" size={22} color={theme.primaryText || "#FFFFFF"} />
-          </TouchableOpacity>
+          </GHTouchableOpacity>
         </View>
       ) : null}
 
@@ -3974,12 +4029,14 @@ export default function Taccuino() {
                   if (t.endsWith("\n")) {
                     const clean = t.replace(/\n+$/, "");
                     if (clean.trim()) {
-                      setTextInput(clean);
-                      // Usa setTimeout per garantire che lo state sia
-                      // aggiornato prima dell'invio.
-                      setTimeout(() => sendTextFromBox(), 0);
+                      // === FIX ENTER (v6) ===
+                      // Passiamo `clean` DIRETTAMENTE a sendTextFromBox
+                      // come override, evitando il race condition tra
+                      // setTextInput async e setTimeout 0 che leggeva il
+                      // valore vecchio via closure.
+                      sendTextFromBox(clean);
                     } else {
-                      setTextInput(clean);
+                      setTextInput("");
                     }
                     return;
                   }
@@ -4045,10 +4102,9 @@ export default function Taccuino() {
                       if (t.endsWith("\n")) {
                         const clean = t.replace(/\n+$/, "");
                         if (clean.trim()) {
-                          setTextInput(clean);
-                          setTimeout(() => sendTextFromBox(), 0);
+                          sendTextFromBox(clean);
                         } else {
-                          setTextInput(clean);
+                          setTextInput("");
                         }
                         return;
                       }

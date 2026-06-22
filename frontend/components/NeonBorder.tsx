@@ -14,6 +14,7 @@
  */
 import React, { useEffect, useMemo, useRef } from "react";
 import { StyleSheet, Animated, Easing, Platform, useWindowDimensions } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Rect } from "react-native-svg";
 
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
@@ -56,8 +57,18 @@ const STATE_COLORS: Record<NeonBorderStatus, string> = {
 // per essere una presenza costante senza distrarre.
 const SLOW_CYCLE_MS = 7000;
 
-// Display border radius (matcha gli angoli iPhone moderni)
-const DISPLAY_RADIUS = 56;
+// Display border radius:
+// === FIX #6 (2026-06-22 v6) — Adattamento dinamico al device ===
+// Prima usavamo `DISPLAY_RADIUS = 56` hardcoded. Su iPhone con notch/Dynamic
+// Island (insets.top ~47-59) il valore funzionava, ma su device con
+// schermo a spigoli più dritti (iPhone SE, iPad, Android vari) il bordo
+// risultava "troppo arrotondato" e non seguiva i veri angoli del display.
+//
+// Heuristica: il radius reale del display correla con l'altezza dell'inset
+// superiore. Notch/Island ≥ 30px → device con corner radius pieno (47-55).
+// Notch piccolo o assente → schermo squadrato (~14px o meno).
+// Calcoliamo runtime via useSafeAreaInsets per essere universali.
+const DEFAULT_RADIUS = 47;
 
 export default function NeonBorder({
   status,
@@ -67,6 +78,21 @@ export default function NeonBorder({
   thickness?: number;
 }) {
   const { width: W, height: H } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  // Stima del corner radius reale del display:
+  //   insets.top ≥ 50 → Dynamic Island (iPhone 14 Pro+)         → ~55
+  //   insets.top ≥ 40 → notch standard (iPhone X..13)           → ~47
+  //   insets.top ≥ 30 → notch piccolo / Android moderno         → ~38
+  //   insets.top ≥ 24 → status bar normale (Android tablet)     → ~18
+  //   altro           → schermo squadrato (iPhone SE, vecchi)   → ~14
+  const dynamicRadius =
+    insets.top >= 50 ? 55 :
+    insets.top >= 40 ? 47 :
+    insets.top >= 30 ? 38 :
+    insets.top >= 24 ? 18 :
+    14;
+  // Su web/tablet usiamo un valore conservativo
+  const DISPLAY_RADIUS = Platform.OS === "web" ? 24 : dynamicRadius;
   const color = STATE_COLORS[status];
 
   // ============ PULSAZIONE LENTA (tutti gli stati tranne thinking) ============
@@ -108,7 +134,7 @@ export default function NeonBorder({
   const perimeter = useMemo(() => {
     const r = DISPLAY_RADIUS;
     return 2 * (W + H) - 8 * r + 2 * Math.PI * r;
-  }, [W, H]);
+  }, [W, H, DISPLAY_RADIUS]);
   const headLen = Math.max(40, perimeter * 0.06);
   const trailLen = Math.max(120, perimeter * 0.30);
   const headDashArray = `${headLen} ${perimeter}`;

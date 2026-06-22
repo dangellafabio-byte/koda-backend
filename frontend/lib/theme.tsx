@@ -103,25 +103,29 @@ const GIORNO: Palette = {
   name: "giorno",
   label: "Chiaro",
   emoji: "☀️",
-  // === FIX 2026-06 v6 (utente: "fai più grigio") ===
-  // Grigio vero, neutro-freddo appena ammorbidito: via il sottotono sabbia
-  // della v5. L'oro dell'Orb risalta per contrasto sul grigio neutro.
+  // === FIX #7 (2026-06-22 v7) — Contrasto con l'alone sabbia ===
+  // L'utente ha segnalato che il vecchio bg `#DBDBD9` era troppo simile
+  // al colore sabbia/champagne dell'alone idle dell'orb (#D4B896 in
+  // NeonBorder STATE_COLORS.idle) → il contrasto si perdeva e l'alone
+  // sembrava "sparire" sullo sfondo. Il nuovo `#BFC2BD` è uno "stone
+  // zen" cool-neutro che fa risaltare per contrasto il warm-tone della
+  // sabbia. Coerente con l'estetica zen del prodotto.
   isDark: false,
-  bg: "#DBDBD9",
-  surface: "#E9E9E7",
+  bg: "#BFC2BD",
+  surface: "#D6D9D2",
   surfaceAlt: "rgba(0,0,0,0.05)",
   border: "rgba(40,40,36,0.16)",
   divider: "rgba(40,40,36,0.11)",
   text: "#262623",
   textMuted: "#54544F",
-  textDim: "#828279",
+  textDim: "#7A7A72",
   primary: "#0E7C7B",
   primaryText: "#FFFFFF",
   primarySoftBg: "rgba(14,124,123,0.10)",
   primarySoftBorder: "rgba(14,124,123,0.45)",
   userBubble: "#0E7C7B",
   userBubbleText: "#FFFFFF",
-  aiBubbleBg: "#E9E9E7",
+  aiBubbleBg: "#D6D9D2",
   aiBubbleBorder: "rgba(40,40,36,0.16)",
   aiBubbleText: "#262623",
   success: "#16A34A",
