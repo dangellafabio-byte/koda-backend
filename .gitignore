@@ -99,3 +99,6 @@ credentials.json
 # === Archive directory: file morti tenuti per reference futura ===
 _archive/
 **/_archive/
+.env
+.env.*
+*.env
