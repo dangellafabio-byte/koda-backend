@@ -3234,11 +3234,13 @@ export default function Taccuino() {
   // leggendo i messaggi vecchi).
   const [isNearBottom, setIsNearBottom] = useState(true);
   const isNearBottomRef = useRef(true);
-  // Tracking dell'altezza del contenuto per distinguere "contenuto cresciuto"
-  // (nuovo messaggio → auto-scroll) da "contenuto riassestato" (FlatList
-  // virtualizzazione, riapertura app, layout reflow → NON scrollare,
-  // sennò entriamo in loop perpetuo come riportato dall'utente).
-  const lastContentHeightRef = useRef(0);
+  // === MISURAZIONE BOTTOM BAR (Fix 2026-06-22 v3) ===
+  // Misuriamo l'altezza REALE della bottom bar tramite onLayout invece di
+  // indovinarla. Così l'ultimo messaggio in fondo finisce ESATTAMENTE
+  // sopra la barra di scrittura (niente più bolle tagliate dietro
+  // l'input, come negli screen dell'utente). Default 140 = stima sicura
+  // per il primo render, prima che onLayout si sia fired.
+  const [bottomBarHeight, setBottomBarHeight] = useState(140);
   const onTimelineScroll = useCallback((e: any) => {
     const y = e?.nativeEvent?.contentOffset?.y ?? 0;
     const layoutH = e?.nativeEvent?.layoutMeasurement?.height ?? 0;
@@ -3808,38 +3810,18 @@ export default function Taccuino() {
         style={styles.timeline}
         contentContainerStyle={[styles.timelineContent, {
           paddingTop: Math.max(insets.top + 70, 130),
-          // === FIX FAB scroll-to-bottom (2026-06-22) ===
-          // In modalità text, l'utente vuole vedere l'ULTIMO messaggio di
-          // Koda subito sopra la barra di scrittura, senza un grosso vuoto.
-          // Il bottomBar in text mode è ~80px (input ~50 + padding ~28),
-          // quindi paddingBottom 100 + insets è la quantità giusta per
-          // far chiudere lo scrollToEnd con la bolla appena sopra l'input.
-          // In modalità voice il padding deve essere maggiore (220) per
-          // lasciare spazio all'orb-tap area.
-          paddingBottom: (inputMode === "text" ? 100 : 220) + insets.bottom,
+          // === FIX PADDING DINAMICO (2026-06-22 v3) ===
+          // Usiamo l'altezza REALE della bottom bar (misurata via onLayout
+          // sotto) + un piccolo margine (12px) per assicurare che l'ultima
+          // bolla non venga MAI tagliata dietro l'input "Scrivi qui...".
+          // Vale sia in modalità text (input ~50-80px) sia voice (orb ~200px)
+          // perché onLayout misura sempre il valore reale.
+          paddingBottom: bottomBarHeight + 12,
         }]}
         showsVerticalScrollIndicator={false}
         testID="timeline"
         onScroll={onTimelineScroll}
         scrollEventThrottle={32}
-        onContentSizeChange={(_w, h) => {
-          // === FIX LOOP DI SCROLL (2026-06-22 v2) ===
-          // Utente ha riportato che lo scroll riprende ad andare da solo
-          // dopo aver riaperto l'app (background→foreground). Causa:
-          // FlatList con removeClippedSubviews monta/smonta items al
-          // resume → onContentSizeChange spara più volte con altezze
-          // oscillanti → ogni evento triggerava scrollToEnd → loop.
-          //
-          // Fix: scrollToEnd SOLO se l'altezza è AUMENTATA di almeno
-          // 4px (= nuovo contenuto reale, non semplice reflow di
-          // virtualizzazione). Soglia 4px filtra le micro-oscillazioni
-          // di sub-pixel rounding senza perdere i nuovi messaggi.
-          const grew = h > lastContentHeightRef.current + 4;
-          lastContentHeightRef.current = h;
-          if (grew && isNearBottomRef.current) {
-            try { scrollRef.current?.scrollToEnd({ animated: false }); } catch {}
-          }
-        }}
         initialNumToRender={20}
         maxToRenderPerBatch={12}
         windowSize={9}
@@ -3896,7 +3878,10 @@ export default function Taccuino() {
           style={[
             styles.scrollFabContainer,
             {
-              bottom: (inputMode === "text" ? 88 : 132) + Math.max(insets.bottom, 14)
+              // === POSIZIONE FAB DINAMICA (Fix 2026-06-22 v3) ===
+              // Si posiziona sempre 12px sopra la barra di scrittura
+              // misurata realmente (niente più valori magici 88/132).
+              bottom: bottomBarHeight + 12
                 + (kbHeight > 0 ? kbHeight - insets.bottom : 0),
             },
           ]}
@@ -3922,6 +3907,16 @@ export default function Taccuino() {
 
       {/* Bottom area: voice OR text — chosen via settings */}
       <View
+        onLayout={(e) => {
+          // === MISURAZIONE BOTTOM BAR (Fix 2026-06-22 v3) ===
+          // Misuriamo l'altezza reale (input + padding + safe area + errori)
+          // così il paddingBottom della FlatList è SEMPRE corretto e
+          // l'ultima bolla non finisce mai dietro la barra di scrittura.
+          const h = e?.nativeEvent?.layout?.height;
+          if (typeof h === "number" && h > 0 && Math.abs(h - bottomBarHeight) > 2) {
+            setBottomBarHeight(h);
+          }
+        }}
         style={[
           styles.bottomBar,
           // === FIX TASTIERA (richiesta utente 2026-06) ===
