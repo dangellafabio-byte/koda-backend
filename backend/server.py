@@ -2625,35 +2625,14 @@ async def api_location_context(payload: LocationContextIn):
 # (P1 Fase 1 Fabio 2026-06-20 — Neural VAD PoC)
 # ============================================================
 
-_SILERO_VAD_PATH = Path(__file__).parent / "static_assets" / "silero_vad.onnx"
-
-
-@api_router.get("/assets/silero_vad.onnx")
-async def api_get_silero_vad():
-    """Restituisce il modello Silero VAD v5 (Apache 2.0).
-
-    Il client lo scarica UNA volta al primo uso e lo cacha in
-    documentDirectory locale. Successivi avvi non toccano la rete.
-
-    File: 2.3MB, ONNX ir_version=8, opset=16.
-    Inputs: input (audio chunk), state (LSTM hidden), sr (sample rate)
-    Outputs: output (speech probability [0..1]), stateN (new state)
-
-    Compatibile con onnxruntime-react-native 1.24.x.
-    """
-    from fastapi.responses import FileResponse
-    if not _SILERO_VAD_PATH.exists():
-        raise HTTPException(status_code=404, detail="silero_vad.onnx not found on server")
-    return FileResponse(
-        path=str(_SILERO_VAD_PATH),
-        media_type="application/octet-stream",
-        filename="silero_vad.onnx",
-        headers={
-            # Cache-Control: il file è immutable (versione modello fissata).
-            # 1 anno di cache + immutable hint per i CDN.
-            "Cache-Control": "public, max-age=31536000, immutable",
-        },
-    )
+# ============================================================
+# === SILERO VAD ENDPOINT RIMOSSO (Fabio 2026-06-21 v15) ===
+# L'endpoint /api/assets/silero_vad.onnx serviva il modello ONNX al client
+# RN per inference on-device. Approccio abbandonato (vedi Plan C nel
+# README di progetto), file ONNX spostati in _archive/. L'endpoint
+# rimosso perché i file .onnx nel progetto attivavano gli scanner ML
+# del pipeline Emergent → BLOCKER deploy.
+# ============================================================
 
 
 # ============================================================

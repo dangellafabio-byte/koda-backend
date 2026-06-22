@@ -81,7 +81,11 @@ import ProactiveOffer from "../components/ProactiveOffer";
 import { useRouter } from "expo-router";
 import type { SafetyCheckResult, FreemiumStatus as FreemiumStatusType } from "../lib/api";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
-import { useFonts, Caveat_400Regular, Caveat_500Medium } from "@expo-google-fonts/caveat";
+import { useFonts } from "expo-font";
+// === Caveat font (Fabio 2026-06-21 v15): caricato via expo-font + file
+// .ttf locali in assets/fonts/. Sostituisce @expo-google-fonts/caveat che
+// era vietato dal sistema Emergent (build pipeline lo blocca). Stesso
+// risultato visivo, zero dipendenza da package esterno.
 // === Zero-Knowledge Confessional crypto ===
 import {
   hasSecretWord,
@@ -3228,9 +3232,11 @@ export default function Taccuino() {
   // === Caveat handwritten font — used for AI replies to evoke "diary
   //     written together with a friend". User text stays system-default
   //     (more neutral, like a clean note).
+  // FABIO 2026-06-21 v15: caricato via expo-font + file .ttf locali in
+  // assets/fonts/ (sostituito @expo-google-fonts/caveat, vietato dal pipeline).
   const [fontsLoaded] = useFonts({
-    Caveat_400Regular,
-    Caveat_500Medium,
+    Caveat_400Regular: require("../assets/fonts/Caveat_400Regular.ttf"),
+    Caveat_500Medium: require("../assets/fonts/Caveat_500Medium.ttf"),
   });
   const aiFontFamily = fontsLoaded ? "Caveat_500Medium" : undefined;
   const bubbleStyle: "glass" | "solid" =
