@@ -873,7 +873,15 @@ async def transcribe_deepgram(audio: UploadFile = File(...), language: str = For
             f"chars={len(cleaned)} stt_ms={_kt_dg_ms}"
         )
         logger.info(f"[KODA_TIMING] DEEPGRAM_END deepgram_ms={_kt_dg_ms} chars={len(cleaned)}")
-        return {"text": cleaned}
+        # === AUDIO HONESTY (Fabio 2026-06-23) ===
+        # Ritorniamo la confidence di Deepgram al client. Permetterà a Koda
+        # di riconoscere apertamente quando l'audio è di bassa qualità
+        # (ambiente rumoroso) invece di indovinare silenziosamente.
+        # < 0.7 = ambiguo → Koda chiede dove si trova l'utente.
+        return {
+            "text": cleaned,
+            "confidence": dg_confidence if dg_confidence is not None else 1.0,
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -7881,6 +7889,7 @@ async def _fast_pipeline_task(
     ephemeral: bool,
     audio_duration_ms: Optional[int],
     emit: Optional[Any] = None,
+    stt_confidence: Optional[float] = None,
 ):
     """Background task: streamma Claude con prompt condensato, frase per
     frase chiama ElevenLabs Flash v2.5, salva ogni MP3 come token e
@@ -7944,6 +7953,45 @@ async def _fast_pipeline_task(
         history_str = _format_history_for_llm(recent) if recent else ""
 
         sys_prompt = _build_fast_system_prompt(profile, recent)
+
+        # === AUDIO HONESTY (Fabio 2026-06-23) ============================
+        # Quando la trascrizione STT ha confidenza bassa (Deepgram conf <0.7),
+        # l'audio è probabilmente di bassa qualità (ambiente rumoroso:
+        # macchina, esterno, vicino a macchinari, finestra aperta, ecc.).
+        # Invece di indovinare silenziosamente (e fallire), Koda si comporta
+        # come un amico ONESTO al telefono: riconosce apertamente il problema,
+        # chiede dove si trova l'utente, adatta il tono.
+        # Soglia: 0.7 lascia passare la stragrande maggioranza delle frasi
+        # in italiano (conf tipica 0.85-0.99); scatta solo su audio davvero
+        # ambiguo. Per ora SOLO comportamento conversazionale — la memoria
+        # del contesto attraverso turni la affronteremo dopo (Fase 2).
+        if stt_confidence is not None and stt_confidence < 0.7:
+            sys_prompt = sys_prompt + (
+                f"\n\n━━━ ⚠️ AUDIO DI BASSA QUALITÀ RILEVATO ━━━\n"
+                f"La trascrizione STT di questo turno ha confidenza bassa "
+                f"({stt_confidence:.2f} su 1.0). Probabilmente l'utente è in "
+                f"ambiente rumoroso (macchina in marcia, esterno, vicino a "
+                f"macchinari, vento, ecc.) e/o ha parlato indistintamente.\n"
+                f"COSA DEVI FARE — solo SE quello che 'hai sentito' è "
+                f"davvero strano/confuso (frase senza senso, parole scollegate):\n"
+                f"  1. NON fingere di aver capito. Sii ONESTO con calore "
+                f"fraterno: 'eh aspetta, non ti ho beccato benissimo' / "
+                f"'mh, c'è un po' di casino di sottofondo, ho perso un pezzo'.\n"
+                f"  2. Chiedi DOVE si trova in modo NATURALE, come farebbe un "
+                f"amico al telefono: 'dove sei adesso?', 'sei in macchina?', "
+                f"'all'aperto?'. SENZA dare l'aria del sistema informatico.\n"
+                f"  3. NON ripetere 'puoi ripetere?' come un robot. Massimo "
+                f"una volta, poi vai avanti con quello che hai capito.\n"
+                f"SE invece la frase ha comunque senso (anche se incerta), "
+                f"rispondi normalmente — la confidenza bassa NON va sempre "
+                f"esposta all'utente, solo quando ci aiuta davvero ad essere "
+                f"più precisi.\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            )
+            logger.info(
+                f"[AUDIO_HONESTY] confidence={stt_confidence:.2f} → "
+                f"injected honesty directive (text={text[:80]!r})"
+            )
 
         # === MEMORIA BIOGRAFICA: inietta i fatti chiave noti su Fabio ===
         # Vengono dai turni precedenti (regex extraction). 1 chiamata Mongo
@@ -8568,6 +8616,12 @@ class FastStartRequest(BaseModel):
     text: str
     ephemeral: bool = False
     audio_duration_ms: Optional[int] = None
+    # === AUDIO HONESTY (Fabio 2026-06-23) ============================
+    # Confidence Deepgram 0-1. Se < 0.7 il backend inietta una direttiva
+    # nel system prompt che porta Koda a riconoscere apertamente l'audio
+    # rumoroso e chiedere contesto invece di indovinare. Backward-compat:
+    # se None il comportamento è identico a prima (nessuna direttiva).
+    stt_confidence: Optional[float] = None
 
 
 @api_router.post("/converse-fast/start")
@@ -8597,6 +8651,7 @@ async def api_converse_fast_start(req: FastStartRequest):
         text=text,
         ephemeral=bool(req.ephemeral),
         audio_duration_ms=req.audio_duration_ms,
+        stt_confidence=req.stt_confidence,
     ))
 
     # filler_token: sempre None (campo mantenuto per compatibilità API col
@@ -8717,6 +8772,13 @@ async def _converse_ws_handler(websocket: WebSocket):
                 audio_duration_ms = int(audio_duration_ms)
             except (TypeError, ValueError):
                 audio_duration_ms = None
+        # === AUDIO HONESTY (Fabio 2026-06-23) — anche su WS ===
+        stt_confidence = req.get("stt_confidence")
+        if stt_confidence is not None:
+            try:
+                stt_confidence = float(stt_confidence)
+            except (TypeError, ValueError):
+                stt_confidence = None
 
         await _ensure_fast_session_indexes()
         session_id = uuid.uuid4().hex
@@ -8763,6 +8825,7 @@ async def _converse_ws_handler(websocket: WebSocket):
                 ephemeral=ephemeral,
                 audio_duration_ms=audio_duration_ms,
                 emit=_emit,
+                stt_confidence=stt_confidence,
             )
         except Exception as e:
             logger.error(f"[ws {session_id[:8]}] pipeline crashed: {e}")

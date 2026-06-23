@@ -676,6 +676,13 @@ export default function Taccuino() {
   // [KODA_TIMING] VOICE_END con [KODA_SUMMARY] = laborioso.
   const recordingStartedAtRef = useRef<number | null>(null);
   const lastRecordingDurationMsRef = useRef<number | null>(null);
+  // === AUDIO HONESTY (Fabio 2026-06-23) ============================
+  // Confidence Deepgram dell'ULTIMA trascrizione completata. Viene
+  // propagata al backend nella chiamata /converse-fast/start (vedi
+  // SpeechMod.fastConverse(..., sttConfidence: ...)). Se < 0.7 il
+  // backend inietterà una direttiva nel prompt → Koda si comporta
+  // come amico onesto: riconosce l'audio rumoroso, chiede contesto.
+  const lastSttConfidenceRef = useRef<number | null>(null);
   const scrollRef = useRef<FlashList<any>>(null);
   // === FIRST-TAP GATE (richiesto utente 2026-05-23) ===
   // Regola: ad ogni cold-start dell'app E ad ogni ritorno dal background,
@@ -2025,6 +2032,7 @@ export default function Taccuino() {
                   const wsResult = await SpeechMod.fastConverseWS(txt, {
                     ephemeral: confessionalMode,
                     timeoutMs: 1500,
+                    sttConfidence: lastSttConfidenceRef.current ?? undefined,
                     onAudioStart: () => {
                       speakingStarted = true;
                       clearTimeout(watchdog);
@@ -2077,6 +2085,7 @@ export default function Taccuino() {
               return await SpeechMod.fastConverse(txt, {
                 ephemeral: confessionalMode,
                 recordingDurationMs: lastRecordingDurationMsRef.current ?? undefined,
+                sttConfidence: lastSttConfidenceRef.current ?? undefined,
                 onAudioStart: () => {
                   speakingStarted = true;
                   clearTimeout(watchdog);
@@ -2719,6 +2728,17 @@ export default function Taccuino() {
       if (!r.ok) throw new Error("transcribe");
       const data = await r.json();
       const txt = (data.text || "").trim();
+      // === AUDIO HONESTY (Fabio 2026-06-23) =====================
+      // Catturiamo la confidence Deepgram per propagarla al backend nella
+      // chiamata /converse-fast/start. Se < 0.7 il backend inietterà una
+      // direttiva nel system prompt → Koda riconosce apertamente l'audio
+      // rumoroso e chiede dove si trova l'utente invece di indovinare.
+      const _stt_confidence: number | null =
+        typeof data?.confidence === "number" ? data.confidence : null;
+      lastSttConfidenceRef.current = _stt_confidence;
+      if (_stt_confidence !== null) {
+        console.log(`[AUDIO_HONESTY_CLIENT] stt_confidence=${_stt_confidence.toFixed(3)}`);
+      }
       // === KODA_STT CLIENT LOG (sprint giugno 2026 — RCA "Koda parla spagnolo") ===
       // Il backend logga [KODA_STT] con text+lang+confidence, MA quei log
       // sono Python (server-side) e l'utente non li vede su /diagnostics.

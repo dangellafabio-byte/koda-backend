@@ -674,6 +674,12 @@ export async function fastConverse(
     // Durata in ms della registrazione utente che ha generato `text`.
     // Solo per scopi di logging — non viene inviata al backend.
     recordingDurationMs?: number;
+    // === AUDIO HONESTY (Fabio 2026-06-23) ============================
+    // Confidence Deepgram 0-1 della trascrizione. Se < 0.7 il backend
+    // inietta una direttiva nel prompt che rende Koda onesto sull'audio
+    // rumoroso (chiede dove si trova l'utente). Default: undefined →
+    // comportamento storico identico, nessuna regressione.
+    sttConfidence?: number;
   } = {}
 ): Promise<FastConverseResult> {
   const timeoutMs = opts.timeoutMs ?? 45000;
@@ -778,6 +784,9 @@ export async function fastConverse(
         text,
         ephemeral: !!opts.ephemeral,
         audio_duration_ms: opts.audioDurationMs,
+        // Audio honesty: passa la confidence Deepgram al backend (può
+        // essere undefined/null per turni "text", o sempre per WS path).
+        stt_confidence: typeof opts.sttConfidence === "number" ? opts.sttConfidence : undefined,
       }),
       signal: ac.signal,
     });
@@ -1135,6 +1144,8 @@ export async function fastConverseWS(
     onAudioStart?: () => void;
     onMeta?: (meta: FastConverseMeta) => void;
     timeoutMs?: number;
+    // Audio honesty (Fabio 2026-06-23) — vedi commento in fastConverse.
+    sttConfidence?: number;
   } = {}
 ): Promise<FastConverseResult> {
   const timeoutMs = opts.timeoutMs ?? 45000;
@@ -1188,6 +1199,7 @@ export async function fastConverseWS(
         text,
         ephemeral: !!opts.ephemeral,
         audio_duration_ms: opts.audioDurationMs,
+        stt_confidence: typeof opts.sttConfidence === "number" ? opts.sttConfidence : undefined,
       }));
     } catch (e) {
       pollError = `ws-send-failed: ${String(e)}`;
