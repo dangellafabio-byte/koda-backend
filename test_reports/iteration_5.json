@@ -1,0 +1,32 @@
+{
+  "summary": "Static code-review (post-fix iteration 4) di /app/frontend/lib/voice.ts e /app/frontend/lib/diagLogger.ts. Tutti e 7 i check richiesti PASS. (1) `let adaptiveMode = false;` ora dichiarato a voice.ts:495, prima delle 3 branch di calibrazione. (2) Le assegnazioni `adaptiveMode = false/true` a righe 588 / 592 / 599 sono ora valide e non emettono più ReferenceError. (3) Nel ramo `else if (noiseFloor > ADAPTIVE_TRIGGER_DB)` (riga 590), le righe 593-595 (silenceThresholdEff / speechThresholdEff / sustainedThresholdEff) sono ora raggiungibili dopo `adaptiveMode = true` (riga 592). (4) Il catch alla fine del setInterval (righe 650-661) ora logga `[KODA_VAD_ERR] interval frame error: ${msg.slice(0,200)}` invece di essere silenzioso. (5) CAPTURE_PREFIXES in diagLogger.ts:24-28 contiene sia `[KODA_` sia `[VAD_` (anche `[AUDIO_HONESTY`). (6) `_matchesCapture(first)` viene chiamato correttamente nell'intercettore console.log a riga 59. (7) `npx tsc --noEmit lib/voice.ts lib/diagLogger.ts` non produce alcun errore TS2304 (cannot find name) né altri errori sui due file (solo errori non-correlati nelle definizioni globali node/react-native, irrilevanti). ESLint conferma: nessun no-undef. Unica osservazione minore: ESLint segnala `adaptiveMode` come 'assigned but never used' — la variabile viene assegnata ma il suo valore non viene letto da nessuna parte; il fix è corretto per evitare ReferenceError ma il valore non è ancora consumato (potenziale TODO se l'intento era usarlo in logica downstream o telemetria). Non è una regressione.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "voice.ts (adaptiveMode usage)", "issue": "MINOR — `adaptiveMode` ora è dichiarato (voice.ts:495) e assegnato (588/592/599) ma il suo valore non viene mai LETTO. ESLint avvisa @typescript-eslint/no-unused-vars. Il fix risolve correttamente il ReferenceError (obiettivo principale) ma il flag adaptiveMode non viene usato per logica/UI/telemetria — se l'intento era esporre la modalità VAD attiva (es. per UI debug o trace logs), va consumato; altrimenti potrebbe essere rimosso e sostituito dai soli log [KODA_VAD_CALIB] già presenti. Reference: /app/frontend/lib/voice.ts:495."}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "(OPZIONALE) Decidere se consumare `adaptiveMode` (es. includerlo nel trace log [KODA_VAD_TRACE] come `mode=${adaptiveMode ? 'adapt' : 'static'}`) oppure rimuoverlo. Funzionalmente il fix attuale è già corretto e non blocca nulla.",
+    "(OPZIONALE) `// eslint-disable-next-line @typescript-eslint/no-explicit-any` a voice.ts:434 è 'unused directive' (linea sotto non genera più il warning) — può essere rimossa."
+  ],
+  "critical_code_review_comments": [
+    "Bug fix iterazione 4 verificati corretti: (a) `let adaptiveMode = false;` dichiarato in posizione idonea (voice.ts:495, insieme alle altre VAD state vars) PRIMA del setInterval che lo usa; (b) catch silenzioso a fine setInterval ora logga `[KODA_VAD_ERR]` con prefisso catturato da diagLogger. Entrambi i fix sono minimali e mirati, senza side-effect su altre branch del codice.",
+    "diagLogger.ts: CAPTURE_PREFIXES è array-based con _matchesCapture O(N·M_prefixes) → 3 prefissi correnti, costo trascurabile. L'aggiunta di `[VAD_` mantiene backward-compat con vecchi build TestFlight, come da intento dichiarato nel commento di riga 20-23.",
+    "VERIFICATO via tsc + eslint: nessun'altra variabile non dichiarata in voice.ts. Le altre vars di stato VAD (speechStartFired, firstSpeechAt, lastVoiceAt, consecutiveVoiceFrames, vadStopped, vadPaused, speechStartCb, silenceCb, meterCb, speechThresholdEff, silenceThresholdEff, sustainedThresholdEff, calibrationSamples, calibrationDone, stopped, capturedUri) sono tutte correttamente dichiarate con let/const ai righi 466-513 e 665."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only static review)", "frontend": "100% (7/7 check PASS)"},
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Static code review puro su voice.ts + diagLogger.ts. Tutti i 7 check post-fix richiesti dall'iterazione 4 sono PASS. tsc/eslint confermano assenza di altri identificatori non dichiarati nei due file. Unica nota cosmetica: `adaptiveMode` è scritto ma mai letto (eslint no-unused-vars warning) — non bloccante. Per validazione end-to-end su device serve ancora una TestFlight build con registrazione di 10-15s in ambiente rumoroso (furgone) per verificare che ora (a) compaiano i log `[KODA_VAD_CALIB] ... mode=adaptive ...` quando noiseFloor > -38 dBFS, (b) le soglie effettive si aggiornino sopra silenceThresholdEff/speechThresholdEff/sustainedThresholdEff e il VAD chiuda correttamente, (c) eventuali errori d'interval frame appaiano come [KODA_VAD_ERR] nel diag panel. La CORS issue dell'iterazione 4 rimane fuori scope per questo passaggio.",
+  "rca_of_issue": "Iterazione 4 aveva identificato 2 bug nel VAD volumetrico nativo: (1) ReferenceError silenzioso su `adaptiveMode` non dichiarata, (2) catch silenzioso che mascherava l'errore. Fix verificati ora staticamente: dichiarazione `let adaptiveMode = false;` a voice.ts:495 con commento esplicativo del bug, e logging `[KODA_VAD_ERR]` nel catch (voice.ts:651-660) catturato dal nuovo prefisso `[KODA_` in diagLogger CAPTURE_PREFIXES. Il prefisso `[VAD_` legacy è anch'esso incluso per backward-compat con build TestFlight pre-rename. Conferma via tsc+eslint che non esistono altre variabili non dichiarate nel file."
+}

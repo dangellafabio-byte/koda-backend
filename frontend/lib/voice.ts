@@ -482,6 +482,17 @@ export async function startRecording(): Promise<Recorder> {
   // Buffer di calibrazione: dB raccolti nei primi CALIBRATION_MS.
   const calibrationSamples: number[] = [];
   let calibrationDone = false;
+  // === BUG FIX 2026-06-23 (testing_agent diagnosis) ===================
+  // `adaptiveMode` veniva ASSEGNATA a riga ~577/581/588 senza essere
+  // mai dichiarata → in strict mode (auto-attivo negli ES modules)
+  // generava `ReferenceError` SILENZIOSAMENTE catturato dal `catch` di
+  // fallback nel setInterval → effetto: il blocco di calibrazione si
+  // INTERROMPEVA esattamente quando doveva applicare le soglie adattive
+  // → le soglie restavano STATICHE (-26 dB sustained, -32 speech, -42
+  // silence) anche in ambiente rumoroso → motore furgone le rinfrescava
+  // continuamente → VAD non chiudeva mai. Root cause del sintomo "VAD
+  // non chiude in furgone in movimento" diagnosticato da Fabio.
+  let adaptiveMode = false;
 
   // === VAD TRACE DIAGNOSTICO (Fabio 2026-06-23) ====================
   // Logga il valore dB del microfono ad OGNI frame VAD (~70ms) per
@@ -637,7 +648,17 @@ export async function startRecording(): Promise<Recorder> {
         }
       }
     } catch (e) {
-      // metering can briefly fail during state transitions — non-fatal
+      // === BUG FIX 2026-06-23 (testing_agent) ===
+      // Prima questo catch era SILENZIOSO ({}). Ha occultato per giorni
+      // un `ReferenceError: adaptiveMode is not defined` causato da una
+      // variabile non dichiarata (ora fixato). Logghiamo l'errore col
+      // prefisso [KODA_VAD_ERR] così il diag panel lo catturerà.
+      // Pass-through perché metering può fallire brevemente durante
+      // state transitions, e non vogliamo crashare l'app.
+      try {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.log(`[KODA_VAD_ERR] interval frame error: ${msg.slice(0, 200)}`);
+      } catch {}
     }
   }, METER_POLL_MS);
 
