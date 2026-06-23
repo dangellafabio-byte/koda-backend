@@ -463,6 +463,50 @@ export async function startRecording(): Promise<Recorder> {
   }
   const startedAt = Date.now();
 
+  // === RECORDING CONTEXT LOG (Fabio 2026-06-23) ====================
+  // Logga sample rate, configurazione preset e qualsiasi metadata che
+  // il recorder esponga via getStatus(). Permette di verificare A POSTERIORI
+  // se iOS sta usando davvero 16kHz come configurato (Apple-like), o se
+  // l'OS lo cambia in cold-start / Bluetooth route switch.
+  // Nota tecnica: l'AudioSession category/mode + outputs Bluetooth/Speaker
+  // NON sono accessibili da JS — vivono in AVAudioSession.sharedInstance().
+  // Il fix in withExpoAudioVoiceProcessing.js dovrebbe imporre `.voiceChat`
+  // + `Voice` data source, ma per VERIFICARLO runtime servirebbe esporre
+  // un'API nativa custom (next iteration). Per ora logghiamo solo i campi
+  // che il recorder JS espone.
+  try {
+    const preset_kind = preset === (RecordingPresets as any).HIGH_QUALITY
+      ? "HIGH_QUALITY"
+      : "CUSTOM_16K_VOICE";
+    const initStatus = recorder.getStatus?.() ?? {};
+    // Estrae solo i campi rilevanti per non spammare con oggetti grossi.
+    const sr =
+      (initStatus as any).sampleRate ??
+      (preset as any)?.sampleRate ??
+      "unknown";
+    const ch =
+      (initStatus as any).numberOfChannels ??
+      (preset as any)?.numberOfChannels ??
+      "unknown";
+    const bd =
+      (initStatus as any).bitRate ??
+      (preset as any)?.bitRate ??
+      "unknown";
+    const fmt =
+      (initStatus as any).extension ?? (preset as any)?.extension ?? "?";
+    console.log(
+      `[KODA_REC_CTX] preset=${preset_kind} sample_rate=${sr} channels=${ch} ` +
+        `bit_rate=${bd} format=${fmt} ` +
+        `ios_voice_processing=expected_voiceChat ` +
+        `expected_data_source=Voice ` +
+        `platform=${Platform.OS}`
+    );
+  } catch (e) {
+    try {
+      console.log(`[KODA_REC_CTX] log_failed: ${String(e).slice(0, 120)}`);
+    } catch {}
+  }
+
   // ===== VAD state =====
   let speechStartFired = false;
   let firstSpeechAt: number | null = null;
