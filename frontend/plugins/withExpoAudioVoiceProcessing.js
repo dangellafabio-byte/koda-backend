@@ -51,9 +51,24 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
       // .voiceChat di default routa l'output all'EARPIECE (auricolare in
       // alto, come una chiamata vocale). Per sentire Koda dallo speaker
       // grande senza il telefono all'orecchio, forziamo overrideOutputAudioPort.
-      // .defaultToSpeaker option non basta con .voiceChat — serve l'override.
+      // === KODA v13 FIX (2026-06-22): rispetta BT/headphones connessi ===
+      // L'override .speaker della v11 forzava SEMPRE il loudspeaker del
+      // telefono, sopprimendo anche output Bluetooth HFP (vivavoce auto).
+      // Risultato: in auto con BT, il mic funzionava ma l'utente non
+      // sentiva Koda. Ora: override solo se NON c'è già un output esterno
+      // (BT, headphones cablate) collegato. iOS routerà l'audio dove
+      // l'utente l'ha già scelto.
       if category == .playAndRecord {
-        try? session.overrideOutputAudioPort(.speaker)
+        let externalRoutes: Set<AVAudioSession.Port> = [
+          .bluetoothA2DP, .bluetoothHFP, .bluetoothLE,
+          .headphones, .headsetMic,
+          .carAudio, .airPlay,
+          .usbAudio,
+        ]
+        let hasExternal = session.currentRoute.outputs.contains { externalRoutes.contains($0.portType) }
+        if !hasExternal {
+          try? session.overrideOutputAudioPort(.speaker)
+        }
         // === KODA v12 FIX (2026-06-22): configurazione mic Apple-like ===
         // Siri/CallKit/Dettatura performano molto meglio del nostro
         // expo-audio sullo STESSO microfono interno in ambienti rumorosi

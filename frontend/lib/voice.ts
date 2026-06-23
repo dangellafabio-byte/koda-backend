@@ -162,6 +162,29 @@ const ADAPTIVE_CAP_SUSTAINED_DB = -22;   // sustained mai sopra -22
  * no AVAudioSession initialization delay).
  */
 export async function prewarmMic(): Promise<boolean> {
+  // === P0 FIX 2026-06-27: warmup parallelo Deepgram (cold-start 44s) ===
+  // Fire-and-forget chiamata a /api/voice/warmup → il backend pre-scalda
+  // DNS+TLS+pool verso api.deepgram.com. Quando il primo audio dell'utente
+  // arriverà, la connessione è già "calda" → niente 2-4s di handshake
+  // sul primo turno, niente 44s di timeout su 4G ballerino in furgone.
+  // Idempotente: chiamabile N volte. Non blocca mai prewarmMic.
+  try {
+    const BACKEND =
+      process.env.EXPO_PUBLIC_BACKEND_URL ||
+      process.env.EXPO_BACKEND_URL ||
+      "";
+    if (BACKEND) {
+      // Timeout corto: se la rete è giù, non resta appeso (3s max).
+      const c = new AbortController();
+      const t = setTimeout(() => c.abort(), 3000);
+      fetch(`${BACKEND}/api/voice/warmup`, {
+        method: "POST",
+        signal: c.signal,
+      })
+        .then(() => clearTimeout(t))
+        .catch(() => clearTimeout(t));
+    }
+  } catch {}
   try {
     if (Platform.OS === "web") {
       if (_webPermissionAsked) return true;

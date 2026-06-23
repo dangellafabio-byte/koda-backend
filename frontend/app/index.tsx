@@ -2642,23 +2642,76 @@ export default function Taccuino() {
       // performance.now() per precisione sub-millisecondo. Stampato come
       // "[KODA_TIMING] LABEL Xms" così è grep-abile sui log device.
       const _kt_upload_start = Date.now();
-      console.log(`[KODA_TIMING] UPLOAD_START @${_kt_upload_start}`);
+      // === P0 FIX 2026-06-27: log dimensione audio per correlare upload lenti ===
+      // Permette di capire se i 44s erano dovuti a un file grande su 4G ballerino
+      // (es. 500KB/s ⇒ 1MB = 2s) o a un cold-start TLS / Deepgram bloccato.
+      let _kt_audio_bytes = -1;
+      try {
+        if (res.blob) {
+          _kt_audio_bytes = res.blob.size;
+        } else if (res.uri && typeof require !== "undefined") {
+          // RN FileSystem path: leggi size solo se è veloce (best-effort)
+          const FS = require("expo-file-system/legacy");
+          const info = await FS.getInfoAsync(res.uri, { size: true });
+          if (info?.exists && typeof info.size === "number") {
+            _kt_audio_bytes = info.size;
+          }
+        }
+      } catch {}
+      console.log(`[KODA_TIMING] UPLOAD_START @${_kt_upload_start} audio_bytes=${_kt_audio_bytes}`);
       // Fase 4 Step 1: usiamo Deepgram Nova-3 (più veloce e accurato di Whisper).
       // Fallback automatico a /transcribe (Whisper) se Deepgram fallisce.
-      let r = await fetch(`${API_BASE}/transcribe-deepgram`, {
-        method: "POST",
-        body: fd,
-      });
+      // === P0 FIX 2026-06-27 (timeout 44s su cold-start Bluetooth) ===
+      // Aggiungiamo client-side timeout via AbortController: se la richiesta
+      // si pianta (TLS cold-start, cellular ballerino, Deepgram down), dopo
+      // 12s ABORT-iamo e cadiamo in fallback Whisper. Senza questo,
+      // l'utente vedeva attese di 30-44s prima di un eventuale errore.
+      const _stt_controller = new AbortController();
+      const _stt_timer = setTimeout(() => _stt_controller.abort(), 12000);
+      let r: Response;
+      try {
+        r = await fetch(`${API_BASE}/transcribe-deepgram`, {
+          method: "POST",
+          body: fd,
+          signal: _stt_controller.signal,
+        });
+      } catch (e: any) {
+        clearTimeout(_stt_timer);
+        const isAbort = e?.name === "AbortError";
+        console.warn(`[transcribe] Deepgram ${isAbort ? "TIMEOUT 12s" : "network error"}: ${e?.message || e}`);
+        // Fallback rapido a Whisper con nuova FormData + nuovo timeout
+        const fd_fb = buildFormData(res);
+        const _wh_controller = new AbortController();
+        const _wh_timer = setTimeout(() => _wh_controller.abort(), 15000);
+        try {
+          r = await fetch(`${API_BASE}/transcribe`, {
+            method: "POST",
+            body: fd_fb,
+            signal: _wh_controller.signal,
+          });
+        } finally {
+          clearTimeout(_wh_timer);
+        }
+      } finally {
+        clearTimeout(_stt_timer);
+      }
       const _kt_deepgram_done = Date.now();
       console.log(`[KODA_TIMING] UPLOAD_END+DEEPGRAM_END @${_kt_deepgram_done} (upload+stt_ms=${_kt_deepgram_done - _kt_upload_start})`);
       if (!r.ok) {
         console.warn(`[transcribe] Deepgram failed (${r.status}), fallback to Whisper`);
         // Ricreo FormData perché il body è già stato consumato
         const fd2 = buildFormData(res);
-        r = await fetch(`${API_BASE}/transcribe`, {
-          method: "POST",
-          body: fd2,
-        });
+        const _wh2_controller = new AbortController();
+        const _wh2_timer = setTimeout(() => _wh2_controller.abort(), 15000);
+        try {
+          r = await fetch(`${API_BASE}/transcribe`, {
+            method: "POST",
+            body: fd2,
+            signal: _wh2_controller.signal,
+          });
+        } finally {
+          clearTimeout(_wh2_timer);
+        }
       }
       if (!r.ok) throw new Error("transcribe");
       const data = await r.json();

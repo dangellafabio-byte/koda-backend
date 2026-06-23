@@ -667,6 +667,103 @@ async def transcribe(audio: UploadFile = File(...), language: str = Form("it")):
 # Stessa interfaccia (multipart file + language) → ritorna {"text": ...}
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
 
+# === P0 FIX 2026-06-27 (timeout 44s su cold-start Bluetooth) ============
+# CONTESTO: l'utente in furgone, al primo turno dopo aver collegato il
+# vivavoce Bluetooth, vedeva log come:
+#   [KODA_TIMING] SILERO_GATE_MS=8031ms reason=fallback-timeout
+#   [KODA_TIMING] upload+stt_ms=44167ms
+# ⇒ 44 secondi totali sulla PRIMA chiamata Deepgram. Cause concorrenti:
+#   1) Nuova connessione TLS verso api.deepgram.com per OGNI request
+#      (l'`async with httpx.AsyncClient(...)` apriva e chiudeva il client)
+#      → 2-4s di handshake su 4G ballerino in movimento.
+#   2) Timeout backend di 30s troppo permissivo → se Deepgram si pianta
+#      (rarissimo ma succede su cold-start cellulare), il client aspetta
+#      30s prima di ritentare con Whisper.
+#   3) Nessun warm-up al boot della sessione → la prima richiesta paga
+#      tutto: DNS, TLS, HTTP/2 setup, Deepgram cold-start.
+#
+# SOLUZIONE:
+#   - Client HTTP/2 PERSISTENTE globale verso api.deepgram.com (keep-alive)
+#     → la PRIMA richiesta paga TLS, le successive riusano la connessione.
+#   - Timeout ridotto: 8s connect+read è abbondante (Deepgram normale =
+#     500ms-2s). Se sfora, fallback Whisper si attiva PRIMA non DOPO 30s.
+#   - Endpoint `/api/voice/warmup`: frontend lo chiama all'avvio sessione
+#     per scaldare DNS+TLS+pool prima del primo audio.
+# ========================================================================
+_DEEPGRAM_HTTP: Optional[httpx.AsyncClient] = None
+_DEEPGRAM_LOCK = asyncio.Lock()
+
+
+async def _get_deepgram_client() -> httpx.AsyncClient:
+    """Ritorna il client httpx persistente verso api.deepgram.com.
+    Lazy-init thread-safe (asyncio lock). Riusato per tutta la vita del processo.
+    HTTP/2 + keep-alive → ZERO TLS handshake dopo la prima richiesta.
+    """
+    global _DEEPGRAM_HTTP
+    if _DEEPGRAM_HTTP is None:
+        async with _DEEPGRAM_LOCK:
+            if _DEEPGRAM_HTTP is None:
+                limits = httpx.Limits(
+                    max_keepalive_connections=4,
+                    max_connections=8,
+                    keepalive_expiry=120.0,
+                )
+                # Timeout breakdown: connect 4s, read 8s, write 8s, pool 8s.
+                # connect=4s evita che un singolo DNS lento blocchi tutto.
+                # read=8s è abbondante per Deepgram (tipico: 500ms-2s).
+                timeout = httpx.Timeout(8.0, connect=4.0)
+                _DEEPGRAM_HTTP = httpx.AsyncClient(
+                    base_url="https://api.deepgram.com",
+                    limits=limits,
+                    timeout=timeout,
+                    http2=False,  # HTTP/2 richiede pkg h2; HTTP/1.1 keep-alive basta
+                )
+                logger.info("[deepgram] persistent client initialized")
+    return _DEEPGRAM_HTTP
+
+
+async def _deepgram_warmup() -> Dict[str, Any]:
+    """Pre-scalda DNS+TLS+connection pool verso api.deepgram.com.
+    Strategia: GET su /v1/listen senza body. Deepgram risponde 400 (no audio)
+    in ~50-200ms → ci basta perché la TLS connection viene persistita nel pool.
+    Da chiamare al boot della sessione voce per evitare il cold-start di 2-4s.
+    Idempotente: chiamabile N volte, fa solo del bene.
+    """
+    if not DEEPGRAM_API_KEY:
+        return {"ok": False, "reason": "no-key", "ms": 0}
+    started = time.time()
+    try:
+        cx = await _get_deepgram_client()
+        # GET su /v1/listen senza audio → Deepgram risponde rapidamente.
+        # Usiamo un timeout corto: se sfora, non blocchiamo nessuno.
+        r = await cx.get(
+            "/v1/listen",
+            headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"},
+            timeout=httpx.Timeout(3.0, connect=2.0),
+        )
+        ms = int((time.time() - started) * 1000)
+        # Qualsiasi risposta (anche 400/405) significa "TLS+TCP up & cached" ✓
+        return {"ok": True, "status": r.status_code, "ms": ms}
+    except Exception as e:
+        ms = int((time.time() - started) * 1000)
+        logger.warning(f"[deepgram] warmup failed in {ms}ms: {e}")
+        return {"ok": False, "reason": str(e)[:80], "ms": ms}
+
+
+@api_router.post("/voice/warmup")
+async def voice_warmup():
+    """Endpoint che il frontend chiama al boot/inizio sessione per scaldare
+    le connessioni verso le API esterne (Deepgram per ora). Restituisce
+    rapidamente con metriche per diagnostica. Non blocca mai più di ~3s.
+    """
+    started = time.time()
+    dg = await _deepgram_warmup()
+    return {
+        "deepgram": dg,
+        "total_ms": int((time.time() - started) * 1000),
+    }
+
+
 @api_router.post("/transcribe-deepgram")
 async def transcribe_deepgram(audio: UploadFile = File(...), language: str = Form("it")):
     """
@@ -676,7 +773,9 @@ async def transcribe_deepgram(audio: UploadFile = File(...), language: str = For
     if not DEEPGRAM_API_KEY:
         raise HTTPException(status_code=500, detail="Deepgram key not configured")
     try:
+        _kt_read_start = time.time()
         data = await audio.read()
+        _kt_read_ms = int((time.time() - _kt_read_start) * 1000)
         if len(data) == 0:
             raise HTTPException(status_code=400, detail="Empty audio")
 
@@ -685,7 +784,10 @@ async def transcribe_deepgram(audio: UploadFile = File(...), language: str = For
         # a Deepgram. Il differenziale con DEEPGRAM_END nel client mostra
         # latenza network + decode + transcribe.
         _kt_dg_start = time.time()
-        logger.info(f"[KODA_TIMING] DEEPGRAM_START audio_bytes={len(data)}")
+        logger.info(
+            f"[KODA_TIMING] DEEPGRAM_START audio_bytes={len(data)} "
+            f"read_body_ms={_kt_read_ms}"
+        )
 
         # Determina il mimetype dal nome file
         name = (audio.filename or "").lower()
@@ -701,7 +803,6 @@ async def transcribe_deepgram(audio: UploadFile = File(...), language: str = For
 
         # Chiamiamo Deepgram via HTTP REST (no SDK per ridurre dipendenze pesanti)
         # Nova-3 supporta italiano dal 2025. Parametri ottimizzati per chitchat.
-        import httpx
         params = {
             "model": "nova-3",
             "language": language or "it",
@@ -713,13 +814,14 @@ async def transcribe_deepgram(audio: UploadFile = File(...), language: str = For
             "Authorization": f"Token {DEEPGRAM_API_KEY}",
             "Content-Type": mimetype,
         }
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(
-                "https://api.deepgram.com/v1/listen",
-                params=params,
-                content=data,
-                headers=headers,
-            )
+        # === P0 FIX: client persistente (no TLS handshake per request) ===
+        cx = await _get_deepgram_client()
+        r = await cx.post(
+            "/v1/listen",
+            params=params,
+            content=data,
+            headers=headers,
+        )
         if r.status_code != 200:
             logger.error(f"Deepgram error {r.status_code}: {r.text[:300]}")
             # Fallback a Whisper se Deepgram fallisce
@@ -8789,6 +8891,24 @@ async def startup_db_client():
         logger.warning(f"[startup] bonifica TONE tags fallita: {e}")
     # NOTA: il warm-up filler è stato rimosso (giugno 2026 v6) — il filler
     # audio non viene più usato. Vedi commento in /converse-fast/start.
+    # === P0 FIX 2026-06-27: pre-scalda Deepgram all'avvio backend ===
+    # Stabilisce DNS+TLS+HTTP keep-alive verso api.deepgram.com così la
+    # prima richiesta di trascrizione di un utente paga solo la latenza
+    # di Deepgram stesso, non handshake+DNS+TLS. Fire-and-forget: se
+    # fallisce non blocca lo startup.
+    try:
+        asyncio.create_task(_deepgram_warmup_with_log())
+    except Exception as e:
+        logger.warning(f"[startup] deepgram warmup scheduling failed: {e}")
+
+
+async def _deepgram_warmup_with_log():
+    """Wrapper di _deepgram_warmup che logga il risultato."""
+    try:
+        res = await _deepgram_warmup()
+        logger.info(f"[startup] deepgram warmup: {res}")
+    except Exception as e:
+        logger.warning(f"[startup] deepgram warmup error: {e}")
 
 
 # === FIX 2026-06-22 v10: rimossa DUPLICATA _TONE_TAG_RE ===
@@ -8891,3 +9011,12 @@ async def _cleanup_tone_tags() -> int:
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+    # === P0 FIX 2026-06-27: chiudi client httpx persistenti ===
+    global _DEEPGRAM_HTTP
+    if _DEEPGRAM_HTTP is not None:
+        try:
+            await _DEEPGRAM_HTTP.aclose()
+            logger.info("[shutdown] deepgram persistent client closed")
+        except Exception as e:
+            logger.warning(f"[shutdown] deepgram client close failed: {e}")
+        _DEEPGRAM_HTTP = None
