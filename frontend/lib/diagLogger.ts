@@ -17,7 +17,21 @@
  */
 
 const MAX_EVENTS = 500;
-const KODA_PREFIX = "[KODA_";
+// === FILTRO DIAGNOSTICO (Fabio 2026-06-23 — fix prefisso VAD_TRACE) ===
+// Cattura qualsiasi log che inizi con uno dei prefissi noti. Robusto
+// anche se in passato è stato emesso con prefisso vecchio (es. [VAD_TRACE]
+// senza "KODA_" davanti — bug del 2026-06-23 in voice.ts).
+const CAPTURE_PREFIXES = [
+  "[KODA_",        // Tutti gli eventi nuovi del sistema diagnostico Koda
+  "[VAD_",         // Legacy: [VAD_TRACE], [VAD_CALIB] emessi prima del rename
+  "[AUDIO_HONESTY", // Honesty Phase 1
+];
+function _matchesCapture(s: string): boolean {
+  for (const p of CAPTURE_PREFIXES) {
+    if (s.startsWith(p)) return true;
+  }
+  return false;
+}
 
 export type DiagEvent = {
   t: number;          // Date.now() di quando è stato emesso
@@ -42,7 +56,7 @@ export function installDiagLogger(): void {
       // Solo se il PRIMO argomento è una stringa che comincia con [KODA_
       // catturiamo. Altrimenti pass-through silenzioso.
       const first = args[0];
-      if (typeof first === "string" && first.startsWith(KODA_PREFIX)) {
+      if (typeof first === "string" && _matchesCapture(first)) {
         // Compone la riga concatenando args (semplice toString).
         const line = args.map((a) => {
           if (typeof a === "string") return a;
