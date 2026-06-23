@@ -483,6 +483,17 @@ export async function startRecording(): Promise<Recorder> {
   const calibrationSamples: number[] = [];
   let calibrationDone = false;
 
+  // === VAD TRACE DIAGNOSTICO (Fabio 2026-06-23) ====================
+  // Logga il valore dB del microfono ad OGNI frame VAD (~70ms) per
+  // tutta la durata della registrazione. Format grep-able:
+  //   [VAD_TRACE] t=Xms db=-YY.Y state=S speech_th=-AA.A sust_th=-BB.B since_voice=Zms
+  // Permette di vedere la CURVA esatta dei dB durante una registrazione
+  // che "non chiude" e confrontarla con una che chiude bene → diagnosi
+  // basata su dati grezzi, non teorie.
+  // ⚠️ RIMUOVERE quando la diagnosi è completa (genera ~200 log per
+  // registrazione di 14s — entro i 500 eventi del pannello diag).
+  const VAD_TRACE_ENABLED = true;
+
   // === IMPORTANT: `stopped` deve essere dichiarata PRIMA del setInterval
   // perché il guard sotto la controlla (insieme a vadStopped/vadPaused).
   // Senza, una callback orfana già schedulata può eseguire dopo
@@ -500,6 +511,31 @@ export async function startRecording(): Promise<Recorder> {
         try { meterCb(db, speechThresholdEff); } catch {}
       }
       const now = Date.now();
+      // === VAD TRACE — log granulare dB per diagnosi (Fabio 2026-06-23) ===
+      // Logga AD OGNI frame (~70ms). Permette di vedere la curva dei dB
+      // dall'inizio alla fine della registrazione e capire ESATTAMENTE
+      // perché il VAD non chiude in furgone in movimento. Da rimuovere
+      // dopo la diagnosi.
+      if (VAD_TRACE_ENABLED) {
+        const tRel = now - startedAt;
+        const sinceVoice = lastVoiceAt ? now - lastVoiceAt : -1;
+        const phase = !calibrationDone
+          ? "CALIB"
+          : speechStartFired
+          ? "SPEECH"
+          : "PRESPEECH";
+        // Soglie effettive: durante CALIB sono ancora i default statici,
+        // dopo CALIB possono essere aggiornate (modalità adattiva).
+        console.log(
+          `[VAD_TRACE] t=${tRel}ms db=${db.toFixed(1)} ` +
+            `phase=${phase} ` +
+            `sp_th=${speechThresholdEff.toFixed(1)} ` +
+            `su_th=${sustainedThresholdEff.toFixed(1)} ` +
+            `si_th=${silenceThresholdEff.toFixed(1)} ` +
+            `since_voice=${sinceVoice}ms ` +
+            `cf=${consecutiveVoiceFrames}`
+        );
+      }
       // Hard cap on recording length
       if (now - startedAt > HARD_CAP_MS) {
         vadStopped = true;
