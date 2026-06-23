@@ -7973,8 +7973,22 @@ async def _fast_pipeline_task(
         nonlocal_first_publish_ms: List[Optional[int]] = [None]
 
         async def _gen_and_publish_sentence(idx: int, sentence: str, previous_text: Optional[str] = None):
-            nonlocal first_audio_logged, timing_first_tts_ms, timing_first_audio_total_ms
+            nonlocal first_audio_logged, timing_first_tts_ms, timing_first_audio_total_ms, current_tone
             try:
+                # === FIX VOCE PIATTA (2026-06-22 v10) ===
+                # Il fast pipeline aveva current_tone hardcoded su "warm" e mai
+                # aggiornato → voice settings ElevenLabs sempre identici qualunque
+                # fosse l'emozione richiesta da Claude via [TONE:xxx]. Risultato:
+                # utente sentiva la voce sempre uguale (piatta).
+                # Fix: estrai il [TONE:xxx] PRIMA dello strip per riassegnare
+                # current_tone a "calm" | "warm" | "concerned" | "energetic" |
+                # "urgent" | "neutral" → _voice_settings_for_tone applica i
+                # parametri corretti (stability/style/speed) alla frase corrente.
+                m = _TONE_TAG_RE.match(sentence)
+                if m:
+                    t_extracted = m.group(1).lower()
+                    if t_extracted in _VALID_TONES:
+                        current_tone = t_extracted
                 clean = _strip_audio_tags(sentence) or sentence
                 if not clean.strip():
                     return
@@ -8024,9 +8038,20 @@ async def _fast_pipeline_task(
                     # "Scalea, bella!" entusiasta vs frase 2 descrittiva con
                     # tono diverso). Verificato compatibile con
                     # eleven_flash_v2_5 + SDK 1.9.0.
-                    # Trim a 1000 char per non sprecare token nel contesto.
-                    if previous_text:
-                        kwargs["previous_text"] = previous_text[-1000:]
+                    # === FIX BIPOLARE (2026-06-22 v11) ===
+                    # previous_text dava continuità prosodica MA su frasi
+                    # ad alta energia (es. "Aaah che bello!") ancorava
+                    # ElevenLabs ad un'intonazione discendente naturale per
+                    # la frase successiva → effetto "bipolare" percepito
+                    # dall'utente (frase 1 entusiasta, frase 2 pacata).
+                    # Soluzioni: (a) tronchiamo a 80 char (basta per
+                    # continuità, non per ancoraggio prosodico forte);
+                    # (b) NON passiamo previous_text se il tono corrente è
+                    # ad alta energia (energetic/urgent) — vogliamo che
+                    # ogni frase mantenga il picco, non che si "calmi".
+                    HIGH_ENERGY_TONES = {"energetic", "urgent"}
+                    if previous_text and current_tone not in HIGH_ENERGY_TONES:
+                        kwargs["previous_text"] = previous_text[-80:]
                     try:
                         gen = client_el.text_to_speech.convert(**kwargs)
                         for chunk in gen:
@@ -8766,8 +8791,12 @@ async def startup_db_client():
     # audio non viene più usato. Vedi commento in /converse-fast/start.
 
 
-_TONE_TAG_RE = re.compile(r"\[TONE:[a-zA-Z_\-]+\]\s*")
-
+# === FIX 2026-06-22 v10: rimossa DUPLICATA _TONE_TAG_RE ===
+# Esisteva una seconda definizione di _TONE_TAG_RE qui che sovrascriveva
+# quella della linea 5173 (con capture group). La duplicata era SENZA
+# capture group → `m.group(1)` falliva nel fast pipeline → current_tone
+# non veniva mai aggiornato → voce sempre piatta. La regex canonica (5173)
+# `^\s*\[\s*TONE\s*:\s*([a-zA-Z]+)\s*\]\s*` è quella da usare ovunque.
 _CONFESSIONAL_BUFFER_TTL_S = 24 * 60 * 60  # 24h — privacy by design
 
 
