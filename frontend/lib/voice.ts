@@ -116,28 +116,6 @@ const MIN_SPEECH_MS = 700;           // need at least 700ms of voice before sile
 const MIN_SPEECH_FRAMES = 3;         // 3 consecutive frames (~210ms) above threshold → real speech
 const METER_POLL_MS = 70;            // ~14Hz sampling
 const HARD_CAP_MS = 60_000;          // absolute max recording length
-// === AUTO-CAP TAMPONE (Fabio 2026-06-23) =================================
-// Nel furgone con motore acceso + ventilazione, il rumore di fondo varia
-// in modo imprevedibile (-25/-30 dBFS con picchi) e può "rinfrescare"
-// continuamente lastVoiceAt → il VAD non chiude mai → l'utente deve fare
-// tap manuale ogni volta. Misurato in log reali: recording_ms = 14-24s
-// per frasi di 1-10s reali.
-//
-// Tampone: dopo che il parlato è iniziato (speechStartFired), se sono
-// passati AUTO_CAP_AFTER_SPEECH_MS senza che il VAD abbia rilevato
-// silenzio, chiudiamo D'UFFICIO. Limita il danno senza spegnere il VAD
-// normale che continua a fare il suo lavoro più velocemente quando ci
-// riesce.
-//
-// 5s è un buon compromesso: copre il 95% dei turni conversazionali
-// (frasi naturali sono 1-4s) e se l'utente vuole parlare di più ha
-// sempre il tap manuale + il fallback HARD_CAP_MS.
-//
-// PROSSIMA SESSIONE: rivalutare seriamente il rapporto voce/rumore col
-// microfono interno (= caso d'uso PRIMARIO, non secondario). Verificare
-// che `data source Voice` + sample rate 16kHz siano applicati e attivi
-// nel build TestFlight, esplorare altre leve native iOS non ancora usate.
-const AUTO_CAP_AFTER_SPEECH_MS = 5000;
 
 // ============ CAPPED ADAPTIVE VAD (Fix #1 — 2026-06) ============
 // Problema osservato in produzione (log utente, furgone):
@@ -620,16 +598,6 @@ export async function startRecording(): Promise<Recorder> {
             vadStopped = true;
             if (silenceCb) try { silenceCb(); } catch {}
           }
-        }
-        // === AUTO-CAP TAMPONE (Fabio 2026-06-23) ===
-        // Se il parlato dura più di AUTO_CAP_AFTER_SPEECH_MS senza che
-        // il VAD abbia rilevato silenzio (= ambiente troppo rumoroso
-        // perché le soglie funzionino), chiudiamo D'UFFICIO. Evita che
-        // l'utente debba fare tap manuale nel furgone con motore acceso.
-        if (!vadStopped && speechElapsed >= AUTO_CAP_AFTER_SPEECH_MS) {
-          console.log(`[VAD_AUTO_CAP] forcing close after ${speechElapsed}ms speech (noisy env tampone fix)`);
-          vadStopped = true;
-          if (silenceCb) try { silenceCb(); } catch {}
         }
       }
     } catch (e) {
