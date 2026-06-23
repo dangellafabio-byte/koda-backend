@@ -527,7 +527,7 @@ export async function startRecording(): Promise<Recorder> {
         // Soglie effettive: durante CALIB sono ancora i default statici,
         // dopo CALIB possono essere aggiornate (modalità adattiva).
         console.log(
-          `[VAD_TRACE] t=${tRel}ms db=${db.toFixed(1)} ` +
+          `[KODA_VAD_TRACE] t=${tRel}ms db=${db.toFixed(1)} ` +
             `phase=${phase} ` +
             `sp_th=${speechThresholdEff.toFixed(1)} ` +
             `su_th=${sustainedThresholdEff.toFixed(1)} ` +
@@ -575,18 +575,18 @@ export async function startRecording(): Promise<Recorder> {
             // Troppo rumoroso: probabilmente utente STA GIÀ parlando.
             // Non ci fidiamo della misura → usa statiche (baseline noto).
             adaptiveMode = false;
-            console.log(`[VAD_CALIB] floor=${noiseFloor.toFixed(1)}dB n=${calibrationSamples.length} mode=static-safety-abort speech=${speechThresholdEff} silence=${silenceThresholdEff} sustained=${sustainedThresholdEff}`);
+            console.log(`[KODA_VAD_CALIB] floor=${noiseFloor.toFixed(1)}dB n=${calibrationSamples.length} mode=static-safety-abort speech=${speechThresholdEff} silence=${silenceThresholdEff} sustained=${sustainedThresholdEff}`);
           } else if (noiseFloor > ADAPTIVE_TRIGGER_DB) {
             // Ambiente rumoroso (es. furgone, auto, traffico): attiva adattivo.
             adaptiveMode = true;
             silenceThresholdEff = Math.min(noiseFloor + ADAPTIVE_OFFSET_DB, ADAPTIVE_CAP_SILENCE_DB);
             speechThresholdEff = silenceThresholdEff - ADAPTIVE_HYSTERESIS_DB;
             sustainedThresholdEff = Math.min(silenceThresholdEff + ADAPTIVE_HYSTERESIS_DB, ADAPTIVE_CAP_SUSTAINED_DB);
-            console.log(`[VAD_CALIB] floor=${noiseFloor.toFixed(1)}dB n=${calibrationSamples.length} mode=adaptive speech=${speechThresholdEff} silence=${silenceThresholdEff} sustained=${sustainedThresholdEff}`);
+            console.log(`[KODA_VAD_CALIB] floor=${noiseFloor.toFixed(1)}dB n=${calibrationSamples.length} mode=adaptive speech=${speechThresholdEff} silence=${silenceThresholdEff} sustained=${sustainedThresholdEff}`);
           } else {
             // Ambiente silenzioso (-38 dBFS o inferiore): le statiche funzionano.
             adaptiveMode = false;
-            console.log(`[VAD_CALIB] floor=${noiseFloor.toFixed(1)}dB n=${calibrationSamples.length} mode=static-quiet speech=${speechThresholdEff} silence=${silenceThresholdEff} sustained=${sustainedThresholdEff}`);
+            console.log(`[KODA_VAD_CALIB] floor=${noiseFloor.toFixed(1)}dB n=${calibrationSamples.length} mode=static-quiet speech=${speechThresholdEff} silence=${silenceThresholdEff} sustained=${sustainedThresholdEff}`);
           }
         }
         // Durante calibration, non avviare la macchina a stati voce/silenzio
