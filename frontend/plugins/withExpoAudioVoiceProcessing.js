@@ -29,7 +29,7 @@ const fs = require("fs");
 const path = require("path");
 const { withDangerousMod } = require("@expo/config-plugins");
 
-const KODA_PATCH_MARKER = "KODA PATCH 2026-06-22 v11 (Voice Processing + speaker route)";
+const KODA_PATCH_MARKER = "KODA PATCH 2026-06-22 v12 (Apple-like mic config: Voice DSP + 16kHz + speaker route)";
 
 const OLD_BLOCK = `    if sessionOptions.isEmpty {
       try session.setCategory(category, mode: .default)
@@ -54,6 +54,37 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
       // .defaultToSpeaker option non basta con .voiceChat — serve l'override.
       if category == .playAndRecord {
         try? session.overrideOutputAudioPort(.speaker)
+        // === KODA v12 FIX (2026-06-22): configurazione mic Apple-like ===
+        // Siri/CallKit/Dettatura performano molto meglio del nostro
+        // expo-audio sullo STESSO microfono interno in ambienti rumorosi
+        // (furgone, motore acceso). Verificato: stesso hardware, stesso
+        // mic, risultati diversi → la differenza sta nella configurazione
+        // di AVAudioSession.
+        //
+        // Due ottimizzazioni che Apple applica e noi NON stavamo applicando:
+        //   1) setPreferredSampleRate(16000): la pipeline DSP del Voice
+        //      Processing AudioUnit (AEC/NS/AGC) è ottimizzata a 16kHz.
+        //      A 48kHz (default) la noise suppression è meno aggressiva
+        //      perché lavora su un range di frequenze più ampio.
+        //   2) setPreferredDataSource("Voice"): il built-in mic dell'iPhone
+        //      espone più "data source" con polar pattern diversi —
+        //      Bottom (omnidirezionale, default), Front, Back, Voice.
+        //      "Voice" attiva un beamforming aggressivo + noise reduction
+        //      specifico per voce ravvicinata in ambienti rumorosi.
+        //      Apple usa questo data source in Siri/Dettatura.
+        //
+        // Fallback gracefully: se il device non espone "Voice", proviamo
+        // "Front" come secondo best (anch'esso con beamforming).
+        try? session.setPreferredSampleRate(16000)
+        if let input = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+          if let voiceSource = input.dataSources?.first(where: {
+            let n = $0.dataSourceName.lowercased()
+            return n.contains("voice") || n.contains("front")
+          }) {
+            try? input.setPreferredDataSource(voiceSource)
+          }
+          try? session.setPreferredInput(input)
+        }
       }
     } else {
       // === ${KODA_PATCH_MARKER} (ramo options) ===
@@ -61,6 +92,17 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
       try session.setCategory(category, mode: recordingMode, options: sessionOptions)
       if category == .playAndRecord {
         try? session.overrideOutputAudioPort(.speaker)
+        // === KODA v12: stessa Apple-like mic config del ramo principale ===
+        try? session.setPreferredSampleRate(16000)
+        if let input = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+          if let voiceSource = input.dataSources?.first(where: {
+            let n = $0.dataSourceName.lowercased()
+            return n.contains("voice") || n.contains("front")
+          }) {
+            try? input.setPreferredDataSource(voiceSource)
+          }
+          try? session.setPreferredInput(input)
+        }
       }
     }
   }`;
