@@ -2494,39 +2494,42 @@ export default function Taccuino() {
         return;
       }
       const fd = buildFormData(res);
-      // === SILERO VAD GATE (Plan C, Fabio escalation 2026-06-20 v8) ===
-      // Prima di consumare Deepgram + Claude + ElevenLabs, chiediamo a
-      // Silero (server-side, già validato sui memo del furgone di Fabio
-      // con motore acceso: speech_prob_max=0.9996) se nell'audio c'è
-      // veramente parlato umano. Se Silero dice "no, solo rumore":
-      // SHORT-CIRCUIT — niente STT, niente LLM, niente TTS, ri-ascolto
-      // come per il classico "non ti ho sentito".
+      // === SILERO VAD GATE — DISATTIVATO (Fabio 2026-06-27) ============
+      // Il backend /api/vad/probe è uno STUB FAIL-OPEN: ritorna sempre
+      // speech_ratio=1.0 perché `services.vad_silero` non è disponibile
+      // (onnxruntime bloccato dai limiti CPU/RAM del cluster Emergent).
+      // Lasciare attivo il gate significava uploadare il file audio COMPLETO
+      // al backend per ottenere SEMPRE "PASS" — spreco netto di 2.5-7s
+      // sulla rete cellulare in furgone (misurato in log reali Fabio
+      // 2026-06-23: SILERO_GATE_MS=6812 / 3071 / 2523).
       //
-      // SAFE-FALLBACK garantito: se la rete è giù / backend non risponde
-      // / timeout, la gate ritorna {hasSpeech: true} e proseguiamo come
-      // prima. Zero regressioni possibili.
-      //
-      // KILL-SWITCH: settings.silero_gate_enabled === false → bypass totale.
-      const sileroGateEnabled = (profile?.settings as any)?.silero_gate_enabled !== false;
+      // FILTRAGGIO RUMORE: ora delegato esclusivamente a:
+      //   1) Voice Processing iOS / voice_communication Android (chip DSP)
+      //   2) VAD volumetrico client-side in voice.ts (CALIBRATION_MS)
+      // Quando/se il backend riavrà Silero attivo, bastera rimettere
+      // `gate = await checkHasSpeech({...})` qui sotto. Il flag esiste.
+      // ================================================================
+      const SILERO_GATE_DISABLED = true; // hardcoded finché backend è stub
+      const sileroGateEnabled = !SILERO_GATE_DISABLED && (profile?.settings as any)?.silero_gate_enabled !== false;
       const _kt_gate_start = Date.now();
-      const gate = await checkHasSpeech({
-        uri: res.uri,
-        blob: res.blob,
-        mime: res.mime,
-        filename: res.filename,
-        threshold: 0.15, // speech_ratio >= 0.15 ⇒ passa
-        // FABIO 2026-06-21 v9: timeout esteso 3500→8000ms perché su rete
-        // cellular in furgone l'upload di audio grandi (500KB-1MB) sfora
-        // i 3.5s. In parallelo, audio >20s vengono bypassati direttamente
-        // (vedi durationMs sotto) per non aspettare comunque 8s a vuoto.
-        timeoutMs: 8000,
-        enabled: sileroGateEnabled,
-        // Passa la durata della registrazione: il gate decide se fare
-        // bypass diretto (audio molto lungo → quasi certamente voce
-        // intenzionale, non vale la pena uploadare al gate).
-        durationMs: lastRecordingDurationMsRef.current ?? undefined,
-        bypassIfDurationMsAbove: 20000, // 20s
-      });
+      const gate = sileroGateEnabled
+        ? await checkHasSpeech({
+            uri: res.uri,
+            blob: res.blob,
+            mime: res.mime,
+            filename: res.filename,
+            threshold: 0.15,
+            timeoutMs: 8000,
+            enabled: true,
+            durationMs: lastRecordingDurationMsRef.current ?? undefined,
+            bypassIfDurationMsAbove: 20000,
+          })
+        : {
+            hasSpeech: true as const,
+            reason: "fallback-disabled" as const,
+            probe: null,
+            latency_ms: 0,
+          };
       logGateDecision(gate);
       console.log(`[KODA_TIMING] SILERO_GATE_MS=${Date.now() - _kt_gate_start}`);
 
