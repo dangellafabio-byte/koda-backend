@@ -36,7 +36,6 @@ import {
   AudioRecorder,
   AudioModule,
   RecordingPresets,
-  setAudioModeAsync,
 } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 
@@ -309,28 +308,37 @@ export class VoiceStreamSession {
       console.warn(`[KODA_STREAM_CLIENT] perm request failed: ${e?.message || e}`);
     }
 
-    // === FIX 2026-06-24 v2 (post-build #2 fallita) ============
-    // CRITICO: imposta AudioSession in modalità recording PRIMA di
-    // creare il recorder. Senza questo, su iOS `prepareToRecordAsync`
-    // si blocca silenziosamente (nessun throw, nessun log) perché
-    // l'AudioSession è ancora in modalità playback dalla TTS precedente
-    // o da default. Il flusso esistente (voice.ts) lo fa dentro
-    // startRecording() — io l'avevo saltato bypassando startTalkInternal.
+    // === FIX 2026-06-24 v3 (post-troubleshoot review) =================
+    // NON chiamiamo più setAudioModeAsync qui — è GIÀ stato fatto da
+    // prewarmMic() in startTalkStreaming. Chiamarla di nuovo creava
+    // race condition tra 3 chiamate asincrone sovrapposte (root cause
+    // del blocco silenzioso identificato dal troubleshoot agent).
+
+    // === FIX 2026-06-24 v3 ===
+    // UN SOLO recorder per tutta la sessione (come voice.ts).
+    // Prima creavo new AudioRecorder per ogni chunk → su iOS l'AudioSession
+    // non faceva in tempo a rilasciare il precedente → prepareToRecordAsync
+    // si bloccava silenziosamente. Ora pattern voice.ts-compliant.
+    let recorder: any = null;
     try {
-      await setAudioModeAsync({
-        allowsRecording: true,
-        playsInSilentMode: true,
-        interruptionMode: "duckOthers",
-        shouldPlayInBackground: false,
-        shouldRouteThroughEarpiece: false,
-      });
-      console.log(`[KODA_STREAM_CLIENT] audio mode set to recording=true`);
-      // Lascia 30ms a iOS per applicare il cambio di session
-      await new Promise((r) => setTimeout(r, 30));
-    } catch (e: any) {
-      console.warn(
-        `[KODA_STREAM_CLIENT] setAudioModeAsync(recording) failed: ${e?.message || e}`
+      console.log(`[KODA_STREAM_CLIENT] constructing single recorder...`);
+      recorder = new (AudioModule as any).AudioRecorder({});
+      this.recorder = recorder;
+      const preset = buildStreamingPreset();
+      console.log(`[KODA_STREAM_CLIENT] calling prepareToRecordAsync...`);
+      const t_prep_start = Date.now();
+      await recorder.prepareToRecordAsync(preset);
+      const t_prep_end = Date.now();
+      console.log(
+        `[KODA_STREAM_CLIENT] prepareToRecordAsync OK in ${t_prep_end - t_prep_start}ms`
       );
+    } catch (e: any) {
+      console.error(
+        `[KODA_STREAM_CLIENT] recorder init failed: ${e?.message || e}`
+      );
+      this.callbacks.onError?.(`mic-init-failed: ${e?.message || e}`);
+      this.recorder = null;
+      return;
     }
 
     let chunkStart = Date.now();
@@ -347,86 +355,69 @@ export class VoiceStreamSession {
         break;
       }
 
-      let rec: any = null;
       const cIdx = this.chunkIdx + 1;
       try {
-        // === GRANULAR LOGS (post-build #2 — per scoprire DOVE hang) ===
-        // Log SOLO per i primi 2 chunk (poi sono ripetitivi e spammano).
         const verbose = cIdx <= 2;
-        if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} construct...`);
-        rec = new (AudioModule as any).AudioRecorder({});
-        this.recorder = rec;
-        const preset = buildStreamingPreset();
-        if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} prepare...`);
-
-        const t_start_rec = Date.now();
-        await rec.prepareToRecordAsync(preset);
         if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} record()...`);
-        rec.record();
+
         const t_record_started = Date.now();
+        recorder.record(); // riusa lo STESSO recorder
 
         if (verbose)
           console.log(
             `[KODA_STREAM_CLIENT] chunk #${cIdx} recording, wait ${CHUNK_DURATION_MS}ms...`
           );
 
-        // Aspetta CHUNK_DURATION_MS
         await new Promise((resolve) => setTimeout(resolve, CHUNK_DURATION_MS));
 
         if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} stop...`);
 
-        // Stop e leggi
-        await rec.stop();
+        await recorder.stop();
         const t_stop = Date.now();
 
-        // Sequenza corretta per espo-audio v54 (vedi voice.ts safeStop()):
-        // PRIMA prova getStatus().url, POI rec.uri come fallback.
+        // Leggi URI PRIMA di qualsiasi cleanup (vedi voice.ts safeStop pattern)
         let uri: string | null = null;
         try {
-          const statusUrl = (rec.getStatus?.() as any)?.url || null;
-          const directUri = rec.uri || null;
+          const statusUrl = (recorder.getStatus?.() as any)?.url || null;
+          const directUri = recorder.uri || null;
           uri = statusUrl || directUri;
         } catch {}
         if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} uri=${uri ? "OK" : "NULL"}`);
         if (!uri) {
           console.warn(
-            `[KODA_STREAM_CLIENT] chunk #${cIdx}: no URI ` +
-              `(status.url and rec.uri both null) — skipping`
+            `[KODA_STREAM_CLIENT] chunk #${cIdx}: no URI — skipping (NO release, riusiamo recorder)`
           );
-          try { rec.release?.(); } catch {}
           continue;
         }
 
-        // Leggi il file come base64 → ArrayBuffer
+        // Leggi file
         const base64 = await FileSystem.readAsStringAsync(uri, {
           encoding: FileSystem.EncodingType.Base64,
         });
         const t_read = Date.now();
         const bytes = base64ToArrayBuffer(base64);
 
-        // Invia binary
+        // Invia
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
           this.ws.send(bytes);
         }
         const t_sent = Date.now();
 
         this.chunkIdx++;
-        const gap = chunkStart - prevChunkEnd; // gap dal precedente chunk
+        const gap = chunkStart - prevChunkEnd;
         console.log(
           `[KODA_STREAM_CLIENT_CHUNK] idx=${this.chunkIdx} ` +
             `size=${bytes.byteLength}B ` +
-            `record_lat=${t_record_started - t_start_rec}ms ` +
             `record_dur=${t_stop - t_record_started}ms ` +
             `read=${t_read - t_stop}ms ` +
             `send=${t_sent - t_read}ms ` +
             `gap_prev=${gap > 0 ? gap : 0}ms`
         );
 
-        // Cleanup file (best-effort) + RELEASE recorder nativo
+        // Cleanup SOLO del file (NON release del recorder — lo riusiamo)
         try {
           await FileSystem.deleteAsync(uri, { idempotent: true });
         } catch {}
-        try { rec.release?.(); } catch {}
 
         prevChunkEnd = t_sent;
         chunkStart = Date.now();
@@ -434,18 +425,22 @@ export class VoiceStreamSession {
         console.warn(
           `[KODA_STREAM_CLIENT] chunk #${cIdx} error: ${e?.message || e}`
         );
-        try { rec?.release?.(); } catch {}
         await new Promise((r) => setTimeout(r, 200));
-      } finally {
-        this.recorder = null;
       }
     }
 
+    // === CLEANUP FINALE (come voice.ts safeStop()) ===
+    // Aspetta 100ms per evitare race con callback orfane prima di release.
     console.log(
-      `[KODA_STREAM_CLIENT] chunk loop ended — chunks=${this.chunkIdx} ` +
+      `[KODA_STREAM_CLIENT] chunk loop ending — chunks=${this.chunkIdx} ` +
         `dur=${Date.now() - this.startedAt}ms ` +
         `(active=${this.chunkLoopActive} stopReq=${this.stopRequested})`
     );
+    await new Promise((r) => setTimeout(r, 100));
+    try { await recorder.stop(); } catch {}
+    try { recorder.release?.(); } catch {}
+    this.recorder = null;
+    console.log(`[KODA_STREAM_CLIENT] chunk loop fully cleaned up`);
   }
 
   private async safeStopRecorder() {

@@ -2326,33 +2326,22 @@ export default function Taccuino() {
     if (!convActiveRef.current) emptyTurnsRef.current = 0;
     unlockSpeech().catch(() => {});
 
-    // === Setup audio session IDENTICO a startTalkInternal ===
-    // (FIX post-build #3: senza questo, prepareToRecordAsync su iOS si
-    // bloccava silenziosamente perché AudioSession non era pronta)
+    // === FIX 2026-06-24 v3 (post-troubleshoot review) ===
+    // Setup audio session — DELEGA TUTTO a prewarmMic() come fa
+    // startTalkInternal. Prima facevo doppia setAudioModeAsync (qui +
+    // dentro chunkLoop) creando 3 chiamate sovrapposte → race condition
+    // sull'AudioSession che causava il blocco silenzioso. Ora una sola
+    // chiamata, dentro prewarmMic, identica al flusso esistente.
     try {
       const ttsPlaying = SpeechMod.isSpeaking();
       if (status !== "speaking" && !ttsPlaying) {
         try { SpeechMod.stop(); } catch {}
       }
-      // (1) Release leftover audio session
-      if (Platform.OS !== "web" && status !== "speaking" && !ttsPlaying) {
-        try {
-          const { setAudioModeAsync } = require("expo-audio");
-          await setAudioModeAsync({
-            allowsRecording: false,
-            playsInSilentMode: true,
-            interruptionMode: "duckOthers",
-            shouldPlayInBackground: false,
-            shouldRouteThroughEarpiece: false,
-          });
-          await new Promise((r) => setTimeout(r, 30));
-        } catch {}
-      }
-      // (2) Cold-start gate — prewarm mic (critico per primo turno)
+      // prewarmMic gestisce permessi + setAudioModeAsync + _nativeReady
       if (Platform.OS !== "web") {
         await prewarmMic();
       }
-      console.log(`[KODA_STREAM_CLIENT] audio prep done, opening stream session`);
+      console.log(`[KODA_STREAM_CLIENT] audio prep done (via prewarmMic)`);
     } catch (e) {
       console.warn(`[KODA_STREAM_CLIENT] audio prep failed: ${e}`);
     }
