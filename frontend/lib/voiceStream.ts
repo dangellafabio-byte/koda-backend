@@ -343,9 +343,24 @@ export class VoiceStreamSession {
         // Stop e leggi
         await rec.stop();
         const t_stop = Date.now();
-        const uri: string | null = rec.uri || rec.getURI?.() || null;
+        // === FIX 2026-06-24 (post-feedback Fabio) =================
+        // Sequenza corretta per espo-audio v54 (vedi voice.ts safeStop()):
+        // PRIMA prova getStatus().url, POI rec.uri come fallback.
+        // (`getURI()` NON esiste su v54. Su iOS, `rec.uri` può tornare null
+        // dopo stop, va letto via getStatus.)
+        let uri: string | null = null;
+        try {
+          const statusUrl = (rec.getStatus?.() as any)?.url || null;
+          const directUri = rec.uri || null;
+          uri = statusUrl || directUri;
+        } catch {}
         if (!uri) {
-          console.warn(`[KODA_STREAM_CLIENT] chunk #${this.chunkIdx + 1}: no URI from recorder`);
+          console.warn(
+            `[KODA_STREAM_CLIENT] chunk #${this.chunkIdx + 1}: no URI ` +
+              `(status.url and rec.uri both null) — skipping`
+          );
+          // Release comunque per non leakare
+          try { rec.release?.(); } catch {}
           continue;
         }
 
@@ -374,10 +389,13 @@ export class VoiceStreamSession {
             `gap_prev=${gap > 0 ? gap : 0}ms`
         );
 
-        // Cleanup file (best-effort)
+        // Cleanup file (best-effort) + RELEASE recorder nativo
+        // (critico: senza release() il bridge nativo iOS leaka risorsa
+        //  e dopo 5-10 chunk il mic si freezza — documentato in voice.ts)
         try {
           await FileSystem.deleteAsync(uri, { idempotent: true });
         } catch {}
+        try { rec.release?.(); } catch {}
 
         prevChunkEnd = t_sent;
         chunkStart = Date.now();
@@ -385,6 +403,8 @@ export class VoiceStreamSession {
         console.warn(
           `[KODA_STREAM_CLIENT] chunk #${this.chunkIdx + 1} error: ${e?.message || e}`
         );
+        // Release anche su errore per non leakare
+        try { rec?.release?.(); } catch {}
         // Aspetta brevemente prima di ritentare
         await new Promise((r) => setTimeout(r, 200));
       } finally {
