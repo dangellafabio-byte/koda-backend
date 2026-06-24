@@ -115,7 +115,17 @@ const SILENCE_DURATION_MS = 1500;    // 1.5s silence after speech → end of utt
 const MIN_SPEECH_MS = 700;           // need at least 700ms of voice before silence can fire
 const MIN_SPEECH_FRAMES = 3;         // 3 consecutive frames (~210ms) above threshold → real speech
 const METER_POLL_MS = 70;            // ~14Hz sampling
-const HARD_CAP_MS = 60_000;          // absolute max recording length
+// === SAFETY-CAP 2026-06-23 (Fabio cross-platform) ===
+// Ridotto da 60s → 25s su entrambe le piattaforme. Motivazione:
+// finché non è pronta la Fase 1 streaming Deepgram Live (che sostituirà
+// il VAD volumetrico come decisore di end-of-utterance), in ambienti
+// estremamente rumorosi (furgone in movimento, noise floor ~ -14 dB)
+// il VAD volumetrico può non chiudere mai naturalmente. 25s sono più
+// che sufficienti per la frase più lunga ragionevole di un utente
+// (frase media parlata: 5-12s) ed evitano upload da 600KB+ con
+// latenze STT di 5-7s. Cap valido iOS+Android identico — la logica
+// è in JS condiviso e non dipende dalla scala dB del device.
+const HARD_CAP_MS = 25_000;          // safety-cap cross-platform (era 60s)
 
 // ============ CAPPED ADAPTIVE VAD (Fix #1 — 2026-06) ============
 // Problema osservato in produzione (log utente, furgone):
@@ -591,9 +601,15 @@ export async function startRecording(): Promise<Recorder> {
             `cf=${consecutiveVoiceFrames}`
         );
       }
-      // Hard cap on recording length
+      // Hard cap on recording length (safety-cap cross-platform)
       if (now - startedAt > HARD_CAP_MS) {
         vadStopped = true;
+        console.log(
+          `[KODA_VAD_CAP] HARD_CAP raggiunto a t=${now - startedAt}ms ` +
+            `(cap=${HARD_CAP_MS}ms) — chiusura forzata. ` +
+            `phase=${speechStartFired ? "SPEECH" : "PRESPEECH"} ` +
+            `calib=${calibrationDone ? "done" : "in-progress"}`
+        );
         if (silenceCb) try { silenceCb(); } catch {}
         return;
       }
