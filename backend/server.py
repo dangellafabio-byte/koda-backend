@@ -8,7 +8,7 @@ import json
 import re
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Callable, Awaitable
 import uuid
 from datetime import datetime, timezone, timedelta
 try:
@@ -8866,6 +8866,64 @@ async def api_converse_ws(websocket: WebSocket):
 @app.websocket("/converse-ws")
 async def converse_ws_root(websocket: WebSocket):
     await _converse_ws_handler(websocket)
+
+
+# ============================================================
+# FASE 1 STREAMING — Voice WebSocket (giugno 2026)
+# ============================================================
+# Endpoint che riceve audio in streaming (rolling chunks AAC ~250ms),
+# fa proxy verso Deepgram Live, e quando arriva UtteranceEnd/speech_final
+# triggera la stessa fast pipeline (_fast_pipeline_task) usata dal flusso
+# legacy file-based. Vantaggi:
+#   • Endpointing intelligente Deepgram (modello linguistico, non volume)
+#     → risolve VAD volumetrico cieco su Xiaomi MIUI e furgone rumoroso
+#   • Latenza: niente upload-then-wait, l'audio è già a destinazione
+#   • Cross-platform: stesso codice JS iOS+Android, stesso PCM server-side
+# ============================================================
+from voice_stream import voice_stream_handler  # noqa: E402
+
+
+async def _run_pipeline_for_streamed_text(
+    text: str,
+    ephemeral: bool,
+    audio_duration_ms: Optional[int],
+    stt_confidence: Optional[float],
+    emit: Callable[..., Awaitable[None]],
+    session_id: str,
+) -> None:
+    """Wrap di _fast_pipeline_task per il voice streaming.
+
+    Si occupa di creare la sessione Mongo (compatibilità col fallback HTTP
+    poll) e poi delegare alla pipeline LLM+TTS esistente.
+    """
+    await _ensure_fast_session_indexes()
+    await _fast_session_create(session_id)
+    await _fast_pipeline_task(
+        session_id=session_id,
+        text=text,
+        ephemeral=ephemeral,
+        audio_duration_ms=audio_duration_ms,
+        emit=emit,
+        stt_confidence=stt_confidence,
+    )
+
+
+@app.websocket("/api/voice/stream")
+async def api_voice_stream(websocket: WebSocket):
+    """Voice streaming endpoint — Fase 1 Deepgram Live."""
+    await voice_stream_handler(
+        websocket,
+        run_pipeline_for_text=_run_pipeline_for_streamed_text,
+    )
+
+
+# Backup path senza /api per test diretti locali.
+@app.websocket("/voice/stream")
+async def voice_stream_root(websocket: WebSocket):
+    await voice_stream_handler(
+        websocket,
+        run_pipeline_for_text=_run_pipeline_for_streamed_text,
+    )
 
 
 # ============================================================
