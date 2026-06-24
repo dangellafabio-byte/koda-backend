@@ -1485,6 +1485,9 @@ export async function voiceStreamConverse(opts: {
   // Notifica del transcript finale dell'utente (per aggiornare la timeline
   // PRIMA che arrivi la risposta AI — UX più reattiva).
   onUserFinal?: (text: string, confidence: number | null, durationMs: number | null) => void;
+  // Esposizione della sessione attiva al chiamante, per permettergli di
+  // chiamare session.stop() da un tap sull'orb (barge-in / stop manuale).
+  onSession?: (session: { stop: () => Promise<void> } | null) => void;
 } = {}): Promise<FastConverseResult> {
   const timeoutMs = opts.timeoutMs ?? 60_000;
   stopAllPlayback();
@@ -1570,9 +1573,12 @@ export async function voiceStreamConverse(opts: {
       ephemeral: opts.ephemeral,
       profileLang: opts.profileLang || "it",
     });
+    // Esponi la sessione al chiamante per stop manuale (es. tap sull'orb).
+    try { opts.onSession?.(session); } catch {}
   } catch (e: any) {
     clearTimeout(hardTimer);
     speakingNow = false;
+    try { opts.onSession?.(null); } catch {}
     return { ok: false, error: `voice-stream-start-failed: ${e?.message || e}` };
   }
 
@@ -1613,6 +1619,7 @@ export async function voiceStreamConverse(opts: {
     }
   } finally {
     try { await session.stop(); } catch {}
+    try { opts.onSession?.(null); } catch {}
     clearTimeout(hardTimer);
     if (currentAbort === ac) currentAbort = null;
     speakingNow = false;

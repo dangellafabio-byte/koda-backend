@@ -667,6 +667,10 @@ export default function Taccuino() {
   }, [profile]);
 
   const recRef = useRef<Recorder | null>(null);
+  // === FASE 1 STREAMING (giugno 2026) ===
+  // Ref alla sessione voice streaming attiva. Permette il tap-to-stop sul
+  // big button anche quando il flusso voce è streaming (non c'è recRef).
+  const streamingSessionRef = useRef<{ stop: () => Promise<void> } | null>(null);
   // === RECORDING DURATION TRACKING (sprint giugno 2026 v11) ===
   // Catturiamo il timestamp di avvio recording così possiamo includerlo
   // nel [KODA_SUMMARY] come recording_duration_ms. Permette di distinguere
@@ -2349,6 +2353,12 @@ export default function Taccuino() {
         ephemeral: confessionalMode,
         profileLang: "it",
         timeoutMs: 60_000,
+        onSession: (s: any) => {
+          streamingSessionRef.current = s;
+          console.log(
+            `[KODA_STREAM_CLIENT] session ref ${s ? "stored" : "cleared"}`
+          );
+        },
         onAudioStart: () => {
           setStatus("speaking");
         },
@@ -2978,7 +2988,17 @@ export default function Taccuino() {
     // and send the audio" — regardless of conversation_mode. The previous
     // behavior (terminate the loop and CANCEL the recording) was confusing
     // and discarded the audio, making it look like the AI didn't hear at all.
-    if (status === "recording" || recRef.current) {
+    if (status === "recording" || recRef.current || streamingSessionRef.current) {
+      // === FASE 1 STREAMING ===
+      // Se siamo in streaming mode, fermare la session.stop() invece di
+      // stopTalk() (che assume il flusso file-based con recRef).
+      if (streamingSessionRef.current) {
+        console.log("[KODA_STREAM_CLIENT] tap-to-stop → session.stop()");
+        const s = streamingSessionRef.current;
+        streamingSessionRef.current = null;
+        s.stop().catch((e) => console.warn("[stream] manual stop failed:", e));
+        return;
+      }
       stopTalk();
       return;
     }

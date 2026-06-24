@@ -297,10 +297,16 @@ export class VoiceStreamSession {
 
   /** Loop principale: registra chunk da CHUNK_DURATION_MS, manda via WS, ripeti. */
   private async chunkLoop() {
+    console.log(`[KODA_STREAM_CLIENT] chunkLoop ENTER`);
     // Permessi (idempotente)
     try {
-      await AudioModule.requestRecordingPermissionsAsync();
-    } catch {}
+      const perm = await AudioModule.requestRecordingPermissionsAsync();
+      console.log(
+        `[KODA_STREAM_CLIENT] mic perm granted=${perm?.granted} status=${perm?.status}`
+      );
+    } catch (e: any) {
+      console.warn(`[KODA_STREAM_CLIENT] perm request failed: ${e?.message || e}`);
+    }
 
     let chunkStart = Date.now();
     let prevChunkEnd = chunkStart;
@@ -316,14 +322,18 @@ export class VoiceStreamSession {
         break;
       }
 
+      let rec: any = null;
       try {
-        // Crea recorder per QUESTO chunk
-        const preset = buildStreamingPreset();
-        const rec = new AudioModule.AudioRecorder(preset);
+        // Crea recorder per QUESTO chunk — API expo-audio v54:
+        // constructor riceve {} (vuoto), il preset va a prepareToRecordAsync().
+        // === FIX 2026-06-24 ===
+        // (prima passavo il preset al costruttore → silent failure su iOS)
+        rec = new (AudioModule as any).AudioRecorder({});
         this.recorder = rec;
+        const preset = buildStreamingPreset();
 
         const t_start_rec = Date.now();
-        await rec.prepareToRecordAsync();
+        await rec.prepareToRecordAsync(preset);
         rec.record();
         const t_record_started = Date.now();
 
@@ -335,7 +345,7 @@ export class VoiceStreamSession {
         const t_stop = Date.now();
         const uri: string | null = rec.uri || rec.getURI?.() || null;
         if (!uri) {
-          console.warn(`[KODA_STREAM_CLIENT] no URI from recorder`);
+          console.warn(`[KODA_STREAM_CLIENT] chunk #${this.chunkIdx + 1}: no URI from recorder`);
           continue;
         }
 
@@ -372,7 +382,9 @@ export class VoiceStreamSession {
         prevChunkEnd = t_sent;
         chunkStart = Date.now();
       } catch (e: any) {
-        console.warn(`[KODA_STREAM_CLIENT] chunk error: ${e?.message || e}`);
+        console.warn(
+          `[KODA_STREAM_CLIENT] chunk #${this.chunkIdx + 1} error: ${e?.message || e}`
+        );
         // Aspetta brevemente prima di ritentare
         await new Promise((r) => setTimeout(r, 200));
       } finally {
@@ -382,7 +394,8 @@ export class VoiceStreamSession {
 
     console.log(
       `[KODA_STREAM_CLIENT] chunk loop ended — chunks=${this.chunkIdx} ` +
-        `dur=${Date.now() - this.startedAt}ms`
+        `dur=${Date.now() - this.startedAt}ms ` +
+        `(active=${this.chunkLoopActive} stopReq=${this.stopRequested})`
     );
   }
 
