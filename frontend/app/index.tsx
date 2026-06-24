@@ -2303,9 +2303,129 @@ export default function Taccuino() {
     setStatus("idle");
   }
 
+  // ============================================================
+  // FASE 1 STREAMING — Voice WS opt-in (giugno 2026)
+  // ============================================================
+  // Quando EXPO_PUBLIC_USE_WS_VOICE_STREAM=true, l'orb attiva questa
+  // pipeline al posto del flusso classico (record → upload → STT → fastConverse).
+  // Vantaggi:
+  //  • Endpointing intelligente Deepgram → niente VAD volumetrico (cieco
+  //    su Xiaomi MIUI, ingannato dal rumore di motore nel furgone)
+  //  • Latenza: niente upload-then-wait di 14s su rete mobile lenta
+  //  • Cross-platform: stesso codice JS iOS+Android
+  // Cambia solo la fonte audio/STT — la timeline UI, la safety, le actions,
+  // e il TTS playback rimangono identici al flusso esistente.
+  // ============================================================
+  const startTalkStreaming = async () => {
+    if (status !== "idle" && status !== "speaking") return;
+    setError(null);
+    if (!convActiveRef.current) emptyTurnsRef.current = 0;
+    unlockSpeech().catch(() => {});
+
+    // Stop eventuale TTS in corso (barge-in)
+    try {
+      if (SpeechMod.isSpeaking()) SpeechMod.stop();
+    } catch {}
+
+    // Placeholder optimistic (verrà aggiornato quando arriva stt_final)
+    const optimisticId = `local-stream-${Date.now()}`;
+    const optimistic: TimelineEntry = {
+      id: optimisticId,
+      role: "user",
+      text: "…",
+      timestamp: new Date().toISOString(),
+      confessional: confessionalMode || undefined,
+    };
+    requestForceScroll();
+    setTimeline((prev) => [...prev, optimistic]);
+    setStatus("recording");
+
+    let capturedMeta: any = null;
+    let aiEntryId: string | null = null;
+
+    try {
+      const { voiceStreamConverse } = require("../lib/speech");
+      const result = await voiceStreamConverse({
+        ephemeral: confessionalMode,
+        profileLang: "it",
+        timeoutMs: 60_000,
+        onAudioStart: () => {
+          setStatus("speaking");
+        },
+        onUserFinal: (userText: string, conf: number | null, _dur: number | null) => {
+          // Aggiorna la bolla utente col testo trascritto reale.
+          setTimeline((prev) =>
+            prev.map((e) =>
+              e.id === optimisticId ? { ...e, text: userText } : e
+            )
+          );
+          if (typeof conf === "number") {
+            lastSttConfidenceRef.current = conf;
+            console.log(
+              `[KODA_STREAM_CLIENT] user_final conf=${conf.toFixed(3)} text=${JSON.stringify(userText)}`
+            );
+          }
+        },
+        onMeta: (meta: any) => {
+          capturedMeta = meta;
+          try {
+            aiEntryId = `stream-ai-${Date.now()}`;
+            const aiEntry: TimelineEntry = {
+              id: aiEntryId,
+              role: "ai",
+              text: stripDisplayTags(meta.reply || ""),
+              voice_text: meta.voice_text || undefined,
+              tone: (meta.tone as Tone) || "warm",
+              timestamp: new Date().toISOString(),
+              actions: meta.actions || undefined,
+              confessional: confessionalMode || undefined,
+            };
+            setTimeline((prev) => [...prev, aiEntry]);
+            if (Array.isArray(meta.actions) && meta.actions.length > 0) {
+              runActions(meta.actions as any[]);
+            }
+            if (meta.close_session) {
+              console.log("[KODA_CLOSE_SESSION] (stream) meta.close_session=true → pausing hands-free loop");
+              setCloseSessionPause(true);
+              closeSessionPauseRef.current = true;
+            }
+          } catch (e) {
+            console.warn("[stream] onMeta handler error:", e);
+          }
+        },
+      });
+
+      if (!result.ok) {
+        console.warn("[stream] failed:", result.error);
+        // Se la bolla utente è ancora vuota, rimuoviamo l'optimistic.
+        setTimeline((prev) => prev.filter((e) => e.id !== optimisticId || (e as any).text !== "…"));
+        setError("Connessione voce interrotta. Riprova.");
+        setTimeout(() => setError(null), 4000);
+      }
+    } catch (e) {
+      console.error("[stream] crash:", e);
+      setError("Errore voce streaming.");
+      setTimeout(() => setError(null), 4000);
+    } finally {
+      setStatus("idle");
+    }
+  };
+
   // Push-to-talk (or hands-free)
   const startTalkInternal = async (autoStopOnSilence: boolean) => {
     if (status !== "idle" && status !== "speaking") return;
+
+    // === FASE 1 STREAMING OPT-IN (env flag, giugno 2026) ===
+    // Se EXPO_PUBLIC_USE_WS_VOICE_STREAM=true, bypassiamo TUTTO il flusso
+    // record-then-upload e attiviamo lo streaming WS con rolling chunks.
+    // Cambia solo la fonte STT — il resto della UX (timeline, actions,
+    // safety) viene gestito dentro startTalkStreaming() in modo identico.
+    const useVoiceStream =
+      String(process.env.EXPO_PUBLIC_USE_WS_VOICE_STREAM || "").toLowerCase() === "true";
+    if (useVoiceStream && Platform.OS !== "web") {
+      return startTalkStreaming();
+    }
+
     setError(null);
     // Reset contatore "vuoti" quando l'utente attiva manualmente (non in loop)
     if (!convActiveRef.current) emptyTurnsRef.current = 0;

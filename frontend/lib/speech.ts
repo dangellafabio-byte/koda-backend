@@ -1463,3 +1463,163 @@ export const SpeechMod = {
     await fallbackSpeak(text, lang, tone);
   },
 };
+
+// =============================================================
+// FASE 1 STREAMING — voiceStreamConverse (giugno 2026)
+// =============================================================
+// Wrapper attorno a VoiceStreamSession (rolling chunks AAC 500ms via WS)
+// che mantiene la stessa interfaccia di fastConverseWS: il chiamante
+// riceve onMeta, onAudioStart, e una Promise risolta con FastConverseResult.
+// Internamente:
+//  - apre la sessione streaming (WS verso /api/voice/stream)
+//  - registra in rolling chunks finché Deepgram non dice "speech_final"
+//  - quando arriva onSentence riusa la stessa coda+player loop di fastConverseWS
+//  - ritorna quando arriva onDone (o errore/timeout)
+// =============================================================
+export async function voiceStreamConverse(opts: {
+  ephemeral?: boolean;
+  profileLang?: string;
+  timeoutMs?: number;
+  onAudioStart?: () => void;
+  onMeta?: (meta: FastConverseMeta) => void;
+  // Notifica del transcript finale dell'utente (per aggiornare la timeline
+  // PRIMA che arrivi la risposta AI — UX più reattiva).
+  onUserFinal?: (text: string, confidence: number | null, durationMs: number | null) => void;
+} = {}): Promise<FastConverseResult> {
+  const timeoutMs = opts.timeoutMs ?? 60_000;
+  stopAllPlayback();
+  speakingNow = true;
+  await prewarmAudio();
+
+  const ac = new AbortController();
+  currentAbort = ac;
+
+  type SentenceItem = {
+    i: number;
+    bytes: Uint8Array;
+    waveform: number[] | null;
+    window_ms: number;
+  };
+  const sentenceQueue: SentenceItem[] = [];
+  let resolveTokenWait: (() => void) | null = null;
+  let metaCaptured: FastConverseMeta | undefined;
+  let firstAudioFired = false;
+  let pipelineDone = false;
+  let pipelineError: string | null = null;
+
+  const notify = () => { if (resolveTokenWait) { resolveTokenWait(); resolveTokenWait = null; } };
+  const waitForToken = () => new Promise<void>((resolve) => {
+    if (sentenceQueue.length > 0 || pipelineDone || pipelineError) { resolve(); return; }
+    resolveTokenWait = resolve;
+  });
+
+  const hardTimer = setTimeout(() => {
+    try { ac.abort(); } catch {}
+    pipelineError = "voice-stream-timeout";
+    pipelineDone = true;
+    notify();
+  }, timeoutMs);
+
+  // Lazy import per evitare cicli (voiceStream.ts → ... → speech.ts)
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { VoiceStreamSession } = require("./voiceStream");
+
+  const session = new VoiceStreamSession({
+    onReady: (sessionId: string) => {
+      console.log(`[KODA_STREAM_CLIENT] ready sess=${sessionId.slice(0, 8)}`);
+    },
+    onInterim: (_text: string, _isFinal: boolean) => {
+      // (UI live transcript — riservato per futura visualizzazione,
+      // per ora silenzioso)
+    },
+    onFinal: (text: string, conf: number | null, dur: number | null) => {
+      try { opts.onUserFinal?.(text, conf, dur); } catch {}
+    },
+    onSentence: (header: any, audioBuf: ArrayBuffer) => {
+      const u8 = new Uint8Array(audioBuf);
+      sentenceQueue.push({
+        i: header.i || 0,
+        bytes: u8,
+        waveform: Array.isArray(header.waveform) ? header.waveform : null,
+        window_ms: typeof header.window_ms === "number" ? header.window_ms : 60,
+      });
+      notify();
+    },
+    onMeta: (meta: any) => {
+      metaCaptured = {
+        reply: meta.reply || "",
+        voice_text: meta.voice_text ?? null,
+        tone: (meta.tone as Tone) ?? null,
+        actions: Array.isArray(meta.actions) ? meta.actions : [],
+      };
+      try { opts.onMeta?.(metaCaptured); } catch {}
+    },
+    onDone: () => {
+      pipelineDone = true;
+      notify();
+    },
+    onError: (msg: string) => {
+      pipelineError = msg || "voice-stream-error";
+      pipelineDone = true;
+      notify();
+    },
+  });
+
+  try {
+    await session.start({
+      ephemeral: opts.ephemeral,
+      profileLang: opts.profileLang || "it",
+    });
+  } catch (e: any) {
+    clearTimeout(hardTimer);
+    speakingNow = false;
+    return { ok: false, error: `voice-stream-start-failed: ${e?.message || e}` };
+  }
+
+  // Player loop (identico al pattern di fastConverseWS) — riusa
+  // _writeMp3ToFile + playElevenLabsNativeFromUrl + _playMp3BytesWeb già
+  // dichiarati nel modulo.
+  try {
+    while (!ac.signal.aborted) {
+      if (sentenceQueue.length === 0) {
+        if (pipelineDone || pipelineError) break;
+        await waitForToken();
+        continue;
+      }
+      const item = sentenceQueue.shift()!;
+      const fireStart = () => {
+        if (!firstAudioFired) {
+          firstAudioFired = true;
+          try { opts.onAudioStart?.(); } catch {}
+        }
+        try {
+          if (item.waveform && item.waveform.length > 0) {
+            startReactiveWaveform(item.waveform, item.window_ms || 60);
+          }
+        } catch {}
+      };
+      try {
+        if (Platform.OS === "web") {
+          await _playMp3BytesWeb(item.bytes, fireStart);
+        } else {
+          const path = await _writeMp3ToFile(item.bytes, item.i);
+          if (!path) continue;
+          await playElevenLabsNativeFromUrl(path, fireStart);
+        }
+      } catch (e) {
+        console.warn("[voice-stream] sentence playback failed:", e);
+      }
+      if (ac.signal.aborted) break;
+    }
+  } finally {
+    try { await session.stop(); } catch {}
+    clearTimeout(hardTimer);
+    if (currentAbort === ac) currentAbort = null;
+    speakingNow = false;
+  }
+
+  if (ac.signal.aborted) return { ok: false, error: "aborted" };
+  if (pipelineError) return { ok: false, error: pipelineError, meta: metaCaptured };
+  return { ok: true, meta: metaCaptured };
+}
+
