@@ -2326,10 +2326,36 @@ export default function Taccuino() {
     if (!convActiveRef.current) emptyTurnsRef.current = 0;
     unlockSpeech().catch(() => {});
 
-    // Stop eventuale TTS in corso (barge-in)
+    // === Setup audio session IDENTICO a startTalkInternal ===
+    // (FIX post-build #3: senza questo, prepareToRecordAsync su iOS si
+    // bloccava silenziosamente perché AudioSession non era pronta)
     try {
-      if (SpeechMod.isSpeaking()) SpeechMod.stop();
-    } catch {}
+      const ttsPlaying = SpeechMod.isSpeaking();
+      if (status !== "speaking" && !ttsPlaying) {
+        try { SpeechMod.stop(); } catch {}
+      }
+      // (1) Release leftover audio session
+      if (Platform.OS !== "web" && status !== "speaking" && !ttsPlaying) {
+        try {
+          const { setAudioModeAsync } = require("expo-audio");
+          await setAudioModeAsync({
+            allowsRecording: false,
+            playsInSilentMode: true,
+            interruptionMode: "duckOthers",
+            shouldPlayInBackground: false,
+            shouldRouteThroughEarpiece: false,
+          });
+          await new Promise((r) => setTimeout(r, 30));
+        } catch {}
+      }
+      // (2) Cold-start gate — prewarm mic (critico per primo turno)
+      if (Platform.OS !== "web") {
+        await prewarmMic();
+      }
+      console.log(`[KODA_STREAM_CLIENT] audio prep done, opening stream session`);
+    } catch (e) {
+      console.warn(`[KODA_STREAM_CLIENT] audio prep failed: ${e}`);
+    }
 
     // Placeholder optimistic (verrà aggiornato quando arriva stt_final)
     const optimisticId = `local-stream-${Date.now()}`;

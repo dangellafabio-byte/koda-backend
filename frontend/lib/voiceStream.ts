@@ -36,6 +36,7 @@ import {
   AudioRecorder,
   AudioModule,
   RecordingPresets,
+  setAudioModeAsync,
 } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 
@@ -308,6 +309,30 @@ export class VoiceStreamSession {
       console.warn(`[KODA_STREAM_CLIENT] perm request failed: ${e?.message || e}`);
     }
 
+    // === FIX 2026-06-24 v2 (post-build #2 fallita) ============
+    // CRITICO: imposta AudioSession in modalità recording PRIMA di
+    // creare il recorder. Senza questo, su iOS `prepareToRecordAsync`
+    // si blocca silenziosamente (nessun throw, nessun log) perché
+    // l'AudioSession è ancora in modalità playback dalla TTS precedente
+    // o da default. Il flusso esistente (voice.ts) lo fa dentro
+    // startRecording() — io l'avevo saltato bypassando startTalkInternal.
+    try {
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        interruptionMode: "duckOthers",
+        shouldPlayInBackground: false,
+        shouldRouteThroughEarpiece: false,
+      });
+      console.log(`[KODA_STREAM_CLIENT] audio mode set to recording=true`);
+      // Lascia 30ms a iOS per applicare il cambio di session
+      await new Promise((r) => setTimeout(r, 30));
+    } catch (e: any) {
+      console.warn(
+        `[KODA_STREAM_CLIENT] setAudioModeAsync(recording) failed: ${e?.message || e}`
+      );
+    }
+
     let chunkStart = Date.now();
     let prevChunkEnd = chunkStart;
 
@@ -323,43 +348,51 @@ export class VoiceStreamSession {
       }
 
       let rec: any = null;
+      const cIdx = this.chunkIdx + 1;
       try {
-        // Crea recorder per QUESTO chunk — API expo-audio v54:
-        // constructor riceve {} (vuoto), il preset va a prepareToRecordAsync().
-        // === FIX 2026-06-24 ===
-        // (prima passavo il preset al costruttore → silent failure su iOS)
+        // === GRANULAR LOGS (post-build #2 — per scoprire DOVE hang) ===
+        // Log SOLO per i primi 2 chunk (poi sono ripetitivi e spammano).
+        const verbose = cIdx <= 2;
+        if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} construct...`);
         rec = new (AudioModule as any).AudioRecorder({});
         this.recorder = rec;
         const preset = buildStreamingPreset();
+        if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} prepare...`);
 
         const t_start_rec = Date.now();
         await rec.prepareToRecordAsync(preset);
+        if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} record()...`);
         rec.record();
         const t_record_started = Date.now();
+
+        if (verbose)
+          console.log(
+            `[KODA_STREAM_CLIENT] chunk #${cIdx} recording, wait ${CHUNK_DURATION_MS}ms...`
+          );
 
         // Aspetta CHUNK_DURATION_MS
         await new Promise((resolve) => setTimeout(resolve, CHUNK_DURATION_MS));
 
+        if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} stop...`);
+
         // Stop e leggi
         await rec.stop();
         const t_stop = Date.now();
-        // === FIX 2026-06-24 (post-feedback Fabio) =================
+
         // Sequenza corretta per espo-audio v54 (vedi voice.ts safeStop()):
         // PRIMA prova getStatus().url, POI rec.uri come fallback.
-        // (`getURI()` NON esiste su v54. Su iOS, `rec.uri` può tornare null
-        // dopo stop, va letto via getStatus.)
         let uri: string | null = null;
         try {
           const statusUrl = (rec.getStatus?.() as any)?.url || null;
           const directUri = rec.uri || null;
           uri = statusUrl || directUri;
         } catch {}
+        if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} uri=${uri ? "OK" : "NULL"}`);
         if (!uri) {
           console.warn(
-            `[KODA_STREAM_CLIENT] chunk #${this.chunkIdx + 1}: no URI ` +
+            `[KODA_STREAM_CLIENT] chunk #${cIdx}: no URI ` +
               `(status.url and rec.uri both null) — skipping`
           );
-          // Release comunque per non leakare
           try { rec.release?.(); } catch {}
           continue;
         }
@@ -390,8 +423,6 @@ export class VoiceStreamSession {
         );
 
         // Cleanup file (best-effort) + RELEASE recorder nativo
-        // (critico: senza release() il bridge nativo iOS leaka risorsa
-        //  e dopo 5-10 chunk il mic si freezza — documentato in voice.ts)
         try {
           await FileSystem.deleteAsync(uri, { idempotent: true });
         } catch {}
@@ -401,11 +432,9 @@ export class VoiceStreamSession {
         chunkStart = Date.now();
       } catch (e: any) {
         console.warn(
-          `[KODA_STREAM_CLIENT] chunk #${this.chunkIdx + 1} error: ${e?.message || e}`
+          `[KODA_STREAM_CLIENT] chunk #${cIdx} error: ${e?.message || e}`
         );
-        // Release anche su errore per non leakare
         try { rec?.release?.(); } catch {}
-        // Aspetta brevemente prima di ritentare
         await new Promise((r) => setTimeout(r, 200));
       } finally {
         this.recorder = null;
