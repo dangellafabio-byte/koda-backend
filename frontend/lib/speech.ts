@@ -1492,7 +1492,16 @@ export async function voiceStreamConverse(opts: {
   const timeoutMs = opts.timeoutMs ?? 60_000;
   stopAllPlayback();
   speakingNow = true;
-  await prewarmAudio();
+  // === FIX 2026-06-25 v6 (root cause Build #4 RecordingDisabledException) ===
+  // NON chiamiamo prewarmAudio() qui! prewarmAudio setta
+  // allowsRecording:FALSE (è pensato per playback TTS) e annulla il
+  // prewarmMic({allowsRecording:true}) che startTalkStreaming ha appena
+  // fatto. Questo era il vero motivo per cui Build #1-4 fallivano con
+  // RecordingDisabledException. Lo streaming deve INIZIARE in modalità
+  // RECORD; il TTS che arriverà dopo gestirà il proprio switch a
+  // playback mode quando serve (setAudioModeAsync è già chiamata
+  // internamente da playElevenLabsNativeFromUrl).
+  // await prewarmAudio();  ← DISABILITATO sul flusso streaming.
 
   const ac = new AbortController();
   currentAbort = ac;
