@@ -445,28 +445,33 @@ export class VoiceStreamSession {
       console.warn(`[KODA_STREAM_CLIENT] perm request failed: ${e?.message || e}`);
     }
 
-    // === FIX 2026-06-24 v3 (post-troubleshoot review) =================
-    // NON chiamiamo più setAudioModeAsync qui — è GIÀ stato fatto da
-    // prewarmMic() in startTalkStreaming. Chiamarla di nuovo creava
-    // race condition tra 3 chiamate asincrone sovrapposte (root cause
-    // del blocco silenzioso identificato dal troubleshoot agent).
-
-    // === FIX 2026-06-25 v7 (post-Build #6 WS close diagnostic) ===
-    // RIMOSSA la chiamata setAudioModeAsync ridondante che era stata
-    // aggiunta in v6 come defense-in-depth. Su iOS in rete cellulare
-    // instabile, ri-attivare l'audio session DOPO che la WebSocket è
-    // già aperta sembra causare il sistema a riconfigurare i radio →
-    // la WS viene chiusa dal sistema con code=1000 ~1s dopo `ready`.
+    // === FIX 2026-06-25 v9 (post-Build #8 Prova 2 disaster) ===
+    // RIPRISTINATA la chiamata setAudioModeAsync({allowsRecording:true})
+    // PRIMA di costruire il recorder. La rimozione in v8 era sbagliata:
+    // dopo un TTS playback (es. risposta di Koda nel turno precedente),
+    // playElevenLabsNativeFromUrl mette l'audio session in playback mode
+    // (allowsRecording:false) e prewarmMic() da solo NON basta a forzare
+    // iOS a tornare in record mode al turno successivo. Risultato:
+    // RecordingDisabledException in loop infinito.
     //
-    // È sicuro rimuoverla perché:
-    //  - prewarmMic() in startTalkStreaming chiama già setAudioModeAsync
-    //    ({allowsRecording:true}) prima di aprire la WS
-    //  - prewarmAudio() (che la annullava settando allowsRecording:false)
-    //    è stata rimossa dal flusso streaming in commit 47cc0566
-    //  - Pattern voice.ts conferma che UNA SOLA chiamata pre-record basta
+    // In Build #7 questa chiamata funzionava (chunks catturati, stt_final
+    // ricevuto). Il WS close che attribuii a questa chiamata era invece
+    // dovuto ad altro (rete cellular).
     //
-    // Se in futuro il pattern v6 dovesse essere necessario di nuovo, va
-    // fatto PRIMA di aprire la WebSocket, non dopo.
+    // Lazy import per evitare ciclo voiceStream → speech → voiceStream.
+    try {
+      const { setAudioModeAsync } = require("expo-audio");
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        interruptionMode: "duckOthers",
+        shouldPlayInBackground: false,
+        shouldRouteThroughEarpiece: false,
+      });
+      console.log(`[KODA_STREAM_CLIENT] setAudioModeAsync(allowsRecording=true) OK`);
+    } catch (e: any) {
+      console.log(`[KODA_STREAM_CLIENT] setAudioModeAsync FAILED: ${e?.message || e}`);
+    }
 
     // === FIX 2026-06-24 v3 ===
     // UN SOLO recorder per tutta la sessione (come voice.ts).

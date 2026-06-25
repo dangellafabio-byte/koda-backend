@@ -1,0 +1,39 @@
+{
+  "summary": "Regression validation for voiceStream.ts v9 fix (setAudioModeAsync({allowsRecording:true}) at start of chunkLoop). All 3 backend assertions passed: GET /api/profile=200, POST /api/auth/dev-login=200 with session_token cookie, WS /api/voice/stream handles full protocol (start→binary garbage→ping keepalive→end) without crashing the server or ffmpeg pipeline. Frontend landing page loads cleanly on web preview (no red screen, no JS errors, no React Native uncaught exceptions). Metro bundler completes successfully — voiceStream.ts TS compiles with no syntax errors. voice_stream module imports cleanly at backend startup (visible in supervisor logs: '[voice_stream] ffmpeg binary: …'). Both WS routes /api/voice/stream and /voice/stream are registered. The native iOS RecordingDisabledException Turn-2 fix cannot be validated on web (expo-audio + AVAudioSession is iOS-only) and requires a physical device build — explicitly out of scope per the request.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "web dev-login button", "issue": "Tapping 'Entra come Tester' on web shows 'Dev login non riuscito' (backend endpoint itself returns 200 with session_token + Set-Cookie — verified via curl). Likely a SameSite=None;Secure cookie behaviour or fetch credentials mode on web; does NOT affect native iOS, where the v9 fix lives. Out of scope for this regression.", "affected_testIDs": ["login-dev"]}
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_voice_stream_v9.py",
+    "/app/test_reports/pytest/iter8_voice_stream.xml"
+  ],
+  "action_items": [
+    "v9 audio-mode fix is safe to ship to the next iOS TestFlight build for in-van validation: no compilation regression, no backend protocol regression, no Metro bundling error.",
+    "Native validation REQUIRED on physical iPhone (build a new dev/TestFlight): Turn 1 → wait for Koda TTS to play → Turn 2 → verify chunkLoop does NOT throw RecordingDisabledException and that chunks #1-3 are captured.",
+    "Watch for log line '[KODA_STREAM_CLIENT] setAudioModeAsync(allowsRecording=true) OK' at the start of EVERY chunkLoop iteration (Turn 1 and Turn 2+). If it logs 'FAILED' on Turn 2, capture e?.message — likely AudioSession-conflict path that needs a deactivate→activate cycle.",
+    "(Pre-existing) Dev-login web flow: the iOS app uses native fetch with credentials and works; the web preview shows 'Dev login non riuscito' — not blocking the v9 regression but worth fixing in a separate iteration."
+  ],
+  "critical_code_review_comments": [
+    "voiceStream.ts:462-474 — the lazy require('expo-audio') inside chunkLoop is correct to avoid the circular import noted in the comment (voiceStream → speech → voiceStream). Good.",
+    "voiceStream.ts is 676 lines — close to the 700-line soft cap. Consider splitting buildStreamingPreset, base64ToArrayBuffer, and the WS lifecycle (openWs/sendJson/forceCloseWs) into a separate ws.ts in a future refactor.",
+    "voice_stream.py:128 — ffmpeg conversion has a 2.0s hard timeout per chunk; the v9 garbage-bytes test confirms ffmpeg returncode != 0 is handled gracefully (returns b'' and the chunk is skipped). No crash path observed."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_voice_stream_v9.py (new)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100% (landing page loads, no errors)"},
+  "seed_data_creation": "None — used existing 'me'/dev profile.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "v9 fix is regression-clean from the backend + bundling perspective. The actual iOS-only RecordingDisabledException on Turn 2 must be validated on a physical device after the next TestFlight build — web preview cannot test expo-audio AVAudioSession state. If the user reports Turn 2 still failing, ask them for the diagLogger output around '[KODA_STREAM_CLIENT] setAudioModeAsync' on Turn 2: a 'FAILED' line means iOS rejected the mode-change (possibly needs await AudioModule.deactivateAudioSessionAsync() then setAudioModeAsync), while an 'OK' line + immediate chunk #1 ERROR means the AudioRecorder construction or prepareToRecordAsync is still racing the AVAudioSession transition.",
+  "rca_of_issue": "Background: After ElevenLabs TTS playback iOS keeps AVAudioSession in playback mode (allowsRecording=false). Turn 2's chunkLoop tried to record without re-asserting recording mode → RecordingDisabledException. v9 fix re-asserts the mode at chunkLoop entry every turn. Validated regression-clean; native validation pending on physical device."
+}
