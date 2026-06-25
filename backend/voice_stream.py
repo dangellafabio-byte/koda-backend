@@ -110,6 +110,14 @@ DG_PARAMS = {
     "smart_format": "true",
     "filler_words": "false",
     "punctuate": "true",
+    # === FIX 2026-06-25 v10 (post-Build #9 home test) ===
+    # In casa silenziosa Deepgram trascriveva "Ciao Cosa" invece di "Ciao Koda"
+    # (e talvolta "Coda"/"Goda"). Nova-3 supporta keyterm prompting (plain
+    # string, NO intensifier suffix). Boostiamo il nome "Koda" così che la
+    # rete neurale lo preferisca alle parole foneticamente vicine. Aggiungere
+    # qui altri nomi-chiave del dominio se appariranno problemi simili
+    # (es. "Sfogo", "Confessionale" se vengono sbagliati).
+    "keyterm": "Koda",
 }
 
 # KeepAlive per evitare chiusura WS Deepgram dopo 10s di silenzio.

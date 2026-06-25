@@ -408,6 +408,10 @@ export class VoiceStreamSession {
       this.safeStopRecorder().catch(() => {});
     } else if (type === "sentence") {
       // Salva header → il prossimo binary frame conterrà l'audio
+      console.log(
+        `[KODA_STREAM_CLIENT] sentence_header i=${evt.i} ` +
+          `text="${(evt.text || "").slice(0, 40)}" bytes=${evt.audio_bytes}`
+      );
       this.pendingSentenceHeader = {
         i: evt.i,
         text: evt.text,

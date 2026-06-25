@@ -284,7 +284,11 @@ async function prepareTTSUrl(
   }
 }
 
-async function playElevenLabsNativeFromUrl(audioUrl: string, onAudioStart?: () => void): Promise<boolean> {
+async function playElevenLabsNativeFromUrl(
+  audioUrl: string,
+  onAudioStart?: () => void,
+  playOpts?: { skipAudioSessionCycle?: boolean; tailBufferMs?: number }
+): Promise<boolean> {
   // === FIX 2026-05-25 (mirato SOLO al playback) ===
   // Su iOS, dopo che il microfono ha registrato (categoria PlayAndRecord),
   // il semplice setAudioModeAsync({allowsRecording:false}) NON forza
@@ -296,23 +300,38 @@ async function playElevenLabsNativeFromUrl(audioUrl: string, onAudioStart?: () =
   // Lo applichiamo SOLO qui (playback path), NON nel recording
   // (voice.ts), perché lì rompe l'attivazione del microfono. Il fix
   // simmetrico recording-side è stato rollbackato il 2026-05-24.
-  try {
-    await setIsAudioActiveAsync(false);
-  } catch {}
-  try {
-    await setAudioModeAsync({
-      allowsRecording: false,
-      playsInSilentMode: true,
-      interruptionMode: "duckOthers",
-      shouldPlayInBackground: false,
-      shouldRouteThroughEarpiece: false,
-    });
-  } catch (e) {
-    console.warn("[speech] setAudioModeAsync(playback) failed", e);
+  //
+  // === FIX 2026-06-25 v10 (post-Build #9 "mangia le parole") ===
+  // PROBLEMA: il ciclo deactivate→reactivate veniva eseguito per OGNI
+  // frase TTS dello stream. Tra frase N e frase N+1, setIsAudioActiveAsync(false)
+  // abbatteva la audio session iOS, troncando ~80-150ms di buffer hardware
+  // residuo della frase N (l'utente sentiva "mangia le parole / frasi a metà").
+  // SOLUZIONE: il chiamante (es. voiceStreamConverse player loop) può ora
+  // passare `skipAudioSessionCycle:true` per le frasi SUCCESSIVE alla prima
+  // dello stream, dopo aver già eseguito il ciclo una sola volta out-of-loop.
+  // Inoltre `tailBufferMs` aggiunge un piccolo grace period dopo didJustFinish
+  // per dare al buffer hardware tempo di drenare prima della frase successiva.
+  const skipCycle = playOpts?.skipAudioSessionCycle === true;
+  const tailBufferMs = playOpts?.tailBufferMs ?? 0;
+  if (!skipCycle) {
+    try {
+      await setIsAudioActiveAsync(false);
+    } catch {}
+    try {
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+        interruptionMode: "duckOthers",
+        shouldPlayInBackground: false,
+        shouldRouteThroughEarpiece: false,
+      });
+    } catch (e) {
+      console.warn("[speech] setAudioModeAsync(playback) failed", e);
+    }
+    try {
+      await setIsAudioActiveAsync(true);
+    } catch {}
   }
-  try {
-    await setIsAudioActiveAsync(true);
-  } catch {}
 
   return await new Promise<boolean>((resolve) => {
     let done = false;
@@ -350,8 +369,22 @@ async function playElevenLabsNativeFromUrl(audioUrl: string, onAudioStart?: () =
       done = true;
       if (activeStallWatcher) { try { clearInterval(activeStallWatcher); } catch {}; activeStallWatcher = null; }
       if (activeSafetyTimer) { try { clearTimeout(activeSafetyTimer); } catch {}; activeSafetyTimer = null; }
-      cleanup();
-      resolve(ok);
+      // === FIX 2026-06-25 v10: tail buffer ===
+      // didJustFinish fa fede sull'evento "ended" di AVPlayer, ma il buffer
+      // hardware iOS può avere ancora 50-150ms di audio da drenare. Se
+      // facciamo cleanup + resolve immediatamente, e il chiamante avvia la
+      // prossima frase con un nuovo player, quei 50-150ms vengono troncati
+      // (sintomo: "si mangia le parole" tra una frase TTS e l'altra).
+      // Concediamo un piccolo grace period prima di rilasciare il controllo.
+      if (tailBufferMs > 0) {
+        setTimeout(() => {
+          try { cleanup(); } catch {}
+          resolve(ok);
+        }, tailBufferMs);
+      } else {
+        cleanup();
+        resolve(ok);
+      }
     };
 
     try {
@@ -1594,6 +1627,16 @@ export async function voiceStreamConverse(opts: {
   // Player loop (identico al pattern di fastConverseWS) — riusa
   // _writeMp3ToFile + playElevenLabsNativeFromUrl + _playMp3BytesWeb già
   // dichiarati nel modulo.
+  // === FIX 2026-06-25 v10 ("mangia le parole" tra frasi TTS) ===
+  // Tracciamo se siamo sulla PRIMA frase dello stream: la prima richiede
+  // il ciclo audio session deactivate→reactivate (transizione recording→playback),
+  // tutte le successive lo saltano (skipAudioSessionCycle=true) per evitare
+  // il troncamento del buffer hardware iOS tra una frase e l'altra.
+  // Inoltre, ogni playback ha un piccolo tail buffer (~120ms) per drenare
+  // il buffer audio prima di rilasciare il controllo alla frase dopo.
+  let isFirstSentence = true;
+  let sentenceCounter = 0;
+  const tStreamStart = Date.now();
   try {
     while (!ac.signal.aborted) {
       if (sentenceQueue.length === 0) {
@@ -1602,6 +1645,9 @@ export async function voiceStreamConverse(opts: {
         continue;
       }
       const item = sentenceQueue.shift()!;
+      sentenceCounter += 1;
+      const sIdx = sentenceCounter;
+      const tArrival = Date.now();
       const fireStart = () => {
         if (!firstAudioFired) {
           firstAudioFired = true;
@@ -1613,17 +1659,43 @@ export async function voiceStreamConverse(opts: {
           }
         } catch {}
       };
+      console.log(
+        `[KODA_TTS_PLAY] sent #${sIdx} arrived t+${tArrival - tStreamStart}ms ` +
+          `bytes=${item.bytes.byteLength} queue_after=${sentenceQueue.length} ` +
+          `first=${isFirstSentence}`
+      );
       try {
         if (Platform.OS === "web") {
           await _playMp3BytesWeb(item.bytes, fireStart);
         } else {
+          const tWrite = Date.now();
           const path = await _writeMp3ToFile(item.bytes, item.i);
-          if (!path) continue;
-          await playElevenLabsNativeFromUrl(path, fireStart);
+          const writeMs = Date.now() - tWrite;
+          if (!path) {
+            console.log(`[KODA_TTS_PLAY] sent #${sIdx} write FAILED — skipping`);
+            continue;
+          }
+          const tPlayStart = Date.now();
+          await playElevenLabsNativeFromUrl(path, fireStart, {
+            // Solo la PRIMA frase fa il ciclo audio session (transizione
+            // recording→playback). Le successive lo saltano per non troncare
+            // l'audio della frase precedente.
+            skipAudioSessionCycle: !isFirstSentence,
+            // Tail buffer: dà ~120ms a iOS per drenare il buffer hardware
+            // prima di rilasciare il controllo e permettere alla frase dopo
+            // di partire. Senza questo, l'ultima sillaba veniva troncata.
+            tailBufferMs: 120,
+          });
+          const playMs = Date.now() - tPlayStart;
+          console.log(
+            `[KODA_TTS_PLAY] sent #${sIdx} done write_ms=${writeMs} ` +
+              `play_ms=${playMs} total=${Date.now() - tArrival}ms`
+          );
         }
       } catch (e) {
-        console.warn("[voice-stream] sentence playback failed:", e);
+        console.warn(`[voice-stream] sentence #${sIdx} playback failed:`, e);
       }
+      isFirstSentence = false;
       if (ac.signal.aborted) break;
     }
   } finally {
