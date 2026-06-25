@@ -319,22 +319,20 @@ export class VoiceStreamSession {
     // Prima creavo new AudioRecorder per ogni chunk → su iOS l'AudioSession
     // non faceva in tempo a rilasciare il precedente → prepareToRecordAsync
     // si bloccava silenziosamente. Ora pattern voice.ts-compliant.
+    //
+    // FIX 2026-06-25 v4 (post-build #3 fallita): scopri che record() dopo
+    // stop() lancia errore. Pattern corretto v54: prepareToRecordAsync
+    // PRIMA DI OGNI record(). Il diagLogger ora cattura anche console.warn
+    // quindi se questo pattern fallisce vediamo finalmente perché.
     let recorder: any = null;
+    const preset = buildStreamingPreset();
     try {
       console.log(`[KODA_STREAM_CLIENT] constructing single recorder...`);
       recorder = new (AudioModule as any).AudioRecorder({});
       this.recorder = recorder;
-      const preset = buildStreamingPreset();
-      console.log(`[KODA_STREAM_CLIENT] calling prepareToRecordAsync...`);
-      const t_prep_start = Date.now();
-      await recorder.prepareToRecordAsync(preset);
-      const t_prep_end = Date.now();
-      console.log(
-        `[KODA_STREAM_CLIENT] prepareToRecordAsync OK in ${t_prep_end - t_prep_start}ms`
-      );
     } catch (e: any) {
-      console.error(
-        `[KODA_STREAM_CLIENT] recorder init failed: ${e?.message || e}`
+      console.log(
+        `[KODA_STREAM_CLIENT] recorder construct failed: ${e?.message || e}`
       );
       this.callbacks.onError?.(`mic-init-failed: ${e?.message || e}`);
       this.recorder = null;
@@ -357,11 +355,19 @@ export class VoiceStreamSession {
 
       const cIdx = this.chunkIdx + 1;
       try {
-        const verbose = cIdx <= 2;
-        if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} record()...`);
+        const verbose = cIdx <= 3;
+        // FIX v4: PRE-PREPARE prima di ogni record (riusabilità v54)
+        if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} prepare...`);
+        const t_prep = Date.now();
+        await recorder.prepareToRecordAsync(preset);
+        if (verbose)
+          console.log(
+            `[KODA_STREAM_CLIENT] chunk #${cIdx} prepare OK in ${Date.now() - t_prep}ms`
+          );
 
+        if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} record()...`);
         const t_record_started = Date.now();
-        recorder.record(); // riusa lo STESSO recorder
+        recorder.record();
 
         if (verbose)
           console.log(
@@ -375,7 +381,7 @@ export class VoiceStreamSession {
         await recorder.stop();
         const t_stop = Date.now();
 
-        // Leggi URI PRIMA di qualsiasi cleanup (vedi voice.ts safeStop pattern)
+        // Leggi URI
         let uri: string | null = null;
         try {
           const statusUrl = (recorder.getStatus?.() as any)?.url || null;
@@ -384,8 +390,10 @@ export class VoiceStreamSession {
         } catch {}
         if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} uri=${uri ? "OK" : "NULL"}`);
         if (!uri) {
-          console.warn(
-            `[KODA_STREAM_CLIENT] chunk #${cIdx}: no URI — skipping (NO release, riusiamo recorder)`
+          // Uso console.log invece di console.warn — diagLogger ora cattura
+          // entrambi ma per uniformità lasciamo log
+          console.log(
+            `[KODA_STREAM_CLIENT] chunk #${cIdx}: no URI — skipping`
           );
           continue;
         }
@@ -414,7 +422,7 @@ export class VoiceStreamSession {
             `gap_prev=${gap > 0 ? gap : 0}ms`
         );
 
-        // Cleanup SOLO del file (NON release del recorder — lo riusiamo)
+        // Cleanup file
         try {
           await FileSystem.deleteAsync(uri, { idempotent: true });
         } catch {}
@@ -422,15 +430,17 @@ export class VoiceStreamSession {
         prevChunkEnd = t_sent;
         chunkStart = Date.now();
       } catch (e: any) {
-        console.warn(
-          `[KODA_STREAM_CLIENT] chunk #${cIdx} error: ${e?.message || e}`
+        // Uso console.log (non warn) per essere catturato dal vecchio
+        // diagLogger se la build attuale non è aggiornata.
+        console.log(
+          `[KODA_STREAM_CLIENT] chunk #${cIdx} ERROR: ${e?.message || e} | ` +
+            `stack: ${String(e?.stack || "").split("\n").slice(0, 3).join(" | ")}`
         );
         await new Promise((r) => setTimeout(r, 200));
       }
     }
 
-    // === CLEANUP FINALE (come voice.ts safeStop()) ===
-    // Aspetta 100ms per evitare race con callback orfane prima di release.
+    // === CLEANUP FINALE ===
     console.log(
       `[KODA_STREAM_CLIENT] chunk loop ending — chunks=${this.chunkIdx} ` +
         `dur=${Date.now() - this.startedAt}ms ` +

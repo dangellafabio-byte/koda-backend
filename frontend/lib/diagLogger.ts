@@ -41,45 +41,51 @@ export type DiagEvent = {
 let buffer: DiagEvent[] = [];
 let installed = false;
 let originalLog: typeof console.log | null = null;
+let originalWarn: typeof console.warn | null = null;
+let originalError: typeof console.error | null = null;
 
 /**
- * Installa l'intercettore su `console.log` (idempotente). Va chiamato
- * UNA VOLTA all'avvio dell'app, prima di qualsiasi altro modulo che
- * emetta log KODA_*.
+ * Wrap che cattura un metodo di console (log/warn/error) nel buffer
+ * diagnostico. Fix 2026-06-25: prima si intercettava SOLO console.log,
+ * quindi `console.warn("[KODA_X] error: ...")` veniva eseguito ma NON
+ * salvato nel ring buffer → "silenzio" ingannevole nei log esportati
+ * (gli errori avvenivano, semplicemente non li vedevamo).
+ */
+function _captureWith(
+  original: (...args: any[]) => void,
+  tag: string
+): (...args: any[]) => void {
+  return (...args: any[]) => {
+    try {
+      const first = args[0];
+      if (typeof first === "string" && _matchesCapture(first)) {
+        const line = args.map((a) => {
+          if (typeof a === "string") return a;
+          try { return JSON.stringify(a); } catch { return String(a); }
+        }).join(" ");
+        // Prefisso del livello (W/E) per distinguere warn/error nel buffer
+        const tagged = tag ? `[${tag}] ${line}` : line;
+        buffer.push({ t: Date.now(), line: tagged });
+        if (buffer.length > MAX_EVENTS) buffer.shift();
+      }
+    } catch {}
+    try { original(...args); } catch {}
+  };
+}
+
+/**
+ * Installa l'intercettore su console.log/warn/error (idempotente).
+ * Va chiamato UNA VOLTA all'avvio dell'app.
  */
 export function installDiagLogger(): void {
   if (installed) return;
   installed = true;
   originalLog = console.log.bind(console);
-  console.log = (...args: any[]) => {
-    try {
-      // Solo se il PRIMO argomento è una stringa che comincia con [KODA_
-      // catturiamo. Altrimenti pass-through silenzioso.
-      const first = args[0];
-      if (typeof first === "string" && _matchesCapture(first)) {
-        // Compone la riga concatenando args (semplice toString).
-        const line = args.map((a) => {
-          if (typeof a === "string") return a;
-          try {
-            return JSON.stringify(a);
-          } catch {
-            return String(a);
-          }
-        }).join(" ");
-        buffer.push({ t: Date.now(), line });
-        if (buffer.length > MAX_EVENTS) {
-          // Drop oldest: shift mantiene FIFO. Eseguito raramente (solo
-          // quando il buffer è pieno) → costo trascurabile.
-          buffer.shift();
-        }
-      }
-    } catch {
-      // Nessuna eccezione deve impedire il log originale di partire.
-    }
-    if (originalLog) {
-      try { originalLog(...args); } catch {}
-    }
-  };
+  originalWarn = console.warn.bind(console);
+  originalError = console.error.bind(console);
+  console.log = _captureWith(originalLog, "");      // log = niente tag (default)
+  console.warn = _captureWith(originalWarn, "W");   // warn = [W] prefix
+  console.error = _captureWith(originalError, "E"); // error = [E] prefix
 }
 
 /** Ritorna una COPIA del buffer attuale (l'ordine è cronologico FIFO). */
