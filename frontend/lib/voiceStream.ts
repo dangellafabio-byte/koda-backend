@@ -36,6 +36,7 @@ import {
   AudioRecorder,
   AudioModule,
   RecordingPresets,
+  setAudioModeAsync,
 } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 
@@ -313,6 +314,32 @@ export class VoiceStreamSession {
     // prewarmMic() in startTalkStreaming. Chiamarla di nuovo creava
     // race condition tra 3 chiamate asincrone sovrapposte (root cause
     // del blocco silenzioso identificato dal troubleshoot agent).
+
+    // === FIX 2026-06-25 v5 (post-build #4: RecordingDisabledException) ===
+    // Il troubleshoot precedente diceva di rimuovere setAudioModeAsync(true)
+    // perché "race condition con prewarmMic". ERRATO: prewarmMic NON imposta
+    // allowsRecording=true in modo persistente — iOS lo resetta tra prewarm
+    // e il primo record() della sessione. In voice.ts la chiamata avviene
+    // DENTRO startRecording (riga 430), proprio PRIMA del recorder construct.
+    // Senza questa chiamata, iOS rifiuta `record()` con:
+    //   "Recording not allowed on iOS. Enable with Audio.setAudioModeAsync"
+    // Pattern voice.ts-identico ora. v6: import statico (non require) per
+    // garantire che setAudioModeAsync sia definito in Hermes/SDK54.
+    try {
+      console.log(`[KODA_STREAM_CLIENT] >>> calling setAudioModeAsync(allowsRecording=true)...`);
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        interruptionMode: "duckOthers",
+        shouldPlayInBackground: false,
+        shouldRouteThroughEarpiece: false,
+      });
+      console.log(`[KODA_STREAM_CLIENT] <<< setAudioModeAsync(allowsRecording=true) OK`);
+    } catch (e: any) {
+      console.log(
+        `[KODA_STREAM_CLIENT] !!! setAudioModeAsync FAILED: ${e?.message || e} | stack: ${String(e?.stack || "").split("\n").slice(0, 3).join(" | ")}`
+      );
+    }
 
     // === FIX 2026-06-24 v3 ===
     // UN SOLO recorder per tutta la sessione (come voice.ts).
