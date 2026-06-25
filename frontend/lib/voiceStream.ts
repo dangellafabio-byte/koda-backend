@@ -36,7 +36,6 @@ import {
   AudioRecorder,
   AudioModule,
   RecordingPresets,
-  setAudioModeAsync,
 } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 
@@ -53,6 +52,18 @@ import * as FileSystem from "expo-file-system/legacy";
 const CHUNK_DURATION_MS = 1500; // durata di ogni recording chunk
 const STREAM_HARD_CAP_MS = 60_000; // safety totale
 const WS_OPEN_TIMEOUT_MS = 6_000;
+
+// === FIX 2026-06-25 v7 (post-Build #6 WS close diagnostic) ===
+// Su rete cellulare instabile (furgone, 4G ballerino) la WS può venir
+// chiusa dal sistema iOS/proxy con code=1000 pochi secondi dopo l'apertura
+// se il primo frame audio tarda ad arrivare. Mitigazioni:
+//   1. KEEPALIVE_INTERVAL_MS: ping ogni 500ms per tenere caldi i proxy
+//   2. MAX_WS_RECONNECTS: in caso di chiusura prematura, riapertura
+//      automatica con stessi parametri (nuovo session_id server-side,
+//      ma trasparente per l'utente)
+const KEEPALIVE_INTERVAL_MS = 500;
+const MAX_WS_RECONNECTS = 2;
+const RECONNECT_BACKOFF_MS = 500;
 
 const BACKEND_URL =
   (process.env.EXPO_PUBLIC_BACKEND_URL as string | undefined) || "";
@@ -141,6 +152,13 @@ export class VoiceStreamSession {
   private chunkIdx = 0;
   // Buffer per associare un binary frame al header sentence che lo precede
   private pendingSentenceHeader: SentenceMeta | null = null;
+  // === FIX 2026-06-25 v7: keepalive + auto-reconnect (Build #6 WS close) ===
+  private lastStartOpts: { ephemeral?: boolean; profileLang?: string } = {};
+  private reconnectAttempts = 0;
+  private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  // Flag: si chiude la WS in modo "atteso" (es. arrivato 'done'/'stt_final'
+  // o stop manuale). Quando true, NON tentiamo reconnect.
+  private finalCloseRequested = false;
 
   constructor(callbacks: VoiceStreamCallbacks) {
     this.callbacks = callbacks;
@@ -156,6 +174,10 @@ export class VoiceStreamSession {
     this.startedAt = Date.now();
     this.stopRequested = false;
     this.chunkIdx = 0;
+    // Salva opts per eventuale reconnect
+    this.lastStartOpts = { ephemeral: opts?.ephemeral, profileLang: opts?.profileLang };
+    this.reconnectAttempts = 0;
+    this.finalCloseRequested = false;
 
     // 1) Apri WS
     const url = buildWsUrl();
@@ -170,10 +192,12 @@ export class VoiceStreamSession {
       container: "aac",
     });
 
-    // 3) Aspetta "ready"
-    // (i frame in arrivo sono già instradati dal listener onmessage)
+    // 3) Aspetta "ready" (i frame in arrivo sono già instradati dal listener onmessage)
 
-    // 4) Avvia chunk loop in background
+    // 4) Avvia keepalive (mantiene caldi proxy/ingress su rete cellulare instabile)
+    this.startKeepalive();
+
+    // 5) Avvia chunk loop in background
     this.chunkLoopActive = true;
     this.chunkLoop().catch((e) => {
       console.warn(`[KODA_STREAM_CLIENT] chunk loop crashed: ${e}`);
@@ -184,7 +208,9 @@ export class VoiceStreamSession {
   /** Forza la chiusura della sessione. Manda "end" al server. */
   async stop(): Promise<void> {
     this.stopRequested = true;
+    this.finalCloseRequested = true;
     this.chunkLoopActive = false;
+    this.stopKeepalive();
     try {
       this.sendJson({ type: "end" });
     } catch {}
@@ -194,6 +220,68 @@ export class VoiceStreamSession {
     // risposta TTS. Lo chiudiamo dentro onmessage quando arriva "done"
     // o dopo un timeout di sicurezza.
     setTimeout(() => this.forceCloseWs(), 25_000);
+  }
+
+  // === FIX 2026-06-25 v7: keepalive ping ===
+  // Su iOS in cellular (es. furgone), proxy intermedi possono chiudere la
+  // WS se passa più di 1-2 secondi senza traffico. Mandiamo un piccolo
+  // ping JSON ogni 500ms per tenerla calda. Il backend riceve frame con
+  // type sconosciuto e li ignora (continua nel suo loop).
+  private startKeepalive(): void {
+    this.stopKeepalive();
+    this.keepaliveTimer = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        try {
+          this.ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
+        } catch {}
+      }
+    }, KEEPALIVE_INTERVAL_MS);
+  }
+
+  private stopKeepalive(): void {
+    if (this.keepaliveTimer) {
+      clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = null;
+    }
+  }
+
+  // === FIX 2026-06-25 v7: WS auto-reconnect ===
+  // Se la WS si chiude in modo inatteso (es. proxy cellular cattivo) e
+  // l'utente sta ancora parlando, tentiamo di riaprire fino a MAX_WS_RECONNECTS
+  // volte. Il server creerà una nuova sessione Deepgram — l'utente non
+  // se ne accorgerà se il glitch è breve. Chunks fra le due connessioni
+  // sono persi (best-effort), ma è meglio di una sessione completamente
+  // morta.
+  private async reconnectIfNeeded(): Promise<boolean> {
+    if (this.stopRequested || this.finalCloseRequested) return false;
+    if (this.reconnectAttempts >= MAX_WS_RECONNECTS) {
+      console.log(
+        `[KODA_STREAM_CLIENT] reconnect: max attempts (${MAX_WS_RECONNECTS}) raggiunti, abort`
+      );
+      return false;
+    }
+    this.reconnectAttempts++;
+    console.log(
+      `[KODA_STREAM_CLIENT] reconnecting WS (tentativo ${this.reconnectAttempts}/${MAX_WS_RECONNECTS}) dopo ${RECONNECT_BACKOFF_MS}ms...`
+    );
+    await new Promise((r) => setTimeout(r, RECONNECT_BACKOFF_MS));
+    try {
+      await this.openWs(buildWsUrl());
+      this.sendJson({
+        type: "start",
+        ephemeral: !!this.lastStartOpts.ephemeral,
+        profile_lang: this.lastStartOpts.profileLang || "it",
+        container: "aac",
+      });
+      this.startKeepalive();
+      console.log(`[KODA_STREAM_CLIENT] WS reconnesso con successo`);
+      return true;
+    } catch (e: any) {
+      console.log(
+        `[KODA_STREAM_CLIENT] reconnect fallito: ${e?.message || e}`
+      );
+      return false;
+    }
   }
 
   // ============ INTERNALS ============
@@ -221,7 +309,16 @@ export class VoiceStreamSession {
 
       ws.onclose = (e) => {
         console.log(`[KODA_STREAM_CLIENT] WS closed code=${e.code} reason=${e.reason}`);
-        this.chunkLoopActive = false;
+        // === FIX 2026-06-25 v7 ===
+        // NON setto più chunkLoopActive=false qui — lascio che il chunkLoop
+        // detecti lo stato closed alla prossima iterazione e decida se
+        // tentare il reconnect (via reconnectIfNeeded) o terminare.
+        // Setto chunkLoopActive=false SOLO se la chiusura era attesa.
+        if (this.finalCloseRequested || this.stopRequested) {
+          this.chunkLoopActive = false;
+        }
+        // Stoppa keepalive — sarà ri-avviato dal reconnectIfNeeded se serve
+        this.stopKeepalive();
       };
 
       ws.onmessage = (ev: MessageEvent) => {
@@ -279,7 +376,10 @@ export class VoiceStreamSession {
       );
       // Una volta che Deepgram ha detto "ho il testo finale", possiamo
       // smettere di registrare. Il server è già partito con la pipeline.
+      // === FIX v7: marca finalCloseRequested per impedire reconnect ===
+      this.finalCloseRequested = true;
       this.chunkLoopActive = false;
+      this.stopKeepalive();
       this.safeStopRecorder().catch(() => {});
     } else if (type === "sentence") {
       // Salva header → il prossimo binary frame conterrà l'audio
@@ -295,6 +395,8 @@ export class VoiceStreamSession {
       this.callbacks.onMeta?.(evt);
     } else if (type === "done") {
       console.log(`[KODA_STREAM_CLIENT] done`);
+      this.finalCloseRequested = true;
+      this.stopKeepalive();
       this.callbacks.onDone?.();
       this.forceCloseWs();
     } else if (type === "error") {
@@ -322,31 +424,22 @@ export class VoiceStreamSession {
     // race condition tra 3 chiamate asincrone sovrapposte (root cause
     // del blocco silenzioso identificato dal troubleshoot agent).
 
-    // === FIX 2026-06-25 v5 (post-build #4: RecordingDisabledException) ===
-    // Il troubleshoot precedente diceva di rimuovere setAudioModeAsync(true)
-    // perché "race condition con prewarmMic". ERRATO: prewarmMic NON imposta
-    // allowsRecording=true in modo persistente — iOS lo resetta tra prewarm
-    // e il primo record() della sessione. In voice.ts la chiamata avviene
-    // DENTRO startRecording (riga 430), proprio PRIMA del recorder construct.
-    // Senza questa chiamata, iOS rifiuta `record()` con:
-    //   "Recording not allowed on iOS. Enable with Audio.setAudioModeAsync"
-    // Pattern voice.ts-identico ora. v6: import statico (non require) per
-    // garantire che setAudioModeAsync sia definito in Hermes/SDK54.
-    try {
-      console.log(`[KODA_STREAM_CLIENT] >>> calling setAudioModeAsync(allowsRecording=true)...`);
-      await setAudioModeAsync({
-        allowsRecording: true,
-        playsInSilentMode: true,
-        interruptionMode: "duckOthers",
-        shouldPlayInBackground: false,
-        shouldRouteThroughEarpiece: false,
-      });
-      console.log(`[KODA_STREAM_CLIENT] <<< setAudioModeAsync(allowsRecording=true) OK`);
-    } catch (e: any) {
-      console.log(
-        `[KODA_STREAM_CLIENT] !!! setAudioModeAsync FAILED: ${e?.message || e} | stack: ${String(e?.stack || "").split("\n").slice(0, 3).join(" | ")}`
-      );
-    }
+    // === FIX 2026-06-25 v7 (post-Build #6 WS close diagnostic) ===
+    // RIMOSSA la chiamata setAudioModeAsync ridondante che era stata
+    // aggiunta in v6 come defense-in-depth. Su iOS in rete cellulare
+    // instabile, ri-attivare l'audio session DOPO che la WebSocket è
+    // già aperta sembra causare il sistema a riconfigurare i radio →
+    // la WS viene chiusa dal sistema con code=1000 ~1s dopo `ready`.
+    //
+    // È sicuro rimuoverla perché:
+    //  - prewarmMic() in startTalkStreaming chiama già setAudioModeAsync
+    //    ({allowsRecording:true}) prima di aprire la WS
+    //  - prewarmAudio() (che la annullava settando allowsRecording:false)
+    //    è stata rimossa dal flusso streaming in commit 47cc0566
+    //  - Pattern voice.ts conferma che UNA SOLA chiamata pre-record basta
+    //
+    // Se in futuro il pattern v6 dovesse essere necessario di nuovo, va
+    // fatto PRIMA di aprire la WebSocket, non dopo.
 
     // === FIX 2026-06-24 v3 ===
     // UN SOLO recorder per tutta la sessione (come voice.ts).
@@ -383,8 +476,17 @@ export class VoiceStreamSession {
         break;
       }
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-        console.log(`[KODA_STREAM_CLIENT] WS non più OPEN — esco dal loop`);
-        break;
+        // === FIX 2026-06-25 v7: tenta reconnect invece di uscire ===
+        console.log(
+          `[KODA_STREAM_CLIENT] WS non più OPEN — tento reconnect...`
+        );
+        const reconnected = await this.reconnectIfNeeded();
+        if (!reconnected) {
+          console.log(`[KODA_STREAM_CLIENT] reconnect non disponibile — esco dal loop`);
+          break;
+        }
+        // Continua il loop con la nuova WS
+        continue;
       }
 
       const cIdx = this.chunkIdx + 1;
