@@ -159,6 +159,14 @@ export class VoiceStreamSession {
   // Flag: si chiude la WS in modo "atteso" (es. arrivato 'done'/'stt_final'
   // o stop manuale). Quando true, NON tentiamo reconnect.
   private finalCloseRequested = false;
+  // === FIX 2026-06-25 v8: traccia se "done" è stato ricevuto ===
+  // Se la WS si chiude SENZA che "done" sia arrivato, voiceStreamConverse
+  // resta in attesa eterna del pipelineDone. Bisogna notificare l'upper
+  // layer via onError per farlo uscire. Questo bug bloccava la UI in
+  // "recording" forever nel caso del tap-to-stop senza stt_final
+  // (Build #7 Turno 2).
+  private doneReceived = false;
+  private notifiedUpperOnClose = false;
 
   constructor(callbacks: VoiceStreamCallbacks) {
     this.callbacks = callbacks;
@@ -178,6 +186,9 @@ export class VoiceStreamSession {
     this.lastStartOpts = { ephemeral: opts?.ephemeral, profileLang: opts?.profileLang };
     this.reconnectAttempts = 0;
     this.finalCloseRequested = false;
+    // === FIX v8: reset flag di tracciamento done/close ===
+    this.doneReceived = false;
+    this.notifiedUpperOnClose = false;
 
     // 1) Apri WS
     const url = buildWsUrl();
@@ -309,16 +320,30 @@ export class VoiceStreamSession {
 
       ws.onclose = (e) => {
         console.log(`[KODA_STREAM_CLIENT] WS closed code=${e.code} reason=${e.reason}`);
-        // === FIX 2026-06-25 v7 ===
-        // NON setto più chunkLoopActive=false qui — lascio che il chunkLoop
-        // detecti lo stato closed alla prossima iterazione e decida se
-        // tentare il reconnect (via reconnectIfNeeded) o terminare.
-        // Setto chunkLoopActive=false SOLO se la chiusura era attesa.
+        this.stopKeepalive();
+
+        // === FIX 2026-06-25 v8 (post-Build #7 Turno 2 UI bloccata) ===
+        // Se la WS si chiude SENZA aver mai ricevuto "done", voiceStreamConverse
+        // resterebbe in attesa eterna del pipelineDone. In quel caso dobbiamo
+        // sbloccarlo notificandolo via onError (così la finally clause fa
+        // setStatus("idle") e l'UI torna utilizzabile).
+        if (!this.doneReceived && !this.notifiedUpperOnClose) {
+          this.notifiedUpperOnClose = true;
+          // Caso A: utente ha cliccato stop ma il server non ha emesso done.
+          //         È un fallimento di pipeline (Deepgram non ha trovato
+          //         transcript finale). Usciamo come errore controllato.
+          // Caso B: WS chiusa per altri motivi senza che noi lo richiedessimo.
+          //         Stesso trattamento — sbloccare l'upper layer.
+          const reason = this.stopRequested
+            ? "ws-closed-no-transcript-after-stop"
+            : `ws-closed-unexpected-code-${e.code}`;
+          console.log(`[KODA_STREAM_CLIENT] notifying upper layer of close: ${reason}`);
+          this.callbacks.onError?.(reason);
+        }
+
         if (this.finalCloseRequested || this.stopRequested) {
           this.chunkLoopActive = false;
         }
-        // Stoppa keepalive — sarà ri-avviato dal reconnectIfNeeded se serve
-        this.stopKeepalive();
       };
 
       ws.onmessage = (ev: MessageEvent) => {
@@ -395,7 +420,9 @@ export class VoiceStreamSession {
       this.callbacks.onMeta?.(evt);
     } else if (type === "done") {
       console.log(`[KODA_STREAM_CLIENT] done`);
+      this.doneReceived = true;
       this.finalCloseRequested = true;
+      this.notifiedUpperOnClose = true; // onDone notifica upper layer
       this.stopKeepalive();
       this.callbacks.onDone?.();
       this.forceCloseWs();

@@ -2378,6 +2378,13 @@ export default function Taccuino() {
           setStatus("speaking");
         },
         onUserFinal: (userText: string, conf: number | null, _dur: number | null) => {
+          // === FIX 2026-06-25 v8 ===
+          // Quando Deepgram emette stt_final, il microfono di fatto si è già
+          // fermato (chunkLoopActive=false dentro voiceStream.ts). Senza
+          // questa transizione, l'UI rimaneva in "recording" per i ~3-5s
+          // che impiega Claude a generare la risposta + TTS — l'utente
+          // pensava che stesse ancora registrando.
+          setStatus("thinking");
           // Aggiorna la bolla utente col testo trascritto reale.
           setTimeline((prev) =>
             prev.map((e) =>
@@ -3009,6 +3016,13 @@ export default function Taccuino() {
       // stopTalk() (che assume il flusso file-based con recRef).
       if (streamingSessionRef.current) {
         console.log("[KODA_STREAM_CLIENT] tap-to-stop → session.stop()");
+        // === FIX 2026-06-25 v8: feedback visivo immediato ===
+        // Senza questo, l'UI restava in "recording" finché non arrivava
+        // done dal server (o un onError di chiusura prematura), che
+        // poteva richiedere fino a 60 secondi nel caso peggiore.
+        // Cambiare subito in "thinking" segnala all'utente che il tap
+        // è stato registrato e il sistema sta processando.
+        setStatus("thinking");
         const s = streamingSessionRef.current;
         streamingSessionRef.current = null;
         s.stop().catch((e) => console.warn("[stream] manual stop failed:", e));
