@@ -78,6 +78,23 @@ logger = logging.getLogger(__name__)
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
 DEEPGRAM_LIVE_URL = "wss://api.deepgram.com/v1/listen"
 
+# === FIX 2026-06-25 v7 (post-Build #5: ffmpeg not in container PATH) ===
+# Il container Emergent NON ha ffmpeg installato via apt. Usiamo il binario
+# static incluso nel package imageio-ffmpeg (già installato come dipendenza
+# transitive). Senza questo, convert_aac_to_pcm16 fallisce silenziosamente
+# e Deepgram non riceve mai audio → nessun stt_final → Koda non risponde.
+# Questo era il vero motivo per cui Build #5 catturava i chunk ma non
+# riceveva trascrizioni.
+try:
+    import imageio_ffmpeg
+    FFMPEG_BIN = imageio_ffmpeg.get_ffmpeg_exe()
+    logger.info(f"[voice_stream] ffmpeg binary: {FFMPEG_BIN}")
+except Exception as _ffmpeg_err:
+    FFMPEG_BIN = "ffmpeg"  # fallback: spera che sia nel PATH
+    logger.warning(
+        f"[voice_stream] imageio_ffmpeg not available, falling back to PATH: {_ffmpeg_err}"
+    )
+
 # Parametri di query string Deepgram Live — vedi docstring per spiegazione.
 # IMPORTANTE: questi sono valori INIZIALI da tunare nel furgone.
 DG_PARAMS = {
@@ -120,7 +137,7 @@ async def convert_aac_to_pcm16(chunk_bytes: bytes) -> bytes:
         return b""
     try:
         process = await asyncio.create_subprocess_exec(
-            "ffmpeg",
+            FFMPEG_BIN,
             "-hide_banner",
             "-loglevel", "error",
             "-i", "pipe:0",
