@@ -43,7 +43,14 @@ import * as FileSystem from "expo-file-system/legacy";
 // =============================================================
 // CONFIG
 // =============================================================
-const CHUNK_DURATION_MS = 500; // durata di ogni recording chunk
+// === FIX 2026-06-25 v7 (post-Build #5 latency analysis) ===
+// Su iOS expo-audio v54, prepareToRecordAsync costa ~1.3-1.6s per chunk
+// (cold-start AVAudioRecorder ogni volta). Se i chunk sono 500ms, l'audio
+// coverage è solo 25% (500ms su 2s di ciclo). Aumentando i chunk a 1500ms,
+// la coverage sale al ~50% e Deepgram riceve segmenti più sostanziali su
+// cui può fare endpointing. Trade-off accettato: latenza first-token
+// leggermente più alta, ma molto più affidabile.
+const CHUNK_DURATION_MS = 1500; // durata di ogni recording chunk
 const STREAM_HARD_CAP_MS = 60_000; // safety totale
 const WS_OPEN_TIMEOUT_MS = 6_000;
 
