@@ -340,6 +340,12 @@ async function playElevenLabsNativeFromUrl(
     let everLoaded = false;
     let lastProgressAt = Date.now();
     let lastPositionSec = 0;
+    // === FIX 2026-06-26 v11: traccia durata MP3 dichiarata da AVPlayer ===
+    // status.duration arriva via playbackStatusUpdate dopo il primo frame
+    // di metadata. Lo loggiamo una volta sola e lo usiamo per chiudere
+    // pulitamente quando pos ≥ dur (evita lo stall watcher).
+    let knownDurationLogged = false;
+    let knownDurationSec: number | null = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let player: any = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -398,9 +404,19 @@ async function playElevenLabsNativeFromUrl(
         if (status?.isLoaded) {
           everLoaded = true;
           const pos = status.currentTime ?? 0;
+          const dur = typeof status.duration === "number" && status.duration > 0
+            ? status.duration
+            : null;
           if (pos > lastPositionSec) {
             lastPositionSec = pos;
             lastProgressAt = Date.now();
+            // === FIX 2026-06-26 v11: log durata MP3 una sola volta ===
+            // Permette di correlare nei log diag bytes vs durata reale.
+            if (dur && !knownDurationLogged) {
+              knownDurationLogged = true;
+              console.log(`[KODA_TTS_PLAY] mp3_duration=${dur.toFixed(2)}s (pos=${pos.toFixed(2)})`);
+              knownDurationSec = dur;
+            }
           }
           if (status.playing || pos > 0) {
             everPlayed = true;
@@ -418,10 +434,40 @@ async function playElevenLabsNativeFromUrl(
             finish(true);
             return;
           }
+          // === FIX 2026-06-26 v11 (root cause "frasi tagliate a metà") ===
+          // Su iOS expo-audio v54, didJustFinish a volte NON viene emesso
+          // alla fine del MP3 (la subscription smette di ricevere status
+          // updates dopo qualche secondo). Risultato: il player rimane "vivo"
+          // ma non avanza più la posizione, e lo stall watcher (a 12s da
+          // ultimo progresso) chiamava finish→player.remove() TRONCANDO
+          // l'audio in corso. Adesso: se il player ha avanzato fino a
+          // ~250ms dalla fine del MP3, consideriamo il playback completo
+          // e usciamo PULITAMENTE (didJustFinish-like) PRIMA che lo stall
+          // watcher possa entrare in azione.
+          if (dur && pos > 0 && pos >= dur - 0.25) {
+            console.log(
+              `[KODA_TTS_PLAY] duration_complete pos=${pos.toFixed(2)} ` +
+                `dur=${dur.toFixed(2)} — finishing gracefully`
+            );
+            finish(true);
+            return;
+          }
         }
       });
 
-      // Stall-watcher: chiude solo se davvero bloccato per >12s dopo l'inizio
+      // === FIX 2026-06-26 v11: stall watcher meno aggressivo ===
+      // Prima: soglia 12s — troppo bassa. Su iOS expo-audio v54 gli eventi
+      // playbackStatusUpdate smettono di arrivare dopo ~5-10s di playback
+      // per ragioni interne al SharedObject system, anche se l'audio
+      // continua a suonare normalmente in AVPlayer. Lo stall watcher
+      // interpretava questo come "audio bloccato" e chiamava player.remove()
+      // → cut brutale dell'audio in corso (sintomo riportato dall'utente:
+      // "frasi tagliate a metà, tutte esattamente a ~13.2s").
+      // Ora: soglia 30s. Una frase ElevenLabs normale è max 15-20s; se
+      // davvero blocca >30s è un problema vero che ha senso terminare.
+      // In parallelo, la nuova logica "pos >= duration - 0.25" qui sopra
+      // chiude la frase prima dello stall in caso di MP3 con duration nota.
+      const STALL_THRESHOLD_MS = 30000;
       const stallWatcher = setInterval(() => {
         if (done) {
           clearInterval(stallWatcher);
@@ -430,10 +476,15 @@ async function playElevenLabsNativeFromUrl(
         }
         if (!everPlayed) return;
         const stalled = Date.now() - lastProgressAt;
-        if (stalled > 12000) {
+        if (stalled > STALL_THRESHOLD_MS) {
           clearInterval(stallWatcher);
           if (activeStallWatcher === stallWatcher) activeStallWatcher = null;
-          console.warn(`[speech] stalled ${stalled}ms after position ${lastPositionSec}s — assuming complete`);
+          // Log con prefisso KODA_TTS_STALL così è visibile nel diag log
+          // dell'utente (i log [speech] sono filtrati).
+          console.log(
+            `[KODA_TTS_STALL] stalled ${stalled}ms after pos=${lastPositionSec.toFixed(2)}s ` +
+              `dur=${knownDurationSec ? knownDurationSec.toFixed(2) : "?"}s — forcing finish`
+          );
           finish(true);
         }
       }, 1000);
