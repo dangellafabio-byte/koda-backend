@@ -1728,10 +1728,18 @@ export async function voiceStreamConverse(opts: {
           }
           const tPlayStart = Date.now();
           await playElevenLabsNativeFromUrl(path, fireStart, {
-            // Solo la PRIMA frase fa il ciclo audio session (transizione
-            // recording→playback). Le successive lo saltano per non troncare
-            // l'audio della frase precedente.
-            skipAudioSessionCycle: !isFirstSentence,
+            // === FIX 2026-06-26 v12 (rollback ottimizzazione v10) ===
+            // L'ipotesi v10 ("saltare il ciclo per frasi successive elimina
+            // il 'mangia le parole'") si è rivelata SBAGLIATA: nel test
+            // furgone v11 si è visto che AVPlayer SI BLOCCA a pos≈0.5s sulle
+            // frasi `first=false` (race condition con cleanup async del player
+            // precedente). Risultato: solo la PRIMA frase di ogni turno
+            // suonava, le successive si fermavano dopo mezzo secondo.
+            // Soluzione: ESEGUIRE SEMPRE il ciclo audio session (costo:
+            // ~80-150ms di gap tra frasi — accettabile). Il vero colpevole
+            // dell'originale "mangia le parole" era SOLO lo stall watcher
+            // a 12s, già fixato in v11.
+            skipAudioSessionCycle: false,
             // Tail buffer: dà ~120ms a iOS per drenare il buffer hardware
             // prima di rilasciare il controllo e permettere alla frase dopo
             // di partire. Senza questo, l'ultima sillaba veniva troncata.
