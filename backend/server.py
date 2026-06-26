@@ -1955,11 +1955,13 @@ async def api_get_profile(request: Request):
     # === MIGRAZIONE VOCI ElevenLabs → Voice Design Koda (giugno 2026 v4) ===
     # Acqua è la nuova voce FEMMINILE ufficiale di Koda (6TngzmzM89jJ3Y2Yiywr),
     # sostituisce la precedente Aria (tCOJUYBo86m5v7hppDc7).
-    # Theo resta maschile (dJwiFcjz9zW5Pge7G8AG).
+    # Vento è la nuova voce MASCHILE ufficiale di Koda (ll9WG7PDTuyHwgC5MD6g),
+    # sostituisce la precedente Theo (dJwiFcjz9zW5Pge7G8AG).
     # Migra le vecchie voci verso le nuove identità Koda.
     _VOICE_MIGRATION_MAP = {
         "pFZP5JQG7iQjIQuC4Bku": "6TngzmzM89jJ3Y2Yiywr",  # Lily → Koda Acqua (femminile v4)
-        "nPczCjzI2devNBz1zQrb": "dJwiFcjz9zW5Pge7G8AG",  # Brian → Koda Echo (maschile)
+        "nPczCjzI2devNBz1zQrb": "ll9WG7PDTuyHwgC5MD6g",  # Brian → Koda Vento (maschile v4)
+        "dJwiFcjz9zW5Pge7G8AG": "ll9WG7PDTuyHwgC5MD6g",  # Theo v3 → Vento (maschile v4)
         # Vecchie Aria intermedie → nuova Acqua femminile definitiva
         "q1GF5A2kzAOPv9d5TQEy": "6TngzmzM89jJ3Y2Yiywr",  # vecchia Aria → Acqua
         "PponuEVSg4RZBO08kPzE": "6TngzmzM89jJ3Y2Yiywr",  # Aria v2 intermedia → Acqua
@@ -5089,7 +5091,7 @@ def _get_eleven_client():
 # (voice_id, display name, short description, gender)
 CURATED_VOICES = [
     {"voice_id": "6TngzmzM89jJ3Y2Yiywr", "name": "Acqua", "description": "La voce femminile di Koda.", "gender": "femminile", "accent": "italiano"},
-    {"voice_id": "dJwiFcjz9zW5Pge7G8AG", "name": "Theo", "description": "La voce maschile di Koda.", "gender": "maschile", "accent": "italiano"},
+    {"voice_id": "ll9WG7PDTuyHwgC5MD6g", "name": "Vento", "description": "La voce maschile di Koda.", "gender": "maschile", "accent": "italiano"},
 ]
 
 # ============================================================================
@@ -5523,18 +5525,20 @@ KODA_VOICES: Dict[str, Dict[str, str]] = {
         "label": "Acqua",
         "description": "La voce femminile di Koda.",
     },
-    # THEO — timbro custom maschile (dJwiFcjz9zW5Pge7G8AG). Profondo, caldo,
-    # avvolgente. Evoca riflessione, eco interiore, intimità.
-    # Nota: l'identità è e resta SEMPRE "Koda" — Acqua/Theo sono solo timbri.
-    # Vecchia chiave "echo" mantenuta per retrocompatibilità con profili salvati.
+    # VENTO — voce custom maschile dell'utente (ll9WG7PDTuyHwgC5MD6g).
+    # La voce maschile UFFICIALE di Koda. Sostituisce la precedente "Theo"
+    # (dJwiFcjz9zW5Pge7G8AG) — l'utente l'ha trovata più adatta all'identità
+    # del prodotto. Le chiavi "theo"/"echo" sono mantenute per retrocompat
+    # con i profili salvati — gli utenti esistenti riceveranno automaticamente
+    # la nuova voce.
     "theo": {
-        "voice_id": "dJwiFcjz9zW5Pge7G8AG",
-        "label": "Theo",
+        "voice_id": "ll9WG7PDTuyHwgC5MD6g",
+        "label": "Vento",
         "description": "La voce maschile di Koda.",
     },
     "echo": {
-        "voice_id": "dJwiFcjz9zW5Pge7G8AG",
-        "label": "Theo",
+        "voice_id": "ll9WG7PDTuyHwgC5MD6g",
+        "label": "Vento",
         "description": "La voce maschile di Koda.",
     },
 }
@@ -5960,7 +5964,8 @@ async def api_fillers(voice_id: Optional[str] = None):
         "PponuEVSg4RZBO08kPzE": "6TngzmzM89jJ3Y2Yiywr",
         "tCOJUYBo86m5v7hppDc7": "6TngzmzM89jJ3Y2Yiywr",  # Aria → Acqua
         "XrExE9yKIg1WjnnlVkGX": "6TngzmzM89jJ3Y2Yiywr",  # Matilda → Acqua
-        "nPczCjzI2devNBz1zQrb": "dJwiFcjz9zW5Pge7G8AG",
+        "nPczCjzI2devNBz1zQrb": "ll9WG7PDTuyHwgC5MD6g",
+        "dJwiFcjz9zW5Pge7G8AG": "ll9WG7PDTuyHwgC5MD6g",  # Theo → Vento
     }
     vid = _legacy.get(vid, vid)
     tokens = await _get_all_filler_tokens(vid)
