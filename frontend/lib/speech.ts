@@ -1800,14 +1800,19 @@ export async function voiceStreamConverse(opts: {
     },
     onFinal: (text: string, conf: number | null, dur: number | null) => {
       try { opts.onUserFinal?.(text, conf, dur); } catch {}
-      // === FIX 2026-06-26 v15: prewarm playback audio session ===
-      // L'utente ha appena finito di parlare (stt_final). La pipeline
-      // backend (Claude + ElevenLabs TTS) impiega 2-3s a produrre la prima
-      // frase. Nello stesso tempo possiamo SBLOCCARE in parallelo la
-      // audio session iOS (recording → playback), che da sola costa
-      // ~670ms su setIsAudioActiveAsync(false). Risultato: la prima
-      // sillaba di Koda arriva ~670ms prima.
-      prewarmPlaybackSession().catch(() => {});
+      // === ROLLBACK v16 (post-Build #15 test furgone) ===
+      // Il prewarm v15 lanciato qui ha corrotto l'audio session iOS:
+      // chiamava setIsAudioActiveAsync(false) MENTRE safeStopRecorder
+      // del chunk loop era ancora in volo, lasciando iOS in stato
+      // ambiguo. Risultato: il PROSSIMO recording (Turn 2) inviava
+      // silenzio digitale a Deepgram → mai uno stt_final → 35s di
+      // hang. Inoltre il prewarm faceva risolvere prematuramente la
+      // prima frase TTS, triggerando auto-listen DURANTE il playback
+      // della seconda frase ("se tagliato" nel test furgone).
+      // Rollback: non chiamiamo prewarm qui. Il cycle audio session
+      // gira normalmente dentro playElevenLabsNativeFromUrl quando
+      // arriva la prima frase, come in Build #14 che era stabile.
+      // prewarmPlaybackSession().catch(() => {});   ← DISABILITATO
     },
     onSentence: (header: any, audioBuf: ArrayBuffer) => {
       const u8 = new Uint8Array(audioBuf);
