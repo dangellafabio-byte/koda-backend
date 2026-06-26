@@ -284,6 +284,48 @@ async function prepareTTSUrl(
   }
 }
 
+/** === FIX 2026-06-26 v15: prewarm audio session per ridurre TTFB ===
+ *  Nei log v14 abbiamo osservato che la prima frase TTS di ogni risposta
+ *  paga ~670ms sulla chiamata `setIsAudioActiveAsync(false)` (transizione
+ *  recording→playback su iOS). Lanciando questo ciclo IN PARALLELO con la
+ *  pipeline LLM/TTS del backend (che richiede 2-3s), eliminiamo quei 670ms
+ *  dal time-to-first-audio percepito dall'utente.
+ *
+ *  Chiamato da `voiceStreamConverse.onFinal` quando arriva `stt_final` —
+ *  l'utente ha finito di parlare, sappiamo che servirà il playback.
+ *  Il risultato viene memorizzato in `prewarmPromise` e CONSUMATO dal
+ *  prossimo ciclo audio in `playElevenLabsNativeFromUrl`. */
+let prewarmPromise: Promise<void> | null = null;
+function prewarmPlaybackSession(): Promise<void> {
+  if (prewarmPromise) return prewarmPromise;
+  const tStart = Date.now();
+  prewarmPromise = (async () => {
+    try {
+      await setIsAudioActiveAsync(false);
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+        interruptionMode: "duckOthers",
+        shouldPlayInBackground: false,
+        shouldRouteThroughEarpiece: false,
+      });
+      await setIsAudioActiveAsync(true);
+      console.log(`[KODA_TTS_PREWARM] completed in ${Date.now() - tStart}ms`);
+    } catch (e) {
+      console.log(`[KODA_TTS_PREWARM] failed (non-blocking):`, e);
+    }
+  })();
+  return prewarmPromise;
+}
+
+/** Consuma il prewarm se in volo, altrimenti restituisce null.
+ *  Il prossimo turno dovrà far ripartire il prewarm da zero. */
+function consumePrewarm(): Promise<void> | null {
+  const p = prewarmPromise;
+  prewarmPromise = null;
+  return p;
+}
+
 async function playElevenLabsNativeFromUrl(
   audioUrl: string,
   onAudioStart?: () => void,
@@ -347,19 +389,32 @@ async function playElevenLabsNativeFromUrl(
   const skipCycle = playOpts?.skipAudioSessionCycle === true;
   const tailBufferMs = playOpts?.tailBufferMs ?? 0;
   if (!skipCycle) {
-    await withTimeout(setIsAudioActiveAsync(false), 1500, "setIsActive(false)");
-    await withTimeout(
-      setAudioModeAsync({
-        allowsRecording: false,
-        playsInSilentMode: true,
-        interruptionMode: "duckOthers",
-        shouldPlayInBackground: false,
-        shouldRouteThroughEarpiece: false,
-      }),
-      1500,
-      "setAudioMode(playback)"
-    );
-    await withTimeout(setIsAudioActiveAsync(true), 1500, "setIsActive(true)");
+    // === FIX 2026-06-26 v15: usa prewarm se disponibile ===
+    // Se onFinal ha già lanciato prewarmPlaybackSession() in parallelo
+    // con la pipeline LLM/TTS, qui ne aspettiamo solo il completamento
+    // (di solito ZERO attesa perché LLM+TTS impiegano 2-3s, più che
+    // sufficienti per i 670ms del setIsActive(false)). Risparmio
+    // garantito su TTFB della prima frase.
+    const prew = consumePrewarm();
+    if (prew) {
+      const tWait = Date.now();
+      await prew;
+      console.log(`[KODA_TTS_PLAY] cycle_step=prewarm_consumed ms=${Date.now() - tWait}`);
+    } else {
+      await withTimeout(setIsAudioActiveAsync(false), 1500, "setIsActive(false)");
+      await withTimeout(
+        setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+          interruptionMode: "duckOthers",
+          shouldPlayInBackground: false,
+          shouldRouteThroughEarpiece: false,
+        }),
+        1500,
+        "setAudioMode(playback)"
+      );
+      await withTimeout(setIsAudioActiveAsync(true), 1500, "setIsActive(true)");
+    }
   }
 
   return await new Promise<boolean>((resolve) => {
@@ -1246,6 +1301,7 @@ async function _writeMp3ToFile(bytes: Uint8Array, idx: number): Promise<string |
     );
     // Timeout wrapper di 2.5s sulla scrittura iOS
     let timedOut = false;
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
     const writePromise: Promise<string | null> = (async () => {
       try {
         await (FileSystem as any).writeAsStringAsync(path, b64, {
@@ -1257,17 +1313,27 @@ async function _writeMp3ToFile(bytes: Uint8Array, idx: number): Promise<string |
         return null;
       }
     })();
+    // === FIX 2026-06-26 v15: cancel timeout quando il write vince la race ===
+    // Prima il setTimeout continuava a girare anche dopo write_ok, emettendo
+    // un "TIMEOUT" log fuorviante 2.5s più tardi (osservato in tutti i log
+    // di Build #14). Adesso lo cancelliamo non appena writePromise risolve.
     const result = await Promise.race([
-      writePromise,
-      new Promise<string | null>((resolve) =>
-        setTimeout(() => {
+      writePromise.then((r) => {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
+        return r;
+      }),
+      new Promise<string | null>((resolve) => {
+        timeoutHandle = setTimeout(() => {
           timedOut = true;
           console.log(
             `[KODA_TTS_WRITE] #${idx} TIMEOUT after 2500ms — falling back`
           );
           resolve(null);
-        }, 2500)
-      ),
+        }, 2500);
+      }),
     ]);
     if (timedOut) {
       // Lasciamo che la scrittura completi in background (fire-and-forget)
@@ -1734,6 +1800,14 @@ export async function voiceStreamConverse(opts: {
     },
     onFinal: (text: string, conf: number | null, dur: number | null) => {
       try { opts.onUserFinal?.(text, conf, dur); } catch {}
+      // === FIX 2026-06-26 v15: prewarm playback audio session ===
+      // L'utente ha appena finito di parlare (stt_final). La pipeline
+      // backend (Claude + ElevenLabs TTS) impiega 2-3s a produrre la prima
+      // frase. Nello stesso tempo possiamo SBLOCCARE in parallelo la
+      // audio session iOS (recording → playback), che da sola costa
+      // ~670ms su setIsAudioActiveAsync(false). Risultato: la prima
+      // sillaba di Koda arriva ~670ms prima.
+      prewarmPlaybackSession().catch(() => {});
     },
     onSentence: (header: any, audioBuf: ArrayBuffer) => {
       const u8 = new Uint8Array(audioBuf);
