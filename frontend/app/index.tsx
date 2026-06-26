@@ -3974,6 +3974,7 @@ export default function Taccuino() {
         horizontal
         pagingEnabled
         showsHorizontalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
         onScroll={(e) => {
           // === FIX FLASH ORB DURANTE SWIPE (richiesta utente 2026-06) ===
           // Prima viewMode si aggiornava SOLO al termine del momentum
@@ -4168,6 +4169,7 @@ export default function Taccuino() {
         ref={scrollRef}
         data={timelineWithSeparators}
         keyExtractor={(it) => (it.kind === "sep" ? it.key : it.entry.id)}
+        keyboardShouldPersistTaps="handled"
         renderItem={({ item: it }) =>
           it.kind === "sep" ? (
             <View style={styles.daySeparator}>
@@ -4407,6 +4409,7 @@ export default function Taccuino() {
                 onPress={sendTextFromBox}
                 style={[styles.sendBtn, !textInput.trim() ? { opacity: 0.4 } : styles.sendBtnActive]}
                 disabled={!textInput.trim()}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                 testID="send-btn"
               >
                 <Ionicons name="arrow-up" size={20} color={theme.primaryText} />
@@ -4467,6 +4470,7 @@ export default function Taccuino() {
                     onPress={sendTextFromBox}
                     style={[styles.sendBtn, !textInput.trim() ? { opacity: 0.4 } : styles.sendBtnActive]}
                     disabled={!textInput.trim()}
+                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                     testID="send-btn-reading"
                   >
                     <Ionicons name="arrow-up" size={20} color={theme.primaryText} />
