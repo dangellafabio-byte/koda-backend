@@ -1220,18 +1220,88 @@ function _bytesToBase64(bytes: Uint8Array): string {
 async function _writeMp3ToFile(bytes: Uint8Array, idx: number): Promise<string | null> {
   // Su web preferiamo un blob URL (vedi _playMp3BytesWeb più sotto).
   if (Platform.OS === "web") return null;
+  // === FIX 2026-06-26 v14: logging granulare + timeout su iOS FS ===
+  // Il diag log v13 ha mostrato che il player loop si ferma PRIMA dei log
+  // `cycle_step` aggiunti nella playback function. L'unica chiamata fra
+  // l'`arrived` log e il primo cycle_step è questa funzione. Quindi è
+  // QUI che iOS hanga (probabilmente su writeAsStringAsync della SECONDA
+  // scrittura consecutiva nello stesso turno, quando il FS è ancora
+  // occupato col flush della prima). Mettiamo logging granulare e
+  // timeout duro: se hanga >2s, restituiamo null e il chiamante salta
+  // la frase invece di restare appeso 38s.
+  const tStart = Date.now();
   try {
     const dir = (FileSystem as any).cacheDirectory;
-    if (!dir) return null;
+    if (!dir) {
+      console.log(`[KODA_TTS_WRITE] #${idx} no_dir → null`);
+      return null;
+    }
     const path = `${dir}koda_ws_${Date.now()}_${idx}.mp3`;
+    const t1 = Date.now();
     const b64 = _bytesToBase64(bytes);
-    await (FileSystem as any).writeAsStringAsync(path, b64, {
-      encoding: (FileSystem as any).EncodingType?.Base64 ?? "base64",
-    });
-    return path;
+    const t2 = Date.now();
+    console.log(
+      `[KODA_TTS_WRITE] #${idx} b64_done bytes=${bytes.byteLength} ` +
+        `b64_len=${b64.length} ms=${t2 - t1}`
+    );
+    // Timeout wrapper di 2.5s sulla scrittura iOS
+    let timedOut = false;
+    const writePromise: Promise<string | null> = (async () => {
+      try {
+        await (FileSystem as any).writeAsStringAsync(path, b64, {
+          encoding: (FileSystem as any).EncodingType?.Base64 ?? "base64",
+        });
+        return path;
+      } catch (e) {
+        console.warn(`[KODA_TTS_WRITE] #${idx} writeAsString error:`, e);
+        return null;
+      }
+    })();
+    const result = await Promise.race([
+      writePromise,
+      new Promise<string | null>((resolve) =>
+        setTimeout(() => {
+          timedOut = true;
+          console.log(
+            `[KODA_TTS_WRITE] #${idx} TIMEOUT after 2500ms — falling back`
+          );
+          resolve(null);
+        }, 2500)
+      ),
+    ]);
+    if (timedOut) {
+      // Lasciamo che la scrittura completi in background (fire-and-forget)
+      // così iOS non resta a holding lock, ma noi non aspettiamo.
+      writePromise.catch(() => {});
+      return null;
+    }
+    console.log(
+      `[KODA_TTS_WRITE] #${idx} write_ok ms=${Date.now() - tStart} path_tail=${path.slice(-30)}`
+    );
+    return result;
   } catch (e) {
     console.warn("[ws] writeMp3ToFile failed:", e);
     return null;
+  }
+}
+
+/** === FIX 2026-06-26 v14: fallback in-memory playback ===
+ *  Se la scrittura su FS hanga o fallisce, riproduciamo il MP3 direttamente
+ *  da memoria via data URI. Più lento del FS path normalmente, ma non
+ *  dipende dal lock del FileSystem iOS → bypassa il hang. */
+async function _playMp3FromMemoryFallback(
+  bytes: Uint8Array,
+  onStart?: () => void,
+  playOpts?: { skipAudioSessionCycle?: boolean; tailBufferMs?: number }
+): Promise<boolean> {
+  try {
+    const b64 = _bytesToBase64(bytes);
+    const dataUri = `data:audio/mpeg;base64,${b64}`;
+    console.log(`[KODA_TTS_PLAY] fallback data-uri len=${dataUri.length}`);
+    return await playElevenLabsNativeFromUrl(dataUri, onStart, playOpts);
+  } catch (e) {
+    console.warn("[ws] memory fallback playback failed:", e);
+    return false;
   }
 }
 
@@ -1751,34 +1821,33 @@ export async function voiceStreamConverse(opts: {
           const tWrite = Date.now();
           const path = await _writeMp3ToFile(item.bytes, item.i);
           const writeMs = Date.now() - tWrite;
-          if (!path) {
-            console.log(`[KODA_TTS_PLAY] sent #${sIdx} write FAILED — skipping`);
-            continue;
-          }
-          const tPlayStart = Date.now();
-          await playElevenLabsNativeFromUrl(path, fireStart, {
-            // === FIX 2026-06-26 v12 (rollback ottimizzazione v10) ===
-            // L'ipotesi v10 ("saltare il ciclo per frasi successive elimina
-            // il 'mangia le parole'") si è rivelata SBAGLIATA: nel test
-            // furgone v11 si è visto che AVPlayer SI BLOCCA a pos≈0.5s sulle
-            // frasi `first=false` (race condition con cleanup async del player
-            // precedente). Risultato: solo la PRIMA frase di ogni turno
-            // suonava, le successive si fermavano dopo mezzo secondo.
-            // Soluzione: ESEGUIRE SEMPRE il ciclo audio session (costo:
-            // ~80-150ms di gap tra frasi — accettabile). Il vero colpevole
-            // dell'originale "mangia le parole" era SOLO lo stall watcher
-            // a 12s, già fixato in v11.
+          const playOpts = {
             skipAudioSessionCycle: false,
-            // Tail buffer: dà ~120ms a iOS per drenare il buffer hardware
-            // prima di rilasciare il controllo e permettere alla frase dopo
-            // di partire. Senza questo, l'ultima sillaba veniva troncata.
             tailBufferMs: 120,
-          });
-          const playMs = Date.now() - tPlayStart;
-          console.log(
-            `[KODA_TTS_PLAY] sent #${sIdx} done write_ms=${writeMs} ` +
-              `play_ms=${playMs} total=${Date.now() - tArrival}ms`
-          );
+          };
+          if (!path) {
+            // === FIX 2026-06-26 v14: fallback memory playback ===
+            // _writeMp3ToFile può aver fatto TIMEOUT (FS iOS bloccato) o
+            // fallito. Invece di saltare la frase (che lascia l'UI appesa
+            // in "speaking" per sempre), proviamo a riprodurre direttamente
+            // da memoria via data URI. Più lento ma robusto al hang FS.
+            console.log(`[KODA_TTS_PLAY] sent #${sIdx} write_failed → fallback memory playback`);
+            const tPlayStart = Date.now();
+            await _playMp3FromMemoryFallback(item.bytes, fireStart, playOpts);
+            const playMs = Date.now() - tPlayStart;
+            console.log(
+              `[KODA_TTS_PLAY] sent #${sIdx} done(fallback) play_ms=${playMs} ` +
+                `total=${Date.now() - tArrival}ms`
+            );
+          } else {
+            const tPlayStart = Date.now();
+            await playElevenLabsNativeFromUrl(path, fireStart, playOpts);
+            const playMs = Date.now() - tPlayStart;
+            console.log(
+              `[KODA_TTS_PLAY] sent #${sIdx} done write_ms=${writeMs} ` +
+                `play_ms=${playMs} total=${Date.now() - tArrival}ms`
+            );
+          }
         }
       } catch (e) {
         console.warn(`[voice-stream] sentence #${sIdx} playback failed:`, e);
