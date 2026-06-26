@@ -3006,60 +3006,65 @@ export default function Taccuino() {
     // Verrà resettato a false quando l'app va in background.
     userInteractedRef.current = true;
 
-    // While the user is RECORDING, the big button always means "stop recording
-    // and send the audio" — regardless of conversation_mode. The previous
-    // behavior (terminate the loop and CANCEL the recording) was confusing
-    // and discarded the audio, making it look like the AI didn't hear at all.
-    if (status === "recording" || recRef.current || streamingSessionRef.current) {
-      // === FASE 1 STREAMING ===
-      // Se siamo in streaming mode, fermare la session.stop() invece di
-      // stopTalk() (che assume il flusso file-based con recRef).
+    // === HARD STOP UNIVERSALE 2026-06-26 (richiesta utente "stop fisico") ===
+    // Tutti i tap SUCCESSIVI al primo (cioè quando NON siamo in idle)
+    // devono interrompere immediatamente TUTTO e tornare in idle.
+    // - Niente "stop and send" (NO trigger pipeline residua)
+    // - Niente barge-in (NO ripartenza automatica del mic)
+    // - Solo silenzio totale, per privacy / contesti delicati.
+    //
+    // Use case: l'utente è nel furgone, entra qualcuno, deve far sparire
+    // tutto subito. UN TAP → silenzio assoluto, UI in idle, conversation
+    // mode disabilitato. Per riprendere, basterà un altro tap (che ora
+    // sarà di nuovo il "primo tap" della prossima sessione).
+    if (status !== "idle") {
+      console.log(`[KODA_HARD_STOP] tap interrupted state=${status} convActive=${convActiveRef.current}`);
+      // 1) Abort streaming session (chiude WS HARD, niente "end" → niente pipeline server-side)
       if (streamingSessionRef.current) {
-        console.log("[KODA_STREAM_CLIENT] tap-to-stop → session.stop()");
-        // === FIX 2026-06-25 v8: feedback visivo immediato ===
-        // Senza questo, l'UI restava in "recording" finché non arrivava
-        // done dal server (o un onError di chiusura prematura), che
-        // poteva richiedere fino a 60 secondi nel caso peggiore.
-        // Cambiare subito in "thinking" segnala all'utente che il tap
-        // è stato registrato e il sistema sta processando.
-        setStatus("thinking");
-        const s = streamingSessionRef.current;
+        const s = streamingSessionRef.current as any;
         streamingSessionRef.current = null;
-        s.stop().catch((e) => console.warn("[stream] manual stop failed:", e));
-        return;
+        try {
+          if (typeof s.abort === "function") {
+            s.abort().catch?.(() => {});
+          } else if (typeof s.stop === "function") {
+            // Fallback per safety: se per qualche motivo abort non esistesse
+            s.stop().catch?.(() => {});
+          }
+        } catch {}
       }
-      stopTalk();
-      return;
-    }
-
-    // While AI is speaking/thinking AND we're in a conversation loop,
-    // the big button terminates the loop (otherwise the user has no way out).
-    if (convActiveRef.current && (status === "speaking" || status === "thinking")) {
-      setConvActive(false);
+      // 2) Stop file-based recorder se attivo (legacy non-streaming path)
+      if (recRef.current) {
+        try {
+          const r = recRef.current as any;
+          recRef.current = null;
+          r.stopAndUnloadAsync?.().catch?.(() => {});
+        } catch {}
+      }
+      // 3) Stop TTS playback in corso + cancel HTTP requests in volo
       try { SpeechMod.stop(); } catch {}
-      setStatus("idle");
-      return;
-    }
-
-    if (status === "idle") {
-      // Tap to start. If conversation_mode is on, turn the loop ON
-      if (conversationOn) setConvActive(true);
-      // === RESET CLOSE SESSION PAUSE ===
-      // L'utente aveva salutato e il loop hands-free era stato sospeso.
-      // Ora ha tappato di nuovo l'orb → intent esplicito di riprendere.
-      // Sblocchiamo il loop e ripartiamo dalla registrazione.
+      // 4) Disabilita loop hands-free conversazionale
+      setConvActive(false);
+      convActiveRef.current = false;
+      // 5) Reset close-session pause (così il prossimo tap riparte pulito)
       if (closeSessionPauseRef.current) {
-        console.log("[KODA_CLOSE_SESSION] user tapped — resuming hands-free loop");
         setCloseSessionPause(false);
         closeSessionPauseRef.current = false;
       }
-      startTalk();
-    } else if (status === "speaking") {
-      // Stop AI voice and immediately start recording — single tap interrupts and listens
-      SpeechMod.stop();
+      // 6) UI immediatamente in idle
       setStatus("idle");
-      setTimeout(() => startTalk(), 50);
+      return;
     }
+
+    // === FIRST TAP (status === "idle") ===
+    // Avvia la conversazione: abilita conv mode se configurato, sblocca
+    // eventuale pausa close-session, e parte la registrazione.
+    if (conversationOn) setConvActive(true);
+    if (closeSessionPauseRef.current) {
+      console.log("[KODA_CLOSE_SESSION] user tapped — resuming hands-free loop");
+      setCloseSessionPause(false);
+      closeSessionPauseRef.current = false;
+    }
+    startTalk();
   };
 
   // Mantieni le ref del gesture composto sincronizzate con la closure
@@ -4033,7 +4038,10 @@ export default function Taccuino() {
                 <Pressable
                   ref={orbBtnRef}
                   onPress={onBigButton}
-                  disabled={status === "transcribing" || status === "thinking"}
+                  // === HARD STOP 2026-06-26: orb sempre tappabile ===
+                  // Prima: disabled durante transcribing/thinking, ma l'utente
+                  // ha chiesto esplicitamente di poter interrompere TUTTO in
+                  // qualsiasi stato (per privacy). Ora il tap funziona sempre.
                   hitSlop={30}
                   style={({ pressed }) => [
                     { alignItems: "center", justifyContent: "center" },

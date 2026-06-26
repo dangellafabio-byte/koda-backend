@@ -233,6 +233,29 @@ export class VoiceStreamSession {
     setTimeout(() => this.forceCloseWs(), 25_000);
   }
 
+  /** === HARD ABORT 2026-06-26 (richiesta utente "stop fisico") ===
+   *  Diverso da stop(): NON manda il frame "end" al server, chiude la WS
+   *  IMMEDIATAMENTE. Risultato: Deepgram non finalizza l'utterance →
+   *  nessun stt_final → la pipeline LLM+TTS server-side NON parte →
+   *  privacy garantita (l'audio già inviato resta a Deepgram come scarto,
+   *  non viene mai elaborato da Claude né letto da ElevenLabs).
+   *  Usato per "tap fisico per silenziare tutto quando entra qualcuno". */
+  async abort(): Promise<void> {
+    console.log(`[KODA_STREAM_CLIENT] abort() — user hard stop`);
+    this.stopRequested = true;
+    this.finalCloseRequested = true;
+    this.chunkLoopActive = false;
+    // Marca doneReceived=true così onclose non genera onError fasullo
+    // (l'upper layer riceverà comunque il segnale di abort via signal).
+    this.doneReceived = true;
+    this.notifiedUpperOnClose = true;
+    this.stopKeepalive();
+    // Chiudi WS subito: niente frame "end", niente waiting per "done".
+    this.forceCloseWs();
+    // Stop recorder fire-and-forget (non blocchiamo il chiamante).
+    this.safeStopRecorder().catch(() => {});
+  }
+
   // === FIX 2026-06-25 v7: keepalive ping ===
   // Su iOS in cellular (es. furgone), proxy intermedi possono chiudere la
   // WS se passa più di 1-2 secondi senza traffico. Mandiamo un piccolo
