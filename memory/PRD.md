@@ -235,3 +235,38 @@ Stato Block E verificato e completato.
 - 6/6 PASS (`test_fase1_ws.py`): WS happy path, WS empty text, WS invalid JSON, HTTP poll fallback, Echo→Theo rename, back-compat alias.
 - Frontend: validazione manuale dal device richiesta (Expo WS playback in dev/TestFlight).
 
+
+
+
+---
+
+## 🌊🌬️ Rebrand voci ufficiali (giugno 2026 v4)
+
+### Decisione di prodotto
+Koda **NON** offre una rosa di voci tra cui scegliere. L'utente sceglie **solo il genere** (maschile/femminile) in onboarding, e l'identità sonora di Koda è **una sola voce per genere**, fissa, riconoscibile.
+
+### Voci ufficiali
+- **Acqua** (`6TngzmzM89jJ3Y2Yiywr`) — voce femminile di Koda. Sostituisce la precedente "Aria" (`tCOJUYBo86m5v7hppDc7`).
+- **Vento** (`ll9WG7PDTuyHwgC5MD6g`) — voce maschile di Koda. Sostituisce la precedente "Theo" (`dJwiFcjz9zW5Pge7G8AG`).
+
+### Implementazione
+**Backend** (`/app/backend/server.py`):
+- `KODA_VOICES["aria"]`/`"theo"`/`"echo"` → voice_id Acqua/Vento (chiavi brand interne mantenute per retrocompat profili).
+- `CURATED_VOICES` aggiornato (label "Acqua" / "Vento", descrizioni asciutte).
+- `_VOICE_MIGRATION_MAP` migra automaticamente utenti esistenti al prossimo `GET /api/profile`:
+  - `tCOJUYBo86m5v7hppDc7` (Aria) → `6TngzmzM89jJ3Y2Yiywr` (Acqua)
+  - `dJwiFcjz9zW5Pge7G8AG` (Theo) → `ll9WG7PDTuyHwgC5MD6g` (Vento)
+  - `XrExE9yKIg1WjnnlVkGX` (Matilda default) → Acqua
+- Cache key `/api/voice/preview/{key}` ora include voice_id → auto-invalidazione quando la voce cambia.
+- Default `Settings.tts_voice_id` e tutti i fallback aggiornati a Acqua.
+
+**Frontend** (`KodaIntro.tsx`, `app/index.tsx`):
+- `BRAND_VOICE_IDS.aria` / `echo` aggiornati.
+- Voice cards M2 onboarding: titoli "Acqua" / "Vento", descrizione asciutta "La voce {femminile|maschile} di Koda."
+- TTS step 3 KodaIntro: "Acqua — voce femminile — oppure Vento — voce maschile. Sono solo due timbri della stessa presenza: io resto sempre Koda."
+- Tour voiceId mapping aggiornato.
+
+### Validazione
+- Backend test automatico passato: `/api/voices` → Acqua + Vento; `/api/voice/preview/aria` e `/voice/preview/theo` generano audio dai nuovi voice_id (verificato da log ElevenLabs).
+- Deploy production effettuato (`app-finder-408.emergent.host`).
+- Confermato funzionante in app reale dell'utente dopo publish.
