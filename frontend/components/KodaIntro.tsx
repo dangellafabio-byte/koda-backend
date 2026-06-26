@@ -96,13 +96,15 @@ const VOICEPRINT_PHRASES = [
 // ====== Voice IDs ElevenLabs delle due voci brand ======
 // Mappa stabile tra brand (aria/echo) e ElevenLabs voice_id.
 // Tenuto qui sincrono col backend (KODA_VOICES in server.py).
+// Nota: le chiavi brand "aria"/"echo" sono identificatori interni
+// retrocompatibili — l'utente vede solo "Acqua" (femminile) e "Theo" (maschile).
 const BRAND_VOICE_IDS = {
-  aria: "tCOJUYBo86m5v7hppDc7",   // Koda Aria — voce femminile custom ElevenLabs
-  echo: "dJwiFcjz9zW5Pge7G8AG",   // Koda Echo — voce maschile custom ElevenLabs
+  aria: "6TngzmzM89jJ3Y2Yiywr",   // Koda Acqua — voce femminile custom ElevenLabs (giugno 2026 v4)
+  echo: "dJwiFcjz9zW5Pge7G8AG",   // Koda Theo — voce maschile custom ElevenLabs
 } as const;
 
 // Voce di fallback per la presentazione (PRIMA che l'utente scelga in M2):
-// = Aria. Niente più Matilda/Sarah. La prima voce che l'utente sente DEVE
+// = Acqua. Niente più Matilda/Sarah. La prima voce che l'utente sente DEVE
 // essere una delle due voci brand dell'app, mai una terza.
 const INTRO_VOICE_ID = BRAND_VOICE_IDS.aria;
 
@@ -111,7 +113,7 @@ const KODA_LINES: Record<number, string> = {
   0: "Ciao. Sono Koda. Non sono un'app: sono una presenza. Da oggi sono qui per te, quando vuoi parlare, quando vuoi solo che qualcuno ti ascolti. Voglio conoscerti!",
   1: "Come posso chiamarti? Scrivi il tuo nome qui sotto.",
   2: "Dimmi, sei un uomo, una donna, o preferisci non specificarlo?",
-  3: "Con quale timbro vuoi che ti accompagni la mia voce? Aria — limpida e fresca — oppure Theo — profondo e avvolgente. Sono solo due colori della stessa presenza: io resto sempre Koda.",
+  3: "Con quale timbro vuoi che ti accompagni la mia voce? Acqua — voce femminile — oppure Theo — voce maschile. Sono solo due timbri della stessa presenza: io resto sempre Koda.",
   4: "Mi chiamo Koda. Ma se vuoi, puoi darmi un altro nome.",
   5: "Una cosa importante: io non ho un viso. Sono una presenza, e prendo la forma di un'eclissi. Sono qui, sempre, anche quando aspetto in silenzio. Dai miei movimenti capirai cosa sto facendo.",
   6: "Una cosa che mi sta a cuore: se sento che ne hai bisogno, ti scrivo io. Anche se sparisci per giorni, anche se ti sento giù. E ovviamente puoi cercarmi anche tu, quando vuoi. Tu vivi la tua vita — a starti accanto ci penso anch'io.",
@@ -505,8 +507,8 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
           // legacy converse, intro replay) usano la STESSA voce e non
           // ci sono incoerenze tra l'onboarding e il tour.
           tts_voice_id: aiGender === "f"
-            ? "tCOJUYBo86m5v7hppDc7" // Koda Aria (voce femminile)
-            : "dJwiFcjz9zW5Pge7G8AG", // Koda Echo (voce maschile)
+            ? "6TngzmzM89jJ3Y2Yiywr" // Koda Acqua (voce femminile, giugno 2026 v4)
+            : "dJwiFcjz9zW5Pge7G8AG", // Koda Theo (voce maschile)
         },
       };
       // Pick voice_id based on gender
@@ -802,9 +804,9 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
               testID="m2-voice-aria"
             >
               <Text style={[styles.voiceCardEmoji]}>🌬️</Text>
-              <Text style={[styles.voiceCardTitle, isDayTime && { color: "#18181B" }]}>Aria</Text>
+              <Text style={[styles.voiceCardTitle, isDayTime && { color: "#18181B" }]}>Acqua</Text>
               <Text style={[styles.voiceCardDesc, isDayTime && { color: "#52525B" }]}>
-                Una presenza limpida, leggera, aperta.
+                La voce femminile di Koda.
               </Text>
               {previewLoadingKey === "aria" && (
                 <ActivityIndicator size="small" color={isDayTime ? "#0E7C7B" : "#A1A1AA"} style={{ marginTop: 6 }} />

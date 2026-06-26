@@ -976,7 +976,7 @@ class TaccuinoSettings(BaseModel):
     night_start_hour: int = 20  # used when theme = "auto-orario"
     # ElevenLabs TTS settings
     tts_provider: str = "elevenlabs"  # "elevenlabs" | "system"
-    tts_voice_id: str = "XrExE9yKIg1WjnnlVkGX"  # Matilda - warm female, good Italian
+    tts_voice_id: str = "6TngzmzM89jJ3Y2Yiywr"  # Acqua - voce femminile ufficiale Koda
     tts_stability: float = 0.5
     tts_similarity_boost: float = 0.75
     # Custom background — either a base64 data URI (user upload) or one of the
@@ -1952,16 +1952,20 @@ async def api_get_profile(request: Request):
         # Best-effort: se la migrazione fallisce, il client comunque
         # forza "notte" come fallback locale.
         pass
-    # === MIGRAZIONE VOCI ElevenLabs → Voice Design Koda (giugno 2026 v3) ===
-    # Aria ora è la voce FEMMINILE custom dell'utente (tCOJUYBo86m5v7hppDc7).
-    # Echo resta maschile (dJwiFcjz9zW5Pge7G8AG).
+    # === MIGRAZIONE VOCI ElevenLabs → Voice Design Koda (giugno 2026 v4) ===
+    # Acqua è la nuova voce FEMMINILE ufficiale di Koda (6TngzmzM89jJ3Y2Yiywr),
+    # sostituisce la precedente Aria (tCOJUYBo86m5v7hppDc7).
+    # Theo resta maschile (dJwiFcjz9zW5Pge7G8AG).
     # Migra le vecchie voci verso le nuove identità Koda.
     _VOICE_MIGRATION_MAP = {
-        "pFZP5JQG7iQjIQuC4Bku": "tCOJUYBo86m5v7hppDc7",  # Lily → Koda Aria (femminile v3)
+        "pFZP5JQG7iQjIQuC4Bku": "6TngzmzM89jJ3Y2Yiywr",  # Lily → Koda Acqua (femminile v4)
         "nPczCjzI2devNBz1zQrb": "dJwiFcjz9zW5Pge7G8AG",  # Brian → Koda Echo (maschile)
-        # Vecchie Aria intermedie → nuova Aria femminile definitiva
-        "q1GF5A2kzAOPv9d5TQEy": "tCOJUYBo86m5v7hppDc7",  # vecchia Aria → nuova Aria femminile
-        "PponuEVSg4RZBO08kPzE": "tCOJUYBo86m5v7hppDc7",  # Aria v2 intermedia → Aria v3 femminile
+        # Vecchie Aria intermedie → nuova Acqua femminile definitiva
+        "q1GF5A2kzAOPv9d5TQEy": "6TngzmzM89jJ3Y2Yiywr",  # vecchia Aria → Acqua
+        "PponuEVSg4RZBO08kPzE": "6TngzmzM89jJ3Y2Yiywr",  # Aria v2 intermedia → Acqua
+        "tCOJUYBo86m5v7hppDc7": "6TngzmzM89jJ3Y2Yiywr",  # Aria v3 → Acqua (giugno 2026 v4)
+        # Failsafe per voci default ElevenLabs ancora salvate in qualche profilo
+        "XrExE9yKIg1WjnnlVkGX": "6TngzmzM89jJ3Y2Yiywr",  # Matilda default → Acqua
     }
     try:
         old_vid = getattr(p.settings, "tts_voice_id", "") or ""
@@ -5084,8 +5088,8 @@ def _get_eleven_client():
 # Curated list of voices that work well for Italian.
 # (voice_id, display name, short description, gender)
 CURATED_VOICES = [
-    {"voice_id": "tCOJUYBo86m5v7hppDc7", "name": "Aria", "description": "Limpida e fresca — voce femminile, spazio, respiro, apertura.", "gender": "femminile", "accent": "italiano"},
-    {"voice_id": "dJwiFcjz9zW5Pge7G8AG", "name": "Theo", "description": "Profonda e avvolgente — timbro maschile, riflessione, eco interiore, intimità.", "gender": "maschile", "accent": "italiano"},
+    {"voice_id": "6TngzmzM89jJ3Y2Yiywr", "name": "Acqua", "description": "La voce femminile di Koda.", "gender": "femminile", "accent": "italiano"},
+    {"voice_id": "dJwiFcjz9zW5Pge7G8AG", "name": "Theo", "description": "La voce maschile di Koda.", "gender": "maschile", "accent": "italiano"},
 ]
 
 # ============================================================================
@@ -5455,7 +5459,7 @@ async def api_voice_preview(voice_key: str):
     # Frase di preview: corta, calda, identica per tutte le voci.
     preview_text = "Ciao, sono qui con te. Quando vuoi parliamo."
     # Cache key separata per le preview (TTL lungo: la voce non cambia mai)
-    cache_key = f"voice_preview_{voice_key}_{hashlib.sha1(preview_text.encode()).hexdigest()[:8]}"
+    cache_key = f"voice_preview_{voice_key}_{hashlib.sha1((preview_text + voice_id).encode()).hexdigest()[:8]}"
     cached = await db.tts_audio_cache.find_one({"_id": cache_key})
     if cached and cached.get("mp3_b64"):
         return Response(content=base64.b64decode(cached["mp3_b64"]), media_type="audio/mpeg")
@@ -5508,26 +5512,30 @@ def _has_audio_tags(text: str) -> bool:
 # ============================================================
 
 KODA_VOICES: Dict[str, Dict[str, str]] = {
-    # ARIA — voce custom femminile dell'utente (tCOJUYBo86m5v7hppDc7).
-    # Limpida, fresca, evoca spazio/respiro/leggerezza/apertura.
+    # ACQUA — voce custom femminile dell'utente (6TngzmzM89jJ3Y2Yiywr).
+    # La voce femminile UFFICIALE di Koda. Sostituisce la precedente "Aria"
+    # (tCOJUYBo86m5v7hppDc7) — l'utente l'ha trovata più adatta all'identità
+    # del prodotto. La chiave "aria" è mantenuta per retrocompatibilità con
+    # i profili salvati (profile.koda_voice="aria") — gli utenti esistenti
+    # continueranno a ricevere automaticamente la nuova voce.
     "aria": {
-        "voice_id": "tCOJUYBo86m5v7hppDc7",
-        "label": "Aria",
-        "description": "Limpida e fresca — voce femminile, spazio, respiro, apertura.",
+        "voice_id": "6TngzmzM89jJ3Y2Yiywr",
+        "label": "Acqua",
+        "description": "La voce femminile di Koda.",
     },
     # THEO — timbro custom maschile (dJwiFcjz9zW5Pge7G8AG). Profondo, caldo,
     # avvolgente. Evoca riflessione, eco interiore, intimità.
-    # Nota: l'identità è e resta SEMPRE "Koda" — Aria/Theo sono solo timbri.
+    # Nota: l'identità è e resta SEMPRE "Koda" — Acqua/Theo sono solo timbri.
     # Vecchia chiave "echo" mantenuta per retrocompatibilità con profili salvati.
     "theo": {
         "voice_id": "dJwiFcjz9zW5Pge7G8AG",
         "label": "Theo",
-        "description": "Profondo e avvolgente — timbro maschile, riflessione, eco interiore, intimità.",
+        "description": "La voce maschile di Koda.",
     },
     "echo": {
         "voice_id": "dJwiFcjz9zW5Pge7G8AG",
         "label": "Theo",
-        "description": "Profondo e avvolgente — timbro maschile, riflessione, eco interiore, intimità.",
+        "description": "La voce maschile di Koda.",
     },
 }
 
@@ -5944,12 +5952,14 @@ async def api_fillers(voice_id: Optional[str] = None):
     Inoltre il client può concatenare PIÙ filler in loop random finché non
     arriva la prima vera frase → "presenza sostenibile", mai silenzio.
     
-    Se voice_id non è passato, usa Aria femminile come default."""
-    vid = voice_id or "tCOJUYBo86m5v7hppDc7"
+    Se voice_id non è passato, usa Acqua femminile come default."""
+    vid = voice_id or "6TngzmzM89jJ3Y2Yiywr"
     _legacy = {
-        "pFZP5JQG7iQjIQuC4Bku": "tCOJUYBo86m5v7hppDc7",
-        "q1GF5A2kzAOPv9d5TQEy": "tCOJUYBo86m5v7hppDc7",
-        "PponuEVSg4RZBO08kPzE": "tCOJUYBo86m5v7hppDc7",
+        "pFZP5JQG7iQjIQuC4Bku": "6TngzmzM89jJ3Y2Yiywr",
+        "q1GF5A2kzAOPv9d5TQEy": "6TngzmzM89jJ3Y2Yiywr",
+        "PponuEVSg4RZBO08kPzE": "6TngzmzM89jJ3Y2Yiywr",
+        "tCOJUYBo86m5v7hppDc7": "6TngzmzM89jJ3Y2Yiywr",  # Aria → Acqua
+        "XrExE9yKIg1WjnnlVkGX": "6TngzmzM89jJ3Y2Yiywr",  # Matilda → Acqua
         "nPczCjzI2devNBz1zQrb": "dJwiFcjz9zW5Pge7G8AG",
     }
     vid = _legacy.get(vid, vid)
@@ -5971,7 +5981,7 @@ async def api_tts(req: TTSRequest):
     if client_el is None:
         raise HTTPException(status_code=503, detail="ElevenLabs not configured")
 
-    voice_id = req.voice_id or "XrExE9yKIg1WjnnlVkGX"
+    voice_id = req.voice_id or "6TngzmzM89jJ3Y2Yiywr"  # default Acqua
     voice_settings = _voice_settings_for_tone(req.tone, req.stability, req.similarity_boost)
 
     try:
@@ -6149,7 +6159,7 @@ async def api_tts_bridge(style: str = "generico", i: int = 0, voice_id: Optional
     phrases = BRIDGE_PHRASES[tier]
     idx = i % len(phrases)
     text = phrases[idx]
-    vid = voice_id or "XrExE9yKIg1WjnnlVkGX"  # Matilda default
+    vid = voice_id or "6TngzmzM89jJ3Y2Yiywr"  # default Acqua
 
     # Cache key versionato → nuove frasi invalidano automaticamente le vecchie
     cache_key = f"bridge:{BRIDGE_VERSION}:{vid}:{tier}:{idx}"
@@ -6240,7 +6250,7 @@ async def api_tts_prepare(req: TTSRequest):
     if client_el is None:
         raise HTTPException(status_code=503, detail="ElevenLabs not configured")
 
-    voice_id = req.voice_id or "XrExE9yKIg1WjnnlVkGX"
+    voice_id = req.voice_id or "6TngzmzM89jJ3Y2Yiywr"  # default Acqua
     voice_settings = _voice_settings_for_tone(req.tone, req.stability, req.similarity_boost)
 
     try:
@@ -6353,7 +6363,7 @@ async def _tts_stream_impl(
     if client_el is None:
         raise HTTPException(status_code=503, detail="ElevenLabs not configured")
 
-    vid = voice_id or "XrExE9yKIg1WjnnlVkGX"
+    vid = voice_id or "6TngzmzM89jJ3Y2Yiywr"  # default Acqua
     voice_settings = _voice_settings_for_tone(tone, stability, similarity_boost)
     use_v3 = _has_audio_tags(text)
     model = "eleven_v3" if use_v3 else "eleven_flash_v2_5"
@@ -6492,7 +6502,7 @@ async def _get_or_generate_offline_clip(voice_id: str, idx: int) -> Optional[str
     Cache permanente (no TTL) — le clip sono asset di sistema, non TTS utente.
 
     Args:
-        voice_id: ElevenLabs voice_id (es. "tCOJUYBo86m5v7hppDc7" per Aria)
+        voice_id: ElevenLabs voice_id (es. "6TngzmzM89jJ3Y2Yiywr" per Acqua)
         idx: indice 0-2 nella lista OFFLINE_CLIP_TEXTS
 
     Returns:
@@ -6576,7 +6586,7 @@ async def api_offline_clips_manifest(voice_id: str):
     Response:
         {
             "version": "v1",
-            "voice_id": "tCOJUYBo86m5v7hppDc7",
+            "voice_id": "6TngzmzM89jJ3Y2Yiywr",
             "clips": [
                 {"idx": 0, "text": "...", "url": "/api/tts/audio/<token>.mp3"},
                 {"idx": 1, "text": "...", "url": "..."},

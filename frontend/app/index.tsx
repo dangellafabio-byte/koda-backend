@@ -5474,9 +5474,9 @@ export default function Taccuino() {
       // Fallback a tts_voice_id se koda_voice mancante.
       voiceId={(() => {
         const k = ((profile?.settings as any)?.koda_voice || "").toLowerCase();
-        if (k === "aria" || k === "eco") return "tCOJUYBo86m5v7hppDc7"; // Koda Aria (femminile)
-        if (k === "echo") return "dJwiFcjz9zW5Pge7G8AG"; // Koda Echo (maschile)
-        return (profile?.settings as any)?.tts_voice_id || "tCOJUYBo86m5v7hppDc7";
+        if (k === "aria" || k === "eco") return "6TngzmzM89jJ3Y2Yiywr"; // Koda Acqua (femminile, giugno 2026 v4)
+        if (k === "echo" || k === "theo") return "dJwiFcjz9zW5Pge7G8AG"; // Koda Theo (maschile)
+        return (profile?.settings as any)?.tts_voice_id || "6TngzmzM89jJ3Y2Yiywr";
       })()}
       onPageChange={(page) => {
         const w = tourDims.width;
