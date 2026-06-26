@@ -50,24 +50,16 @@ import * as FileSystem from "expo-file-system/legacy";
 // cui può fare endpointing. Trade-off accettato: latenza first-token
 // leggermente più alta, ma molto più affidabile.
 const CHUNK_DURATION_MS = 1500; // durata di ogni recording chunk
-// === FIX 2026-06-26 v17 (post-Build #16 long-speech TTS drop) ===
-// L'utente ha riscontrato che parlando >60s in furgone, l'app smetteva
-// di rispondere COMPLETAMENTE — non solo perdeva una risposta, ma
-// TUTTI i turni successivi venivano bloccati. Root cause: il vecchio
-// cap a 60s scattava insieme al timeoutMs di voiceStreamConverse (anche
-// 60s), generando una race condition che lasciava la sessione in stato
-// ambiguo. Inoltre, raggiunto il cap, il chunkLoop faceva semplicemente
-// `break` senza inviare il frame "end" al server → Deepgram non
-// finalizzava mai l'utterance → nessun stt_final → nessuna TTS.
-//
-// Fix:
-//   1. STREAM_HARD_CAP_MS alzato a 180_000 (3 min) per sfoghi lunghi
-//   2. Al raggiungimento del cap, NON facciamo break secco: inviamo
-//      "end" al server in modo controllato (come uno stop manuale),
-//      manteniamo la WS aperta in modo che la TTS arrivi normalmente
-//   3. timeoutMs upper layer ora 240_000 (4 min) per dare margine a
-//      LLM+TTS dopo lo speech
-const STREAM_HARD_CAP_MS = 180_000; // safety totale (3 minuti)
+// === FIX 2026-06-26 v18 (cap differenziato chat vs sfogo) ===
+// L'utente ha richiesto due livelli di cap a seconda del contesto:
+//   - Chat normale: 3 minuti — sufficiente per quasi tutti i turni
+//   - Stanza dello Sfogo (ephemeral=true): 5 minuti — quando uno si
+//     lascia andare, non guarda l'orologio. È giusto dargli più spazio
+//     prima che il microfono si fermi.
+// La logica del cap (al raggiungimento manda "end" controllato e
+// aspetta la TTS) è identica per entrambi i casi.
+const STREAM_HARD_CAP_MS_CHAT = 180_000; // 3 minuti — modalità normale
+const STREAM_HARD_CAP_MS_SFOGO = 300_000; // 5 minuti — Stanza dello Sfogo
 const WS_OPEN_TIMEOUT_MS = 6_000;
 
 // === FIX 2026-06-25 v7 (post-Build #6 WS close diagnostic) ===
@@ -546,20 +538,23 @@ export class VoiceStreamSession {
     let prevChunkEnd = chunkStart;
 
     while (this.chunkLoopActive && !this.stopRequested) {
-      // === FIX 2026-06-26 v17: hard-cap come "stop controllato" ===
-      // Raggiunto il limite di 3 minuti, NON facciamo un break secco
-      // (che lascerebbe Deepgram in attesa di altri chunk all'infinito,
-      // senza mai finalizzare l'utterance né generare la TTS).
-      // Invece: comportiamoci come se l'utente avesse premuto stop:
-      //   - segnaliamo stopRequested + finalCloseRequested
-      //   - inviamo il frame "end" al server, così Deepgram chiude il
-      //     suo stream, emette stt_final, parte la pipeline LLM+TTS e
-      //     l'utente riceve normalmente la risposta vocale
-      //   - lasciamo la WS aperta: il server la chiuderà naturalmente
-      //     dopo aver inviato il "done" finale
-      if (Date.now() - this.startedAt > STREAM_HARD_CAP_MS) {
+      // === FIX 2026-06-26 v17/v18: hard-cap dinamico chat vs sfogo ===
+      // Cap differenziato in base al contesto:
+      //   - chat normale: 3 minuti (STREAM_HARD_CAP_MS_CHAT)
+      //   - Stanza dello Sfogo (ephemeral=true): 5 minuti (STREAM_HARD_CAP_MS_SFOGO)
+      // Raggiunto il limite, NON facciamo break secco (che lascerebbe
+      // Deepgram in attesa di altri chunk all'infinito): inviamo "end"
+      // al server in modo controllato, Deepgram chiude il suo stream,
+      // emette stt_final, parte la pipeline LLM+TTS e l'utente riceve
+      // normalmente la risposta vocale. La WS resta aperta finché il
+      // server invia "done".
+      const hardCapMs = this.lastStartOpts.ephemeral
+        ? STREAM_HARD_CAP_MS_SFOGO
+        : STREAM_HARD_CAP_MS_CHAT;
+      if (Date.now() - this.startedAt > hardCapMs) {
         console.log(
-          `[KODA_STREAM_CLIENT] hard-cap ${STREAM_HARD_CAP_MS}ms raggiunto — ` +
+          `[KODA_STREAM_CLIENT] hard-cap ${hardCapMs}ms raggiunto ` +
+            `(mode=${this.lastStartOpts.ephemeral ? "sfogo" : "chat"}) — ` +
             `chiusura controllata input audio (mantengo WS aperta per TTS)`
         );
         this.stopRequested = true;

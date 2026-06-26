@@ -2367,13 +2367,11 @@ export default function Taccuino() {
       const result = await voiceStreamConverse({
         ephemeral: confessionalMode,
         profileLang: "it",
-        // === FIX 2026-06-26 v17: alzato da 60s → 240s ===
-        // STREAM_HARD_CAP_MS è 180s (3 min di parlato), poi servono
-        // ~30-60s per LLM+TTS. Con il vecchio valore di 60s, il timer
-        // outer scattava insieme al cap interno, generando un
-        // "voice-stream-timeout" prematuro che impediva alla TTS di
-        // arrivare. 240s = 3 min speech + 1 min pipeline.
-        timeoutMs: 240_000,
+        // === FIX 2026-06-26 v18: timeout dinamico chat vs sfogo ===
+        // Allineato a STREAM_HARD_CAP_MS_* + 60s margine pipeline.
+        // - chat normale: 180s + 60s = 240s
+        // - Stanza dello Sfogo: 300s + 60s = 360s
+        timeoutMs: confessionalMode ? 360_000 : 240_000,
         onSession: (s: any) => {
           streamingSessionRef.current = s;
           console.log(

@@ -127,13 +127,16 @@ DG_KEEPALIVE_INTERVAL_S = 5.0
 CLIENT_IDLE_TIMEOUT_S = 20.0
 
 # Hard cap totale sessione (safety net contro WS appesi).
-# === FIX 2026-06-26 v17: alzato da 120s → 240s ===
-# Il client ora consente fino a 180s di parlato (STREAM_HARD_CAP_MS),
-# poi servono ~30-60s per LLM+TTS prima del frame "done". Il vecchio
-# valore di 120s tagliava la sessione PRIMA che il client raggiungesse
-# il proprio cap, generando perdita di TTS e UI bloccata sui turni
-# successivi quando l'utente faceva sfoghi lunghi.
-SESSION_HARD_CAP_S = 240.0
+# === FIX 2026-06-26 v18: cap differenziato chat (3min) vs sfogo (5min) ===
+# Il client ora supporta cap differenziati:
+#   - chat normale: 180s di parlato + 60s pipeline = ~240s
+#   - Stanza dello Sfogo: 300s di parlato + 60s pipeline = ~360s
+# Mettiamo 360s qui per coprire entrambi i casi senza branching server-side
+# (il server non sa a priori se la sessione è ephemeral fino a che riceve
+# il frame "start" — alzare il cap server è più sicuro di un check
+# condizionale, e non causa danni: il cap scatta solo se il client non
+# manda mai "end", caso che non si verifica nel flusso normale).
+SESSION_HARD_CAP_S = 360.0
 
 
 # ============================================================
