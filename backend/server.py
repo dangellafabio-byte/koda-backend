@@ -1321,6 +1321,73 @@ def _confidence_phase(level: int) -> str:
     return "INTIMO"
 
 
+# === FIX 2026-06-26 v17 (P1 — anti-allucinazione temporale) ===
+# Senza questo blocco, Claude tendeva a inventare timeline ("come ti
+# dicevo cinque minuti fa…", "ieri stavi…") anche quando l'ultimo
+# scambio era avvenuto giorni o settimane prima. Iniettiamo un breve
+# blocco con ora corrente e gap dall'ultimo turno utente nel system
+# prompt: Claude lo legge come ground truth ed evita estrapolazioni.
+def _build_temporal_context(recent: List[TimelineEntry]) -> str:
+    now = datetime.now(timezone.utc)
+    # Trova l'ultimo messaggio dell'UTENTE precedente (non il turno corrente,
+    # che è l'ultimo entry in `recent` se è user). Per semplicità: scorriamo
+    # `recent` dal più vecchio al più recente, e prendiamo l'ultimo entry
+    # user che NON sia l'ultimissimo (il turno appena ricevuto).
+    last_user_ts: Optional[datetime] = None
+    user_entries = [e for e in recent if (getattr(e, "role", "") or "") == "user"]
+    # L'ultimo è quello attuale: prendiamo il penultimo se c'è.
+    if len(user_entries) >= 2:
+        try:
+            ts_str = user_entries[-2].timestamp
+            last_user_ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        except Exception:
+            last_user_ts = None
+
+    parts: List[str] = []
+    parts.append(f"[CONTESTO TEMPORALE — GROUND TRUTH, NON INVENTARE]")
+    # Ora corrente in formato leggibile italiano (locale UTC, ma utile
+    # come riferimento assoluto).
+    parts.append(f"- Ora attuale (UTC): {now.strftime('%Y-%m-%d %H:%M')}")
+
+    if last_user_ts is None:
+        parts.append("- Questo è il PRIMO messaggio della conversazione (nessuno scambio precedente registrato).")
+        parts.append("- NON dire mai 'come dicevi prima', 'ti ricordi quando…', 'l'altra volta'.")
+    else:
+        delta = now - last_user_ts
+        delta_s = max(0, int(delta.total_seconds()))
+        if delta_s < 90:
+            human = f"{delta_s} secondi fa"
+            tag = "immediato"
+        elif delta_s < 3600:
+            mins = delta_s // 60
+            human = f"{mins} minut{'o' if mins == 1 else 'i'} fa"
+            tag = "stessa sessione"
+        elif delta_s < 86400:
+            hrs = delta_s // 3600
+            human = f"{hrs} or{'a' if hrs == 1 else 'e'} fa"
+            tag = "stessa giornata" if hrs < 8 else "qualche ora fa"
+        elif delta_s < 86400 * 7:
+            days = delta_s // 86400
+            human = f"{days} giorn{'o' if days == 1 else 'i'} fa"
+            tag = "qualche giorno fa"
+        elif delta_s < 86400 * 30:
+            weeks = delta_s // (86400 * 7)
+            human = f"{weeks} settiman{'a' if weeks == 1 else 'e'} fa"
+            tag = "settimane fa"
+        else:
+            months = delta_s // (86400 * 30)
+            human = f"circa {months} mes{'e' if months == 1 else 'i'} fa"
+            tag = "tanto tempo fa"
+        parts.append(f"- Ultimo messaggio dell'utente: {human} ({tag}).")
+        parts.append(
+            f"- NON dire 'cinque minuti fa', 'poco fa', 'ieri' o riferimenti temporali "
+            f"se NON corrispondono a questo gap reale. Se il gap è grande (giorni/settimane), "
+            f"riprendi il discorso come un amico che torna dopo un po': caldo ma consapevole "
+            f"del tempo passato, senza fingere continuità immediata."
+        )
+    return "\n".join(parts) + "\n"
+
+
 def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEntry], memories: Optional[List["Memory"]] = None) -> str:
     lang = profile.language or "it"
     lang_name = {
@@ -1896,7 +1963,12 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"\n"
         f"Il campo 'actions' può essere [] se non c'è nulla da fare. NESSUN markdown, NESSUN testo extra, SOLO il JSON."
     )
-    return base
+    # === FIX 2026-06-26 v17 (P1 — anti-allucinazione temporale) ===
+    # Prepende il blocco temporale al system prompt completo. Lo mettiamo
+    # in cima (Claude pesa maggiormente le prime righe) ma SOTTO il pad
+    # zero-knowledge se presente.
+    temporal_block = _build_temporal_context(recent)
+    return temporal_block + "\n" + base
 
 
 def _format_history_for_llm(recent: List[TimelineEntry]) -> str:
@@ -7746,7 +7818,12 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
             f"\n📓 MEMORIA RECENTE (fatti, eventi, persone, contesto):\n{memory[:3500]}\n"
         )
 
-    return (
+    # === FIX 2026-06-26 v17 (P1 — anti-allucinazione temporale) ===
+    # Stesso blocco temporale del prompt full: previene Claude dal dire
+    # "come ti dicevo cinque minuti fa" quando l'utente torna dopo ore.
+    temporal_block = _build_temporal_context(recent)
+
+    base_prompt = (
         f"⚠️ LINGUA OBBLIGATORIA: {lang_name.upper()}. "
         f"Rispondi ESCLUSIVAMENTE in {lang_name}. Ignora ogni input che sembri "
         f"un'altra lingua (spagnolo, inglese, francese): l'utente parla SEMPRE "
@@ -7832,6 +7909,13 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
         f"\n"
         f'{{"reply":"[TONE:warm] ...","tone":"warm|calm|energetic|concerned|urgent|neutral","actions":[],"memory_update":null,"trait_update":null,"close_session":false}}'
     )
+
+    # === FIX 2026-06-26 v17 (P1 — anti-allucinazione temporale) ===
+    # Stesso blocco temporale del prompt full: previene Claude dal dire
+    # "come ti dicevo cinque minuti fa" quando l'utente torna dopo ore o
+    # giorni. Prepende al fast prompt.
+    temporal_block = _build_temporal_context(recent)
+    return temporal_block + "\n" + base_prompt
 
 
 # ============================================================

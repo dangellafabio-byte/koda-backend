@@ -1743,7 +1743,9 @@ export async function voiceStreamConverse(opts: {
   // chiamare session.stop() da un tap sull'orb (barge-in / stop manuale).
   onSession?: (session: { stop: () => Promise<void> } | null) => void;
 } = {}): Promise<FastConverseResult> {
-  const timeoutMs = opts.timeoutMs ?? 60_000;
+  // === FIX 2026-06-26 v17: default alzato da 60s → 240s ===
+  // Allineato con STREAM_HARD_CAP_MS (180s) + margine 60s per LLM+TTS.
+  const timeoutMs = opts.timeoutMs ?? 240_000;
   stopAllPlayback();
   speakingNow = true;
   // === FIX 2026-06-25 v6 (root cause Build #4 RecordingDisabledException) ===

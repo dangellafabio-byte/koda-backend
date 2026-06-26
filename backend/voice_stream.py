@@ -127,7 +127,13 @@ DG_KEEPALIVE_INTERVAL_S = 5.0
 CLIENT_IDLE_TIMEOUT_S = 20.0
 
 # Hard cap totale sessione (safety net contro WS appesi).
-SESSION_HARD_CAP_S = 120.0
+# === FIX 2026-06-26 v17: alzato da 120s → 240s ===
+# Il client ora consente fino a 180s di parlato (STREAM_HARD_CAP_MS),
+# poi servono ~30-60s per LLM+TTS prima del frame "done". Il vecchio
+# valore di 120s tagliava la sessione PRIMA che il client raggiungesse
+# il proprio cap, generando perdita di TTS e UI bloccata sui turni
+# successivi quando l'utente faceva sfoghi lunghi.
+SESSION_HARD_CAP_S = 240.0
 
 
 # ============================================================
