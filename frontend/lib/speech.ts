@@ -1836,6 +1836,18 @@ export async function voiceStreamConverse(opts: {
       if (!isFirstSentence) {
         await new Promise<void>((r) => setTimeout(r, 200));
       }
+      // === FIX 2026-06-26 v14 (abort guard #1) ===
+      // Hard-stop dell'utente potrebbe essere arrivato durante il wait
+      // sopra (o durante l'await su playElevenLabsNativeFromUrl della
+      // frase precedente, che può bloccarsi 30s sullo stall watcher
+      // se il player è stato rimosso esternamente da SpeechMod.stop()).
+      // Senza questo check, la prossima frase partirebbe lo stesso →
+      // "voce fantasma di Koda" 30s dopo che l'utente credeva di aver
+      // silenziato tutto. Esci dal loop subito.
+      if (ac.signal.aborted) {
+        console.log(`[KODA_TTS_PLAY] sent #${sIdx} aborted before write — exit loop`);
+        break;
+      }
       try {
         if (Platform.OS === "web") {
           await _playMp3BytesWeb(item.bytes, fireStart);
@@ -1847,6 +1859,13 @@ export async function voiceStreamConverse(opts: {
             skipAudioSessionCycle: false,
             tailBufferMs: 120,
           };
+          // === FIX 2026-06-26 v14 (abort guard #2) ===
+          // Se l'utente ha tappato l'hard-stop mentre _writeMp3ToFile era
+          // in corso, NON avviamo nuovi player. Esci dal loop.
+          if (ac.signal.aborted) {
+            console.log(`[KODA_TTS_PLAY] sent #${sIdx} aborted before play — exit loop`);
+            break;
+          }
           if (!path) {
             // === FIX 2026-06-26 v14: fallback memory playback ===
             // _writeMp3ToFile può aver fatto TIMEOUT (FS iOS bloccato) o
