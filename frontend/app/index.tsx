@@ -3045,11 +3045,15 @@ export default function Taccuino() {
       // 4) Disabilita loop hands-free conversazionale
       setConvActive(false);
       convActiveRef.current = false;
-      // 5) Reset close-session pause (così il prossimo tap riparte pulito)
-      if (closeSessionPauseRef.current) {
-        setCloseSessionPause(false);
-        closeSessionPauseRef.current = false;
-      }
+      // 5) === FIX 2026-06-26 v13: blocca auto-listen post hard-stop ===
+      // Senza questo, l'useEffect di auto-listen hands-free (riga ~1615)
+      // rilevava status="idle" e ripartiva da solo con startTalkInternal
+      // dopo 450ms → l'utente vedeva il mic riattivarsi e doveva tappare
+      // ancora ("ho schiacciato il pulsante ma non fa niente"). Usiamo lo
+      // stesso pattern di close_session: pause attivo fino al prossimo tap
+      // esplicito sull'orb (il quale, vedi sotto, lo resetta).
+      setCloseSessionPause(true);
+      closeSessionPauseRef.current = true;
       // 6) UI immediatamente in idle
       setStatus("idle");
       return;

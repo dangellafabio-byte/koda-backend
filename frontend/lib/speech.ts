@@ -311,26 +311,55 @@ async function playElevenLabsNativeFromUrl(
   // dello stream, dopo aver già eseguito il ciclo una sola volta out-of-loop.
   // Inoltre `tailBufferMs` aggiunge un piccolo grace period dopo didJustFinish
   // per dare al buffer hardware tempo di drenare prima della frase successiva.
+  // === FIX 2026-06-26 v13: timeout wrapper anti-hang ===
+  // Su iOS, se l'AVPlayer della frase precedente è ancora in fase di
+  // teardown async, le chiamate setIsAudioActiveAsync(false) /
+  // setAudioModeAsync possono HANGARE indefinitamente (osservato: 38s di
+  // freeze in "speaking" sul Turn 3 della Build #12, fra sent #1 e sent #2).
+  // Mettiamo un timeout duro: se la chiamata non risponde in 1.5s,
+  // proseguiamo lo stesso. iOS si auto-riprende al prossimo ciclo.
+  const withTimeout = <T,>(p: Promise<T>, ms: number, label: string): Promise<void> => {
+    return new Promise<void>((resolve) => {
+      let resolved = false;
+      const tStart = Date.now();
+      const timer = setTimeout(() => {
+        if (resolved) return;
+        resolved = true;
+        console.log(`[KODA_TTS_PLAY] cycle_step=${label} TIMEOUT after ${ms}ms`);
+        resolve();
+      }, ms);
+      p.then(() => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+        console.log(`[KODA_TTS_PLAY] cycle_step=${label} ok ms=${Date.now() - tStart}`);
+        resolve();
+      }).catch((e) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+        console.log(`[KODA_TTS_PLAY] cycle_step=${label} ERROR ms=${Date.now() - tStart} err=${String(e?.message || e).slice(0, 60)}`);
+        resolve();
+      });
+    });
+  };
+
   const skipCycle = playOpts?.skipAudioSessionCycle === true;
   const tailBufferMs = playOpts?.tailBufferMs ?? 0;
   if (!skipCycle) {
-    try {
-      await setIsAudioActiveAsync(false);
-    } catch {}
-    try {
-      await setAudioModeAsync({
+    await withTimeout(setIsAudioActiveAsync(false), 1500, "setIsActive(false)");
+    await withTimeout(
+      setAudioModeAsync({
         allowsRecording: false,
         playsInSilentMode: true,
         interruptionMode: "duckOthers",
         shouldPlayInBackground: false,
         shouldRouteThroughEarpiece: false,
-      });
-    } catch (e) {
-      console.warn("[speech] setAudioModeAsync(playback) failed", e);
-    }
-    try {
-      await setIsAudioActiveAsync(true);
-    } catch {}
+      }),
+      1500,
+      "setAudioMode(playback)"
+    );
+    await withTimeout(setIsAudioActiveAsync(true), 1500, "setIsActive(true)");
   }
 
   return await new Promise<boolean>((resolve) => {
