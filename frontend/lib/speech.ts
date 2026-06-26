@@ -1275,6 +1275,11 @@ async function _writeMp3ToFile(bytes: Uint8Array, idx: number): Promise<string |
       writePromise.catch(() => {});
       return null;
     }
+    if (result === null) {
+      // writeAsStringAsync ha lanciato eccezione (catch interno → null).
+      // Loggato già dall'inner catch, qui esciamo silenziosi.
+      return null;
+    }
     console.log(
       `[KODA_TTS_WRITE] #${idx} write_ok ms=${Date.now() - tStart} path_tail=${path.slice(-30)}`
     );
@@ -1814,6 +1819,23 @@ export async function voiceStreamConverse(opts: {
           `bytes=${item.bytes.byteLength} queue_after=${sentenceQueue.length} ` +
           `first=${isFirstSentence}`
       );
+      // === FIX 2026-06-26 v14 (vero root cause): wait inter-frase ===
+      // ROOT CAUSE: su iOS, AVPlayer.remove() deallocala risorsa sul MAIN
+      // THREAD. Per MP3 piccoli (~1-2s) la dealloc è veloce. Per MP3
+      // grandi (5s+ con buffer hardware) la dealloc occupa il main thread
+      // per decine/centinaia di ms. expo-file-system.writeAsStringAsync
+      // dispatcha al main thread → resta in coda dietro la dealloc →
+      // **blocca indefinitamente** dal punto di vista JS (osservato hang
+      // sent #2 di 38s nel log v13 quando sent #1 era 5.67s).
+      // FIX: per le frasi successive alla prima, attendiamo 200ms PRIMA
+      // di scrivere il file. Dà al main thread iOS il tempo di completare
+      // la dealloc dell'AVPlayer precedente. Cost: +200ms gap inter-frase.
+      // Difensa in profondità: il timeout 2.5s in _writeMp3ToFile + il
+      // fallback memory playback restano come safety net se il problema
+      // si ripresenta in altre condizioni.
+      if (!isFirstSentence) {
+        await new Promise<void>((r) => setTimeout(r, 200));
+      }
       try {
         if (Platform.OS === "web") {
           await _playMp3BytesWeb(item.bytes, fireStart);
