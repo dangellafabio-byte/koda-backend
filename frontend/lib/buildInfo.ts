@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-06-27 16:02";
-export const BUILD_NOTES = "Grigio sasso scuro + eclissi colorata per voce";
+export const BUILD_VERSION = "2026-06-27 18:50";
+export const BUILD_NOTES = "Rimosso header voci duplicato + grigio sasso scuro";

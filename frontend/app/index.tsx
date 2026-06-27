@@ -5182,12 +5182,15 @@ export default function Taccuino() {
               return null;
             })()}
 
-            <Text style={styles.settingsSubtitle}>Voce dell&apos;assistente</Text>
-            <Text style={styles.settingsHint}>
-              {voicesEnabled
-                ? "Tocca per selezionare. Premi ▶ per ascoltare un'anteprima."
-                : "ElevenLabs non è configurato. Userò la voce del sistema."}
-            </Text>
+            {/* === HEADER VOCI: RIMOSSO IL VECCHIO HEADER QUI (2026-06-27 v22) ===
+                Era presente un doppio header "Voce dell'assistente" + hint
+                "Tocca per selezionare. Premi ▶ per ascoltare un'anteprima."
+                seguito dall'indicatore Confidenza e poi da un altro header
+                "🎙️ Scegli la voce di Koda" + il nuovo selettore a cerchi.
+                Risultato: l'utente vedeva il vecchio titolo + testo, dava
+                per scontato che la UI fosse quella, e il selettore a cerchi
+                colorati restava fuori schermo. Adesso resta solo il nuovo
+                header sopra i cerchi (a ~50 righe sotto). */}
 
             {/* === INDICATORE CONFIDENZA (richiesta utente 2026-06, opt B) ===
                 Read-only. Mostra al volo a che fase relazionale è Koda.
