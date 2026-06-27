@@ -2688,6 +2688,11 @@ export default function Taccuino() {
     // di stringa vuota. Mobile (iOS+Android) usa SEMPRE WS streaming.
     const envFlag = String(process.env.EXPO_PUBLIC_USE_WS_VOICE_STREAM || "true").toLowerCase();
     const useVoiceStream = envFlag !== "false"; // default true se assente nel bundle
+    // === FIX 2026-06-27 v19 DIAG ===
+    // Log esplicito così nel prossimo diag log Android possiamo verificare
+    // se il fallback hardcoded sta funzionando. Se vedi questa riga col
+    // valore true significa che il nuovo bundle è arrivato sul device.
+    console.log(`[KODA_FLAG] useVoiceStream=${useVoiceStream} (env="${process.env.EXPO_PUBLIC_USE_WS_VOICE_STREAM ?? "<missing>"}", platform=${Platform.OS})`);
     if (useVoiceStream && Platform.OS !== "web") {
       return startTalkStreaming();
     }
