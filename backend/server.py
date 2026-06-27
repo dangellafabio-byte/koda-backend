@@ -7288,7 +7288,18 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
     recent_docs.reverse()
     recent = [TimelineEntry(**d) for d in recent_docs]
 
-    system_prompt = _build_conversation_system_prompt(profile, recent)
+    # === FIX 2026-06-26 v18 (memoria): carica ricordi rilevanti ===
+    # Stesso pattern di /converse: scoring tag+importance+time-decay.
+    # In modalità ephemeral nessun ricordo (Stanza dello Sfogo).
+    memories_for_prompt: List[Memory] = []
+    if not req.ephemeral:
+        try:
+            memories_for_prompt = await _load_relevant_memories(text, limit=6)
+        except Exception as e:
+            logger.warning(f"[converse-stream-audio] memory load failed: {e}")
+            memories_for_prompt = []
+
+    system_prompt = _build_conversation_system_prompt(profile, recent, memories=memories_for_prompt)
     history_str = _format_history_for_llm(recent)
 
     # === WEB SEARCH OPZIONALE (Tavily) ===
@@ -7746,7 +7757,7 @@ def _infer_user_gender(profile: "Profile") -> str:
     return "n"
 
 
-def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> str:
+def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], memories: Optional[List["Memory"]] = None) -> str:
     """Prompt CONDENSATO per il fast path — mantiene l'identità essenziale
     di Koda ma rimuove tutte le sezioni ridondanti (umanità calibrata G/F/E/D/C/B/A,
     dinamicità emotiva 4-modi, registro linguistico, ecc.) che fanno
@@ -7816,6 +7827,22 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry]) -> 
     if memory:
         memory_block += (
             f"\n📓 MEMORIA RECENTE (fatti, eventi, persone, contesto):\n{memory[:3500]}\n"
+        )
+
+    # === FIX 2026-06-26 v18 (Fabio in furgone: "Koda non si ricorda di ieri") ===
+    # Ricordi semantici puntuali (`taccuino_memories`) — frammenti
+    # specifici che Koda ha registrato negli scambi passati. Caricati
+    # tramite scoring tag+importance+time-decay (vedi _load_relevant_memories).
+    # Senza questo blocco, Koda vede solo il riassunto aggregato e perde
+    # i fatti specifici di ieri/settimana scorsa che l'utente magari
+    # vuole riprendere ("ma ti ricordi quella cosa di lavoro?").
+    if memories:
+        memories_text = _format_memories_for_prompt(memories)
+        memory_block += (
+            f"\n💎 RICORDI SEMANTICI RILEVANTI (momenti specifici "
+            f"vissuti con questa persona — usali con naturalezza quando "
+            f"servono a riprendere il filo, NON sbandierarli "
+            f"gratuitamente):\n{memories_text}\n"
         )
 
     # === FIX 2026-06-26 v17 (P1 — anti-allucinazione temporale) ===
@@ -8051,7 +8078,25 @@ async def _fast_pipeline_task(
         recent = [TimelineEntry(**d) for d in recent_docs]
         history_str = _format_history_for_llm(recent) if recent else ""
 
-        sys_prompt = _build_fast_system_prompt(profile, recent)
+        # === FIX 2026-06-26 v18 (Fabio in furgone: "Koda non si ricorda di ieri") ===
+        # La pipeline voce NON caricava i ricordi semantici da
+        # `taccuino_memories` (lo faceva solo /converse). Risultato: Koda
+        # vedeva solo il `memory_summary` aggregato + 16 turni recenti, e
+        # qualsiasi cosa di vecchio (ieri, settimana scorsa) era invisibile.
+        # Fix: carichiamo i top-6 ricordi rilevanti per il testo dell'utente
+        # con lo stesso scoring di /converse (tag overlap + importance +
+        # time-decay 30 giorni), e li iniettiamo nel system prompt.
+        # In modalità ephemeral (Stanza dello Sfogo) NON carichiamo memorie:
+        # zero-knowledge per design.
+        memories: List[Memory] = []
+        if not ephemeral:
+            try:
+                memories = await _load_relevant_memories(text, limit=6)
+            except Exception as e:
+                logger.warning(f"[fast] memory load failed: {e}")
+                memories = []
+
+        sys_prompt = _build_fast_system_prompt(profile, recent, memories=memories)
 
         # === AUDIO HONESTY (Fabio 2026-06-23) ============================
         # Quando la trascrizione STT ha confidenza bassa (Deepgram conf <0.7),
