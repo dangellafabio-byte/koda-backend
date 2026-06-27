@@ -59,6 +59,7 @@ import {
   saveTimelineCache,
 } from "../lib/localCache";
 import Constants from "expo-constants";
+import { BUILD_VERSION, BUILD_NOTES } from "../lib/buildInfo";
 import FortezzaCloseEffect from "../components/FortezzaCloseEffect";
 import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
@@ -5496,11 +5497,18 @@ export default function Taccuino() {
             {/* === VERSIONE APP ===
                 Footer minimale (senza expo-application per evitare
                 crash su build che non l'avevano linkato nativamente).
-                Mostra solo versione semantica. Per il numero build
-                preciso, usare i log EAS o il timestamp installazione. */}
+                Mostra versione semantica + timestamp del bundle JS
+                (utile per verificare a colpo d'occhio se il device
+                ha scaricato l'ultimo OTA o sta usando un bundle vecchio). */}
             <View style={{ alignItems: "center", marginTop: 24, marginBottom: 8 }}>
               <Text style={{ color: theme.text + "55", fontSize: 11, fontStyle: "italic" }}>
                 Koda v{Constants.expoConfig?.version || "1.0.1"}
+              </Text>
+              <Text style={{ color: theme.text + "40", fontSize: 10, fontFamily: Platform.OS === "ios" ? "Courier" : "monospace", marginTop: 4 }}>
+                bundle {BUILD_VERSION}
+              </Text>
+              <Text style={{ color: theme.text + "30", fontSize: 9, marginTop: 2, textAlign: "center", paddingHorizontal: 24 }} numberOfLines={2}>
+                {BUILD_NOTES}
               </Text>
             </View>
             </ScrollView>
