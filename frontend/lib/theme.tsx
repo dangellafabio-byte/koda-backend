@@ -103,17 +103,16 @@ const GIORNO: Palette = {
   name: "giorno",
   label: "Chiaro",
   emoji: "☀️",
-  // === FIX 2026-06-27 v19 (richiesta utente: grigio sasso zen scuro) ===
-  // L'utente ha esplicitamente chiesto: "voglio un grigio sasso zen
-  // molto grigio, quasi puntinato — testi in bianco per contrasto, come
-  // nel tema scuro". Il vecchio #BFC2BD era troppo chiaro/luminoso, quasi
-  // un beige. Il nuovo #8A8A85 è uno "stone zen" medio-scuro, molto
-  // neutro, che evoca un sasso ben levigato dopo l'acqua. I testi
-  // primary passano dal nero #262623 al bianco #FFFFFF (come nel tema
-  // notte) per mantenere il contrasto AAA su questa base più scura.
+  // === FIX 2026-06-27 v20 (richiesta utente: "pietra media" #5A5A5A) ===
+  // L'utente ha esplicitamente scelto "Pietra media" dopo aver visto i
+  // mockup di confronto. Il vecchio #8A8A85 era percepito troppo chiaro.
+  // #5A5A5A è un grigio puro medio-scuro che resta neutro (nessun
+  // sottotono caldo/freddo), evoca un sasso ben levigato dopo l'acqua,
+  // e mantiene contrasto AAA con testo bianco. Surface leggermente più
+  // chiara per dare gerarchia ai modali/card.
   isDark: false,
-  bg: "#8A8A85",
-  surface: "#9A9A95",
+  bg: "#5A5A5A",
+  surface: "#6A6A6A",
   surfaceAlt: "rgba(255,255,255,0.10)",
   border: "rgba(255,255,255,0.18)",
   divider: "rgba(255,255,255,0.13)",

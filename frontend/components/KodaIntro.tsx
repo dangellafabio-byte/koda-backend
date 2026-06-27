@@ -97,7 +97,7 @@ const VOICEPRINT_PHRASES = [
 // Mappa stabile tra brand (aria/echo) e ElevenLabs voice_id.
 // Tenuto qui sincrono col backend (KODA_VOICES in server.py).
 // Nota: le chiavi brand "aria"/"echo" sono identificatori interni
-// retrocompatibili — l'utente vede solo "Acqua" (femminile) e "Theo" (maschile).
+// retrocompatibili — l'utente vede solo "Acqua" (femminile) e "Vento" (maschile).
 const BRAND_VOICE_IDS = {
   aria: "6TngzmzM89jJ3Y2Yiywr",   // Koda Acqua — voce femminile custom ElevenLabs (giugno 2026 v4)
   echo: "ll9WG7PDTuyHwgC5MD6g",   // Koda Vento — voce maschile custom ElevenLabs (giugno 2026 v4)

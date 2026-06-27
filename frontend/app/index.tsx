@@ -4220,7 +4220,7 @@ export default function Taccuino() {
               style={[
                 styles.confessionalToggleText,
                 !theme.isDark && !confessionalMode && { color: "rgba(0,0,0,0.85)" },
-                confessionalMode && { color: "#FF6B6B" },
+                confessionalMode && { color: "#FFE4E8" },
               ]}
             >
               {confessionalMode ? "Stanza dello Sfogo" : "Stanza dello Sfogo"}
@@ -6215,12 +6215,13 @@ const makeStyles = (t: any) => StyleSheet.create({
   },
   headerCenter: { flex: 1, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
   // === Toggle Confessionale (lucchetto al centro dell'header) ===
-  // === FIX 2026-06-27 v19 (richiesta utente: colore distintivo) ===
-  // L'utente vuole che il toggle dello Sfogo sia in un rosso scarlatto
-  // riconoscibile, che funzioni sia sul tema scuro (notte) che sul nuovo
-  // grigio sasso (giorno). #DC2851 è uno scarlatto crimson moderno: alto
-  // contrasto su entrambi gli sfondi, leggibile e visivamente "caldo"
-  // — coerente con l'idea di un luogo intimo/protetto dove sfogarsi.
+  // === FIX 2026-06-27 v20 (richiesta utente: "rosso scarlatto") ===
+  // Allineato al colore del NeonBorder "confessional" (#FF1744), per
+  // coerenza visiva totale: quando l'utente attiva la Stanza, il bordo,
+  // l'orb, il glow e il bottone sono tutti dello stesso identico scarlatto.
+  // È il "Material Red A400" — uno scarlatto vivido, alto contrasto sia
+  // sul grigio sasso del giorno sia sull'indaco notturno. Caldo, intimo,
+  // immediatamente riconoscibile.
   confessionalToggle: {
     flexDirection: "row",
     alignItems: "center",
@@ -6228,13 +6229,13 @@ const makeStyles = (t: any) => StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: "rgba(220,40,81,0.20)",
+    backgroundColor: "rgba(255,23,68,0.20)",
     borderWidth: 1,
-    borderColor: "rgba(220,40,81,0.65)",
+    borderColor: "rgba(255,23,68,0.70)",
   },
   confessionalToggleOn: {
-    backgroundColor: "#DC2851",
-    borderColor: "#FF7A99",
+    backgroundColor: "#FF1744",
+    borderColor: "#FF8FA3",
   },
   confessionalToggleText: {
     color: "#FFFFFFCC",

@@ -149,7 +149,7 @@ export default function PaywallScreen() {
           <Text style={[styles.benefitsList, { color: theme.text }]}>
             • Memoria completa della Stanza Quotidiana{"\n"}
             • Continuità illimitata{"\n"}
-            • Voce premium (Aria o Theo){"\n"}
+            • Voce premium (Acqua o Vento){"\n"}
             • Check-in proattivi{"\n"}
             • Ricerca web in tempo reale
           </Text>

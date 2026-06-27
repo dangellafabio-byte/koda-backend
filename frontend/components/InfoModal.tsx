@@ -27,7 +27,7 @@ const SECTIONS = (aiName: string): Section[] => [
     icon: "person-circle-outline",
     title: "Chi è e come si chiama",
     examples: [
-      `"Chiamati Luna" / "Aria" / "Pulse"`,
+      `"Chiamati Luna" / "Stella" / "Pulse"`,
       `"Sii donna" / "Sii uomo" / "Sii neutra"`,
       `"Chiamami Marco" / "Da ora sono donna"`,
     ],
