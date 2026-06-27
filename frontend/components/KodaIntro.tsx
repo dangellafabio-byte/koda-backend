@@ -108,6 +108,17 @@ const BRAND_VOICE_IDS = {
 // essere una delle due voci brand dell'app, mai una terza.
 const INTRO_VOICE_ID = BRAND_VOICE_IDS.aria;
 
+// ====== SPEAKING PALETTE PER VOCE (2026-06-27) ======
+// Stesse identiche palette usate nel main flow (app/index.tsx → VOICE_SPEAKING_PALETTES).
+// L'orb dell'intro userà queste appena l'utente ha scelto la voce, così
+// la sfera è già del colore giusto in tutti gli step successivi.
+//   Acqua → viola elettrico
+//   Vento → cobalto vivo
+const VOICE_INTRO_PALETTES: Record<"aria" | "echo", [string, string, string]> = {
+  aria: ["#E9D5FF", "#BD10E0", "#7E22CE"], // viola (femminile)
+  echo: ["#93BBFD", "#2563EB", "#1E3A8A"], // cobalto (maschile)
+};
+
 // ====== Battute di Koda per ogni step (TTS in tutti) ======
 const KODA_LINES: Record<number, string> = {
   0: "Ciao. Sono Koda. Non sono un'app: sono una presenza. Da oggi sono qui per te, quando vuoi parlare, quando vuoi solo che qualcuno ti ascolti. Voglio conoscerti!",
@@ -914,6 +925,21 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
               status={orbStatus}
               tone={orbTone}
               size={orbSize}
+              // === SPEAKING COLOR PER VOCE (2026-06-27) ===
+              // Appena l'utente sceglie la voce in M1, l'orb usa la palette
+              // identitaria di quella voce (viola=Acqua, cobalto=Vento)
+              // per TUTTI gli step successivi dell'intro. Prima vedeva
+              // solo viola (palette warm fissa). Ora la sfera "diventa"
+              // del colore della voce scelta — coerente col main flow.
+              speakingPaletteOverride={
+                selectedVoiceKey ? VOICE_INTRO_PALETTES[selectedVoiceKey] : null
+              }
+              // === FORCE: applica la palette voce ANCHE in idle ===
+              // In KodaIntro vogliamo che la sfera "indossi" l'identità
+              // della voce in modo persistente — non solo mentre Koda
+              // parla. Così tra uno step e l'altro la sfera non torna
+              // viola di default ma resta del colore scelto.
+              forceVoiceIdentity={!!selectedVoiceKey}
             />
           </Animated.View>
 

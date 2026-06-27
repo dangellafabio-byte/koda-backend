@@ -5741,17 +5741,19 @@ export default function Taccuino() {
     />
   );
 
-  // === ACTIVATION PULSE (idea 1) ===
-  // Mostrato una sola volta dopo che il profilo è caricato e non c'è
-  // KodaIntro/onboarding in corso. Effetto "sistema attivo" all'avvio.
-  const activationPulseEl = (!activationPulseDone && profile && showColorIntro === false && !showOnboarding) ? (
-    <ActivationPulse
-      color="#8B5CF6"
-      duration={1500}
-      thickness={3}
-      onComplete={() => setActivationPulseDone(true)}
-    />
-  ) : null;
+  // === ACTIVATION PULSE — DISABILITATO (2026-06-27 v21) ===
+  // L'utente ha segnalato che su Android il flash viola al boot
+  // (#8B5CF6) appare ripetutamente "senza far niente" — probabilmente
+  // perché Android killa l'app in background più aggressivamente
+  // di iOS e ad ogni "cold start" il pulse parte di nuovo.
+  // Disabilitato per stabilità visiva. La marca dell'identità Koda
+  // viene già comunicata dal NeonBorder champagne perenne in idle.
+  // Se si vuole riabilitare: rimettere il blocco originale qui sotto.
+  const activationPulseEl: React.ReactNode = null;
+  // OLD CODE (mantenuto come commento per ripristino veloce):
+  // const activationPulseEl = (!activationPulseDone && profile && showColorIntro === false && !showOnboarding) ? (
+  //   <ActivationPulse color="#8B5CF6" duration={1500} thickness={3} onComplete={() => setActivationPulseDone(true)} />
+  // ) : null;
 
   const confessionalTint = confessionalMode ? (
     <View

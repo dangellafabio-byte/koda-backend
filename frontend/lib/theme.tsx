@@ -103,16 +103,16 @@ const GIORNO: Palette = {
   name: "giorno",
   label: "Chiaro",
   emoji: "☀️",
-  // === FIX 2026-06-27 v20 (richiesta utente: "pietra media" #5A5A5A) ===
-  // L'utente ha esplicitamente scelto "Pietra media" dopo aver visto i
-  // mockup di confronto. Il vecchio #8A8A85 era percepito troppo chiaro.
-  // #5A5A5A è un grigio puro medio-scuro che resta neutro (nessun
-  // sottotono caldo/freddo), evoca un sasso ben levigato dopo l'acqua,
-  // e mantiene contrasto AAA con testo bianco. Surface leggermente più
-  // chiara per dare gerarchia ai modali/card.
+  // === FIX 2026-06-27 v21 (richiesta utente: "ancora più scuro, sasso zen") ===
+  // Dopo aver provato #5A5A5A (Pietra media) sul device fisico l'utente
+  // ha confermato che serve più scuro. Passiamo al "Sasso caldo scuro"
+  // #3D3A37 — pietra di fiume con sottotono caldo impercettibile. Dà
+  // davvero la sensazione di vera pietra, non di grigio digitale.
+  // Contrasto AAA con testo bianco. Si sposa benissimo col rosso
+  // scarlatto del bottone Sfogo (entrambi nella famiglia calda).
   isDark: false,
-  bg: "#5A5A5A",
-  surface: "#6A6A6A",
+  bg: "#3D3A37",
+  surface: "#4F4A45",
   surfaceAlt: "rgba(255,255,255,0.10)",
   border: "rgba(255,255,255,0.18)",
   divider: "rgba(255,255,255,0.13)",

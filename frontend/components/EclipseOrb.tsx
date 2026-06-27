@@ -51,6 +51,11 @@ type Props = {
    *  Acqua=viola (default), Vento=cobalto. Se passato, sostituisce
    *  TONE_PALETTES.warm/concerned/etc durante lo speaking. */
   speakingPaletteOverride?: [string, string, string] | null;
+  /** Se true, la `speakingPaletteOverride` viene applicata anche durante
+   *  "idle" — non solo "speaking". Utile in KodaIntro per dare alla
+   *  sfera l'identità della voce scelta in modo persistente.
+   *  Default: false (mantiene il comportamento del main flow). */
+  forceVoiceIdentity?: boolean;
 };
 
 // === Tone → aurora palette ([bright, mid, deep])
@@ -108,6 +113,7 @@ export default function EclipseOrb({
   meterDb,
   meterThreshold,
   speakingPaletteOverride,
+  forceVoiceIdentity = false,
 }: Props) {
   // === Palette resolution: tone-driven when speaking, blu petrolio when
   // listening, ciclamino while thinking, viola when idle.
@@ -120,9 +126,17 @@ export default function EclipseOrb({
     if (status === "speaking" && speakingPaletteOverride) {
       return speakingPaletteOverride;
     }
+    // === FORCE VOICE IDENTITY (KodaIntro 2026-06) ===
+    // Quando il chiamante chiede esplicitamente di "indossare" l'identità
+    // della voce anche fuori dallo speaking (es. in idle durante l'intro),
+    // applichiamo la palette voce anche qui. Non incluso recording/thinking
+    // sopra: quelli restano sempre fissi per riconoscibilità stato.
+    if (forceVoiceIdentity && speakingPaletteOverride) {
+      return speakingPaletteOverride;
+    }
     if (tone && TONE_PALETTES[tone]) return TONE_PALETTES[tone];
     return TONE_PALETTES.neutral;
-  }, [status, tone, speakingPaletteOverride]);
+  }, [status, tone, speakingPaletteOverride, forceVoiceIdentity]);
 
   // === Animated values — all useNativeDriver for 60fps
   // Aurora intensity (overall halo brightness): 0..1
