@@ -6153,6 +6153,12 @@ const makeStyles = (t: any) => StyleSheet.create({
   },
   headerCenter: { flex: 1, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
   // === Toggle Confessionale (lucchetto al centro dell'header) ===
+  // === FIX 2026-06-27 v19 (richiesta utente: colore distintivo) ===
+  // L'utente vuole che il toggle dello Sfogo sia in un rosso scarlatto
+  // riconoscibile, che funzioni sia sul tema scuro (notte) che sul nuovo
+  // grigio sasso (giorno). #DC2851 è uno scarlatto crimson moderno: alto
+  // contrasto su entrambi gli sfondi, leggibile e visivamente "caldo"
+  // — coerente con l'idea di un luogo intimo/protetto dove sfogarsi.
   confessionalToggle: {
     flexDirection: "row",
     alignItems: "center",
@@ -6160,13 +6166,13 @@ const makeStyles = (t: any) => StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: "rgba(0,0,0,0.35)",
+    backgroundColor: "rgba(220,40,81,0.20)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.15)",
+    borderColor: "rgba(220,40,81,0.65)",
   },
   confessionalToggleOn: {
-    backgroundColor: "rgba(60,0,0,0.5)",
-    borderColor: "#FCA5A5",
+    backgroundColor: "#DC2851",
+    borderColor: "#FF7A99",
   },
   confessionalToggleText: {
     color: "#FFFFFFCC",

@@ -103,41 +103,42 @@ const GIORNO: Palette = {
   name: "giorno",
   label: "Chiaro",
   emoji: "☀️",
-  // === FIX #7 (2026-06-22 v7) — Contrasto con l'alone sabbia ===
-  // L'utente ha segnalato che il vecchio bg `#DBDBD9` era troppo simile
-  // al colore sabbia/champagne dell'alone idle dell'orb (#D4B896 in
-  // NeonBorder STATE_COLORS.idle) → il contrasto si perdeva e l'alone
-  // sembrava "sparire" sullo sfondo. Il nuovo `#BFC2BD` è uno "stone
-  // zen" cool-neutro che fa risaltare per contrasto il warm-tone della
-  // sabbia. Coerente con l'estetica zen del prodotto.
+  // === FIX 2026-06-27 v19 (richiesta utente: grigio sasso zen scuro) ===
+  // L'utente ha esplicitamente chiesto: "voglio un grigio sasso zen
+  // molto grigio, quasi puntinato — testi in bianco per contrasto, come
+  // nel tema scuro". Il vecchio #BFC2BD era troppo chiaro/luminoso, quasi
+  // un beige. Il nuovo #8A8A85 è uno "stone zen" medio-scuro, molto
+  // neutro, che evoca un sasso ben levigato dopo l'acqua. I testi
+  // primary passano dal nero #262623 al bianco #FFFFFF (come nel tema
+  // notte) per mantenere il contrasto AAA su questa base più scura.
   isDark: false,
-  bg: "#BFC2BD",
-  surface: "#D6D9D2",
-  surfaceAlt: "rgba(0,0,0,0.05)",
-  border: "rgba(40,40,36,0.16)",
-  divider: "rgba(40,40,36,0.11)",
-  text: "#262623",
-  textMuted: "#54544F",
-  textDim: "#7A7A72",
+  bg: "#8A8A85",
+  surface: "#9A9A95",
+  surfaceAlt: "rgba(255,255,255,0.10)",
+  border: "rgba(255,255,255,0.18)",
+  divider: "rgba(255,255,255,0.13)",
+  text: "#FFFFFF",
+  textMuted: "rgba(255,255,255,0.78)",
+  textDim: "rgba(255,255,255,0.55)",
   primary: "#0E7C7B",
   primaryText: "#FFFFFF",
-  primarySoftBg: "rgba(14,124,123,0.10)",
-  primarySoftBorder: "rgba(14,124,123,0.45)",
+  primarySoftBg: "rgba(14,124,123,0.22)",
+  primarySoftBorder: "rgba(14,124,123,0.55)",
   userBubble: "#0E7C7B",
   userBubbleText: "#FFFFFF",
-  aiBubbleBg: "#D6D9D2",
-  aiBubbleBorder: "rgba(40,40,36,0.16)",
-  aiBubbleText: "#262623",
-  success: "#16A34A",
-  warning: "#B8860B",
-  danger: "#DC2626",
+  aiBubbleBg: "rgba(255,255,255,0.10)",
+  aiBubbleBorder: "rgba(255,255,255,0.20)",
+  aiBubbleText: "#FFFFFF",
+  success: "#34D399",
+  warning: "#FBBF24",
+  danger: "#FB7185",
   tone: {
-    neutral: { bg: "#E2E2E0", border: "#C5C5C1" },
-    calm: { bg: "#DDE5E5", border: "#9CBAB9" },
-    warm: { bg: "#EAE3D2", border: "#CDB683" },
-    energetic: { bg: "#DFE7DA", border: "#A5C094" },
-    concerned: { bg: "#ECE1D0", border: "#D2B27C" },
-    urgent: { bg: "#EFDCD8", border: "#DDA098" },
+    neutral: { bg: "rgba(255,255,255,0.10)", border: "rgba(255,255,255,0.30)" },
+    calm: { bg: "rgba(56,189,248,0.16)", border: "rgba(56,189,248,0.45)" },
+    warm: { bg: "rgba(251,191,36,0.16)", border: "rgba(251,191,36,0.45)" },
+    energetic: { bg: "rgba(34,197,94,0.16)", border: "rgba(34,197,94,0.45)" },
+    concerned: { bg: "rgba(249,115,22,0.16)", border: "rgba(249,115,22,0.50)" },
+    urgent: { bg: "rgba(239,68,68,0.18)", border: "rgba(239,68,68,0.55)" },
   },
 };
 
