@@ -3198,6 +3198,19 @@ async def api_converse(req: ConverseRequest):
     user_entry = TimelineEntry(role="user", text=text, audio_duration_ms=req.audio_duration_ms)
     if not req.ephemeral:
         await db.taccuino_timeline.insert_one(user_entry.model_dump())
+        # === FIX 2026-06-26 v18 (parità voce↔chat) ===
+        # La pipeline voce estraeva fatti biografici regex-only ("ho un figlio
+        # Luca", "lavoro a Pavia"…) e li salvava in `taccuino_key_facts` come
+        # memoria permanente. La chat scritta NON lo faceva → se l'utente
+        # dichiarava biograficamente qualcosa via tastiera, Koda perdeva
+        # quella traccia. Ora entrambi i flow lo fanno (stesso pattern,
+        # asyncio in background, zero cost).
+        try:
+            _extracted = _extract_key_facts_from_text(text)
+            if _extracted:
+                asyncio.create_task(_save_key_facts(_extracted))
+        except Exception as e:
+            logger.warning(f"[converse] key_facts extraction failed: {e}")
 
     # Load recent context — anche in ephemeral usiamo il context recente per
     # la qualità della risposta, ma la NUOVA confessione non finirà nel
@@ -7283,6 +7296,15 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
     user_entry = TimelineEntry(role="user", text=text, audio_duration_ms=req.audio_duration_ms)
     if not req.ephemeral:
         await db.taccuino_timeline.insert_one(user_entry.model_dump())
+        # === FIX 2026-06-26 v18 (parità voce↔chat): estrazione key_facts ===
+        # Stesso fix di /converse: la chat ora estrae fatti biografici regex e
+        # li salva in `taccuino_key_facts` per la memoria permanente.
+        try:
+            _extracted = _extract_key_facts_from_text(text)
+            if _extracted:
+                asyncio.create_task(_save_key_facts(_extracted))
+        except Exception as e:
+            logger.warning(f"[converse-stream-audio] key_facts extraction failed: {e}")
 
     recent_docs = await db.taccuino_timeline.find(_uf(), {"_id": 0}).sort("timestamp", -1).to_list(20)
     recent_docs.reverse()
