@@ -2640,6 +2640,34 @@ export default function Taccuino() {
       setTimeout(() => setError(null), 4000);
     } finally {
       setStatus("idle");
+      // === FIX 2026-06-27 v18 (Fabio in furgone/Apple: hands-free non riparte) ===
+      // L'auto-listen useEffect (cerca [KODA_HF_GUARD] nei log) DOVREBBE
+      // riavviare il microfono dopo che status torna a "idle". Tuttavia,
+      // l'utente ha riportato che su iPhone l'app resta in idle dopo la
+      // risposta di Koda e bisogna tappare ogni volta. Il diag log mostra
+      // gap di 5-8s fra "session ref cleared" e la prossima sessione,
+      // contro i ~450ms attesi. Sospettiamo una race condition tra React
+      // batching e il flush dello state change, che impedisce al useEffect
+      // di vedere "idle" subito dopo il finally.
+      //
+      // Fix esplicito: schedula DIRETTAMENTE un re-trigger dopo 500ms, in
+      // parallelo al useEffect. Stesso identico set di guardie per evitare
+      // di registrare in momenti sbagliati (modali, tour, sealUnlocking,
+      // close_session, ecc.). Se il useEffect parte prima (ottimo), questo
+      // setTimeout trova `recRef.current` non-null e si auto-annulla.
+      // Se il useEffect non parte (caso bug), questo lo fa partire.
+      setTimeout(() => {
+        if (!handsFreeRef.current) return;
+        if (!userInteractedRef.current) return;
+        if (closeSessionPauseRef.current) return;
+        if (recRef.current) return; // useEffect ha già fatto il lavoro
+        if (tourActiveRef.current) return;
+        // Stato attuale: niente flag bloccanti, hands-free vuole riavviare.
+        console.log("[KODA_HF_EXPLICIT] re-trigger after voiceStream finally (idle confirmed)");
+        startTalkInternal(true).catch((err) => {
+          console.log(`[KODA_HF_EXPLICIT] startTalkInternal failed: ${err?.message || err}`);
+        });
+      }, 500);
     }
   };
 

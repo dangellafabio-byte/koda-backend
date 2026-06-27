@@ -1,0 +1,41 @@
+{
+  "summary": "Backend regression suite for Jan 2026 iteration (Koda — hands-free temporal-context + new_memory pipeline + voice_stream 360s cap). All 6 pytest cases PASSED against the live backend (https://app-finder-408.preview.emergentagent.com): (1) GET /api/voices returns the curated {voices:[Acqua, Vento], enabled:true} shape — both voices have voice_id/name/description/gender/accent. (2) POST /api/converse (standard) returns 200 with non-empty ai_entry.text, regex extracts 'Si chiama Mario' + 'Ha un cane di nome Luna' into taccuino_key_facts, and Claude emits a `new_memory` that lands in taccuino_memories scoped to the test UUIDv4 (profile_id == standard_uid, confirmed). (3) POST /api/converse with ephemeral=true returns 200 with non-empty reply AND leaks ZERO into taccuino_memories AND ZERO new key_facts containing the unique payload suffix — zero-knowledge confessional contract holds. (4) server._build_temporal_context imports cleanly and produces the '[CONTESTO TEMPORALE — GROUND TRUTH' anchor on both empty and 2-entry input; 'PRIMO messaggio' branch and gap-line branch both verified. (5) WS /api/voice/stream accepts the start frame and replies with {type:'ready', session_id:...} (Deepgram handshake live, voice_stream.py:420). No regressions detected across the day's backend edits. NOTE on test harness: backend `user_id_middleware` (server.py:140-154) silently downgrades ANY non-UUIDv4 X-User-Id value to 'me' — the test request example 'backend-test-${timestamp}' would have collided with the legacy 'me' bucket; tests now use real UUIDv4 to obtain isolated profiles.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/key-facts", "issue": "Endpoint is GLOBAL (no user-scoping at server.py:5810-5819 — `find({}, ...)` ignores current_user_id). The companion /api/memories IS user-scoped. If/when Koda becomes multi-tenant this needs fixing; for the current single-user TestFlight build it's not blocking."},
+      {"endpoint": "user_id_middleware (server.py:140-154)", "issue": "Silently downgrades any non-UUIDv4 X-User-Id to 'me' instead of returning 400. Easy to misuse from a client — but documented behaviour, not a regression."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_koda_regression_jan2026.py",
+    "/app/test_reports/pytest/iter9_regression.xml"
+  ],
+  "action_items": [
+    "Backend is regression-clean for the iteration's edits (temporal context, memories= injection in both _build_conversation_system_prompt and _build_fast_system_prompt, regex key_facts in /converse + /converse-stream-audio, new_memory save in voice pipeline, SESSION_HARD_CAP_S=360 in voice_stream.py). Safe to ship to TestFlight/Android.",
+    "(Optional, not blocking) Consider user-scoping /api/key-facts (server.py:5810) — currently global. Mirror the _memory_filter() pattern used at server.py:493-499.",
+    "(Optional) Tighten user_id_middleware to return 400 Bad Request on malformed X-User-Id instead of silently using 'me' — surfacing bugs in client header construction earlier."
+  ],
+  "critical_code_review_comments": [
+    "server.py:3399-3414 — `new_memory` extraction from Claude JSON in /converse is wrapped in try/except and logs warning on failure: good defensive shape. Confirmed working live: backend log emitted `[memory] saved id=73098b60 src=chat imp=5 tags=['cane','luna','famiglia']` during this test run.",
+    "server.py:1330-1388 — _build_temporal_context is pure (no IO), handles all branches: empty list, single user entry (treated as first), and N≥2 user entries (uses penultimate as 'last user'). The 'NON dire 5 minuti fa…' guard text is appended to the prompt — strong anti-hallucination signal for Claude.",
+    "server.py:9333 lines total — the file is now WAY over the 700-line soft cap (~13× over). High-risk monolith. Strongly recommend a refactor pass splitting into routers (converse.py, memory.py, voices.py, tts.py, voice_proxy.py, key_facts.py). Not a regression but the next iteration that touches this file will be increasingly hard.",
+    "voice_stream.py:139 SESSION_HARD_CAP_S=360.0 (was lower per request) — bumped successfully, no other site uses the constant; safe.",
+    "server.py:5777 _save_key_facts dedup uses `find_one({'fact': f['fact']})` — global, no user scoping. Means two users saying 'sono Mario' will share the same row. For single-user MVP that's fine; flagged above as minor for multi-tenant future."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_koda_regression_jan2026.py (new — 6 pytest cases, all passing)"
+  ],
+  "success_rate": {"backend": "100% (6/6)", "frontend": "n/a (skipped per request)"},
+  "seed_data_creation": "None. Tests use fresh UUIDv4 X-User-Id per run; standard test relies on Claude emitting new_memory at runtime (verified live in backend log).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "If a future iteration touches /converse, /converse-stream-audio, /voices, /api/voice/stream, or _build_temporal_context, just re-run `pytest /app/backend/tests/test_koda_regression_jan2026.py -v` — it is the canonical regression for the Jan 2026 hands-free + memory-pipeline edits. The WS test requires Deepgram to be reachable (warmup status 400 is normal — DG returns 400 to GET; we use WSS). If the test ever fails on `expected first frame {'type':'ready'}, got {'type':'error', 'message':'STT unavailable'}` then check DEEPGRAM_API_KEY in /app/backend/.env. The standard-converse test will pytest.skip() if Claude omits new_memory for that turn — this is non-deterministic model behaviour, NOT a regression; the user_entry / ai_entry / key_facts assertions still run and must pass.",
+  "rca_of_issue": "Not a bug-fix iteration — this was a regression-validation sweep. Initial pytest run had 3 expected-shape failures all rooted in test-harness misunderstanding (NOT product bugs): (a) X-User-Id values had to be UUIDv4 (or 'me') per backend middleware, otherwise downgraded to 'me' causing cross-pollution with the legacy bucket — fixed by using uuid.uuid4(); (b) key_facts assertion incorrectly expected the unique suffix in the saved fact string, but the regex on server.py:5698 only captures `[A-Z][a-zàèéìòù]+`, stripping the suffix — fixed by asserting the canonical fact strings ('Si chiama Mario', 'Ha un cane di nome Luna'); (c) WS test needed the Frame-0 `start` JSON before the server emits `ready` per voice_stream.py:20-26 protocol — fixed by sending the start frame. After fixes, 6/6 passing against the live backend with Claude/Deepgram/ElevenLabs all wired."
+}
