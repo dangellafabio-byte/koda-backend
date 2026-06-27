@@ -1,0 +1,41 @@
+{
+  "summary": "Backend-only validation of the Android-OTA env-var frontend fix (default fallback 'true' for EXPO_PUBLIC_USE_WS_VOICE_STREAM, frontend/app/index.tsx ~ln 2655). The change is JS-only and does not touch the backend, but the request asked to re-verify that the backend flow used by both iOS and Android still passes. Two suites, all green: (1) /app/backend/tests/test_koda_regression_jan2026.py — 6/6 PASSED (voices shape, /converse standard with memory+key_facts persistence and user-scoped profile_id, /converse ephemeral zero-knowledge, _build_temporal_context empty + 2-entry, WS /api/voice/stream ready frame). (2) New /app/backend/tests/test_iter10_android_ota_request.py — 3/3 PASSED with the EXACT payloads from the review request: (a) GET /api/voices returns {voices:[Acqua,Vento], enabled:true}; (b) POST /api/converse with 'Sono Marco, lavoro a Pavia da 10 anni' returns 200 with non-empty ai_entry.text and within 2.5s key_facts contains at least one fact mentioning 'pavia' or 'lavoro' AND /api/memories contains ≥1 memory scoped to the test UUIDv4; (c) WS /api/voice/stream accepts the rich start frame (lang/user_id/ai_name/tts_voice_id=6TngzmzM89jJ3Y2Yiywr/ephemeral=false), emits {type:'ready', session_id:...} within 15s (Deepgram nova-3 it connected in 224ms per backend log), then closes cleanly (server: 'sent 1000 (OK); then received 1000 (OK)') after the client sends {type:'end'}. No regressions, no critical issues. Note on test harness: backend user_id_middleware (server.py:140-154) silently downgrades any non-UUIDv4 X-User-Id to 'me'; new tests use real UUIDv4 to obtain isolated profiles. The frontend fallback change is the right one — Android OTA bundle has historically not picked up EXPO_PUBLIC_* env vars; defaulting useVoiceStream=true means startTalkStreaming() is invoked, which is the WS path the backend now exercises green here.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/key-facts", "issue": "Endpoint is still GLOBAL (server.py:5810-5819, find({}, ...) ignores current_user_id) while /api/memories is user-scoped. Carried over from iter 9; not blocking for single-user TestFlight build but a multi-tenancy footgun."},
+      {"endpoint": "user_id_middleware (server.py:140-154)", "issue": "Still silently downgrades any non-UUIDv4 X-User-Id to 'me' rather than returning 400. Easy to misuse from a misconfigured client. Carried over from iter 9."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_koda_regression_jan2026.py",
+    "/app/backend/tests/test_iter10_android_ota_request.py",
+    "/app/test_reports/pytest/iter10_regression.xml",
+    "/app/test_reports/pytest/iter10_android_ota.xml"
+  ],
+  "action_items": [
+    "Ship the frontend OTA fix to the Xiaomi tablet build and confirm with a fresh diag log that the Android client now emits the [KODA_STREAM] / WS frames instead of the legacy [KODA_VAD_TRACE] / [KODA_REC_CTX] / [KODA_POLL] REST polling trace.",
+    "(Optional, carried from iter 9) User-scope /api/key-facts (server.py:5810) using _memory_filter().",
+    "(Optional) Make user_id_middleware return 400 on malformed X-User-Id rather than downgrading to 'me'."
+  ],
+  "critical_code_review_comments": [
+    "Frontend fix is correct and minimal: `String(process.env.EXPO_PUBLIC_USE_WS_VOICE_STREAM || 'true').toLowerCase() !== 'false'` correctly inverts the missing-env semantic. Worth adding a one-time [KODA_FLAG] log near that line so future diag logs from Android make it obvious whether the env was present or fell back — currently you can only infer it from the path taken (KODA_STREAM vs KODA_VAD_TRACE).",
+    "voice_stream.py:397-402 — server reads only profile_lang/ephemeral/container from the start frame. Extra keys (user_id, ai_name, tts_voice_id, lang) are silently ignored, which is the right forward-compatible behavior; verified live in this iteration's WS test.",
+    "server.py is still 9333 lines — refactor pressure unchanged from iter 9; this is the next cycle's priority once the Android OTA path is confirmed in production."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter10_android_ota_request.py (new — 3 pytest cases, all passing)"
+  ],
+  "success_rate": {"backend": "100% (9/9 across both suites)", "frontend": "n/a (backend-only per request)"},
+  "seed_data_creation": "None. Each test mints a fresh UUIDv4 X-User-Id for isolation.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Two canonical backend regression files now live in /app/backend/tests: test_koda_regression_jan2026.py (broad) and test_iter10_android_ota_request.py (exact payloads from the Android-OTA review request). Re-run both with `pytest /app/backend/tests/ -v` for any future iteration that touches /converse, /voices, voice_stream.py, _build_temporal_context, or the memory/key_facts pipeline. WS test will pytest.fail if Deepgram is unreachable (check DEEPGRAM_API_KEY). Marco/Pavia memory test will pytest.skip (not fail) if Claude omits new_memory in that turn — the key_facts assertion still must pass.",
+  "rca_of_issue": "Not a bug-fix iteration. The frontend env-var fallback change is a defensive workaround for the Android OTA pipeline not propagating EXPO_PUBLIC_* into the JS bundle (a known Expo OTA quirk on some Android builds). Backend is unaffected and verified green end-to-end on the WS streaming path that the Android client will now take by default."
+}

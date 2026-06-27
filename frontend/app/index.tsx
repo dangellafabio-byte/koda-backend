@@ -2676,12 +2676,18 @@ export default function Taccuino() {
     if (status !== "idle" && status !== "speaking") return;
 
     // === FASE 1 STREAMING OPT-IN (env flag, giugno 2026) ===
-    // Se EXPO_PUBLIC_USE_WS_VOICE_STREAM=true, bypassiamo TUTTO il flusso
-    // record-then-upload e attiviamo lo streaming WS con rolling chunks.
-    // Cambia solo la fonte STT — il resto della UX (timeline, actions,
-    // safety) viene gestito dentro startTalkStreaming() in modo identico.
-    const useVoiceStream =
-      String(process.env.EXPO_PUBLIC_USE_WS_VOICE_STREAM || "").toLowerCase() === "true";
+    // === FIX 2026-06-27 v19 (Android Xiaomi: bundle OTA non propaga env) ===
+    // L'utente ha verificato sperimentalmente che `EXPO_PUBLIC_USE_WS_VOICE_STREAM=true`
+    // nel .env NON arriva al bundle Android via OTA update (anche dopo
+    // disinstalla + reinstall). Diag log Android mostra ancora il vecchio
+    // path: [KODA_VAD_TRACE], [KODA_REC_CTX], [KODA_POLL], con metering
+    // db=-100 costante (bug Xiaomi MIUI) → hands-free non chiude mai.
+    // Su iPhone invece l'env arriva correttamente e WS streaming funziona.
+    // Soluzione pragmatica: hardcoded a true. Il flag env resta letto per
+    // retrocompatibilità futura, ma il default fallback è ora `true` invece
+    // di stringa vuota. Mobile (iOS+Android) usa SEMPRE WS streaming.
+    const envFlag = String(process.env.EXPO_PUBLIC_USE_WS_VOICE_STREAM || "true").toLowerCase();
+    const useVoiceStream = envFlag !== "false"; // default true se assente nel bundle
     if (useVoiceStream && Platform.OS !== "web") {
       return startTalkStreaming();
     }
