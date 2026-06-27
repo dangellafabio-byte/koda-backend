@@ -7931,10 +7931,14 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"\n"
         f"FORMATO: SOLO JSON. \"reply\" PRIMO campo, inizia con [TONE:warm|calm|concerned|energetic|urgent|neutral]. "
         f"\"memory_update\": fatto ≤100 char o null. \"trait_update\": tratto STABILE ≤120 char (raro, null quasi sempre). "
+        f"\"new_memory\": ricordo semantico astratto in TERZA persona se in questo turno è emerso qualcosa di personalmente significativo "
+        f"(es. una preoccupazione ricorrente, una persona cara, un evento doloroso o gioioso, un valore, una preferenza forte). "
+        f"Formato: {{\"concept\":\"frase breve 8-25 parole in terza persona (es: 'porta un peso familiare di lunga data')\",\"tags\":[\"max 4 tag minuscoli\"],\"emotion\":\"ansia|tristezza|gioia|rabbia|paura|serenità|confusione|tenerezza|vergogna|sollievo|null\",\"importance\":\"1-10 (5=default)\"}} oppure null. "
+        f"Crea new_memory MOLTO RARAMENTE (1 turno su 10 max): solo per momenti davvero significativi, MAI per chit-chat. "
         f"\"close_session\": true SOLO su saluto chiusura ('ciao Koda', 'a dopo', 'buonanotte', 'vado'); "
         f"se true reply breve calda max 12 parole, no domande.\n"
         f"\n"
-        f'{{"reply":"[TONE:warm] ...","tone":"warm|calm|energetic|concerned|urgent|neutral","actions":[],"memory_update":null,"trait_update":null,"close_session":false}}'
+        f'{{"reply":"[TONE:warm] ...","tone":"warm|calm|energetic|concerned|urgent|neutral","actions":[],"memory_update":null,"trait_update":null,"new_memory":null,"close_session":false}}'
     )
 
     # === FIX 2026-06-26 v17 (P1 — anti-allucinazione temporale) ===
@@ -8676,6 +8680,26 @@ async def _fast_pipeline_task(
                 await save_profile(profile)
             except Exception as e:
                 logger.warning(f"[fast] profile update failed: {e}")
+
+            # === FIX 2026-06-26 v18 (Fabio in furgone: memoria semantica) ===
+            # NUOVO: salva ricordi puntuali in `taccuino_memories` quando
+            # Claude li emette nel campo `new_memory`. Stesso meccanismo di
+            # /converse — finora ASSENTE nella pipeline voce, causa per cui
+            # parlando solo a voce Koda non accumulava ricordi specifici
+            # ricuperabili nei turni successivi. SOLO in non-ephemeral
+            # (zero-knowledge in Stanza dello Sfogo).
+            try:
+                nm = data.get("new_memory")
+                if isinstance(nm, dict) and (nm.get("concept") or "").strip():
+                    await _save_memory(
+                        concept=str(nm.get("concept") or "").strip(),
+                        tags=nm.get("tags"),
+                        emotion=nm.get("emotion"),
+                        importance=int(nm.get("importance") or 5),
+                        source="chat",
+                    )
+            except Exception as e:
+                logger.warning(f"[fast] new_memory save failed: {e}")
 
         total_ms = int((time.time() - t0) * 1000)
         logger.info(f"[fast {session_id[:8]}] DONE in {total_ms}ms ({sentence_idx} sentences)")
