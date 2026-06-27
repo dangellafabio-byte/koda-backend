@@ -782,10 +782,10 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
     if (marketingStep === 1) {
       return (
         <StepView
-          title="Il timbro della mia voce."
-          subtitle="Acqua o Vento? Sono due tonalità della stessa presenza — un colore della voce, non un'identità separata. Io resto Koda. Tocca per ascoltarle."
+          title="Il colore della mia voce."
+          subtitle="Due timbri della stessa presenza. Tocca per ascoltare. Resto sempre Koda."
           showSubtitle={true}
-          primaryLabel={selectedVoiceKey ? "Conferma voce" : "Tocca una voce per ascoltarla"}
+          primaryLabel={selectedVoiceKey ? "Conferma" : "Tocca per ascoltare"}
           onPrimary={() => {
             if (!selectedVoiceKey) return;
             // Aggancia la scelta alla logica AI gender esistente (per declinazione).
@@ -803,50 +803,87 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
           primaryDisabled={!selectedVoiceKey}
           darkOnLight={isDayTime}
         >
-          <View style={styles.voiceCardGroup}>
+          {/* === NUOVO SELETTORE VOCI INTRO (2026-06-27 v22) ===
+              Coerente con la UI di Impostazioni: niente nomi, niente
+              descrizioni, niente etichette. Solo 2 cerchi colorati grandi.
+              Acqua = viola, Vento = cobalto. Il cerchio selezionato ha
+              bordo bianco + checkmark.
+              I nomi "Acqua/Vento" restano usati internamente come chiavi
+              brand e nei messaggi vocali di Koda, ma l'utente vede solo
+              il colore — il colore È il nome. */}
+          <View style={styles.voiceCircleGroup}>
+            {/* Acqua — viola elettrico #BD10E0 */}
             <Pressable
               onPress={() => playVoicePreview("aria")}
               style={({ pressed }) => [
-                styles.voiceCardBig,
-                isDayTime && styles.voiceCardBigLight,
-                selectedVoiceKey === "aria" && (isDayTime ? styles.voiceCardBigSelectedLight : styles.voiceCardBigSelected),
+                styles.voiceCircleIntroWrap,
                 pressed && { opacity: 0.85 },
               ]}
               testID="m2-voice-aria"
             >
-              <Text style={[styles.voiceCardEmoji]}>🌬️</Text>
-              <Text style={[styles.voiceCardTitle, isDayTime && { color: "#18181B" }]}>Acqua</Text>
-              <Text style={[styles.voiceCardDesc, isDayTime && { color: "#52525B" }]}>
-                La voce femminile di Koda.
-              </Text>
-              {previewLoadingKey === "aria" && (
-                <ActivityIndicator size="small" color={isDayTime ? "#0E7C7B" : "#A1A1AA"} style={{ marginTop: 6 }} />
-              )}
-              {selectedVoiceKey === "aria" && previewLoadingKey !== "aria" && (
-                <Ionicons name="checkmark-circle" size={20} color="#34D399" style={{ marginTop: 6 }} />
-              )}
+              <View
+                style={[
+                  styles.voiceCircleIntroGlow,
+                  {
+                    backgroundColor: "#BD10E0",
+                    opacity: selectedVoiceKey === "aria" ? 0.55 : 0.28,
+                  },
+                ]}
+              />
+              <View
+                style={[
+                  styles.voiceCircleIntro,
+                  {
+                    backgroundColor: "#BD10E0",
+                    shadowColor: "#BD10E0",
+                    borderColor: selectedVoiceKey === "aria" ? "#FFFFFF" : "transparent",
+                    borderWidth: selectedVoiceKey === "aria" ? 4 : 0,
+                  },
+                ]}
+              >
+                {previewLoadingKey === "aria" ? (
+                  <ActivityIndicator size="large" color="#FFFFFF" />
+                ) : selectedVoiceKey === "aria" ? (
+                  <Ionicons name="checkmark" size={40} color="#FFFFFF" />
+                ) : null}
+              </View>
             </Pressable>
+
+            {/* Vento — cobalto vivo #2563EB */}
             <Pressable
               onPress={() => playVoicePreview("echo")}
               style={({ pressed }) => [
-                styles.voiceCardBig,
-                isDayTime && styles.voiceCardBigLight,
-                selectedVoiceKey === "echo" && (isDayTime ? styles.voiceCardBigSelectedLight : styles.voiceCardBigSelected),
+                styles.voiceCircleIntroWrap,
                 pressed && { opacity: 0.85 },
               ]}
               testID="m2-voice-echo"
             >
-              <Text style={[styles.voiceCardEmoji]}>🌌</Text>
-              <Text style={[styles.voiceCardTitle, isDayTime && { color: "#18181B" }]}>Vento</Text>
-              <Text style={[styles.voiceCardDesc, isDayTime && { color: "#52525B" }]}>
-                La voce maschile di Koda.
-              </Text>
-              {previewLoadingKey === "echo" && (
-                <ActivityIndicator size="small" color={isDayTime ? "#0E7C7B" : "#A1A1AA"} style={{ marginTop: 6 }} />
-              )}
-              {selectedVoiceKey === "echo" && previewLoadingKey !== "echo" && (
-                <Ionicons name="checkmark-circle" size={20} color="#34D399" style={{ marginTop: 6 }} />
-              )}
+              <View
+                style={[
+                  styles.voiceCircleIntroGlow,
+                  {
+                    backgroundColor: "#2563EB",
+                    opacity: selectedVoiceKey === "echo" ? 0.55 : 0.28,
+                  },
+                ]}
+              />
+              <View
+                style={[
+                  styles.voiceCircleIntro,
+                  {
+                    backgroundColor: "#2563EB",
+                    shadowColor: "#2563EB",
+                    borderColor: selectedVoiceKey === "echo" ? "#FFFFFF" : "transparent",
+                    borderWidth: selectedVoiceKey === "echo" ? 4 : 0,
+                  },
+                ]}
+              >
+                {previewLoadingKey === "echo" ? (
+                  <ActivityIndicator size="large" color="#FFFFFF" />
+                ) : selectedVoiceKey === "echo" ? (
+                  <Ionicons name="checkmark" size={40} color="#FFFFFF" />
+                ) : null}
+              </View>
             </Pressable>
           </View>
         </StepView>
