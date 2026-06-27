@@ -1639,15 +1639,32 @@ export default function Taccuino() {
   //   - registratore già attivo
   //   - error visibile (l'utente sta leggendo un feedback)
   useEffect(() => {
-    if (!handsFree) return;
+    // === FIX 2026-06-27 v18 (diag hands-free Android) ===
+    // L'utente Xiaomi ha riportato che dopo aver pubblicato i fix di oggi,
+    // hands-free NON auto-restarta dopo una risposta di Koda — bisogna
+    // tappare ogni volta. Il diag log mostra gap di 5-8s fra "session ref
+    // cleared" e "audio prep done", contro i ~450ms attesi.
+    // Aggiungiamo log per OGNI guardia che blocca: al prossimo test
+    // sappiamo subito quale flag sta impedendo il restart su Android.
+    // Prefisso unico KODA_HF_GUARD così è facilmente filtrabile nel diag.
+    if (!handsFree) {
+      if (status === "idle") console.log("[KODA_HF_GUARD] blocked: handsFree=false");
+      return;
+    }
     // === FIRST-TAP GATE ===
     // Il loop hands-free non parte FINCHÉ l'utente non ha toccato l'orb
     // almeno una volta in questa sessione foreground. Questo elimina
     // tutta una serie di problemi di sessione audio iOS al cold-start
     // / ritorno dal background. Vedi commenti su `userInteractedRef`.
-    if (!userInteractedRef.current) return;
+    if (!userInteractedRef.current) {
+      if (status === "idle") console.log("[KODA_HF_GUARD] blocked: userInteractedRef=false (first-tap gate)");
+      return;
+    }
     if (status !== "idle") return;
-    if (!profile) return;
+    if (!profile) {
+      console.log("[KODA_HF_GUARD] blocked: profile=null");
+      return;
+    }
     // === CLOSE SESSION PAUSE (fix regressione 2026-06-20) ===
     // L'utente ha appena salutato per chiudere ("ci sentiamo dopo", "ciao
     // Koda"…). Il backend ha settato close_session=true e il client lo ha
@@ -1656,32 +1673,70 @@ export default function Taccuino() {
     // il loop hands-free riapriva il mic dopo 450ms e poi mostrava
     // "non ti sento" anche se l'utente era già andato via.
     if (closeSessionPauseRef.current) {
-      console.log("[KODA_CLOSE_SESSION] hands-free loop suppressed (waiting for user tap)");
+      console.log("[KODA_HF_GUARD] blocked: closeSessionPause=true (waiting for user tap)");
       return;
     }
-    if (showOnboarding) return;
+    if (showOnboarding) {
+      console.log("[KODA_HF_GUARD] blocked: showOnboarding=true");
+      return;
+    }
     // CRITICAL: showColorIntro può essere `null` (in fase di caricamento da
     // SecureStore). Se attivassimo il mic in quei millisecondi, l'audio
     // session iOS andrebbe in "recording" e poi quando KodaIntro vuole
     // parlare il TTS resta muto. Aspettiamo esplicitamente `false`.
-    if (showColorIntro !== false) return;
-    if (tourActive) return; // niente mic durante il tour visivo
-    if (showSealSetup) return;
-    if (sealUnlocking) return;
-    if (showSettings) return;
-    if (profile.settings?.input_mode === "text") return;
-    if (recRef.current) return;
+    if (showColorIntro !== false) {
+      console.log(`[KODA_HF_GUARD] blocked: showColorIntro=${showColorIntro}`);
+      return;
+    }
+    if (tourActive) {
+      console.log("[KODA_HF_GUARD] blocked: tourActive=true");
+      return;
+    }
+    if (showSealSetup) {
+      console.log("[KODA_HF_GUARD] blocked: showSealSetup=true");
+      return;
+    }
+    if (sealUnlocking) {
+      console.log("[KODA_HF_GUARD] blocked: sealUnlocking=true");
+      return;
+    }
+    if (showSettings) {
+      console.log("[KODA_HF_GUARD] blocked: showSettings=true");
+      return;
+    }
+    if (profile.settings?.input_mode === "text") {
+      console.log("[KODA_HF_GUARD] blocked: input_mode=text");
+      return;
+    }
+    if (recRef.current) {
+      console.log("[KODA_HF_GUARD] blocked: recRef.current is non-null (recorder still alive?)");
+      return;
+    }
+    // Tutte le guardie superate — schedula il restart.
+    console.log("[KODA_HF_LOOP] all guards passed — scheduling startTalkInternal in 450ms");
     // breve pausa di respiro per evitare di registrare la coda del TTS
     // e per dare al sistema audio iOS il tempo di switchare la sessione.
     const t = setTimeout(() => {
-      if (!handsFreeRef.current) return;
-      if (recRef.current) return;
+      if (!handsFreeRef.current) {
+        console.log("[KODA_HF_LOOP] aborted in timeout: handsFreeRef=false");
+        return;
+      }
+      if (recRef.current) {
+        console.log("[KODA_HF_LOOP] aborted in timeout: recRef became non-null");
+        return;
+      }
       // CRITICAL: re-check tourActive in closure. Senza questo, nel piccolo
       // gap fra "KodaIntro chiusa" e "tourActive=true" il setTimeout era
       // già stato schedulato e apriva il mic durante il tour.
-      if (tourActiveRef.current) return;
+      if (tourActiveRef.current) {
+        console.log("[KODA_HF_LOOP] aborted in timeout: tourActiveRef=true");
+        return;
+      }
+      console.log("[KODA_HF_LOOP] firing startTalkInternal(true)");
       // Re-check status in closure
-      startTalkInternal(true).catch(() => {});
+      startTalkInternal(true).catch((e) => {
+        console.log(`[KODA_HF_LOOP] startTalkInternal threw: ${e?.message || e}`);
+      });
     }, 450);
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
