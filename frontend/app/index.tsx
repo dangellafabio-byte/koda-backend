@@ -22,6 +22,7 @@ import {
   AppState,
   Switch,
   Linking,
+  BackHandler,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { TouchableOpacity as GHTouchableOpacity } from "react-native-gesture-handler";
@@ -1660,6 +1661,121 @@ export default function Taccuino() {
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, handsFree, profile?.id, showOnboarding, showColorIntro, showSealSetup, sealUnlocking, showSettings, tourActive]);
+
+  // === ANDROID BACK BUTTON HANDLER (2026-06-27 v18) ===
+  // Su Android l'utente può premere il tasto/gesto "back" hardware. Senza
+  // gestione esplicita, il default è uscire dall'app — comportamento che
+  // diventa pericoloso in tre casi:
+  //   1) Stanza dello Sfogo aperta → l'utente esce per errore e perde la
+  //      sessione effimera senza nemmeno un avviso. Rompe la fiducia in
+  //      un prodotto che si presenta come "amico attento".
+  //   2) Microfono attivo (recording/processing) → il back lascerebbe il
+  //      registratore aperto in background o in stato corrotto.
+  //   3) Koda sta parlando (speaking) → il TTS continua mentre l'utente
+  //      pensa di aver chiuso l'app.
+  // Inoltre, intercettiamo i modali aperti (Impostazioni, Onboarding,
+  // SealSetup, ConfessionalIntro, Tour) e li chiudiamo invece di uscire.
+  //
+  // Restituire `true` = abbiamo gestito il back, NON propagare al sistema.
+  // Restituire `false` = comportamento di default (chiude l'app).
+  // Solo Android: su iOS questo hook è no-op (BackHandler non spara mai).
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+
+    const onBack = (): boolean => {
+      // --- Tier 1: chiudi modali (priorità alta) ---
+      if (showSettings) {
+        setShowSettings(false);
+        return true;
+      }
+      if (showConfessionalIntro) {
+        setShowConfessionalIntro(false);
+        return true;
+      }
+      if (showSealSetup) {
+        setShowSealSetup(false);
+        return true;
+      }
+      if (tourActive) {
+        // Tour visivo: chiude il tour, non l'app
+        try { setTourActive(false); } catch {}
+        return true;
+      }
+      // Onboarding e ColorIntro: NON permettiamo di scappare via back
+      // (l'utente deve completare il flow), quindi semplicemente ignoriamo.
+      if (showOnboarding || showColorIntro === true) {
+        return true;
+      }
+
+      // --- Tier 2: Stanza dello Sfogo attiva ---
+      // Conferma esplicita prima di uscire. Se Koda sta parlando o sta
+      // registrando dentro la Stanza, il back deve comunque chiedere.
+      if (confessionalMode) {
+        Alert.alert(
+          "Uscire dalla Stanza dello Sfogo?",
+          "Quello che hai detto qui non verrà salvato. Sei sicuro di voler uscire?",
+          [
+            { text: "Resta qui", style: "cancel" },
+            {
+              text: "Esci",
+              style: "destructive",
+              onPress: () => {
+                // Ferma TTS se sta parlando
+                try { SpeechMod.stop(); } catch {}
+                // Aborta sessione streaming se attiva
+                try {
+                  if (streamingSessionRef.current) {
+                    const s = streamingSessionRef.current as any;
+                    streamingSessionRef.current = null;
+                    try { s.abort?.().catch?.(() => {}); } catch {}
+                  }
+                } catch {}
+                setConfessionalMode(false);
+              },
+            },
+          ],
+          { cancelable: true }
+        );
+        return true;
+      }
+
+      // --- Tier 3: Microfono attivo ---
+      // Back durante "recording" o "processing" = STOP, non chiusura app.
+      // Replica il comportamento del tap sull'orb durante registrazione.
+      if (status === "recording" || status === "processing") {
+        try {
+          if (streamingSessionRef.current) {
+            const s = streamingSessionRef.current as any;
+            streamingSessionRef.current = null;
+            try { s.abort?.().catch?.(() => {}); } catch {}
+          }
+        } catch {}
+        try { SpeechMod.stop(); } catch {}
+        setStatus("idle");
+        return true;
+      }
+
+      // --- Tier 4: Koda sta parlando (TTS playback) ---
+      // Back = fermala con grazia, ma resta nell'app.
+      if (status === "speaking") {
+        try { SpeechMod.stop(); } catch {}
+        setStatus("idle");
+        return true;
+      }
+
+      // --- Default: comportamento di sistema (esce dall'app) ---
+      return false;
+    };
+
+    const sub = BackHandler.addEventListener("hardwareBackPress", onBack);
+    return () => {
+      try { sub.remove(); } catch {}
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    showSettings, showConfessionalIntro, showSealSetup, tourActive,
+    showOnboarding, showColorIntro, confessionalMode, status,
+  ]);
 
   const sendText = useCallback(
     async (text: string, opts?: { fromText?: boolean }) => {
