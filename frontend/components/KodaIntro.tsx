@@ -772,7 +772,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       return (
         <StepView
           title="Il timbro della mia voce."
-          subtitle="Aria o Theo? Sono due tonalità della stessa presenza — un colore della voce, non un'identità separata. Io resto Koda. Tocca per ascoltarle."
+          subtitle="Acqua o Vento? Sono due tonalità della stessa presenza — un colore della voce, non un'identità separata. Io resto Koda. Tocca per ascoltarle."
           showSubtitle={true}
           primaryLabel={selectedVoiceKey ? "Conferma voce" : "Tocca una voce per ascoltarla"}
           onPrimary={() => {

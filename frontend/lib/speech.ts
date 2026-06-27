@@ -194,6 +194,17 @@ function stopAllPlayback() {
     try {
       p.pause?.();
     } catch {}
+    // === FIX 2026-06-27 v18 (Android Xiaomi: TTS continuava dopo stop) ===
+    // Su Android, `expo-audio.pause()` non sempre interrompe immediatamente
+    // il playback: il buffer audio interno può continuare a riprodurre per
+    // alcuni secondi anche dopo pause(), e remove() a volte tarda. Risultato:
+    // l'utente tappa l'orb per fermare Koda, la UI passa a "idle" ma la voce
+    // continua. Fix aggressivo: muta il volume e fa seekTo(0) PRIMA di
+    // remove() — combo che forza Android a smettere subito di emettere audio.
+    if (Platform.OS === "android") {
+      try { p.volume = 0; } catch {}
+      try { p.seekTo?.(0); } catch {}
+    }
     // `remove()` releases the SharedObject and tears down the AVPlayer.
     try {
       p.remove?.();

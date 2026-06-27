@@ -252,7 +252,20 @@ export default function Taccuino() {
         const r = await fetch(`${API_BASE}/voices`);
         if (r.ok) {
           const v = await r.json();
-          if (!cancelled && Array.isArray(v)) setVoiceList(v);
+          // === FIX 2026-06-27 v18 (Android Xiaomi: Impostazioni mostra solo Acqua) ===
+          // Il backend ritorna `{"voices": [...], "enabled": true}` (oggetto)
+          // ma il client controllava `Array.isArray(v)` direttamente sul body
+          // → il check falliva → `voiceList` restava vuoto → la UI di
+          // Impostazioni mostrava solo la voce di default (Acqua) senza
+          // possibilità di scegliere Vento. Ora supportiamo entrambi i
+          // formati per retrocompatibilità.
+          let voices: any[] = [];
+          if (Array.isArray(v)) {
+            voices = v;
+          } else if (v && Array.isArray(v.voices)) {
+            voices = v.voices;
+          }
+          if (!cancelled && voices.length > 0) setVoiceList(voices);
         }
       } catch {}
     })();
@@ -610,7 +623,19 @@ export default function Taccuino() {
   const conversationOn = !!profile?.settings?.conversation_mode;
   // Tracks "we are inside an active hands-free conversation loop"
   const [convActive, setConvActive] = useState(false);
-  const [voices, setVoices] = useState<VoiceOption[]>([]);
+  // === FIX 2026-06-27 v18 (Android Xiaomi: Impostazioni mostrava solo Acqua) ===
+  // Su Android, per motivi non chiari (probabilmente race condition al mount
+  // o errore di fetch silenzioso), lo state `voices` restava vuoto e l'utente
+  // non vedeva la scelta tra Acqua e Vento. Su iOS funzionava regolarmente.
+  // Soluzione robusta: inizializziamo `voices` con il fallback hardcoded
+  // delle DUE voci ufficiali (allineato a CURATED_VOICES nel backend).
+  // Se poi la fetch al backend riesce, sovrascrive con la risposta server
+  // (consente di aggiungere nuove voci in futuro senza ricompilare il client).
+  const _DEFAULT_VOICES: VoiceOption[] = [
+    { voice_id: "6TngzmzM89jJ3Y2Yiywr", name: "Acqua", description: "La voce femminile di Koda.", gender: "femminile" as any, accent: "italiano" } as any,
+    { voice_id: "ll9WG7PDTuyHwgC5MD6g", name: "Vento", description: "La voce maschile di Koda.", gender: "maschile" as any, accent: "italiano" } as any,
+  ];
+  const [voices, setVoices] = useState<VoiceOption[]>(_DEFAULT_VOICES);
   const [voicesEnabled, setVoicesEnabled] = useState(true);
   const [voicePreviewLoading, setVoicePreviewLoading] = useState<string | null>(null);
   const convActiveRef = useRef(false);
