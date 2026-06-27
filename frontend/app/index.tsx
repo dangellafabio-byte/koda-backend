@@ -176,6 +176,41 @@ const NAMED_COLORS: Record<string, string> = {
   fucsia: "#E11D48", lilla: "#C4B5FD", indaco: "#6366F1",
 };
 
+// === VOICE → SPEAKING COLOR (2026-06) ===
+// Mappa l'identità della voce scelta al colore mostrato durante "speaking".
+// Il colore diventa l'identità visiva della voce: niente nomi sul selettore,
+// solo cerchi colorati. Tocca = preview audio.
+//
+//   Acqua (femminile)  → viola elettrico  #BD10E0
+//   Vento (maschile)   → cobalto vivo     #2563EB
+//
+// Gli stati Recording (#00F5D4 tiffany) e Thinking (#EC4899 ciclamino)
+// restano FISSI per garantire la leggibilità dello stato a colpo d'occhio.
+// Solo "speaking" cambia colore in base alla voce.
+const VOICE_ID_ACQUA = "6TngzmzM89jJ3Y2Yiywr";
+const VOICE_ID_VENTO = "ll9WG7PDTuyHwgC5MD6g";
+
+const VOICE_SPEAKING_COLORS: Record<string, string> = {
+  [VOICE_ID_ACQUA]: "#BD10E0", // viola elettrico (default storico)
+  [VOICE_ID_VENTO]: "#2563EB", // cobalto vivo
+};
+
+// Palette [bright, mid, deep] per l'EclipseOrb durante speaking.
+// Acqua = palette warm originale (viola). Vento = palette cobalto.
+const VOICE_SPEAKING_PALETTES: Record<string, [string, string, string]> = {
+  [VOICE_ID_ACQUA]: ["#E9D5FF", "#BD10E0", "#7E22CE"],
+  [VOICE_ID_VENTO]: ["#93BBFD", "#2563EB", "#1E3A8A"],
+};
+
+function getVoiceSpeakingColor(voiceId: string | undefined | null): string | undefined {
+  if (!voiceId) return undefined;
+  return VOICE_SPEAKING_COLORS[voiceId];
+}
+function getVoiceSpeakingPalette(voiceId: string | undefined | null): [string, string, string] | null {
+  if (!voiceId) return null;
+  return VOICE_SPEAKING_PALETTES[voiceId] || null;
+}
+
 // Rimuove i tag [TONE:xxx], gli [audio tags], le *narrazioni* tra
 // asterischi (es. *sighs*, *laughs*) e le (azioni) tra parentesi dal
 // testo per la visualizzazione in chat. Difensivo: il backend già
@@ -4317,6 +4352,13 @@ export default function Taccuino() {
                         status === "idle" ? null :
                         lastAiTone
                       }
+                      // === SPEAKING COLOR LEGATO ALLA VOCE (2026-06) ===
+                      // Acqua = viola (palette warm originale)
+                      // Vento = cobalto vivo (#2563EB)
+                      // Se voiceId è null/sconosciuto → palette null → fallback al tone.
+                      speakingPaletteOverride={getVoiceSpeakingPalette(
+                        (profile?.settings as any)?.tts_voice_id
+                      )}
                       size={Math.min(windowWidth * 0.78, 360)}
                       meterDb={meterDb}
                       meterThreshold={meterThreshold}
@@ -5182,46 +5224,60 @@ export default function Taccuino() {
               <Text style={[styles.settingsSubtitle, { marginTop: 4, marginBottom: 6 }]}>
                 🎙️ Scegli la voce di Koda
               </Text>
-              {voices.map((v) => {
-                const selected = profile?.settings?.tts_voice_id === v.voice_id;
-                const loading = voicePreviewLoading === v.voice_id;
-                return (
-                  <TouchableOpacity
-                    key={v.voice_id}
-                    onPress={() => selectAndPreviewVoice(v.voice_id, v.name)}
-                    style={[styles.voiceCard, selected && styles.voiceCardActive]}
-                    testID={`voice-${v.voice_id}`}
-                  >
-                    <View style={styles.voiceCardLeft}>
+              {/* === NUOVO SELETTORE VOCI (2026-06) ===
+                  Niente più nomi né etichette: ogni voce È il suo colore.
+                  Due cerchi colorati grandi, side-by-side. Tap = preview audio
+                  + selezione automatica. Il cerchio selezionato ha un anello
+                  bianco e una checkmark sottile. */}
+              <Text style={styles.voicePickerHint}>
+                Tocca per ascoltare
+              </Text>
+              <View style={styles.voicePickerRow}>
+                {voices.map((v) => {
+                  const selected = profile?.settings?.tts_voice_id === v.voice_id;
+                  const loading = voicePreviewLoading === v.voice_id;
+                  const voiceColor =
+                    VOICE_SPEAKING_COLORS[v.voice_id] || theme.primary;
+                  return (
+                    <TouchableOpacity
+                      key={v.voice_id}
+                      onPress={() => selectAndPreviewVoice(v.voice_id, v.name)}
+                      style={styles.voiceCircleWrap}
+                      testID={`voice-${v.voice_id}`}
+                      activeOpacity={0.75}
+                    >
+                      {/* Glow soft attorno al cerchio (più visibile se selezionato) */}
                       <View
                         style={[
-                          styles.voiceDot,
-                          selected && { backgroundColor: theme.primary, borderColor: theme.primary },
+                          styles.voiceCircleGlow,
+                          {
+                            backgroundColor: voiceColor,
+                            opacity: selected ? 0.45 : 0.22,
+                          },
                         ]}
                       />
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.voiceName}>
-                          {v.name}
-                          <Text style={styles.voiceGender}>
-                            {"  "}
-                            {v.gender === "F" ? "♀" : v.gender === "M" ? "♂" : ""}
-                          </Text>
-                        </Text>
-                        <Text style={styles.voiceDesc} numberOfLines={2}>
-                          {v.description}
-                        </Text>
+                      {/* Cerchio principale */}
+                      <View
+                        style={[
+                          styles.voiceCircle,
+                          {
+                            backgroundColor: voiceColor,
+                            borderColor: selected ? "#FFFFFF" : "transparent",
+                            borderWidth: selected ? 3 : 0,
+                            shadowColor: voiceColor,
+                          },
+                        ]}
+                      >
+                        {loading ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : selected ? (
+                          <Ionicons name="checkmark" size={28} color="#FFFFFF" />
+                        ) : null}
                       </View>
-                    </View>
-                    {loading ? (
-                      <ActivityIndicator size="small" color={theme.primary} />
-                    ) : selected ? (
-                      <Ionicons name="checkmark-circle" size={22} color={theme.primary} />
-                    ) : (
-                      <Ionicons name="volume-medium-outline" size={20} color={theme.textMuted} />
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             </View>
 
             <View style={styles.divider} />
@@ -5676,7 +5732,13 @@ export default function Taccuino() {
     neonStatus === "idle" ? 2 :
     3;
   const neonBorderEl = (
-    <NeonBorder status={neonStatus} thickness={neonThickness} />
+    <NeonBorder
+      status={neonStatus}
+      thickness={neonThickness}
+      speakingColorOverride={getVoiceSpeakingColor(
+        (profile?.settings as any)?.tts_voice_id
+      )}
+    />
   );
 
   // === ACTIVATION PULSE (idea 1) ===
@@ -6933,6 +6995,61 @@ const makeStyles = (t: any) => StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
     lineHeight: 16,
+  },
+  // === NUOVO SELETTORE VOCI (2026-06) ===
+  // Solo cerchi colorati: ogni voce È il suo colore.
+  voicePickerHint: {
+    color: t.textMuted,
+    fontSize: 11,
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
+    textAlign: "center",
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  voicePickerRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 48,
+    paddingVertical: 20,
+    paddingHorizontal: 8,
+  },
+  voiceCircleWrap: {
+    width: 90,
+    height: 90,
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+  },
+  voiceCircleGlow: {
+    position: "absolute",
+    width: 110,
+    height: 110,
+    borderRadius: 999,
+    // boxShadow non gestito uniformemente → ci affidiamo al fill +
+    // opacity. Su iOS e web il risultato è uno halo soft visibile.
+    ...Platform.select({
+      ios: { shadowColor: "#000", shadowOpacity: 0, shadowRadius: 0 },
+      android: {},
+      default: {},
+    }),
+  },
+  voiceCircle: {
+    width: 78,
+    height: 78,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+    ...Platform.select({
+      ios: {
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.55,
+        shadowRadius: 12,
+      },
+      android: { elevation: 6 },
+      default: {},
+    }),
   },
   voicePlayBtn: {
     width: 34,

@@ -73,9 +73,14 @@ const DEFAULT_RADIUS = 47;
 export default function NeonBorder({
   status,
   thickness = 3,
+  speakingColorOverride,
 }: {
   status: NeonBorderStatus;
   thickness?: number;
+  /** Se fornito e status === "speaking", sostituisce il viola fisso #BD10E0.
+   *  Serve per legare il colore dell'orb/bordo alla voce scelta
+   *  (es. Acqua=viola, Vento=cobalto). */
+  speakingColorOverride?: string;
 }) {
   const { width: W, height: H } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -93,7 +98,12 @@ export default function NeonBorder({
     14;
   // Su web/tablet usiamo un valore conservativo
   const DISPLAY_RADIUS = Platform.OS === "web" ? 24 : dynamicRadius;
-  const color = STATE_COLORS[status];
+  const baseColor = STATE_COLORS[status];
+  // Override dinamico per "speaking" — legato alla voce scelta dall'utente.
+  // Per gli altri stati il colore resta sempre fisso.
+  const color = (status === "speaking" && speakingColorOverride)
+    ? speakingColorOverride
+    : baseColor;
 
   // ============ PULSAZIONE LENTA (tutti gli stati tranne thinking) ============
   const pulse = useRef(new Animated.Value(0)).current;

@@ -47,6 +47,10 @@ type Props = {
   /** Live mic dB during recording — drives gentle inward pulse */
   meterDb?: number | null;
   meterThreshold?: number | null;
+  /** Override della palette durante "speaking" — legata alla voce scelta.
+   *  Acqua=viola (default), Vento=cobalto. Se passato, sostituisce
+   *  TONE_PALETTES.warm/concerned/etc durante lo speaking. */
+  speakingPaletteOverride?: [string, string, string] | null;
 };
 
 // === Tone → aurora palette ([bright, mid, deep])
@@ -103,15 +107,22 @@ export default function EclipseOrb({
   size = 280,
   meterDb,
   meterThreshold,
+  speakingPaletteOverride,
 }: Props) {
   // === Palette resolution: tone-driven when speaking, blu petrolio when
   // listening, ciclamino while thinking, viola when idle.
   const palette: [string, string, string] = useMemo(() => {
     if (status === "recording") return LISTEN_PALETTE;
     if (status === "thinking" || status === "transcribing") return THINK_PALETTE;
+    // === SPEAKING: override per voce (Acqua=viola, Vento=cobalto) ===
+    // Se è passata una palette custom legata alla voce, ha la priorità
+    // sul tone-driven default (warm/concerned/etc).
+    if (status === "speaking" && speakingPaletteOverride) {
+      return speakingPaletteOverride;
+    }
     if (tone && TONE_PALETTES[tone]) return TONE_PALETTES[tone];
     return TONE_PALETTES.neutral;
-  }, [status, tone]);
+  }, [status, tone, speakingPaletteOverride]);
 
   // === Animated values — all useNativeDriver for 60fps
   // Aurora intensity (overall halo brightness): 0..1
