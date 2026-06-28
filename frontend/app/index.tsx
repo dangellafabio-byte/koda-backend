@@ -1045,6 +1045,24 @@ export default function Taccuino() {
   //     forza status a idle per il prossimo tap.
   useEffect(() => {
     const sub = AppState.addEventListener("change", (next) => {
+      // === FIX 2026-06-28 v32 — Xiaomi/HyperOS Privacy Flicker ===
+      // Su Xiaomi HyperOS l'indicatore di privacy del microfono (il dot
+      // verde in alto a destra che appare quando il mic è attivo) può
+      // causare brevi transizioni AppState: active → inactive → active
+      // durante una sessione di registrazione. Senza guard, ogni "active"
+      // ri-resetta lo status a idle e azzera userInteractedRef → l'orb
+      // visivamente torna a idle dopo <1s anche se i chunk continuano a
+      // essere registrati e inviati al backend.
+      // Skip TUTTI gli azzeramenti se c'è una sessione streaming/recorder
+      // attiva. Lo status reale è governato dal flusso voiceStreamConverse.
+      const sessionActive =
+        !!streamingSessionRef.current || !!recRef.current;
+      if (sessionActive) {
+        console.log(
+          `[KODA_APPSTATE] change=${next} skipped (active session: streaming=${!!streamingSessionRef.current} rec=${!!recRef.current})`
+        );
+        return;
+      }
       if (next === "background" || next === "inactive") {
         // App va in background: ferma TUTTO subito.
         userInteractedRef.current = false;
