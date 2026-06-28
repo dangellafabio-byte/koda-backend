@@ -4479,10 +4479,32 @@ async def decision_heartbeat(req: DecisionHeartbeatRequest,
         decision = {"action": "DO_NOTHING"}  # rispetta lo spazio
     elif not throttled:
         sc24 = len(inter)
-        if sc24 >= 5 and not is_suppressed("OFFER_SPACE"):
+        # === FIX 2026-06-27 v23 — consapevolezza temporale OFFER_SPACE ===
+        # Prima la logica scattava se sc24 >= 5 (interazioni nelle ultime
+        # 24h). Ma sc24 conta ANCHE messaggi di ieri sera, e poteva
+        # triggerare "abbiamo fatto sessioni intense" anche dopo 12h di
+        # pausa al primo "ciao" mattutino → assurdo.
+        # Ora controlliamo che almeno l'ULTIMA interazione precedente sia
+        # davvero recente (< 3h): solo allora è onesto chiamare la fase
+        # "sessioni intense di recente". Se l'ultimo scambio era ieri
+        # sera, la giornata si è interrotta, non è una raffica continua.
+        last_session_gap_s = 86400  # default = troppo distante
+        if len(inter) >= 2:
+            sorted_inter = sorted(inter)
+            try:
+                last_session_gap_s = (now - sorted_inter[-2]).total_seconds()
+            except Exception:
+                last_session_gap_s = 86400
+        recent_burst = last_session_gap_s < 3 * 3600  # < 3 ore = davvero recente
+
+        if sc24 >= 5 and recent_burst and not is_suppressed("OFFER_SPACE"):
             decision = {
                 "action": "OFFER_SPACE",
-                "internal_reason": {"interaction_velocity_peak": True, "session_count_24h": sc24},
+                "internal_reason": {
+                    "interaction_velocity_peak": True,
+                    "session_count_24h": sc24,
+                    "last_gap_s": int(last_session_gap_s),
+                },
                 "user_reason": "Abbiamo fatto diverse sessioni intense di recente. Volevo solo ricordarti che, se ne senti il bisogno, puoi staccare dallo schermo in qualsiasi momento.",
             }
         elif silence_days >= 6 and not is_suppressed("OFFER_CHECKIN"):
