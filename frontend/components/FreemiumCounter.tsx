@@ -26,8 +26,13 @@ export default function FreemiumCounter({ remaining, total, visible }: Props) {
 
   return (
     <View style={styles.wrap} pointerEvents="none">
-      <View style={[styles.pill, { backgroundColor: theme.surface + "AA", borderColor: theme.border }]}>
-        <Text style={[styles.text, { color: theme.textDim }]}>{label}</Text>
+      <View style={[styles.pill, { backgroundColor: theme.surface + "EE", borderColor: theme.border }]}>
+        {/* === FIX 2026-06-28 v30 — testo SEMPRE bianco/contrastato ===
+            Prima: theme.textDim = rgba(255,255,255,0.55) sul tema Chiaro
+            su bg theme.surface + "AA" → contrasto bassissimo, leggibile
+            come "scuro/nero" su Home grigia. Ora text full (theme.text)
+            + bg più opaco (EE invece di AA) per netto stacco. */}
+        <Text style={[styles.text, { color: theme.text }]}>{label}</Text>
       </View>
     </View>
   );

@@ -834,20 +834,13 @@ export default function Taccuino() {
   // zione di colore per frame sul JS thread).
   const auroraAnim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    if (theme.name !== "giorno") return;
-    auroraAnim.setValue(0);
-    const loop = Animated.loop(
-      Animated.timing(auroraAnim, {
-        toValue: 1,
-        duration: 300000, // 5 minuti per ciclo completo
-        easing: Easing.linear,
-        useNativeDriver: false, // color interpolation richiede JS
-      })
-    );
-    loop.start();
-    return () => {
-      loop.stop();
-    };
+    // === FIX 2026-06-28 v30 — disabilitato anche il loop ===
+    // L'Aurora è già disabilitata visivamente (isAurora=false hardcoded),
+    // ma il loop CPU continuava a girare ogni 5 min per il tema "giorno".
+    // Spreco inutile sul JS-thread su Android (useNativeDriver: false).
+    // Il loop ora non parte mai — se si vuole riabilitare l'Aurora,
+    // bisogna ripristinare anche questo useEffect.
+    return;
   }, [theme.name, auroraAnim]);
   // Colori Aurora — sequenza dei colori dell'AURORA BOREALE (richiesta
   // utente 2026-06). Verde dominante (il colore signature dell'aurora
@@ -4341,11 +4334,11 @@ export default function Taccuino() {
             <Text
               style={[
                 styles.confessionalToggleText,
-                // === FIX 2026-06-28 v27 — rimosso override testo nero ===
-                // Lo override che metteva color: "rgba(0,0,0,0.85)" sul tema
-                // chiaro è stato eliminato. Adesso bg è opaco (maroon o
-                // rosso), bianco si legge bene sempre.
-                confessionalMode && { color: "#FFE4E8" },
+                // === FIX 2026-06-28 v30 — bianco SEMPRE ===
+                // L'utente ha chiesto esplicitamente: pill opaca + testo
+                // bianco PIENO in ogni schermata (home + timeline) e in
+                // ogni stato (sfogo attivo o non attivo). Nessun override
+                // condizionale: il bianco #FFFFFF deve restare costante.
               ]}
             >
               {confessionalMode ? "Stanza dello Sfogo" : "Stanza dello Sfogo"}

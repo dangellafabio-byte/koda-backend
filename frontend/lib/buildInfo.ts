@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-06-28 v1.1.0+29";
-export const BUILD_NOTES = "FIX P0 Android TTS: gestione robusta frame binari WS in entrambi i path (voiceStream + fastConverseWS). 6 tipi di dato gestiti (ArrayBuffer cross-realm, TypedArray, Blob, ecc.). Più diagnostica.";
+export const BUILD_VERSION = "2026-06-28 v1.1.0+30";
+export const BUILD_NOTES = "Pill Sfogo: testo bianco SEMPRE in entrambe le schermate. Counter Freemium: testo bianco. + tutti i fix voce (cascata WS, TTS Android, mutex).";
