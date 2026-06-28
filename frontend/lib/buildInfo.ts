@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-06-28 v1.1.0";
-export const BUILD_NOTES = "Build production unificata (iOS+Android stesso runtimeVersion fisso 1.1.0) — include fix cascata WS Stanza Sfogo";
+export const BUILD_VERSION = "2026-06-28 v1.1.0+27";
+export const BUILD_NOTES = "Pill Stanza Sfogo opaca (niente più trasparenza) + testo bianco leggibile su tutti i temi";

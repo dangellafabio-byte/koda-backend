@@ -4341,7 +4341,10 @@ export default function Taccuino() {
             <Text
               style={[
                 styles.confessionalToggleText,
-                !theme.isDark && !confessionalMode && { color: "rgba(0,0,0,0.85)" },
+                // === FIX 2026-06-28 v27 — rimosso override testo nero ===
+                // Lo override che metteva color: "rgba(0,0,0,0.85)" sul tema
+                // chiaro è stato eliminato. Adesso bg è opaco (maroon o
+                // rosso), bianco si legge bene sempre.
                 confessionalMode && { color: "#FFE4E8" },
               ]}
             >
@@ -6410,16 +6413,27 @@ const makeStyles = (t: any) => StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: "rgba(255,23,68,0.20)",
+    // === FIX 2026-06-28 v27 — pill SEMPRE opaca ===
+    // Prima: rgba(255,23,68,0.20) → solo 20% opacità → le bolle della
+    // timeline trasparivano attraverso la pill, parole sovrapposte =
+    // effetto ottico pessimo (segnalato da utente). Ora maroon scuro
+    // opaco al 100%: si stacca sempre dallo sfondo, indipendente dal
+    // tema o dai messaggi dietro.
+    backgroundColor: "#7A1F2E",
     borderWidth: 1,
-    borderColor: "rgba(255,23,68,0.70)",
+    borderColor: "#FF6B7E",
   },
   confessionalToggleOn: {
     backgroundColor: "#FF1744",
     borderColor: "#FF8FA3",
   },
   confessionalToggleText: {
-    color: "#FFFFFFCC",
+    // === FIX 2026-06-28 v27 — testo SEMPRE bianco ===
+    // Prima: condizionale che metteva rgba(0,0,0,0.85) su tema chiaro →
+    // testo quasi nero su sfondo trasparente rosso = illeggibile.
+    // Ora il bg è sempre opaco (maroon o rosso brillante), il bianco
+    // si legge bene in entrambi i casi.
+    color: "#FFFFFF",
     fontSize: 12,
     fontWeight: "600",
     letterSpacing: 0.3,
