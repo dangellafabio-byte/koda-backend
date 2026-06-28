@@ -274,12 +274,15 @@ export default function Taccuino() {
     const prev = statusRef.current;
     if (prev !== next) {
       try {
-        // Estrai prima riga di stack (oltre il frame di setStatus stesso)
+        // Estrai prime 5 righe di stack per identificare il caller esatto.
+        // Su Android RN gli address hex non sono leggibili, ma il pattern
+        // di chiamata sì (es. "at onUserFinal", "at finally", "at anonymous").
         const stack = new Error().stack || "";
-        const lines = stack.split("\n");
-        // line[0] = Error, line[1] = setStatus, line[2] = caller reale
-        const callerFrame = (lines[2] || lines[1] || "").trim().slice(0, 120);
-        const tag = caller || callerFrame;
+        const lines = stack.split("\n")
+          .slice(1, 6)
+          .map((s) => s.trim().slice(0, 100))
+          .filter((s) => s.length > 0);
+        const tag = caller || lines.slice(0, 4).join(" ← ");
         console.log(
           `[KODA_STATUS] ${prev} → ${next} t+${Date.now() - statusTraceStartRef.current}ms caller=${tag}`
         );
