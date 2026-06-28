@@ -714,10 +714,23 @@ export class VoiceStreamSession {
 
         this.chunkIdx++;
         const gap = chunkStart - prevChunkEnd;
+        const recDurMs = t_stop - t_record_started;
+        // === FIX 2026-06-28 v33 — Anomaly detection ===
+        // Se un chunk dura meno dell'80% del target, è un sintomo di
+        // problemi: privacy indicator che interrompe, AudioSession
+        // contesa, AppState change, ecc. Lo logghiamo con prefisso
+        // ANOMALY così è grep-abile nel diag.
+        if (recDurMs < CHUNK_DURATION_MS * 0.8) {
+          console.log(
+            `[KODA_STREAM_CLIENT_ANOMALY] chunk #${this.chunkIdx} ` +
+              `duration_short=${recDurMs}ms target=${CHUNK_DURATION_MS}ms ` +
+              `bytes=${bytes.byteLength} — possible mic interruption`
+          );
+        }
         console.log(
           `[KODA_STREAM_CLIENT_CHUNK] idx=${this.chunkIdx} ` +
             `size=${bytes.byteLength}B ` +
-            `record_dur=${t_stop - t_record_started}ms ` +
+            `record_dur=${recDurMs}ms ` +
             `read=${t_read - t_stop}ms ` +
             `send=${t_sent - t_read}ms ` +
             `gap_prev=${gap > 0 ? gap : 0}ms`

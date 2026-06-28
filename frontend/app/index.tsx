@@ -1055,12 +1055,20 @@ export default function Taccuino() {
       // essere registrati e inviati al backend.
       // Skip TUTTI gli azzeramenti se c'è una sessione streaming/recorder
       // attiva. Lo status reale è governato dal flusso voiceStreamConverse.
-      const sessionActive =
-        !!streamingSessionRef.current || !!recRef.current;
+      const streamingAlive = !!streamingSessionRef.current;
+      const recorderAlive = !!recRef.current;
+      const sessionActive = streamingAlive || recorderAlive;
+      // === FIX 2026-06-28 v33 — Logging dettagliato AppState ===
+      // Sempre logga il cambio (anche → active) con tutto il contesto.
+      // Ci permette di vedere se HyperOS continua a fare flicker e in
+      // che stato è il sistema audio in ogni transizione.
+      console.log(
+        `[KODA_APPSTATE] next=${next} streaming=${streamingAlive} ` +
+          `recorder=${recorderAlive} status=${statusRef.current} ` +
+          `userInteracted=${userInteractedRef.current} ` +
+          `=> ${sessionActive ? "skipped (session alive)" : "handled"}`
+      );
       if (sessionActive) {
-        console.log(
-          `[KODA_APPSTATE] change=${next} skipped (active session: streaming=${!!streamingSessionRef.current} rec=${!!recRef.current})`
-        );
         return;
       }
       if (next === "background" || next === "inactive") {
