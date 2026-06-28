@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-06-28 v1.1.0+27";
-export const BUILD_NOTES = "Pill Stanza Sfogo opaca (niente più trasparenza) + testo bianco leggibile su tutti i temi";
+export const BUILD_VERSION = "2026-06-28 v1.1.0+28";
+export const BUILD_NOTES = "FIX P0 Android: audio TTS non riprodotto (binary frame scartato per realm-mismatch ArrayBuffer) — ora gestisce TUTTI i tipi (ArrayBuffer cross-realm, Uint8Array, Blob, plain array). Plus pill Sfogo opaca.";

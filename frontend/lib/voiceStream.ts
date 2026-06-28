@@ -394,21 +394,87 @@ export class VoiceStreamSession {
       }
     } else {
       // binary frame: deve seguire un sentence header
-      if (this.pendingSentenceHeader) {
-        const header = this.pendingSentenceHeader;
-        this.pendingSentenceHeader = null;
+      if (!this.pendingSentenceHeader) {
+        // Frame binario senza header pendente: probabilmente un keepalive
+        // o un frame fuori ordine. Logghiamo per visibilità ma non
+        // facciamo nulla — il loop continua sulla prossima sentence.
+        console.warn(
+          `[KODA_STREAM_CLIENT] binary frame received without pending header — dropped ` +
+            `(type=${typeof data} ctor=${(data as any)?.constructor?.name || "?"})`
+        );
+        return;
+      }
+      const header = this.pendingSentenceHeader;
+      this.pendingSentenceHeader = null;
+
+      // === FIX 2026-06-28 v28 — BUG ANDROID TTS NON RIPRODOTTA ===
+      // Su Android React Native, `data instanceof ArrayBuffer` ritorna
+      // FALSE anche se `data` È un ArrayBuffer (problema noto di realm
+      // mismatch tra istanze ArrayBuffer del JS bridge e quelle di
+      // V8/Hermes). Risultato: il frame audio veniva scartato silenziosamente
+      // → niente onSentence → niente KODA_TTS_PLAY → niente voce di Koda.
+      // Su iPhone funziona perché il bridge JS usa la stessa istanza
+      // di ArrayBuffer.
+      // FIX: invece di un singolo instanceof, proviamo IN CASCATA tutti
+      // i tipi possibili che un frame binario WS può assumere su RN/web,
+      // e logghiamo cosa abbiamo trovato per diagnostica futura.
+      const ctorName = (data as any)?.constructor?.name || "?";
+      console.log(
+        `[KODA_STREAM_CLIENT] binary frame received ` +
+          `ctor=${ctorName} byteLength=${(data as any)?.byteLength ?? (data as any)?.size ?? "?"} ` +
+          `header_i=${header.i}`
+      );
+
+      const dispatch = (buf: ArrayBuffer) => {
         try {
-          // Normalizza Blob → ArrayBuffer se necessario
-          if (data instanceof ArrayBuffer) {
-            this.callbacks.onSentence?.(header, data);
-          } else if (data?.arrayBuffer) {
-            data.arrayBuffer().then((buf: ArrayBuffer) => {
-              this.callbacks.onSentence?.(header, buf);
-            });
-          }
+          this.callbacks.onSentence?.(header, buf);
         } catch (e) {
-          console.warn(`[KODA_STREAM_CLIENT] sentence dispatch error: ${e}`);
+          console.warn(`[KODA_STREAM_CLIENT] onSentence callback error: ${e}`);
         }
+      };
+
+      try {
+        // Caso 1: ArrayBuffer "vero"
+        if (data instanceof ArrayBuffer) {
+          dispatch(data);
+          return;
+        }
+        // Caso 2: ArrayBuffer-like (cross-realm: instanceof fallisce ma
+        // l'oggetto È strutturalmente un ArrayBuffer — ha byteLength e
+        // può essere passato a new Uint8Array)
+        if (data && typeof (data as any).byteLength === "number" && !(data as any).buffer) {
+          dispatch(data as ArrayBuffer);
+          return;
+        }
+        // Caso 3: TypedArray (Uint8Array, Int8Array, ecc.) — usa .buffer
+        if ((data as any)?.buffer instanceof ArrayBuffer) {
+          dispatch((data as any).buffer);
+          return;
+        }
+        // Caso 4: TypedArray cross-realm — .buffer esiste ma instanceof
+        // fallisce. Stesso pattern del caso 2 per il buffer interno.
+        if ((data as any)?.buffer && typeof (data as any).buffer.byteLength === "number") {
+          dispatch((data as any).buffer);
+          return;
+        }
+        // Caso 5: Blob (browser/web) — converti via .arrayBuffer()
+        if (typeof (data as any)?.arrayBuffer === "function") {
+          (data as any).arrayBuffer().then((buf: ArrayBuffer) => dispatch(buf))
+            .catch((e: any) => console.warn(`[KODA_STREAM_CLIENT] Blob.arrayBuffer() failed: ${e}`));
+          return;
+        }
+        // Caso 6: ultima istanza — array di numeri (vecchio bridge RN)
+        if (Array.isArray(data)) {
+          dispatch(new Uint8Array(data as number[]).buffer);
+          return;
+        }
+        // Nessun caso: scartiamo MA logghiamo bene
+        console.warn(
+          `[KODA_STREAM_CLIENT] UNHANDLED binary frame type — dropped ` +
+            `ctor=${ctorName} keys=${Object.keys(data || {}).slice(0, 5).join(",")}`
+        );
+      } catch (e) {
+        console.warn(`[KODA_STREAM_CLIENT] binary dispatch error: ${e}`);
       }
     }
   }
