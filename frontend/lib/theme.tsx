@@ -111,8 +111,13 @@ const GIORNO: Palette = {
   // Contrasto AAA con testo bianco. Si sposa benissimo col rosso
   // scarlatto del bottone Sfogo (entrambi nella famiglia calda).
   isDark: false,
-  bg: "#3D3A37",
-  surface: "#4F4A45",
+  // === FIX 2026-06-28 v24: grigio medio (via di mezzo) ===
+  // L'utente ha confermato che #5A5A5A era troppo chiaro e #3D3A37
+  // troppo scuro. #4A4641 è il punto di equilibrio: pietra di fiume
+  // un po' più chiara, ma ancora "vera pietra zen". Surface leggermente
+  // più chiara per gerarchia. Testo resta bianco.
+  bg: "#4A4641",
+  surface: "#5C5751",
   surfaceAlt: "rgba(255,255,255,0.10)",
   border: "rgba(255,255,255,0.18)",
   divider: "rgba(255,255,255,0.13)",

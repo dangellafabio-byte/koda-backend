@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-06-27 22:30";
-export const BUILD_NOTES = "Cerchi voci Intro + pulsante Controlla aggiornamenti";
+export const BUILD_VERSION = "2026-06-28 11:00";
+export const BUILD_NOTES = "Grigio medio (via di mezzo) + analisi crash voce Android";
