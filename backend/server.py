@@ -8020,12 +8020,31 @@ async def _ensure_fast_session_indexes():
 
 
 async def _fast_session_create(session_id: str):
-    await db.fast_sessions.insert_one({
-        "_id": session_id,
-        "started_at_dt": datetime.now(timezone.utc),
-        "events": [],
-        "done": False,
-    })
+    # === FIX 2026-06-28 v35 — E11000 duplicate key on multi-utterance ===
+    # Sul flusso voice streaming, se Deepgram emette PIÙ stt_final nella
+    # stessa sessione WS (es. l'utente parla per 20+ secondi e Deepgram
+    # spezza in 2 utterance), `_run_pipeline_for_streamed_text` viene
+    # invocato 2 volte con lo STESSO session_id. La prima crea la riga
+    # in `fast_sessions` ok, la seconda dava E11000 duplicate key error
+    # → la pipeline LLM+TTS del secondo turno veniva abortita lato server
+    # → l'utente non sentiva la risposta del secondo segmento.
+    # FIX: usare update_one(upsert=True) con $setOnInsert per i campi
+    # base e $set per resettare events/done. Così la chiamata è
+    # idempotente per lo STESSO session_id e supporta multi-utterance.
+    await db.fast_sessions.update_one(
+        {"_id": session_id},
+        {
+            "$setOnInsert": {
+                "_id": session_id,
+                "started_at_dt": datetime.now(timezone.utc),
+            },
+            "$set": {
+                "events": [],
+                "done": False,
+            },
+        },
+        upsert=True,
+    )
 
 
 async def _fast_session_append(session_id: str, event: dict):
