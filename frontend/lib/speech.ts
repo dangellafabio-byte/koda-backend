@@ -1889,6 +1889,8 @@ export async function voiceStreamConverse(opts: {
   let firstAudioFired = false;
   let pipelineDone = false;
   let pipelineError: string | null = null;
+  // === TEST BINARIO v35 — bypass attempted flag ===
+  let bypassAttempted = false;
 
   const notify = () => { if (resolveTokenWait) { resolveTokenWait(); resolveTokenWait = null; } };
   const waitForToken = () => new Promise<void>((resolve) => {
@@ -1940,6 +1942,96 @@ export async function voiceStreamConverse(opts: {
         window_ms: typeof header.window_ms === "number" ? header.window_ms : 60,
       });
       notify();
+
+      // ============================================================
+      // === TEST BINARIO 2026-06-28 v35 (proposto da utente) ========
+      // ============================================================
+      // OBIETTIVO: isolare il problema in 2 categorie nette.
+      //   - Se [KODA_BYPASS] suona davvero → bug nella logica del
+      //     player loop (queue/abort/skipCycle/tailBuffer/ecc.)
+      //   - Se [KODA_BYPASS] NON suona → bug in expo-audio /
+      //     audio session / speaker routing Android
+      //
+      // Cosa fa: alla PRIMA sentence ricevuta (i=0) su Android,
+      // crea un AudioPlayer NUOVO e ISOLATO che riproduce i bytes
+      // direttamente. Non tocca currentPlayer, non tocca
+      // currentAbort, non passa per playElevenLabsNativeFromUrl.
+      // L'unico obiettivo è sentire l'audio.
+      //
+      // Logging granulare di OGNI step così da fermare il primo
+      // punto di fallimento se c'è.
+      // ============================================================
+      if (header.i === 0 && Platform.OS === "android" && !bypassAttempted) {
+        bypassAttempted = true;
+        const bytesCopy = new Uint8Array(u8); // copia per evitare race con queue
+        (async () => {
+          const t0 = Date.now();
+          console.log(`[KODA_BYPASS] start bytes=${bytesCopy.byteLength}`);
+          try {
+            try {
+              await setAudioModeAsync({
+                allowsRecording: false,
+                playsInSilentMode: true,
+                interruptionMode: "doNotMix",
+                shouldPlayInBackground: false,
+                shouldRouteThroughEarpiece: false,
+              });
+              console.log(`[KODA_BYPASS] audio_mode_set ms=${Date.now() - t0}`);
+            } catch (e: any) {
+              console.log(`[KODA_BYPASS] audio_mode FAILED: ${e?.message || e}`);
+            }
+            // 1) write bytes
+            const dir = (FileSystem as any).cacheDirectory;
+            if (!dir) {
+              console.log(`[KODA_BYPASS] FAIL no_cache_dir`);
+              return;
+            }
+            const path = `${dir}koda_bypass_${Date.now()}.mp3`;
+            const b64 = _bytesToBase64(bytesCopy);
+            console.log(`[KODA_BYPASS] b64_ready len=${b64.length} ms=${Date.now() - t0}`);
+            await (FileSystem as any).writeAsStringAsync(path, b64, {
+              encoding: (FileSystem as any).EncodingType?.Base64 ?? "base64",
+            });
+            console.log(`[KODA_BYPASS] file_written ms=${Date.now() - t0} path_tail=${path.slice(-30)}`);
+            // 2) create isolated player
+            const p: any = createAudioPlayer(path, { updateInterval: 250 });
+            try { p.volume = 1.0; } catch {}
+            try { p.setVolume?.(1.0); } catch {}
+            console.log(`[KODA_BYPASS] player_created ms=${Date.now() - t0}`);
+            // 3) status listener
+            let firedOnce = false;
+            const sub = p.addListener("playbackStatusUpdate", (st: any) => {
+              if (!st?.isLoaded) return;
+              if (!firedOnce) {
+                firedOnce = true;
+                console.log(
+                  `[KODA_BYPASS] first_status loaded=${!!st.isLoaded} ` +
+                    `playing=${!!st.playing} pos=${(st.currentTime || 0).toFixed(2)} ` +
+                    `dur=${st.duration?.toFixed?.(2) ?? "?"} ms=${Date.now() - t0}`
+                );
+              }
+              if (st.didJustFinish) {
+                console.log(`[KODA_BYPASS] didJustFinish total_ms=${Date.now() - t0}`);
+              }
+            });
+            // 4) play
+            try {
+              p.play();
+              console.log(`[KODA_BYPASS] play_called ms=${Date.now() - t0}`);
+            } catch (e: any) {
+              console.log(`[KODA_BYPASS] play_threw: ${e?.message || e}`);
+            }
+            // 5) cleanup dopo 12s (sufficiente per file da 22KB → ~3-4s di audio)
+            setTimeout(() => {
+              try { sub?.remove?.(); } catch {}
+              try { p?.remove?.(); } catch {}
+              console.log(`[KODA_BYPASS] cleanup total_ms=${Date.now() - t0}`);
+            }, 12000);
+          } catch (e: any) {
+            console.log(`[KODA_BYPASS] OUTER_FAIL: ${e?.message || e}`);
+          }
+        })();
+      }
     },
     onMeta: (meta: any) => {
       metaCaptured = {
