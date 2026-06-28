@@ -1777,6 +1777,14 @@ export default function Taccuino() {
       console.log("[KODA_HF_GUARD] blocked: recRef.current is non-null (recorder still alive?)");
       return;
     }
+    // === FIX 2026-06-28 v26 — guard su streamingSessionRef ===
+    // Il flusso voiceStream usa `streamingSessionRef`, NON `recRef`. Senza
+    // questo check, mentre una sessione streaming era attiva l'useEffect
+    // poteva firare e aprire una SECONDA WebSocket in parallelo → cascata.
+    if (streamingSessionRef.current) {
+      console.log("[KODA_HF_GUARD] blocked: streamingSessionRef.current is non-null (stream already active)");
+      return;
+    }
     // Tutte le guardie superate — schedula il restart.
     console.log("[KODA_HF_LOOP] all guards passed — scheduling startTalkInternal in 450ms");
     // breve pausa di respiro per evitare di registrare la coda del TTS
@@ -2583,6 +2591,14 @@ export default function Taccuino() {
   // ============================================================
   const startTalkStreaming = async () => {
     if (status !== "idle" && status !== "speaking") return;
+    // === GUARD 2026-06-28 v26 — protezione cascata ===
+    // Anche se startTalkInternal ha già fatto i suoi check, blocchiamo
+    // qui in caso il chiamante salti il debounce. Sintomo visto nei log:
+    // 6+ sessioni WS in apertura allo stesso ms con showSettings=true.
+    if (streamingSessionRef.current) {
+      console.log("[KODA_STREAM_GUARD] startTalkStreaming aborted: session already active");
+      return;
+    }
     setError(null);
     if (!convActiveRef.current) emptyTurnsRef.current = 0;
     unlockSpeech().catch(() => {});
@@ -2705,34 +2721,22 @@ export default function Taccuino() {
       setTimeout(() => setError(null), 4000);
     } finally {
       setStatus("idle");
-      // === FIX 2026-06-27 v18 (Fabio in furgone/Apple: hands-free non riparte) ===
-      // L'auto-listen useEffect (cerca [KODA_HF_GUARD] nei log) DOVREBBE
-      // riavviare il microfono dopo che status torna a "idle". Tuttavia,
-      // l'utente ha riportato che su iPhone l'app resta in idle dopo la
-      // risposta di Koda e bisogna tappare ogni volta. Il diag log mostra
-      // gap di 5-8s fra "session ref cleared" e la prossima sessione,
-      // contro i ~450ms attesi. Sospettiamo una race condition tra React
-      // batching e il flush dello state change, che impedisce al useEffect
-      // di vedere "idle" subito dopo il finally.
-      //
-      // Fix esplicito: schedula DIRETTAMENTE un re-trigger dopo 500ms, in
-      // parallelo al useEffect. Stesso identico set di guardie per evitare
-      // di registrare in momenti sbagliati (modali, tour, sealUnlocking,
-      // close_session, ecc.). Se il useEffect parte prima (ottimo), questo
-      // setTimeout trova `recRef.current` non-null e si auto-annulla.
-      // Se il useEffect non parte (caso bug), questo lo fa partire.
-      setTimeout(() => {
-        if (!handsFreeRef.current) return;
-        if (!userInteractedRef.current) return;
-        if (closeSessionPauseRef.current) return;
-        if (recRef.current) return; // useEffect ha già fatto il lavoro
-        if (tourActiveRef.current) return;
-        // Stato attuale: niente flag bloccanti, hands-free vuole riavviare.
-        console.log("[KODA_HF_EXPLICIT] re-trigger after voiceStream finally (idle confirmed)");
-        startTalkInternal(true).catch((err) => {
-          console.log(`[KODA_HF_EXPLICIT] startTalkInternal failed: ${err?.message || err}`);
-        });
-      }, 500);
+      // === FIX 2026-06-28 v26 (P0 cascata WebSocket — log diag iPhone/Android) ===
+      // Il vecchio re-trigger esplicito [KODA_HF_EXPLICIT] è stato RIMOSSO.
+      // Causava una CASCATA ESPONENZIALE di sessioni WebSocket:
+      //   1. Sessione finisce → finally → setTimeout(500ms) re-trigger
+      //   2. Nessun controllo su showSettings, streamingSessionRef, o stato
+      //      reale dell'audio → re-trigger fira anche con Impostazioni aperte
+      //   3. Nuovo startTalkInternal → nuova WS → se fallisce subito (es.
+      //      utente in Settings, voice change), finally rifira → cascata
+      //   4. Ogni iterazione: N sessioni → N finally → N retrigger → 2N sess.
+      // Risultato osservato nei log: 6+ WebSocket aperte allo stesso ms.
+      // Soluzione: AFFIDIAMOCI ESCLUSIVAMENTE all'useEffect [KODA_HF_LOOP],
+      // che ha tutti i guard corretti (showSettings, showColorIntro,
+      // tourActive, sealUnlocking, streamingSessionRef, recRef, ecc.) e
+      // viene triggerato automaticamente quando status → idle.
+      // Se l'utente segnala "hands-free non riparte" su qualche caso edge,
+      // si affronta lì — NON con un secondo trigger parallelo.
     }
   };
 
@@ -2753,6 +2757,15 @@ export default function Taccuino() {
       return;
     }
     lastStartTalkAtRef.current = now;
+
+    // === GUARD STREAMING SESSION (2026-06-28 v26 — diag log iPhone cascata) ===
+    // Se una sessione WebSocket è già attiva, non aprirne un'altra. Questo
+    // catch è la difesa decisiva contro la cascata di WS osservata nei log
+    // (6+ sessioni aperte allo stesso millisecondo).
+    if (streamingSessionRef.current) {
+      console.log("[KODA_HF_LOCK] startTalkInternal blocked: streamingSessionRef.current is non-null (stream active)");
+      return;
+    }
 
     if (status !== "idle" && status !== "speaking") return;
 
@@ -3716,6 +3729,21 @@ export default function Taccuino() {
     const next = { ...profile, settings: { ...profile.settings, tts_voice_id: voiceId } };
     setProfile(next);
     setDefaultVoiceId(voiceId);
+    // === FIX 2026-06-28 v26 — chiusura sessione attiva al cambio voce ===
+    // Se l'utente cambia voce mentre una sessione streaming è in volo (es.
+    // nella Stanza dello Sfogo con hands-free attivo), la sessione attuale
+    // sta ancora ricevendo TTS con la VECCHIA voce. Senza chiudere prima la
+    // sessione, il nuovo turno si scontra col vecchio audio → conflitto.
+    // Chiudiamo la sessione corrente: il prossimo restart hands-free la
+    // userà la voce nuova.
+    if (streamingSessionRef.current) {
+      const s = streamingSessionRef.current as any;
+      streamingSessionRef.current = null;
+      try {
+        if (typeof s.abort === "function") s.abort().catch?.(() => {});
+        else if (typeof s.stop === "function") s.stop().catch?.(() => {});
+      } catch {}
+    }
     // === OFFLINE CLIPS — preload per la nuova voce (idempotente) ===
     try { preloadOfflineClips(voiceId).catch(() => {}); } catch {}
     try {

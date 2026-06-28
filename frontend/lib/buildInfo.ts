@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-06-28 14:30";
-export const BUILD_NOTES = "FIX P0: mutex 800ms su startTalkInternal — niente più doppia WebSocket /api/voice/stream nel cambio voce / turno";
+export const BUILD_VERSION = "2026-06-28 15:00";
+export const BUILD_NOTES = "FIX P0 cascata WS: rimosso KODA_HF_EXPLICIT (causa moltiplicazione sessioni) + guard streamingSessionRef ovunque + chiusura sessione su cambio voce";
