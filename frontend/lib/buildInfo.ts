@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-06-28 15:00";
-export const BUILD_NOTES = "FIX P0 cascata WS: rimosso KODA_HF_EXPLICIT (causa moltiplicazione sessioni) + guard streamingSessionRef ovunque + chiusura sessione su cambio voce";
+export const BUILD_VERSION = "2026-06-28 v1.1.0";
+export const BUILD_NOTES = "Build production unificata (iOS+Android stesso runtimeVersion fisso 1.1.0) — include fix cascata WS Stanza Sfogo";
