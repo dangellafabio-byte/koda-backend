@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-06-28 v1.1.0+28";
-export const BUILD_NOTES = "FIX P0 Android: audio TTS non riprodotto (binary frame scartato per realm-mismatch ArrayBuffer) — ora gestisce TUTTI i tipi (ArrayBuffer cross-realm, Uint8Array, Blob, plain array). Plus pill Sfogo opaca.";
+export const BUILD_VERSION = "2026-06-28 v1.1.0+29";
+export const BUILD_NOTES = "FIX P0 Android TTS: gestione robusta frame binari WS in entrambi i path (voiceStream + fastConverseWS). 6 tipi di dato gestiti (ArrayBuffer cross-realm, TypedArray, Blob, ecc.). Più diagnostica.";

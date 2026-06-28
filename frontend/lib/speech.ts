@@ -1500,9 +1500,50 @@ export async function fastConverseWS(
         }
       } else {
         // Binary frame → bytes audio della frase precedente.
-        const u8 = ev.data instanceof ArrayBuffer
-          ? new Uint8Array(ev.data)
-          : new Uint8Array((ev.data as any));
+        // === FIX 2026-06-28 v28 — robustezza cross-realm (vedi voiceStream.ts) ===
+        // Su Android RN `instanceof ArrayBuffer` può fallire per realm
+        // mismatch. Usiamo lo stesso pattern a cascata del voiceStream.
+        let u8: Uint8Array | null = null;
+        const d: any = ev.data;
+        try {
+          if (d instanceof ArrayBuffer) {
+            u8 = new Uint8Array(d);
+          } else if (d && typeof d.byteLength === "number" && !d.buffer) {
+            // ArrayBuffer-like cross-realm
+            u8 = new Uint8Array(d);
+          } else if (d?.buffer instanceof ArrayBuffer) {
+            u8 = new Uint8Array(d.buffer);
+          } else if (d?.buffer && typeof d.buffer.byteLength === "number") {
+            // TypedArray cross-realm
+            u8 = new Uint8Array(d.buffer);
+          } else if (typeof d?.arrayBuffer === "function") {
+            // Blob (web). Convertiamo in modo asincrono.
+            d.arrayBuffer().then((buf: ArrayBuffer) => {
+              if (pendingSentence) {
+                sentenceQueue.push({
+                  i: pendingSentence.i || 0,
+                  bytes: new Uint8Array(buf),
+                  waveform: Array.isArray(pendingSentence.waveform) ? pendingSentence.waveform : null,
+                  window_ms: typeof pendingSentence.window_ms === "number" ? pendingSentence.window_ms : 60,
+                });
+                pendingSentence = null;
+                notify();
+              }
+            }).catch((e: any) => console.warn(`[ws] Blob.arrayBuffer() failed: ${e}`));
+            return; // dispatch asincrono — esci qui
+          } else if (Array.isArray(d)) {
+            u8 = new Uint8Array(d as number[]);
+          }
+        } catch (e) {
+          console.warn(`[ws] binary normalize error: ${e}`);
+        }
+        if (!u8) {
+          console.warn(
+            `[ws] UNHANDLED binary frame — discarded ` +
+              `ctor=${d?.constructor?.name || "?"}`
+          );
+          return;
+        }
         if (pendingSentence) {
           sentenceQueue.push({
             i: pendingSentence.i || 0,
