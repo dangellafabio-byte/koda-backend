@@ -260,7 +260,34 @@ export default function Taccuino() {
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
-  const [status, setStatus] = useState<Status>("idle");
+  const [status, _setStatusRaw] = useState<Status>("idle");
+  // === FIX 2026-06-28 v32 — DIAG STATUS TRACING ===
+  // Wrapper su setStatus per loggare OGNI transizione di stato con
+  // timestamp + caller. Cruciale per diagnosticare il bug Android
+  // "l'orb torna a idle subito senza mai mostrare thinking/speaking".
+  // Il log esce nel formato:
+  //   [KODA_STATUS] prev=recording → next=idle caller=finally:voiceStreamConverse t+12345ms
+  // Permette di vedere ESATTAMENTE chi mette idle prematuro.
+  const statusTraceStartRef = useRef<number>(Date.now());
+  const statusRef = useRef<Status>("idle");
+  const setStatus = useCallback((next: Status, caller?: string) => {
+    const prev = statusRef.current;
+    if (prev !== next) {
+      try {
+        // Estrai prima riga di stack (oltre il frame di setStatus stesso)
+        const stack = new Error().stack || "";
+        const lines = stack.split("\n");
+        // line[0] = Error, line[1] = setStatus, line[2] = caller reale
+        const callerFrame = (lines[2] || lines[1] || "").trim().slice(0, 120);
+        const tag = caller || callerFrame;
+        console.log(
+          `[KODA_STATUS] ${prev} → ${next} t+${Date.now() - statusTraceStartRef.current}ms caller=${tag}`
+        );
+      } catch {}
+    }
+    statusRef.current = next;
+    _setStatusRaw(next);
+  }, []);
   const [textInput, setTextInput] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
   // === KODA INTRO ===

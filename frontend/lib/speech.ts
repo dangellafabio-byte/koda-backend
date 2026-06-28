@@ -494,6 +494,39 @@ async function playElevenLabsNativeFromUrl(
       // stream MP3 chunks as they arrive.
       player = createAudioPlayer(audioUrl, { updateInterval: 250 });
       currentPlayer = player;
+      // === FIX 2026-06-28 v32 — Android volume + diag ===
+      // Su Android (Xiaomi/HyperOS), l'utente segnala che `[KODA_TTS_PLAY]`
+      // gira nei log ma NESSUN audio esce dallo speaker. Cause possibili:
+      //   1) Il volume del player non è impostato (default 0 su alcune build)
+      //   2) Router audio bloccato in MODE_IN_COMMUNICATION dopo recording
+      //      con audioSource="voice_communication" → audio va all'earpiece
+      // Forziamo volume=1.0 PRIMA di play(). expo-audio v54 lo accetta come
+      // assegnazione diretta o via setVolume(). Try entrambi.
+      try {
+        player.volume = 1.0;
+      } catch {}
+      try {
+        player.setVolume?.(1.0);
+      } catch {}
+      // === FIX 2026-06-28 v32 — Android Speaker Routing ===
+      // Su Android, ANCHE dopo setAudioModeAsync({shouldRouteThroughEarpiece:false}),
+      // l'AudioManager può restare in MODE_IN_COMMUNICATION se l'ultimo
+      // recorder usava voice_communication. Risultato: AVPlayer/MediaPlayer
+      // suona attraverso l'earpiece (volume bassissimo, impercettibile).
+      // Forziamo un secondo set di audio mode QUI, dopo aver creato il
+      // player, per garantire il routing speaker.
+      if (Platform.OS === "android") {
+        try {
+          setAudioModeAsync({
+            allowsRecording: false,
+            playsInSilentMode: true,
+            interruptionMode: "doNotMix",
+            shouldPlayInBackground: false,
+            shouldRouteThroughEarpiece: false,
+          }).catch(() => {});
+        } catch {}
+        console.log(`[KODA_TTS_PLAY] android_audio_mode_forced playback`);
+      }
 
       subscription = player.addListener("playbackStatusUpdate", (status: any) => {
         if (status?.isLoaded) {
@@ -502,6 +535,21 @@ async function playElevenLabsNativeFromUrl(
           const dur = typeof status.duration === "number" && status.duration > 0
             ? status.duration
             : null;
+          // === FIX 2026-06-28 v32 — Android: log primo isLoaded ===
+          // Su Android RN, status.playing può restare FALSE per tutto il
+          // playback (bug noto expo-audio v54). Logghiamo il primo isLoaded
+          // così sappiamo che il file È stato caricato. Inoltre — su
+          // Android — accettiamo isLoaded come trigger per onAudioStart
+          // INVECE di aspettare playing=true (che potrebbe non arrivare mai).
+          if (!firstSoundFired && Platform.OS === "android") {
+            firstSoundFired = true;
+            everPlayed = true;
+            console.log(
+              `[KODA_TTS_PLAY] android_first_loaded playing=${!!status.playing} ` +
+                `pos=${pos.toFixed(2)} dur=${dur ?? "?"} — firing onAudioStart`
+            );
+            try { onAudioStart?.(); } catch (e) { console.warn("[speech] onAudioStart cb threw:", e); }
+          }
           if (pos > lastPositionSec) {
             lastPositionSec = pos;
             lastProgressAt = Date.now();
