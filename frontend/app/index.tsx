@@ -747,6 +747,21 @@ export default function Taccuino() {
   // Ref alla sessione voice streaming attiva. Permette il tap-to-stop sul
   // big button anche quando il flusso voce è streaming (non c'è recRef).
   const streamingSessionRef = useRef<{ stop: () => Promise<void> } | null>(null);
+  // === MUTEX 2026-06-28 — P0 race condition fix (handoff diag log) ===
+  // Su iPhone + Android, due meccanismi di restart hands-free firavano
+  // entro ~50ms l'uno dall'altro:
+  //   • KODA_HF_LOOP (useEffect + setTimeout 450ms)
+  //   • KODA_HF_EXPLICIT (setTimeout 500ms nel finally di voiceStream)
+  // Entrambi passavano i guard (recRef=null) e chiamavano startTalkInternal
+  // in parallelo → due sessioni WebSocket /api/voice/stream aperte
+  // simultaneamente che si killavano a vicenda (codici 1000/1006).
+  // Sintomo utente: voce si ferma dopo ~1s quando cambia voce nello Sfogo
+  // o tra un turno e l'altro.
+  // FIX: debounce timestamp-based 800ms sull'INGRESSO di startTalkInternal.
+  // Il secondo call entro 800ms viene scartato. JS single-threaded → safe.
+  // 800ms copre la finestra di parallelismo (50-100ms) con margine ampio
+  // ma NON impatta gli avvii legittimi (turni successivi distano 30s+).
+  const lastStartTalkAtRef = useRef<number>(0);
   // === RECORDING DURATION TRACKING (sprint giugno 2026 v11) ===
   // Catturiamo il timestamp di avvio recording così possiamo includerlo
   // nel [KODA_SUMMARY] come recording_duration_ms. Permette di distinguere
@@ -2723,6 +2738,22 @@ export default function Taccuino() {
 
   // Push-to-talk (or hands-free)
   const startTalkInternal = async (autoStopOnSilence: boolean) => {
+    // === MUTEX 2026-06-28 — P0 race condition fix ===
+    // KODA_HF_LOOP (useEffect+timeout 450ms) e KODA_HF_EXPLICIT (timeout 500ms
+    // dentro voiceStream finally) firavano in parallelo entro ~50-100ms,
+    // entrambi passavano i guard (recRef=null in entrambi i closure) e
+    // aprivano due WebSocket simultanee verso /api/voice/stream → si
+    // killavano a vicenda (codici 1000/1006) → la voce si fermava dopo 1s.
+    // Debounce timestamp-based 800ms: il primo passa, il secondo (entro
+    // 800ms) viene scartato. Tra turni reali (30s+) entrambi sono OK.
+    const now = Date.now();
+    const sinceLast = now - lastStartTalkAtRef.current;
+    if (sinceLast < 800) {
+      console.log(`[KODA_HF_LOCK] startTalkInternal debounced (${sinceLast}ms since last call) — duplicate trigger blocked`);
+      return;
+    }
+    lastStartTalkAtRef.current = now;
+
     if (status !== "idle" && status !== "speaking") return;
 
     // === FASE 1 STREAMING OPT-IN (env flag, giugno 2026) ===
@@ -3357,6 +3388,12 @@ export default function Taccuino() {
       setCloseSessionPause(false);
       closeSessionPauseRef.current = false;
     }
+    // === FIX 2026-06-28 (mutex bypass) ===
+    // Tap esplicito dell'utente sull'orb: resetta il debounce così se
+    // l'utente vuole riavviare subito dopo un hard-stop (entro 800ms),
+    // il nuovo startTalkInternal NON viene scartato. Il debounce serve
+    // solo a bloccare i DUPLICATI del loop hands-free, non i tap manuali.
+    lastStartTalkAtRef.current = 0;
     startTalk();
   };
 
