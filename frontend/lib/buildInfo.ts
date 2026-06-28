@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-06-28 v1.1.0+30";
-export const BUILD_NOTES = "Pill Sfogo: testo bianco SEMPRE in entrambe le schermate. Counter Freemium: testo bianco. + tutti i fix voce (cascata WS, TTS Android, mutex).";
+export const BUILD_VERSION = "2026-06-28 v1.1.0+31";
+export const BUILD_NOTES = "Android: chunk 1500→3000ms. Ridotti i cicli prepare/stop del mic (causa flash HyperOS + buchi audio Deepgram). Latenza +1.5s ma flusso voce affidabile.";

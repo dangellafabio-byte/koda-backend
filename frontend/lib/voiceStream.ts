@@ -49,7 +49,19 @@ import * as FileSystem from "expo-file-system/legacy";
 // la coverage sale al ~50% e Deepgram riceve segmenti più sostanziali su
 // cui può fare endpointing. Trade-off accettato: latenza first-token
 // leggermente più alta, ma molto più affidabile.
-const CHUNK_DURATION_MS = 1500; // durata di ogni recording chunk
+// === FIX 2026-06-28 v31 (Android: mic open/close → flash + buchi audio) ===
+// Durata chunk raddoppiata da 1500ms → 3000ms. Su Android ogni stop()
+// rilascia veramente il microfono e prepareToRecordAsync() lo riapre:
+// 1) HyperOS Privacy Indicator pulsa ogni 2s (flash visivo confermato
+//    dal video utente del 28-06)
+// 2) micro-buchi audio tra i chunk → Deepgram non riesce a fare
+//    endpointing pulito → mai stt_final → Koda non risponde su Android
+// Su iPhone non succede perché iOS mantiene la AudioSession warm tra
+// prepare/stop. Raddoppiando i chunk:
+//   • cicli mic da ogni 2s → ogni 3.5s (flash dimezzato)
+//   • chunk più sostanziali per Deepgram (endpointing più affidabile)
+//   • trade-off: latenza first-token +1.5s (accettabile vs flusso rotto)
+const CHUNK_DURATION_MS = 3000; // durata di ogni recording chunk
 // === FIX 2026-06-26 v18 (cap differenziato chat vs sfogo) ===
 // L'utente ha richiesto due livelli di cap a seconda del contesto:
 //   - Chat normale: 3 minuti — sufficiente per quasi tutti i turni
