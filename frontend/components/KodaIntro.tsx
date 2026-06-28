@@ -1327,6 +1327,41 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginBottom: 24,
   },
+  // === NUOVO SELETTORE VOCI A CERCHI (2026-06-27 v22) ===
+  // Coerente con Impostazioni. Niente nomi: il colore È la voce.
+  // Acqua (viola) e Vento (cobalto) — due cerchi grandi affiancati.
+  voiceCircleGroup: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 56,
+    marginTop: 32,
+    marginBottom: 32,
+  },
+  voiceCircleIntroWrap: {
+    width: 120,
+    height: 120,
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+  },
+  voiceCircleIntroGlow: {
+    position: "absolute",
+    width: 150,
+    height: 150,
+    borderRadius: 999,
+  },
+  voiceCircleIntro: {
+    width: 110,
+    height: 110,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.65,
+    shadowRadius: 18,
+    elevation: 10,
+  },
   voiceCardBig: {
     backgroundColor: "#18181B",
     borderRadius: 18,

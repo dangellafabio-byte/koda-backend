@@ -59,6 +59,7 @@ import {
   saveTimelineCache,
 } from "../lib/localCache";
 import Constants from "expo-constants";
+import * as Updates from "expo-updates";
 import { BUILD_VERSION, BUILD_NOTES } from "../lib/buildInfo";
 import FortezzaCloseEffect from "../components/FortezzaCloseEffect";
 import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
@@ -673,6 +674,19 @@ export default function Taccuino() {
   ];
   const [voices, setVoices] = useState<VoiceOption[]>(_DEFAULT_VOICES);
   const [voicesEnabled, setVoicesEnabled] = useState(true);
+
+  // === OTA UPDATE CHECK (2026-06-27 v23) ===
+  // Stato per il pulsante "Controlla aggiornamenti" nelle Impostazioni.
+  // Usa expo-updates per forzare il check del bundle OTA.
+  //   - "idle":      pulsante normale
+  //   - "checking":  sta controllando (spinner)
+  //   - "downloading": ha trovato un update, lo sta scaricando
+  //   - "uptodate":  nessun update disponibile (msg ~2s, poi torna idle)
+  //   - "error":     errore (msg + ritorno a idle dopo 3s)
+  const [otaStatus, setOtaStatus] = useState<
+    "idle" | "checking" | "downloading" | "uptodate" | "error"
+  >("idle");
+  const [otaError, setOtaError] = useState<string | null>(null);
   const [voicePreviewLoading, setVoicePreviewLoading] = useState<string | null>(null);
   const convActiveRef = useRef(false);
   // Flag: scaricato la cronologia confessionale (cifrata) dal backend in
@@ -3683,6 +3697,48 @@ export default function Taccuino() {
     }
   };
 
+  // === OTA UPDATE CHECK HANDLER (2026-06-27 v23) ===
+  // Permette all'utente di forzare il check OTA dall'app senza dover
+  // chiudere/riaprire o svuotare cache di sistema. Flow:
+  //   1. checkForUpdateAsync() — interroga il CDN Expo Updates
+  //   2. Se isAvailable=true → fetchUpdateAsync() scarica il bundle nuovo
+  //   3. Updates.reloadAsync() ricarica l'app col nuovo bundle
+  //   4. Se isAvailable=false → mostra "Sei già aggiornato" e torna idle
+  // In ambiente dev (Expo Go) le API throwano errore "not enabled in dev"
+  // → catturato e mostrato come "Non disponibile in sviluppo".
+  const checkForOtaUpdate = async () => {
+    if (otaStatus !== "idle") return;
+    setOtaError(null);
+    setOtaStatus("checking");
+    try {
+      const result = await Updates.checkForUpdateAsync();
+      if (result.isAvailable) {
+        setOtaStatus("downloading");
+        await Updates.fetchUpdateAsync();
+        // Piccolo delay per dare feedback visivo, poi reload
+        await new Promise((r) => setTimeout(r, 800));
+        await Updates.reloadAsync();
+        // dopo reloadAsync l'app riparte, il setStatus successivo non viene mai eseguito
+      } else {
+        setOtaStatus("uptodate");
+        setTimeout(() => setOtaStatus("idle"), 2500);
+      }
+    } catch (err: any) {
+      const msg = String(err?.message || err || "errore sconosciuto");
+      // In dev (Expo Go) Updates.* lancia "not enabled in development builds"
+      if (msg.toLowerCase().includes("development") || msg.toLowerCase().includes("not enabled")) {
+        setOtaError("Non disponibile in modalità sviluppo");
+      } else {
+        setOtaError(msg.slice(0, 100));
+      }
+      setOtaStatus("error");
+      setTimeout(() => {
+        setOtaStatus("idle");
+        setOtaError(null);
+      }, 3500);
+    }
+  };
+
   /**
    * Tap-on-AI-bubble handler: TOGGLE play/stop the AI's message via voice.
    *  - 1st tap on a bubble → start speaking that message
@@ -5497,6 +5553,53 @@ export default function Taccuino() {
               <Ionicons name="chevron-forward" size={16} color={theme.text + "66"} />
             </TouchableOpacity>
 
+            {/* === CONTROLLA AGGIORNAMENTI OTA (2026-06-27 v23) ===
+                Pulsante "manuale" per forzare il check del bundle OTA
+                Expo. Risolve i casi in cui il device tiene la cache
+                vecchia e non scarica gli update automaticamente al boot.
+                Stati visivi: idle → checking → downloading → reload
+                          oppure: idle → checking → uptodate (2s) → idle
+                          oppure: idle → checking → error (3s) → idle */}
+            <TouchableOpacity
+              onPress={checkForOtaUpdate}
+              disabled={otaStatus !== "idle"}
+              style={[
+                styles.otaCheckButton,
+                otaStatus !== "idle" && { opacity: 0.7 },
+              ]}
+              testID="ota-check-button"
+              activeOpacity={0.75}
+            >
+              {otaStatus === "checking" || otaStatus === "downloading" ? (
+                <ActivityIndicator size="small" color={theme.text} />
+              ) : (
+                <Ionicons
+                  name={
+                    otaStatus === "uptodate"
+                      ? "checkmark-circle"
+                      : otaStatus === "error"
+                      ? "warning-outline"
+                      : "cloud-download-outline"
+                  }
+                  size={20}
+                  color={
+                    otaStatus === "uptodate"
+                      ? "#34D399"
+                      : otaStatus === "error"
+                      ? "#FB7185"
+                      : theme.text
+                  }
+                />
+              )}
+              <Text style={[styles.otaCheckButtonText, { color: theme.text }]}>
+                {otaStatus === "idle" && "Controlla aggiornamenti"}
+                {otaStatus === "checking" && "Sto controllando…"}
+                {otaStatus === "downloading" && "Scarico aggiornamento…"}
+                {otaStatus === "uptodate" && "Sei già aggiornato"}
+                {otaStatus === "error" && (otaError || "Errore")}
+              </Text>
+            </TouchableOpacity>
+
             {/* === VERSIONE APP ===
                 Footer minimale (senza expo-application per evitare
                 crash su build che non l'avevano linkato nativamente).
@@ -7020,6 +7123,30 @@ const makeStyles = (t: any) => StyleSheet.create({
     textAlign: "center",
     marginTop: 4,
     marginBottom: 4,
+  },
+  // === OTA UPDATE BUTTON (2026-06-27 v23) ===
+  // Pulsante "Controlla aggiornamenti" in fondo alle Impostazioni.
+  // Stile minimale, leggermente più evidente del footer versione perché
+  // è un'azione, non solo testo. Bordo soft + icona + label.
+  otaCheckButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: t.border,
+    backgroundColor: t.surfaceAlt,
+    marginTop: 18,
+    marginHorizontal: 8,
+    minHeight: 44,
+  },
+  otaCheckButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    letterSpacing: 0.2,
   },
   voicePickerRow: {
     flexDirection: "row",
