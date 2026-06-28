@@ -291,6 +291,20 @@ export default function Taccuino() {
     statusRef.current = next;
     _setStatusRaw(next);
   }, []);
+
+  // === BUILD VERSION TAG 2026-06-28 v35 ===
+  // Logga una sola volta all'avvio una stringa identificativa della build.
+  // Se vediamo questa riga nei log diag, sappiamo che l'APK installato
+  // contiene davvero le modifiche v35 (BYPASS + TTS_STOP + TTS_LOOP +
+  // AppState guard + verbose AppState log + anomaly detection).
+  // Se NON vediamo questa riga, l'APK è stantio o la build non ha
+  // inglobato l'ultimo commit.
+  useEffect(() => {
+    console.log(
+      `[KODA_BUILDTAG] v35-bypass-binary-test build=2026-06-28-evening ` +
+        `features=BYPASS,TTS_STOP,TTS_LOOP,APPSTATE_GUARD,ANOMALY`
+    );
+  }, []);
   const [textInput, setTextInput] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
   // === KODA INTRO ===
