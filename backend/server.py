@@ -8549,18 +8549,34 @@ async def _fast_pipeline_task(
                 # Solo per il TTS — il testo visualizzato in chat resta intatto.
                 clean_tts = _normalize_for_tts_it(clean)
                 vs = _voice_settings_for_tone(current_tone, None, None)
+                # === FIX 2026-06-29 — Eleven V3 + Audio Tags ===
+                # Strategia "una persona sola che recita": V3 SEMPRE, voce
+                # SEMPRE la stessa, identità SEMPRE la stessa. Cambia solo il
+                # TAG emotivo iniettato all'inizio di OGNI frase, derivato dal
+                # current_tone scelto da Claude. V3 interpreta i tag inline
+                # come direzione di recitazione (analogo al copione teatrale).
+                _TONE_TO_V3_TAG = {
+                    "calm":      "[softly]",
+                    "concerned": "[gently]",
+                    "warm":      "[warmly]",
+                    "energetic": "[excited]",
+                    "urgent":    "[urgent]",
+                    "neutral":   "",
+                }
+                _v3_tag = _TONE_TO_V3_TAG.get(current_tone or "warm", "")
+                clean_tts_v3 = (
+                    f"{_v3_tag} {clean_tts}".strip() if _v3_tag else clean_tts
+                )
                 logger.info(
                     f"[fast {session_id[:8]}] TTS sentence idx={idx} tone={current_tone} "
-                    f"stab={vs['stability']:.2f} style={vs['style']:.2f} speed={vs['speed']:.2f}"
+                    f"v3_tag={_v3_tag!r} stab={vs['stability']:.2f} style={vs['style']:.2f} speed={vs['speed']:.2f}"
                 )
-                # === FIX 2026-06-29 — modello espressivo invece di flash ===
-                # eleven_flash_v2_5 ignora quasi del tutto i parametri `style`
-                # e `speed` → Claude variava il tono nel testo ma la voce
-                # usciva monotona. Passiamo a eleven_turbo_v2_5: ~100ms in
-                # più di TTFB (~175ms invece di ~75ms), MA risponde davvero
-                # alle voice_settings → variazione audio percepibile.
-                # Inoltre supporta tutte le lingue Flash + qualità superiore.
-                model_id = "eleven_turbo_v2_5"
+                # === Modello: Eleven V3 (massima espressività) ===
+                # Benchmark Fabio 2026-06-29: +200-250ms TTFB vs turbo, ma
+                # qualità emotiva "un mondo di differenza". Per un companion
+                # è il tradeoff giusto. Su frasi corte siamo 487ms vs 241ms;
+                # su frasi lunghe 424ms vs 398ms (~zero differenza).
+                model_id = "eleven_v3"
 
                 def _do_tts():
                     audio = bytearray()
@@ -8577,7 +8593,7 @@ async def _fast_pipeline_task(
                     if not (isinstance(tts_lang, str) and len(tts_lang) == 2):
                         tts_lang = "it"
                     kwargs = dict(
-                        text=clean_tts,
+                        text=clean_tts_v3,
                         voice_id=voice_id,
                         model_id=model_id,
                         output_format="mp3_44100_128",  # 128kbps qualità piena, niente chipmunk
