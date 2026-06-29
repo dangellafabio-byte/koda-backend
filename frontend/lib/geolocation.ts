@@ -51,8 +51,8 @@ export async function checkLocationPermission(): Promise<{
       canAskAgain: res.canAskAgain,
       status: res.status,
     };
-  } catch (e) {
-    console.warn("[geolocation] checkPermission error:", e);
+  } catch (e: any) {
+    console.log(`[KODA_GEO] checkPermission error: ${e?.message || String(e)}`);
     return {
       granted: false,
       canAskAgain: true,
@@ -128,27 +128,55 @@ export async function fetchLocationOnce(opts?: {
     }
 
     // 4. Invia al backend (salva come key_fact "In questo momento si trova a X")
-    try {
-      await api.postLocationContext({
-        city,
-        region: place.region || undefined,
-        country: place.country || undefined,
-      });
-    } catch (e) {
-      // Non blocco l'utente se la POST fallisce: il fact può anche essere
-      // estratto a voce ("sono a Pavia"). Logghiamo e basta.
-      console.warn("[geolocation] postLocationContext failed:", e);
+    // === FIX 2026-06-29 Geo diagnostics ===
+    // Prima la POST era avvolta in try/catch che usava console.warn → il
+    // warning NON viene catturato dal diagnostic logger (filtra solo
+    // console.log) → bug invisibile. Adesso loggamo TUTTI gli step con
+    // console.log così sono visibili nel diag e capiamo dove si rompe.
+    console.log(
+      `[KODA_GEO] POST /api/profile/location-context starting → city=${city} region=${place.region || "?"}`
+    );
+    let postOk = false;
+    let postError: string | null = null;
+    // Retry: fino a 3 tentativi con backoff 0/1.5s/3s, per superare
+    // network blip momentanei o cold-start del backend.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const resp = await api.postLocationContext({
+          city,
+          region: place.region || undefined,
+          country: place.country || undefined,
+        });
+        postOk = !!resp?.ok;
+        console.log(
+          `[KODA_GEO] POST /api/profile/location-context OK (attempt ${attempt}) → ok=${resp?.ok} fact="${resp?.fact || "?"}"`
+        );
+        postError = null;
+        break; // successo → esci dal retry loop
+      } catch (e: any) {
+        postError = e?.message || String(e);
+        console.log(
+          `[KODA_GEO] POST /api/profile/location-context FAILED (attempt ${attempt}/3) → ${postError}`
+        );
+        if (attempt < 3) {
+          await new Promise((r) => setTimeout(r, attempt * 1500));
+        }
+      }
     }
 
-    console.log(`[KODA_GEO] location resolved: ${city} (${place.region || "?"}, ${place.country || "?"})`);
+    console.log(
+      `[KODA_GEO] location resolved: ${city} (${place.region || "?"}, ${place.country || "?"}) postOk=${postOk}`
+    );
     return {
       ok: true,
       city,
       region: place.region || undefined,
       country: place.country || undefined,
-    };
+      // Embedded diagnostics nel result così il chiamante può loggarlo:
+      ...(postError ? { postError } : {}),
+    } as GeolocationResult & { postError?: string };
   } catch (e: any) {
-    console.warn("[geolocation] fetchLocationOnce error:", e);
+    console.log(`[KODA_GEO] fetchLocationOnce ERROR (outer): ${e?.message || String(e)}`);
     return { ok: false, reason: "error", message: e?.message || String(e) };
   }
 }
