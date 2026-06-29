@@ -9395,6 +9395,18 @@ async def demo_sound(name: str):
     if not path.exists():
         raise HTTPException(404, "not found")
     return FileResponse(str(path), media_type="audio/wav")
+
+# === TTS A/B TEST per debug espressività voce (Fabio 2026-06-29) ===
+# Endpoint temporaneo: serve i file MP3 generati con voice_settings diverse
+# (stesso testo, stessa voce, stesso modello). Permette di confrontare
+# all'orecchio se ElevenLabs varia davvero la voce in base ai parametri.
+@app.get("/api/voicetest/{tone}")
+async def voicetest_tone(tone: str):
+    safe = tone.replace("/", "").replace("..", "").lower()
+    path = Path("/app/frontend/public/tts_test") / f"test_{safe}.mp3"
+    if not path.exists():
+        raise HTTPException(404, f"tone '{safe}' not generated")
+    return FileResponse(str(path), media_type="audio/mpeg")
 # ============================================================================
 
 app.add_middleware(
