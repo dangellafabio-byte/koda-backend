@@ -188,9 +188,28 @@ export class VoiceStreamSession {
   // (Build #7 Turno 2).
   private doneReceived = false;
   private notifiedUpperOnClose = false;
+  // === FIX 2026-06-29 P1 — Anticipatory chunk stop ===
+  // Quando arriva stt_final (Deepgram SpeechFinal), il chunkLoop sta
+  // dentro un setTimeout(CHUNK_DURATION_MS) per registrare il chunk
+  // corrente. Senza interrompere quel timer, il loop continua a girare
+  // fino al completamento del chunk → fino a 3000ms di latenza
+  // percepita dall'utente fra "smetto di parlare" e "Koda inizia a
+  // pensare/parlare". Salviamo qui il canceller del wait corrente.
+  private chunkWaitCancel: (() => void) | null = null;
 
   constructor(callbacks: VoiceStreamCallbacks) {
     this.callbacks = callbacks;
+  }
+
+  /** Interrompe il wait del chunk in corso (se attivo). Safe da chiamare
+   *  anche se nessun wait è in corso (no-op). Idempotente. */
+  private cancelChunkWait(reason: string): void {
+    if (this.chunkWaitCancel) {
+      const cancel = this.chunkWaitCancel;
+      this.chunkWaitCancel = null;
+      console.log(`[KODA_STREAM_CLIENT] chunk wait cancelled — ${reason}`);
+      try { cancel(); } catch {}
+    }
   }
 
   /** Apre WS + avvia recording loop. */
@@ -242,6 +261,7 @@ export class VoiceStreamSession {
     this.stopRequested = true;
     this.finalCloseRequested = true;
     this.chunkLoopActive = false;
+    this.cancelChunkWait("stop() called");
     this.stopKeepalive();
     try {
       this.sendJson({ type: "end" });
@@ -266,6 +286,7 @@ export class VoiceStreamSession {
     this.stopRequested = true;
     this.finalCloseRequested = true;
     this.chunkLoopActive = false;
+    this.cancelChunkWait("abort() called");
     // Marca doneReceived=true così onclose non genera onError fasullo
     // (l'upper layer riceverà comunque il segnale di abort via signal).
     this.doneReceived = true;
@@ -514,6 +535,11 @@ export class VoiceStreamSession {
       // === FIX v7: marca finalCloseRequested per impedire reconnect ===
       this.finalCloseRequested = true;
       this.chunkLoopActive = false;
+      // === FIX 2026-06-29 P1 — Anticipatory chunk stop ===
+      // Interrompi il timer del chunk in corso (altrimenti il loop resta
+      // dentro setTimeout(3000ms) fino al completamento → fino a 3s di
+      // latenza percepita prima che Koda inizi a parlare).
+      this.cancelChunkWait("stt_final received");
       this.stopKeepalive();
       this.safeStopRecorder().catch(() => {});
     } else if (type === "sentence") {
@@ -675,7 +701,40 @@ export class VoiceStreamSession {
             `[KODA_STREAM_CLIENT] chunk #${cIdx} recording, wait ${CHUNK_DURATION_MS}ms...`
           );
 
-        await new Promise((resolve) => setTimeout(resolve, CHUNK_DURATION_MS));
+        // === FIX 2026-06-29 P1 — Cancellable wait ===
+        // Sostituiamo il setTimeout fisso con una Promise cancellabile,
+        // così quando arriva stt_final (handleJsonEvent → cancelChunkWait)
+        // possiamo uscire dal wait subito invece di aspettare fino a
+        // CHUNK_DURATION_MS ms. Salva fino a ~3s di latenza percepita.
+        let waitCancelled = false;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(() => {
+            this.chunkWaitCancel = null;
+            resolve();
+          }, CHUNK_DURATION_MS);
+          this.chunkWaitCancel = () => {
+            clearTimeout(timer);
+            this.chunkWaitCancel = null;
+            waitCancelled = true;
+            resolve();
+          };
+        });
+
+        // Early-exit: se il wait è stato cancellato (stt_final / stop /
+        // abort), il recorder è già stato fermato esternamente via
+        // safeStopRecorder(). NON tentiamo recorder.stop() di nuovo
+        // (double-stop → eccezione), NON leggiamo URI e NON inviamo:
+        // il server ha già la trascrizione e la pipeline LLM+TTS è
+        // partita → inviare altri byte è solo spreco.
+        if (waitCancelled || !this.chunkLoopActive || this.stopRequested) {
+          const elapsed = Date.now() - t_record_started;
+          const saved = CHUNK_DURATION_MS - elapsed;
+          console.log(
+            `[KODA_STREAM_CLIENT] chunk #${cIdx} anticipatory exit ` +
+              `(elapsed=${elapsed}ms, saved=~${saved > 0 ? saved : 0}ms latency)`
+          );
+          break;
+        }
 
         if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} stop...`);
 
