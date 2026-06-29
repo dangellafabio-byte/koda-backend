@@ -5432,14 +5432,14 @@ def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], si
 
     if t == "calm":
         # sussurrato, lento, asciutto — momenti di intimità profonda
-        base_stability = stability if stability is not None else 0.55
-        style = 0.30
-        speed = 0.92
+        base_stability = stability if stability is not None else 0.65
+        style = 0.20
+        speed = 0.88
     elif t == "concerned":
         # empatico, profondo, espressivo, leggermente più lento
-        base_stability = stability if stability is not None else 0.28
-        style = 0.60
-        speed = 0.93
+        base_stability = stability if stability is not None else 0.20
+        style = 0.75
+        speed = 0.90
     elif t == "warm":
         # ★ default: abbraccio caldo, naturale, presente
         base_stability = stability if stability is not None else 0.35
@@ -5447,18 +5447,18 @@ def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], si
         speed = 0.96
     elif t == "energetic":
         # vivace, gioioso, leggero
-        base_stability = stability if stability is not None else 0.32
-        style = 0.65
-        speed = 1.05
+        base_stability = stability if stability is not None else 0.22
+        style = 0.85
+        speed = 1.10
     elif t == "urgent":
         # safety/emergenza: incalzante, drammatico, rapido
-        base_stability = stability if stability is not None else 0.25
-        style = 0.70
-        speed = 1.08
+        base_stability = stability if stability is not None else 0.18
+        style = 0.90
+        speed = 1.14
     else:  # neutral — solo per fatti/info neutre (meteo, calcoli)
-        base_stability = stability if stability is not None else 0.50
-        style = 0.40
-        speed = 0.98
+        base_stability = stability if stability is not None else 0.55
+        style = 0.30
+        speed = 1.00
 
     return {
         "stability": base_stability,
@@ -8549,13 +8549,18 @@ async def _fast_pipeline_task(
                 # Solo per il TTS — il testo visualizzato in chat resta intatto.
                 clean_tts = _normalize_for_tts_it(clean)
                 vs = _voice_settings_for_tone(current_tone, None, None)
-                # FAST PATH: SEMPRE eleven_flash_v2_5 (~75ms TTFB, ~real-time gen).
-                # Il modello eleven_v3 è MOLTO più lento (~3-9s per frase corta)
-                # e il prompt chiede a Claude di mettere [warmly] etc. davanti,
-                # quindi se rilevassimo gli audio tag finiremmo SEMPRE su v3.
-                # I tag tipo [warmly] vengono comunque rimossi da _strip_audio_tags
-                # e Flash v2.5 li ignorerebbe in ogni caso → niente perdita.
-                model_id = "eleven_flash_v2_5"
+                logger.info(
+                    f"[fast {session_id[:8]}] TTS sentence idx={idx} tone={current_tone} "
+                    f"stab={vs['stability']:.2f} style={vs['style']:.2f} speed={vs['speed']:.2f}"
+                )
+                # === FIX 2026-06-29 — modello espressivo invece di flash ===
+                # eleven_flash_v2_5 ignora quasi del tutto i parametri `style`
+                # e `speed` → Claude variava il tono nel testo ma la voce
+                # usciva monotona. Passiamo a eleven_turbo_v2_5: ~100ms in
+                # più di TTFB (~175ms invece di ~75ms), MA risponde davvero
+                # alle voice_settings → variazione audio percepibile.
+                # Inoltre supporta tutte le lingue Flash + qualità superiore.
+                model_id = "eleven_turbo_v2_5"
 
                 def _do_tts():
                     audio = bytearray()
