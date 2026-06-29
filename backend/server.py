@@ -8196,6 +8196,9 @@ async def _fast_pipeline_task(
     audio_duration_ms: Optional[int],
     emit: Optional[Any] = None,
     stt_confidence: Optional[float] = None,
+    location_city: Optional[str] = None,
+    location_region: Optional[str] = None,
+    location_country: Optional[str] = None,
 ):
     """Background task: streamma Claude con prompt condensato, frase per
     frase chiama ElevenLabs Flash v2.5, salva ogni MP3 come token e
@@ -8327,6 +8330,32 @@ async def _fast_pipeline_task(
                 "\n\n📓 FATTI CHIAVE SULL'UTENTE (memoria permanente — "
                 "ricordali nelle risposte se rilevanti, senza ripeterli "
                 "esplicitamente come una scheda):\n" + kf_brief + "\n"
+            )
+
+        # === GEOLOCATION ONE-SHOT DAL CLIENT (Fabio 2026-06-29) ===
+        # La città/regione/paese arrivano direttamente dal GPS del telefono
+        # nel payload WebSocket del turno corrente. Zero DB, zero sync.
+        # Iniettato SEMPRE quando presente: Koda saprà rispondere a
+        # "dove sono?", "che tempo fa?", "che ore sono qui?" ecc.
+        if location_city:
+            loc_line = f"📍 L'utente si trova ADESSO a {location_city}"
+            if location_region and location_region.lower() != location_city.lower():
+                loc_line += f" ({location_region}"
+                if location_country:
+                    loc_line += f", {location_country}"
+                loc_line += ")"
+            elif location_country:
+                loc_line += f", {location_country}"
+            sys_prompt = sys_prompt + (
+                "\n\n" + loc_line + ".\n"
+                "Usa questa info se ti chiede dove si trova, che tempo fa, "
+                "che ore sono lì, cosa c'è da fare, ecc. NON dire mai 'non "
+                "so dove sei' quando hai questa info. Non esibirla a sproposito: "
+                "usala solo quando è davvero rilevante.\n"
+            )
+            logger.info(
+                f"[fast {session_id[:8]}] location injected: "
+                f"city={location_city!r} region={location_region!r}"
             )
 
         # === SAFETY GUARDRAILS (Italia) — P0 obbligatorio per App Store ===
@@ -9234,6 +9263,9 @@ async def _run_pipeline_for_streamed_text(
     stt_confidence: Optional[float],
     emit: Callable[..., Awaitable[None]],
     session_id: str,
+    location_city: Optional[str] = None,
+    location_region: Optional[str] = None,
+    location_country: Optional[str] = None,
 ) -> None:
     """Wrap di _fast_pipeline_task per il voice streaming.
 
@@ -9249,6 +9281,9 @@ async def _run_pipeline_for_streamed_text(
         audio_duration_ms=audio_duration_ms,
         emit=emit,
         stt_confidence=stt_confidence,
+        location_city=location_city,
+        location_region=location_region,
+        location_country=location_country,
     )
 
 

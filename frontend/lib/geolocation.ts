@@ -34,6 +34,86 @@ export type GeolocationResult =
   | { ok: true; city: string; region?: string; country?: string }
   | { ok: false; reason: "disabled" | "denied" | "blocked" | "no-network" | "error"; message?: string };
 
+// =============================================================
+// CACHED LOCATION — singleton in-memory (Fabio 2026-06-29)
+// =============================================================
+// Conserva l'ultima posizione recuperata con successo da
+// fetchLocationOnce / refreshLocationSilent. Letto direttamente dal
+// flusso vocale (`voiceStreamConverse`) per iniettare la città nel
+// payload WebSocket di OGNI turno → Koda sa sempre dove sei senza
+// passare per database / multi-tenancy. Approccio "usa quello che hai".
+// =============================================================
+export type CachedLocation = {
+  city: string;
+  region?: string;
+  country?: string;
+  fetchedAt: number; // epoch ms
+};
+
+let _cachedLocation: CachedLocation | null = null;
+
+/** Restituisce l'ultima posizione conosciuta o null se mai recuperata. */
+export function getCachedLocation(): CachedLocation | null {
+  return _cachedLocation;
+}
+
+/** Resetta la cache (es. quando l'utente disabilita il toggle). */
+export function clearCachedLocation(): void {
+  _cachedLocation = null;
+}
+
+function _setCachedLocation(r: { city: string; region?: string; country?: string }) {
+  _cachedLocation = {
+    city: r.city,
+    region: r.region,
+    country: r.country,
+    fetchedAt: Date.now(),
+  };
+  console.log(
+    `[KODA_GEO] cache updated → ${r.city} (${r.region || "?"}, ${r.country || "?"})`
+  );
+}
+
+/**
+ * Aggiornamento silenzioso della cache. Non chiede mai permessi:
+ * se il permesso non c'è già, esce con `false`. Pensato per essere
+ * chiamato PRIMA di ogni sessione vocale per avere la città fresca.
+ * Massimo ~1s di latenza (Balanced accuracy).
+ */
+export async function refreshLocationSilent(): Promise<boolean> {
+  if (Platform.OS === "web") return false;
+  try {
+    const existing = await Location.getForegroundPermissionsAsync();
+    if (existing.status !== Location.PermissionStatus.GRANTED) {
+      return false;
+    }
+    const pos = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+    });
+    const places = await Location.reverseGeocodeAsync({
+      latitude: pos.coords.latitude,
+      longitude: pos.coords.longitude,
+    });
+    if (!places || places.length === 0) return false;
+    const p = places[0];
+    const city =
+      (p.city && p.city.trim()) ||
+      (p.subregion && p.subregion.trim()) ||
+      (p.region && p.region.trim()) ||
+      "";
+    if (!city) return false;
+    _setCachedLocation({
+      city,
+      region: p.region || undefined,
+      country: p.country || undefined,
+    });
+    return true;
+  } catch (e: any) {
+    console.log(`[KODA_GEO] refreshLocationSilent error: ${e?.message || String(e)}`);
+    return false;
+  }
+}
+
 /**
  * Verifica i permessi GPS senza richiederli (silent check).
  * Utile per capire se vale la pena mostrare il toggle "abilitato" o
@@ -167,6 +247,12 @@ export async function fetchLocationOnce(opts?: {
     console.log(
       `[KODA_GEO] location resolved: ${city} (${place.region || "?"}, ${place.country || "?"}) postOk=${postOk}`
     );
+    // === FIX 2026-06-29 — popola la cache in-memory letta dal flusso vocale ===
+    _setCachedLocation({
+      city,
+      region: place.region || undefined,
+      country: place.country || undefined,
+    });
     return {
       ok: true,
       city,

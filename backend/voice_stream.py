@@ -357,6 +357,14 @@ async def voice_stream_handler(
     # Configurazione dalla prima frame
     profile_lang = "it"
     ephemeral = False
+    # === Geolocation one-shot dal client (Fabio 2026-06-29) ===
+    # La città/regione/paese arrivano nel frame "start" dal GPS del telefono.
+    # NON tocchiamo DB: passiamo i 3 valori a `run_pipeline_for_text` che li
+    # inietta direttamente nel system prompt di Claude. Approccio
+    # "usa quello che hai", zero stato server-side.
+    location_city: Optional[str] = None
+    location_region: Optional[str] = None
+    location_country: Optional[str] = None
 
     async def emit_to_client(event: dict, audio_bytes: Optional[bytes] = None) -> None:
         """Emit verso il client (riusa il pattern del converse-ws esistente)."""
@@ -400,9 +408,22 @@ async def voice_stream_handler(
         profile_lang = (start_req.get("profile_lang") or "it").lower()
         ephemeral = bool(start_req.get("ephemeral", False))
         container = (start_req.get("container") or "aac").lower()
+        # Estraiamo la posizione GPS dal client (3 campi opzionali).
+        # Sanity cap: max 80 char per evitare iniezioni nel prompt.
+        def _clip(v: Any) -> Optional[str]:
+            if not isinstance(v, str):
+                return None
+            s = v.strip()
+            if not s:
+                return None
+            return s[:80]
+        location_city = _clip(start_req.get("location_city"))
+        location_region = _clip(start_req.get("location_region"))
+        location_country = _clip(start_req.get("location_country"))
         logger.info(
             f"[KODA_STREAM sess={short_id}] start lang={profile_lang} "
-            f"ephemeral={ephemeral} container={container}"
+            f"ephemeral={ephemeral} container={container} "
+            f"city={location_city!r} region={location_region!r} country={location_country!r}"
         )
 
         # ---------------- 2) Connetti a Deepgram ----------------
@@ -555,6 +576,9 @@ async def voice_stream_handler(
                     stt_confidence=conf_snapshot,
                     emit=emit_to_client,
                     session_id=session_id,
+                    location_city=location_city,
+                    location_region=location_region,
+                    location_country=location_country,
                 )
                 if client_alive:
                     await emit_to_client({"type": "done"})

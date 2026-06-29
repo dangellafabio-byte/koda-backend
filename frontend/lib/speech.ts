@@ -2061,9 +2061,42 @@ export async function voiceStreamConverse(opts: {
   });
 
   try {
+    // === FIX 2026-06-29 — pesca la città dal GPS cache + auto-refresh ===
+    // Approccio "usa quello che hai": leggiamo la posizione direttamente
+    // dal cache in-memory di geolocation.ts (popolato all'avvio dell'app
+    // se geolocation_enabled). NIENTE database, NIENTE POST separate.
+    // Tentiamo anche un refresh silenzioso (~500ms) per averla fresca,
+    // ma NON blocchiamo se fallisce: usiamo l'ultima conosciuta.
+    let locCity: string | undefined;
+    let locRegion: string | undefined;
+    let locCountry: string | undefined;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const geo = require("./geolocation");
+      // Refresh silenzioso non bloccante (max ~1s su iPhone, ~1.5s Android).
+      // Se fallisce o il permesso non c'è, lascia la cache invariata.
+      try { await geo.refreshLocationSilent(); } catch {}
+      const cached = geo.getCachedLocation?.();
+      if (cached && cached.city) {
+        locCity = cached.city;
+        locRegion = cached.region;
+        locCountry = cached.country;
+        console.log(
+          `[KODA_GEO] voiceStreamConverse → injecting ${locCity} (${locRegion || "?"}, ${locCountry || "?"})`
+        );
+      } else {
+        console.log(`[KODA_GEO] voiceStreamConverse → no cached location (Koda non saprà la città)`);
+      }
+    } catch (e: any) {
+      console.log(`[KODA_GEO] voiceStreamConverse cache read failed: ${e?.message || e}`);
+    }
+
     await session.start({
       ephemeral: opts.ephemeral,
       profileLang: opts.profileLang || "it",
+      locationCity: locCity,
+      locationRegion: locRegion,
+      locationCountry: locCountry,
     });
     // Esponi la sessione al chiamante per stop manuale (es. tap sull'orb).
     try { opts.onSession?.(session); } catch {}

@@ -174,7 +174,13 @@ export class VoiceStreamSession {
   // Buffer per associare un binary frame al header sentence che lo precede
   private pendingSentenceHeader: SentenceMeta | null = null;
   // === FIX 2026-06-25 v7: keepalive + auto-reconnect (Build #6 WS close) ===
-  private lastStartOpts: { ephemeral?: boolean; profileLang?: string } = {};
+  private lastStartOpts: {
+    ephemeral?: boolean;
+    profileLang?: string;
+    locationCity?: string;
+    locationRegion?: string;
+    locationCountry?: string;
+  } = {};
   private reconnectAttempts = 0;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   // Flag: si chiude la WS in modo "atteso" (es. arrivato 'done'/'stt_final'
@@ -213,7 +219,13 @@ export class VoiceStreamSession {
   }
 
   /** Apre WS + avvia recording loop. */
-  async start(opts?: { ephemeral?: boolean; profileLang?: string }): Promise<void> {
+  async start(opts?: {
+    ephemeral?: boolean;
+    profileLang?: string;
+    locationCity?: string;
+    locationRegion?: string;
+    locationCountry?: string;
+  }): Promise<void> {
     if (Platform.OS === "web") {
       // Phase 1: solo nativo per ora (web ha MediaRecorder che richiede
       // un path diverso). Fallback all'esistente.
@@ -223,7 +235,13 @@ export class VoiceStreamSession {
     this.stopRequested = false;
     this.chunkIdx = 0;
     // Salva opts per eventuale reconnect
-    this.lastStartOpts = { ephemeral: opts?.ephemeral, profileLang: opts?.profileLang };
+    this.lastStartOpts = {
+      ephemeral: opts?.ephemeral,
+      profileLang: opts?.profileLang,
+      locationCity: opts?.locationCity,
+      locationRegion: opts?.locationRegion,
+      locationCountry: opts?.locationCountry,
+    };
     this.reconnectAttempts = 0;
     this.finalCloseRequested = false;
     // === FIX v8: reset flag di tracciamento done/close ===
@@ -232,15 +250,21 @@ export class VoiceStreamSession {
 
     // 1) Apri WS
     const url = buildWsUrl();
-    console.log(`[KODA_STREAM_CLIENT] opening WS → ${url}`);
+    console.log(
+      `[KODA_STREAM_CLIENT] opening WS → ${url} loc=${opts?.locationCity || "<none>"}`
+    );
     await this.openWs(url);
 
-    // 2) Frame iniziale
+    // 2) Frame iniziale (include la città GPS se disponibile — Koda sa
+    //    dove sei senza salvare niente in DB)
     this.sendJson({
       type: "start",
       ephemeral: !!opts?.ephemeral,
       profile_lang: opts?.profileLang || "it",
       container: "aac",
+      location_city: opts?.locationCity || undefined,
+      location_region: opts?.locationRegion || undefined,
+      location_country: opts?.locationCountry || undefined,
     });
 
     // 3) Aspetta "ready" (i frame in arrivo sono già instradati dal listener onmessage)
@@ -348,6 +372,9 @@ export class VoiceStreamSession {
         ephemeral: !!this.lastStartOpts.ephemeral,
         profile_lang: this.lastStartOpts.profileLang || "it",
         container: "aac",
+        location_city: this.lastStartOpts.locationCity || undefined,
+        location_region: this.lastStartOpts.locationRegion || undefined,
+        location_country: this.lastStartOpts.locationCountry || undefined,
       });
       this.startKeepalive();
       console.log(`[KODA_STREAM_CLIENT] WS reconnesso con successo`);
