@@ -5432,29 +5432,29 @@ def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], si
 
     if t == "calm":
         # sussurrato, lento, asciutto — momenti di intimità profonda
-        base_stability = stability if stability is not None else 0.65
-        style = 0.20
-        speed = 0.88
+        base_stability = stability if stability is not None else 0.80
+        style = 0.15
+        speed = 0.82
     elif t == "concerned":
-        # empatico, profondo, espressivo, leggermente più lento
-        base_stability = stability if stability is not None else 0.20
-        style = 0.75
-        speed = 0.90
+        # empatico, profondo, espressivo, decisamente più lento
+        base_stability = stability if stability is not None else 0.15
+        style = 0.80
+        speed = 0.85
     elif t == "warm":
         # ★ default: abbraccio caldo, naturale, presente
-        base_stability = stability if stability is not None else 0.35
+        base_stability = stability if stability is not None else 0.40
         style = 0.55
-        speed = 0.96
+        speed = 0.97
     elif t == "energetic":
-        # vivace, gioioso, leggero
-        base_stability = stability if stability is not None else 0.22
-        style = 0.85
-        speed = 1.10
-    elif t == "urgent":
-        # safety/emergenza: incalzante, drammatico, rapido
+        # vivace, gioioso, leggero, RAPIDO
         base_stability = stability if stability is not None else 0.18
         style = 0.90
-        speed = 1.14
+        speed = 1.15
+    elif t == "urgent":
+        # safety/emergenza: incalzante, drammatico, rapidissimo
+        base_stability = stability if stability is not None else 0.10
+        style = 0.95
+        speed = 1.20
     else:  # neutral — solo per fatti/info neutre (meteo, calcoli)
         base_stability = stability if stability is not None else 0.55
         style = 0.30
