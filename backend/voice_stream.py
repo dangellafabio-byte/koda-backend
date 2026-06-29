@@ -448,9 +448,32 @@ async def voice_stream_handler(
                     is_final = bool(evt.get("is_final", False))
                     speech_final = bool(evt.get("speech_final", False))
                     conf = alt.get("confidence")
+                    # === FIX 2026-06-29 — conf=0 fallback ===
+                    # Su utterance brevi (es. "Koda mi senti?") o un po'
+                    # rumorose, Deepgram Nova-3 a volte emette
+                    # confidence=0.0 al livello top dell'alternative anche
+                    # se le word singole hanno confidence valida (es. 0.97).
+                    # Fallback: se conf top-level è 0 ma il campo `words`
+                    # contiene confidence per parola, usiamo la media.
                     if conf is not None:
                         try:
-                            utterance_confidence = float(conf)
+                            conf_f = float(conf)
+                            if conf_f <= 0.0:
+                                words = alt.get("words") or []
+                                word_confs = [
+                                    float(w.get("confidence", 0))
+                                    for w in words
+                                    if isinstance(w, dict) and w.get("confidence") is not None
+                                ]
+                                if word_confs:
+                                    mean_conf = sum(word_confs) / len(word_confs)
+                                    logger.info(
+                                        f"[KODA_STREAM_DG sess={short_id}] "
+                                        f"conf=0 fallback: mean(words.conf)={mean_conf:.3f} "
+                                        f"({len(word_confs)} words)"
+                                    )
+                                    conf_f = mean_conf
+                            utterance_confidence = conf_f
                         except (TypeError, ValueError):
                             pass
 
@@ -506,15 +529,22 @@ async def voice_stream_handler(
 
         async def _trigger_pipeline(final_text: str) -> None:
             """Esegue la pipeline LLM+TTS esistente con il testo trascritto."""
-            nonlocal pipeline_in_flight
+            nonlocal pipeline_in_flight, utterance_confidence
             pipeline_in_flight = True
             audio_duration_ms = None
             if speech_started_at is not None:
                 audio_duration_ms = int((time.time() - speech_started_at) * 1000)
+            # === FIX 2026-06-29 — snapshot conf prima del reset ===
+            # Catturiamo la conf di QUESTA utterance, poi resettiamo lo
+            # stato per la prossima. Senza reset, su una WS lunga la
+            # seconda utterance ereditava la confidence della prima
+            # se Deepgram non emetteva una nuova confidence non-zero.
+            conf_snapshot = utterance_confidence
+            utterance_confidence = None
             await emit_to_client({
                 "type": "stt_final",
                 "text": final_text,
-                "confidence": utterance_confidence,
+                "confidence": conf_snapshot,
                 "audio_duration_ms": audio_duration_ms,
             })
             try:
@@ -522,7 +552,7 @@ async def voice_stream_handler(
                     text=final_text,
                     ephemeral=ephemeral,
                     audio_duration_ms=audio_duration_ms,
-                    stt_confidence=utterance_confidence,
+                    stt_confidence=conf_snapshot,
                     emit=emit_to_client,
                     session_id=session_id,
                 )

@@ -1,0 +1,40 @@
+{
+  "summary": "Backend-only validation of the 3 fixes shipped today (Jan 2026): (A) _fast_session_create idempotent for multi-utterance Deepgram, (B) Deepgram conf=0 fallback to mean(words[].confidence) + utterance_confidence reset between utterances on the same WS, (C) parity core_traits voice/text in /converse. All 8 new tests + all 9 prior regression tests are GREEN (17/17). New file: /app/backend/tests/test_iter11_trait_update_jan2026.py. Highlights — (A) _fast_session_create called twice on the same session_id now NO-OPS the started_at_dt ($setOnInsert) and RESETS events=[]/done=False ($set) — verified by direct in-process call: push event + mark_done, then second create, then assert state. (B) Code inspection asserts the conf=0→mean(words.conf) fallback block exists in voice_stream.py:451-478 (with the 'mean(words.conf)=' log line) AND the snapshot+reset pattern in _trigger_pipeline (lines 537-543) — reset is within 200 chars of the snapshot. WS handshake smoke test passes (ready frame received in <1s, session_id present). (C) Deterministic test using httpx ASGI transport + monkeypatch of server.LlmChat (fake LLM returning controlled JSON): (i) trait_update string is appended to profile.core_traits and persists across GETs; (ii) when Claude omits trait_update, core_traits stays unchanged while memory_summary still receives the memory_update — proves the new branch is gated correctly; (iii) repeated trait_updates APPEND (not overwrite) and the 1500-char cap holds. Also a live no-mocks regression test against the running backend confirms /converse response model still exposes profile.core_traits as a string. Note on test harness: motor's AsyncIOMotorClient binds to the first event loop it sees; since asyncio.run closes its loop and pytest runs each test in a fresh loop, we rebind srv.client/srv.db at the start of each scenario — documented inline in the test file.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/key-facts", "issue": "Still GLOBAL (server.py:5810), not user-scoped. Carried over from iter 9/10. Not blocking but multi-tenancy footgun."},
+      {"endpoint": "user_id_middleware (server.py:140-154)", "issue": "Silently downgrades non-UUIDv4 X-User-Id to 'me'. Carried over from iter 9/10."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter11_trait_update_jan2026.py",
+    "/app/test_reports/pytest/iter11_trait_update.xml"
+  ],
+  "action_items": [
+    "All 3 Jan 2026 backend fixes are validated and green. No code changes required from main agent.",
+    "(Optional, carried) User-scope /api/key-facts via _memory_filter().",
+    "(Optional, carried) Have user_id_middleware return 400 on malformed X-User-Id."
+  ],
+  "critical_code_review_comments": [
+    "Fix C in server.py:3404-3415 mirrors the voice path at server.py:8756-8761 byte-for-byte (sep handling, 1500-char cap, last-N truncation). The only minor asymmetry: text path uses `.strip()` and the voice path does not — both branches still reject 'null'/'none'/'' so functionally equivalent.",
+    "Fix A is robust: $setOnInsert preserves started_at_dt across multi-utterance creates, so the TTL index (server.py:8035, 5min) still anchors on the first utterance — multiple utterances in a single WS session correctly share the original session lifetime instead of being repeatedly refreshed.",
+    "Fix B (voice_stream.py:451-478): the fallback recomputes mean of word confidences ONLY when top-level conf is <=0.0, preserving the cheap fast path for the normal case. The reset in _trigger_pipeline (line 542-543) snapshots BEFORE clearing so the in-flight pipeline still receives the correct confidence — same loop, no race.",
+    "server.py is still 9395 lines; refactor pressure unchanged from iter 9/10."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter11_trait_update_jan2026.py (new — 8 pytest cases, all passing)"
+  ],
+  "success_rate": {"backend": "100% (8/8 new + 9/9 carried = 17/17)", "frontend": "n/a (backend-only per request)"},
+  "seed_data_creation": "None persistent. Each test mints a fresh UUIDv4 X-User-Id and cleans up its own profile/timeline/memories docs after the assertions.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend test files in /app/backend/tests now: test_koda_regression_jan2026.py (broad), test_iter10_android_ota_request.py (Android OTA WS payloads), test_iter11_trait_update_jan2026.py (today's 3 fixes: fast_session idempotency, voice_stream conf fallback+reset code-inspect+WS handshake, /converse core_traits parity with monkeypatched LlmChat). Run all with `pytest /app/backend/tests/test_koda_regression_jan2026.py /app/backend/tests/test_iter10_android_ota_request.py /app/backend/tests/test_iter11_trait_update_jan2026.py -v`. NOTE: the trait_update tests import server.py and monkeypatch server.LlmChat at module level; they REBIND srv.client/srv.db on each scenario to avoid motor's 'Event loop is closed' issue. Do NOT remove those rebind calls if you add more scenarios in the same class.",
+  "rca_of_issue": "Not a bug-fix iteration on my side. The 3 backend fixes were already shipped by the main agent; my job was deterministic validation. The only debugging done here was on the TEST harness itself: motor's AsyncIOMotorClient caches the event loop it binds to on first use, so chained asyncio.run() calls in pytest fail with 'Event loop is closed' on the 2nd test onwards. Mitigation documented above (rebind srv.client/srv.db before each asyncio.run)."
+}

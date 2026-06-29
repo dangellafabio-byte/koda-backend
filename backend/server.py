@@ -3393,6 +3393,26 @@ async def api_converse(req: ConverseRequest):
             if len(new_mem) > 4000:
                 new_mem = new_mem[-4000:]
             profile.memory_summary = new_mem
+        # === FIX 2026-06-29 — parità core_traits voice/text ===
+        # La pipeline voice (`_fast_pipeline_task`, line ~8736) salva
+        # `trait_update` in `profile.core_traits` quando Claude rileva un
+        # tratto stabile. La pipeline text (`/converse`) NON lo faceva
+        # → asimmetria: parlando a voce Koda costruiva il ritratto
+        # profondo, scrivendo no. Logica identica al voice flow:
+        # append separato, capped a 1500 char, kept anche quando
+        # `memory_summary` viene riciclata.
+        trait_update = data.get("trait_update")
+        if (
+            isinstance(trait_update, str)
+            and trait_update.strip()
+            and trait_update.lower() not in {"null", "none", ""}
+        ):
+            sep_t = "\n- " if profile.core_traits else "- "
+            new_traits = (profile.core_traits or "") + sep_t + trait_update.strip()
+            if len(new_traits) > 1500:
+                new_traits = new_traits[-1500:]
+            profile.core_traits = new_traits
+            logger.info(f"[converse] trait_update saved: '{trait_update[:80]}'")
         profile = await save_profile(profile)
 
         # === RICORDI SEMANTICI (giugno 2026) ===

@@ -155,23 +155,30 @@ export async function unlockSpeech(): Promise<void> {
   }
 }
 
+// === Debug verbose flag (post-debug 2026-06-28) ===
+// Gateare i log diagnostici aggiunti durante il debug del bug P0 Android.
+// Default false: log puliti. Si attiva via EXPO_PUBLIC_KODA_DEBUG_VERBOSE=true
+// in .env per troubleshooting futuri.
+const KODA_DEBUG_VERBOSE =
+  process.env.EXPO_PUBLIC_KODA_DEBUG_VERBOSE === "true";
+
 // ---------- Utility: stop everything ----------
 function stopAllPlayback(caller?: string) {
   // === FIX 2026-06-28 v34 — Trace WHO calls stopAllPlayback ===
-  // Il player TTS viene abortito da qualcuno mentre voiceStreamConverse
-  // sta processando le sentence audio in arrivo → niente audio finale.
-  // Logghiamo SEMPRE chi chiama questa funzione + stack trace per
-  // identificare il chiamante esatto.
-  try {
-    const stack = new Error().stack || "";
-    const lines = stack.split("\n").slice(1, 4).map((s) => s.trim().slice(0, 80));
-    const hadAbort = !!currentAbort;
-    console.log(
-      `[KODA_TTS_STOP] stopAllPlayback called caller=${caller ?? "?"} ` +
-        `hadAbort=${hadAbort} hadPlayer=${!!currentPlayer} ` +
-        `speakingNow=${speakingNow} | stack=${lines.join(" ← ")}`
-    );
-  } catch {}
+  // Loggato SOLO in modalità debug verbose. In produzione resta silente
+  // (bug P0 risolto, log lasciato come strumento per debugging futuri).
+  if (KODA_DEBUG_VERBOSE) {
+    try {
+      const stack = new Error().stack || "";
+      const lines = stack.split("\n").slice(1, 4).map((s) => s.trim().slice(0, 80));
+      const hadAbort = !!currentAbort;
+      console.log(
+        `[KODA_TTS_STOP] stopAllPlayback called caller=${caller ?? "?"} ` +
+          `hadAbort=${hadAbort} hadPlayer=${!!currentPlayer} ` +
+          `speakingNow=${speakingNow} | stack=${lines.join(" ← ")}`
+      );
+    } catch {}
+  }
   // === ORB REATTIVO (2026-06 #3) ===
   // Fermiamo sempre il driver waveform appena interrompiamo il playback.
   try { stopReactiveWaveform(); } catch {}
@@ -1961,7 +1968,7 @@ export async function voiceStreamConverse(opts: {
       // Logging granulare di OGNI step così da fermare il primo
       // punto di fallimento se c'è.
       // ============================================================
-      if (header.i === 0 && Platform.OS === "android" && !bypassAttempted) {
+      if (header.i === 0 && Platform.OS === "android" && KODA_DEBUG_VERBOSE && !bypassAttempted) {
         bypassAttempted = true;
         const bytesCopy = new Uint8Array(u8); // copia per evitare race con queue
         (async () => {
@@ -2080,20 +2087,25 @@ export async function voiceStreamConverse(opts: {
   let isFirstSentence = true;
   let sentenceCounter = 0;
   const tStreamStart = Date.now();
-  console.log(`[KODA_TTS_LOOP] enter player loop aborted=${ac.signal.aborted} pipelineDone=${pipelineDone}`);
+  if (KODA_DEBUG_VERBOSE) {
+    console.log(`[KODA_TTS_LOOP] enter player loop aborted=${ac.signal.aborted} pipelineDone=${pipelineDone}`);
+  }
   try {
     while (!ac.signal.aborted) {
       if (sentenceQueue.length === 0) {
         if (pipelineDone || pipelineError) {
-          console.log(`[KODA_TTS_LOOP] exit (queue empty, done=${pipelineDone} err=${pipelineError})`);
+          if (KODA_DEBUG_VERBOSE) {
+            console.log(`[KODA_TTS_LOOP] exit (queue empty, done=${pipelineDone} err=${pipelineError})`);
+          }
           break;
         }
         await waitForToken();
-        // === FIX 2026-06-28 v34 — log dopo waitForToken ===
-        console.log(
-          `[KODA_TTS_LOOP] waitForToken returned queue=${sentenceQueue.length} ` +
-            `aborted=${ac.signal.aborted} done=${pipelineDone} err=${pipelineError}`
-        );
+        if (KODA_DEBUG_VERBOSE) {
+          console.log(
+            `[KODA_TTS_LOOP] waitForToken returned queue=${sentenceQueue.length} ` +
+              `aborted=${ac.signal.aborted} done=${pipelineDone} err=${pipelineError}`
+          );
+        }
         continue;
       }
       const item = sentenceQueue.shift()!;

@@ -270,19 +270,26 @@ export default function Taccuino() {
   // Permette di vedere ESATTAMENTE chi mette idle prematuro.
   const statusTraceStartRef = useRef<number>(Date.now());
   const statusRef = useRef<Status>("idle");
+  // === Debug verbose flag (post-debug 2026-06-28) ===
+  // Default false: log puliti. Si attiva via EXPO_PUBLIC_KODA_DEBUG_VERBOSE=true
+  // in .env per troubleshooting (necessita rebuild).
+  const KODA_DEBUG_VERBOSE =
+    process.env.EXPO_PUBLIC_KODA_DEBUG_VERBOSE === "true";
   const setStatus = useCallback((next: Status, caller?: string) => {
     const prev = statusRef.current;
     if (prev !== next) {
       try {
-        // Estrai prime 5 righe di stack per identificare il caller esatto.
-        // Su Android RN gli address hex non sono leggibili, ma il pattern
-        // di chiamata sì (es. "at onUserFinal", "at finally", "at anonymous").
+        // Stack trace: 1 riga in produzione, 4 righe in debug verbose.
         const stack = new Error().stack || "";
         const lines = stack.split("\n")
-          .slice(1, 6)
+          .slice(1, KODA_DEBUG_VERBOSE ? 6 : 3)
           .map((s) => s.trim().slice(0, 100))
           .filter((s) => s.length > 0);
-        const tag = caller || lines.slice(0, 4).join(" ← ");
+        const tag = caller || (
+          KODA_DEBUG_VERBOSE
+            ? lines.slice(0, 4).join(" ← ")
+            : (lines[1] || lines[0] || "?")
+        );
         console.log(
           `[KODA_STATUS] ${prev} → ${next} t+${Date.now() - statusTraceStartRef.current}ms caller=${tag}`
         );
@@ -290,7 +297,7 @@ export default function Taccuino() {
     }
     statusRef.current = next;
     _setStatusRaw(next);
-  }, []);
+  }, [KODA_DEBUG_VERBOSE]);
 
   // === BUILD VERSION TAG 2026-06-28 v35 ===
   // Logga una sola volta all'avvio una stringa identificativa della build.
@@ -301,8 +308,9 @@ export default function Taccuino() {
   // inglobato l'ultimo commit.
   useEffect(() => {
     console.log(
-      `[KODA_BUILDTAG] v35-bypass-binary-test build=2026-06-28-evening ` +
-        `features=BYPASS,TTS_STOP,TTS_LOOP,APPSTATE_GUARD,ANOMALY`
+      `[KODA_BUILDTAG] v36-cleanup-debug-gated build=2026-06-29-morning ` +
+        `verbose=${KODA_DEBUG_VERBOSE} ` +
+        `features=ANOMALY,STATUS,APPSTATE_GUARD${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
   }, []);
   const [textInput, setTextInput] = useState("");
@@ -1075,16 +1083,20 @@ export default function Taccuino() {
       const streamingAlive = !!streamingSessionRef.current;
       const recorderAlive = !!recRef.current;
       const sessionActive = streamingAlive || recorderAlive;
-      // === FIX 2026-06-28 v33 — Logging dettagliato AppState ===
-      // Sempre logga il cambio (anche → active) con tutto il contesto.
-      // Ci permette di vedere se HyperOS continua a fare flicker e in
-      // che stato è il sistema audio in ogni transizione.
-      console.log(
-        `[KODA_APPSTATE] next=${next} streaming=${streamingAlive} ` +
-          `recorder=${recorderAlive} status=${statusRef.current} ` +
-          `userInteracted=${userInteractedRef.current} ` +
-          `=> ${sessionActive ? "skipped (session alive)" : "handled"}`
-      );
+      // === FIX 2026-06-28 v33 — Logging AppState ===
+      // Verbose (default OFF): log dettagliato con status, userInteracted, decisione.
+      // Conciso (default ON): solo cambio + skip/handled.
+      if (KODA_DEBUG_VERBOSE) {
+        console.log(
+          `[KODA_APPSTATE] next=${next} streaming=${streamingAlive} ` +
+            `recorder=${recorderAlive} status=${statusRef.current} ` +
+            `userInteracted=${userInteractedRef.current} ` +
+            `=> ${sessionActive ? "skipped (session alive)" : "handled"}`
+        );
+      } else if (sessionActive) {
+        // In produzione: solo i casi di skip (utili per capire flicker)
+        console.log(`[KODA_APPSTATE] next=${next} skipped (session alive)`);
+      }
       if (sessionActive) {
         return;
       }
