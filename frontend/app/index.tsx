@@ -5432,55 +5432,85 @@ export default function Taccuino() {
                   Due cerchi colorati grandi, side-by-side. Tap = preview audio
                   + selezione automatica. Il cerchio selezionato ha un anello
                   bianco e una checkmark sottile. */}
-              <Text style={styles.voicePickerHint}>
-                Tocca per ascoltare
-              </Text>
-              <View style={styles.voicePickerRow}>
-                {voices.map((v) => {
-                  const selected = profile?.settings?.tts_voice_id === v.voice_id;
-                  const loading = voicePreviewLoading === v.voice_id;
-                  const voiceColor =
-                    VOICE_SPEAKING_COLORS[v.voice_id] || theme.primary;
-                  return (
-                    <TouchableOpacity
-                      key={v.voice_id}
-                      onPress={() => selectAndPreviewVoice(v.voice_id, v.name)}
-                      style={styles.voiceCircleWrap}
-                      testID={`voice-${v.voice_id}`}
-                      activeOpacity={0.75}
-                    >
-                      {/* Glow soft attorno al cerchio (più visibile se selezionato) */}
-                      <View
-                        style={[
-                          styles.voiceCircleGlow,
-                          {
-                            backgroundColor: voiceColor,
-                            opacity: selected ? 0.45 : 0.22,
-                          },
-                        ]}
-                      />
-                      {/* Cerchio principale */}
-                      <View
-                        style={[
-                          styles.voiceCircle,
-                          {
-                            backgroundColor: voiceColor,
-                            borderColor: selected ? "#FFFFFF" : "transparent",
-                            borderWidth: selected ? 3 : 0,
-                            shadowColor: voiceColor,
-                          },
-                        ]}
-                      >
-                        {loading ? (
-                          <ActivityIndicator size="small" color="#FFFFFF" />
-                        ) : selected ? (
-                          <Ionicons name="checkmark" size={28} color="#FFFFFF" />
-                        ) : null}
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+              {/* === FIX 2026-06-30 — Lock selettore voce durante stati attivi ===
+                  Se l'utente cambia voce mentre Koda sta registrando,
+                  pensando o parlando, la sessione streaming si scontra con
+                  la nuova voce → stato corrotto / freeze. Blocchiamo i
+                  bottoni quando status !== "idle" e mostriamo un hint
+                  chiaro. */}
+              {(() => {
+                const voiceLocked = status !== "idle";
+                const lockHint = (() => {
+                  switch (status) {
+                    case "recording":
+                      return "🎙️ Aspetta che finisca di ascoltarti per cambiare voce";
+                    case "transcribing":
+                      return "✍️ Sto leggendo… cambierai voce tra un attimo";
+                    case "thinking":
+                      return "💭 Sto pensando… cambierai voce tra un attimo";
+                    case "speaking":
+                      return "🔊 Aspetta che finisca di parlare per cambiare voce";
+                    default:
+                      return "Tocca per ascoltare";
+                  }
+                })();
+                return (
+                  <>
+                    <Text style={styles.voicePickerHint}>{lockHint}</Text>
+                    <View style={styles.voicePickerRow}>
+                      {voices.map((v) => {
+                        const selected = profile?.settings?.tts_voice_id === v.voice_id;
+                        const loading = voicePreviewLoading === v.voice_id;
+                        const voiceColor =
+                          VOICE_SPEAKING_COLORS[v.voice_id] || theme.primary;
+                        return (
+                          <TouchableOpacity
+                            key={v.voice_id}
+                            onPress={() => selectAndPreviewVoice(v.voice_id, v.name)}
+                            style={[
+                              styles.voiceCircleWrap,
+                              voiceLocked && { opacity: 0.45 },
+                            ]}
+                            testID={`voice-${v.voice_id}`}
+                            activeOpacity={0.75}
+                            disabled={voiceLocked}
+                            accessibilityState={{ disabled: voiceLocked }}
+                          >
+                            {/* Glow soft attorno al cerchio (più visibile se selezionato) */}
+                            <View
+                              style={[
+                                styles.voiceCircleGlow,
+                                {
+                                  backgroundColor: voiceColor,
+                                  opacity: selected ? 0.45 : 0.22,
+                                },
+                              ]}
+                            />
+                            {/* Cerchio principale */}
+                            <View
+                              style={[
+                                styles.voiceCircle,
+                                {
+                                  backgroundColor: voiceColor,
+                                  borderColor: selected ? "#FFFFFF" : "transparent",
+                                  borderWidth: selected ? 3 : 0,
+                                  shadowColor: voiceColor,
+                                },
+                              ]}
+                            >
+                              {loading ? (
+                                <ActivityIndicator size="small" color="#FFFFFF" />
+                              ) : selected ? (
+                                <Ionicons name="checkmark" size={28} color="#FFFFFF" />
+                              ) : null}
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </>
+                );
+              })()}
             </View>
 
             <View style={styles.divider} />
