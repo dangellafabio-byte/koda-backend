@@ -8382,7 +8382,24 @@ async def _fast_pipeline_task(
         # qualsiasi argomento real-time. L'utente ha dato consenso esplicito.
         web_search_brief: Optional[str] = None
         ws_enabled = bool(getattr(profile.settings, "web_search_enabled", True))
-        if not ws_enabled:
+        # === FIX 2026-06-29 — Bypass Tavily per "dove sono?" ===
+        # Frasi tipo "dove ci troviamo IN QUESTO MOMENTO?" matchavano il
+        # trigger Tavily ("in questo momento") → web search → Claude
+        # rispondeva "attiva Google Maps" ignorando la posizione GPS
+        # iniettata. Se l'utente ha già la posizione attiva, skippiamo
+        # del tutto Tavily per le domande "dove sono".
+        _t_lc = (text or "").lower()
+        _is_where_question = any(p in _t_lc for p in (
+            "dove sono", "dove mi trovo", "dove ci troviamo", "dove siamo",
+            "dove cazzo sono", "in che posto", "in che città", "in che paese",
+            "dimmi dove", "sai dove", "sapresti dove",
+        ))
+        if location_city and _is_where_question:
+            logger.info(
+                f"[fast {session_id[:8]}] where-question detected + location available "
+                f"({location_city!r}) → skip Tavily, use GPS only"
+            )
+        elif not ws_enabled:
             logger.info(f"[fast {session_id[:8]}] web-search disabled by user — skip")
         elif _should_web_search(text, force_open=True):
             logger.info(f"[fast {session_id[:8]}] web-search triggered (open internet) for: {text[:80]}")
@@ -8396,6 +8413,22 @@ async def _fast_pipeline_task(
         user_payload_parts = []
         if history_str:
             user_payload_parts.append(f"STORICO RECENTE:\n{history_str}")
+        # === FIX 2026-06-29 — Location nel USER payload (priorità massima) ===
+        # Anche se l'iniettiamo già nel system_prompt, gpt-mini/Haiku
+        # leggono meglio le info messe a contatto con la query nel USER
+        # message. Doppia iniezione = robusto contro Tavily/altri tool.
+        if location_city:
+            loc_user_line = f"📍 POSIZIONE GPS DELL'UTENTE (dal suo telefono ADESSO): {location_city}"
+            if location_region and location_region.lower() != location_city.lower():
+                loc_user_line += f", {location_region}"
+            if location_country:
+                loc_user_line += f", {location_country}"
+            loc_user_line += (
+                ". Questa è la fonte autoritativa: se ti chiede dove si trova, "
+                "RISPONDI con questa città. NON dire 'attiva Google Maps', NON "
+                "dire 'non posso saperlo', NON inventare. Solo questa città."
+            )
+            user_payload_parts.append(loc_user_line)
         if web_search_brief:
             user_payload_parts.append(
                 "RISULTATI WEB SEARCH (informazioni AGGIORNATE in tempo reale — "
