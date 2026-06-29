@@ -2605,6 +2605,21 @@ async def api_get_profile_background():
 @api_router.put("/profile", response_model=Profile)
 async def api_update_profile(update: ProfileUpdate):
     p = await get_or_create_profile()
+    # === DIAGNOSTICA TEMPORANEA 2026-06-29 — geolocation_enabled tracking ===
+    # Logghiamo OGNI PUT che tocca settings.geolocation_enabled per
+    # capire se il client lo invia (e con che valore). Quando non
+    # arrivano più chiamate, sappiamo che l'iPhone non sta nemmeno
+    # chiamando l'endpoint.
+    try:
+        if update.settings and isinstance(update.settings, dict):
+            if "geolocation_enabled" in update.settings:
+                pid = current_user_id()
+                logger.info(
+                    f"[geo-debug] PUT /profile pid={pid[:14]} "
+                    f"geolocation_enabled={update.settings['geolocation_enabled']!r}"
+                )
+    except Exception:
+        pass
     if update.language is not None:
         # === GUARD LINGUA (Fabio escalation 2026-06-20 v5) ===
         # L'app è ITALIAN-ONLY. Rifiutiamo qualsiasi tentativo del client
