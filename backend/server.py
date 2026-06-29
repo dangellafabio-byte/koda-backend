@@ -1268,6 +1268,38 @@ async def get_or_create_profile() -> Profile:
                     {"$or": [{"profile_id": {"$exists": False}}, {"profile_id": None}, {"profile_id": "me"}]},
                     {"$set": {"profile_id": uid}},
                 )
+                # === FIX 2026-06-29 Multi-tenancy key_facts ===
+                # Copia anche i key_facts del legacy "me" al nuovo UUID,
+                # così il nuovo device porta dietro la memoria biografica
+                # (nome, città, partner, animali, lavoro, ecc.).
+                # Duplichiamo invece di update_many così "me" mantiene
+                # comunque i suoi facts (utile per ulteriori claim
+                # falliti / debug).
+                try:
+                    me_facts = await db.taccuino_key_facts.find(
+                        {"profile_id": "me"}, {"_id": 0}
+                    ).to_list(500)
+                    for f in me_facts:
+                        # Skip se già esiste un fact identico per il nuovo uid.
+                        exists = await db.taccuino_key_facts.find_one(
+                            {"fact": f["fact"], "profile_id": uid}
+                        )
+                        if exists:
+                            continue
+                        new_fact = {
+                            "id": str(uuid.uuid4()),
+                            "profile_id": uid,
+                            "fact": f["fact"],
+                            "category": f.get("category", "altro"),
+                            "source_text": f.get("source_text", ""),
+                            "created_at": f.get("created_at", datetime.now(timezone.utc).isoformat()),
+                        }
+                        await db.taccuino_key_facts.insert_one(new_fact)
+                    logger.info(
+                        f"[multi-user] migrated {len(me_facts)} key_facts → {uid[:8]}..."
+                    )
+                except Exception as e:
+                    logger.warning(f"[multi-user] key_facts migration failed: {e}")
                 logger.info(f"[multi-user] migrated 'me' → {uid[:8]}... (first claim)")
                 # Restituisci il profilo appena creato
                 fresh = await db.taccuino_profile.find_one({"id": uid}, {"_id": 0})
@@ -2787,21 +2819,29 @@ async def api_location_context(payload: LocationContextIn):
     if not city or len(city) > 80:
         raise HTTPException(status_code=400, detail="city missing or too long")
     try:
-        # Rimuovi key_fact precedenti di categoria luogo_geo (1 solo per profilo)
-        await db.taccuino_key_facts.delete_many({"category": "luogo_geo"})
+        pid = current_user_id()
+        # === FIX 2026-06-29 Multi-tenancy ===
+        # Prima: delete_many({"category": "luogo_geo"}) → cancellava la
+        # posizione di TUTTI gli utenti del database (!!). Ora limitiamo
+        # al profilo corrente.
+        await db.taccuino_key_facts.delete_many({
+            "category": "luogo_geo",
+            "profile_id": pid,
+        })
         # Inserisci il nuovo
         fact_text = f"In questo momento si trova a {city}"
         if payload.region and payload.region != city:
             fact_text += f" ({payload.region})"
         doc = {
             "id": str(uuid.uuid4()),
+            "profile_id": pid,
             "fact": fact_text,
             "category": "luogo_geo",
             "source_text": f"GPS reverse-geocode: city={city} region={payload.region or '?'} country={payload.country or '?'}",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.taccuino_key_facts.insert_one(doc)
-        logger.info(f"[location-context] saved: {fact_text}")
+        logger.info(f"[location-context] saved (pid={pid[:8]}): {fact_text}")
         return {"ok": True, "city": city, "fact": fact_text}
     except Exception as e:
         logger.warning(f"[location-context] save failed: {e}")
@@ -5810,17 +5850,29 @@ def _extract_key_facts_from_text(text: str) -> List[Dict[str, str]]:
 
 async def _save_key_facts(facts: List[Dict[str, str]]) -> int:
     """Salva fatti nuovi nella collection — skippa duplicati (stessa fact
-    string)."""
+    string PER LO STESSO PROFILO).
+
+    === FIX 2026-06-29 Multi-tenancy ===
+    Prima salvavamo i fatti senza `profile_id` → pool globale condiviso
+    fra TUTTI gli utenti (incluso test agent) → contesto Claude
+    contaminato da fatti contraddittori ("Si chiama Fabio" + "Si chiama
+    Mario" + "Si chiama Marco"). Adesso ogni fatto è legato al
+    `current_user_id()`."""
     if not facts:
         return 0
+    pid = current_user_id()
     saved = 0
     for f in facts:
         try:
-            exists = await db.taccuino_key_facts.find_one({"fact": f["fact"]})
+            # Dedup PER PROFILO, non globale: stesso fact, profili diversi = OK.
+            exists = await db.taccuino_key_facts.find_one(
+                {"fact": f["fact"], "profile_id": pid}
+            )
             if exists:
                 continue
             doc = {
                 "id": str(uuid.uuid4()),
+                "profile_id": pid,
                 "fact": f["fact"],
                 "category": f.get("category", "altro"),
                 "source_text": f.get("source_text", ""),
@@ -5828,17 +5880,29 @@ async def _save_key_facts(facts: List[Dict[str, str]]) -> int:
             }
             await db.taccuino_key_facts.insert_one(doc)
             saved += 1
-            logger.info(f"[key_facts] saved: {f['fact'][:80]}")
+            logger.info(f"[key_facts] saved (pid={pid[:8]}): {f['fact'][:80]}")
         except Exception as e:
             logger.warning(f"[key_facts] save failed: {e}")
     return saved
 
 
 async def _get_key_facts_brief(limit: int = 20) -> str:
-    """Restituisce una stringa formattata coi fatti chiave esistenti, da
-    iniettare nel system prompt. Limit 20 per non gonfiare i token."""
+    """Restituisce una stringa formattata coi fatti chiave dell'utente
+    corrente, da iniettare nel system prompt. Limit 20 per non gonfiare
+    i token.
+
+    === FIX 2026-06-29 Multi-tenancy ===
+    Filtra per `current_user_id()` + retrocompat con i fatti legacy
+    senza `profile_id` (per non perdere dati storici durante la
+    migrazione)."""
     try:
-        cursor = db.taccuino_key_facts.find({}, {"_id": 0}).sort("created_at", -1).limit(limit)
+        pid = current_user_id()
+        # Match: profile_id = pid OPPURE profile_id assente (legacy "me" originario)
+        query = {"$or": [{"profile_id": pid}]}
+        if pid == "me":
+            # Solo "me" può vedere i fatti legacy senza profile_id (Fabio originale)
+            query["$or"].append({"profile_id": {"$exists": False}})
+        cursor = db.taccuino_key_facts.find(query, {"_id": 0}).sort("created_at", -1).limit(limit)
         facts = await cursor.to_list(limit)
         if not facts:
             return ""
@@ -5851,9 +5915,17 @@ async def _get_key_facts_brief(limit: int = 20) -> str:
 
 @api_router.get("/key-facts")
 async def api_get_key_facts():
-    """Lista tutti i fatti chiave dell'utente — per la futura UI di gestione."""
+    """Lista tutti i fatti chiave dell'utente — per la futura UI di gestione.
+
+    === FIX 2026-06-29 Multi-tenancy ===
+    Filtra per current_user_id() + retrocompat con i fatti legacy senza
+    profile_id (solo "me" può vederli)."""
     try:
-        cursor = db.taccuino_key_facts.find({}, {"_id": 0}).sort("created_at", -1).limit(200)
+        pid = current_user_id()
+        query = {"$or": [{"profile_id": pid}]}
+        if pid == "me":
+            query["$or"].append({"profile_id": {"$exists": False}})
+        cursor = db.taccuino_key_facts.find(query, {"_id": 0}).sort("created_at", -1).limit(200)
         facts = await cursor.to_list(200)
         return {"facts": facts, "count": len(facts)}
     except Exception as e:
@@ -5863,9 +5935,15 @@ async def api_get_key_facts():
 
 @api_router.delete("/key-facts/{fact_id}")
 async def api_delete_key_fact(fact_id: str):
-    """Cancella un fatto chiave."""
+    """Cancella un fatto chiave dell'utente corrente."""
     try:
-        r = await db.taccuino_key_facts.delete_one({"id": fact_id})
+        # Guard: solo il proprietario del fatto può cancellarlo.
+        # I fatti legacy senza profile_id sono cancellabili solo da "me".
+        pid = current_user_id()
+        match = {"id": fact_id, "$or": [{"profile_id": pid}]}
+        if pid == "me":
+            match["$or"].append({"profile_id": {"$exists": False}})
+        r = await db.taccuino_key_facts.delete_one(match)
         return {"deleted": r.deleted_count}
     except Exception as e:
         return {"deleted": 0, "error": str(e)}
