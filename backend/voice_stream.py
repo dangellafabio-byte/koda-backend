@@ -104,7 +104,7 @@ DG_PARAMS = {
     "sample_rate": "16000",
     "channels": "1",
     "endpointing": "250",
-    "utterance_end_ms": "900",
+    "utterance_end_ms": "1000",
     "interim_results": "true",
     "vad_events": "true",
     "smart_format": "true",
