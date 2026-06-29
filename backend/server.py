@@ -9407,6 +9407,16 @@ async def voicetest_tone(tone: str):
     if not path.exists():
         raise HTTPException(404, f"tone '{safe}' not generated")
     return FileResponse(str(path), media_type="audio/mpeg")
+
+# === LABORATORIO MODEL A/B (Fabio 2026-06-29) ===
+# Confronto turbo vs v3 vs v3+audio_tags sulla stessa voce e testo.
+@app.get("/api/voicelab/{name}")
+async def voicelab(name: str):
+    safe = name.replace("/", "").replace("..", "").lower()
+    path = Path("/app/frontend/public/tts_test") / f"lab_{safe}.mp3"
+    if not path.exists():
+        raise HTTPException(404, f"lab '{safe}' not generated")
+    return FileResponse(str(path), media_type="audio/mpeg")
 # ============================================================================
 
 app.add_middleware(
