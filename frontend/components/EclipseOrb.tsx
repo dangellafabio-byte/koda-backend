@@ -27,6 +27,7 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import { View, StyleSheet, Animated, Easing } from "react-native";
 import Svg, { Defs, RadialGradient, Stop, Circle } from "react-native-svg";
+import { useTheme } from "../lib/theme";
 
 export type OrbStatus = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 export type OrbTone =
@@ -115,6 +116,17 @@ export default function EclipseOrb({
   speakingPaletteOverride,
   forceVoiceIdentity = false,
 }: Props) {
+  // === FIX 2026-06-29 v37 — Eclissi nel tema giorno (negativo fotografico) ===
+  // Nel tema chiaro il "disco nero" perde senso (sarebbe un buco scuro
+  // dentro un ambiente luminoso). Invertiamo: disco perlato/avorio.
+  // L'alone/halo manteniamo gli STESSI colori della palette (signature
+  // emotiva), ma con opacità ridotte (Strada 1: "ombra colorata"
+  // pittorica, soft, niente neon esplosivi su chiaro).
+  const { theme } = useTheme();
+  const isLight = !theme.isDark;
+  // Multiplier applicato a tutte le opacities dei layer luminosi quando
+  // siamo nel tema chiaro. <1 = più desaturato/sottile.
+  const haloOpacityScale = isLight ? 0.55 : 1.0;
   // === Palette resolution: tone-driven when speaking, blu petrolio when
   // listening, ciclamino while thinking, viola when idle.
   const palette: [string, string, string] = useMemo(() => {
@@ -443,9 +455,9 @@ export default function EclipseOrb({
           <Defs>
             <RadialGradient id="halo" cx="50%" cy="50%" r="50%">
               <Stop offset="0%" stopColor={palette[0]} stopOpacity={0.0} />
-              <Stop offset="35%" stopColor={palette[1]} stopOpacity={0.18} />
-              <Stop offset="55%" stopColor={palette[1]} stopOpacity={0.32} />
-              <Stop offset="75%" stopColor={palette[2]} stopOpacity={0.18} />
+              <Stop offset="35%" stopColor={palette[1]} stopOpacity={0.18 * haloOpacityScale} />
+              <Stop offset="55%" stopColor={palette[1]} stopOpacity={0.32 * haloOpacityScale} />
+              <Stop offset="75%" stopColor={palette[2]} stopOpacity={0.18 * haloOpacityScale} />
               <Stop offset="100%" stopColor={palette[2]} stopOpacity={0} />
             </RadialGradient>
           </Defs>
@@ -537,8 +549,8 @@ export default function EclipseOrb({
           <Defs>
             <RadialGradient id="rim" cx="50%" cy="50%" r="50%">
               <Stop offset={`${(discRadius / haloRadius) * 100 * 0.97}%`} stopColor={palette[0]} stopOpacity={0} />
-              <Stop offset={`${(discRadius / haloRadius) * 100 * 1.01}%`} stopColor={palette[0]} stopOpacity={0.95} />
-              <Stop offset={`${(discRadius / haloRadius) * 100 * 1.08}%`} stopColor={palette[1]} stopOpacity={0.55} />
+              <Stop offset={`${(discRadius / haloRadius) * 100 * 1.01}%`} stopColor={palette[0]} stopOpacity={0.95 * haloOpacityScale} />
+              <Stop offset={`${(discRadius / haloRadius) * 100 * 1.08}%`} stopColor={palette[1]} stopOpacity={0.55 * haloOpacityScale} />
               <Stop offset="100%" stopColor={palette[2]} stopOpacity={0} />
             </RadialGradient>
           </Defs>
@@ -546,20 +558,28 @@ export default function EclipseOrb({
         </Svg>
       </Animated.View>
 
-      {/* === Layer 3: DISCO NERO CENTRALE ===
-          Cerchio perfettamente nero al centro. Un sottilissimo gradient
-          interno (#000 → #0A0A12) lo fa sembrare 3D / solido, non un buco
-          piatto. Resta SEMPRE al centro, non ruota e non pulsa (è
-          la "scatola nera emotiva" — punto fermo).
+      {/* === Layer 3: DISCO CENTRALE ===
+          Notte: cerchio nero (scatola nera emotiva, custode dei segreti).
+          Giorno (negativo fotografico): cerchio perlato/avorio — la luce
+          si concentra al centro invece che intorno. Mantiene la stessa
+          metafora di "punto fermo che custodisce", in polarità opposta.
       */}
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
         <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
           <Defs>
-            <RadialGradient id="disc" cx="42%" cy="38%" r="55%">
-              <Stop offset="0%" stopColor="#0F0F1A" stopOpacity={1} />
-              <Stop offset="60%" stopColor="#050507" stopOpacity={1} />
-              <Stop offset="100%" stopColor="#000000" stopOpacity={1} />
-            </RadialGradient>
+            {isLight ? (
+              <RadialGradient id="disc" cx="42%" cy="38%" r="55%">
+                <Stop offset="0%" stopColor="#FBF8EE" stopOpacity={1} />
+                <Stop offset="60%" stopColor="#F0EADC" stopOpacity={1} />
+                <Stop offset="100%" stopColor="#E5DECB" stopOpacity={1} />
+              </RadialGradient>
+            ) : (
+              <RadialGradient id="disc" cx="42%" cy="38%" r="55%">
+                <Stop offset="0%" stopColor="#0F0F1A" stopOpacity={1} />
+                <Stop offset="60%" stopColor="#050507" stopOpacity={1} />
+                <Stop offset="100%" stopColor="#000000" stopOpacity={1} />
+              </RadialGradient>
+            )}
           </Defs>
           <Circle cx={center} cy={center} r={discRadius} fill="url(#disc)" />
         </Svg>

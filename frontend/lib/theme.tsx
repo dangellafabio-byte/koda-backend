@@ -103,44 +103,43 @@ const GIORNO: Palette = {
   name: "giorno",
   label: "Chiaro",
   emoji: "☀️",
-  // === FIX 2026-06-27 v21 (richiesta utente: "ancora più scuro, sasso zen") ===
-  // Dopo aver provato #5A5A5A (Pietra media) sul device fisico l'utente
-  // ha confermato che serve più scuro. Passiamo al "Sasso caldo scuro"
-  // #3D3A37 — pietra di fiume con sottotono caldo impercettibile. Dà
-  // davvero la sensazione di vera pietra, non di grigio digitale.
-  // Contrasto AAA con testo bianco. Si sposa benissimo col rosso
-  // scarlatto del bottone Sfogo (entrambi nella famiglia calda).
+  // === FIX 2026-06-29 v37 — TEMA "GIORNO-NEGATIVO" ===
+  // Riprogettazione completa: invece di un grigio neutro (problemi di
+  // contrasto + estraneità al mood Koda), il tema giorno diventa un
+  // "negativo fotografico" del tema notte. Stessa struttura emotiva,
+  // luminanza invertita: avorio caldo (luce ambientale) + testo indaco
+  // (esattamente il colore dello sfondo notte). Mantiene la signature
+  // teal-petrolio (#0E7C7B) e il bordeaux della Stanza dello Sfogo
+  // (#7A1F2E), che funzionano su entrambi gli sfondi.
   isDark: false,
-  // === FIX 2026-06-28 v25: grigio leggermente più chiaro ===
-  // Dopo #4A4641 (troppo scuro per scritte) → #524D47, ancora pietra zen
-  // ma più chiaro di un buon 8%, scritte bianche più leggibili.
-  bg: "#524D47",
-  surface: "#605A53",
-  surfaceAlt: "rgba(255,255,255,0.10)",
-  border: "rgba(255,255,255,0.18)",
-  divider: "rgba(255,255,255,0.13)",
-  text: "#FFFFFF",
-  textMuted: "rgba(255,255,255,0.78)",
-  textDim: "rgba(255,255,255,0.55)",
+  bg: "#F4F2E8",
+  surface: "#E8E2D5",
+  surfaceAlt: "rgba(31,26,54,0.06)",
+  border: "rgba(31,26,54,0.10)",
+  divider: "rgba(31,26,54,0.08)",
+  text: "#1F1A36",
+  textMuted: "rgba(31,26,54,0.65)",
+  textDim: "rgba(31,26,54,0.42)",
   primary: "#0E7C7B",
   primaryText: "#FFFFFF",
-  primarySoftBg: "rgba(14,124,123,0.22)",
-  primarySoftBorder: "rgba(14,124,123,0.55)",
+  primarySoftBg: "rgba(14,124,123,0.12)",
+  primarySoftBorder: "rgba(14,124,123,0.45)",
   userBubble: "#0E7C7B",
   userBubbleText: "#FFFFFF",
-  aiBubbleBg: "rgba(255,255,255,0.10)",
-  aiBubbleBorder: "rgba(255,255,255,0.20)",
-  aiBubbleText: "#FFFFFF",
-  success: "#34D399",
-  warning: "#FBBF24",
-  danger: "#FB7185",
+  aiBubbleBg: "rgba(31,26,54,0.06)",
+  aiBubbleBorder: "rgba(31,26,54,0.16)",
+  aiBubbleText: "#1F1A36",
+  // Stati semantici più saturi/scuri per leggibilità su chiaro
+  success: "#16A34A",
+  warning: "#D97706",
+  danger: "#DC2626",
   tone: {
-    neutral: { bg: "rgba(255,255,255,0.10)", border: "rgba(255,255,255,0.30)" },
-    calm: { bg: "rgba(56,189,248,0.16)", border: "rgba(56,189,248,0.45)" },
-    warm: { bg: "rgba(251,191,36,0.16)", border: "rgba(251,191,36,0.45)" },
-    energetic: { bg: "rgba(34,197,94,0.16)", border: "rgba(34,197,94,0.45)" },
-    concerned: { bg: "rgba(249,115,22,0.16)", border: "rgba(249,115,22,0.50)" },
-    urgent: { bg: "rgba(239,68,68,0.18)", border: "rgba(239,68,68,0.55)" },
+    neutral: { bg: "rgba(31,26,54,0.08)", border: "rgba(31,26,54,0.18)" },
+    calm: { bg: "rgba(14,116,144,0.10)", border: "rgba(14,116,144,0.35)" },
+    warm: { bg: "rgba(217,119,6,0.12)", border: "rgba(217,119,6,0.40)" },
+    energetic: { bg: "rgba(22,163,74,0.10)", border: "rgba(22,163,74,0.35)" },
+    concerned: { bg: "rgba(234,88,12,0.10)", border: "rgba(234,88,12,0.40)" },
+    urgent: { bg: "rgba(220,38,38,0.12)", border: "rgba(220,38,38,0.45)" },
   },
 };
 
