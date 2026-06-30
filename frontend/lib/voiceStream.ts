@@ -143,7 +143,18 @@ function buildStreamingPreset() {
       extension: ".m4a",
       sampleRate: 16000,
       numberOfChannels: 1,
-      bitRate: 32000,
+      // === FIX 2026-06-30 — Xiaomi STT garbled in furgone (Fabio) ===
+      // Su Android il preset HIGH_QUALITY di expo-audio limita di default
+      // il bitrate AAC a ~32 kbps. In ambiente rumoroso (furgone, vento,
+      // strada) la compressione spinta toglie dettagli alle alte frequenze
+      // → Deepgram fatica a distinguere consonanti simili (s/f, t/d, p/b)
+      // → trascrizioni "garbled" / Koda fraintende. Su iPhone gli stessi
+      // 32 kbps + processing hardware AVAudioSession bastano (Fabio
+      // conferma: "iPhone mi sente bene"). Alziamo SOLO su Android a
+      // 64 kbps: +12 KB/sec di banda (banale su 4G), qualità sensibilmente
+      // migliore per Deepgram, nessun cambio iOS.
+      // sample rate resta 16kHz (consigliato Deepgram per nova-2/3).
+      bitRate: 64000,
       outputFormat: "mpeg4",
       audioEncoder: "aac",
       audioSource: "voice_communication", // AEC/NS/AGC hardware
