@@ -70,6 +70,13 @@ type Props = {
   onDone: (result: KodaIntroResult) => void;
   /** Optional: chiamata quando l'utente preme la X per uscire senza salvare. */
   onCancel?: () => void;
+  /** === FIX 2026-06-30 — Lock "Avanti" alla prima esecuzione (Fabio) ===
+   *  Quando true (= utente NON ancora onboarded), l'utente NON può
+   *  premere "Avanti"/"Continua" mentre Koda sta parlando: la
+   *  presentazione si guarda dall'inizio alla fine.
+   *  Quando false (= "Rivedi la Intro" dalle impostazioni), libero.
+   *  Default: false (comportamento storico = sempre libero). */
+  isFirstRun?: boolean;
 };
 
 // ====== 3 frasi per il voiceprint enrollment ======
@@ -134,7 +141,7 @@ const KODA_LINES: Record<number, string> = {
 };
 
 // ====== Componente principale ======
-export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCancel }: Props) {
+export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCancel, isFirstRun = false }: Props) {
   // === FASE MARKETING (M1/M2/M3) inserita PRIMA dei 10 step tecnici ===
   // Le 3 schermate emozionali introducono Koda all'utente PRIMA di chiedere
   // dati. Non toccano la logica dei 10 step esistenti (raccolta nome,
@@ -273,8 +280,16 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         setOrbTone("neutral");
       } else if (marketingStep === 1) {
         setOrbStatus("idle");
-        if (selectedVoiceKey === "aria") setOrbTone("calm");
-        else if (selectedVoiceKey === "echo") setOrbTone("warm");
+        // === FIX 2026-06-30 — Mappatura tone INVERTITA (Fabio "vedo viola se scelgo maschio") ===
+        // Prima: aria → "calm" (BLU), echo → "warm" (VIOLA). Inverso al design:
+        // i commenti, le carte (linee 815, 852) e VOICE_INTRO_PALETTES dicono
+        // tutti "Acqua = viola, Vento = cobalto". Ora la mappatura è
+        // allineata: Acqua → warm (viola), Vento → calm (blu).
+        // NB: la palette FINALE che vedi è VOICE_INTRO_PALETTES via
+        // speakingPaletteOverride+forceVoiceIdentity, ma la coerenza
+        // del tone evita flicker visivi durante le transizioni.
+        if (selectedVoiceKey === "aria") setOrbTone("warm");
+        else if (selectedVoiceKey === "echo") setOrbTone("calm");
         else setOrbTone("neutral");
       } else if (marketingStep === 2) {
         // "Sto pensando" = sto spiegando le regole
@@ -991,6 +1006,25 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
               {phase === "marketing" ? renderMarketing() : renderStep()}
               {error ? <Text style={styles.errorText}>{error}</Text> : null}
             </ScrollView>
+            {/* === FIX 2026-06-30 — Speak lock overlay (Fabio "non deve far andare avanti finché parla") ===
+                Alla PRIMA esecuzione (isFirstRun=true) blocchiamo ogni input
+                mentre Koda sta parlando: la presentazione si guarda
+                dall'inizio alla fine, niente skippare avanti accidentalmente.
+                Implementazione: View assoluta che cattura tutti i tap
+                quando isFirstRun && isKodaSpeaking. Trasparente — l'utente
+                vede tutto, ma niente è tappabile. Cancel/X resta usabile
+                perché è FUORI da questo wrapper (vedi sotto).
+                Quando "Rivedi la Intro" dalle impostazioni (isFirstRun=false),
+                l'overlay non viene MAI montato → libertà totale di navigazione. */}
+            {isFirstRun && isKodaSpeaking && (
+              <View
+                style={StyleSheet.absoluteFillObject}
+                pointerEvents="auto"
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+                testID="koda-intro-speak-lock"
+              />
+            )}
           </Animated.View>
 
           {/* Link "Annulla" in basso — sempre visibile su ogni step. Permette

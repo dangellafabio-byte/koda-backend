@@ -473,7 +473,10 @@ export default function Taccuino() {
       {
         page: "voice",
         rect: confRect,
-        label: "Confessionale",
+        // === FIX 2026-06-30 — Etichetta tour allineata al testo bottone ===
+        // Prima qui c'era "Confessionale" ma il bottone in tutta l'app dice
+        // "Stanza dello Sfogo" (vedi linea 4467 + paywall.tsx). Allineato.
+        label: "Stanza dello Sfogo",
         shape: "round",
         speech: `La Stanza dello Sfogo: un posto dove un pensiero può uscire senza dover rimanere. Quello che ci diciamo qui non viene salvato.`,
       },
@@ -5246,7 +5249,7 @@ export default function Taccuino() {
                   <Text style={styles.settingHint}>
                     Permetti a Koda di consultare fonti certificate (ANSA,
                     Repubblica, Wikipedia, meteo.it…) per meteo, notizie e fatti
-                    recenti. Nel Confessionale resta sempre spento.
+                    recenti. Nella Stanza dello Sfogo resta sempre spento.
                   </Text>
                 </View>
                 <Switch
@@ -6025,6 +6028,13 @@ export default function Taccuino() {
         currentVoiceId={profile?.settings?.tts_voice_id || null}
         onDone={dismissColorIntro}
         onCancel={cancelKodaIntro}
+        // === FIX 2026-06-30 — Lock "Avanti" alla prima esecuzione (Fabio) ===
+        // Se l'utente NON è ancora onboarded, è la PRIMA volta che vede
+        // la presentazione → blocchiamo i tap "Avanti" mentre Koda parla
+        // (deve guardarla dall'inizio alla fine). Se invece è entrato da
+        // "Rivedi la Intro" nelle impostazioni (onboarded=true), libertà
+        // totale di scorrimento — l'ha già vista, sa di cosa parla.
+        isFirstRun={!profile?.onboarded}
       />
     );
   }
