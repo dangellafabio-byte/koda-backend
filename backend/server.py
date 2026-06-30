@@ -8661,6 +8661,13 @@ async def _fast_pipeline_task(
                         # poteva causare artefatti "chipmunk" su Flash v2.5
                         # secondo feedback utente. Default ElevenLabs (1) OK.
                     )
+                    # === FIX 2026-06-30 — apply_text_normalization NON supportato dall'SDK 1.9.0 ===
+                    # Tentativo precedente di aggiungere `apply_text_normalization="off"`
+                    # (allineamento con /api/tts) ha rotto v3 con TypeError:
+                    # "TextToSpeechClient.convert() got an unexpected keyword
+                    # argument 'apply_text_normalization'". L'SDK 1.9.0 NON
+                    # accetta questo parametro. Lo lasciamo OFF (cioè
+                    # commentato) finché non aggiorniamo l'SDK.
                     # === PROSODY CONTINUITY (Fabio 2026-06-21) ===
                     # Passiamo a ElevenLabs il testo della frase precedente
                     # come CONTESTO (NON sintetizzato!). Il modello lo usa per
@@ -8680,8 +8687,25 @@ async def _fast_pipeline_task(
                     # (b) NON passiamo previous_text se il tono corrente è
                     # ad alta energia (energetic/urgent) — vogliamo che
                     # ogni frase mantenga il picco, non che si "calmi".
+                    # === FIX 2026-06-30 — previous_text INCOMPATIBILE con v3 ===
+                    # Root cause "frasi tagliate a metà" (Fabio in furgone,
+                    # 4/4 riproducibile). Lo SDK ElevenLabs ritorna 400
+                    # validation_error 'unsupported_model' su v3 quando
+                    # passiamo previous_text. L'eccezione viene catturata
+                    # localmente → empty bytes → frase scartata silenziosamente
+                    # → utente sente solo la prima frase di ogni risposta.
+                    # v3 non supporta ANCORA previous_text/next_text (ElevenLabs
+                    # SDK 1.9.0, giugno 2026). Verificato via log del backend:
+                    #   "Providing previous_text or next_text is not yet
+                    #    supported with the 'eleven_v3' model."
+                    # Quindi SU V3 NON passiamo previous_text. Su flash sì
+                    # (continua a funzionare come prima).
                     HIGH_ENERGY_TONES = {"energetic", "urgent"}
-                    if previous_text and current_tone not in HIGH_ENERGY_TONES:
+                    if (
+                        previous_text
+                        and current_tone not in HIGH_ENERGY_TONES
+                        and model_id != "eleven_v3"
+                    ):
                         kwargs["previous_text"] = previous_text[-80:]
                     try:
                         gen = client_el.text_to_speech.convert(**kwargs)
@@ -8690,6 +8714,36 @@ async def _fast_pipeline_task(
                                 audio.extend(chunk)
                     except Exception as e:
                         logger.error(f"[fast] tts error: {e}")
+                    # === FIX 2026-06-30 — Fallback v3 → flash su empty ===
+                    # Safety net: se per QUALSIASI motivo v3 ritorna empty
+                    # (eccezione catturata sopra, stream silenziosamente
+                    # vuoto, content che v3 non sa sintetizzare, ecc.) NON
+                    # perdiamo la frase. Retry IMMEDIATO con eleven_flash_v2_5
+                    # + strip dei tag audio (flash non li onora ma almeno
+                    # parla). Stesso pattern del /api/tts endpoint (linea 6306).
+                    if not audio and model_id == "eleven_v3":
+                        logger.warning(
+                            f"[fast {session_id[:8]}] v3 empty for idx={idx} "
+                            f"chars={len(clean_tts)} — fallback to flash"
+                        )
+                        fallback_kwargs = dict(
+                            text=clean_tts,  # senza tag v3
+                            voice_id=voice_id,
+                            model_id="eleven_flash_v2_5",
+                            output_format="mp3_44100_128",
+                            language_code=tts_lang,
+                            voice_settings=vs,
+                        )
+                        # flash supporta previous_text → lo passiamo se c'è
+                        if previous_text and current_tone not in HIGH_ENERGY_TONES:
+                            fallback_kwargs["previous_text"] = previous_text[-80:]
+                        try:
+                            gen2 = client_el.text_to_speech.convert(**fallback_kwargs)
+                            for chunk in gen2:
+                                if chunk:
+                                    audio.extend(chunk)
+                        except Exception as e2:
+                            logger.error(f"[fast] flash fallback also failed: {e2}")
                     return bytes(audio)
 
                 t_tts = time.time()
