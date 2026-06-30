@@ -7312,12 +7312,16 @@ def _pop_first_sentence(buf: str) -> tuple[str, str]:
 
 # === EARLY-FIRST-CHUNK (giugno 2026 v5 — sub-2s percepiti) ===
 # Per la PRIMA frase splittiamo aggressivamente al primo soft-break (virgola,
-# punto e virgola, due punti, em-dash) dopo MIN_FIRST_CHUNK_CHARS caratteri.
-# Così il TTS può iniziare a generare audio mentre il LLM continua a streamare
-# il resto della frase. Risparmio reale: 400-700ms di primo audio percepito.
+# punto e virgola, due punti) dopo MIN_FIRST_CHUNK_CHARS caratteri.
+# Così il TTS può iniettare audio mentre il LLM continua a streamare il resto.
 # Le frasi successive (idx >= 1) usano la logica normale (punto/punto-int).
-_EARLY_CHUNK_RE = re.compile(r'[,;:—–]\s')
-MIN_FIRST_CHUNK_CHARS = 22  # sweet spot: abbastanza per suonare naturale, non taglia troppo
+# === FIX 2026-06-30 — em-dash NON è break ===
+# In italiano l'em-dash è pausa narrativa interna (es. "sono tutto orecchi —
+# dimmi tutto"). Splittavamo lì e arrivava "Perfetto, sono tutto orecchi —"
+# come prima frase, ma poi il resto si perdeva se Claude terminava in fretta.
+# Lasciamo solo virgola/punto-e-virgola/due-punti come soft break.
+_EARLY_CHUNK_RE = re.compile(r'[,;:]\s')
+MIN_FIRST_CHUNK_CHARS = 35  # alzato da 22 → frasi prime più sostanziose
 
 
 def _pop_first_chunk_aggressive(buf: str) -> tuple[str, str]:
