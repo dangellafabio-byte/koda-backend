@@ -663,6 +663,23 @@ export class VoiceStreamSession {
     // quindi se questo pattern fallisce vediamo finalmente perché.
     let recorder: any = null;
     const preset = buildStreamingPreset();
+    // === KODA_STT_BITRATE_CHECK (Fabio 2026-06-30) ===
+    // Log diagnostico per confermare che il bundle nuovo è attivo sul
+    // device. Su Android stampa il bitrate effettivamente applicato:
+    //   v=32000 → bundle VECCHIO (fix non arrivato — killa l'app e riapri)
+    //   v=64000 → bundle NUOVO attivo (fix applicato)
+    // Su iPhone resta 32000 by design (Fabio conferma che funziona bene).
+    try {
+      const _bitrate =
+        Platform.OS === "android"
+          ? (preset as any).android?.bitRate
+          : (preset as any).ios?.bitRate;
+      console.log(
+        `[KODA_STT_BITRATE_CHECK] platform=${Platform.OS} bitrate=${_bitrate} ` +
+          `sampleRate=${(preset as any).android?.sampleRate ?? (preset as any).ios?.sampleRate} ` +
+          `expected_android=64000 expected_ios=32000`
+      );
+    } catch {}
     try {
       console.log(`[KODA_STREAM_CLIENT] constructing single recorder...`);
       recorder = new (AudioModule as any).AudioRecorder({});
