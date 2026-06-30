@@ -3559,14 +3559,55 @@ export default function Taccuino() {
   };
 
   const resetMemory = async () => {
-    try {
-      await api.resetEverything();
-      setTimeline([]);
-      const p = await api.getProfile();
-      setProfile(p);
-      if (!p.onboarded) setShowOnboarding(true);
-    } catch {}
-    setShowSettings(false);
+    // === FIX 2026-06-30 — Doppia conferma (Fabio "rischio cliccare per sbaglio") ===
+    // Prima il bottone "Cancella tutta la memoria" partiva DIRETTAMENTE al
+    // wipe → un tap accidentale cancellava tutto, irreversibile. Ora
+    // richiediamo DUE conferme esplicite via Alert nativi:
+    //  1. "Sei sicuro?" — primo livello di consapevolezza (Annulla di default)
+    //  2. "Ultima conferma: davvero tutto?" — seconda barriera, intenzione
+    //     espressa due volte. Bottone distruttivo a destra, in rosso
+    //     (style: "destructive" su iOS), Annulla sempre prominente a sinistra.
+    // Solo dopo entrambi gli OK procediamo con resetEverything().
+    // Cancel di entrambi gli Alert = nessun reset, nessun side effect.
+    const doWipe = async () => {
+      try {
+        await api.resetEverything();
+        setTimeline([]);
+        const p = await api.getProfile();
+        setProfile(p);
+        if (!p.onboarded) setShowOnboarding(true);
+      } catch {}
+      setShowSettings(false);
+    };
+
+    Alert.alert(
+      "Cancellare tutta la memoria?",
+      "Questo eliminerà profilo, taccuino, ricordi e ogni conversazione. L'operazione è IRREVERSIBILE.",
+      [
+        { text: "Annulla", style: "cancel" },
+        {
+          text: "Continua",
+          style: "destructive",
+          onPress: () => {
+            // Seconda conferma — barriera contro il "doppio tap" accidentale.
+            Alert.alert(
+              "Sei davvero sicuro?",
+              "Ultima conferma: tutti i tuoi dati spariranno per sempre. Tornerai alla schermata della lingua iniziale.",
+              [
+                { text: "No, annulla", style: "cancel" },
+                {
+                  text: "Sì, cancella tutto",
+                  style: "destructive",
+                  onPress: () => { void doWipe(); },
+                },
+              ],
+              { cancelable: true }
+            );
+          },
+        },
+      ],
+      { cancelable: true }
+    );
   };
 
   // === EXPORT DATI GDPR (giugno 2026) ======================================
