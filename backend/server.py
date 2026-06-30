@@ -1387,35 +1387,89 @@ def _build_temporal_context(recent: List[TimelineEntry]) -> str:
     else:
         delta = now - last_user_ts
         delta_s = max(0, int(delta.total_seconds()))
-        if delta_s < 90:
-            human = f"{delta_s} secondi fa"
+        # === FIX 2026-06-30 — descrizioni temporali umane ===
+        # Mai dare a Claude il numero esatto (es. "34 minuti fa") perché lo
+        # cita pari pari e suona da assistente robotico. Diamo solo un'etichetta
+        # qualitativa: "poco fa", "una mezz'oretta fa", "stamattina", ecc.
+        # Così Koda può scegliere se menzionare o meno il tempo, e quando lo
+        # menziona suona come parla un amico.
+        if delta_s < 60:
+            human = "pochi secondi fa"
             tag = "immediato"
-        elif delta_s < 3600:
-            mins = delta_s // 60
-            human = f"{mins} minut{'o' if mins == 1 else 'i'} fa"
+        elif delta_s < 180:           # 1-3 min
+            human = "un attimo fa"
+            tag = "appena"
+        elif delta_s < 600:           # 3-10 min
+            human = "qualche minuto fa"
             tag = "stessa sessione"
-        elif delta_s < 86400:
-            hrs = delta_s // 3600
-            human = f"{hrs} or{'a' if hrs == 1 else 'e'} fa"
-            tag = "stessa giornata" if hrs < 8 else "qualche ora fa"
-        elif delta_s < 86400 * 7:
-            days = delta_s // 86400
-            human = f"{days} giorn{'o' if days == 1 else 'i'} fa"
+        elif delta_s < 1500:          # 10-25 min
+            human = "una decina di minuti fa"
+            tag = "stessa sessione"
+        elif delta_s < 2400:          # 25-40 min
+            human = "circa mezz'ora fa"
+            tag = "stessa sessione"
+        elif delta_s < 4200:          # 40-70 min
+            human = "circa un'oretta fa"
+            tag = "stessa sessione"
+        elif delta_s < 10800:         # 70 min - 3 h
+            human = "un paio d'ore fa"
+            tag = "qualche ora fa"
+        elif delta_s < 21600:         # 3-6 h
+            human = "qualche ora fa"
+            tag = "qualche ora fa"
+        elif delta_s < 43200:         # 6-12 h
+            # Se l'ultimo è stato stamattina e adesso è sera, etc.
+            hr_now = now.hour
+            if 5 <= hr_now < 12:
+                human = "stamattina presto" if hr_now < 9 else "stamattina"
+            elif 12 <= hr_now < 18:
+                human = "stamattina"
+            elif 18 <= hr_now < 23:
+                human = "questo pomeriggio"
+            else:
+                human = "prima stasera"
+            tag = "stessa giornata"
+        elif delta_s < 86400:         # 12-24 h
+            human = "ieri sera" if now.hour < 12 else "stamattina"
+            tag = "ieri/oggi"
+        elif delta_s < 86400 * 2:     # 1-2 giorni
+            human = "ieri"
+            tag = "ieri"
+        elif delta_s < 86400 * 4:     # 2-4 giorni
+            human = "un paio di giorni fa"
             tag = "qualche giorno fa"
-        elif delta_s < 86400 * 30:
-            weeks = delta_s // (86400 * 7)
-            human = f"{weeks} settiman{'a' if weeks == 1 else 'e'} fa"
+        elif delta_s < 86400 * 8:     # 4-8 giorni
+            human = "qualche giorno fa"
+            tag = "qualche giorno fa"
+        elif delta_s < 86400 * 14:    # 1-2 settimane
+            human = "la settimana scorsa"
+            tag = "settimana scorsa"
+        elif delta_s < 86400 * 30:    # 2-4 settimane
+            human = "un paio di settimane fa"
             tag = "settimane fa"
+        elif delta_s < 86400 * 75:    # 1-2.5 mesi
+            human = "un mesetto fa"
+            tag = "mese scorso"
+        elif delta_s < 86400 * 180:   # 2.5-6 mesi
+            human = "qualche mese fa"
+            tag = "mesi fa"
+        elif delta_s < 86400 * 365:   # 6-12 mesi
+            human = "tanto tempo fa"
+            tag = "molti mesi fa"
         else:
-            months = delta_s // (86400 * 30)
-            human = f"circa {months} mes{'e' if months == 1 else 'i'} fa"
-            tag = "tanto tempo fa"
+            human = "tantissimo tempo fa"
+            tag = "anni fa"
         parts.append(f"- Ultimo messaggio dell'utente: {human} ({tag}).")
         parts.append(
-            f"- NON dire 'cinque minuti fa', 'poco fa', 'ieri' o riferimenti temporali "
-            f"se NON corrispondono a questo gap reale. Se il gap è grande (giorni/settimane), "
-            f"riprendi il discorso come un amico che torna dopo un po': caldo ma consapevole "
-            f"del tempo passato, senza fingere continuità immediata."
+            f"- IMPORTANTE — quando ti riferisci al tempo passato: "
+            f"PARLA COME UN AMICO, MAI come un assistente. Usa SOLO espressioni "
+            f"umane tipo \"poco fa\", \"una mezz'oretta fa\", \"stamattina\", "
+            f"\"ieri sera\", \"qualche giorno fa\". "
+            f"NON dire MAI numeri precisi tipo \"34 minuti fa\" o \"2 ore e 15 "
+            f"minuti fa\" — è da robot. Se l'etichetta sopra è già qualitativa "
+            f"(es. \"un paio d'ore fa\"), riusala tale e quale o varia con un "
+            f"sinonimo naturale. Se il gap è grande, riprendi caldo ma "
+            f"consapevole, come un amico che torna dopo un po'."
         )
     return "\n".join(parts) + "\n"
 
