@@ -362,8 +362,13 @@ function consumePrewarm(): Promise<void> | null {
 async function playElevenLabsNativeFromUrl(
   audioUrl: string,
   onAudioStart?: () => void,
-  playOpts?: { skipAudioSessionCycle?: boolean; tailBufferMs?: number }
+  playOpts?: { skipAudioSessionCycle?: boolean; tailBufferMs?: number; diagLabel?: string; mp3Bytes?: number }
 ): Promise<boolean> {
+  // === KODA_CUTOFF_DIAG (Fabio 2026-06-30) ===
+  // Label opzionale per correlare i log di finish() con la frase TTS
+  // attualmente in playback (es. "sent #3 idx=2 bytes=27123").
+  const diagLabel = playOpts?.diagLabel || "anon";
+  const diagBytes = playOpts?.mp3Bytes ?? 0;
   // === FIX 2026-05-25 (mirato SOLO al playback) ===
   // Su iOS, dopo che il microfono ha registrato (categoria PlayAndRecord),
   // il semplice setAudioModeAsync({allowsRecording:false}) NON forza
@@ -487,9 +492,40 @@ async function playElevenLabsNativeFromUrl(
       player = null;
     };
 
-    const finish = (ok: boolean) => {
+    const finish = (ok: boolean, reason: string = "unknown") => {
       if (done) return;
       done = true;
+      // === KODA_CUTOFF_DIAG (Fabio 2026-06-30) ===
+      // Log unificato di ogni termine playback. Reason ci dice ESATTAMENTE
+      // perché la frase è finita: didJustFinish (naturale) vs duration_complete
+      // (chiusura grace 0.25s) vs stall (no progress 30s) vs safety_timer
+      // (45s assoluti) vs play_threw / create_failed. Se vediamo frasi
+      // tagliate, possiamo correlare reason con pos/dur per identificare
+      // se è il duration_complete che fa cilecca su MP3 di eleven_v3.
+      // expectedDur = stima duration dai byte (ElevenLabs eleven_v3 MP3
+      // @ 128kbps → ~16KB/s). Se expectedDur >> dur reportato, vuol dire
+      // che AVPlayer/MediaPlayer sta riportando una durata SBAGLIATA
+      // (header VBR senza Xing tag) → ROOT CAUSE plausibile dei tagli.
+      const pct = knownDurationSec && knownDurationSec > 0
+        ? Math.round((lastPositionSec / knownDurationSec) * 100)
+        : null;
+      const gap = knownDurationSec !== null
+        ? (knownDurationSec - lastPositionSec)
+        : null;
+      const expectedDurSec = diagBytes > 0 ? diagBytes / 16000 : 0;
+      const durMismatch = (knownDurationSec !== null && expectedDurSec > 0)
+        ? (expectedDurSec - knownDurationSec)
+        : null;
+      console.log(
+        `[KODA_CUTOFF_DIAG] finish label=${diagLabel} reason=${reason} ok=${ok} ` +
+        `pos=${lastPositionSec.toFixed(2)}s ` +
+        `dur=${knownDurationSec !== null ? knownDurationSec.toFixed(2) : "?"}s ` +
+        `expected_dur=${expectedDurSec > 0 ? expectedDurSec.toFixed(2) : "?"}s ` +
+        `dur_mismatch=${durMismatch !== null ? durMismatch.toFixed(2) : "?"}s ` +
+        `gap=${gap !== null ? gap.toFixed(2) : "?"}s ` +
+        `played=${pct !== null ? pct + "%" : "?"} ` +
+        `bytes=${diagBytes} everPlayed=${everPlayed} everLoaded=${everLoaded}`
+      );
       if (activeStallWatcher) { try { clearInterval(activeStallWatcher); } catch {}; activeStallWatcher = null; }
       if (activeSafetyTimer) { try { clearTimeout(activeSafetyTimer); } catch {}; activeSafetyTimer = null; }
       // === FIX 2026-06-25 v10: tail buffer ===
@@ -596,7 +632,7 @@ async function playElevenLabsNativeFromUrl(
             }
           }
           if (status.didJustFinish) {
-            finish(true);
+            finish(true, "didJustFinish");
             return;
           }
           // === FIX 2026-06-26 v11 (root cause "frasi tagliate a metà") ===
@@ -614,7 +650,7 @@ async function playElevenLabsNativeFromUrl(
               `[KODA_TTS_PLAY] duration_complete pos=${pos.toFixed(2)} ` +
                 `dur=${dur.toFixed(2)} — finishing gracefully`
             );
-            finish(true);
+            finish(true, "duration_complete");
             return;
           }
         }
@@ -650,7 +686,7 @@ async function playElevenLabsNativeFromUrl(
             `[KODA_TTS_STALL] stalled ${stalled}ms after pos=${lastPositionSec.toFixed(2)}s ` +
               `dur=${knownDurationSec ? knownDurationSec.toFixed(2) : "?"}s — forcing finish`
           );
-          finish(true);
+          finish(true, "stall_30s");
         }
       }, 1000);
       activeStallWatcher = stallWatcher;
@@ -659,7 +695,7 @@ async function playElevenLabsNativeFromUrl(
         clearInterval(stallWatcher);
         if (activeStallWatcher === stallWatcher) activeStallWatcher = null;
         if (activeSafetyTimer === safetyTimer) activeSafetyTimer = null;
-        finish(everLoaded);
+        finish(everLoaded, "safety_45s");
       }, 45000);
       activeSafetyTimer = safetyTimer;
 
@@ -669,11 +705,11 @@ async function playElevenLabsNativeFromUrl(
         player.play();
       } catch (e) {
         console.warn("[speech] player.play() threw", e);
-        finish(false);
+        finish(false, "play_threw");
       }
     } catch (e) {
       console.warn("[speech] createAudioPlayer failed", e);
-      finish(false);
+      finish(false, "create_failed");
     }
   });
 }
@@ -2161,6 +2197,10 @@ export async function voiceStreamConverse(opts: {
           `bytes=${item.bytes.byteLength} queue_after=${sentenceQueue.length} ` +
           `first=${isFirstSentence}`
       );
+      console.log(
+        `[KODA_CUTOFF_DIAG] sent_play_start label=stream#${sIdx} ` +
+          `tts_idx=${item.i} bytes=${item.bytes.byteLength} queue_after=${sentenceQueue.length}`
+      );
       // === FIX 2026-06-26 v14 (vero root cause): wait inter-frase ===
       // ROOT CAUSE: su iOS, AVPlayer.remove() deallocala risorsa sul MAIN
       // THREAD. Per MP3 piccoli (~1-2s) la dealloc è veloce. Per MP3
@@ -2200,6 +2240,8 @@ export async function voiceStreamConverse(opts: {
           const playOpts = {
             skipAudioSessionCycle: false,
             tailBufferMs: 120,
+            diagLabel: `stream#${sIdx}/idx${item.i}`,
+            mp3Bytes: item.bytes.byteLength,
           };
           // === FIX 2026-06-26 v14 (abort guard #2) ===
           // Se l'utente ha tappato l'hard-stop mentre _writeMp3ToFile era

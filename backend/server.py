@@ -8834,6 +8834,24 @@ async def _fast_pipeline_task(
             except Exception:
                 pass
 
+        # === KODA_CUTOFF_DIAG (Fabio 2026-06-30) ===
+        # Riepilogo lato server di tutte le frasi emesse. Quando l'utente
+        # segnala "frase tagliata", confrontiamo questo log con i log
+        # frontend [KODA_CUTOFF_DIAG] finish per capire:
+        #   - se mancano frasi (problema backend → LLM/TTS)
+        #   - se le frasi ci sono ma il player chiude prima (problema frontend)
+        try:
+            _full_chars = sum(len(c) for c in full_reply_chars)
+            _tail_len = len(tail) if tail else 0
+            logger.info(
+                f"[KODA_CUTOFF_DIAG_BE] sid={session_id[:8]} "
+                f"sentences_emitted={sentence_idx} "
+                f"full_reply_chars={_full_chars} tail_chars={_tail_len} "
+                f"tail_preview={(tail[:60] if tail else '')!r}"
+            )
+        except Exception:
+            pass
+
         full_reply = ''.join(full_reply_chars).strip() or "..."
         # === DIAG LINGUA (sprint 2026-06-20 escalation) ===
         # Fabio segnala: "TUTTE le risposte sono in spagnolo, SEMPRE, da
