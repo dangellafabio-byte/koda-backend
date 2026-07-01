@@ -8794,6 +8794,29 @@ async def _fast_pipeline_task(
                     timing_first_audio_total_ms = total_first
                     logger.info(f"[fast {session_id[:8]}] FIRST AUDIO ready: {total_first}ms (tts={tts_ms}ms)")
                     logger.info(f"[KODA_TIMING] FIRST_AUDIO sid={session_id[:8]} total_ms={total_first} tts_ms={tts_ms}")
+                    # === FIX 2026-07-03 v40 — Pipeline summary decomposto (Fabio latenza) ===
+                    # Rispondere alla domanda "dove vanno i 6 secondi?" richiede
+                    # decomposizione precisa. Prima avevamo timing puntuali ma
+                    # non un summary. Con questo log un singolo grep dà tutto.
+                    try:
+                        _setup_ms = int((t_llm_start - t0) * 1000)  # profilo + memories + context
+                        _llm_ttft_ms = timing_llm_ttft_ms or 0
+                        # llm_first_sent_ms: da primo token Claude a fine estrazione prima frase
+                        # = (t_tts - t_llm_start) - llm_ttft_ms
+                        _llm_first_sent_ms = int((t_tts - t_llm_start) * 1000) - _llm_ttft_ms
+                        _tts_ms = tts_ms
+                        _overhead_ms = total_first - _setup_ms - _llm_ttft_ms - _llm_first_sent_ms - _tts_ms
+                        logger.info(
+                            f"[KODA_PIPELINE_SUMMARY sid={session_id[:8]}] "
+                            f"setup={_setup_ms}ms | "
+                            f"claude_ttft={_llm_ttft_ms}ms | "
+                            f"claude_first_sent={_llm_first_sent_ms}ms | "
+                            f"eleven_tts={_tts_ms}ms | "
+                            f"overhead={_overhead_ms}ms | "
+                            f"TOTAL_srv={total_first}ms"
+                        )
+                    except Exception as _e:
+                        logger.warning(f"[KODA_PIPELINE_SUMMARY error]: {_e}")
                 # === FIX 2026-06-20 — Publish PRIMA del waveform compute ===
                 # RCA (PM Claude): "first_audio_srv" misurava QUI, ma il
                 # _publish reale (che mette l'evento in Mongo) avveniva DOPO

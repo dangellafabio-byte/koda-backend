@@ -874,8 +874,18 @@ async def voice_stream_handler(
             if WHISPER_ENABLED and pcm_snapshot and len(pcm_snapshot) > 1600 and not skip_whisper:
                 # 1600B = 0.05s @ 16kHz → skip utterance troppo brevi che
                 # sarebbero rumore o click accidentale.
+                # === FIX 2026-07-03 v40 — Timing Whisper misurato ===
+                # Per rispondere alla domanda di Fabio "quanto costa Whisper
+                # esattamente in produzione?" logghiamo il ms reale ogni turno.
+                _t_whisper_start = time.time()
                 whisper_text = await transcribe_pcm_with_whisper(
                     pcm_snapshot, session_short=short_id
+                )
+                _whisper_ms = int((time.time() - _t_whisper_start) * 1000)
+                logger.info(
+                    f"[KODA_PIPELINE_STT sess={short_id}] "
+                    f"whisper_ms={_whisper_ms} dg_conf={conf_snapshot} "
+                    f"whisper_hit={bool(whisper_text)}"
                 )
                 if whisper_text:
                     transcript_source = "whisper-1"
@@ -895,6 +905,10 @@ async def voice_stream_handler(
                 logger.info(
                     f"[KODA_STT_OVERRIDE sess={short_id}] "
                     f"skip whisper (dg_conf={conf_snapshot} high) → deepgram={final_text!r}"
+                )
+                logger.info(
+                    f"[KODA_PIPELINE_STT sess={short_id}] "
+                    f"whisper_ms=0 dg_conf={conf_snapshot} whisper_hit=SKIPPED"
                 )
 
             await emit_to_client({
