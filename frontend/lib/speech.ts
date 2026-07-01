@@ -2352,8 +2352,32 @@ export async function voiceStreamConverse(opts: {
       if (ac.signal.aborted) break;
     }
   } finally {
-    try { await session.stop(); } catch {}
+    // === FIX 2026-07-03 v40 — Fix E: pulizia streamingSessionRef incondizionata ===
+    // Bug osservato nel log Fabio del 2026-07-01: quando l'app va in
+    // background durante TTS playback e poi torna in foreground, il
+    // player loop può stallarsi (expo-audio non emette duration_complete)
+    // → session.stop() resta appeso → onSession(null) non viene mai
+    // chiamato → streamingSessionRef.current resta non-null → il
+    // successivo tap-to-talk viene bloccato da HF_GUARD "streamingSessionRef
+    // is non-null (stream already active)" → app percepita come "bloccata".
+    //
+    // FIX: invertiamo l'ordine. Prima puliamo il ref della sessione
+    // (istantaneo, non può fallire), POI tentiamo session.stop() con
+    // timeout di 5s. Se session.stop() stalla, il ref è già pulito e
+    // il prossimo tap può partire.
     try { opts.onSession?.(null); } catch {}
+    try {
+      await Promise.race([
+        session.stop(),
+        new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error("session-stop-timeout-5s")), 5000)
+        ),
+      ]);
+    } catch (e: any) {
+      console.log(
+        `[voice-stream] session.stop() bailout: ${e?.message || e}`
+      );
+    }
     clearTimeout(hardTimer);
     if (currentAbort === ac) currentAbort = null;
     speakingNow = false;

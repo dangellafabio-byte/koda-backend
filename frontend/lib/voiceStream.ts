@@ -909,6 +909,43 @@ export class VoiceStreamSession {
       const cIdx = this.chunkIdx + 1;
       try {
         const verbose = cIdx <= 3;
+        // === FIX 2026-07-03 v40 — Fix D: guarantee AudioSession attiva ===
+        // Bug documentato di expo-audio v54 con pattern "single recorder
+        // riusato": dopo ~2 cicli prepare→record→stop→prepare→..., iOS
+        // può de-attivare silenziosamente AVAudioSession (comportamento
+        // default: "recording terminated"). Il successivo prepareToRecordAsync
+        // fallisce con "Session activation failed" → loop di failure
+        // fino al bail-out del cap (v38), con turno perso.
+        //
+        // Workaround documentato: prima di OGNI prepareToRecordAsync,
+        // ri-attivare esplicitamente la session con setAudioModeAsync.
+        // È idempotente (0-13ms misurati sui log Fabio), quindi il costo
+        // è trascurabile (~15-35ms/turno = <1% latenza totale).
+        //
+        // Skip sul chunk #1 perché la chiamata è già stata fatta all'inizio
+        // di chunkLoop (linea ~761): risparmiamo 1 chiamata inutile.
+        if (cIdx > 1) {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const { setAudioModeAsync } = require("expo-audio");
+            await setAudioModeAsync({
+              allowsRecording: true,
+              playsInSilentMode: true,
+              interruptionMode: "duckOthers",
+              shouldPlayInBackground: false,
+              shouldRouteThroughEarpiece: false,
+            });
+            if (verbose) {
+              console.log(
+                `[KODA_STREAM_CLIENT] chunk #${cIdx} pre-prepare session refresh OK`
+              );
+            }
+          } catch (e: any) {
+            console.log(
+              `[KODA_STREAM_CLIENT] chunk #${cIdx} pre-prepare refresh failed: ${e?.message || e}`
+            );
+          }
+        }
         // FIX v4: PRE-PREPARE prima di ogni record (riusabilità v54)
         if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} prepare...`);
         const t_prep = Date.now();

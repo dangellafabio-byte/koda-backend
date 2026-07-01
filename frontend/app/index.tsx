@@ -308,7 +308,7 @@ export default function Taccuino() {
   // inglobato l'ultimo commit.
   useEffect(() => {
     console.log(
-      `[KODA_BUILDTAG] v39-endpointing-builtin-600 build=2026-07-03-afternoon ` +
+      `[KODA_BUILDTAG] v40-fix-d-e build=2026-07-03-evening ` +
         `verbose=${KODA_DEBUG_VERBOSE} ` +
         `features=ANOMALY,STATUS,APPSTATE_GUARD${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
