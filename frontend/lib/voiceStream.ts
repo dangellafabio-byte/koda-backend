@@ -83,8 +83,22 @@ const WS_OPEN_TIMEOUT_MS = 6_000;
 //      automatica con stessi parametri (nuovo session_id server-side,
 //      ma trasparente per l'utente)
 const KEEPALIVE_INTERVAL_MS = 500;
-const MAX_WS_RECONNECTS = 2;
-const RECONNECT_BACKOFF_MS = 500;
+// === FIX 2026-07-02 (Fabio "WS opened in 2795ms" + "code=1006 -9820") ===
+// Su rete cellulare instabile (furgone 4G ballerino, cell handover, ecc.)
+// possono succedere due cose:
+//   1) L'apertura della WS dura 2+ secondi vs 400-600ms tipici.
+//   2) La WS si chiude spontaneamente con code=1006 (unclean close), spesso
+//      con OSStatus -9820 (SSL/TLS handshake fallito su iOS).
+// Prima queste situazioni notificavano subito onError all'upper layer →
+// stato UI in idle, utente deve ri-tap. Ora:
+//   - MAX_WS_RECONNECTS alzato 2 → 3 (una possibilità in più prima di
+//     mollare, la rete cellulare va e viene rapidamente).
+//   - RECONNECT_BACKOFF_MS ridotto 500 → 350 (rapidità di ripristino
+//     quando la rete torna).
+//   - onclose distingue tra "close atteso" (done/stop) e "close recuperabile"
+//     (1006 mentre stiamo registrando) — vedi voiceStream onclose handler.
+const MAX_WS_RECONNECTS = 3;
+const RECONNECT_BACKOFF_MS = 350;
 
 const BACKEND_URL =
   (process.env.EXPO_PUBLIC_BACKEND_URL as string | undefined) || "";
