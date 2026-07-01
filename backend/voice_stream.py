@@ -330,8 +330,20 @@ def dg_params_for_route(audio_route: Optional[str]) -> Dict[str, str]:
         params["utterance_end_ms"] = "1000"
     else:
         # builtin / unknown: default bilanciato.
-        params["endpointing"] = "250"
-        params["utterance_end_ms"] = "1000"
+        # === FIX 2026-07-03 v39 (Fabio "mi tagli ancora le frasi") ===
+        # 250ms erano troppo aggressivi per mic interno iPhone: bastava
+        # una pausa di respirazione (~300ms) tra una frase e l'altra
+        # perché Deepgram dichiarasse speech_final → cutoff. Alzato a
+        # 600ms: soglia superiore alla pausa di respirazione (200-400ms)
+        # ma inferiore a una pausa di riflessione (>800ms).
+        # utterance_end_ms alzato 1000→1500: dà a Deepgram un margine
+        # più largo per capire se l'utterance è finita davvero o è solo
+        # una pausa naturale.
+        # Trade-off: +300-500ms di latenza dopo che l'utente ha finito
+        # DAVVERO di parlare (perché DG aspetta più a lungo). In cambio,
+        # niente più cutoff su frasi con pause di respirazione naturali.
+        params["endpointing"] = "600"
+        params["utterance_end_ms"] = "1500"
     # Dev-time + runtime guard: Deepgram richiede utterance_end_ms>=1000.
     # Nota: usiamo un if esplicito invece di `assert` così la protezione
     # resta attiva anche in prod se qualcuno lancia uvicorn con `-O`
