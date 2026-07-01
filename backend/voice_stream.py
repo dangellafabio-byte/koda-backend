@@ -720,12 +720,37 @@ async def voice_stream_handler(
             conf_snapshot = utterance_confidence
             utterance_confidence = None
 
-            # === FIX 2026-07-01 — Whisper override (Fabio "primo → 1º") ===
+            # === FIX 2026-07-01 — Whisper override + skip su high-confidence (Fabio latenza) ===
             # Log confronto Deepgram vs Whisper per capire quanto migliora
             # in produzione. Se Whisper vuoto/errore → tengo Deepgram.
+            #
+            # OTTIMIZZAZIONE LATENZA: se Deepgram è confidente (conf>=0.7)
+            # E il testo è "sano" (nessuna cifra sospetta tipo 1º/2ª/3° in
+            # posti strani), SKIP Whisper → risparmio 500-800ms per turno.
+            # Whisper resta attivo solo su testi sospetti dove serve davvero.
             transcript_source = "deepgram"
             transcript_used = final_text
-            if WHISPER_ENABLED and pcm_snapshot and len(pcm_snapshot) > 1600:
+
+            # Heuristica "testo sospetto" che triggera Whisper anche con conf alta:
+            #   - cifre ordinali tipo "1º", "2ª", "3°" (STT confuso "primo"→"1º")
+            #   - testo molto corto (<8 char) che spesso è rumore
+            #   - troncamento evidente (ultima parola sotto 3 char)
+            import re as _re
+            _suspicious_ordinal = bool(_re.search(r'\b\d+[°ºªᵃᵉ]', final_text))
+            _too_short = len(final_text.strip()) < 8
+            _ends_truncated = False
+            _words = final_text.strip().split()
+            if _words and len(_words[-1]) <= 2 and _words[-1] not in {"è", "e", "a", "o", "in", "di", "da", "un", "il", "la", "le", "no", "sì", "un'", "l'", "d'", "un", "ho", "so", "va", "sa", "fa", "me", "mi", "ti", "si", "ci", "vi", "lo", "gli", "che", "chi", "fu", "ma"}:
+                _ends_truncated = True
+            suspicious = _suspicious_ordinal or _too_short or _ends_truncated
+
+            # Conf alta = Deepgram si fida. In quel caso skip Whisper SE
+            # non ci sono altri segnali sospetti.
+            dg_high_confidence = (conf_snapshot is not None and conf_snapshot >= 0.7)
+
+            skip_whisper = dg_high_confidence and not suspicious
+
+            if WHISPER_ENABLED and pcm_snapshot and len(pcm_snapshot) > 1600 and not skip_whisper:
                 # 1600B = 0.05s @ 16kHz → skip utterance troppo brevi che
                 # sarebbero rumore o click accidentale.
                 whisper_text = await transcribe_pcm_with_whisper(
@@ -736,15 +761,20 @@ async def voice_stream_handler(
                     transcript_used = whisper_text
                     logger.info(
                         f"[KODA_STT_OVERRIDE sess={short_id}] "
-                        f"deepgram={final_text!r} "
+                        f"deepgram={final_text!r} conf={conf_snapshot} "
                         f"whisper={whisper_text!r} "
-                        f"→ using WHISPER"
+                        f"→ using WHISPER (suspicious={suspicious})"
                     )
                 else:
                     logger.info(
                         f"[KODA_STT_OVERRIDE sess={short_id}] "
                         f"whisper unavailable → using DEEPGRAM: {final_text!r}"
                     )
+            elif skip_whisper:
+                logger.info(
+                    f"[KODA_STT_OVERRIDE sess={short_id}] "
+                    f"skip whisper (dg_conf={conf_snapshot} high) → deepgram={final_text!r}"
+                )
 
             await emit_to_client({
                 "type": "stt_final",

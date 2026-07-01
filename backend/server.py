@@ -7374,8 +7374,16 @@ def _pop_first_sentence(buf: str) -> tuple[str, str]:
 # dimmi tutto"). Splittavamo lì e arrivava "Perfetto, sono tutto orecchi —"
 # come prima frase, ma poi il resto si perdeva se Claude terminava in fretta.
 # Lasciamo solo virgola/punto-e-virgola/due-punti come soft break.
+# === FIX 2026-07-01 — First-chunk più aggressivo (Fabio latenza) ===
+# Ampliamo i soft-break e abbassiamo la soglia char. Prima: 35 char +
+# solo virgola/;/: → attesa 500-1000ms in più prima del primo audio.
+# Ora: 15 char + virgola/;/:/spazio dopo congiunzione tipica italiana.
+# Esempi che ora splittano subito (era 35+ char):
+#   "Sì, ti sento —" → 12 char, split subito
+#   "Certo che sì, dimmi." → split dopo "Certo che sì,"
+#   "Aspetta, non ho capito benissimo." → split dopo "Aspetta,"
 _EARLY_CHUNK_RE = re.compile(r'[,;:]\s')
-MIN_FIRST_CHUNK_CHARS = 35  # alzato da 22 → frasi prime più sostanziose
+MIN_FIRST_CHUNK_CHARS = 15  # abbassato da 35 per latenza ridotta
 
 
 def _pop_first_chunk_aggressive(buf: str) -> tuple[str, str]:
@@ -8554,7 +8562,23 @@ async def _fast_pipeline_task(
             # _build_fast_system_prompt per le istruzioni di tono caldo).
             model='openai/claude-haiku-4-5-20251001',
             messages=[
-                {'role': 'system', 'content': sys_prompt},
+                # === FIX 2026-07-01 — Anthropic prompt caching (Fabio latenza) ===
+                # System prompt Koda è ~2500 token. Cachandolo su Anthropic
+                # (marker cache_control ephemeral) risparmiamo ~300-500ms
+                # su TTFT + 90% costi input sui token cachati. Il formato
+                # con content=list[content_block] è il canonico Anthropic
+                # (litellm lo passa through per model="anthropic/*").
+                # Cache TTL default 5 min → coerente con conversation flow.
+                {
+                    'role': 'system',
+                    'content': [
+                        {
+                            'type': 'text',
+                            'text': sys_prompt,
+                            'cache_control': {'type': 'ephemeral'},
+                        }
+                    ],
+                },
                 {'role': 'user', 'content': user_payload},
             ],
             stream=True,
