@@ -1,0 +1,49 @@
+{
+  "summary": "Iter 12 backend validation of the 3 P0/P1 fixes shipped 2026-07-02. RESULT: 20/24 pytest tests PASS. 4 tests fail exposing a P0 REGRESSION in Fix 2 (VAD dynamic per audio_route): `dg_params_for_route()` sets `utterance_end_ms` to 700 (bluetooth), 800 (builtin/unknown) — but Deepgram Live enforces a HARD minimum of 1000ms on this parameter and returns HTTP 400 for any lower value. Live probe (see rca_of_issue) confirms 700/800/999 all fail; 1000/1500 both succeed. Consequence: STT is BROKEN in production for 3 of 4 audio routes (only `wired`=1000 works). Fix 1 (Whisper JSON parsing) and Fix 3 (Prosody unification) are both VERIFIED GREEN: (Fix 1) response_format='json', _extract_text() handles dict/str/pydantic-obj, anti-nested-JSON loop up to 3 iters, and the duplicate 0-arg _trigger_pipeline is REMOVED (single definition at voice_stream.py:786). (Fix 3) Live end-to-end run against /converse-fast/start with a 3-sentence prompt produced sentence_idx=0 (aggressive chunk ~22c) then sentence_idx=1 as a unified body significantly longer — confirms body_buffer is being accumulated and emitted as ONE TTS call. Also asserted no error events and clean done=true completion. Server starts clean, no import errors, no crashes.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "WS /api/voice/stream (Fix 2 — dg_params_for_route)",
+        "issue": "P0 REGRESSION: Deepgram Live enforces `utterance_end_ms >= 1000ms` (server returns HTTP 400 for anything below). The new `dg_params_for_route()` in voice_stream.py:296-330 sets utterance_end_ms=700 for bluetooth and =800 for builtin/unknown, so `dg.connect()` fails on those routes with `server rejected WebSocket connection: HTTP 400`, the client receives `{'type':'error','message':'STT unavailable: ...HTTP 400'}` and the entire voice pipeline is dead. Only route=wired (1000ms) works. Live probe (5 values 700/800/999/1000/1500) confirms this deterministically. FIX: keep utterance_end_ms=1000 (min) for ALL routes; only vary `endpointing` (200/250/300) to achieve the intended aggressive-vs-conservative endpointing behavior. Endpointing has a much lower minimum (~10ms) and is the correct knob for tuning noisy/quiet audio contexts. Docs ref: https://developers.deepgram.com/docs/utterance-end (Minimum: 1,000 ms).",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {"endpoint": "GET /api/key-facts", "issue": "Still GLOBAL (carried over from iter 9/10/11). Not blocking."},
+      {"endpoint": "user_id_middleware", "issue": "Still silently downgrades non-UUIDv4 X-User-Id to 'me' (carried over)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter12_whisper_vad_prosody_jan2026.py",
+    "/app/test_reports/pytest/iter12_results.xml"
+  ],
+  "action_items": [
+    "P0 FIX Deepgram utterance_end_ms floor: in /app/backend/voice_stream.py:296-330 (`dg_params_for_route`), change utterance_end_ms=700 (bluetooth) and =800 (builtin/unknown default) to 1000 (Deepgram minimum). Vary ONLY the `endpointing` parameter (200 for bluetooth, 250 for builtin, 300 for wired) to achieve the aggressive/conservative tuning intent. Verified via live probe against Deepgram nova-3: 700/800/999 → HTTP 400; 1000/1500 → OK.",
+    "After the fix above, re-run tests: `pytest /app/backend/tests/test_iter12_whisper_vad_prosody_jan2026.py::TestVoiceStreamAudioRoute -v` — all 5 route variants should return `ready`.",
+    "Consider adding a startup-time sanity assert in voice_stream.py that any params dict returned by dg_params_for_route has int(utterance_end_ms)>=1000, so future edits fail fast in dev.",
+    "(Carried) User-scope /api/key-facts via _memory_filter().",
+    "(Carried) user_id_middleware should return 400 on malformed X-User-Id."
+  ],
+  "critical_code_review_comments": [
+    "Fix 1 (Whisper JSON) is well-defended: response_format='json' + tolerant _extract_text (dict/str/pydantic) + anti-nested-JSON loop with 3-iter cap, guards against both single- and double-wrapped payloads. Verified via direct semantic simulation on synthetic {'text':...,'usage':...} and doubly-wrapped variants. Hallucination filter (Amara.org etc.) untouched and still active.",
+    "Fix 1 duplicate `_trigger_pipeline` cleanup verified: grep shows exactly 1 definition (voice_stream.py:786). No dead code path.",
+    "Fix 2 code wiring is correct — voice_stream_handler reads audio_route from start frame (line 635), calls dg_params_for_route (line 661), passes per-session dg_params to DeepgramLiveSession (line 662), constructor stores them (line 420) and uses them in the query string on connect (line 429). BUT the param VALUES violate Deepgram's contract → HTTP 400 (see critical issue). Wiring is fine; values need adjustment.",
+    "Fix 3 (Opzione A body unification) implementation is clean and matches spec: idx=0 fires immediately, subsequent sentences push to body_buffer, tail also goes to buffer when idx>0, final join + single emit at idx=1 with previous_text=_prev_sentence_for_tts. The edge case where the whole reply fits in the aggressive chunk (no body_buffer) is correctly handled (no idx=1 emit).",
+    "server.py is still 9820 lines — refactor pressure persists (carried from iter 9/10/11)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter12_whisper_vad_prosody_jan2026.py (new — 24 pytest cases: 6 dg_params unit, 2 DGSession constructor, 1 no-dup-trigger, 5 whisper-json inspection+simulation, 4 converse-fast e2e, 5 WS audio_route handshake, 1 dev-login regression)"
+  ],
+  "success_rate": {"backend": "20/24 = 83% (4 failures ALL trace to the same P0: DG rejects utterance_end_ms<1000)", "frontend": "n/a (backend-only per request)"},
+  "seed_data_creation": "None persistent. Fast-session docs created by /converse-fast/start have a 5min TTL index and self-expire.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 12 test file is /app/backend/tests/test_iter12_whisper_vad_prosody_jan2026.py. Run with `pytest tests/test_iter12_whisper_vad_prosody_jan2026.py -v` from /app/backend. The 4 TestVoiceStreamAudioRoute failures (bluetooth/builtin/unknown/no-field) will REMAIN RED until utterance_end_ms is raised to 1000 for those routes in voice_stream.py:316-329. Once fixed, no test change needed — just re-run. The wired variant passing PROVES the audio_route→dg_params→DeepgramLiveSession→query-string plumbing works end-to-end when values are valid. Fix 1 and Fix 3 don't need retesting unless the main agent touches those files. Also carried tests in tests/test_iter11_trait_update_jan2026.py + test_koda_regression_jan2026.py + test_iter10_android_ota_request.py still pass.",
+  "rca_of_issue": "REPRODUCTION: `python3 -c \"...websockets.connect(wss://api.deepgram.com/v1/listen?...&utterance_end_ms=V&...)\"` with V ∈ {700,800,999} → HTTP 400 from Deepgram before the WS handshake completes. With V ∈ {1000,1500} → 101 Switching Protocols, connection OK. Server-side log matches: `[KODA_STREAM_DG sess=XXXX] connected in 154ms — model=nova-3 lang=it endpointing=300ms utterance_end_ms=1000ms` (wired route, succeeds) vs `DG connect failed: server rejected WebSocket connection: HTTP 400` (bluetooth/builtin/unknown routes, all utterance_end_ms<1000). CAUSE: The fix author saw endpointing (a parameter with min ~10ms) and utterance_end_ms as symmetric knobs and lowered both. But Deepgram's docs (https://developers.deepgram.com/docs/utterance-end) state utterance_end_ms has hard minimum 1000ms because it is computed from interim-results cadence (~1s). MITIGATION: keep utterance_end_ms=1000 for all routes; only vary endpointing to get the desired aggressive/conservative behavior. The intent (close mic faster on noisy bluetooth in-van audio) is fully achievable via endpointing=200 alone."
+}

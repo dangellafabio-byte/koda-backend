@@ -160,38 +160,70 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
         buf = io.BytesIO(wav_bytes)
         buf.name = "utterance.wav"  # emergentintegrations valida l'estensione
         t0 = time.time()
-        # response_format="text" → ritorna direttamente la stringa
+        # === FIX 2026-07-02 (Fabio "log JSON in Claude") ===
+        # response_format="json" → ritorna un oggetto con .text pulito.
+        # Il proxy Emergent (via litellm) può però wrappare la risposta in
+        # vari modi (TranscriptionResponse pydantic, dict, str JSON, o
+        # anche una string che CONTIENE il JSON verbose_json). Nel log
+        # utente del 2026-07-01 si è visto Claude ricevere direttamente
+        # `{"text":"...","usage":{"type":"duration",...}}` come "final
+        # text": significa che uno dei rami di sopra estraeva `text` ma
+        # il valore ESTRATTO era a sua volta JSON annidato.
+        # Fix: dopo aver preso `text` da qualsiasi ramo, se sembra JSON
+        # (inizia con `{`), fai `json.loads` e ri-estrai `.text`. Loop
+        # 2 giri per gestire doppio wrapping.
         response = await asyncio.wait_for(
             client.transcribe(
                 file=buf,
                 model="whisper-1",
-                response_format="text",
+                response_format="json",
                 language="it",
             ),
             timeout=WHISPER_TIMEOUT_SEC,
         )
         elapsed_ms = int((time.time() - t0) * 1000)
-        # Il proxy Emergent (via litellm) ritorna un formato che dipende
-        # dal server sottostante. Robusto: gestiamo string+text, dict,
-        # object, e JSON-string incapsulato.
-        text: Optional[str] = None
-        if isinstance(response, str):
-            # Se è JSON string wrapping l'oggetto verbose, estrai .text
-            s = response.strip()
-            if s.startswith("{"):
-                try:
-                    obj = json.loads(s)
-                    text = (obj.get("text") or "").strip() if isinstance(obj, dict) else None
-                except Exception:
-                    text = s
-            else:
-                text = s
-        elif isinstance(response, dict):
-            text = (response.get("text") or "").strip()
-        else:
-            text = (getattr(response, "text", None) or "").strip()
-        if text is None:
-            text = ""
+
+        def _extract_text(payload: Any) -> str:
+            """Estrai il campo 'text' da un payload (str/dict/obj) in modo
+            tollerante. Ritorna stringa vuota se non trovato.
+            """
+            if payload is None:
+                return ""
+            # dict → prendi 'text'
+            if isinstance(payload, dict):
+                return str(payload.get("text") or "").strip()
+            # pydantic/obj con .text
+            attr = getattr(payload, "text", None)
+            if isinstance(attr, str):
+                return attr.strip()
+            # str → potrebbe essere plain text o JSON string
+            if isinstance(payload, str):
+                return payload.strip()
+            return ""
+
+        raw_text = _extract_text(response)
+
+        # === Sanitizzazione anti-JSON annidato ===
+        # Se il testo estratto sembra a sua volta un JSON (es.
+        # '{"text":"ciao","usage":...}'), lo parsiamo e ri-estraiamo.
+        # Facciamo max 3 loop per evitare cicli infiniti su payload strani.
+        text: str = raw_text
+        for _ in range(3):
+            if not text:
+                break
+            s = text.strip()
+            if not (s.startswith("{") and s.endswith("}")):
+                break
+            try:
+                inner = json.loads(s)
+            except Exception:
+                # Non è JSON valido → tienilo così com'è
+                break
+            if isinstance(inner, dict) and "text" in inner:
+                text = str(inner.get("text") or "").strip()
+                # ripeti il check al prossimo giro
+                continue
+            break
         text = text.strip()
         # === Filtro anti-hallucination Whisper (Amara.org, etc.) ===
         # Su audio muto/rumoroso Whisper allucina frasi standard tipo
@@ -232,6 +264,11 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
 
 # Parametri di query string Deepgram Live — vedi docstring per spiegazione.
 # IMPORTANTE: questi sono valori INIZIALI da tunare nel furgone.
+# === FIX 2026-07-02 (Fabio "non capisce quando chiudere in furgone") ===
+# I parametri di endpointing ora sono DINAMICI in funzione dell'audio route
+# rilevata dal client (Bluetooth auto, auricolari cablati, mic interno).
+# Vedi `dg_params_for_route()` sotto. Questi restano come default/fallback
+# per compatibilità (se il client non manda audio_route).
 DG_PARAMS = {
     "model": "nova-3",
     "language": "it",
@@ -239,7 +276,7 @@ DG_PARAMS = {
     "sample_rate": "16000",
     "channels": "1",
     "endpointing": "250",
-    "utterance_end_ms": "1000",
+    "utterance_end_ms": "800",
     "interim_results": "true",
     "vad_events": "true",
     "smart_format": "true",
@@ -254,6 +291,43 @@ DG_PARAMS = {
     # (es. "Sfogo", "Confessionale" se vengono sbagliati).
     "keyterm": "Koda",
 }
+
+
+def dg_params_for_route(audio_route: Optional[str]) -> Dict[str, str]:
+    """Restituisce i parametri Deepgram tunati per la audio route corrente.
+
+    === FIX 2026-07-02 (Fabio furgone) ===
+    In furgone connesso al Bluetooth auto, il mic dell'auto/telefono
+    riceve costantemente rumore motore/vento. Deepgram non trigga
+    speech_final finché non c'è un vero "silenzio" — che in furgone
+    non arriva mai. Riduciamo endpointing e utterance_end_ms per la
+    route Bluetooth così Koda chiude il mic anche in mezzo al rumore
+    di fondo. Per auricolari cablati (contesto silenzioso) restiamo
+    conservativi. Per mic interno un default intermedio.
+
+    Args:
+        audio_route: uno di "bluetooth", "wired", "builtin", None (o
+                     stringa sconosciuta → trattata come "builtin").
+    Returns:
+        Copia di DG_PARAMS con endpointing/utterance_end_ms adattati.
+    """
+    params = dict(DG_PARAMS)
+    route = (audio_route or "").strip().lower()
+    if route == "bluetooth":
+        # Furgone/auto: aggressivo per bucare il rumore di fondo continuo.
+        params["endpointing"] = "200"
+        params["utterance_end_ms"] = "700"
+    elif route == "wired":
+        # Auricolari cablati: contesto tipicamente silenzioso, meno rischio
+        # falsi positivi. Manteniamo un po' più conservativo.
+        params["endpointing"] = "300"
+        params["utterance_end_ms"] = "1000"
+    else:
+        # builtin / unknown: default bilanciato (già scritto sopra).
+        # Manteniamo esplicito per chiarezza log.
+        params["endpointing"] = "250"
+        params["utterance_end_ms"] = "800"
+    return params
 
 # KeepAlive per evitare chiusura WS Deepgram dopo 10s di silenzio.
 DG_KEEPALIVE_INTERVAL_S = 5.0
@@ -334,12 +408,16 @@ class DeepgramLiveSession:
     Si occupa internamente del KeepAlive periodico.
     """
 
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, dg_params: Optional[Dict[str, str]] = None):
         self.session_id = session_id
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self._keepalive_task: Optional[asyncio.Task] = None
         self._closed = False
         self._connect_started_at: Optional[float] = None
+        # === FIX 2026-07-02 (Fabio audio route dinamica) ===
+        # Se il caller passa dei parametri custom (es. tunati per Bluetooth),
+        # li usiamo. Altrimenti fallback ai default globali.
+        self.dg_params: Dict[str, str] = dg_params if dg_params else dict(DG_PARAMS)
 
     @property
     def short_id(self) -> str:
@@ -348,7 +426,7 @@ class DeepgramLiveSession:
     async def connect(self) -> None:
         if not DEEPGRAM_API_KEY:
             raise RuntimeError("DEEPGRAM_API_KEY not configured")
-        qs = "&".join(f"{k}={v}" for k, v in DG_PARAMS.items())
+        qs = "&".join(f"{k}={v}" for k, v in self.dg_params.items())
         url = f"{DEEPGRAM_LIVE_URL}?{qs}"
         headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
         self._connect_started_at = time.time()
@@ -366,9 +444,9 @@ class DeepgramLiveSession:
         dt_ms = int((time.time() - (self._connect_started_at or 0)) * 1000)
         logger.info(
             f"[KODA_STREAM_DG sess={self.short_id}] connected in {dt_ms}ms — "
-            f"model={DG_PARAMS['model']} lang={DG_PARAMS['language']} "
-            f"endpointing={DG_PARAMS['endpointing']}ms "
-            f"utterance_end_ms={DG_PARAMS['utterance_end_ms']}ms"
+            f"model={self.dg_params['model']} lang={self.dg_params['language']} "
+            f"endpointing={self.dg_params['endpointing']}ms "
+            f"utterance_end_ms={self.dg_params['utterance_end_ms']}ms"
         )
         # Avvia KeepAlive periodico in background.
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
@@ -550,6 +628,11 @@ async def voice_stream_handler(
         profile_lang = (start_req.get("profile_lang") or "it").lower()
         ephemeral = bool(start_req.get("ephemeral", False))
         container = (start_req.get("container") or "aac").lower()
+        # === FIX 2026-07-02 (Fabio "non capisce quando chiudere in furgone") ===
+        # Il client manda la audio route rilevata (bluetooth/wired/builtin).
+        # Usiamo questa info per tunare i parametri Deepgram (endpointing +
+        # utterance_end_ms) e chiudere il mic anche nel rumore del furgone.
+        audio_route = (start_req.get("audio_route") or "").strip().lower() or None
         # Estraiamo la posizione GPS dal client (3 campi opzionali).
         # Sanity cap: max 80 char per evitare iniezioni nel prompt.
         def _clip(v: Any) -> Optional[str]:
@@ -565,6 +648,7 @@ async def voice_stream_handler(
         logger.info(
             f"[KODA_STREAM sess={short_id}] start lang={profile_lang} "
             f"ephemeral={ephemeral} container={container} "
+            f"audio_route={audio_route!r} "
             f"city={location_city!r} region={location_region!r} country={location_country!r}"
         )
 
@@ -572,7 +656,10 @@ async def voice_stream_handler(
         if not DEEPGRAM_API_KEY:
             await emit_to_client({"type": "error", "message": "STT not configured"})
             return
-        dg = DeepgramLiveSession(session_id=session_id)
+        # Params Deepgram tunati per la audio route corrente (bluetooth in
+        # furgone → più aggressivo, wired → più conservativo).
+        dg_params_dyn = dg_params_for_route(audio_route)
+        dg = DeepgramLiveSession(session_id=session_id, dg_params=dg_params_dyn)
         try:
             await dg.connect()
         except Exception as e:
@@ -696,8 +783,6 @@ async def voice_stream_handler(
                     await emit_to_client({"type": "error", "message": f"STT error: {msg}"})
                     break
 
-        async def _trigger_pipeline(final_text: str) -> None:
-            """Esegue la pipeline LLM+TTS esistente con il testo trascritto."""
         async def _trigger_pipeline(final_text: str, pcm_snapshot: bytes = b"") -> None:
             """Esegue la pipeline LLM+TTS esistente con il testo trascritto.
 

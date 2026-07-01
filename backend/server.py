@@ -8860,6 +8860,21 @@ async def _fast_pipeline_task(
                 logger.error(f"[fast] sentence gen error: {e}")
 
         sentence_tasks: List[asyncio.Task] = []
+        # === FIX 2026-07-02 (Fabio "voce bipolare") — Opzione A prosodia unificata ===
+        # Il modello eleven_v3 NON supporta `previous_text` per continuità
+        # prosodica: se mandiamo sentence 1, 2, 3, 4 come chiamate separate,
+        # ElevenLabs genera 4 clip audio disgiunte e la voce suona
+        # "bipolare" (energia/tono cambia di colpo tra una frase e la
+        # successiva).
+        # Fix: la PRIMA frase (chunk aggressivo ~22 char) viene ancora
+        # spedita subito per minimizzare TTFT audio. Tutte le frasi
+        # SUCCESSIVE vengono accumulate in `body_buffer` e mandate a
+        # ElevenLabs in UNA SOLA chiamata come body idx=1: così eleven_v3
+        # genera prosodia coerente per l'intero corpo della risposta.
+        # Trade-off: leggero delay sul secondo chunk audio (perché
+        # ElevenLabs deve generare tutto il body prima di iniziare a
+        # streammare), ma il primo chunk è già in playback per l'utente.
+        body_buffer: List[str] = []
 
         async for chunk in stream:
             try:
@@ -8890,28 +8905,58 @@ async def _fast_pipeline_task(
                         break
                     sentence_buf = rest
                     if sent.strip():
-                        # PROSODY CONTINUITY (Fabio 2026-06-21): la frase
-                        # PRECEDENTE viene passata a ElevenLabs come `previous_text`
-                        # per dare contesto prosodico (no salti di energia tra
-                        # frase 1 e frase 2). _prev_sentence_for_tts contiene
-                        # il testo della frase letta più di recente.
-                        task = asyncio.create_task(_gen_and_publish_sentence(
-                            sentence_idx, sent, previous_text=_prev_sentence_for_tts or None,
-                        ))
-                        sentence_tasks.append(task)
-                        _prev_sentence_for_tts = sent
-                        sentence_idx += 1
+                        # === FIX 2026-07-02 Opzione A ===
+                        # sentence_idx == 0: chunk aggressivo → TTS immediato (fast TTFT)
+                        # sentence_idx > 0:  accumula in body_buffer → 1 sola TTS call
+                        #                    a fine LLM stream (prosodia unificata)
+                        if sentence_idx == 0:
+                            task = asyncio.create_task(_gen_and_publish_sentence(
+                                sentence_idx, sent, previous_text=None,
+                            ))
+                            sentence_tasks.append(task)
+                            _prev_sentence_for_tts = sent
+                            sentence_idx += 1
+                        else:
+                            body_buffer.append(sent)
             if extractor.reply_finished:
                 break
 
         tail = sentence_buf.strip()
         if tail:
-            task = asyncio.create_task(_gen_and_publish_sentence(
-                sentence_idx, tail, previous_text=_prev_sentence_for_tts or None,
-            ))
-            sentence_tasks.append(task)
-            _prev_sentence_for_tts = tail
-            sentence_idx += 1
+            # === FIX 2026-07-02 Opzione A ===
+            # Anche il tail (frase finale senza newline terminale) fa parte
+            # del body — accumula insieme al resto per prosodia coerente.
+            if sentence_idx == 0:
+                # Edge case: la risposta era così corta da non triggerare
+                # nemmeno il primo aggressive chunk. Emettiamo il tail come
+                # frase unica (nessun body separato).
+                task = asyncio.create_task(_gen_and_publish_sentence(
+                    sentence_idx, tail, previous_text=None,
+                ))
+                sentence_tasks.append(task)
+                _prev_sentence_for_tts = tail
+                sentence_idx += 1
+            else:
+                body_buffer.append(tail)
+
+        # === FIX 2026-07-02 Opzione A — Emetti body unificato ===
+        # Ora che l'LLM ha finito di streammare, se abbiamo accumulato frasi
+        # nel body_buffer le mandiamo a ElevenLabs come UNA sola stringa.
+        # Prosodia coerente per tutto il corpo della risposta.
+        if body_buffer:
+            body_text = " ".join(s.strip() for s in body_buffer if s and s.strip()).strip()
+            if body_text:
+                logger.info(
+                    f"[fast {session_id[:8]}] body unified TTS: "
+                    f"n_sentences={len(body_buffer)} chars={len(body_text)} "
+                    f"preview={body_text[:80]!r}"
+                )
+                task = asyncio.create_task(_gen_and_publish_sentence(
+                    sentence_idx, body_text, previous_text=_prev_sentence_for_tts or None,
+                ))
+                sentence_tasks.append(task)
+                _prev_sentence_for_tts = body_text
+                sentence_idx += 1
 
         if sentence_tasks:
             try:

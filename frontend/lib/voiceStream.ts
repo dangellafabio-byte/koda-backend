@@ -171,6 +171,87 @@ function buildStreamingPreset() {
 }
 
 // =============================================================
+// AUDIO ROUTE DETECTION (Fabio 2026-07-02 — furgone VAD dinamico)
+// =============================================================
+/**
+ * Rileva la audio route corrente (bluetooth / wired / builtin) per
+ * consentire al server di tunare i parametri Deepgram di endpointing.
+ *
+ * Approccio: crea un recorder temporaneo, chiama prepareToRecordAsync
+ * per attivare la AudioSession, poi getCurrentInput() legge la porta
+ * audio corrente da AVAudioSession (iOS) / MediaRecorder AudioSource
+ * (Android). Se qualsiasi passo fallisce, ritorna "unknown" così il
+ * server usa i parametri di default.
+ *
+ * NOTA: fatto una sola volta per sessione all'apertura della WS, non
+ * per ogni chunk. Se durante la conversazione l'utente stacca il
+ * Bluetooth (raro nel furgone) i parametri Deepgram restano quelli
+ * iniziali — l'imprecisione è accettabile per l'MVP.
+ *
+ * @returns "bluetooth" | "wired" | "builtin" | "unknown"
+ */
+async function detectAudioRoute(): Promise<
+  "bluetooth" | "wired" | "builtin" | "unknown"
+> {
+  try {
+    // Costruisce un recorder minimalissimo (l'unico scopo è chiamare
+    // getCurrentInput() dopo prepareToRecordAsync).
+    const probe = new (AudioModule as any).AudioRecorder({});
+    const preset = buildStreamingPreset();
+    try {
+      await probe.prepareToRecordAsync(preset);
+    } catch (e: any) {
+      console.log(
+        `[KODA_STREAM_CLIENT] detectAudioRoute: prepare failed: ${e?.message || e}`
+      );
+      return "unknown";
+    }
+    let inputType = "";
+    let inputName = "";
+    try {
+      const cur = await probe.getCurrentInput();
+      inputType = String(cur?.type || "");
+      inputName = String(cur?.name || "");
+    } catch (e: any) {
+      console.log(
+        `[KODA_STREAM_CLIENT] detectAudioRoute: getCurrentInput failed: ${e?.message || e}`
+      );
+    }
+    // Rilascia il probe (best-effort). Se il recorder si trova già in
+    // stato prepared → stop() lancia; catch silenzioso.
+    try { await probe.stop(); } catch {}
+
+    const s = `${inputType} ${inputName}`.toLowerCase();
+    console.log(
+      `[KODA_STREAM_CLIENT] detectAudioRoute: type="${inputType}" name="${inputName}"`
+    );
+
+    // Heuristica classificazione (basata su AVAudioSessionPort values
+    // iOS e MediaRecorder.AudioSource su Android):
+    //   Bluetooth: "BluetoothA2DP", "BluetoothHFP", "BluetoothLE", "bluetooth"
+    //   Wired:     "Headphones", "HeadsetMic", "LineIn", "USBAudio", "headset"
+    //   Built-in:  "BuiltInMic", "MicrophoneBuiltIn", "voice_communication",
+    //              "default"
+    if (/bluetooth|hfp|a2dp|\bble\b|car\s*audio/.test(s)) {
+      return "bluetooth";
+    }
+    if (/headphone|headset|earbud|line[\s-]?in|usb\s*audio|wired/.test(s)) {
+      return "wired";
+    }
+    if (/built[\s-]?in|internal|voice_communication|default|mic\b/.test(s)) {
+      return "builtin";
+    }
+    // Nessun match → unknown (server userà default bilanciato)
+    return "unknown";
+  } catch (e: any) {
+    console.log(
+      `[KODA_STREAM_CLIENT] detectAudioRoute: crashed → unknown: ${e?.message || e}`
+    );
+    return "unknown";
+  }
+}
+
+// =============================================================
 // SESSION
 // =============================================================
 export class VoiceStreamSession {
@@ -259,20 +340,43 @@ export class VoiceStreamSession {
     this.doneReceived = false;
     this.notifiedUpperOnClose = false;
 
+    // === FIX 2026-07-02 (Fabio "furgone non chiude") — Audio route detection ===
+    // Rileva se siamo su Bluetooth (auto), auricolari cablati o mic
+    // interno PRIMA di aprire la WS. Il server userà questo per
+    // scegliere parametri Deepgram di endpointing più aggressivi in
+    // furgone. Se detection fallisce → "unknown" → fallback default.
+    // Timeboxato a 2s per non ritardare troppo il "tap to talk".
+    let audioRoute: "bluetooth" | "wired" | "builtin" | "unknown" = "unknown";
+    try {
+      audioRoute = await Promise.race([
+        detectAudioRoute(),
+        new Promise<"unknown">((resolve) =>
+          setTimeout(() => resolve("unknown"), 2000)
+        ),
+      ]);
+      console.log(`[KODA_STREAM_CLIENT] audio_route detected → ${audioRoute}`);
+    } catch (e: any) {
+      console.log(
+        `[KODA_STREAM_CLIENT] audio_route detection crashed: ${e?.message || e}`
+      );
+    }
+    // Salva per eventuale reconnect
+    (this.lastStartOpts as any).audioRoute = audioRoute;
+
     // 1) Apri WS
     const url = buildWsUrl();
     console.log(
-      `[KODA_STREAM_CLIENT] opening WS → ${url} loc=${opts?.locationCity || "<none>"}`
+      `[KODA_STREAM_CLIENT] opening WS → ${url} loc=${opts?.locationCity || "<none>"} route=${audioRoute}`
     );
     await this.openWs(url);
 
-    // 2) Frame iniziale (include la città GPS se disponibile — Koda sa
-    //    dove sei senza salvare niente in DB)
+    // 2) Frame iniziale (include la città GPS e la audio route)
     this.sendJson({
       type: "start",
       ephemeral: !!opts?.ephemeral,
       profile_lang: opts?.profileLang || "it",
       container: "aac",
+      audio_route: audioRoute,
       location_city: opts?.locationCity || undefined,
       location_region: opts?.locationRegion || undefined,
       location_country: opts?.locationCountry || undefined,
@@ -383,6 +487,7 @@ export class VoiceStreamSession {
         ephemeral: !!this.lastStartOpts.ephemeral,
         profile_lang: this.lastStartOpts.profileLang || "it",
         container: "aac",
+        audio_route: (this.lastStartOpts as any).audioRoute || "unknown",
         location_city: this.lastStartOpts.locationCity || undefined,
         location_region: this.lastStartOpts.locationRegion || undefined,
         location_country: this.lastStartOpts.locationCountry || undefined,
