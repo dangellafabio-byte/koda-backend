@@ -308,7 +308,7 @@ export default function Taccuino() {
   // inglobato l'ultimo commit.
   useEffect(() => {
     console.log(
-      `[KODA_BUILDTAG] v36-cleanup-debug-gated build=2026-06-29-morning ` +
+      `[KODA_BUILDTAG] v37-audio-route-whisper-json-prosody build=2026-07-02-morning ` +
         `verbose=${KODA_DEBUG_VERBOSE} ` +
         `features=ANOMALY,STATUS,APPSTATE_GUARD${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
