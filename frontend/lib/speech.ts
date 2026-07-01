@@ -1927,6 +1927,47 @@ export async function voiceStreamConverse(opts: {
     window_ms: number;
   };
   const sentenceQueue: SentenceItem[] = [];
+  // === FIX 2026-07-01 — "Bipolare" bug (Fabio da log furgone) ===
+  // Root cause: il backend genera le frasi in PARALLELO con
+  // `asyncio.create_task`. Se la frase idx=1 è più corta della idx=0,
+  // finisce TTS prima → arriva prima al frontend → il vecchio queue
+  // (FIFO by arrival) la riproduce PRIMA di idx=0. L'utente sente
+  // la seconda parte della risposta prima della prima → sensazione
+  // di "bipolare" / "distacco tra frasi" / "cambio argomento".
+  // Osservato nei log: turni con idx=1 breve (es. "chi?") suonati
+  // prima di idx=0 lungo ("Aspetta Fabio, non ti ho beccato benissimo...").
+  //
+  // Fix: buffer di REORDER per index. Le frasi si accodano SOLO
+  // nell'ordine idx=0, 1, 2, ... Se arriva idx=N ma aspettiamo idx=M<N,
+  // parcheggiamo in `pendingByIdx` e drain quando idx=M arriva.
+  const pendingByIdx = new Map<number, SentenceItem>();
+  let nextExpectedIdx = 0;
+  const enqueueInOrder = (item: SentenceItem) => {
+    if (item.i === nextExpectedIdx) {
+      sentenceQueue.push(item);
+      nextExpectedIdx += 1;
+      while (pendingByIdx.has(nextExpectedIdx)) {
+        const drained = pendingByIdx.get(nextExpectedIdx)!;
+        pendingByIdx.delete(nextExpectedIdx);
+        sentenceQueue.push(drained);
+        console.log(
+          `[KODA_CUTOFF_DIAG] reorder_drain idx=${drained.i} bytes=${drained.bytes.byteLength} ` +
+            `nextExpected=${nextExpectedIdx + 1}`
+        );
+        nextExpectedIdx += 1;
+      }
+    } else if (item.i > nextExpectedIdx) {
+      pendingByIdx.set(item.i, item);
+      console.log(
+        `[KODA_CUTOFF_DIAG] reorder_buffer idx=${item.i} bytes=${item.bytes.byteLength} ` +
+          `waiting_for=${nextExpectedIdx} pending_count=${pendingByIdx.size}`
+      );
+    } else {
+      console.warn(
+        `[KODA_CUTOFF_DIAG] reorder_drop_duplicate idx=${item.i} nextExpected=${nextExpectedIdx}`
+      );
+    }
+  };
   let resolveTokenWait: (() => void) | null = null;
   let metaCaptured: FastConverseMeta | undefined;
   let firstAudioFired = false;
@@ -1978,7 +2019,11 @@ export async function voiceStreamConverse(opts: {
     },
     onSentence: (header: any, audioBuf: ArrayBuffer) => {
       const u8 = new Uint8Array(audioBuf);
-      sentenceQueue.push({
+      // === FIX 2026-07-01 — Bipolare bug: usa enqueueInOrder ===
+      // Prima si faceva sentenceQueue.push diretto → FIFO by arrival →
+      // le frasi generate in parallelo dal backend potevano suonarsi
+      // in ordine sbagliato. Ora buffer di reorder per index.
+      enqueueInOrder({
         i: header.i || 0,
         bytes: u8,
         waveform: Array.isArray(header.waveform) ? header.waveform : null,
@@ -2086,10 +2131,36 @@ export async function voiceStreamConverse(opts: {
       try { opts.onMeta?.(metaCaptured); } catch {}
     },
     onDone: () => {
+      // === FIX 2026-07-01 — Flush pending items su done (safety net) ===
+      // Se qualche idx è rimasto in pendingByIdx (es. idx=0 perso lato
+      // backend → mai arrivato → idx=1 ancora bufferizzato) all'arrivo
+      // del segnale done, drenamo TUTTO in ordine crescente: meglio
+      // suonare una frase sola che restare in silenzio.
+      if (pendingByIdx.size > 0) {
+        const sortedKeys = Array.from(pendingByIdx.keys()).sort((a, b) => a - b);
+        for (const k of sortedKeys) {
+          const it = pendingByIdx.get(k)!;
+          pendingByIdx.delete(k);
+          sentenceQueue.push(it);
+          console.warn(
+            `[KODA_CUTOFF_DIAG] reorder_flush_on_done idx=${it.i} ` +
+              `bytes=${it.bytes.byteLength} nextExpected_was=${nextExpectedIdx}`
+          );
+        }
+      }
       pipelineDone = true;
       notify();
     },
     onError: (msg: string) => {
+      // Anche su errore: flush pending per non perdere audio già ricevuto.
+      if (pendingByIdx.size > 0) {
+        const sortedKeys = Array.from(pendingByIdx.keys()).sort((a, b) => a - b);
+        for (const k of sortedKeys) {
+          const it = pendingByIdx.get(k)!;
+          pendingByIdx.delete(k);
+          sentenceQueue.push(it);
+        }
+      }
       pipelineError = msg || "voice-stream-error";
       pipelineDone = true;
       notify();
