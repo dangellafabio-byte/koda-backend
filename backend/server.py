@@ -7052,19 +7052,28 @@ def _should_web_search(text: str, force_open: bool = False) -> bool:
             return False
         if any(p in t for p in intro_phrases) and len(t) < 30:
             return False
-        # === STRATEGIA AGGRESSIVA (giugno 2026 v3) ===
-        # Lo STT (Deepgram) trascrive sempre in MINUSCOLO, quindi il check
-        # "capitalizzata" non funziona. Cambio approccio: se la frase è ≥ 10
-        # caratteri e NON è conversazionale (vedi sopra), Tavily VA SEMPRE
-        # chiamato. L'utente ha attivato il toggle → vuole accesso real-time.
-        # Cache da 5 min limita il costo. False positives = qualche chiamata
-        # in più, false negatives = "non so" frustrato → preferiamo i primi.
-        if len(t) >= 10:
-            return True
-        # Sotto i 10 char (es. "ehi?", "ok?") → solo trigger espliciti.
-        if "?" in t and len(t) >= 6:
-            return True
+        # === STRATEGIA CONSERVATIVA (luglio 2026 v4 — Fix Tavily 2s timeout) ===
+        # RCA: la strategia "aggressiva" (≥10 char = SEMPRE Tavily) mandava
+        # Tavily in timeout a 2000ms su OGNI turno conversazionale di Fabio,
+        # sprecando 2 secondi buttati per ogni frase. Misurato tramite endpoint
+        # /api/debug/last-turn-timing: sub_other_setup_ms=2007ms fissi.
+        #
+        # Nuovo approccio anche con toggle ON: richiedere SEGNALI FATTUALI
+        # espliciti prima di scomodare Tavily. Copre 3 casi:
+        #   1. Prefissi imperativi ("cerca X", "googla Y", "verifica Z")
+        #   2. Keyword fattuali (meteo, prezzo, notizie, sport, ricetta, ecc.
+        #      — vedi _WEB_SEARCH_TRIGGERS_IT: già ricca di 60+ trigger IT)
+        #   3. Domande esplicite corte con "?" ("che ora è?", "chi ha vinto?")
+        #
+        # Se la frase è pura chat/introspezione ("mi sento giù", "ho litigato
+        # con mio fratello", "che devo fare per Chiara") → Tavily NON viene
+        # chiamato → risparmio 2s per turno.
         if any(t.startswith(p) for p in _WEB_SEARCH_PREFIX_IT):
+            return True
+        if any(k in t for k in _WEB_SEARCH_TRIGGERS_IT):
+            return True
+        # Domande corte esplicite (max 30 char) con "?" → probabile query fattuale
+        if "?" in t and 6 <= len(t) <= 30:
             return True
         return False
 
@@ -8523,10 +8532,13 @@ async def _fast_pipeline_task(
         elif _should_web_search(text, force_open=True):
             logger.info(f"[fast {session_id[:8]}] web-search triggered (open internet) for: {text[:80]}")
             t_search = time.time()
-            # Timeout aggressivo: 2.0s — se Tavily non risponde entro questa
-            # finestra, Koda procede con la sua conoscenza interna (senza brief).
-            # Latenza target totale: < 2.5s end-to-end per query con web search.
-            web_search_brief = await _tavily_search_brief(text, max_results=3, timeout_s=2.0, open_internet=True)
+            # === FIX 2026-07-03 v41 — Timeout Tavily 2.0s → 0.8s ===
+            # RCA (Fabio): Tavily andava in timeout esatto a 2000ms su ogni
+            # turno conversazionale → 2s buttati sempre. Ora se Tavily non
+            # risponde in 0.8s, procediamo senza brief. Tavily buono
+            # risponde in 300-600ms; se è degradato, Claude sa già rispondere
+            # bene con la sua conoscenza. Latenza target: < 1.5s totale con web.
+            web_search_brief = await _tavily_search_brief(text, max_results=3, timeout_s=0.8, open_internet=True)
             logger.info(f"[fast {session_id[:8]}] web-search done in {(time.time()-t_search)*1000:.0f}ms, brief={'yes' if web_search_brief else 'no'}")
 
         user_payload_parts = []
