@@ -354,6 +354,40 @@ export class VoiceStreamSession {
     this.doneReceived = false;
     this.notifiedUpperOnClose = false;
 
+    // === FIX 2026-07-03 v38 — AudioSession mode PRIMA di detectAudioRoute ===
+    // BUG RESIDUO da v37: dopo che Koda ha finito di parlare al turno N,
+    // playElevenLabsNativeFromUrl (speech.ts) lascia AVAudioSession in
+    // playback mode (allowsRecording:false, così TTS suona forte anche
+    // in silenzioso). Al turno N+1, session.start() chiamava PRIMA
+    // detectAudioRoute → probe.prepareToRecordAsync → iOS lanciava
+    // RecordingDisabledException perché la session era ancora playback-only.
+    // Poi la session iOS entrava in stato "danneggiato" → ogni successivo
+    // prepareToRecordAsync in chunkLoop falliva con lo stesso errore →
+    // loop infinito (regex isPrepareFail non matchava RecordingDisabledException,
+    // quindi il cap di 5 retry non scattava).
+    // FIX: mettiamo la session in record mode PRIMA di detectAudioRoute,
+    // così detectAudioRoute non crasha e la pipeline procede pulita.
+    // La chiamata duplicata in chunkLoop (riga ~761) resta come safety net
+    // per il caso reconnect ed è idempotente.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { setAudioModeAsync } = require("expo-audio");
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        interruptionMode: "duckOthers",
+        shouldPlayInBackground: false,
+        shouldRouteThroughEarpiece: false,
+      });
+      console.log(
+        `[KODA_STREAM_CLIENT] start(): setAudioModeAsync(record) OK before detectAudioRoute`
+      );
+    } catch (e: any) {
+      console.log(
+        `[KODA_STREAM_CLIENT] start(): setAudioModeAsync FAILED: ${e?.message || e}`
+      );
+    }
+
     // === FIX 2026-07-02 (Fabio "furgone non chiude") — Audio route detection ===
     // Rileva se siamo su Bluetooth (auto), auricolari cablati o mic
     // interno PRIMA di aprire la WS. Il server userà questo per
@@ -1007,7 +1041,16 @@ export class VoiceStreamSession {
         const isPrepareFail =
           /prepareToRecordAsync/i.test(errMsg) ||
           /AudioSession/i.test(errMsg) ||
-          /560557684/.test(errMsg);
+          /560557684/.test(errMsg) ||
+          // === FIX 2026-07-03 v38 — RecordingDisabledException nel cap ===
+          // Dopo che detectAudioRoute (o TTS playback) lascia iOS in
+          // playback mode, prepareToRecordAsync lancia questo errore
+          // testuale invece di quello OSStatus 560557684. Se non è
+          // matchato dalla regex, il contatore consecutivePrepareFailures
+          // non incrementa mai → il cap di 5 non scatta mai → loop
+          // infinito. Aggiungiamo i due pattern noti iOS/RN.
+          /RecordingDisabledException/i.test(errMsg) ||
+          /Recording not allowed/i.test(errMsg);
         console.log(
           `[KODA_STREAM_CLIENT] chunk #${cIdx} ERROR: ${e?.message || e} | ` +
             `stack: ${String(e?.stack || "").split("\n").slice(0, 3).join(" | ")}`
@@ -1025,13 +1068,33 @@ export class VoiceStreamSession {
           if (consecutivePrepareFailures === 2) {
             try {
               console.log(`[KODA_STREAM_CLIENT] attempting AVAudioSession reset (cycle)...`);
-              // require locale come nel setup iniziale a linea 641
+              // === FIX 2026-07-03 v38 — Reset con SET COMPLETO di parametri ===
+              // Prima chiamava solo sma({allowsRecording:false}) e poi
+              // sma({allowsRecording:true}) — troppo minimalista: iOS
+              // resetta i parametri non specificati ai default (che
+              // includono playsInSilentMode:false → audio silenzioso se
+              // il telefono è in muto, e nessun ducking). Serve un reset
+              // completo che ripristini tutti i parametri identici al
+              // setup iniziale (linea ~761).
+              // require locale come nel setup iniziale
               // eslint-disable-next-line @typescript-eslint/no-require-imports
               const { setAudioModeAsync: sma } = require("expo-audio");
-              await sma({ allowsRecording: false } as any);
+              await sma({
+                allowsRecording: false,
+                playsInSilentMode: true,
+                interruptionMode: "duckOthers",
+                shouldPlayInBackground: false,
+                shouldRouteThroughEarpiece: false,
+              } as any);
               await new Promise((r) => setTimeout(r, 150));
-              await sma({ allowsRecording: true } as any);
-              console.log(`[KODA_STREAM_CLIENT] AVAudioSession reset done`);
+              await sma({
+                allowsRecording: true,
+                playsInSilentMode: true,
+                interruptionMode: "duckOthers",
+                shouldPlayInBackground: false,
+                shouldRouteThroughEarpiece: false,
+              } as any);
+              console.log(`[KODA_STREAM_CLIENT] AVAudioSession reset done (full params)`);
             } catch (resetErr) {
               console.log(
                 `[KODA_STREAM_CLIENT] AVAudioSession reset failed: ${String(resetErr)}`
