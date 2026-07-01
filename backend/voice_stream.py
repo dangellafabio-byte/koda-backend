@@ -60,9 +60,11 @@ Constraint Emergent rispettati:
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
+import struct
 import time
 import uuid
 from typing import Optional, Callable, Awaitable, Any, Dict
@@ -94,6 +96,139 @@ except Exception as _ffmpeg_err:
     logger.warning(
         f"[voice_stream] imageio_ffmpeg not available, falling back to PATH: {_ffmpeg_err}"
     )
+
+# ============================================================
+# WHISPER-1 OVERRIDE (Fabio 2026-07-01 — "primo → 1º" bug)
+# ============================================================
+# Deepgram continua a gestire endpointing (detection di quando smetti di
+# parlare) MA la trascrizione finale, se possibile, la prendiamo da
+# Whisper-1 di OpenAI: più accurato in italiano rumoroso (furgone).
+# Fallback trasparente al testo Deepgram se Whisper fallisce/timeout.
+EMERGENT_LLM_KEY = os.getenv("EMERGENT_LLM_KEY", "")
+WHISPER_ENABLED = bool(EMERGENT_LLM_KEY)
+WHISPER_TIMEOUT_SEC = 6.0  # tempo max prima del fallback Deepgram
+_whisper_client = None
+
+def _get_whisper_client():
+    """Lazy init del client Whisper via emergentintegrations."""
+    global _whisper_client
+    if _whisper_client is None and WHISPER_ENABLED:
+        try:
+            from emergentintegrations.llm.openai.speech_to_text import OpenAISpeechToText
+            _whisper_client = OpenAISpeechToText(api_key=EMERGENT_LLM_KEY)
+            logger.info("[voice_stream] Whisper-1 client initialized (via EMERGENT_LLM_KEY)")
+        except Exception as e:
+            logger.warning(f"[voice_stream] Whisper-1 client init failed: {e}")
+            _whisper_client = None
+    return _whisper_client
+
+def _pcm_to_wav(pcm_bytes: bytes, sample_rate: int = 16000) -> bytes:
+    """Wrappa PCM s16le mono in header WAV RIFF (formato accettato da Whisper).
+
+    Header WAV standard 44-byte per PCM 16-bit mono a 16 kHz.
+    """
+    num_samples = len(pcm_bytes) // 2  # 16-bit = 2 byte per sample
+    byte_rate = sample_rate * 2  # mono * 2 byte
+    header = b"RIFF"
+    header += struct.pack("<I", 36 + len(pcm_bytes))  # chunk size
+    header += b"WAVEfmt "
+    header += struct.pack("<I", 16)  # subchunk1 size (PCM)
+    header += struct.pack("<H", 1)  # audio format (1 = PCM)
+    header += struct.pack("<H", 1)  # num channels (mono)
+    header += struct.pack("<I", sample_rate)
+    header += struct.pack("<I", byte_rate)
+    header += struct.pack("<H", 2)  # block align
+    header += struct.pack("<H", 16)  # bits per sample
+    header += b"data"
+    header += struct.pack("<I", len(pcm_bytes))  # data size
+    return header + pcm_bytes
+
+async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?") -> Optional[str]:
+    """Trascrivi PCM 16kHz mono via Whisper-1. None se fallisce (fallback DG).
+
+    L'input è PCM linear16 già convertito da ffmpeg. Lo wrappiamo in WAV
+    e lo passiamo a Whisper come file-like object. Se Whisper impiega
+    più di WHISPER_TIMEOUT_SEC secondi → None → il caller usa DG.
+    """
+    if not pcm_bytes or not WHISPER_ENABLED:
+        return None
+    client = _get_whisper_client()
+    if client is None:
+        return None
+    try:
+        wav_bytes = _pcm_to_wav(pcm_bytes, sample_rate=16000)
+        buf = io.BytesIO(wav_bytes)
+        buf.name = "utterance.wav"  # emergentintegrations valida l'estensione
+        t0 = time.time()
+        # response_format="text" → ritorna direttamente la stringa
+        response = await asyncio.wait_for(
+            client.transcribe(
+                file=buf,
+                model="whisper-1",
+                response_format="text",
+                language="it",
+            ),
+            timeout=WHISPER_TIMEOUT_SEC,
+        )
+        elapsed_ms = int((time.time() - t0) * 1000)
+        # Il proxy Emergent (via litellm) ritorna un formato che dipende
+        # dal server sottostante. Robusto: gestiamo string+text, dict,
+        # object, e JSON-string incapsulato.
+        text: Optional[str] = None
+        if isinstance(response, str):
+            # Se è JSON string wrapping l'oggetto verbose, estrai .text
+            s = response.strip()
+            if s.startswith("{"):
+                try:
+                    obj = json.loads(s)
+                    text = (obj.get("text") or "").strip() if isinstance(obj, dict) else None
+                except Exception:
+                    text = s
+            else:
+                text = s
+        elif isinstance(response, dict):
+            text = (response.get("text") or "").strip()
+        else:
+            text = (getattr(response, "text", None) or "").strip()
+        if text is None:
+            text = ""
+        text = text.strip()
+        # === Filtro anti-hallucination Whisper (Amara.org, etc.) ===
+        # Su audio muto/rumoroso Whisper allucina frasi standard tipo
+        # "Sottotitoli creati dalla comunità Amara.org" o "Grazie per aver
+        # guardato questo video". Le filtriamo → None → fallback DG.
+        _HALLUCINATION_MARKERS = (
+            "amara.org",
+            "sottotitoli creati",
+            "grazie per aver guardato",
+            "grazie a tutti per",
+            "iscrivetevi al canale",
+            "www.",
+        )
+        low = text.lower()
+        if text and any(m in low for m in _HALLUCINATION_MARKERS):
+            logger.info(
+                f"[voice_stream sess={session_short}] Whisper-1 hallucination "
+                f"detected → fallback Deepgram (was: {text!r})"
+            )
+            return None
+        logger.info(
+            f"[voice_stream sess={session_short}] Whisper-1 OK "
+            f"pcm={len(pcm_bytes)}B ({len(pcm_bytes)/32000:.1f}s) "
+            f"ms={elapsed_ms} text={text!r}"
+        )
+        return text if text else None
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"[voice_stream sess={session_short}] Whisper-1 TIMEOUT "
+            f"({WHISPER_TIMEOUT_SEC}s) → fallback Deepgram"
+        )
+        return None
+    except Exception as e:
+        logger.warning(
+            f"[voice_stream sess={session_short}] Whisper-1 error → fallback Deepgram: {e}"
+        )
+        return None
 
 # Parametri di query string Deepgram Live — vedi docstring per spiegazione.
 # IMPORTANTE: questi sono valori INIZIALI da tunare nel furgone.
@@ -353,6 +488,13 @@ async def voice_stream_handler(
     audio_bytes_received = 0
     chunks_received = 0
     last_chunk_at = time.time()
+    # === FIX 2026-07-01 — Whisper-1 override (Fabio "primo → 1º") ===
+    # Buffer PCM 16kHz mono accumulato per l'utterance corrente. Deepgram
+    # continua a fare l'endpointing (sa quando smetti di parlare) ma la
+    # trascrizione finale, se Whisper risponde in tempo, la prendiamo da
+    # Whisper: più accurata in italiano rumoroso (furgone). Fallback a
+    # Deepgram in caso di errore/timeout → zero rischio regressione.
+    utterance_pcm_buffer = bytearray()
 
     # Configurazione dalla prima frame
     profile_lang = "it"
@@ -523,7 +665,11 @@ async def voice_stream_handler(
                         final_text = " ".join(utterance_text_parts).strip()
                         utterance_text_parts.clear()
                         if final_text:
-                            await _trigger_pipeline(final_text)
+                            # === FIX 2026-07-01 — Whisper override ===
+                            # Snapshot PCM PRIMA di clear (per Whisper).
+                            pcm_snapshot = bytes(utterance_pcm_buffer)
+                            utterance_pcm_buffer.clear()
+                            await _trigger_pipeline(final_text, pcm_snapshot)
 
                 elif evt_type == "UtteranceEnd":
                     # Fallback: arriva se l'audio è continuato a entrare ma
@@ -536,7 +682,9 @@ async def voice_stream_handler(
                                 f"[KODA_STREAM sess={short_id}] "
                                 f"UtteranceEnd → trigger pipeline (text={final_text!r})"
                             )
-                            await _trigger_pipeline(final_text)
+                            pcm_snapshot = bytes(utterance_pcm_buffer)
+                            utterance_pcm_buffer.clear()
+                            await _trigger_pipeline(final_text, pcm_snapshot)
 
                 elif evt_type == "Metadata":
                     # Metadata di sessione (ignora per ora)
@@ -550,6 +698,15 @@ async def voice_stream_handler(
 
         async def _trigger_pipeline(final_text: str) -> None:
             """Esegue la pipeline LLM+TTS esistente con il testo trascritto."""
+        async def _trigger_pipeline(final_text: str, pcm_snapshot: bytes = b"") -> None:
+            """Esegue la pipeline LLM+TTS esistente con il testo trascritto.
+
+            === FIX 2026-07-01 — Whisper-1 override ===
+            Se abbiamo il PCM buffer di questa utterance, proviamo a
+            trascriverlo con Whisper-1 (più accurato in italiano rumoroso).
+            Se Whisper riesce → usiamo il suo testo. Altrimenti fallback
+            trasparente al testo Deepgram (`final_text`) come prima.
+            """
             nonlocal pipeline_in_flight, utterance_confidence
             pipeline_in_flight = True
             audio_duration_ms = None
@@ -562,15 +719,43 @@ async def voice_stream_handler(
             # se Deepgram non emetteva una nuova confidence non-zero.
             conf_snapshot = utterance_confidence
             utterance_confidence = None
+
+            # === FIX 2026-07-01 — Whisper override (Fabio "primo → 1º") ===
+            # Log confronto Deepgram vs Whisper per capire quanto migliora
+            # in produzione. Se Whisper vuoto/errore → tengo Deepgram.
+            transcript_source = "deepgram"
+            transcript_used = final_text
+            if WHISPER_ENABLED and pcm_snapshot and len(pcm_snapshot) > 1600:
+                # 1600B = 0.05s @ 16kHz → skip utterance troppo brevi che
+                # sarebbero rumore o click accidentale.
+                whisper_text = await transcribe_pcm_with_whisper(
+                    pcm_snapshot, session_short=short_id
+                )
+                if whisper_text:
+                    transcript_source = "whisper-1"
+                    transcript_used = whisper_text
+                    logger.info(
+                        f"[KODA_STT_OVERRIDE sess={short_id}] "
+                        f"deepgram={final_text!r} "
+                        f"whisper={whisper_text!r} "
+                        f"→ using WHISPER"
+                    )
+                else:
+                    logger.info(
+                        f"[KODA_STT_OVERRIDE sess={short_id}] "
+                        f"whisper unavailable → using DEEPGRAM: {final_text!r}"
+                    )
+
             await emit_to_client({
                 "type": "stt_final",
-                "text": final_text,
+                "text": transcript_used,
                 "confidence": conf_snapshot,
                 "audio_duration_ms": audio_duration_ms,
+                "stt_source": transcript_source,  # per diag frontend
             })
             try:
                 await run_pipeline_for_text(
-                    text=final_text,
+                    text=transcript_used,
                     ephemeral=ephemeral,
                     audio_duration_ms=audio_duration_ms,
                     stt_confidence=conf_snapshot,
@@ -645,6 +830,8 @@ async def voice_stream_handler(
 
                     # Invia a Deepgram
                     await dg.send_pcm(pcm)
+                    # === FIX 2026-07-01 — accumula PCM per Whisper override ===
+                    utterance_pcm_buffer.extend(pcm)
 
                     # Diagnostica granulare (richiesta da Fabio per Xiaomi)
                     if chunks_received % 4 == 0 or chunks_received <= 4:
