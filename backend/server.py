@@ -68,6 +68,13 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
+# === FIX 2026-07-03 v40 — Debug endpoint per timing pipeline (Fabio) ===
+# Salva in memoria l'ultimo KODA_PIPELINE_SUMMARY prodotto, così
+# possiamo esporlo via /api/debug/last-turn-timing e leggere il breakdown
+# senza dover accedere alla dashboard log di Emergent.
+from collections import deque
+_LAST_TIMING_SUMMARIES = deque(maxlen=10)
+
 
 # ============================================================================
 # ADMIN: cleanup endpoint per stale claim (giugno 2026 — ONE-TIME)
@@ -2214,6 +2221,23 @@ async def api_get_profile(request: Request):
 # Verrà override dal Paywall + RevenueCat quando integreremo i tier veri.
 DEFAULT_DAILY_TRIAL_LIMIT = 20
 DEFAULT_MONTHLY_LIMIT = 250
+
+
+# === FIX 2026-07-03 v40 — Debug endpoint per ispezione timing pipeline ===
+# Chiamato da Safari su iPhone: https://<host>/api/debug/last-turn-timing
+# Restituisce gli ultimi 10 breakdown della pipeline turno-per-turno in JSON.
+# NO AUTH — solo per debug latenza, endpoint innocuo (readonly).
+@api_router.get("/debug/last-turn-timing")
+async def debug_last_turn_timing():
+    try:
+        items = list(_LAST_TIMING_SUMMARIES)
+    except Exception:
+        items = []
+    return {
+        "count": len(items),
+        "note": "Ultimi 10 turni. Ordine: dal piu' vecchio al piu' recente.",
+        "turns": items,
+    }
 
 
 @api_router.get("/usage")
@@ -8815,6 +8839,20 @@ async def _fast_pipeline_task(
                             f"overhead={_overhead_ms}ms | "
                             f"TOTAL_srv={total_first}ms"
                         )
+                        # Salva anche in memoria per endpoint /api/debug/last-turn-timing
+                        try:
+                            _LAST_TIMING_SUMMARIES.append({
+                                "sid": session_id[:8],
+                                "at_iso": datetime.now(timezone.utc).isoformat(),
+                                "setup_ms": _setup_ms,
+                                "claude_ttft_ms": _llm_ttft_ms,
+                                "claude_first_sent_ms": _llm_first_sent_ms,
+                                "eleven_tts_ms": _tts_ms,
+                                "overhead_ms": _overhead_ms,
+                                "total_srv_ms": total_first,
+                            })
+                        except Exception:
+                            pass
                     except Exception as _e:
                         logger.warning(f"[KODA_PIPELINE_SUMMARY error]: {_e}")
                 # === FIX 2026-06-20 — Publish PRIMA del waveform compute ===
