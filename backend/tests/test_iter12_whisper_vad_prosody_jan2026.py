@@ -76,10 +76,12 @@ class TestDgParamsForRoute:
     """dg_params_for_route() returns tuned params per audio route."""
 
     def test_bluetooth_aggressive(self):
+        # Post iter12 P0 fix: utterance_end_ms must be >=1000 (DG hard min).
+        # Only `endpointing` varies by route. Bluetooth = 150ms (aggressive).
         from voice_stream import dg_params_for_route
         p = dg_params_for_route("bluetooth")
-        assert p["endpointing"] == "200", p
-        assert p["utterance_end_ms"] == "700", p
+        assert p["endpointing"] == "150", p
+        assert p["utterance_end_ms"] == "1000", p
         # Sanity: base params still present
         assert p["model"] == "nova-3"
         assert p["language"] == "it"
@@ -87,14 +89,14 @@ class TestDgParamsForRoute:
     def test_wired_conservative(self):
         from voice_stream import dg_params_for_route
         p = dg_params_for_route("wired")
-        assert p["endpointing"] == "300", p
+        assert p["endpointing"] == "350", p
         assert p["utterance_end_ms"] == "1000", p
 
     def test_builtin_balanced(self):
         from voice_stream import dg_params_for_route
         p = dg_params_for_route("builtin")
         assert p["endpointing"] == "250", p
-        assert p["utterance_end_ms"] == "800", p
+        assert p["utterance_end_ms"] == "1000", p
 
     def test_unknown_falls_back_to_builtin_default(self):
         from voice_stream import dg_params_for_route
@@ -103,13 +105,20 @@ class TestDgParamsForRoute:
         p_empty = dg_params_for_route("")
         for p in (p_none, p_bogus, p_empty):
             assert p["endpointing"] == "250", p
-            assert p["utterance_end_ms"] == "800", p
+            assert p["utterance_end_ms"] == "1000", p
 
     def test_route_is_case_insensitive_and_stripped(self):
         from voice_stream import dg_params_for_route
         p = dg_params_for_route("  Bluetooth  ")
-        assert p["endpointing"] == "200"
-        assert p["utterance_end_ms"] == "700"
+        assert p["endpointing"] == "150"
+        assert p["utterance_end_ms"] == "1000"
+
+    def test_utterance_end_ms_never_below_1000_for_any_route(self):
+        """Deepgram Live hard minimum is 1000ms — guard in code + assert here."""
+        from voice_stream import dg_params_for_route
+        for route in ("bluetooth", "wired", "builtin", "unknown", None, "", "BLUETOOTH", "  Wired  "):
+            p = dg_params_for_route(route)
+            assert int(p["utterance_end_ms"]) >= 1000, (route, p)
 
     def test_returns_a_copy_not_mutating_defaults(self):
         from voice_stream import dg_params_for_route, DG_PARAMS
@@ -126,8 +135,8 @@ class TestDeepgramLiveSessionAcceptsParams:
         from voice_stream import DeepgramLiveSession, dg_params_for_route
         p = dg_params_for_route("bluetooth")
         dg = DeepgramLiveSession(session_id="deadbeef" * 4, dg_params=p)
-        assert dg.dg_params["endpointing"] == "200"
-        assert dg.dg_params["utterance_end_ms"] == "700"
+        assert dg.dg_params["endpointing"] == "150"
+        assert dg.dg_params["utterance_end_ms"] == "1000"
 
     def test_constructor_defaults_when_no_params(self):
         from voice_stream import DeepgramLiveSession, DG_PARAMS

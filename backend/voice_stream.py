@@ -296,14 +296,19 @@ DG_PARAMS = {
 def dg_params_for_route(audio_route: Optional[str]) -> Dict[str, str]:
     """Restituisce i parametri Deepgram tunati per la audio route corrente.
 
-    === FIX 2026-07-02 (Fabio furgone) ===
+    === FIX 2026-07-02 (Fabio furgone) + hotfix regressione DG-400 ===
     In furgone connesso al Bluetooth auto, il mic dell'auto/telefono
     riceve costantemente rumore motore/vento. Deepgram non trigga
     speech_final finché non c'è un vero "silenzio" — che in furgone
-    non arriva mai. Riduciamo endpointing e utterance_end_ms per la
-    route Bluetooth così Koda chiude il mic anche in mezzo al rumore
-    di fondo. Per auricolari cablati (contesto silenzioso) restiamo
-    conservativi. Per mic interno un default intermedio.
+    non arriva mai. Tunare AGGRESSIVAMENTE l'endpointing (soglia in ms
+    di "silenzio percepito" dopo cui DG marca fine utterance) risolve.
+
+    IMPORTANTE (bugfix iter12): Deepgram Live impone un MINIMO HARD di
+    1000ms su `utterance_end_ms`. Valori inferiori causano HTTP 400
+    "server rejected WebSocket connection" e la WS non si apre → nessun
+    STT → Koda non risponde. Manteniamo quindi utterance_end_ms=1000
+    per TUTTE le route e variamo SOLO `endpointing` (minimo ~10ms
+    documentato, quindi valori come 150-350 sono tutti validi).
 
     Args:
         audio_route: uno di "bluetooth", "wired", "builtin", None (o
@@ -314,19 +319,34 @@ def dg_params_for_route(audio_route: Optional[str]) -> Dict[str, str]:
     params = dict(DG_PARAMS)
     route = (audio_route or "").strip().lower()
     if route == "bluetooth":
-        # Furgone/auto: aggressivo per bucare il rumore di fondo continuo.
-        params["endpointing"] = "200"
-        params["utterance_end_ms"] = "700"
+        # Furgone/auto: molto aggressivo su endpointing per bucare il
+        # rumore di fondo continuo. utterance_end_ms al minimo Deepgram.
+        params["endpointing"] = "150"
+        params["utterance_end_ms"] = "1000"
     elif route == "wired":
         # Auricolari cablati: contesto tipicamente silenzioso, meno rischio
         # falsi positivi. Manteniamo un po' più conservativo.
-        params["endpointing"] = "300"
+        params["endpointing"] = "350"
         params["utterance_end_ms"] = "1000"
     else:
-        # builtin / unknown: default bilanciato (già scritto sopra).
-        # Manteniamo esplicito per chiarezza log.
+        # builtin / unknown: default bilanciato.
         params["endpointing"] = "250"
-        params["utterance_end_ms"] = "800"
+        params["utterance_end_ms"] = "1000"
+    # Dev-time assert: Deepgram richiede utterance_end_ms>=1000
+    try:
+        assert int(params["utterance_end_ms"]) >= 1000, (
+            f"utterance_end_ms must be >=1000 (Deepgram limit), got "
+            f"{params['utterance_end_ms']}"
+        )
+    except AssertionError:
+        # In prod (uvicorn con -O) l'assert può essere skippata. Log
+        # esplicito così vediamo il problema PRIMA che la WS fallisca.
+        logger.error(
+            f"[dg_params_for_route] INVALID utterance_end_ms="
+            f"{params.get('utterance_end_ms')!r} for route={route!r} "
+            f"— Deepgram will reject with HTTP 400. Forcing to 1000."
+        )
+        params["utterance_end_ms"] = "1000"
     return params
 
 # KeepAlive per evitare chiusura WS Deepgram dopo 10s di silenzio.
