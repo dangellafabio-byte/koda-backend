@@ -695,6 +695,24 @@ export class VoiceStreamSession {
 
     let chunkStart = Date.now();
     let prevChunkEnd = chunkStart;
+    // === FIX 2026-07-01 — iOS AudioSession 560557684 infinite-retry (Fabio da log) ===
+    // Contatore fallimenti CONSECUTIVI di prepareToRecordAsync (in genere
+    // OSStatus 560557684 = AVAudioSession is not active). Prima il catch
+    // rifaceva setTimeout(200ms) e riprovava all'infinito → dopo un
+    // app-background con audio session revocata l'app spammava il log
+    // per 90+ secondi e restava in stato "recording" con WS morta,
+    // impedendo tap sull'eclissi (streamingSessionRef non pulito).
+    //
+    // Fix:
+    //  1) Cap MAX_CONSECUTIVE_PREPARE_FAILS retry (default 5, ~1.5s totali).
+    //  2) Backoff progressivo 200→400→800→1200→1600ms per dare tempo
+    //     alla session di stabilizzarsi.
+    //  3) Reset AVAudioSession al secondo fallimento (deactivate+reactivate).
+    //  4) Superato il cap → break del loop, chiamiamo notifyClose così
+    //     lo speech.ts fa cleanup di streamingSessionRef → tap eclissi
+    //     torna a funzionare, niente lock-up.
+    let consecutivePrepareFailures = 0;
+    const MAX_CONSECUTIVE_PREPARE_FAILURES = 5;
 
     while (this.chunkLoopActive && !this.stopRequested) {
       // === FIX 2026-06-26 v17/v18: hard-cap dinamico chat vs sfogo ===
@@ -742,6 +760,8 @@ export class VoiceStreamSession {
         if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} prepare...`);
         const t_prep = Date.now();
         await recorder.prepareToRecordAsync(preset);
+        // Prepare OK → reset contatore fallimenti consecutivi
+        consecutivePrepareFailures = 0;
         if (verbose)
           console.log(
             `[KODA_STREAM_CLIENT] chunk #${cIdx} prepare OK in ${Date.now() - t_prep}ms`
@@ -858,13 +878,75 @@ export class VoiceStreamSession {
         prevChunkEnd = t_sent;
         chunkStart = Date.now();
       } catch (e: any) {
-        // Uso console.log (non warn) per essere catturato dal vecchio
-        // diagLogger se la build attuale non è aggiornata.
+        // === FIX 2026-07-01 — iOS AudioSession 560557684 cap + backoff ===
+        // Prima qui c'era solo setTimeout(200ms) e retry infinito. Se
+        // l'utente andava in background+foreground iOS revocava la
+        // session e lo stesso errore si ripeteva per 90+ secondi.
+        // Ora: contatore fallimenti + backoff progressivo + tentativo
+        // di reset AVAudioSession + bail-out dopo cap → notify upper.
+        const errMsg = String(e?.message || e || "");
+        const isPrepareFail =
+          /prepareToRecordAsync/i.test(errMsg) ||
+          /AudioSession/i.test(errMsg) ||
+          /560557684/.test(errMsg);
         console.log(
           `[KODA_STREAM_CLIENT] chunk #${cIdx} ERROR: ${e?.message || e} | ` +
             `stack: ${String(e?.stack || "").split("\n").slice(0, 3).join(" | ")}`
         );
-        await new Promise((r) => setTimeout(r, 200));
+
+        if (isPrepareFail) {
+          consecutivePrepareFailures += 1;
+          console.log(
+            `[KODA_STREAM_CLIENT] prepareToRecordAsync failure ` +
+              `#${consecutivePrepareFailures}/${MAX_CONSECUTIVE_PREPARE_FAILURES}`
+          );
+
+          // Al 2° fallimento consecutivo, tenta reset AVAudioSession:
+          // deactivate + riattiva. A volte iOS "sblocca" la session così.
+          if (consecutivePrepareFailures === 2) {
+            try {
+              console.log(`[KODA_STREAM_CLIENT] attempting AVAudioSession reset (cycle)...`);
+              // require locale come nel setup iniziale a linea 641
+              // eslint-disable-next-line @typescript-eslint/no-require-imports
+              const { setAudioModeAsync: sma } = require("expo-audio");
+              await sma({ allowsRecording: false } as any);
+              await new Promise((r) => setTimeout(r, 150));
+              await sma({ allowsRecording: true } as any);
+              console.log(`[KODA_STREAM_CLIENT] AVAudioSession reset done`);
+            } catch (resetErr) {
+              console.log(
+                `[KODA_STREAM_CLIENT] AVAudioSession reset failed: ${String(resetErr)}`
+              );
+            }
+          }
+
+          // Cap raggiunto → bail-out: chiudi WS, notify upper layer
+          // così speech.ts pulisce streamingSessionRef e l'utente può
+          // ritappare l'eclissi senza restare bloccato.
+          if (consecutivePrepareFailures >= MAX_CONSECUTIVE_PREPARE_FAILURES) {
+            const reason = "prepare-failures-cap-560557684";
+            console.log(
+              `[KODA_STREAM_CLIENT] BAIL OUT — ${consecutivePrepareFailures} ` +
+                `prepare failures consecutive: chiudo sessione e notifico upper (${reason})`
+            );
+            this.chunkLoopActive = false;
+            this.stopRequested = true;
+            this.finalCloseRequested = true;
+            // Stessa notifica-pattern usata quando WS si chiude senza transcript
+            // (linea 443-444): upper layer pulirà streamingSessionRef → tap eclissi
+            // torna a funzionare.
+            try { this.callbacks.onError?.(reason); } catch {}
+            try { this.ws?.close(1000, "prepare-failures"); } catch {}
+            break;
+          }
+
+          // Backoff progressivo: 200 → 400 → 800 → 1200 → 1600 ms
+          const backoffMs = Math.min(200 * consecutivePrepareFailures * 2, 1600);
+          await new Promise((r) => setTimeout(r, backoffMs));
+        } else {
+          // Errore non prepare-related → backoff base 200ms come prima
+          await new Promise((r) => setTimeout(r, 200));
+        }
       }
     }
 
