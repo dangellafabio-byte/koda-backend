@@ -8337,7 +8337,11 @@ async def _fast_pipeline_task(
             logger.warning(f"[fast] mongo append failed: {e}")
 
     try:
+        # === FIX 2026-07-03 v40 — Sub-timing setup breakdown ===
+        # Decomposizione del setup 4093ms per capire chi consuma cosa.
+        _t_before_profile = time.time()
         profile = await get_or_create_profile()
+        _t_after_profile = time.time()
 
         # User entry — salvo SUBITO se non ephemeral
         user_entry = TimelineEntry(role="user", text=text, audio_duration_ms=audio_duration_ms)
@@ -8391,8 +8395,10 @@ async def _fast_pipeline_task(
             except Exception as e:
                 logger.warning(f"[fast] memory load failed: {e}")
                 memories = []
+        _t_after_memories = time.time()
 
         sys_prompt = _build_fast_system_prompt(profile, recent, memories=memories)
+        _t_after_prompt_build = time.time()
 
         # === AUDIO HONESTY (Fabio 2026-06-23) ============================
         # Quando la trascrizione STT ha confidenza bassa (Deepgram conf <0.7),
@@ -8830,9 +8836,18 @@ async def _fast_pipeline_task(
                         _llm_first_sent_ms = int((t_tts - t_llm_start) * 1000) - _llm_ttft_ms
                         _tts_ms = tts_ms
                         _overhead_ms = total_first - _setup_ms - _llm_ttft_ms - _llm_first_sent_ms - _tts_ms
+                        # === FIX 2026-07-03 v40 — Setup sub-timing decomposto ===
+                        try:
+                            _sub_profile_ms = int((_t_after_profile - _t_before_profile) * 1000)
+                            _sub_memories_ms = int((_t_after_memories - _t_after_profile) * 1000)
+                            _sub_prompt_build_ms = int((_t_after_prompt_build - _t_after_memories) * 1000)
+                            _sub_other_setup_ms = _setup_ms - _sub_profile_ms - _sub_memories_ms - _sub_prompt_build_ms
+                        except Exception:
+                            _sub_profile_ms = _sub_memories_ms = _sub_prompt_build_ms = _sub_other_setup_ms = -1
                         logger.info(
                             f"[KODA_PIPELINE_SUMMARY sid={session_id[:8]}] "
-                            f"setup={_setup_ms}ms | "
+                            f"setup={_setup_ms}ms "
+                            f"(profile={_sub_profile_ms} memories={_sub_memories_ms} prompt={_sub_prompt_build_ms} other={_sub_other_setup_ms}) | "
                             f"claude_ttft={_llm_ttft_ms}ms | "
                             f"claude_first_sent={_llm_first_sent_ms}ms | "
                             f"eleven_tts={_tts_ms}ms | "
@@ -8845,6 +8860,10 @@ async def _fast_pipeline_task(
                                 "sid": session_id[:8],
                                 "at_iso": datetime.now(timezone.utc).isoformat(),
                                 "setup_ms": _setup_ms,
+                                "sub_profile_ms": _sub_profile_ms,
+                                "sub_memories_ms": _sub_memories_ms,
+                                "sub_prompt_build_ms": _sub_prompt_build_ms,
+                                "sub_other_setup_ms": _sub_other_setup_ms,
                                 "claude_ttft_ms": _llm_ttft_ms,
                                 "claude_first_sent_ms": _llm_first_sent_ms,
                                 "eleven_tts_ms": _tts_ms,
