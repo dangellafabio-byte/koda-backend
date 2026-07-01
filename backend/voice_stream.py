@@ -332,19 +332,23 @@ def dg_params_for_route(audio_route: Optional[str]) -> Dict[str, str]:
         # builtin / unknown: default bilanciato.
         params["endpointing"] = "250"
         params["utterance_end_ms"] = "1000"
-    # Dev-time assert: Deepgram richiede utterance_end_ms>=1000
+    # Dev-time + runtime guard: Deepgram richiede utterance_end_ms>=1000.
+    # Nota: usiamo un if esplicito invece di `assert` così la protezione
+    # resta attiva anche in prod se qualcuno lancia uvicorn con `-O`
+    # (asserts strippati). Se qualcuno accidentalmente edita i valori
+    # sopra a <1000, logghiamo l'errore e forziamo 1000 → WS non fallisce.
     try:
-        assert int(params["utterance_end_ms"]) >= 1000, (
-            f"utterance_end_ms must be >=1000 (Deepgram limit), got "
-            f"{params['utterance_end_ms']}"
-        )
-    except AssertionError:
-        # In prod (uvicorn con -O) l'assert può essere skippata. Log
-        # esplicito così vediamo il problema PRIMA che la WS fallisca.
+        if int(params["utterance_end_ms"]) < 1000:
+            logger.error(
+                f"[dg_params_for_route] INVALID utterance_end_ms="
+                f"{params.get('utterance_end_ms')!r} for route={route!r} "
+                f"— Deepgram will reject with HTTP 400. Forcing to 1000."
+            )
+            params["utterance_end_ms"] = "1000"
+    except (ValueError, TypeError):
         logger.error(
-            f"[dg_params_for_route] INVALID utterance_end_ms="
-            f"{params.get('utterance_end_ms')!r} for route={route!r} "
-            f"— Deepgram will reject with HTTP 400. Forcing to 1000."
+            f"[dg_params_for_route] non-int utterance_end_ms="
+            f"{params.get('utterance_end_ms')!r} — Forcing to 1000."
         )
         params["utterance_end_ms"] = "1000"
     return params
