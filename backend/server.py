@@ -2191,29 +2191,11 @@ async def api_get_profile(request: Request):
             )
     except Exception as e:
         logger.warning(f"[profile/migrate] voice sync failed: {e}")
-    try:
-        bg = p.settings.background or ""
-        if bg.startswith("data:") and len(bg) > 2000:
-            # Hash deterministico → cache-bust automatico quando l'immagine cambia.
-            import hashlib as _hl
-            v = _hl.md5(bg[:4096].encode("utf-8", errors="ignore")).hexdigest()[:10]
-            # Costruisci la base URL dalla richiesta corrente, così la URL
-            # restituita corrisponde esattamente all'host che il client sta
-            # già usando (preview Emergent / Cloudflare / qualunque proxy).
-            try:
-                scheme = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
-                host = (
-                    request.headers.get("x-forwarded-host")
-                    or request.headers.get("host")
-                    or request.url.netloc
-                )
-                base = f"{scheme}://{host}"
-            except Exception:
-                # Fallback se per qualche motivo non riusciamo a leggere headers.
-                base = ""
-            p.settings.background = f"{base}/api/profile/background?v={v}"
-    except Exception:
-        pass
+    # === FIX 2026-07-02 (Fabio) — Rimossa enrichment "background" ===
+    # La feature "sfondo custom" è stata rimossa dall'UI. Non generiamo più
+    # URL /api/profile/background nel payload di risposta. Il codice
+    # rimosso costruiva `scheme://host/api/profile/background?v=hash` da
+    # un data URI base64. Ora obsoleto.
     return p
 
 
@@ -2677,33 +2659,11 @@ async def api_subscription_webhook(request: Request):
     return {"ok": True}
 
 
-@api_router.api_route("/profile/background", methods=["GET", "HEAD"])
-async def api_get_profile_background():
-    """Serve l'immagine di sfondo personalizzata dell'utente come binary.
-
-    Estrae il base64 dal profilo e lo decodifica al volo. Aggiunge
-    Cache-Control aggressivo perché lo sfondo cambia raramente.
-    """
-    p = await get_or_create_profile()
-    bg = (p.settings.background or "") if p.settings else ""
-    if not bg or not bg.startswith("data:"):
-        raise HTTPException(status_code=404, detail="No custom background set")
-    try:
-        # data:image/jpeg;base64,XXXX → mime=image/jpeg, payload=XXXX
-        header, _, b64 = bg.partition(",")
-        mime = "image/jpeg"
-        if ";" in header:
-            mime = header[len("data:"):].split(";", 1)[0] or "image/jpeg"
-        import base64 as _b64
-        raw = _b64.b64decode(b64)
-    except Exception as e:
-        logger.error(f"[bg] decode failed: {e}")
-        raise HTTPException(status_code=500, detail="Background decode failed")
-    return Response(
-        content=raw,
-        media_type=mime,
-        headers={"Cache-Control": "private, max-age=86400"},
-    )
+# === FIX 2026-07-02 (Fabio) — Rimosso endpoint /profile/background ===
+# La feature "sfondo custom" è stata rimossa dall'UI. L'endpoint che
+# serviva l'immagine base64 come binary non ha più senso. Se vecchi
+# build client provano a chiamare, ricevono 404 dal router FastAPI
+# naturalmente (nessun handler registrato).
 
 
 @api_router.put("/profile", response_model=Profile)
@@ -2810,13 +2770,15 @@ async def api_update_profile(update: ProfileUpdate):
         incoming = update.settings  # già dict
         if isinstance(incoming, dict):
             current = p.settings.model_dump()
-            # Protezione background placeholder/URL (mantenuta).
+            # === FIX 2026-07-02 (Fabio) — Scarto TOTALE del campo "background" ===
+            # La feature "sfondo custom" è stata rimossa dall'UI. Se un vecchio
+            # build client prova ancora a inviare `settings.background` (base64,
+            # URL, o placeholder), lo scartiamo silenziosamente per evitare
+            # bloating del DB (nei test si arrivava a 300 KB per profilo).
+            # Il campo resta nel Model per backward-compat lettura, ma NON
+            # viene MAI scritto in DB da qui in avanti.
             try:
-                nb = incoming.get("background")
-                if isinstance(nb, str) and (
-                    nb.startswith("@server:")
-                    or "/api/profile/background" in nb
-                ):
+                if "background" in incoming:
                     incoming = {k: v for k, v in incoming.items() if k != "background"}
             except Exception:
                 pass

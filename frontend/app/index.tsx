@@ -1274,18 +1274,6 @@ export default function Taccuino() {
     } catch {}
   };
 
-  const saveBackground = async (value: string | null) => {
-    if (!profile) return;
-    const next = {
-      ...profile,
-      settings: { ...profile.settings, background: value } as any,
-    };
-    setProfile(next);
-    try {
-      await api.updateProfile({ settings: next.settings } as any);
-    } catch {}
-  };
-
   const saveBackgroundDim = async (dim: number) => {
     if (!profile) return;
     const next = {
@@ -1361,38 +1349,12 @@ export default function Taccuino() {
     try { await api.updateProfile({ settings: next.settings } as any); } catch {}
   };
 
-  const pickBackgroundFromGallery = async () => {
-    try {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) {
-        setError("Per scegliere una foto serve il permesso galleria.");
-        setTimeout(() => setError(null), 5000);
-        return;
-      }
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.6,
-        base64: true,
-        allowsEditing: false,
-      });
-      if (result.canceled || !result.assets?.[0]) return;
-      const a = result.assets[0];
-      // Prefer base64 (works cross-platform, persisted via API). Fallback to local URI on web.
-      let dataUri: string | null = null;
-      if (a.base64) {
-        const mime = a.mimeType || (a.uri.endsWith(".png") ? "image/png" : "image/jpeg");
-        dataUri = `data:${mime};base64,${a.base64}`;
-      } else if (a.uri) {
-        dataUri = a.uri;
-      }
-      if (dataUri) {
-        await saveBackground(dataUri);
-      }
-    } catch (e: any) {
-      setError("Non sono riuscito a caricare la foto.");
-      setTimeout(() => setError(null), 4000);
-    }
-  };
+  // === FIX 2026-07-02 (Fabio) — Rimossa feature "sfondo custom da galleria" ===
+  // saveBackground / pickBackgroundFromGallery erano dead code (bottone UI
+  // già rimosso). Ora gli sfondi sono solo i preset di Koda. Se in futuro
+  // servisse riabilitare custom background: NON salvare base64 dentro
+  // profile.settings (esplode il DB). Usare invece asset locale o upload
+  // separato in blob storage.
 
   const sendTestNotification = async () => {
     const when = new Date(Date.now() + 10000);
