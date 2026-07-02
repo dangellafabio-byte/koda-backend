@@ -1395,9 +1395,20 @@ def _build_temporal_context(recent: List[TimelineEntry]) -> str:
 
     parts: List[str] = []
     parts.append(f"[CONTESTO TEMPORALE — GROUND TRUTH, NON INVENTARE]")
-    # Ora corrente in formato leggibile italiano (locale UTC, ma utile
-    # come riferimento assoluto).
-    parts.append(f"- Ora attuale (UTC): {now.strftime('%Y-%m-%d %H:%M')}")
+    # === FIX 2026-07-02 (Fabio) — Ora italiana invece che UTC ===
+    # BUG storico: passavamo UTC a Claude. In estate CEST = UTC+2, quindi
+    # se l'utente diceva "sono le 12" (mezzogiorno reale), Claude leggeva
+    # "UTC 10:00" e interpretava "l'utente parla di un orario futuro".
+    # Confusione totale su "l'una di notte / mezzogiorno / mezzanotte".
+    # Fix: convertire in Europe/Rome (già importato come _ITALY_TZ a r.21).
+    try:
+        now_it = now.astimezone(_ITALY_TZ) if _ITALY_TZ else now
+        # Formato italiano con giorno settimana per contesto ricco.
+        # NB: locale del container potrebbe non essere it_IT → strftime %A/%B
+        # ritorna comunque in inglese, ma Claude gestisce da solo.
+        parts.append(f"- Ora attuale (Europa/Roma): {now_it.strftime('%Y-%m-%d %H:%M')} ({now_it.strftime('%A')})")
+    except Exception:
+        parts.append(f"- Ora attuale (UTC): {now.strftime('%Y-%m-%d %H:%M')}")
 
     if last_user_ts is None:
         parts.append("- Questo è il PRIMO messaggio della conversazione (nessuno scambio precedente registrato).")
@@ -6963,7 +6974,11 @@ _WEB_SEARCH_TRIGGERS_IT = (
     # diceva "informazione di oggi" o "notizia attuale" e Tavily NON
     # scattava. Ora copriamo tutte le varianti italiane del "fresco/attuale".
     "oggi", "stamattina", "stasera", "stanotte",
-    "attuale", "attuali", "attualmente", "adesso", "al momento",
+    # === FIX 2026-07-02 (Fabio) — Rimosse keyword ambigue "adesso/al momento/attualmente" ===
+    # Erano parole normalissime di conversazione ("adesso ti dico", "al
+    # momento sono in ferie") che triggeravano Tavily inutilmente per
+    # ~800ms. Ora restano solo composti veri come "in questo momento nel
+    # mondo" o "anno attuale/corrente" (definiti sotto nella sezione tempo).
     "in questo momento", "proprio ora", "ora come ora",
     "fresco", "fresca", "recente", "recenti", "ultimo", "ultima",
     # === Prezzi / mercati ===
