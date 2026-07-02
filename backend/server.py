@@ -7406,7 +7406,16 @@ def _pop_first_sentence(buf: str) -> tuple[str, str]:
 #   "Certo che sì, dimmi." → split dopo "Certo che sì,"
 #   "Aspetta, non ho capito benissimo." → split dopo "Aspetta,"
 _EARLY_CHUNK_RE = re.compile(r'[,;:]\s')
-MIN_FIRST_CHUNK_CHARS = 15  # abbassato da 35 per latenza ridotta
+# === FIX 2026-07-02 B1 (Fabio — buffer prosodico prima frase) ===
+# Alzata da 15 → 40 char per allineare il codice al prompt "7-15 parole".
+# Con 15 char il TAG [TONE:warm] (~12 char) + prima virgola veniva matchato
+# subito, producendo prime frasi tipo "Aaah," o "Oh che bello," (0.6-1s di
+# audio) → gap percepito ~1.5s prima della seconda frase (ElevenLabs deve
+# ancora finire di generare il body). Con 40 char la prima frase risulta di
+# ~7 parole (~2s di audio) → maschera il tempo di generazione della seconda
+# parte. Trade-off: +200-400ms sul primo audio (accettabile, restiamo sotto
+# ~1.9s TTFT audio percepito).
+MIN_FIRST_CHUNK_CHARS = 40
 
 
 def _pop_first_chunk_aggressive(buf: str) -> tuple[str, str]:
