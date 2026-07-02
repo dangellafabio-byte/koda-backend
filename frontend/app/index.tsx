@@ -1286,47 +1286,12 @@ export default function Taccuino() {
     } catch {}
   };
 
-  const pickAiAvatar = async () => {
-    try {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) {
-        setError("Per scegliere una foto serve il permesso galleria.");
-        setTimeout(() => setError(null), 5000);
-        return;
-      }
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.7,
-        base64: true,
-        allowsEditing: true,
-        aspect: [1, 1],
-      });
-      if (result.canceled || !result.assets?.[0]) return;
-      const a = result.assets[0];
-      let dataUri: string | null = null;
-      if (a.base64) {
-        const mime = a.mimeType || (a.uri.endsWith(".png") ? "image/png" : "image/jpeg");
-        dataUri = `data:${mime};base64,${a.base64}`;
-      } else if (a.uri) {
-        dataUri = a.uri;
-      }
-      if (dataUri && profile) {
-        const next = { ...profile, settings: { ...profile.settings, ai_avatar: dataUri } as any };
-        setProfile(next);
-        try { await api.updateProfile({ settings: next.settings } as any); } catch {}
-      }
-    } catch {
-      setError("Non sono riuscito a caricare la foto.");
-      setTimeout(() => setError(null), 4000);
-    }
-  };
-
-  const removeAiAvatar = async () => {
-    if (!profile) return;
-    const next = { ...profile, settings: { ...profile.settings, ai_avatar: null } as any };
-    setProfile(next);
-    try { await api.updateProfile({ settings: next.settings } as any); } catch {}
-  };
+  // === FIX 2026-07-02 (Fabio) — Rimosse pickAiAvatar/removeAiAvatar (dead code) ===
+  // Le funzioni erano definite ma nessun bottone UI le chiamava. Il campo
+  // settings.ai_avatar era vuoto per tutti i profili in DB e il componente
+  // Bubble riceveva la prop `aiAvatar` senza mai usarla internamente.
+  // Se in futuro serve un avatar per Koda: NON salvare base64 nel profilo
+  // (stesso problema del background). Usare asset locale + selettore preset.
 
   const setBubbleColor = async (key: string) => {
     if (!profile) return;
@@ -4689,7 +4654,6 @@ export default function Taccuino() {
                   entry={it.entry as any}
                   onReplay={() => {}}
                   onGhost={() => {}}
-                  aiAvatar={(profile?.settings as any)?.ai_avatar || null}
                   bubbleAccent={bubbleAccent}
                   bubbleStyle={bubbleStyle}
                   textOnBubble={textOnBubble}
@@ -4712,7 +4676,6 @@ export default function Taccuino() {
                     entry={it.entry}
                     onReplay={replayMessage}
                     onGhost={ghostMessage}
-                    aiAvatar={(profile?.settings as any)?.ai_avatar || null}
                     bubbleAccent={bubbleAccent}
                     bubbleStyle={bubbleStyle}
                     textOnBubble={textOnBubble}
@@ -6262,7 +6225,6 @@ function Bubble({
   entry,
   onReplay,
   onGhost,
-  aiAvatar,
   bubbleAccent,
   bubbleStyle,
   textOnBubble,
@@ -6273,7 +6235,6 @@ function Bubble({
   onReplay?: (e: TimelineEntry) => void;
   /** Long-press handler for "Ghost" / "Dimentica questo". */
   onGhost?: (e: TimelineEntry) => void;
-  aiAvatar?: string | null;
   bubbleAccent: { color: string; soft: string };
   bubbleStyle: "glass" | "solid";
   textOnBubble: string;

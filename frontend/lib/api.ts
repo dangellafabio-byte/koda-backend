@@ -88,9 +88,12 @@ export type ProfileSettings = {
   night_start_hour?: number;
   conversation_mode?: boolean;
   hands_free?: boolean;             // True hands-free continuous listening (default true)
-  background?: string | null;       // null | preset id | "data:image/...;base64,..."
-  background_dim?: number;          // 0..1 dark overlay opacity
-  ai_avatar?: string | null;        // Custom photo for AI avatar (base64 data URI)
+  background?: string | null;       // DEPRECATED (2026-07-02) — mantenuto solo per backward-compat retention type. Server scarta il campo in ingresso.
+  background_dim?: number;          // 0..1 dark overlay opacity (usato dagli sfondi PRESET di Koda)
+  // === FIX 2026-07-02 (Fabio) — Rimosso ai_avatar (dead feature) ===
+  // Nessuna UI lo settava, il componente Bubble non lo usava. Rimosso
+  // per evitare bloating del profilo se in futuro qualche client
+  // provasse a re-introdurlo con base64.
   bubble_color?: string;            // "viola" | "verde_acqua" | "rosa" | "ambra" | "ghiaccio" | hex
   bubble_style?: "glass" | "solid"; // visual style applied to BOTH user and AI bubbles
   text_size?: number;               // 0.85 | 1.0 | 1.15 | 1.35

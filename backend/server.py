@@ -998,11 +998,12 @@ class TaccuinoSettings(BaseModel):
     tts_similarity_boost: float = 0.75
     # Custom background — either a base64 data URI (user upload) or one of the
     # preset names below ("aurora", "carta", "notturno", "sabbia", "marmo")
-    background: Optional[str] = None  # null | preset id | "data:image/...;base64,..."
-    background_dim: float = 0.55  # 0..1 dark overlay opacity over custom backgrounds
-    # Avatar shown next to AI bubbles. Either base64 data URI (user-uploaded photo)
-    # or null (fallback to default pulsing orb).
-    ai_avatar: Optional[str] = None
+    background: Optional[str] = None  # DEPRECATED (2026-07-02) — server scarta il campo in ingresso; mantenuto per backward-compat lettura di doc vecchi.
+    background_dim: float = 0.55  # 0..1 dark overlay opacity (usato dagli sfondi preset di Koda)
+    # === FIX 2026-07-02 (Fabio) — Rimosso ai_avatar (dead feature) ===
+    # Il campo era Optional[str] = None. Nessuna UI lo settava e il componente
+    # Bubble non lo usava. Rimosso per prevenire bloating del profilo se qualche
+    # client provasse a re-introdurlo con base64 (stesso problema del background).
     # Bubble accent color used for AI bubbles. Either a preset name ("viola",
     # "verde_acqua", "rosa", "ambra", "ghiaccio") or a custom hex string.
     bubble_color: str = "viola"
@@ -2770,16 +2771,18 @@ async def api_update_profile(update: ProfileUpdate):
         incoming = update.settings  # già dict
         if isinstance(incoming, dict):
             current = p.settings.model_dump()
-            # === FIX 2026-07-02 (Fabio) — Scarto TOTALE del campo "background" ===
-            # La feature "sfondo custom" è stata rimossa dall'UI. Se un vecchio
-            # build client prova ancora a inviare `settings.background` (base64,
-            # URL, o placeholder), lo scartiamo silenziosamente per evitare
-            # bloating del DB (nei test si arrivava a 300 KB per profilo).
-            # Il campo resta nel Model per backward-compat lettura, ma NON
-            # viene MAI scritto in DB da qui in avanti.
+            # === FIX 2026-07-02 (Fabio) — Scarto TOTALE dei campi obsoleti ===
+            # `background`: feature "sfondo custom" rimossa dall'UI.
+            # `ai_avatar`: dead feature, mai usata dai componenti UI.
+            # Entrambi rimossi per prevenire bloating del profilo se qualche
+            # vecchio build client provasse a inviare base64 (nei test si
+            # arrivava a 300 KB per profilo). I campi restano nel Model per
+            # backward-compat LETTURA di doc vecchi, ma NON vengono MAI
+            # scritti da qui in avanti.
             try:
-                if "background" in incoming:
-                    incoming = {k: v for k, v in incoming.items() if k != "background"}
+                for _dead in ("background", "ai_avatar"):
+                    if _dead in incoming:
+                        incoming = {k: v for k, v in incoming.items() if k != _dead}
             except Exception:
                 pass
             current.update(incoming)
