@@ -6969,16 +6969,16 @@ _WEB_SEARCH_TRIGGERS_IT = (
     "news", "ultime", "in tempo reale", "succede in italia", "succede nel mondo",
     "che succede", "cosa succede", "cosa è successo", "cos'è successo",
     "cosa sta succedendo", "che sta succedendo",
+    # === FIX 2026-07-02 v2 (Fabio) — Rimosse "oggi/stamattina/stasera/stanotte" ===
+    # Terzo giro di pulizia. Fabio ha segnalato: "Partirò da lì STASERA"
+    # matchava e attivava Tavily per 808ms. Sono parole normalissime di
+    # conversazione ("ci vediamo stasera", "stamattina ho fatto colazione"),
+    # non search request. I composti veri ("notizie di oggi", "meteo di
+    # stamattina") sono già coperti da "notizie" e "meteo" come trigger
+    # indipendenti sopra — quindi rimuovere queste standalone NON riduce
+    # la capacità di Tavily di attivarsi quando serve davvero.
     # === Avverbi temporali "fresco" (richiesta utente giugno 2026) ===
-    # Espansione massiccia: prima i trigger erano troppo ristretti — l'utente
-    # diceva "informazione di oggi" o "notizia attuale" e Tavily NON
-    # scattava. Ora copriamo tutte le varianti italiane del "fresco/attuale".
-    "oggi", "stamattina", "stasera", "stanotte",
-    # === FIX 2026-07-02 (Fabio) — Rimosse keyword ambigue "adesso/al momento/attualmente" ===
-    # Erano parole normalissime di conversazione ("adesso ti dico", "al
-    # momento sono in ferie") che triggeravano Tavily inutilmente per
-    # ~800ms. Ora restano solo composti veri come "in questo momento nel
-    # mondo" o "anno attuale/corrente" (definiti sotto nella sezione tempo).
+    # I trigger sopravvissuti al FIX 2026-07-02 v2 sono composti veri:
     "in questo momento", "proprio ora", "ora come ora",
     "fresco", "fresca", "recente", "recenti", "ultimo", "ultima",
     # === Prezzi / mercati ===
