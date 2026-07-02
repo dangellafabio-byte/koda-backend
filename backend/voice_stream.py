@@ -397,8 +397,19 @@ def dg_params_for_route(audio_route: Optional[str]) -> Dict[str, str]:
         # Trade-off: +300-500ms di latenza dopo che l'utente ha finito
         # DAVVERO di parlare (perché DG aspetta più a lungo). In cambio,
         # niente più cutoff su frasi con pause di respirazione naturali.
-        params["endpointing"] = "600"
-        params["utterance_end_ms"] = "1500"
+        # === FIX 2026-07-02 v40 (Fabio "Koda mi ha interrotto in furgone") ===
+        # Ancora troppo aggressivo per uso in guida. Pausa media di
+        # riflessione al volante = 700-1200ms (guardi lo specchio,
+        # pensi alla prossima parola). Con 600ms Koda partiva a
+        # rispondere prima che l'utente finisse. Alzato a 900ms
+        # (tollera pausa di respirazione lunga) e utterance_end_ms a
+        # 2000ms (Deepgram aspetta di vedere davvero silenzio prima
+        # di dichiarare fine).
+        # Trade-off aggiuntivo: +300-500ms sul TTFT audio a fine turno.
+        # Accettabile perché elimina il "Koda mi interrompe" — bug
+        # molto più frustrante della latenza.
+        params["endpointing"] = "900"
+        params["utterance_end_ms"] = "2000"
     # Dev-time + runtime guard: Deepgram richiede utterance_end_ms>=1000.
     # Nota: usiamo un if esplicito invece di `assert` così la protezione
     # resta attiva anche in prod se qualcuno lancia uvicorn con `-O`
@@ -437,6 +448,15 @@ CLIENT_IDLE_TIMEOUT_S = 20.0
 # condizionale, e non causa danni: il cap scatta solo se il client non
 # manda mai "end", caso che non si verifica nel flusso normale).
 SESSION_HARD_CAP_S = 360.0
+
+# === FIX 2026-07-02 v40 (Fabio "entra in registrazione e non si muove più") ===
+# Watchdog: se dopo X secondi dallo start della utterance corrente non è
+# arrivato nessuno stt_final (Deepgram non riesce a chiudere in ambiente
+# rumoroso, es. furgone), forziamo la trascrizione fallback su tutto il
+# PCM accumulato via gpt-4o-mini-transcribe e chiudiamo la sessione pulita.
+# Evita il caso di sessioni appese indefinitamente che richiedono la
+# chiusura manuale dell'app.
+MAX_UTTERANCE_NO_FINAL_S = 30.0
 
 
 # ============================================================
@@ -996,6 +1016,58 @@ async def voice_stream_handler(
 
         dg_task = asyncio.create_task(dg_event_loop())
 
+        # === FIX 2026-07-02 v40 — Watchdog anti-blocco ===
+        # Se Deepgram non emette speech_final o UtteranceEnd entro
+        # MAX_UTTERANCE_NO_FINAL_S (30s) dallo start della utterance corrente,
+        # forziamo la chiusura della utterance triggerando la pipeline con
+        # il PCM accumulato (Whisper si occupa della trascrizione se il testo
+        # Deepgram è vuoto). Evita il caso "furgone rumoroso → DG non decide
+        # mai" che lasciava la sessione bloccata indefinitamente.
+        async def utterance_watchdog_loop() -> None:
+            nonlocal speech_started_at
+            while client_alive and dg is not None and not dg._closed:
+                try:
+                    await asyncio.sleep(2.0)
+                except asyncio.CancelledError:
+                    break
+                # Se stiamo già processando o non abbiamo audio, skip.
+                if pipeline_in_flight:
+                    continue
+                if not utterance_pcm_buffer:
+                    continue
+                # Riferimento temporale: preferiamo speech_started_at
+                # (Deepgram ha visto voce). Se DG non l'ha mai emesso ma
+                # abbiamo comunque audio nel buffer, usiamo started_at
+                # + un piccolo warmup di 3s per non triggerare troppo
+                # presto su rumore breve.
+                ref_t = speech_started_at if speech_started_at is not None else (started_at + 3.0)
+                elapsed = time.time() - ref_t
+                if elapsed < MAX_UTTERANCE_NO_FINAL_S:
+                    continue
+                # Trigger fallback
+                buf_size = len(utterance_pcm_buffer)
+                partial_text = " ".join(utterance_text_parts).strip()
+                logger.warning(
+                    f"[KODA_STREAM sess={short_id}] WATCHDOG: no stt_final "
+                    f"in {elapsed:.1f}s buffer={buf_size}B "
+                    f"partial_text={partial_text!r} → forcing fallback transcribe"
+                )
+                pcm_snapshot = bytes(utterance_pcm_buffer)
+                utterance_pcm_buffer.clear()
+                utterance_text_parts.clear()
+                # Reset per una eventuale prossima utterance nella
+                # stessa sessione (anche se in pratica il client
+                # probabilmente chiude e riapre).
+                speech_started_at = None
+                try:
+                    await _trigger_pipeline(partial_text, pcm_snapshot)
+                except Exception as e:
+                    logger.error(
+                        f"[KODA_STREAM sess={short_id}] watchdog pipeline error: {e}"
+                    )
+
+        watchdog_task = asyncio.create_task(utterance_watchdog_loop())
+
         # ---------------- 4) Loop principale: leggi audio dal client ----------------
         try:
             while client_alive:
@@ -1091,6 +1163,12 @@ async def voice_stream_handler(
         try:
             await asyncio.wait_for(dg_task, timeout=2.0)
         except (asyncio.TimeoutError, Exception):
+            pass
+        # Cancella il watchdog task (v40)
+        try:
+            watchdog_task.cancel()
+            await asyncio.wait_for(watchdog_task, timeout=1.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
             pass
 
     except WebSocketDisconnect:
