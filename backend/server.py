@@ -9348,6 +9348,21 @@ async def _fast_pipeline_task(
                 r"\bgrazie (koda|coda),? (ora )?chiudo\b",
                 # "ok dai ci sentiamo" / "ok ci sentiamo" → euristica frequente
                 r"\b(ok|va bene|vabbè) (dai )?ci sentiamo\b",
+                # === FIX 2026-07-02 v43 (Fabio "mancano i saluti naturali") ===
+                # Saluti diretti a Koda per nome: chiaro segnale di chiusura.
+                r"\bciao (koda|coda)\b",
+                r"\bnotte (koda|coda)\b",
+                r"\barrivederci (koda|coda)?\b",
+                r"\bgrazie (koda|coda)$",  # "grazie Koda" a fine frase
+                r"\bgrazie di tutto\b",
+                r"\bgrazie (mille )?(davvero |per )?(tutto|ora)\b",
+                # Congedi generici hardened (fine sessione hands-free)
+                r"\b(ok |va bene |vabbè )?dai ciao\b",
+                r"\bora ti saluto\b",
+                r"\bti saluto (koda|coda|adesso|ora)?\b",
+                r"\bok basta (dai|per )?(oggi|ora|adesso)?\b",
+                r"\b(ci vediamo|ci becchiamo) (dopo|domani|poi|più tardi)\b",
+                r"\bstacco (ora|adesso|qui)?\b",
             ]
             for pat in close_patterns:
                 if _re_close.search(pat, user_lc):
