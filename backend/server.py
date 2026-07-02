@@ -1082,6 +1082,13 @@ class Profile(BaseModel):
     style_preferences: Dict[str, Any] = Field(default_factory=dict)
     memory_summary: str = ""  # Periodically updated narrative about the user (episodic)
     core_traits: str = ""  # Long-term essence: traits, values, character (NEVER sovrascritto)
+    # === FIX 2026-07-02 v41 (Fabio "non è che parto da San Martino, io abito a Torre d'Isola") ===
+    # RESIDENZA PERMANENTE dell'utente (dove ABITA, non dove si trova ora via GPS).
+    # Distinta da location_city (che è transitoria, cambia turno per turno).
+    # Formato libero: "Torre d'Isola, Pavia" o "Milano" o "Roma centro".
+    # Popolata quando l'utente dice "abito a X" / "vivo a Y" / "casa mia è a Z"
+    # → Claude estrae e mette in `home_update` nel JSON, il server salva qui.
+    home_city: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -3548,6 +3555,16 @@ async def api_converse(req: ConverseRequest):
                 new_traits = new_traits[-1500:]
             profile.core_traits = new_traits
             logger.info(f"[converse] trait_update saved: '{trait_update[:80]}'")
+        # === FIX 2026-07-02 v41 — home_update (residenza permanente) ===
+        home_update = data.get("home_update")
+        if (
+            isinstance(home_update, str)
+            and home_update.strip()
+            and home_update.lower() not in {"null", "none", ""}
+        ):
+            _hu = home_update.strip()[:60]
+            profile.home_city = _hu
+            logger.info(f"[converse] home_update saved: '{_hu}'")
         profile = await save_profile(profile)
 
         # === RICORDI SEMANTICI (giugno 2026) ===
@@ -8323,9 +8340,14 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"⚠️ NON usare mai nomi già presenti in memoria come 'Marco', 'Mario', 'Luna', 'Luca' se "
         f"non sono stati pronunciati dall'utente IN QUESTO turno — quelli sono artefatti di test. "
         f"\"close_session\": true SOLO su saluto chiusura ('ciao Koda', 'a dopo', 'buonanotte', 'vado'); "
-        f"se true reply breve calda max 12 parole, no domande.\n"
+        f"se true reply breve calda max 12 parole, no domande. "
+        f"\"home_update\": città/paese di RESIDENZA dell'utente se in questo turno ha "
+        f"dichiarato dove abita (es. 'abito a X', 'vivo a Y', 'casa mia è a Z', 'sto di "
+        f"casa a K', 'sono di W', 'la mia casa è a V'). Formato: 'Torre d'Isola, Pavia' "
+        f"o 'Milano' — max 60 char. Solo se l'utente lo dichiara ESPLICITAMENTE in "
+        f"questo turno, altrimenti null.\n"
         f"\n"
-        f'{{"reply":"[TONE:warm] ...","tone":"warm|calm|energetic|concerned|urgent|neutral","actions":[],"memory_update":null,"trait_update":null,"new_memory":null,"close_session":false}}'
+        f'{{"reply":"[TONE:warm] ...","tone":"warm|calm|energetic|concerned|urgent|neutral","actions":[],"memory_update":null,"trait_update":null,"new_memory":null,"close_session":false,"home_update":null}}'
     )
 
     # === FIX 2026-06-26 v17 (P1 — anti-allucinazione temporale) ===
@@ -8573,8 +8595,21 @@ async def _fast_pipeline_task(
         # nel payload WebSocket del turno corrente. Zero DB, zero sync.
         # Iniettato SEMPRE quando presente: Koda saprà rispondere a
         # "dove sono?", "che tempo fa?", "che ore sono qui?" ecc.
+        # === FIX 2026-07-02 v41 (Fabio "io abito a Torre d'Isola, non parto da San Martino") ===
+        # Distinguo esplicitamente RESIDENZA (permanente, DB) vs POSIZIONE
+        # ATTUALE (transitoria, GPS). Claude riceve entrambe e capisce
+        # quando riferirsi all'una o all'altra.
+        home_line = ""
+        if profile.home_city:
+            home_line = (
+                f"🏠 RESIDENZA (dove ABITA sempre, permanente): {profile.home_city}.\n"
+                f"⚠️ Quando l'utente parla di 'partire da casa', 'tornare a casa', "
+                f"'arrivare a casa', 'stasera parto', 'domani vado', 'il mio quartiere', "
+                f"'sotto casa' → si riferisce SEMPRE alla RESIDENZA sopra, MAI alla "
+                f"posizione GPS attuale (che è solo dove SI TROVA in questo istante).\n"
+            )
         if location_city:
-            loc_line = f"📍 L'utente si trova ADESSO a {location_city}"
+            loc_line = f"📍 POSIZIONE ATTUALE (GPS, dove si trova ADESSO in questo istante): {location_city}"
             if location_region and location_region.lower() != location_city.lower():
                 loc_line += f" ({location_region}"
                 if location_country:
@@ -8583,15 +8618,36 @@ async def _fast_pipeline_task(
             elif location_country:
                 loc_line += f", {location_country}"
             sys_prompt = sys_prompt + (
-                "\n\n" + loc_line + ".\n"
-                "Usa questa info se ti chiede dove si trova, che tempo fa, "
-                "che ore sono lì, cosa c'è da fare, ecc. NON dire mai 'non "
-                "so dove sei' quando hai questa info. Non esibirla a sproposito: "
-                "usala solo quando è davvero rilevante.\n"
+                "\n\n━━━ 📍 GEOLOCALIZZAZIONE ━━━\n"
+                + home_line
+                + loc_line + ".\n"
+                "⚠️ La POSIZIONE ATTUALE cambia turno per turno (utente in movimento). "
+                "NON assumere che l'utente ABITI lì. Se la posizione attuale è diversa "
+                "dalla residenza, significa che l'utente è FUORI CASA per lavoro/viaggio/"
+                "commissioni. NON dire mai 'stasera parti da " + location_city + "' se "
+                "la RESIDENZA è diversa — parte da CASA (la residenza), non da qui.\n"
+                "✅ Usa POSIZIONE ATTUALE quando ti chiede: 'dove sono ora?', 'che "
+                "tempo fa qui?', 'che ore sono qui?', 'cosa c'è da fare in zona?'.\n"
+                "✅ Usa RESIDENZA quando ti chiede: 'a che ora torno a casa?', 'stasera "
+                "parto', 'ci vediamo a casa', 'il mio bar sotto casa'.\n"
+                "NON esibire questi dettagli a sproposito. Usali solo se davvero rilevanti.\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             )
             logger.info(
                 f"[fast {session_id[:8]}] location injected: "
-                f"city={location_city!r} region={location_region!r}"
+                f"city={location_city!r} region={location_region!r} "
+                f"home_city={profile.home_city!r}"
+            )
+        elif profile.home_city:
+            # Utente ha home_city ma GPS non disponibile — inietta comunque residenza.
+            sys_prompt = sys_prompt + (
+                "\n\n━━━ 🏠 RESIDENZA ━━━\n"
+                + home_line
+                + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            )
+            logger.info(
+                f"[fast {session_id[:8]}] home_only injected: "
+                f"home_city={profile.home_city!r}"
             )
 
         # === SAFETY GUARDRAILS (Italia) — P0 obbligatorio per App Store ===
@@ -9358,6 +9414,12 @@ async def _fast_pipeline_task(
                         new_traits = new_traits[-1500:]
                     profile.core_traits = new_traits
                     logger.info(f"[fast] trait_update saved: '{trait_update[:80]}'")
+                # === FIX 2026-07-02 v41 — home_update (residenza permanente) ===
+                home_update = (data.get("home_update") or "").strip()
+                if home_update and home_update.lower() not in {"null", "none", ""}:
+                    _hu = home_update[:60]
+                    profile.home_city = _hu
+                    logger.info(f"[fast] home_update saved: '{_hu}'")
                 await save_profile(profile)
             except Exception as e:
                 logger.warning(f"[fast] profile update failed: {e}")
