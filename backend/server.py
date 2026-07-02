@@ -8106,7 +8106,28 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
     #   anche se cancella i fatti grezzi. Cresce lentamente.
     # MEMORIA RECENTE (memory_summary): fatti puntuali, eventi, persone,
     #   contesto degli ultimi N giorni. Ha cap a 4000 char (FIFO).
+    # === FIX 2026-07-02 v42 (Fabio "la memoria è la memoria, il GPS è un'altra cosa") ===
+    # I FATTI FISSI (nome + residenza + ...) sono la parte più stabile
+    # della memoria: NON cambiano turno per turno, NON sono influenzati
+    # dal FIFO del memory_summary, NON dipendono dal GPS. Sono la base
+    # identitaria dell'utente. Vanno iniettati SEMPRE all'inizio del
+    # blocco memoria, prima del ritratto e della memoria recente.
     memory_block = ""
+    fixed_facts = []
+    if profile.name:
+        fixed_facts.append(f"si chiama {profile.name}")
+    if profile.home_city:
+        fixed_facts.append(f"abita a {profile.home_city}")
+    if fixed_facts:
+        memory_block += (
+            f"\n📌 FATTI FISSI DELL'UTENTE (identità permanente, sempre validi): "
+            f"L'utente {', '.join(fixed_facts)}. "
+            f"Quando parla di 'casa', 'partire', 'tornare', 'andare a casa' "
+            f"→ si riferisce sempre alla sua RESIDENZA sopra, mai a dove si "
+            f"trova ora fisicamente. Questi fatti NON dipendono dal GPS e NON "
+            f"cambiano mai (a meno che l'utente non ti dica esplicitamente di "
+            f"aver cambiato casa).\n"
+        )
     if traits:
         memory_block += (
             f"\n🪞 RITRATTO PROFONDO DI {profile.name or 'utente'} "
@@ -8593,61 +8614,54 @@ async def _fast_pipeline_task(
         # === GEOLOCATION ONE-SHOT DAL CLIENT (Fabio 2026-06-29) ===
         # La città/regione/paese arrivano direttamente dal GPS del telefono
         # nel payload WebSocket del turno corrente. Zero DB, zero sync.
-        # Iniettato SEMPRE quando presente: Koda saprà rispondere a
-        # "dove sono?", "che tempo fa?", "che ore sono qui?" ecc.
-        # === FIX 2026-07-02 v41 (Fabio "io abito a Torre d'Isola, non parto da San Martino") ===
-        # Distinguo esplicitamente RESIDENZA (permanente, DB) vs POSIZIONE
-        # ATTUALE (transitoria, GPS). Claude riceve entrambe e capisce
-        # quando riferirsi all'una o all'altra.
-        home_line = ""
-        if profile.home_city:
-            home_line = (
-                f"🏠 RESIDENZA (dove ABITA sempre, permanente): {profile.home_city}.\n"
-                f"⚠️ Quando l'utente parla di 'partire da casa', 'tornare a casa', "
-                f"'arrivare a casa', 'stasera parto', 'domani vado', 'il mio quartiere', "
-                f"'sotto casa' → si riferisce SEMPRE alla RESIDENZA sopra, MAI alla "
-                f"posizione GPS attuale (che è solo dove SI TROVA in questo istante).\n"
-            )
-        if location_city:
-            loc_line = f"📍 POSIZIONE ATTUALE (GPS, dove si trova ADESSO in questo istante): {location_city}"
+        # === FIX 2026-07-02 v42 (Fabio "il GPS quasi mai serve") ===
+        # IL GPS È UNO STRUMENTO ON-DEMAND, NON UN CONTESTO PERMANENTE.
+        # La memoria (nome, residenza, ecc.) è già iniettata nel blocco
+        # 📌 FATTI FISSI + 🪞 RITRATTO + 📓 MEMORIA. Il GPS deve entrare
+        # nel prompt SOLO quando l'utente sta effettivamente chiedendo
+        # qualcosa relativo a DOVE SI TROVA IN QUESTO ISTANTE
+        # (es. "dove sono?", "che tempo fa?", "che ore sono qui?",
+        # "che c'è in zona?", "che si fa qui?"). In TUTTI gli altri turni
+        # il GPS NON viene iniettato → Claude non lo vede → non confonde
+        # più "sto a X" con "abito a X".
+        _user_lc = (user_text or "").lower() if 'user_text' in dir() else ""
+        # user_text non è disponibile nel context di _build_fast_system_prompt;
+        # useremo il check basato su `recent` (ultimo msg utente) invece.
+        _last_user_msg = ""
+        for _e in reversed(recent or []):
+            if getattr(_e, "role", "") == "user":
+                _last_user_msg = (getattr(_e, "text", "") or "").lower()
+                break
+        _geo_request_kw = (
+            "dove sono", "dove mi trovo", "dove sto", "che tempo fa",
+            "che tempo c'è", "che ora è qui", "che ore sono qui",
+            "meteo", "previsioni", "piove qui", "fa caldo qui", "fa freddo qui",
+            "in zona", "vicino a me", "qui vicino", "qui intorno",
+            "che si fa qui", "cosa c'è da fare", "cosa c'è qui",
+            "che città", "che paese", "che comune", "dove siamo",
+        )
+        _wants_geo = any(kw in _last_user_msg for kw in _geo_request_kw)
+        if location_city and _wants_geo:
+            loc_line = f"📍 POSIZIONE GPS ATTUALE (usa SOLO per questa domanda specifica): {location_city}"
             if location_region and location_region.lower() != location_city.lower():
-                loc_line += f" ({location_region}"
-                if location_country:
-                    loc_line += f", {location_country}"
-                loc_line += ")"
-            elif location_country:
+                loc_line += f", {location_region}"
+            if location_country:
                 loc_line += f", {location_country}"
             sys_prompt = sys_prompt + (
-                "\n\n━━━ 📍 GEOLOCALIZZAZIONE ━━━\n"
-                + home_line
-                + loc_line + ".\n"
-                "⚠️ La POSIZIONE ATTUALE cambia turno per turno (utente in movimento). "
-                "NON assumere che l'utente ABITI lì. Se la posizione attuale è diversa "
-                "dalla residenza, significa che l'utente è FUORI CASA per lavoro/viaggio/"
-                "commissioni. NON dire mai 'stasera parti da " + location_city + "' se "
-                "la RESIDENZA è diversa — parte da CASA (la residenza), non da qui.\n"
-                "✅ Usa POSIZIONE ATTUALE quando ti chiede: 'dove sono ora?', 'che "
-                "tempo fa qui?', 'che ore sono qui?', 'cosa c'è da fare in zona?'.\n"
-                "✅ Usa RESIDENZA quando ti chiede: 'a che ora torno a casa?', 'stasera "
-                "parto', 'ci vediamo a casa', 'il mio bar sotto casa'.\n"
-                "NON esibire questi dettagli a sproposito. Usali solo se davvero rilevanti.\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "\n\n" + loc_line + ".\n"
+                "⚠️ Questa è la posizione TRANSITORIA dove l'utente si trova ora "
+                "(GPS del telefono). NON confonderla con la residenza (vedi FATTI FISSI). "
+                "Usala solo per rispondere alla domanda geo di questo turno, poi dimenticala.\n"
             )
             logger.info(
-                f"[fast {session_id[:8]}] location injected: "
-                f"city={location_city!r} region={location_region!r} "
-                f"home_city={profile.home_city!r}"
+                f"[fast {session_id[:8]}] GPS injected ON-DEMAND: "
+                f"city={location_city!r} (geo_request detected)"
             )
-        elif profile.home_city:
-            # Utente ha home_city ma GPS non disponibile — inietta comunque residenza.
-            sys_prompt = sys_prompt + (
-                "\n\n━━━ 🏠 RESIDENZA ━━━\n"
-                + home_line
-                + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            )
+        elif location_city:
+            # GPS disponibile ma l'utente non ha fatto domanda geo → NON iniettare.
             logger.info(
-                f"[fast {session_id[:8]}] home_only injected: "
-                f"home_city={profile.home_city!r}"
+                f"[fast {session_id[:8]}] GPS available ({location_city!r}) "
+                f"but no geo_request → skipping injection (uses memory instead)"
             )
 
         # === SAFETY GUARDRAILS (Italia) — P0 obbligatorio per App Store ===
