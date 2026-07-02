@@ -175,9 +175,28 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
         response = await asyncio.wait_for(
             client.transcribe(
                 file=buf,
-                model="whisper-1",
+                model="gpt-4o-mini-transcribe",  # === FIX 2026-07-02 v42 (Fabio) — Migrato da whisper-1 (2022) al modello 2024 ottimizzato per italiano ===
                 response_format="json",
                 language="it",
+                # === FIX 2026-07-02 v43 — Prompt generico italiano ===
+                # NOTA IMPORTANTE (Fabio 2026-07-02): il prompt DEVE restare
+                # GENERICO. Koda è un'app per chiunque parli italiano — non
+                # per un utente specifico. Il prompt aiuta il modello a
+                # riconoscere l'italiano quotidiano naturale, NON a boostare
+                # keyword di un dominio specifico. Se in futuro serve gergo
+                # specifico (es. cucina, edilizia, sanità), il fix corretto
+                # è iniettarlo dinamicamente dal profilo utente, NON
+                # hardcodarlo qui.
+                # Stesso prompt usato in server.py per coerenza cross-endpoint.
+                prompt=(
+                    "Conversazione informale in italiano. Sport: boxe, calcio, "
+                    "tennis, padel, yoga, palestra. Cibo: pasta, pizza, "
+                    "espresso, caffè, brioche, cornetto. Tecnologia: "
+                    "smartphone, app, password, email, file, WiFi. Lavoro, "
+                    "soldi, spese, banca. Famiglia, mamma, papà, fratello, "
+                    "sorella. Numeri e orari naturali (es: alle sette e "
+                    "mezza, fra dieci minuti)."
+                ),
             ),
             timeout=WHISPER_TIMEOUT_SEC,
         )
@@ -225,34 +244,70 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
                 continue
             break
         text = text.strip()
-        # === Filtro anti-hallucination Whisper (Amara.org, etc.) ===
-        # Su audio muto/rumoroso Whisper allucina frasi standard tipo
-        # "Sottotitoli creati dalla comunità Amara.org" o "Grazie per aver
-        # guardato questo video". Le filtriamo → None → fallback DG.
+        # === FIX 2026-07-02 v42 — Filtro anti-hallucination esteso per gpt-4o-mini-transcribe ===
+        # Pattern legacy Whisper-1 (YouTube training) → mantenuti come double-guard.
+        # Nuovi pattern gpt-4o-mini-transcribe: ripetizioni patologiche
+        # (es. "sì sì sì sì sì" su audio muto), continuazioni fantasma.
         _HALLUCINATION_MARKERS = (
+            # Legacy Whisper-1 (safe double-guard)
             "amara.org",
             "sottotitoli creati",
             "grazie per aver guardato",
             "grazie a tutti per",
             "iscrivetevi al canale",
             "www.",
+            # gpt-4o-mini-transcribe: canali/CTA occasionali
+            "iscriviti al canale",
+            "grazie per l'ascolto",
+            "buon proseguimento",
+            "grazie per aver visto",
         )
         low = text.lower()
         if text and any(m in low for m in _HALLUCINATION_MARKERS):
             logger.info(
-                f"[voice_stream sess={session_short}] Whisper-1 hallucination "
-                f"detected → fallback Deepgram (was: {text!r})"
+                f"[voice_stream sess={session_short}] STT hallucination "
+                f"(marker) detected → fallback Deepgram (was: {text!r})"
             )
             return None
+        # === FIX 2026-07-02 v42 — Detector ripetizioni patologiche ===
+        # gpt-4o-mini-transcribe su audio muto/rumoroso tende a produrre
+        # sequenze del tipo "sì sì sì sì sì" o "no no no no no". Se la
+        # stessa parola breve compare >=5 volte consecutive, è hallucination.
+        # Threshold conservativo per evitare falsi positivi su parlato reale
+        # con ripetizioni naturali (es. "no no aspetta" è legittimo).
+        try:
+            words = [w.lower().strip(",.!?;:") for w in text.split() if w]
+            if len(words) >= 5:
+                # Trova la sequenza più lunga di parole identiche consecutive
+                max_run = 1
+                cur_run = 1
+                cur_w = words[0]
+                for w in words[1:]:
+                    if w == cur_w and len(w) <= 4:  # solo parole corte (sì, no, eh, mh, ok)
+                        cur_run += 1
+                        if cur_run > max_run:
+                            max_run = cur_run
+                    else:
+                        cur_run = 1
+                        cur_w = w
+                if max_run >= 5:
+                    logger.info(
+                        f"[voice_stream sess={session_short}] STT hallucination "
+                        f"(repetition run={max_run}) → fallback Deepgram "
+                        f"(was: {text!r})"
+                    )
+                    return None
+        except Exception:
+            pass  # non blocchiamo per errore di filtro
         logger.info(
-            f"[voice_stream sess={session_short}] Whisper-1 OK "
+            f"[voice_stream sess={session_short}] STT_MODEL=gpt-4o-mini-transcribe "
             f"pcm={len(pcm_bytes)}B ({len(pcm_bytes)/32000:.1f}s) "
             f"ms={elapsed_ms} text={text!r}"
         )
         return text if text else None
     except asyncio.TimeoutError:
         logger.warning(
-            f"[voice_stream sess={session_short}] Whisper-1 TIMEOUT "
+            f"[voice_stream sess={session_short}] STT_MODEL=gpt-4o-mini-transcribe TIMEOUT "
             f"({WHISPER_TIMEOUT_SEC}s) → fallback Deepgram"
         )
         return None

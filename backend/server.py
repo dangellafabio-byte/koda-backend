@@ -654,7 +654,7 @@ async def transcribe(audio: UploadFile = File(...), language: str = Form("it")):
             with open(tmp.name, "rb") as f:
                 kwargs: dict = {
                     "file": f,
-                    "model": "whisper-1",
+                    "model": "gpt-4o-mini-transcribe",  # === FIX 2026-07-02 v42 — Migrato da whisper-1 al modello 2024 ===
                     "response_format": "json",
                     "language": language or "it",
                 }
@@ -900,6 +900,7 @@ async def transcribe_deepgram(audio: UploadFile = File(...), language: str = For
 # Common Whisper hallucinations on silent / unintelligible audio.
 # These strings appear because Whisper was trained on a lot of YouTube subtitles.
 _WHISPER_HALLUCINATIONS = [
+    # === Legacy Whisper-1 (YouTube training) — mantenuti come double-guard ===
     "sottotitoli creati dalla comunità amara.org",
     "sottotitoli e revisione a cura di",
     "sottotitoli a cura di qtss",
@@ -914,6 +915,15 @@ _WHISPER_HALLUCINATIONS = [
     "sottotitoli",
     "amara.org",
     "qtss",
+    # === FIX 2026-07-02 v42 — Nuovi pattern gpt-4o-mini-transcribe ===
+    # Marker occasionali osservati su modelli 2024. Le ripetizioni
+    # patologiche ("sì sì sì sì sì") sono gestite in voice_stream.py
+    # con un detector runtime; qui gestiamo solo i marker fissi noti.
+    "grazie per l'ascolto",
+    "grazie per aver ascoltato",
+    "buon ascolto",
+    "www.",
+    "http",
 ]
 
 
