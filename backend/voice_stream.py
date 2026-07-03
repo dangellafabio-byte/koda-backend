@@ -374,15 +374,19 @@ def dg_params_for_route(audio_route: Optional[str]) -> Dict[str, str]:
     params = dict(DG_PARAMS)
     route = (audio_route or "").strip().lower()
     if route == "bluetooth":
-        # === FIX 2026-07-03 v44 (Fabio "mi spezza le frasi in CarPlay") ===
-        # 150ms endpointing era troppo aggressivo per CarPlay/bluetooth in
-        # auto: bastava una pausa di respirazione di 200ms per tagliare la
-        # frase a metà (log turno bf5e8dd4: "Ho visto l'autista, per fortuna
-        # l'ho visto" — troncato). Allineato ai valori di builtin che sono
-        # stati validati (v40): endpointing 900, utterance_end 2000.
-        # Il rumore di CarPlay non è così invadente quanto pensavamo:
-        # Deepgram gestisce il rumore col modello, non con l'endpointing.
-        params["endpointing"] = "900"
+        # === FIX 2026-07-03 v45 (Fabio "mi tagli il 400 prima di dire chilometri") ===
+        # Log reale: "che cazzo hai capito? 400" — tagliato PRIMA di completare
+        # "chilometri". Fabio stava pensando/dicendo il numero, DG con 900ms
+        # ha chiuso l'utterance perché ha visto silenzio breve dopo "400".
+        # In stato agitato/pensiero (guida stressata, ha appena litigato con
+        # Koda per un errore di comprensione) le pause tra parole possono
+        # arrivare a 1000-1100ms. Alziamo endpointing a 1200ms per Bluetooth
+        # CarPlay: soglia superiore alla pausa massima di riflessione stress.
+        # utterance_end_ms rimane 2000ms (Deepgram aspetta 2s totali per
+        # dichiarare fine utterance).
+        # Trade-off: +300ms sul TTFT audio a fine turno. Accettabile: molto
+        # meglio di essere tagliati mentre stai per completare la parola.
+        params["endpointing"] = "1200"
         params["utterance_end_ms"] = "2000"
     elif route == "wired":
         # Auricolari cablati: contesto tipicamente silenzioso, meno rischio

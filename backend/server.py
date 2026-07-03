@@ -8754,11 +8754,17 @@ async def _fast_pipeline_task(
         user_payload_parts = []
         if history_str:
             user_payload_parts.append(f"STORICO RECENTE:\n{history_str}")
-        # === FIX 2026-06-29 — Location nel USER payload (priorità massima) ===
-        # Anche se l'iniettiamo già nel system_prompt, gpt-mini/Haiku
-        # leggono meglio le info messe a contatto con la query nel USER
-        # message. Doppia iniezione = robusto contro Tavily/altri tool.
-        if location_city:
+        # === FIX 2026-07-03 v45 (Fabio "Koda continua a dire Chiusi/Montepulciano") ===
+        # BUG: La doppia iniezione GPS nel USER payload NON aveva il guard
+        # `_wants_geo` → Chiusi/Montepulciano venivano passati a Claude a
+        # OGNI turno con l'istruzione "questa è la fonte autoritativa,
+        # RISPONDI con questa città". Il fix v42 aveva messo il guard SOLO
+        # nel system_prompt (riga ~8676) ma qui la GPS trapassava comunque.
+        # Ora anche il USER payload rispetta _wants_geo → GPS entra SOLO
+        # se l'utente sta CHIEDENDO dove si trova / meteo / cosa c'è in
+        # zona. In tutti gli altri turni: memoria + residenza (home_city),
+        # non GPS transitoria.
+        if location_city and _wants_geo:
             loc_user_line = f"📍 POSIZIONE GPS DELL'UTENTE (dal suo telefono ADESSO): {location_city}"
             if location_region and location_region.lower() != location_city.lower():
                 loc_user_line += f", {location_region}"
@@ -8770,6 +8776,15 @@ async def _fast_pipeline_task(
                 "dire 'non posso saperlo', NON inventare. Solo questa città."
             )
             user_payload_parts.append(loc_user_line)
+            logger.info(
+                f"[fast {session_id[:8]}] GPS injected in USER payload ON-DEMAND: "
+                f"city={location_city!r}"
+            )
+        elif location_city:
+            logger.info(
+                f"[fast {session_id[:8]}] GPS available ({location_city!r}) "
+                f"but no geo_request → NOT injected in USER payload"
+            )
         if web_search_brief:
             user_payload_parts.append(
                 "RISULTATI WEB SEARCH (informazioni AGGIORNATE in tempo reale — "
@@ -9401,6 +9416,25 @@ async def _fast_pipeline_task(
                 r"\bok basta (dai|per )?(oggi|ora|adesso)?\b",
                 r"\b(ci vediamo|ci becchiamo) (dopo|domani|poi|più tardi)\b",
                 r"\bstacco (ora|adesso|qui)?\b",
+                # === FIX 2026-07-03 v45 (Fabio "Sentiamo dopo non chiude") ===
+                # Log reale: STT ha trascritto "Sentiamo dopo." (senza "ci"
+                # iniziale) → Koda ha risposto ma non ha chiuso, HF_LOOP
+                # è ripartito. Aggiungiamo varianti SENZA "ci" e con più
+                # forme di congedo che i pattern precedenti non prendevano.
+                r"\bsentiamo (dopo|poi|domani|più tardi|dopo dai|dopo grazie)\b",
+                r"\brisentiamo (dopo|poi|domani|più tardi)\b",
+                r"\b(ok |va bene )?ci risentiamo\b",
+                r"\bok grazie (koda|coda)?\b",
+                r"\bok (ci )?siamo\b",  # "ok ci siamo" a fine turno = chiudo
+                r"\btelefono dopo\b",
+                r"\bchiamo dopo\b",
+                r"\bti richiamo\b",
+                r"\bci risentiamo dopo\b",
+                # Utente esplicitamente vuole fermarsi/riflettere
+                r"\bmi lasci (in pace|solo|un attimo)\b",
+                r"\bora sto (in silenzio|un po' zitto|zitto)\b",
+                r"\bok basta parlare\b",
+                r"\btaci (un attimo|un po|per favore)?\b",
             ]
             for pat in close_patterns:
                 if _re_close.search(pat, user_lc):
