@@ -617,6 +617,28 @@ async def root():
     return {"message": "Taccuino Vivo API", "status": "ok"}
 
 
+# === FIX 2026-07-03 v45 (Fabio "verifica che il deploy sia aggiornato") ===
+# Endpoint pubblico di verifica versione. Fabio può aprirlo dal browser
+# Safari sul telefono (o qualsiasi client) per capire se il backend
+# Emergent prod è la versione con i fix v45 (regex close_session, guard
+# GPS user payload, endpointing 1200ms bluetooth, keyterm Deepgram) o
+# se il Redeploy Publish non ha propagato. Rispondendo con la stringa
+# di versione permette debug rapido senza fare rebuild iOS.
+@api_router.get("/koda-version")
+async def koda_version():
+    return {
+        "version": "v45-2026-07-03-close-session-gps-keyterm-endpointing",
+        "fixes_active": [
+            "close_session_regex_expanded",  # sentiamo dopo, risentiamo, ok grazie koda, ecc.
+            "gps_user_payload_wants_geo_guard",  # niente Chiusi/Montepulciano random
+            "bluetooth_endpointing_1200ms",  # niente cutoff su "400 [pausa] chilometri"
+            "deepgram_keyterm_28_words",  # chilometri, minuti, autista, furgone, ecc.
+            "debug_v_banner_in_meta",  # meta payload include debug_v
+        ],
+        "status": "ok",
+    }
+
+
 @api_router.post("/transcribe")
 async def transcribe(audio: UploadFile = File(...), language: str = Form("it")):
     if not EMERGENT_LLM_KEY:
