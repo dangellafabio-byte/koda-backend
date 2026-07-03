@@ -9555,6 +9555,11 @@ async def _fast_pipeline_task(
             "tone": ai_entry.tone,
             "actions": parsed_actions,
             "close_session": close_session,
+            # === FIX 2026-07-03 v45 (Fabio "verifica se i fix sono deployati") ===
+            # Banner esplicito: se il client non vede "v45" nel meta, il
+            # Redeploy Emergent NON ha preso il fix backend. Utile per
+            # troubleshooting rapido lato utente senza dover fare ticket.
+            "debug_v": "v45-2026-07-03-close-session-gps-keyterm",
             # === KODA_SUMMARY metric (sprint v11) ===
             # Esposizione esplicita di path/modello così il client può
             # loggarli nel [KODA_SUMMARY]. Permette di accorgersi a colpo

@@ -254,6 +254,70 @@ function stripToneMarkerOnly(text: string): string {
     .trim();
 }
 
+// === FIX 2026-07-03 v45 CLIENT-SIDE (Fabio "Sentiamo dopo non chiude") ===
+// Heuristica close_session lato CLIENT — defense-in-depth per quando il
+// backend non ha ancora ricevuto il fix v45 (redeploy pending o problemi
+// deployment Emergent). Il client, ricevendo `stt_final` con la
+// trascrizione, checka se contiene un pattern di congedo inequivocabile.
+// Se sì, forziamo `closeSessionPauseRef.current = true` — così il
+// HF_LOOP guard blocca la ripartenza automatica del mic anche se il
+// backend manda `close_session: false`.
+// NOTA: la logica va lasciata in sync con `close_patterns` in
+// backend/server.py (`_fast_pipeline_task`, ~riga 9385). Se aggiungi
+// pattern nuovi qui, aggiungili anche là (e viceversa).
+function detectCloseSessionClientSide(text: string | null | undefined): boolean {
+  if (!text || typeof text !== "string") return false;
+  const userLc = " " + text.toLowerCase().trim() + " ";
+  const patterns: RegExp[] = [
+    /\bci sentiamo (dopo|più tardi|poi|domani)\b/,
+    /\bsentiamo (dopo|poi|domani|più tardi|dopo dai|dopo grazie)\b/,
+    /\brisentiamo (dopo|poi|domani|più tardi)\b/,
+    /\b(ok |va bene )?ci risentiamo\b/,
+    /\ba dopo\b/,
+    /\ba più tardi\b/,
+    /\ba presto\b/,
+    /\ba domani\b/,
+    /\bci aggiorniamo\b/,
+    /\bbuonanotte\b/,
+    /\bbuona notte\b/,
+    /\bbuona giornata\b/,
+    /\bbuona serata\b/,
+    /\bvado a (letto|dormire|riposare)\b/,
+    /\bvado che (ho|devo)\b/,
+    /\bora (vado|scappo|chiudo)\b/,
+    /\bbasta per (oggi|ora|adesso)\b/,
+    /\bmi fermo qui\b/,
+    /\bchiudo qui\b/,
+    /\bgrazie (koda|coda),? (ora )?chiudo\b/,
+    /\b(ok|va bene|vabbè) (dai )?ci sentiamo\b/,
+    /\bciao (koda|coda)\b/,
+    /\bnotte (koda|coda)\b/,
+    /\barrivederci (koda|coda)?\b/,
+    /\bgrazie (koda|coda)$/,
+    /\bgrazie di tutto\b/,
+    /\bgrazie (mille )?(davvero |per )?(tutto|ora)\b/,
+    /\b(ok |va bene |vabbè )?dai ciao\b/,
+    /\bora ti saluto\b/,
+    /\bti saluto (koda|coda|adesso|ora)?\b/,
+    /\bok basta (dai|per )?(oggi|ora|adesso)?\b/,
+    /\b(ci vediamo|ci becchiamo) (dopo|domani|poi|più tardi)\b/,
+    /\bstacco (ora|adesso|qui)?\b/,
+    /\bok grazie (koda|coda)?\b/,
+    /\btelefono dopo\b/,
+    /\bchiamo dopo\b/,
+    /\bti richiamo\b/,
+    /\bmi lasci (in pace|solo|un attimo)\b/,
+    /\bok basta parlare\b/,
+    /\btaci (un attimo|un po|per favore)?\b/,
+  ];
+  for (const pat of patterns) {
+    if (pat.test(userLc)) return true;
+  }
+  return false;
+}
+
+
+
 export default function Taccuino() {
   const insets = useSafeAreaInsets();
   const { theme, themeName, setThemeName, setHours, dayStart, nightStart } = useTheme();
@@ -2682,6 +2746,18 @@ export default function Taccuino() {
             console.log(
               `[KODA_STREAM_CLIENT] user_final conf=${conf.toFixed(3)} text=${JSON.stringify(userText)}`
             );
+          }
+          // === FIX 2026-07-03 v45 CLIENT-SIDE close_session heuristic ===
+          // Se l'utente ha detto un saluto di congedo, pausiamo il HF loop
+          // SUBITO — non aspettiamo `meta.close_session` dal backend
+          // (che potrebbe non arrivare se il deploy non è aggiornato).
+          // Questo funziona sempre appena c'è il testo trascritto.
+          if (detectCloseSessionClientSide(userText)) {
+            console.log(
+              `[KODA_CLOSE_SESSION] (client heuristic) matched → pausing HF loop | text=${JSON.stringify(userText)}`
+            );
+            setCloseSessionPause(true);
+            closeSessionPauseRef.current = true;
           }
         },
         onMeta: (meta: any) => {
