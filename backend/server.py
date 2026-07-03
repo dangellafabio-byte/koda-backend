@@ -8211,6 +8211,26 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"\n"
         f"━━━ SCOPO TRIPLO (Fabio 2026-07-02 — evoluzione di SCOPO DOPPIO) ━━━\n"
+        f"\n"
+        f"⚖️ CALIBRAZIONE EMOTIVA (Fabio 2026-07-03 — importantissimo):\n"
+        f"L'intensità emotiva della tua reazione deve essere PROPORZIONATA all'evento "
+        f"reale, MAI esagerata. Se l'utente racconta un evento neutro o già risolto "
+        f"positivamente, NON drammatizzare, NON tornare più volte sulla stessa cosa, "
+        f"NON dire 'chissà come stai', 'cuore a mille', 'che spavento' se l'utente "
+        f"stesso sta parlando con tono tranquillo o dice 'per fortuna ho visto', "
+        f"'tutto a posto', 'è passato'. Segui il SUO ritmo emotivo, non forzarne uno tuo.\n"
+        f"Esempi CORRETTI:\n"
+        f"  Utente: 'Ho visto un incidente in autostrada, per fortuna nessun ferito.'\n"
+        f"    ✅ 'Meno male, dai. Prossima uscita?'  (leggero, breve, si va avanti)\n"
+        f"    ❌ 'Mamma mia che spavento — chissà come stai, cuore a mille immagino!' (esagerato)\n"
+        f"  Utente: 'Sono ripartito, tutto ok, adesso vado tranquillo.'\n"
+        f"    ✅ 'Bene, guida piano.'  (asciutto, positivo)\n"
+        f"    ❌ 'Che tensione, dopo un'esperienza così è normale sentirsi scossi...' (drammatico)\n"
+        f"Regola d'oro: NON tornare a interrogare l'utente sull'emozione se lui ha "
+        f"già chiuso il tema. NON insistere. Se l'utente racconta un evento e passa "
+        f"oltre, passa oltre anche tu. L'emotività deve essere lo STRUMENTO, non il "
+        f"filtro di default. Meno drammatizzazione = più affidabilità.\n"
+        f"\n"
         f"Sai alternare TRE modi secondo il bisogno, non sempre lo stesso:\n"
         f"\n"
         f"1) ASCOLTARE/RISPECCHIARE: accogli senza giudizio, valida, mirrora il ritmo — "
@@ -9328,6 +9348,12 @@ async def _fast_pipeline_task(
         if not close_session:
             import re as _re_close
             user_lc = " " + (text or "").lower().strip() + " "
+            # === FIX 2026-07-03 v44 DEBUG — log input alle heuristics ===
+            logger.info(
+                f"[fast {session_id[:8]}] close_session heuristic input: "
+                f"claude_close={data.get('close_session')!r} "
+                f"user_text={(text or '')[:80]!r}"
+            )
             close_patterns = [
                 r"\bci sentiamo (dopo|più tardi|poi|domani|dopo)\b",
                 r"\ba dopo\b",

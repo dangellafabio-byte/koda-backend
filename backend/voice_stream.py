@@ -374,10 +374,16 @@ def dg_params_for_route(audio_route: Optional[str]) -> Dict[str, str]:
     params = dict(DG_PARAMS)
     route = (audio_route or "").strip().lower()
     if route == "bluetooth":
-        # Furgone/auto: molto aggressivo su endpointing per bucare il
-        # rumore di fondo continuo. utterance_end_ms al minimo Deepgram.
-        params["endpointing"] = "150"
-        params["utterance_end_ms"] = "1000"
+        # === FIX 2026-07-03 v44 (Fabio "mi spezza le frasi in CarPlay") ===
+        # 150ms endpointing era troppo aggressivo per CarPlay/bluetooth in
+        # auto: bastava una pausa di respirazione di 200ms per tagliare la
+        # frase a metà (log turno bf5e8dd4: "Ho visto l'autista, per fortuna
+        # l'ho visto" — troncato). Allineato ai valori di builtin che sono
+        # stati validati (v40): endpointing 900, utterance_end 2000.
+        # Il rumore di CarPlay non è così invadente quanto pensavamo:
+        # Deepgram gestisce il rumore col modello, non con l'endpointing.
+        params["endpointing"] = "900"
+        params["utterance_end_ms"] = "2000"
     elif route == "wired":
         # Auricolari cablati: contesto tipicamente silenzioso, meno rischio
         # falsi positivi. Manteniamo un po' più conservativo.
