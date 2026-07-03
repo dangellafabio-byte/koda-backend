@@ -341,10 +341,26 @@ DG_PARAMS = {
     # In casa silenziosa Deepgram trascriveva "Ciao Cosa" invece di "Ciao Koda"
     # (e talvolta "Coda"/"Goda"). Nova-3 supporta keyterm prompting (plain
     # string, NO intensifier suffix). Boostiamo il nome "Koda" così che la
-    # rete neurale lo preferisca alle parole foneticamente vicine. Aggiungere
-    # qui altri nomi-chiave del dominio se appariranno problemi simili
-    # (es. "Sfogo", "Confessionale" se vengono sbagliati).
-    "keyterm": "Koda",
+    # rete neurale lo preferisca alle parole foneticamente vicine.
+    # === FIX 2026-07-03 v45 (Fabio "STT dice metri invece di chilometri") ===
+    # Log reale in CarPlay: DG trascrive "400 metri" quando Fabio dice
+    # "400 chilometri". Ambiente rumoroso + parola foneticamente ambigua
+    # (metri vs chilometri hanno la stessa terminazione "-etri"). Nova-3
+    # accetta MULTIPLI keyterm — passiamo lista completa unità di misura
+    # + parole del dominio Fabio (autista/furgone). QS builder in
+    # `connect()` emette un `keyterm=X` per ogni elemento della lista.
+    "keyterm": [
+        "Koda",
+        # Unità di misura (cutoff "metri/chilometri" #1 problema Fabio)
+        "chilometri", "kilometri", "chilometro", "chilometraggio",
+        "minuti", "minuto", "secondi", "ora", "ore",
+        # Dominio guida/furgone
+        "autista", "furgone", "camion", "autostrada",
+        "consegna", "consegne", "pacco", "pacchi", "corriere",
+        "uscita", "ingresso", "casello", "svincolo",
+        # Nomi luoghi ricorrenti nei log Fabio
+        "Fiano", "Capena", "Monterotondo", "Roma", "Lazio",
+    ],
 }
 
 
@@ -547,7 +563,19 @@ class DeepgramLiveSession:
     async def connect(self) -> None:
         if not DEEPGRAM_API_KEY:
             raise RuntimeError("DEEPGRAM_API_KEY not configured")
-        qs = "&".join(f"{k}={v}" for k, v in self.dg_params.items())
+        # === FIX 2026-07-03 v45 — keyterm multipli ===
+        # Deepgram Nova-3 accetta un `keyterm=X` per ogni parola boostata.
+        # Se un value del dict è una lista, emettiamo più occorrenze dello
+        # stesso param (Fabio: chilometri/metri, autista, furgone, ecc.).
+        from urllib.parse import quote as _uq
+        qs_parts = []
+        for k, v in self.dg_params.items():
+            if isinstance(v, (list, tuple)):
+                for item in v:
+                    qs_parts.append(f"{k}={_uq(str(item))}")
+            else:
+                qs_parts.append(f"{k}={_uq(str(v))}")
+        qs = "&".join(qs_parts)
         url = f"{DEEPGRAM_LIVE_URL}?{qs}"
         headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
         self._connect_started_at = time.time()
