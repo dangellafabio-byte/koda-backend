@@ -639,6 +639,26 @@ async def koda_version():
     }
 
 
+# === FIX 2026-07-05 (Fabio "no Mac, serve CSR per certificato Apple") ===
+# Endpoint temporaneo che serve la CSR generata via openssl con il nome
+# file esatto richiesto da Apple Developer Portal. Fabio apre l'URL
+# dal browser (Safari/Chrome), il file scarica direttamente con nome
+# "Fabio.certSigningRequest" — nessuna rinomina, nessun problema di
+# estensioni nascoste. Da rimuovere dopo che il certificato è emesso.
+@api_router.get("/download/csr")
+async def download_csr():
+    from fastapi.responses import FileResponse
+    from pathlib import Path as _P
+    csr_path = _P("/app/temp/apple_cert/ios_distribution.certSigningRequest")
+    if not csr_path.exists():
+        raise HTTPException(404, "CSR not found — regenerate via openssl first")
+    return FileResponse(
+        str(csr_path),
+        media_type="application/octet-stream",
+        filename="Fabio.certSigningRequest",
+    )
+
+
 @api_router.post("/transcribe")
 async def transcribe(audio: UploadFile = File(...), language: str = Form("it")):
     if not EMERGENT_LLM_KEY:
