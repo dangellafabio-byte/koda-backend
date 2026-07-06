@@ -15,6 +15,7 @@ expo-env.d.ts
 *.jks
 *.p8
 *.p12
+!credentials/dist_cert.p12
 *.key
 *.mobileprovision
 

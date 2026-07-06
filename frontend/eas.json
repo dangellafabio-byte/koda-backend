@@ -22,6 +22,7 @@
     "preview": {
       "distribution": "internal",
       "autoIncrement": true,
+      "credentialsSource": "local",
       "ios": {
         "resourceClass": "m-medium",
         "simulator": false
@@ -42,6 +43,7 @@
         "buildType": "app-bundle"
       },
       "autoIncrement": true,
+      "credentialsSource": "local",
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app"
       },
