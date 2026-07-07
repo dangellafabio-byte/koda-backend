@@ -1175,6 +1175,41 @@ export default function Taccuino() {
           recRef.current = null;
         }
         try { SpeechMod.stop(); } catch {}
+        // === FIX 2026-07-06 v46 (Fabio "iOS mic globale bruciato") ===
+        // Rilascio ESPLICITO dell'AVAudioSession quando l'app va
+        // background/inactive. Senza questo, iOS lasciava la sessione
+        // audio "hot" (allowsRecording=true) → dopo il ritorno
+        // foreground `prepareToRecordAsync` falliva 5/5 volte E
+        // BLOCCAVA IL MIC GLOBALE del telefono (fotocamera/WhatsApp
+        // non funzionavano più finché non riavviavi l'iPhone).
+        // Rilascio async fire-and-forget (non blocchiamo il main
+        // thread mentre l'app sta chiudendo).
+        (async () => {
+          try {
+            const { setAudioModeAsync, setIsAudioActiveAsync } =
+              (await import("expo-audio")) as any;
+            // Priorità: disattivare la sessione (release del lock)
+            try {
+              if (typeof setIsAudioActiveAsync === "function") {
+                await setIsAudioActiveAsync(false);
+              }
+            } catch {}
+            try {
+              await setAudioModeAsync({
+                allowsRecording: false,
+                playsInSilentMode: false,
+                shouldPlayInBackground: false,
+              } as any);
+            } catch {}
+            console.log(
+              `[KODA_APPSTATE] AudioSession released (background/inactive)`
+            );
+          } catch (e: any) {
+            console.log(
+              `[KODA_APPSTATE] AudioSession release failed: ${e?.message || e}`
+            );
+          }
+        })();
       } else if (next === "active") {
         // === FIX 2026-06-27 RESUME COLD ===
         // Quando l'app torna foreground DOPO essere stata in background

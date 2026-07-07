@@ -3571,12 +3571,44 @@ async def api_converse(req: ConverseRequest):
         profile.total_messages += 1
         profile.confidence_level = min(100, profile.confidence_level + 1)
         if memory_update and memory_update.lower() not in {"null", "none", ""}:
-            sep = "\n- " if profile.memory_summary else "- "
-            new_mem = (profile.memory_summary or "") + sep + memory_update
-            # Truncate to keep it reasonable
-            if len(new_mem) > 4000:
-                new_mem = new_mem[-4000:]
-            profile.memory_summary = new_mem
+            # === FIX 2026-07-06 v46 (Fabio "Koda dimentica il contesto") ===
+            # 1. Dedup: se il memory_update è già presente (fuzzy contains)
+            #    nel memory_summary corrente, non lo aggiungo. Evita che
+            #    Koda ripeta 10 volte lo stesso fatto perché estratto in
+            #    turni diversi con parole leggermente diverse.
+            # 2. Cap 4000→8000 char: Fabio parla ORE al giorno mentre guida
+            #    → 4000 char si riempiono in 2-3 giorni; 8000 danno respiro
+            #    a ~1 settimana di conversazione ricca.
+            # 3. Smart truncation: quando serve tagliare, cerchiamo il primo
+            #    "\n- " dopo il midpoint invece di tagliare in mezzo a una
+            #    frase. Preserva la coerenza narrativa.
+            update_norm = memory_update.strip().lower()
+            current_norm = (profile.memory_summary or "").lower()
+            # Semplice dedup: se le prime 50 char del new update sono già
+            # nel summary, skip. Copre la maggior parte dei duplicati.
+            update_key = update_norm[:50]
+            if update_key and update_key in current_norm:
+                logger.info(
+                    f"[converse] memory dedup: '{memory_update[:60]}' already in summary → skip"
+                )
+            else:
+                sep = "\n- " if profile.memory_summary else "- "
+                new_mem = (profile.memory_summary or "") + sep + memory_update
+                # Smart truncate: taglio pulito a inizio bullet
+                MAX_MEM = 8000
+                if len(new_mem) > MAX_MEM:
+                    # Tagliamo dalla fine mantenendo gli 8000 char più
+                    # recenti, ma iniziamo dal primo "\n- " per non
+                    # spezzare una frase a metà.
+                    tail = new_mem[-MAX_MEM:]
+                    first_bullet = tail.find("\n- ")
+                    if 0 <= first_bullet < 200:
+                        # Se il primo bullet è vicino all'inizio, ne
+                        # buttiamo via un pezzetto per pulizia.
+                        new_mem = tail[first_bullet + 1 :]
+                    else:
+                        new_mem = tail
+                profile.memory_summary = new_mem
         # === FIX 2026-06-29 — parità core_traits voice/text ===
         # La pipeline voice (`_fast_pipeline_task`, line ~8736) salva
         # `trait_update` in `profile.core_traits` quando Claude rileva un
@@ -9541,11 +9573,23 @@ async def _fast_pipeline_task(
                 profile.total_messages += 1
                 profile.confidence_level = min(100, profile.confidence_level + 1)
                 if memory_update and memory_update.lower() not in {"null", "none", ""}:
-                    sep = "\n- " if profile.memory_summary else "- "
-                    new_mem = (profile.memory_summary or "") + sep + memory_update
-                    if len(new_mem) > 4000:
-                        new_mem = new_mem[-4000:]
-                    profile.memory_summary = new_mem
+                    # === FIX 2026-07-06 v46 (Fabio "Koda dimentica") ===
+                    # Dedup + cap 8000 + smart truncate (allineato a /converse text)
+                    update_key = memory_update.strip().lower()[:50]
+                    current_norm = (profile.memory_summary or "").lower()
+                    if update_key and update_key in current_norm:
+                        logger.info(
+                            f"[fast] memory dedup: '{memory_update[:60]}' already → skip"
+                        )
+                    else:
+                        sep = "\n- " if profile.memory_summary else "- "
+                        new_mem = (profile.memory_summary or "") + sep + memory_update
+                        MAX_MEM = 8000
+                        if len(new_mem) > MAX_MEM:
+                            tail = new_mem[-MAX_MEM:]
+                            first_bullet = tail.find("\n- ")
+                            new_mem = tail[first_bullet + 1 :] if 0 <= first_bullet < 200 else tail
+                        profile.memory_summary = new_mem
                 # === CORE TRAITS: ritratto profondo permanente ===
                 # Claude lo emette SOLO quando rileva un tratto stabile (raro).
                 # Cresce lentamente, capped 1500 char. Resta in profilo

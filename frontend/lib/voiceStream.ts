@@ -207,9 +207,35 @@ function buildStreamingPreset() {
 async function detectAudioRoute(): Promise<
   "bluetooth" | "wired" | "builtin" | "unknown"
 > {
+  const info = await detectAudioRouteDetailed();
+  return info.route;
+}
+
+/**
+ * Versione ESTESA di detectAudioRoute che ritorna anche il tipo di
+ * dispositivo audio effettivo — utile per distinguere CarPlay (auto)
+ * da auricolari personali (AirPods, cuffie cablate). Serve alla
+ * Modalità Discreta che si attiva SOLO con auricolari personali.
+ *
+ * === FIX 2026-07-06 v46 (Fabio "Modalità telefono/discreta") ===
+ */
+export type AudioDeviceKind =
+  | "airpods"          // AirPods / earbuds bluetooth personali
+  | "headphones_wired" // cuffie/auricolari con cavo
+  | "carplay"          // CarPlay (Bluetooth in auto)
+  | "car_bluetooth"    // Bluetooth generico auto (non CarPlay)
+  | "builtin"          // Microfono/speaker interno del telefono
+  | "unknown";
+
+export interface AudioRouteInfo {
+  route: "bluetooth" | "wired" | "builtin" | "unknown";
+  deviceKind: AudioDeviceKind;
+  deviceType: string; // valore raw iOS/Android (es. "CarAudio", "BluetoothA2DP")
+  deviceName: string; // nome UI del dispositivo (es. "AirPods di Fabio")
+}
+
+export async function detectAudioRouteDetailed(): Promise<AudioRouteInfo> {
   try {
-    // Costruisce un recorder minimalissimo (l'unico scopo è chiamare
-    // getCurrentInput() dopo prepareToRecordAsync).
     const probe = new (AudioModule as any).AudioRecorder({});
     const preset = buildStreamingPreset();
     try {
@@ -218,7 +244,7 @@ async function detectAudioRoute(): Promise<
       console.log(
         `[KODA_STREAM_CLIENT] detectAudioRoute: prepare failed: ${e?.message || e}`
       );
-      return "unknown";
+      return { route: "unknown", deviceKind: "unknown", deviceType: "", deviceName: "" };
     }
     let inputType = "";
     let inputName = "";
@@ -231,37 +257,54 @@ async function detectAudioRoute(): Promise<
         `[KODA_STREAM_CLIENT] detectAudioRoute: getCurrentInput failed: ${e?.message || e}`
       );
     }
-    // Rilascia il probe (best-effort). Se il recorder si trova già in
-    // stato prepared → stop() lancia; catch silenzioso.
     try { await probe.stop(); } catch {}
 
-    const s = `${inputType} ${inputName}`.toLowerCase();
+    const typeLC = inputType.toLowerCase();
+    const nameLC = inputName.toLowerCase();
+    const s = `${typeLC} ${nameLC}`;
     console.log(
       `[KODA_STREAM_CLIENT] detectAudioRoute: type="${inputType}" name="${inputName}"`
     );
 
-    // Heuristica classificazione (basata su AVAudioSessionPort values
-    // iOS e MediaRecorder.AudioSource su Android):
-    //   Bluetooth: "BluetoothA2DP", "BluetoothHFP", "BluetoothLE", "bluetooth"
-    //   Wired:     "Headphones", "HeadsetMic", "LineIn", "USBAudio", "headset"
-    //   Built-in:  "BuiltInMic", "MicrophoneBuiltIn", "voice_communication",
-    //              "default"
-    if (/bluetooth|hfp|a2dp|\bble\b|car\s*audio/.test(s)) {
-      return "bluetooth";
+    // Classificazione route (retrocompatibile)
+    let route: "bluetooth" | "wired" | "builtin" | "unknown" = "unknown";
+    if (/bluetooth|hfp|a2dp|\bble\b|car\s*audio/.test(s)) route = "bluetooth";
+    else if (/headphone|headset|earbud|line[\s-]?in|usb\s*audio|wired/.test(s)) route = "wired";
+    else if (/built[\s-]?in|internal|voice_communication|default|mic\b/.test(s)) route = "builtin";
+
+    // Classificazione dispositivo (nuovo — per Modalità Discreta)
+    let deviceKind: AudioDeviceKind = "unknown";
+    if (/car\s*audio|carplay/.test(s)) {
+      deviceKind = "carplay";
+    } else if (/bluetooth|hfp|a2dp|\bble\b/.test(typeLC)) {
+      // Bluetooth NON CarPlay: differenzia auricolari personali (AirPods/
+      // Beats/nome utente) da sistemi car generici. Euristica:
+      // - Se il nome contiene "airpods", "buds", "pods", "headphones",
+      //   nome persona → auricolari personali
+      // - Se contiene "car", "auto", "myford", "toyota", "bmw", "audi",
+      //   "renault", "peugeot" ecc → car bluetooth (raro perché CarPlay
+      //   copre la maggior parte dei casi moderni)
+      if (/airpods|buds|pods|beats|headphone|headset|earbud/.test(nameLC)) {
+        deviceKind = "airpods";
+      } else if (/\bcar\b|auto|vehicle|ford|toyota|bmw|audi|renault|peugeot|fiat|volkswagen|volvo|mercedes|opel|kia|hyundai|honda|nissan|mazda|jeep/.test(nameLC)) {
+        deviceKind = "car_bluetooth";
+      } else {
+        // Default per bluetooth generico: assumiamo auricolare personale
+        // (più probabile per l'utente medio moderno)
+        deviceKind = "airpods";
+      }
+    } else if (/headphone|headset|earbud|line[\s-]?in|usb\s*audio/.test(s)) {
+      deviceKind = "headphones_wired";
+    } else if (route === "builtin") {
+      deviceKind = "builtin";
     }
-    if (/headphone|headset|earbud|line[\s-]?in|usb\s*audio|wired/.test(s)) {
-      return "wired";
-    }
-    if (/built[\s-]?in|internal|voice_communication|default|mic\b/.test(s)) {
-      return "builtin";
-    }
-    // Nessun match → unknown (server userà default bilanciato)
-    return "unknown";
+
+    return { route, deviceKind, deviceType: inputType, deviceName: inputName };
   } catch (e: any) {
     console.log(
       `[KODA_STREAM_CLIENT] detectAudioRoute: crashed → unknown: ${e?.message || e}`
     );
-    return "unknown";
+    return { route: "unknown", deviceKind: "unknown", deviceType: "", deviceName: "" };
   }
 }
 
