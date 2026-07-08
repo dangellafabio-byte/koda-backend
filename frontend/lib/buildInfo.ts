@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-06-28 v1.1.0+31";
-export const BUILD_NOTES = "Android: chunk 1500→3000ms. Ridotti i cicli prepare/stop del mic (causa flash HyperOS + buchi audio Deepgram). Latenza +1.5s ma flusso voce affidabile.";
+export const BUILD_VERSION = "2026-07-08 v1.1.0+46";
+export const BUILD_NOTES = "Tap durante recording = graceful stop (Koda risponde). Long-press 500ms = kill-switch privacy. Proximity sensor auto-routing (iOS+Android). Settings modal ottimizzata (removeClippedSubviews, lazy mount).";
