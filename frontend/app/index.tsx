@@ -3752,6 +3752,19 @@ export default function Taccuino() {
     }
   };
 
+  // === FIX 2026-07-08 (Settings lag) ===
+  // Forziamo input_mode = "both" a livello profilo. Prima veniva fatto con
+  // un IIFE dentro il render del ScrollView delle Impostazioni, che
+  // chiamava setInputMode() durante il rendering → re-render loop → scroll
+  // laggava pesantemente. Ora è un useEffect one-shot che parte al caricamento
+  // del profile e SOLO se il valore corrente non è già "both".
+  useEffect(() => {
+    if (profile && profile.settings?.input_mode !== "both") {
+      setInputMode("both" as any).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.settings?.input_mode]);
+
   // Load available voices (curated + custom)
   useEffect(() => {
     (async () => {
@@ -5099,7 +5112,12 @@ export default function Taccuino() {
               style={{ flexGrow: 0 }}
               contentContainerStyle={{ paddingBottom: 6 }}
               showsVerticalScrollIndicator={true}
+              removeClippedSubviews={Platform.OS === "android"}
+              scrollEventThrottle={16}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
             >
+{showSettings && (<>
 
             {/* === IDENTITÀ — L'Amico Fraterno =======================
                 L'unica variabile di identità modificabile è il NOME dell'amico.
@@ -5453,13 +5471,9 @@ export default function Taccuino() {
                 le due pagine principali (home voce ↔ chat scrittura).
                 Avere un toggle in Settings era ridondante e confondeva. */}
             {/* Forziamo internamente input_mode su "both" così entrambi
-                i pannelli restano disponibili nel layout. */}
-            {(() => {
-              if (inputMode !== "both") {
-                try { setInputMode("both" as any); } catch {}
-              }
-              return null;
-            })()}
+                i pannelli restano disponibili nel layout.
+                MOVED to useEffect — chiamare setInputMode() dentro render
+                causava re-render ricorrenti che laggavano lo scroll. */}
 
             {/* === HEADER VOCI: RIMOSSO IL VECCHIO HEADER QUI (2026-06-27 v22) ===
                 Era presente un doppio header "Voce dell'assistente" + hint
@@ -5870,6 +5884,7 @@ export default function Taccuino() {
                 {BUILD_NOTES}
               </Text>
             </View>
+</>)}
             </ScrollView>
           </View>
         </View>
