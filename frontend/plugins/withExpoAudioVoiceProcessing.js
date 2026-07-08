@@ -29,7 +29,8 @@ const fs = require("fs");
 const path = require("path");
 const { withDangerousMod } = require("@expo/config-plugins");
 
-const KODA_PATCH_MARKER = "KODA PATCH 2026-06-22 v12 (Apple-like mic config: Voice DSP + 16kHz + speaker route)";
+const KODA_PATCH_MARKER = "KODA PATCH 2026-07-07 v14 (Voice DSP + 16kHz + PROXIMITY SENSOR routing)";
+const KODA_ANDROID_MARKER = "KODA ANDROID PATCH 2026-07-08 v1 (Proximity Sensor auto-routing)";
 
 const OLD_BLOCK = `    if sessionOptions.isEmpty {
       try session.setCategory(category, mode: .default)
@@ -40,25 +41,28 @@ const OLD_BLOCK = `    if sessionOptions.isEmpty {
 
 const NEW_BLOCK = `    if sessionOptions.isEmpty {
       // === ${KODA_PATCH_MARKER} ===
-      // Quando si registra, usa .voiceChat invece di .default per attivare
-      // l'AudioUnit Voice Processing nativo iOS (AEC + NS + AGC). Stesso
-      // preset usato da Siri/FaceTime/WhatsApp. Pulisce automaticamente
-      // rumore motore furgone/vento, mantiene la voce. Solo .playAndRecord
-      // supporta .voiceChat → fallback a .default per le altre categorie.
+      // Voice Processing (AEC/NS/AGC) tramite AVAudioSession.Mode.voiceChat.
+      // Stesso preset usato da Siri/FaceTime/WhatsApp. Pulisce rumore
+      // motore/vento mantenendo la voce.
       let recordingMode: AVAudioSession.Mode = (category == .playAndRecord) ? .voiceChat : .default
       try session.setCategory(category, mode: recordingMode)
-      // === KODA v11 FIX (2026-06-22): routing audio allo SPEAKER ===
-      // .voiceChat di default routa l'output all'EARPIECE (auricolare in
-      // alto, come una chiamata vocale). Per sentire Koda dallo speaker
-      // grande senza il telefono all'orecchio, forziamo overrideOutputAudioPort.
-      // === KODA v13 FIX (2026-06-22): rispetta BT/headphones connessi ===
-      // L'override .speaker della v11 forzava SEMPRE il loudspeaker del
-      // telefono, sopprimendo anche output Bluetooth HFP (vivavoce auto).
-      // Risultato: in auto con BT, il mic funzionava ma l'utente non
-      // sentiva Koda. Ora: override solo se NON c'è già un output esterno
-      // (BT, headphones cablate) collegato. iOS routerà l'audio dove
-      // l'utente l'ha già scelto.
       if category == .playAndRecord {
+        // === KODA v14 (2026-07-07): Modalità Telefono via Proximity Sensor ===
+        // Attiva il monitoring del sensore di prossimità iOS. Con .voiceChat
+        // mode + proximity ON, iOS gestisce AUTOMATICAMENTE il routing
+        // dell'output:
+        //   • Telefono lontano dall'orecchio → LOUDSPEAKER esterno
+        //   • Telefono vicino all'orecchio → EARPIECE interno (auricolare)
+        // Esattamente come una normale chiamata telefonica. Nessun toggle,
+        // nessuna configurazione utente. Se il telefono è connesso a
+        // Bluetooth/CarPlay/cuffie, quelle hanno precedenza (non tocchiamo).
+        DispatchQueue.main.async {
+          UIDevice.current.isProximityMonitoringEnabled = true
+        }
+        // Route policy: quando ci sono dispositivi esterni (BT/AirPods/
+        // CarPlay/cuffie) → li usiamo. Altrimenti lasciamo che iOS scelga
+        // in base al proximity sensor (loudspeaker se lontano, earpiece
+        // se vicino). NON forziamo più .speaker come nella v13.
         let externalRoutes: Set<AVAudioSession.Port> = [
           .bluetoothA2DP, .bluetoothHFP, .bluetoothLE,
           .headphones, .headsetMic,
@@ -67,29 +71,13 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
         ]
         let hasExternal = session.currentRoute.outputs.contains { externalRoutes.contains($0.portType) }
         if !hasExternal {
-          try? session.overrideOutputAudioPort(.speaker)
+          // Nessun dispositivo esterno collegato → lasciamo che
+          // AVAudioSession + proximity gestiscano il routing.
+          // Default per .voiceChat = earpiece (se proximity=true) o
+          // speaker (se proximity=false). Non forziamo nulla.
         }
-        // === KODA v12 FIX (2026-06-22): configurazione mic Apple-like ===
-        // Siri/CallKit/Dettatura performano molto meglio del nostro
-        // expo-audio sullo STESSO microfono interno in ambienti rumorosi
-        // (furgone, motore acceso). Verificato: stesso hardware, stesso
-        // mic, risultati diversi → la differenza sta nella configurazione
-        // di AVAudioSession.
-        //
-        // Due ottimizzazioni che Apple applica e noi NON stavamo applicando:
-        //   1) setPreferredSampleRate(16000): la pipeline DSP del Voice
-        //      Processing AudioUnit (AEC/NS/AGC) è ottimizzata a 16kHz.
-        //      A 48kHz (default) la noise suppression è meno aggressiva
-        //      perché lavora su un range di frequenze più ampio.
-        //   2) setPreferredDataSource("Voice"): il built-in mic dell'iPhone
-        //      espone più "data source" con polar pattern diversi —
-        //      Bottom (omnidirezionale, default), Front, Back, Voice.
-        //      "Voice" attiva un beamforming aggressivo + noise reduction
-        //      specifico per voce ravvicinata in ambienti rumorosi.
-        //      Apple usa questo data source in Siri/Dettatura.
-        //
-        // Fallback gracefully: se il device non espone "Voice", proviamo
-        // "Front" come secondo best (anch'esso con beamforming).
+        // === KODA v12: configurazione mic Apple-like (invariata dalla v11) ===
+        // 16kHz + Voice data source per beamforming/noise reduction attivi.
         try? session.setPreferredSampleRate(16000)
         if let input = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
           if let voiceSource = input.dataSources?.first(where: {
@@ -106,8 +94,13 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
       let recordingMode: AVAudioSession.Mode = (category == .playAndRecord) ? .voiceChat : .default
       try session.setCategory(category, mode: recordingMode, options: sessionOptions)
       if category == .playAndRecord {
-        try? session.overrideOutputAudioPort(.speaker)
-        // === KODA v12: stessa Apple-like mic config del ramo principale ===
+        // Proximity sensor ON anche nel ramo con options (usato quando
+        // Bluetooth opzioni sono attive).
+        DispatchQueue.main.async {
+          UIDevice.current.isProximityMonitoringEnabled = true
+        }
+        // Stessa logica del ramo principale: no override forzato .speaker,
+        // lasciamo iOS + proximity gestire.
         try? session.setPreferredSampleRate(16000)
         if let input = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
           if let voiceSource = input.dataSources?.first(where: {
@@ -164,12 +157,215 @@ function patchExpoAudioSwift(projectRoot) {
   );
 }
 
+// ============================================================================
+// ANDROID: Proximity Sensor Auto-Routing
+// ============================================================================
+// PROBLEMA: su Android, `expo-audio` gestisce `shouldRouteThroughEarpiece` come
+// flag statico. Non c'è routing automatico basato sul sensore di prossimità.
+// Quando l'utente porta il telefono all'orecchio, l'audio continua a uscire
+// dall'altoparlante esterno — comportamento imbarazzante in pubblico.
+//
+// SOLUZIONE: patcha `AudioModule.kt` per registrare un `SensorEventListener`
+// sul sensore TYPE_PROXIMITY. Durante il playback di un `AudioPlayer` attivo:
+//   • distanza < 5cm → MODE_IN_COMMUNICATION + speakerphoneOn(false) → earpiece
+//   • distanza >= 5cm → speakerphoneOn(true) + MODE_NORMAL → altoparlante
+// Il listener è passivo: agisce SOLO se players.isPlaying == true.
+// Nessuna interazione richiesta dal codice JS; il comportamento è nativo.
+//
+// Idempotente: skip se marker già presente.
+// ============================================================================
+
+const ANDROID_OLD_IMPORTS = `import android.Manifest
+import android.content.ContentResolver
+import android.content.Context
+import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager`;
+
+const ANDROID_NEW_IMPORTS = `import android.Manifest
+import android.content.ContentResolver
+import android.content.Context
+import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager`;
+
+const ANDROID_OLD_FIELDS = `  private var shouldRouteThroughEarpiece = false
+  private var focusAcquired = false`;
+
+const ANDROID_NEW_FIELDS = `  private var shouldRouteThroughEarpiece = false
+  private var focusAcquired = false
+  // === ${KODA_ANDROID_MARKER} ===
+  private var kodaProximitySensorManager: SensorManager? = null
+  private var kodaProximitySensor: Sensor? = null
+  private var kodaProximityListener: SensorEventListener? = null
+  private var kodaProximityForcedEarpiece = false`;
+
+const ANDROID_OLD_ONCREATE = `    OnCreate {
+      audioManager = appContext.reactContext?.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    }`;
+
+const ANDROID_NEW_ONCREATE = `    OnCreate {
+      audioManager = appContext.reactContext?.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+      // === ${KODA_ANDROID_MARKER} ===
+      // Registra listener sul sensore di prossimità. Il listener toggla
+      // automaticamente il routing (earpiece vs speaker) durante il playback
+      // di TTS. Se il device non ha proximity sensor (rari tablet), skip.
+      try {
+        val sm = appContext.reactContext?.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        val ps = sm?.getDefaultSensor(Sensor.TYPE_PROXIMITY)
+        if (sm != null && ps != null) {
+          kodaProximitySensorManager = sm
+          kodaProximitySensor = ps
+          val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+              try {
+                val distance = event.values.getOrNull(0) ?: return
+                // "Near" = distance < 5cm AND distance < maxRange.
+                // Threshold 5cm evita falsi positivi in tasca (>= maxRange).
+                val isNear = distance < 5f && distance < ps.maximumRange
+                // Auto-toggle SOLO se un player sta suonando (TTS attivo).
+                val hasPlaying = players.values.any { it.ref.isPlaying }
+                if (hasPlaying && isNear && !kodaProximityForcedEarpiece) {
+                  // Telefono all'orecchio → route to earpiece
+                  audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                  @Suppress("DEPRECATION")
+                  audioManager.setSpeakerphoneOn(false)
+                  kodaProximityForcedEarpiece = true
+                } else if (kodaProximityForcedEarpiece && (!hasPlaying || !isNear)) {
+                  // Telefono lontano dall'orecchio o TTS finito → altoparlante
+                  @Suppress("DEPRECATION")
+                  audioManager.setSpeakerphoneOn(true)
+                  // Ripristina MODE_NORMAL solo se non stiamo in earpiece manuale
+                  if (!shouldRouteThroughEarpiece) {
+                    audioManager.mode = AudioManager.MODE_NORMAL
+                  }
+                  kodaProximityForcedEarpiece = false
+                }
+              } catch (_: Exception) {}
+            }
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+          }
+          kodaProximityListener = listener
+          sm.registerListener(listener, ps, SensorManager.SENSOR_DELAY_NORMAL)
+        }
+      } catch (_: Exception) {}
+    }`;
+
+const ANDROID_OLD_ONDESTROY = `    OnDestroy {
+      appContext.mainQueue.launch {
+        releaseAudioFocus()`;
+
+const ANDROID_NEW_ONDESTROY = `    OnDestroy {
+      // === ${KODA_ANDROID_MARKER} ===
+      // Cleanup listener del sensore di prossimità.
+      try {
+        kodaProximityListener?.let { l ->
+          kodaProximitySensorManager?.unregisterListener(l)
+        }
+        kodaProximityListener = null
+        kodaProximitySensorManager = null
+        kodaProximitySensor = null
+      } catch (_: Exception) {}
+      appContext.mainQueue.launch {
+        releaseAudioFocus()`;
+
+function patchExpoAudioKotlin(projectRoot) {
+  const file = path.join(
+    projectRoot,
+    "node_modules",
+    "expo-audio",
+    "android",
+    "src",
+    "main",
+    "java",
+    "expo",
+    "modules",
+    "audio",
+    "AudioModule.kt"
+  );
+
+  if (!fs.existsSync(file)) {
+    console.warn(
+      `[withExpoAudioVoiceProcessing][Android] AudioModule.kt NOT FOUND at ${file}. Skipping.`
+    );
+    return;
+  }
+
+  let content = fs.readFileSync(file, "utf8");
+
+  if (content.includes(KODA_ANDROID_MARKER)) {
+    console.log(
+      "[withExpoAudioVoiceProcessing][Android] Patch already applied (marker found). Skipping."
+    );
+    return;
+  }
+
+  let ok = true;
+
+  if (content.includes(ANDROID_OLD_IMPORTS)) {
+    content = content.replace(ANDROID_OLD_IMPORTS, ANDROID_NEW_IMPORTS);
+  } else {
+    console.warn("[withExpoAudioVoiceProcessing][Android] IMPORTS block not found.");
+    ok = false;
+  }
+
+  if (content.includes(ANDROID_OLD_FIELDS)) {
+    content = content.replace(ANDROID_OLD_FIELDS, ANDROID_NEW_FIELDS);
+  } else {
+    console.warn("[withExpoAudioVoiceProcessing][Android] FIELDS block not found.");
+    ok = false;
+  }
+
+  if (content.includes(ANDROID_OLD_ONCREATE)) {
+    content = content.replace(ANDROID_OLD_ONCREATE, ANDROID_NEW_ONCREATE);
+  } else {
+    console.warn("[withExpoAudioVoiceProcessing][Android] ONCREATE block not found.");
+    ok = false;
+  }
+
+  if (content.includes(ANDROID_OLD_ONDESTROY)) {
+    content = content.replace(ANDROID_OLD_ONDESTROY, ANDROID_NEW_ONDESTROY);
+  } else {
+    console.warn("[withExpoAudioVoiceProcessing][Android] ONDESTROY block not found.");
+    ok = false;
+  }
+
+  if (!ok) {
+    console.warn(
+      "[withExpoAudioVoiceProcessing][Android] One or more patch blocks not found. " +
+        "expo-audio version may have changed. Proximity auto-routing NOT activated."
+    );
+    return;
+  }
+
+  fs.writeFileSync(file, content, "utf8");
+  console.log(
+    "[withExpoAudioVoiceProcessing][Android] ✅ Proximity Sensor auto-routing patch applied to AudioModule.kt"
+  );
+}
+
 module.exports = function withExpoAudioVoiceProcessing(config) {
-  return withDangerousMod(config, [
+  // iOS: patch AudioModule.swift for voiceChat mode + proximity sensor.
+  config = withDangerousMod(config, [
     "ios",
     async (config) => {
       patchExpoAudioSwift(config.modRequest.projectRoot);
       return config;
     },
   ]);
+  // Android: patch AudioModule.kt for proximity sensor auto-routing.
+  config = withDangerousMod(config, [
+    "android",
+    async (config) => {
+      patchExpoAudioKotlin(config.modRequest.projectRoot);
+      return config;
+    },
+  ]);
+  return config;
 };
