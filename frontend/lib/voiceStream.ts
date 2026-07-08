@@ -438,14 +438,34 @@ export class VoiceStreamSession {
     // furgone. Se detection fallisce → "unknown" → fallback default.
     // Timeboxato a 2s per non ritardare troppo il "tap to talk".
     let audioRoute: "bluetooth" | "wired" | "builtin" | "unknown" = "unknown";
+    let audioDeviceKind: string = "unknown";
     try {
-      audioRoute = await Promise.race([
-        detectAudioRoute(),
-        new Promise<"unknown">((resolve) =>
-          setTimeout(() => resolve("unknown"), 2000)
+      const routeInfo = await Promise.race([
+        detectAudioRouteDetailed(),
+        new Promise<AudioRouteInfo>((resolve) =>
+          setTimeout(
+            () => resolve({ route: "unknown", deviceKind: "unknown", deviceType: "", deviceName: "" }),
+            2000
+          )
         ),
       ]);
-      console.log(`[KODA_STREAM_CLIENT] audio_route detected → ${audioRoute}`);
+      audioRoute = routeInfo.route;
+      audioDeviceKind = routeInfo.deviceKind;
+      console.log(
+        `[KODA_STREAM_CLIENT] audio_route detected → ${audioRoute} | device kind → ${audioDeviceKind}`
+      );
+      // === FIX 2026-07-07 v46 (Modalità Telefono) ===
+      // Notifica il client del deviceKind rilevato così può attivare la
+      // Modalità Telefono (nome "Amico", UI discreta) se sono auricolari
+      // personali. NON attiva la modalità internamente — la decisione è
+      // del client in base alla preferenza utente auto/on/off.
+      try {
+        if (typeof (opts as any)?.onAudioDevice === "function") {
+          (opts as any).onAudioDevice(audioDeviceKind, routeInfo);
+        }
+      } catch (e: any) {
+        console.log(`[KODA_STREAM_CLIENT] onAudioDevice callback threw: ${e?.message || e}`);
+      }
     } catch (e: any) {
       console.log(
         `[KODA_STREAM_CLIENT] audio_route detection crashed: ${e?.message || e}`
@@ -453,6 +473,7 @@ export class VoiceStreamSession {
     }
     // Salva per eventuale reconnect
     (this.lastStartOpts as any).audioRoute = audioRoute;
+    (this.lastStartOpts as any).audioDeviceKind = audioDeviceKind;
 
     // 1) Apri WS
     const url = buildWsUrl();
