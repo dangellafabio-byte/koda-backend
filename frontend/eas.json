@@ -47,7 +47,7 @@
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app"
       },
-      "channel": "production"
+      "channel": "preview"
     },
     "preview-android": {
       "extends": "preview",
