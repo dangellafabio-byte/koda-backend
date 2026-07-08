@@ -3455,17 +3455,53 @@ export default function Taccuino() {
     // Verrà resettato a false quando l'app va in background.
     userInteractedRef.current = true;
 
+    // === TAP GRACEFUL STOP 2026-07-08 (richiesta utente) ===
+    // Cambio comportamento rispetto al vecchio HARD_STOP universale:
+    //   • Tap durante `recording` → session.stop() (invia "end" al server,
+    //     il server elabora e Koda risponde). L'utente ha finito di parlare.
+    //   • Tap durante `speaking` / `thinking` / `transcribing` → abort
+    //     (barge-in: interrompe TTS/pipeline immediatamente).
+    //   • Long-press (delayLongPress=500ms) → HARD_STOP kill-switch privacy
+    //     (vedi onBigButtonLongPress più sotto).
+    //
+    // Motivazione: il vecchio comportamento "un tap = kill switch privacy"
+    // rompeva il flusso naturale walkie-talkie. L'utente premeva stop e
+    // Koda non rispondeva mai perché il server chiudeva la sessione senza
+    // processare l'utterance. Ora tap = "ho finito parlare, tocca a te".
+    if (status === "recording") {
+      console.log(`[KODA_TAP_STOP] recording → transcribing (graceful stop)`);
+      if (streamingSessionRef.current) {
+        const s = streamingSessionRef.current as any;
+        try {
+          if (typeof s.stop === "function") {
+            // stop() manda "end" al WS. Il server elabora l'audio, invia
+            // stt_final → meta → done. Le callback onUserFinal/onMeta
+            // aggiorneranno lo status naturalmente (transcribing→thinking
+            // →speaking→idle).
+            s.stop().catch?.(() => {});
+          } else if (typeof s.abort === "function") {
+            // Fallback safety
+            s.abort().catch?.(() => {});
+          }
+        } catch {}
+      }
+      // File-based recorder legacy path (non-streaming)
+      if (recRef.current) {
+        // Nel non-streaming path, il recorder viene fermato dentro
+        // stopAndConverse() con la pipeline completa. Non lo tocchiamo qui.
+      }
+      // Transizione UI: recording → transcribing. Il resto della pipeline
+      // farà transcribing → thinking → speaking → idle come da flusso normale.
+      setStatus("transcribing");
+      return;
+    }
+
     // === HARD STOP UNIVERSALE 2026-06-26 (richiesta utente "stop fisico") ===
-    // Tutti i tap SUCCESSIVI al primo (cioè quando NON siamo in idle)
-    // devono interrompere immediatamente TUTTO e tornare in idle.
+    // Ora attivo SOLO quando l'utente tappa durante speaking/thinking/
+    // transcribing (barge-in su TTS o cancellazione pipeline).
     // - Niente "stop and send" (NO trigger pipeline residua)
     // - Niente barge-in (NO ripartenza automatica del mic)
     // - Solo silenzio totale, per privacy / contesti delicati.
-    //
-    // Use case: l'utente è nel furgone, entra qualcuno, deve far sparire
-    // tutto subito. UN TAP → silenzio assoluto, UI in idle, conversation
-    // mode disabilitato. Per riprendere, basterà un altro tap (che ora
-    // sarà di nuovo il "primo tap" della prossima sessione).
     if (status !== "idle") {
       console.log(`[KODA_HARD_STOP] tap interrupted state=${status} convActive=${convActiveRef.current}`);
       // 1) Abort streaming session (chiude WS HARD, niente "end" → niente pipeline server-side)
@@ -3524,6 +3560,50 @@ export default function Taccuino() {
     // solo a bloccare i DUPLICATI del loop hands-free, non i tap manuali.
     lastStartTalkAtRef.current = 0;
     startTalk();
+  };
+
+  // === LONG-PRESS HARD STOP 2026-07-08 (privacy kill-switch) ===
+  // Trigger: tieni premuto l'orb per ~500ms in QUALSIASI stato non-idle.
+  // Effetto: silenzio totale immediato — abort WS senza processing,
+  // stop TTS, disattiva conversation mode, blocca hands-free loop.
+  // Use case: l'utente è nel furgone, entra qualcuno, deve far sparire
+  // tutto SUBITO senza che Koda risponda a quello che ha appena detto.
+  // Il tap breve invece è il "walkie-talkie stop" (chiama session.stop()).
+  const onBigButtonLongPress = () => {
+    userInteractedRef.current = true;
+    if (status === "idle") return;
+    console.log(`[KODA_HARD_STOP] long-press kill-switch state=${status}`);
+    if (streamingSessionRef.current) {
+      const s = streamingSessionRef.current as any;
+      streamingSessionRef.current = null;
+      try {
+        if (typeof s.abort === "function") {
+          s.abort().catch?.(() => {});
+        } else if (typeof s.stop === "function") {
+          s.stop().catch?.(() => {});
+        }
+      } catch {}
+    }
+    if (recRef.current) {
+      try {
+        const r = recRef.current as any;
+        recRef.current = null;
+        r.stopAndUnloadAsync?.().catch?.(() => {});
+      } catch {}
+    }
+    try { SpeechMod.stop(); } catch {}
+    setConvActive(false);
+    convActiveRef.current = false;
+    setCloseSessionPause(true);
+    closeSessionPauseRef.current = true;
+    setStatus("idle");
+    // Feedback aptico (se disponibile). Su iOS/Android nativi vibra
+    // brevemente per confermare all'utente che il kill switch ha agito.
+    try {
+      // Import lazy per non appesantire l'entry.
+      const Haptics = require("expo-haptics");
+      Haptics?.notificationAsync?.(Haptics.NotificationFeedbackType.Warning).catch?.(() => {});
+    } catch {}
   };
 
   // Mantieni le ref del gesture composto sincronizzate con la closure
@@ -4612,10 +4692,15 @@ export default function Taccuino() {
                 <Pressable
                   ref={orbBtnRef}
                   onPress={onBigButton}
+                  onLongPress={onBigButtonLongPress}
+                  delayLongPress={500}
                   // === HARD STOP 2026-06-26: orb sempre tappabile ===
                   // Prima: disabled durante transcribing/thinking, ma l'utente
                   // ha chiesto esplicitamente di poter interrompere TUTTO in
                   // qualsiasi stato (per privacy). Ora il tap funziona sempre.
+                  // === LONG-PRESS 2026-07-08 ===
+                  // Tap breve = graceful stop (ho finito parlare, tocca a te).
+                  // Long-press (500ms) = kill-switch privacy (silenzio totale).
                   hitSlop={30}
                   style={({ pressed }) => [
                     { alignItems: "center", justifyContent: "center" },
