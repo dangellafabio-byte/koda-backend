@@ -454,18 +454,6 @@ export class VoiceStreamSession {
       console.log(
         `[KODA_STREAM_CLIENT] audio_route detected → ${audioRoute} | device kind → ${audioDeviceKind}`
       );
-      // === FIX 2026-07-07 v46 (Modalità Telefono) ===
-      // Notifica il client del deviceKind rilevato così può attivare la
-      // Modalità Telefono (nome "Amico", UI discreta) se sono auricolari
-      // personali. NON attiva la modalità internamente — la decisione è
-      // del client in base alla preferenza utente auto/on/off.
-      try {
-        if (typeof (opts as any)?.onAudioDevice === "function") {
-          (opts as any).onAudioDevice(audioDeviceKind, routeInfo);
-        }
-      } catch (e: any) {
-        console.log(`[KODA_STREAM_CLIENT] onAudioDevice callback threw: ${e?.message || e}`);
-      }
     } catch (e: any) {
       console.log(
         `[KODA_STREAM_CLIENT] audio_route detection crashed: ${e?.message || e}`

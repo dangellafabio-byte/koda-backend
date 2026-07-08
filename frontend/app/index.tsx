@@ -861,67 +861,6 @@ export default function Taccuino() {
     } catch {}
   }, [profile]);
 
-  // === Modalità Telefono / Discreta (FIX 2026-07-07 v46) ===
-  // Feature per Fabio: quando si usa Koda in pubblico (ufficio, treno,
-  // colleghi vicini) l'utente vuole che chi sta intorno NON capisca che
-  // sta parlando con un'AI. Attivando la Modalità Telefono:
-  //   • Il nome "Koda" diventa "Amico" nell'header e nei toast
-  //   • Un indicatore visivo minimale segnala "chiamata in corso" tipo
-  //     app telefonica
-  //   • L'audio è forzato sull'auricolare (già gestito dal routing)
-  // Persistenza: `profile.settings.discreet_mode` con 3 valori:
-  //   • "auto" (default): si attiva SOLO se rilevo auricolari personali
-  //     (AirPods/cuffie cablate) — NO CarPlay/speaker esterno
-  //   • "on": sempre attiva
-  //   • "off": mai attiva
-  const discreetPref: "auto" | "on" | "off" =
-    ((profile?.settings as any)?.discreet_mode as any) || "auto";
-  // Flag che indica se in QUESTO momento la modalità è visivamente attiva
-  const [discreetActive, setDiscreetActive] = useState<boolean>(false);
-  const discreetActiveRef = useRef(false);
-  useEffect(() => { discreetActiveRef.current = discreetActive; }, [discreetActive]);
-
-  // Callback che il voiceStream chiama quando rileva il device kind
-  // (airpods / headphones_wired / carplay / builtin / unknown).
-  const onAudioDeviceDetected = useCallback((kind: string) => {
-    let shouldBeActive = false;
-    if (discreetPref === "on") shouldBeActive = true;
-    else if (discreetPref === "off") shouldBeActive = false;
-    else {
-      // auto: solo auricolari personali
-      shouldBeActive = kind === "airpods" || kind === "headphones_wired";
-    }
-    if (shouldBeActive !== discreetActiveRef.current) {
-      console.log(
-        `[KODA_DISCREET] mode change: ${discreetActiveRef.current} → ${shouldBeActive} ` +
-        `(pref=${discreetPref}, device=${kind})`
-      );
-      setDiscreetActive(shouldBeActive);
-    }
-  }, [discreetPref]);
-
-  // Toggle ciclico Auto → On → Off → Auto
-  const cycleDiscreetMode = useCallback(async () => {
-    if (!profile) return;
-    const cur: "auto" | "on" | "off" = discreetPref;
-    const next: "auto" | "on" | "off" =
-      cur === "auto" ? "on" : cur === "on" ? "off" : "auto";
-    const nextProfile = {
-      ...profile,
-      settings: { ...profile.settings, discreet_mode: next } as any,
-    };
-    setProfile(nextProfile);
-    const label =
-      next === "auto" ? "Modalità Telefono: automatica (con auricolari)"
-      : next === "on" ? "Modalità Telefono: sempre attiva"
-      : "Modalità Telefono: disattivata";
-    setHandsFreeToast(label);
-    setTimeout(() => setHandsFreeToast(null), 2500);
-    try {
-      await api.updateProfile({ settings: nextProfile.settings } as any);
-    } catch {}
-  }, [profile, discreetPref]);
-
   const recRef = useRef<Recorder | null>(null);
   // === FASE 1 STREAMING (giugno 2026) ===
   // Ref alla sessione voice streaming attiva. Permette il tap-to-stop sul
@@ -2819,18 +2758,6 @@ export default function Taccuino() {
           console.log(
             `[KODA_STREAM_CLIENT] session ref ${s ? "stored" : "cleared"}`
           );
-        },
-        // === FIX 2026-07-07 v46 (Modalità Telefono) ===
-        // Callback quando il voice stream rileva il tipo di dispositivo
-        // audio (AirPods / cuffie / CarPlay / speaker). In base a questa
-        // + preferenza utente decidiamo se attivare la Modalità Telefono
-        // (nome "Amico" + UI discreta).
-        onAudioDevice: (kind: string) => {
-          try {
-            onAudioDeviceDetected(kind);
-          } catch (e: any) {
-            console.log(`[KODA_DISCREET] onAudioDevice error: ${e?.message || e}`);
-          }
         },
         onAudioStart: () => {
           setStatus("speaking");
@@ -5375,71 +5302,6 @@ export default function Taccuino() {
                   thumbColor="#fff"
                 />
               </View>
-            </View>
-
-            {/* === FIX 2026-07-07 v46 — Modalità Telefono ===
-                Feature per usare Koda in pubblico senza far capire agli
-                altri che si sta parlando con un'AI. Cicla 3 modi:
-                • Auto: si attiva SOLO con auricolari personali (AirPods,
-                  cuffie cablate) — mai con CarPlay o speaker
-                • Sempre: attiva a prescindere dal dispositivo audio
-                • Mai: disattivata
-                Quando attiva: il nome "Koda" diventa "Amico", appare un
-                badge "🎧 Modalità Telefono" nell'header. */}
-            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8, marginTop: 14 }]}>
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.settingLabel}>📞 Modalità Telefono</Text>
-                  <Text style={styles.settingHint}>
-                    Quando attiva: Koda diventa Amico nell{"'"}interfaccia,
-                    così chi ti sta accanto non capisce che parli con un{"'"}AI.
-                    In Auto si attiva solo con AirPods o cuffie personali.
-                  </Text>
-                </View>
-                <TouchableOpacity
-                  onPress={cycleDiscreetMode}
-                  style={{
-                    paddingVertical: 8,
-                    paddingHorizontal: 14,
-                    borderRadius: 12,
-                    backgroundColor:
-                      discreetPref === "off"
-                        ? theme.muted + "55"
-                        : bubbleAccent.color,
-                    minWidth: 88,
-                    alignItems: "center",
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: discreetPref === "off" ? theme.text : "#fff",
-                      fontSize: 13,
-                      fontWeight: "700",
-                    }}
-                  >
-                    {discreetPref === "auto"
-                      ? "Auto"
-                      : discreetPref === "on"
-                      ? "Sempre"
-                      : "Mai"}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-              {discreetActive && (
-                <View
-                  style={{
-                    backgroundColor: bubbleAccent.color + "22",
-                    paddingHorizontal: 10,
-                    paddingVertical: 6,
-                    borderRadius: 8,
-                    alignSelf: "flex-start",
-                  }}
-                >
-                  <Text style={{ color: bubbleAccent.color, fontSize: 12, fontWeight: "600" }}>
-                    🎧 Attualmente attiva
-                  </Text>
-                </View>
-              )}
             </View>
 
             <View style={styles.divider} />
