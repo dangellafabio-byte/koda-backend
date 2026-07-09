@@ -1211,20 +1211,31 @@ async def voice_stream_handler(
                                 f"[KODA_STREAM sess={short_id}] dg.finalize() failed: {e}"
                             )
 
-                        # 1) Aspetta max 3s che dg_event_loop chiami _trigger_pipeline
-                        #    (che alza pipeline_in_flight=True) al ricevere speech_final
-                        _t_wait = time.time()
-                        while not pipeline_in_flight and (time.time() - _t_wait) < 3.0:
-                            await asyncio.sleep(0.1)
+                        # === FIX 2026-07-09 v2 — Wait unificato con detection start/end ===
+                        # Approccio:
+                        #   - Max 28s totali per pipeline (3s start + 25s run)
+                        #   - Traccia _pipeline_seen: True appena vediamo
+                        #     pipeline_in_flight=True. Se poi torna False,
+                        #     usciamo subito (pipeline complete).
+                        #   - Se dopo 3s non l'abbiamo mai vista → fallback.
+                        _t0 = time.time()
+                        _pipeline_seen = False
+                        while (time.time() - _t0) < 28.0:
                             if not client_alive:
                                 break
+                            if pipeline_in_flight:
+                                _pipeline_seen = True
+                            elif _pipeline_seen:
+                                # Era in flight, ora finita → esci subito
+                                break
+                            elif (time.time() - _t0) > 3.0:
+                                # 3s scaduti senza mai vedere pipeline partire
+                                break
+                            await asyncio.sleep(0.15)
 
-                        # 2) Fallback: DG non ha detto niente → trigger pipeline
-                        #    manualmente con il PCM buffer (Whisper deciderà se
-                        #    c'è testo utile). Se nel frattempo dg_event_loop
-                        #    ha triggerato la pipeline (race), _trigger_pipeline
-                        #    è idempotente e ritorna subito.
-                        if not pipeline_in_flight and utterance_pcm_buffer and client_alive:
+                        # Fallback: DG non ha mai fatto partire la pipeline →
+                        # trigger manuale con PCM buffer (Whisper)
+                        if not _pipeline_seen and utterance_pcm_buffer and client_alive:
                             logger.warning(
                                 f"[KODA_STREAM sess={short_id}] end frame: no DG "
                                 f"speech_final in 3s, forcing fallback pipeline "
@@ -1236,32 +1247,26 @@ async def voice_stream_handler(
                             utterance_text_parts.clear()
                             try:
                                 await _trigger_pipeline(partial_text, pcm_snapshot)
+                                # Nota: _trigger_pipeline è await-blocking, quando
+                                # ritorna la pipeline è già completa. Non serve
+                                # un ulteriore wait.
                             except Exception as e:
                                 logger.error(
                                     f"[KODA_STREAM sess={short_id}] end fallback "
                                     f"pipeline error: {e}"
                                 )
-
-                        # 3) In ogni caso, aspetta che la pipeline finisca (max 25s).
-                        #    Copre TUTTI i casi:
-                        #    - Pipeline già completata dall'await del fallback → esce subito
-                        #    - Pipeline partita da dg_event_loop (race) → aspetta
-                        #    - Nessuna pipeline mai partita (no PCM, no DG) → esce subito
-                        _t_pipe = time.time()
-                        while pipeline_in_flight and (time.time() - _t_pipe) < 25.0:
-                            await asyncio.sleep(0.2)
-                            if not client_alive:
-                                break
-
-                        if pipeline_in_flight:
+                        elif _pipeline_seen and pipeline_in_flight and client_alive:
+                            # Rara: siamo usciti dal wait unificato per timeout
+                            # 28s ma la pipeline è ancora in corso. Warning e
+                            # chiudiamo comunque.
                             logger.warning(
                                 f"[KODA_STREAM sess={short_id}] end frame: pipeline "
-                                f"still in flight after wait cap, closing anyway"
+                                f"still in flight after 28s, closing anyway"
                             )
                         else:
                             logger.info(
                                 f"[KODA_STREAM sess={short_id}] end frame: pipeline "
-                                f"complete, closing session"
+                                f"complete (seen={_pipeline_seen}), closing session"
                             )
                         break
         except WebSocketDisconnect:
