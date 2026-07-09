@@ -942,6 +942,17 @@ async def voice_stream_handler(
             trasparente al testo Deepgram (`final_text`) come prima.
             """
             nonlocal pipeline_in_flight, utterance_confidence
+            # === FIX 2026-07-09 — Idempotency guard ===
+            # Sia dg_event_loop (su speech_final) sia il branch "end" (fallback)
+            # possono tentare di chiamare _trigger_pipeline. Se una è già in
+            # corso, il secondo chiamante deve abortire silenziosamente per
+            # evitare doppie risposte TTS / doppio consumo LLM.
+            if pipeline_in_flight:
+                logger.info(
+                    f"[KODA_STREAM sess={short_id}] _trigger_pipeline SKIP "
+                    f"(already in flight) — caller text={final_text!r}"
+                )
+                return
             pipeline_in_flight = True
             audio_duration_ms = None
             if speech_started_at is not None:
@@ -1210,7 +1221,9 @@ async def voice_stream_handler(
 
                         # 2) Fallback: DG non ha detto niente → trigger pipeline
                         #    manualmente con il PCM buffer (Whisper deciderà se
-                        #    c'è testo utile)
+                        #    c'è testo utile). Se nel frattempo dg_event_loop
+                        #    ha triggerato la pipeline (race), _trigger_pipeline
+                        #    è idempotente e ritorna subito.
                         if not pipeline_in_flight and utterance_pcm_buffer and client_alive:
                             logger.warning(
                                 f"[KODA_STREAM sess={short_id}] end frame: no DG "
@@ -1228,14 +1241,17 @@ async def voice_stream_handler(
                                     f"[KODA_STREAM sess={short_id}] end fallback "
                                     f"pipeline error: {e}"
                                 )
-                        else:
-                            # 3) Pipeline partita da dg_event_loop: aspetta max 25s
-                            #    che finisca (LLM+TTS totali)
-                            _t_pipe = time.time()
-                            while pipeline_in_flight and (time.time() - _t_pipe) < 25.0:
-                                await asyncio.sleep(0.2)
-                                if not client_alive:
-                                    break
+
+                        # 3) In ogni caso, aspetta che la pipeline finisca (max 25s).
+                        #    Copre TUTTI i casi:
+                        #    - Pipeline già completata dall'await del fallback → esce subito
+                        #    - Pipeline partita da dg_event_loop (race) → aspetta
+                        #    - Nessuna pipeline mai partita (no PCM, no DG) → esce subito
+                        _t_pipe = time.time()
+                        while pipeline_in_flight and (time.time() - _t_pipe) < 25.0:
+                            await asyncio.sleep(0.2)
+                            if not client_alive:
+                                break
 
                         if pipeline_in_flight:
                             logger.warning(
