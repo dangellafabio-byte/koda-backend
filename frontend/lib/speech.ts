@@ -74,7 +74,13 @@ export async function prewarmAudio(): Promise<void> {
       allowsRecording: false,
       playsInSilentMode: true,
       interruptionMode: "duckOthers",
-      shouldPlayInBackground: false,
+      // === FIX 2026-07-08 (Fabio "Koda continua a parlare a schermo bloccato") ===
+      // shouldPlayInBackground=true su tutte le chiamate playback così iOS
+      // NON sospende AVAudioSession quando schermo bloccato / app in background.
+      // Combinato con UIBackgroundModes=["audio"] nell'Info.plist (già in app.json),
+      // Koda continua a suonare la risposta TTS anche in macchina con telefono
+      // in tasca / schermo spento.
+      shouldPlayInBackground: true,
       shouldRouteThroughEarpiece: false,
     });
   } catch (e) {
@@ -339,7 +345,8 @@ function prewarmPlaybackSession(): Promise<void> {
         allowsRecording: false,
         playsInSilentMode: true,
         interruptionMode: "duckOthers",
-        shouldPlayInBackground: false,
+        // === FIX 2026-07-08 background audio iOS ===
+        shouldPlayInBackground: true,
         shouldRouteThroughEarpiece: false,
       });
       await setIsAudioActiveAsync(true);
@@ -445,7 +452,8 @@ async function playElevenLabsNativeFromUrl(
           allowsRecording: false,
           playsInSilentMode: true,
           interruptionMode: "duckOthers",
-          shouldPlayInBackground: false,
+          // === FIX 2026-07-08 background audio iOS ===
+          shouldPlayInBackground: true,
           shouldRouteThroughEarpiece: false,
         }),
         1500,
@@ -579,7 +587,9 @@ async function playElevenLabsNativeFromUrl(
             allowsRecording: false,
             playsInSilentMode: true,
             interruptionMode: "doNotMix",
-            shouldPlayInBackground: false,
+            // === FIX 2026-07-08 background audio (per iOS; Android ignora
+            //     senza ForegroundService — v. nota per futuro) ===
+            shouldPlayInBackground: true,
             shouldRouteThroughEarpiece: false,
           }).catch(() => {});
         } catch {}
@@ -2061,7 +2071,8 @@ export async function voiceStreamConverse(opts: {
                 allowsRecording: false,
                 playsInSilentMode: true,
                 interruptionMode: "doNotMix",
-                shouldPlayInBackground: false,
+                // === FIX 2026-07-08 background audio ===
+                shouldPlayInBackground: true,
                 shouldRouteThroughEarpiece: false,
               });
               console.log(`[KODA_BYPASS] audio_mode_set ms=${Date.now() - t0}`);
