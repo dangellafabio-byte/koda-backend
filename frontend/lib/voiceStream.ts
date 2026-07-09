@@ -495,22 +495,43 @@ export class VoiceStreamSession {
     });
   }
 
-  /** Forza la chiusura della sessione. Manda "end" al server. */
+  /** === FIX 2026-07-08 (Fabio "tap-to-stop chiude WS troppo presto") ===
+   *  Graceful stop: ferma il microfono ma NON invia più "end" al server.
+   *  Motivazione: il frame {type:"end"} costringe il server a chiudere
+   *  la pipeline lato Deepgram prima che stt_final abbia margine di
+   *  arrivare pulito, e in molti casi la WS si chiude prima che Koda
+   *  possa streammare la risposta TTS. Nuovo comportamento:
+   *   1) chunkLoop stop → niente più audio in entrata
+   *   2) Deepgram VAD/endpointing chiude l'utterance sul silenzio
+   *   3) server emette stt_final → parte pipeline LLM+TTS
+   *   4) server invia sentence + audio + done, WS chiusa dal server
+   *  Il long-press resta collegato a abort() per il kill-switch privacy. */
   async stop(): Promise<void> {
     this.stopRequested = true;
     this.finalCloseRequested = true;
     this.chunkLoopActive = false;
     this.cancelChunkWait("stop() called");
-    this.stopKeepalive();
-    try {
-      this.sendJson({ type: "end" });
-    } catch {}
     // Stop current recording se in corso
     await this.safeStopRecorder();
-    // NON chiudiamo subito il WS — aspettiamo "done" dal server con la
-    // risposta TTS. Lo chiudiamo dentro onmessage quando arriva "done"
-    // o dopo un timeout di sicurezza.
-    setTimeout(() => this.forceCloseWs(), 25_000);
+    // === FIX 2026-07-08: NON inviamo più {type:"end"} qui ===
+    // Lasciamo che Deepgram VAD chiuda l'utterance naturalmente sul
+    // silenzio. La WS resta aperta per ricevere sentence/audio/done.
+    // Manteniamo il keepalive attivo così proxy cellulari non chiudono
+    // la WS mentre aspettiamo la risposta TTS.
+    // this.sendJson({ type: "end" });  ← rimosso intenzionalmente
+    // this.stopKeepalive();            ← rimosso: keepalive utile fino a "done"
+
+    // Timeout di sicurezza: se dopo 30s il server non manda "done",
+    // chiudiamo comunque per evitare WS zombie.
+    setTimeout(() => {
+      if (!this.doneReceived) {
+        console.log(
+          `[KODA_STREAM_CLIENT] stop() safety timeout — no 'done' received in 30s, force closing WS`
+        );
+        this.stopKeepalive();
+        this.forceCloseWs();
+      }
+    }, 30_000);
   }
 
   /** === HARD ABORT 2026-06-26 (richiesta utente "stop fisico") ===
