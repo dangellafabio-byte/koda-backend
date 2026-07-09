@@ -495,43 +495,43 @@ export class VoiceStreamSession {
     });
   }
 
-  /** === FIX 2026-07-08 (Fabio "tap-to-stop chiude WS troppo presto") ===
-   *  Graceful stop: ferma il microfono ma NON invia più "end" al server.
-   *  Motivazione: il frame {type:"end"} costringe il server a chiudere
-   *  la pipeline lato Deepgram prima che stt_final abbia margine di
-   *  arrivare pulito, e in molti casi la WS si chiude prima che Koda
-   *  possa streammare la risposta TTS. Nuovo comportamento:
-   *   1) chunkLoop stop → niente più audio in entrata
-   *   2) Deepgram VAD/endpointing chiude l'utterance sul silenzio
-   *   3) server emette stt_final → parte pipeline LLM+TTS
-   *   4) server invia sentence + audio + done, WS chiusa dal server
+  /** === FIX 2026-07-09 v2 (Fabio "tap-to-stop") ===
+   *  Graceful stop coordinato con il fix server-side:
+   *   1) Ferma chunkLoop lato client (basta di registrare)
+   *   2) Invia {type:"end"} al server → server chiama dg.finalize() E aspetta
+   *      che la pipeline LLM+TTS finisca prima di chiudere la WS (fix
+   *      voice_stream.py 2026-07-09)
+   *   3) NON chiudiamo la WS qui: aspettiamo che il server mandi sentence +
+   *      audio + done. Timeout di sicurezza a 40s.
+   *   4) Keepalive resta attivo così proxy cellulari non chiudono la WS
+   *      mentre aspettiamo la risposta TTS.
    *  Il long-press resta collegato a abort() per il kill-switch privacy. */
   async stop(): Promise<void> {
     this.stopRequested = true;
     this.finalCloseRequested = true;
     this.chunkLoopActive = false;
     this.cancelChunkWait("stop() called");
-    // Stop current recording se in corso
+    // Stop recording (niente più audio in ingresso)
     await this.safeStopRecorder();
-    // === FIX 2026-07-08: NON inviamo più {type:"end"} qui ===
-    // Lasciamo che Deepgram VAD chiuda l'utterance naturalmente sul
-    // silenzio. La WS resta aperta per ricevere sentence/audio/done.
-    // Manteniamo il keepalive attivo così proxy cellulari non chiudono
-    // la WS mentre aspettiamo la risposta TTS.
-    // this.sendJson({ type: "end" });  ← rimosso intenzionalmente
-    // this.stopKeepalive();            ← rimosso: keepalive utile fino a "done"
+    // Segnala al server "utente ha finito" → server finalizza DG, aspetta
+    // pipeline, poi manda done. Il vecchio bug (server chiudeva subito) è
+    // stato risolto lato server 2026-07-09.
+    try {
+      this.sendJson({ type: "end" });
+    } catch {}
 
-    // Timeout di sicurezza: se dopo 30s il server non manda "done",
-    // chiudiamo comunque per evitare WS zombie.
+    // Timeout di sicurezza: se dopo 40s il server non manda "done",
+    // chiudiamo comunque per evitare WS zombie. 40s = 3s wait DG final +
+    // 25s wait pipeline + 12s margine per rete cellulare.
     setTimeout(() => {
       if (!this.doneReceived) {
         console.log(
-          `[KODA_STREAM_CLIENT] stop() safety timeout — no 'done' received in 30s, force closing WS`
+          `[KODA_STREAM_CLIENT] stop() safety timeout — no 'done' received in 40s, force closing WS`
         );
         this.stopKeepalive();
         this.forceCloseWs();
       }
-    }, 30_000);
+    }, 40_000);
   }
 
   /** === HARD ABORT 2026-06-26 (richiesta utente "stop fisico") ===

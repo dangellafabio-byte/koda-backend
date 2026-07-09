@@ -1179,12 +1179,74 @@ async def voice_stream_handler(
                         continue
                     if ctrl.get("type") == "end":
                         logger.info(
-                            f"[KODA_STREAM sess={short_id}] client sent end frame"
+                            f"[KODA_STREAM sess={short_id}] client sent end frame — "
+                            f"finalizing DG and awaiting pipeline completion"
                         )
-                        # Forza Deepgram a finalizzare
-                        await dg.finalize()
-                        # Aspetta un po' per ricevere il transcript finale
-                        await asyncio.sleep(2.0)
+                        # === FIX 2026-07-09 (Fabio "tap-to-stop closes WS too early") ===
+                        # PROBLEMA precedente: dopo finalize() facevamo solo
+                        # asyncio.sleep(2.0) e poi break → WS chiusa PRIMA che
+                        # la pipeline LLM+TTS (Claude + ElevenLabs, tipicamente
+                        # 3-5s) potesse emettere sentence + audio + done →
+                        # Koda non rispondeva mai al tap-to-stop.
+                        #
+                        # NUOVO: dopo finalize aspettiamo (a) che la pipeline
+                        # parta entro 3s, (b) che finisca entro 25s. Se DG non
+                        # emette speech_final in 3s ma abbiamo PCM buffer,
+                        # facciamo il fallback Whisper direttamente.
+                        try:
+                            await dg.finalize()
+                        except Exception as e:
+                            logger.warning(
+                                f"[KODA_STREAM sess={short_id}] dg.finalize() failed: {e}"
+                            )
+
+                        # 1) Aspetta max 3s che dg_event_loop chiami _trigger_pipeline
+                        #    (che alza pipeline_in_flight=True) al ricevere speech_final
+                        _t_wait = time.time()
+                        while not pipeline_in_flight and (time.time() - _t_wait) < 3.0:
+                            await asyncio.sleep(0.1)
+                            if not client_alive:
+                                break
+
+                        # 2) Fallback: DG non ha detto niente → trigger pipeline
+                        #    manualmente con il PCM buffer (Whisper deciderà se
+                        #    c'è testo utile)
+                        if not pipeline_in_flight and utterance_pcm_buffer and client_alive:
+                            logger.warning(
+                                f"[KODA_STREAM sess={short_id}] end frame: no DG "
+                                f"speech_final in 3s, forcing fallback pipeline "
+                                f"with {len(utterance_pcm_buffer)}B PCM"
+                            )
+                            pcm_snapshot = bytes(utterance_pcm_buffer)
+                            utterance_pcm_buffer.clear()
+                            partial_text = " ".join(utterance_text_parts).strip()
+                            utterance_text_parts.clear()
+                            try:
+                                await _trigger_pipeline(partial_text, pcm_snapshot)
+                            except Exception as e:
+                                logger.error(
+                                    f"[KODA_STREAM sess={short_id}] end fallback "
+                                    f"pipeline error: {e}"
+                                )
+                        else:
+                            # 3) Pipeline partita da dg_event_loop: aspetta max 25s
+                            #    che finisca (LLM+TTS totali)
+                            _t_pipe = time.time()
+                            while pipeline_in_flight and (time.time() - _t_pipe) < 25.0:
+                                await asyncio.sleep(0.2)
+                                if not client_alive:
+                                    break
+
+                        if pipeline_in_flight:
+                            logger.warning(
+                                f"[KODA_STREAM sess={short_id}] end frame: pipeline "
+                                f"still in flight after wait cap, closing anyway"
+                            )
+                        else:
+                            logger.info(
+                                f"[KODA_STREAM sess={short_id}] end frame: pipeline "
+                                f"complete, closing session"
+                            )
                         break
         except WebSocketDisconnect:
             client_alive = False
