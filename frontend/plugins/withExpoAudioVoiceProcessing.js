@@ -29,7 +29,7 @@ const fs = require("fs");
 const path = require("path");
 const { withDangerousMod } = require("@expo/config-plugins");
 
-const KODA_PATCH_MARKER = "KODA PATCH 2026-07-07 v14 (Voice DSP + 16kHz + PROXIMITY SENSOR routing)";
+const KODA_PATCH_MARKER = "KODA PATCH 2026-07-10 v15 (Voice DSP + 16kHz + PROXIMITY OBSERVER DYNAMIC)";
 const KODA_ANDROID_MARKER = "KODA ANDROID PATCH 2026-07-08 v1 (Proximity Sensor auto-routing)";
 
 const OLD_BLOCK = `    if sessionOptions.isEmpty {
@@ -59,22 +59,58 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
         DispatchQueue.main.async {
           UIDevice.current.isProximityMonitoringEnabled = true
         }
-        // Route policy: quando ci sono dispositivi esterni (BT/AirPods/
-        // CarPlay/cuffie) → li usiamo. Altrimenti lasciamo che iOS scelga
-        // in base al proximity sensor (loudspeaker se lontano, earpiece
-        // se vicino). NON forziamo più .speaker come nella v13.
-        let externalRoutes: Set<AVAudioSession.Port> = [
-          .bluetoothA2DP, .bluetoothHFP, .bluetoothLE,
-          .headphones, .headsetMic,
-          .carAudio, .airPlay,
-          .usbAudio,
+        // === KODA v15 (2026-07-10): Observer proximity DINAMICO ===
+        // Il flag proximityMonitoringEnabled da solo NON muove l'audio: fa solo
+        // dimmerare lo schermo e leggere lo stato. Per ottenere il routing
+        // earpiece↔speaker come una vera telefonata serve un observer che al
+        // cambio di proximityState chiami overrideOutputAudioPort(.none/.speaker).
+        // Guard di idempotenza: nested enum + static var (Swift 5.5+) così
+        // ogni chiamata a setCategory non registra observer duplicati.
+        enum KodaProxObserverGuard {
+            static var registered = false
+        }
+        if !KodaProxObserverGuard.registered {
+            KodaProxObserverGuard.registered = true
+            NotificationCenter.default.addObserver(
+                forName: UIDevice.proximityStateDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                let s = AVAudioSession.sharedInstance()
+                guard s.category == .playAndRecord else { return }
+                let extPorts: Set<AVAudioSession.Port> = [
+                    .bluetoothA2DP, .bluetoothHFP, .bluetoothLE,
+                    .headphones, .headsetMic,
+                    .carAudio, .airPlay, .usbAudio,
+                ]
+                if s.currentRoute.outputs.contains(where: { extPorts.contains($0.portType) }) { return }
+                do {
+                    if UIDevice.current.proximityState {
+                        // Vicino all'orecchio → EARPIECE (auricolare interno)
+                        try s.overrideOutputAudioPort(.none)
+                    } else {
+                        // Lontano → LOUDSPEAKER (esterno)
+                        try s.overrideOutputAudioPort(.speaker)
+                    }
+                } catch { /* silent */ }
+            }
+        }
+        // Routing INIZIALE: se il device è già in mano al momento del setCategory,
+        // applica subito il routing corretto senza aspettare un cambio di stato.
+        let extPorts0: Set<AVAudioSession.Port> = [
+            .bluetoothA2DP, .bluetoothHFP, .bluetoothLE,
+            .headphones, .headsetMic,
+            .carAudio, .airPlay, .usbAudio,
         ]
-        let hasExternal = session.currentRoute.outputs.contains { externalRoutes.contains($0.portType) }
-        if !hasExternal {
-          // Nessun dispositivo esterno collegato → lasciamo che
-          // AVAudioSession + proximity gestiscano il routing.
-          // Default per .voiceChat = earpiece (se proximity=true) o
-          // speaker (se proximity=false). Non forziamo nulla.
+        let hasExternal0 = session.currentRoute.outputs.contains { extPorts0.contains($0.portType) }
+        if !hasExternal0 {
+            do {
+                if UIDevice.current.proximityState {
+                    try session.overrideOutputAudioPort(.none)
+                } else {
+                    try session.overrideOutputAudioPort(.speaker)
+                }
+            } catch { /* silent */ }
         }
         // === KODA v12: configurazione mic Apple-like (invariata dalla v11) ===
         // 16kHz + Voice data source per beamforming/noise reduction attivi.
@@ -99,8 +135,53 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
         DispatchQueue.main.async {
           UIDevice.current.isProximityMonitoringEnabled = true
         }
-        // Stessa logica del ramo principale: no override forzato .speaker,
-        // lasciamo iOS + proximity gestire.
+        // === KODA v15: stesso observer proximity dinamico del ramo principale.
+        //   nested enum guard evita registrazioni duplicate anche se
+        //   setCategory viene chiamato più volte (ramo options).
+        enum KodaProxObserverGuardOpt {
+            static var registered = false
+        }
+        if !KodaProxObserverGuardOpt.registered {
+            KodaProxObserverGuardOpt.registered = true
+            NotificationCenter.default.addObserver(
+                forName: UIDevice.proximityStateDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                let s = AVAudioSession.sharedInstance()
+                guard s.category == .playAndRecord else { return }
+                let extPorts: Set<AVAudioSession.Port> = [
+                    .bluetoothA2DP, .bluetoothHFP, .bluetoothLE,
+                    .headphones, .headsetMic,
+                    .carAudio, .airPlay, .usbAudio,
+                ]
+                if s.currentRoute.outputs.contains(where: { extPorts.contains($0.portType) }) { return }
+                do {
+                    if UIDevice.current.proximityState {
+                        try s.overrideOutputAudioPort(.none)
+                    } else {
+                        try s.overrideOutputAudioPort(.speaker)
+                    }
+                } catch { /* silent */ }
+            }
+        }
+        // Routing INIZIALE nel ramo options (BT etc): applica solo se non ci
+        // sono device esterni. Se ci sono BT/cuffie, non tocchiamo il routing.
+        let extPortsOpt: Set<AVAudioSession.Port> = [
+            .bluetoothA2DP, .bluetoothHFP, .bluetoothLE,
+            .headphones, .headsetMic,
+            .carAudio, .airPlay, .usbAudio,
+        ]
+        let hasExternalOpt = session.currentRoute.outputs.contains { extPortsOpt.contains($0.portType) }
+        if !hasExternalOpt {
+            do {
+                if UIDevice.current.proximityState {
+                    try session.overrideOutputAudioPort(.none)
+                } else {
+                    try session.overrideOutputAudioPort(.speaker)
+                }
+            } catch { /* silent */ }
+        }
         try? session.setPreferredSampleRate(16000)
         if let input = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
           if let voiceSource = input.dataSources?.first(where: {
