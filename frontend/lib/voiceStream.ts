@@ -484,10 +484,36 @@ export class VoiceStreamSession {
 
     // 3) Aspetta "ready" (i frame in arrivo sono già instradati dal listener onmessage)
 
+    // === FIX 2026-07-10 (race stop() durante start()) ===
+    // Se l'utente preme tap-stop MENTRE start() è in corso (setup audio +
+    // WS opening, che impiega ~1-2s), stop() setta stopRequested=true. In
+    // quel caso NON dobbiamo far partire il chunkLoop: dobbiamo abortire
+    // il setup residuo e mandare {type:"end"} al server per triggerare la
+    // pipeline sul poco audio che magari abbiamo già inviato.
+    if (this.stopRequested) {
+      console.log(
+        `[KODA_STREAM_CLIENT] start(): stopRequested=true dopo openWs → aborting chunkLoop startup`
+      );
+      // Manda comunque {type:"end"} così se DG ha già ricevuto qualcosa,
+      // il server finalizza la pipeline invece di andare in idle timeout.
+      try { this.sendJson({ type: "end" }); } catch {}
+      // Non partiamo con chunkLoop né keepalive persistente.
+      // stop() sopra ha già settato il safety timeout 40s.
+      return;
+    }
+
     // 4) Avvia keepalive (mantiene caldi proxy/ingress su rete cellulare instabile)
     this.startKeepalive();
 
-    // 5) Avvia chunk loop in background
+    // 5) Avvia chunk loop in background — ma solo se stop() non è
+    //    arrivato mentre eravamo in setup.
+    if (this.stopRequested) {
+      console.log(
+        `[KODA_STREAM_CLIENT] start(): stopRequested=true prima di chunkLoop → abort`
+      );
+      try { this.sendJson({ type: "end" }); } catch {}
+      return;
+    }
     this.chunkLoopActive = true;
     this.chunkLoop().catch((e) => {
       console.warn(`[KODA_STREAM_CLIENT] chunk loop crashed: ${e}`);

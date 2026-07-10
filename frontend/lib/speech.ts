@@ -2209,6 +2209,18 @@ export async function voiceStreamConverse(opts: {
       console.log(`[KODA_GEO] voiceStreamConverse cache read failed: ${e?.message || e}`);
     }
 
+    // === FIX 2026-07-10 (Fabio "tap-stop ignorato durante WS opening") ===
+    // Espone la session al chiamante SUBITO, PRIMA di session.start().
+    // Motivazione: session.start() è async e impiega 1-2s (setAudioMode,
+    // detectAudioRoute, apertura WebSocket). Se onSession veniva chiamato
+    // solo DOPO start(), streamingSessionRef.current restava null per
+    // tutto quel tempo → un tap-stop dell'utente durante quella finestra
+    // veniva silenziosamente ignorato (l'if(sessionRef.current) falliva),
+    // il chunkLoop partiva comunque e continuava all'infinito.
+    // Ora il ref è disponibile IMMEDIATAMENTE dopo new VoiceStreamSession(),
+    // così stop() può essere invocato in qualsiasi momento durante start().
+    try { opts.onSession?.(session); } catch {}
+
     await session.start({
       ephemeral: opts.ephemeral,
       profileLang: opts.profileLang || "it",
@@ -2216,8 +2228,6 @@ export async function voiceStreamConverse(opts: {
       locationRegion: locRegion,
       locationCountry: locCountry,
     });
-    // Esponi la sessione al chiamante per stop manuale (es. tap sull'orb).
-    try { opts.onSession?.(session); } catch {}
   } catch (e: any) {
     clearTimeout(hardTimer);
     speakingNow = false;
