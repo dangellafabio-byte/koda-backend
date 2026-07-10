@@ -696,7 +696,7 @@ async def transcribe(audio: UploadFile = File(...), language: str = Form("it")):
             with open(tmp.name, "rb") as f:
                 kwargs: dict = {
                     "file": f,
-                    "model": "gpt-4o-mini-transcribe",  # === FIX 2026-07-02 v42 — Migrato da whisper-1 al modello 2024 ===
+                    "model": "whisper-1",  # === FIX 2026-07-10 (Fabio) — Rollback: proxy Emergent LLM supporta solo whisper-1 ===
                     "response_format": "json",
                     "language": language or "it",
                 }

@@ -175,7 +175,7 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
         response = await asyncio.wait_for(
             client.transcribe(
                 file=buf,
-                model="gpt-4o-mini-transcribe",  # === FIX 2026-07-02 v42 (Fabio) — Migrato da whisper-1 (2022) al modello 2024 ottimizzato per italiano ===
+                model="whisper-1",  # === FIX 2026-07-10 (Fabio) — Rollback da gpt-4o-mini-transcribe (respinto dal proxy Emergent LLM: "Invalid model: gpt-4o-mini-transcribe. Must be one of ['whisper-1']") → torniamo a whisper-1 che è supportato dal proxy ===
                 response_format="json",
                 language="it",
                 # === FIX 2026-07-02 v43 — Prompt generico italiano ===
@@ -300,14 +300,14 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
         except Exception:
             pass  # non blocchiamo per errore di filtro
         logger.info(
-            f"[voice_stream sess={session_short}] STT_MODEL=gpt-4o-mini-transcribe "
+            f"[voice_stream sess={session_short}] STT_MODEL=whisper-1 "
             f"pcm={len(pcm_bytes)}B ({len(pcm_bytes)/32000:.1f}s) "
             f"ms={elapsed_ms} text={text!r}"
         )
         return text if text else None
     except asyncio.TimeoutError:
         logger.warning(
-            f"[voice_stream sess={session_short}] STT_MODEL=gpt-4o-mini-transcribe TIMEOUT "
+            f"[voice_stream sess={session_short}] STT_MODEL=whisper-1 TIMEOUT "
             f"({WHISPER_TIMEOUT_SEC}s) → fallback Deepgram"
         )
         return None

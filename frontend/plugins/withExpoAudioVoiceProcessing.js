@@ -29,8 +29,13 @@ const fs = require("fs");
 const path = require("path");
 const { withDangerousMod } = require("@expo/config-plugins");
 
-const KODA_PATCH_MARKER = "KODA PATCH 2026-07-10 v15 (Voice DSP + 16kHz + PROXIMITY OBSERVER DYNAMIC)";
-const KODA_ANDROID_MARKER = "KODA ANDROID PATCH 2026-07-08 v1 (Proximity Sensor auto-routing)";
+const KODA_PATCH_MARKER = "KODA PATCH 2026-07-11 v16 (Voice DSP + 16kHz + PROXIMITY OBSERVER DYNAMIC + CACHE-SAFE)";
+const KODA_ANDROID_MARKER = "KODA ANDROID PATCH 2026-07-11 v2 (Proximity Sensor auto-routing + CACHE-SAFE)";
+// Marker generico usato per riconoscere QUALSIASI vecchia patch KODA (v11, v12,
+// v13, v14, v15…) presente nel file cached di node_modules. Serve per il revert
+// automatico prima di applicare la versione corrente. NON modificare.
+const KODA_GENERIC_IOS_MARKER = "KODA PATCH";
+const KODA_GENERIC_ANDROID_MARKER = "KODA ANDROID PATCH";
 
 const OLD_BLOCK = `    if sessionOptions.isEmpty {
       try session.setCategory(category, mode: .default)
@@ -196,6 +201,39 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
     }
   }`;
 
+function revertPreviousKodaIosPatch(content) {
+  // Se il file non contiene alcuna patch KODA, nulla da revertire.
+  if (!content.includes(KODA_GENERIC_IOS_MARKER)) return content;
+  // Se la patch corrente (v16) è già applicata, saltiamo.
+  if (content.includes(KODA_PATCH_MARKER)) return content;
+  // Trovato marker KODA di versione precedente → reverto il blocco setCategory
+  // alla forma originale espo-audio (OLD_BLOCK), così la patch nuova si applica
+  // normalmente sotto. Serve a bypassare la cache di node_modules su EAS Build
+  // quando un vecchio bundle già patchato viene riutilizzato.
+  const startAnchor = "    if sessionOptions.isEmpty {";
+  const endAnchor = "\n  private func activateSession()";
+  const startIdx = content.indexOf(startAnchor);
+  const endIdx = content.indexOf(endAnchor, startIdx);
+  if (startIdx === -1 || endIdx === -1) {
+    console.warn(
+      "[withExpoAudioVoiceProcessing] Revert: anchors (setCategory / activateSession) " +
+        "non trovati in AudioModule.swift. Impossibile ripulire la patch precedente. " +
+        "La patch nuova potrebbe NON applicarsi. Verifica versione expo-audio."
+    );
+    return content;
+  }
+  const before = content.slice(0, startIdx);
+  const after = content.slice(endIdx); // inizia con "\n  private func activateSession()"
+  // OLD_BLOCK termina con "  }" senza newline finale, quindi aggiungo "\n" per
+  // ricreare la riga vuota che separa setCategory da activateSession.
+  const reverted = before + OLD_BLOCK + "\n" + after;
+  console.log(
+    "[withExpoAudioVoiceProcessing] ♻️  Patch KODA di versione precedente rilevata in " +
+      "AudioModule.swift → ripristino OLD_BLOCK prima di applicare " + KODA_PATCH_MARKER
+  );
+  return reverted;
+}
+
 function patchExpoAudioSwift(projectRoot) {
   const file = path.join(
     projectRoot,
@@ -214,6 +252,15 @@ function patchExpoAudioSwift(projectRoot) {
   }
 
   let content = fs.readFileSync(file, "utf8");
+
+  // Cache-safe: se node_modules su EAS Build contiene già una vecchia patch
+  // KODA (v11-v15), ripristiniamo il file originale così la nuova patch può
+  // applicarsi. Idempotente: no-op se il file è pulito o già alla versione corrente.
+  const reverted = revertPreviousKodaIosPatch(content);
+  if (reverted !== content) {
+    fs.writeFileSync(file, reverted, "utf8");
+    content = reverted;
+  }
 
   if (content.includes(KODA_PATCH_MARKER)) {
     console.log(
@@ -383,6 +430,22 @@ function patchExpoAudioKotlin(projectRoot) {
   if (content.includes(KODA_ANDROID_MARKER)) {
     console.log(
       "[withExpoAudioVoiceProcessing][Android] Patch already applied (marker found). Skipping."
+    );
+    return;
+  }
+
+  if (
+    content.includes(KODA_GENERIC_ANDROID_MARKER) &&
+    !content.includes(KODA_ANDROID_MARKER)
+  ) {
+    // Vecchia patch KODA Android rilevata (v1 o precedente): i blocchi OLD non
+    // matchano più → la nuova patch non si applicherebbe. Segnaliamo all'utente
+    // che deve pulire node_modules su EAS. Su build iOS questo non tocca nulla.
+    console.warn(
+      "[withExpoAudioVoiceProcessing][Android] ⚠️  Patch KODA precedente rilevata in " +
+        "AudioModule.kt. Per applicare " + KODA_ANDROID_MARKER + " esegui su EAS " +
+        "un build con 'clean cache' oppure elimina node_modules/expo-audio e reinstalla. " +
+        "Skip patch Android (routing proximity Android NON attivo su questa build)."
     );
     return;
   }
