@@ -372,9 +372,9 @@ export default function Taccuino() {
   // inglobato l'ultimo commit.
   useEffect(() => {
     console.log(
-      `[KODA_BUILDTAG] v48-tapstop-race-fix+prox-observer build=2026-07-10-morning ` +
+      `[KODA_BUILDTAG] v49-cache-safe-v16 build=2026-07-10-afternoon ` +
         `verbose=${KODA_DEBUG_VERBOSE} ` +
-        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,PROXIMITY_OBSERVER_DYNAMIC,BG_AUDIO_IOS${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
+        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,PROXIMITY_OBSERVER_V16_CACHE_SAFE,BG_AUDIO_IOS,WHISPER1_FALLBACK${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
   }, []);
   const [textInput, setTextInput] = useState("");
