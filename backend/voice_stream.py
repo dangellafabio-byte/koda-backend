@@ -299,6 +299,69 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
                     return None
         except Exception:
             pass  # non blocchiamo per errore di filtro
+        # === FIX 2026-07-10 pomeriggio (Fabio "Gradanti cellulari naturali") ===
+        # Detector whisper-1 nonsense hallucination su audio rumoroso.
+        # Pattern osservato in produzione: whisper-1 su audio con SNR basso o
+        # silenzio parziale allucina "frasi" corte fatte di 2-6 sostantivi/aggettivi
+        # sconnessi, tutti lunghi (≥6 char), senza articoli/verbi/preposizioni.
+        # Es. "Gradanti cellulari naturali.", "Camarera portafoglio decisivo."
+        # Se la frase è breve E ogni parola è lunga E nessuna parola è tra
+        # quelle funzionali italiane più frequenti → hallucination → reject.
+        # Whitelist ultra-conservativa: se anche UNA parola funzionale è presente,
+        # la frase è considerata legittima. Evita falsi positivi su parlato reale.
+        _COMMON_IT_FUNCTIONAL_WORDS = {
+            # articoli/preposizioni/congiunzioni
+            "il", "la", "lo", "i", "gli", "le", "un", "uno", "una",
+            "di", "a", "da", "in", "con", "su", "per", "tra", "fra",
+            "del", "dello", "della", "dei", "degli", "delle",
+            "al", "allo", "alla", "ai", "agli", "alle",
+            "dal", "dalla", "dai", "dagli", "dalle",
+            "nel", "nella", "nei", "negli", "nelle",
+            "sul", "sulla", "sui", "sugli", "sulle",
+            "col", "coi",
+            "e", "o", "ma", "però", "quindi", "anche", "come", "che", "chi",
+            "se", "quando", "dove", "perché", "mentre", "senza",
+            # pronomi/verbi ausiliari comuni
+            "io", "tu", "lui", "lei", "noi", "voi", "loro",
+            "mi", "ti", "ci", "vi", "si", "ne",
+            "me", "te", "sé",
+            "ho", "hai", "ha", "abbiamo", "avete", "hanno",
+            "sono", "sei", "è", "siamo", "siete",
+            "ero", "eri", "era", "eravamo", "eravate", "erano",
+            "avevo", "avevi", "aveva",
+            "sarò", "sarai", "sarà",
+            "faccio", "fai", "fa", "fatto", "fare",
+            "vado", "vai", "va", "andare",
+            "voglio", "vuoi", "vuole", "vogliamo",
+            "posso", "puoi", "può", "possiamo",
+            # negazioni/avverbi/interiezioni frequenti
+            "non", "no", "sì", "si", "già", "mai", "sempre", "ora", "adesso",
+            "poi", "prima", "dopo", "qui", "lì", "là", "molto", "poco", "tanto",
+            "bene", "male", "così", "solo", "davvero", "forse", "quasi",
+            "cosa", "cose", "niente", "tutto", "tutti", "nulla", "qualcosa",
+            "ciao", "grazie", "prego", "scusa", "aspetta", "senti", "guarda",
+            "ok", "va", "bene", "eh", "mh", "boh", "beh",
+            # verbi/sostantivi molto frequenti (base koda usage)
+            "voglio", "penso", "credo", "sento", "vedo", "dico", "detto",
+            "sono", "casa", "vita", "tempo", "giorno", "oggi", "ieri", "domani",
+            "koda", "coda",  # nome AI
+        }
+        try:
+            words_nostrip = [w.strip(",.!?;:()[]\"'“”‘’") for w in text.split() if w]
+            words_lc = [w.lower() for w in words_nostrip if w]
+            n = len(words_lc)
+            if 2 <= n <= 6:
+                has_functional = any(w in _COMMON_IT_FUNCTIONAL_WORDS for w in words_lc)
+                all_long = all(len(w) >= 6 for w in words_lc)
+                if not has_functional and all_long:
+                    logger.info(
+                        f"[voice_stream sess={session_short}] STT hallucination "
+                        f"(nonsense: {n} long words, no functional) → fallback Deepgram "
+                        f"(was: {text!r})"
+                    )
+                    return None
+        except Exception:
+            pass
         logger.info(
             f"[voice_stream sess={session_short}] STT_MODEL=whisper-1 "
             f"pcm={len(pcm_bytes)}B ({len(pcm_bytes)/32000:.1f}s) "
