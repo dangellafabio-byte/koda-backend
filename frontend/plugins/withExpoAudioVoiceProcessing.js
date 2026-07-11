@@ -29,8 +29,12 @@ const fs = require("fs");
 const path = require("path");
 const { withDangerousMod } = require("@expo/config-plugins");
 
-const KODA_PATCH_MARKER = "KODA PATCH 2026-07-11 v16 (Voice DSP + 16kHz + PROXIMITY OBSERVER DYNAMIC + CACHE-SAFE)";
-const KODA_ANDROID_MARKER = "KODA ANDROID PATCH 2026-07-11 v2 (Proximity Sensor auto-routing + CACHE-SAFE)";
+const KODA_PATCH_MARKER = "KODA PATCH 2026-07-11 v17 (Voice DSP + 16kHz + PROXIMITY OBSERVER + MANUAL BUTTON)";
+const KODA_ANDROID_MARKER = "KODA ANDROID PATCH 2026-07-11 v3 (Proximity Sensor auto-routing + MANUAL BUTTON)";
+// Marker specifico per la seconda patch iOS che inietta AsyncFunction("kodaSetAudioOutput")
+// dentro il ModuleDefinition di ExpoAudio. Idempotente.
+const KODA_V17_ASYNC_MARKER = "KODA_V17_ASYNC_FUNCTION kodaSetAudioOutput";
+const KODA_V17_ASYNC_ANDROID_MARKER = "KODA_V17_ANDROID_ASYNC_FUNCTION kodaSetAudioOutput";
 // Marker generico usato per riconoscere QUALSIASI vecchia patch KODA (v11, v12,
 // v13, v14, v15…) presente nel file cached di node_modules. Serve per il revert
 // automatico prima di applicare la versione corrente. NON modificare.
@@ -52,25 +56,20 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
       let recordingMode: AVAudioSession.Mode = (category == .playAndRecord) ? .voiceChat : .default
       try session.setCategory(category, mode: recordingMode)
       if category == .playAndRecord {
-        // === KODA v14 (2026-07-07): Modalità Telefono via Proximity Sensor ===
-        // Attiva il monitoring del sensore di prossimità iOS. Con .voiceChat
-        // mode + proximity ON, iOS gestisce AUTOMATICAMENTE il routing
-        // dell'output:
-        //   • Telefono lontano dall'orecchio → LOUDSPEAKER esterno
-        //   • Telefono vicino all'orecchio → EARPIECE interno (auricolare)
-        // Esattamente come una normale chiamata telefonica. Nessun toggle,
-        // nessuna configurazione utente. Se il telefono è connesso a
-        // Bluetooth/CarPlay/cuffie, quelle hanno precedenza (non tocchiamo).
+        // === KODA v14: proximity monitoring on ===
         DispatchQueue.main.async {
           UIDevice.current.isProximityMonitoringEnabled = true
         }
-        // === KODA v15 (2026-07-10): Observer proximity DINAMICO ===
-        // Il flag proximityMonitoringEnabled da solo NON muove l'audio: fa solo
-        // dimmerare lo schermo e leggere lo stato. Per ottenere il routing
-        // earpiece↔speaker come una vera telefonata serve un observer che al
-        // cambio di proximityState chiami overrideOutputAudioPort(.none/.speaker).
-        // Guard di idempotenza: nested enum + static var (Swift 5.5+) così
-        // ogni chiamata a setCategory non registra observer duplicati.
+        // === KODA v15 + v17: Observer proximity + MANUAL OVERRIDE ===
+        // Il flag proximityMonitoringEnabled da solo NON muove l'audio: serve
+        // un observer che al cambio di proximityState chiami
+        // overrideOutputAudioPort(.none/.speaker).
+        //
+        // v17: rispetta anche l'override MANUALE settato dal pulsante UI via
+        // AsyncFunction("kodaSetAudioOutput"). Lo storage è UserDefaults key
+        // "KodaAudioOverrideMode" con valori "earpiece" | "speaker" | nil.
+        // Se manuale attivo → observer NON tocca la route (l'ha già impostata
+        // la AsyncFunction). Se manuale nil → observer usa proximity.
         enum KodaProxObserverGuard {
             static var registered = false
         }
@@ -89,6 +88,8 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
                     .carAudio, .airPlay, .usbAudio,
                 ]
                 if s.currentRoute.outputs.contains(where: { extPorts.contains($0.portType) }) { return }
+                // v17: se c'è override manuale, l'observer NON ricalcola
+                if UserDefaults.standard.string(forKey: "KodaAudioOverrideMode") != nil { return }
                 do {
                     if UIDevice.current.proximityState {
                         // Vicino all'orecchio → EARPIECE (auricolare interno)
@@ -102,6 +103,7 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
         }
         // Routing INIZIALE: se il device è già in mano al momento del setCategory,
         // applica subito il routing corretto senza aspettare un cambio di stato.
+        // v17: rispetta anche override manuale se già settato dall'UI.
         let extPorts0: Set<AVAudioSession.Port> = [
             .bluetoothA2DP, .bluetoothHFP, .bluetoothLE,
             .headphones, .headsetMic,
@@ -110,7 +112,12 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
         let hasExternal0 = session.currentRoute.outputs.contains { extPorts0.contains($0.portType) }
         if !hasExternal0 {
             do {
-                if UIDevice.current.proximityState {
+                let manualMode0 = UserDefaults.standard.string(forKey: "KodaAudioOverrideMode")
+                if manualMode0 == "earpiece" {
+                    try session.overrideOutputAudioPort(.none)
+                } else if manualMode0 == "speaker" {
+                    try session.overrideOutputAudioPort(.speaker)
+                } else if UIDevice.current.proximityState {
                     try session.overrideOutputAudioPort(.none)
                 } else {
                     try session.overrideOutputAudioPort(.speaker)
@@ -135,14 +142,9 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
       let recordingMode: AVAudioSession.Mode = (category == .playAndRecord) ? .voiceChat : .default
       try session.setCategory(category, mode: recordingMode, options: sessionOptions)
       if category == .playAndRecord {
-        // Proximity sensor ON anche nel ramo con options (usato quando
-        // Bluetooth opzioni sono attive).
         DispatchQueue.main.async {
           UIDevice.current.isProximityMonitoringEnabled = true
         }
-        // === KODA v15: stesso observer proximity dinamico del ramo principale.
-        //   nested enum guard evita registrazioni duplicate anche se
-        //   setCategory viene chiamato più volte (ramo options).
         enum KodaProxObserverGuardOpt {
             static var registered = false
         }
@@ -161,6 +163,7 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
                     .carAudio, .airPlay, .usbAudio,
                 ]
                 if s.currentRoute.outputs.contains(where: { extPorts.contains($0.portType) }) { return }
+                if UserDefaults.standard.string(forKey: "KodaAudioOverrideMode") != nil { return }
                 do {
                     if UIDevice.current.proximityState {
                         try s.overrideOutputAudioPort(.none)
@@ -170,8 +173,6 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
                 } catch { /* silent */ }
             }
         }
-        // Routing INIZIALE nel ramo options (BT etc): applica solo se non ci
-        // sono device esterni. Se ci sono BT/cuffie, non tocchiamo il routing.
         let extPortsOpt: Set<AVAudioSession.Port> = [
             .bluetoothA2DP, .bluetoothHFP, .bluetoothLE,
             .headphones, .headsetMic,
@@ -180,7 +181,12 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
         let hasExternalOpt = session.currentRoute.outputs.contains { extPortsOpt.contains($0.portType) }
         if !hasExternalOpt {
             do {
-                if UIDevice.current.proximityState {
+                let manualModeOpt = UserDefaults.standard.string(forKey: "KodaAudioOverrideMode")
+                if manualModeOpt == "earpiece" {
+                    try session.overrideOutputAudioPort(.none)
+                } else if manualModeOpt == "speaker" {
+                    try session.overrideOutputAudioPort(.speaker)
+                } else if UIDevice.current.proximityState {
                     try session.overrideOutputAudioPort(.none)
                 } else {
                     try session.overrideOutputAudioPort(.speaker)
@@ -282,6 +288,183 @@ function patchExpoAudioSwift(projectRoot) {
   fs.writeFileSync(file, patched, "utf8");
   console.log(
     "[withExpoAudioVoiceProcessing] ✅ Voice Processing patch applied to expo-audio AudioModule.swift"
+  );
+}
+
+// ============================================================================
+// KODA v17 iOS PATCH #2: AsyncFunction("kodaSetAudioOutput")
+// ============================================================================
+// Iniettiamo una nuova AsyncFunction dentro il ModuleDefinition di ExpoAudio,
+// che espone a JavaScript la capacità di forzare l'output audio su earpiece o
+// speaker (con modalità "auto" che ritorna al proximity observer).
+//
+// Chiamata da JS: NativeAudioModule.kodaSetAudioOutput("earpiece"|"speaker"|"auto")
+//
+// Storage: UserDefaults key "KodaAudioOverrideMode" — letto dall'observer v17
+// per skippare il routing automatico quando c'è un override manuale attivo.
+//
+// Rispetta i device esterni (BT/AirPods/CarPlay/cuffie): se ne è collegato
+// almeno uno, la funzione ritorna senza fare nulla (l'utente si aspetta che
+// il suono resti dove è, cioè sulle cuffie).
+// ============================================================================
+
+const SWIFT_ASYNC_FUNCTION_BLOCK = `    // === ${KODA_V17_ASYNC_MARKER} ===
+    // AsyncFunction esposta a JS per la Modalità Telefono manuale (pulsante UI).
+    // Sostituisce/coesiste con l'observer proximity: se questa funzione viene
+    // chiamata con "earpiece"/"speaker", l'observer viene bypassato (via
+    // UserDefaults). Chiamata con "auto" rimuove l'override → observer riprende.
+    AsyncFunction("kodaSetAudioOutput") { (output: String) -> String in
+      #if os(iOS)
+      let session = AVAudioSession.sharedInstance()
+      let extPorts: Set<AVAudioSession.Port> = [
+        .bluetoothA2DP, .bluetoothHFP, .bluetoothLE,
+        .headphones, .headsetMic,
+        .carAudio, .airPlay, .usbAudio,
+      ]
+      let hasExternal = session.currentRoute.outputs.contains { extPorts.contains($0.portType) }
+      if hasExternal {
+        // Device esterno collegato: NON tocchiamo il routing. Ritorniamo il
+        // nome della prima output port così JS può mostrare l'icona corretta
+        // (es. 🎧 AirPods).
+        let firstExt = session.currentRoute.outputs.first { extPorts.contains($0.portType) }
+        return "external:" + (firstExt?.portName ?? "unknown")
+      }
+      switch output {
+      case "earpiece":
+        UserDefaults.standard.set("earpiece", forKey: "KodaAudioOverrideMode")
+        do { try session.overrideOutputAudioPort(.none) } catch {}
+        return "earpiece"
+      case "speaker":
+        UserDefaults.standard.set("speaker", forKey: "KodaAudioOverrideMode")
+        do { try session.overrideOutputAudioPort(.speaker) } catch {}
+        return "speaker"
+      default: // "auto" o qualsiasi altro valore → rimuovi override
+        UserDefaults.standard.removeObject(forKey: "KodaAudioOverrideMode")
+        // Riapplica routing basato su proximity corrente
+        do {
+          if UIDevice.current.proximityState {
+            try session.overrideOutputAudioPort(.none)
+            return "auto:earpiece"
+          } else {
+            try session.overrideOutputAudioPort(.speaker)
+            return "auto:speaker"
+          }
+        } catch { return "auto:error" }
+      }
+      #else
+      return "unsupported"
+      #endif
+    }
+
+    // Query dello stato corrente (utile per l'UI al mount)
+    AsyncFunction("kodaGetAudioOutput") { () -> String in
+      #if os(iOS)
+      let session = AVAudioSession.sharedInstance()
+      let extPorts: Set<AVAudioSession.Port> = [
+        .bluetoothA2DP, .bluetoothHFP, .bluetoothLE,
+        .headphones, .headsetMic,
+        .carAudio, .airPlay, .usbAudio,
+      ]
+      let firstExt = session.currentRoute.outputs.first { extPorts.contains($0.portType) }
+      if let ext = firstExt {
+        return "external:" + ext.portName
+      }
+      let manual = UserDefaults.standard.string(forKey: "KodaAudioOverrideMode")
+      if let m = manual {
+        return m // "earpiece" o "speaker"
+      }
+      // Nessun override: se proximity attivo → earpiece, altrimenti speaker
+      return UIDevice.current.proximityState ? "auto:earpiece" : "auto:speaker"
+      #else
+      return "unsupported"
+      #endif
+    }
+`;
+
+const SWIFT_ASYNC_ANCHOR = `    AsyncFunction("getRecordingPermissionsAsync") { (promise: Promise) in
+      #if os(iOS)
+      appContext?.permissions?.getPermissionUsingRequesterClass(
+        AudioRecordingRequester.self,
+        resolve: promise.resolver,
+        reject: promise.legacyRejecter
+      )
+      #else
+      promise.reject(Exception.init(name: "UnsupportedOperation", description: "Audio recording is not supported on this platform."))
+      #endif
+    }
+
+    OnDestroy {`;
+
+const SWIFT_ASYNC_INJECTED = `    AsyncFunction("getRecordingPermissionsAsync") { (promise: Promise) in
+      #if os(iOS)
+      appContext?.permissions?.getPermissionUsingRequesterClass(
+        AudioRecordingRequester.self,
+        resolve: promise.resolver,
+        reject: promise.legacyRejecter
+      )
+      #else
+      promise.reject(Exception.init(name: "UnsupportedOperation", description: "Audio recording is not supported on this platform."))
+      #endif
+    }
+
+${SWIFT_ASYNC_FUNCTION_BLOCK}
+    OnDestroy {`;
+
+function patchExpoAudioSwiftAsyncFunction(projectRoot) {
+  const file = path.join(
+    projectRoot,
+    "node_modules",
+    "expo-audio",
+    "ios",
+    "AudioModule.swift"
+  );
+  if (!fs.existsSync(file)) return;
+  let content = fs.readFileSync(file, "utf8");
+  // Cache-safe: se esiste già una vecchia iniezione KODA_V17_ASYNC_FUNCTION con
+  // versione diversa da quella corrente, la rimuoviamo prima di iniettare la
+  // nuova. Serve a bypassare la cache node_modules su EAS Build.
+  const GENERIC_START_MARKER = "// === KODA_V17_ASYNC_FUNCTION";
+  if (
+    content.includes(GENERIC_START_MARKER) &&
+    !content.includes(KODA_V17_ASYNC_MARKER)
+  ) {
+    // Trova il blocco: da "    // === KODA_V17_ASYNC_FUNCTION" fino a "    OnDestroy {"
+    const startAnchor = "    // === KODA_V17_ASYNC_FUNCTION";
+    const endAnchor = "    OnDestroy {";
+    const s = content.indexOf(startAnchor);
+    const e = content.indexOf(endAnchor, s);
+    if (s !== -1 && e !== -1) {
+      // Rimuovi da s fino a e (esclusivo) — lascia solo endAnchor
+      const before = content.slice(0, s);
+      const after = content.slice(e);
+      content = before + after;
+      fs.writeFileSync(file, content, "utf8");
+      console.log(
+        "[withExpoAudioVoiceProcessing][iOS AsyncFunc] ♻️  Old KODA AsyncFunction " +
+          "detected (different version). Removed before re-injecting current version."
+      );
+    }
+  }
+  // Idempotente: se il marker corrente è presente skip.
+  if (content.includes(KODA_V17_ASYNC_MARKER)) {
+    console.log(
+      "[withExpoAudioVoiceProcessing][iOS AsyncFunc] Already injected, skipping."
+    );
+    return;
+  }
+  if (!content.includes(SWIFT_ASYNC_ANCHOR)) {
+    console.warn(
+      "[withExpoAudioVoiceProcessing][iOS AsyncFunc] Anchor block " +
+        "(getRecordingPermissionsAsync + OnDestroy) NOT found. Manual button " +
+        "AsyncFunction NOT injected. expo-audio may have changed."
+    );
+    return;
+  }
+  const patched = content.replace(SWIFT_ASYNC_ANCHOR, SWIFT_ASYNC_INJECTED);
+  fs.writeFileSync(file, patched, "utf8");
+  console.log(
+    "[withExpoAudioVoiceProcessing][iOS AsyncFunc] ✅ kodaSetAudioOutput + " +
+      "kodaGetAudioOutput injected into ExpoAudio ModuleDefinition."
   );
 }
 
@@ -495,11 +678,12 @@ function patchExpoAudioKotlin(projectRoot) {
 }
 
 module.exports = function withExpoAudioVoiceProcessing(config) {
-  // iOS: patch AudioModule.swift for voiceChat mode + proximity sensor.
+  // iOS: patch AudioModule.swift for voiceChat mode + proximity sensor + manual button.
   config = withDangerousMod(config, [
     "ios",
     async (config) => {
       patchExpoAudioSwift(config.modRequest.projectRoot);
+      patchExpoAudioSwiftAsyncFunction(config.modRequest.projectRoot);
       return config;
     },
   ]);
