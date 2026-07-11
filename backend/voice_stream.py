@@ -1286,6 +1286,21 @@ async def voice_stream_handler(
         _SENTENCE_END_POLL_S = 0.10   # frequenza polling (100ms per reattività)
 
         async def sentence_end_watcher_loop() -> None:
+            # === ROLLBACK 2026-07-11 (Fabio) — DISABILITATO ===
+            # Il watcher v22 basato su punteggiatura (.?!) + quiet 500ms causava
+            # blocchi indefiniti in modalità hands-free quando il secondo turno
+            # non riceveva punteggiatura da Deepgram. Utente ha richiesto
+            # ripristino del comportamento pre-v22: chiusura utterance
+            # ESCLUSIVAMENTE tramite speech_final naturale o utterance_end_ms
+            # Deepgram (default 1000-2000ms configurato in dg_params_for_route).
+            # Il codice originale è mantenuto sotto (dopo il return) per
+            # documentazione ma non gira più.
+            logger.info(
+                f"[KODA_STREAM sess={short_id}] sentence_end_watcher DISABILITATO "
+                f"(rollback v22 → utterance_end_ms nativo Deepgram)"
+            )
+            return
+            # === CODICE PRE-ROLLBACK (non eseguito) ===
             nonlocal last_final_at, last_final_ends_with_punct
             while client_alive and dg is not None and not dg._closed:
                 try:
