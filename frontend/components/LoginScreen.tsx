@@ -66,6 +66,11 @@ export default function LoginScreen() {
 
   const isIOS = Platform.OS === "ios";
   const isWeb = Platform.OS === "web";
+  // === DEV LOGIN GATE (v18, 2026-07-11) ===
+  // Il bottone "Entra come Tester" appare SOLO se la env
+  // `EXPO_PUBLIC_KODA_DEV_LOGIN=1` è settata al build time. In produzione la
+  // env NON è settata → bottone invisibile → nessun bypass del gate freemium.
+  const devLoginEnabled = process.env.EXPO_PUBLIC_KODA_DEV_LOGIN === "1";
 
   return (
     <View style={[styles.root, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 32 }]}>
@@ -119,7 +124,7 @@ export default function LoginScreen() {
           </View>
         )}
 
-        {isWeb ? (
+        {isWeb && devLoginEnabled ? (
           <TouchableOpacity
             style={[styles.btn, styles.devBtn]}
             onPress={onDevLogin}

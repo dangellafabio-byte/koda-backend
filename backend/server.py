@@ -124,36 +124,101 @@ async def release_stale_claim(x_admin_secret: Optional[str] = Header(None)):
 
 
 # ============================================================================
-# MULTI-USER UUID (giugno 2026)
+# MULTI-USER UUID (giugno 2026) + AUTH-BOUND FREEMIUM (luglio 2026 v18)
 # ----------------------------------------------------------------------------
-# Ogni device genera un UUID al primo avvio e lo manda nell'header
-# `X-User-Id` su ogni richiesta. Il middleware sotto estrae il valore e
-# lo mette in una ContextVar che get_or_create_profile() e tutte le
-# operazioni sulla timeline leggono come "current user". Default = "me"
-# (utente legacy single-user, backwards compat per build vecchie).
+# Ogni request identifica un `current_user_id` con questa priorità:
+#   1. Session autenticata (Apple Sign In o Google OAuth) → hash(email) come uid
+#      → il free trial + profilo persistono attraverso reinstallazioni.
+#   2. Header `X-User-Id` (UUID v4) → device-legacy, backwards compat.
+#   3. Fallback `"me"` → utente legacy pre-multi-user.
+#
+# FIX 2026-07-10 v18 (Fabio): il counter freemium era legato al device UUID.
+# Chi cancellava e reinstallava l'app resettava il contatore. Ora è legato
+# all'email autenticata → stesso Apple/Google account = stesso profilo.
 # ============================================================================
+import hashlib as _hashlib
 from contextvars import ContextVar
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 _current_user_id: ContextVar[str] = ContextVar("current_user_id", default="me")
 
+# Cache in-memory session_token → uid (TTL 60s). Evita lookup MongoDB su ogni
+# request. La cache è per-worker ma poiché le sessioni sono JWT-style stabili,
+# è safe. Al logout la session viene invalidata su DB → il worst-case è 60s
+# di token stale valido, accettabile per un free trial gate.
+_SESSION_UID_CACHE: Dict[str, tuple] = {}  # token → (uid, expiry_epoch)
+_SESSION_UID_CACHE_TTL = 60.0
+
 
 def current_user_id() -> str:
-    """Restituisce l'id utente per la request in corso (UUID o "me")."""
+    """Restituisce l'id utente per la request in corso.
+    Può essere: hash email (v18+), UUID device (legacy), o "me" (very-legacy).
+    """
     return _current_user_id.get()
+
+
+def _email_to_uid(email: str) -> str:
+    """Deriva un uid deterministico e stabile da un'email autenticata.
+    Formato UUID-like (32 hex chars in 8-4-4-4-12) così passa la validazione
+    _UUID_RE e resta compatibile con ovunque nel codice ci si aspetti un UUID.
+    """
+    normalized = email.strip().lower().encode("utf-8")
+    h = _hashlib.sha256(normalized).hexdigest()
+    # UUID-v4-like formatting: setta bit "4" nel terzo blocco
+    return f"{h[0:8]}-{h[8:12]}-4{h[13:16]}-8{h[17:20]}-{h[20:32]}"
+
+
+async def _resolve_uid_from_session(request) -> Optional[str]:
+    """Prova a risolvere un uid dall'auth session token della request.
+    Ritorna None se non autenticato. Usa cache TTL per performance.
+    """
+    import time as _time
+    auth = request.headers.get("authorization", "") or ""
+    tok = None
+    if auth.lower().startswith("bearer "):
+        tok = auth[7:].strip()
+    else:
+        try:
+            cookie_tok = request.cookies.get("session_token")
+        except Exception:
+            cookie_tok = None
+        if cookie_tok:
+            tok = cookie_tok
+    if not tok:
+        return None
+    now = _time.time()
+    cached = _SESSION_UID_CACHE.get(tok)
+    if cached and cached[1] > now:
+        return cached[0]
+    try:
+        sess = await db.sessions.find_one({"session_token": tok})
+        if not sess:
+            return None
+        exp = sess.get("expires_at")
+        if exp is not None and getattr(exp, "tzinfo", None) is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp is not None and exp < datetime.now(timezone.utc):
+            return None
+        email = (sess.get("email") or "").strip().lower()
+        if not email:
+            return None
+        uid = _email_to_uid(email)
+        _SESSION_UID_CACHE[tok] = (uid, now + _SESSION_UID_CACHE_TTL)
+        return uid
+    except Exception:
+        return None
 
 
 @app.middleware("http")
 async def user_id_middleware(request, call_next):
-    """Estrae `X-User-Id` dall'header e lo setta come ContextVar.
-
-    Validazione: deve essere un UUID v4 ben formato. Qualsiasi valore
-    sospetto fa fallback a "me" (utente legacy). Questo evita inezioni
-    o uso del backend come database multiutente generico.
-    """
-    raw = request.headers.get("x-user-id", "") or ""
-    raw = raw.strip().lower()
-    uid = raw if (_UUID_RE.match(raw) or raw == "me") else "me"
+    """v18: risolve current_user_id con priorità session → X-User-Id → "me"."""
+    session_uid = await _resolve_uid_from_session(request)
+    if session_uid:
+        uid = session_uid
+    else:
+        raw = request.headers.get("x-user-id", "") or ""
+        raw = raw.strip().lower()
+        uid = raw if (_UUID_RE.match(raw) or raw == "me") else "me"
     token = _current_user_id.set(uid)
     try:
         return await call_next(request)
