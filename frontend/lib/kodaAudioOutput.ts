@@ -37,6 +37,22 @@ function getModule(): any {
   return _module;
 }
 
+// === KODA v18 JS CACHE ===
+// Cache in-process della modalità manuale corrente. Serve al TTS play loop
+// (lib/speech.ts) per ri-applicare l'override DOPO ogni setAudioModeAsync,
+// perché expo-audio setAudioModeAsync distrugge silenziosamente
+// l'overrideOutputAudioPort iOS (resetta la sessione a .playback).
+//
+// Aggiornato ad ogni setKodaAudioOutput(). Vale solo per la sessione
+// corrente in RAM — al kill dell'app viene ripreso da UserDefaults lato
+// Swift, ma il primo mount JS deve chiamare getKodaAudioOutput() per
+// sincronizzare la cache.
+let _cachedOverride: "earpiece" | "speaker" | null = null;
+
+export function getCachedKodaOverride(): "earpiece" | "speaker" | null {
+  return _cachedOverride;
+}
+
 /**
  * Forza l'output audio su earpiece o speaker, oppure ripristina l'auto (proximity).
  * Ritorna la modalità applicata effettiva (utile se BT/AirPods hanno la precedenza).
@@ -59,12 +75,48 @@ export async function setKodaAudioOutput(
     console.log(
       `[KODA_AUDIO_OUT] setKodaAudioOutput(${output}) → ${result}`
     );
+    // === v18 JS CACHE UPDATE ===
+    // Aggiorna la cache in RAM cosi il TTS play loop può ri-applicare
+    // l'override dopo setAudioModeAsync.
+    if (output === "earpiece" || output === "speaker") {
+      _cachedOverride = output;
+    } else {
+      // "auto" o qualsiasi altro → rimuovi override cached
+      _cachedOverride = null;
+    }
     return result as KodaAudioMode;
   } catch (e: any) {
     console.log(
       `[KODA_AUDIO_OUT] setKodaAudioOutput(${output}) error: ${e?.message || e}`
     );
     return "unsupported";
+  }
+}
+
+/**
+ * v18: Ri-applica silenziosamente l'override manuale corrente (se attivo)
+ * dopo un cambio di audio session iOS (es. setAudioModeAsync).
+ *
+ * Chiamata dopo ogni ciclo `setAudioMode(playback)` in speech.ts. Se
+ * l'utente ha attivato "earpiece" via pulsante manuale, questa funzione
+ * ri-forza il routing all'auricolare che iOS ha appena resettato.
+ *
+ * No-op se nessun override attivo (modalità "auto").
+ */
+export async function reapplyKodaAudioOverride(): Promise<void> {
+  if (Platform.OS !== "ios") return;
+  if (_cachedOverride == null) return; // auto → nulla da ri-applicare
+  const m = getModule();
+  if (!m || typeof m.kodaSetAudioOutput !== "function") return;
+  try {
+    const result: string = await m.kodaSetAudioOutput(_cachedOverride);
+    console.log(
+      `[KODA_AUDIO_OUT] reapply(${_cachedOverride}) → ${result}`
+    );
+  } catch (e: any) {
+    console.log(
+      `[KODA_AUDIO_OUT] reapply(${_cachedOverride}) error: ${e?.message || e}`
+    );
   }
 }
 
@@ -81,6 +133,12 @@ export async function getKodaAudioOutput(): Promise<KodaAudioMode> {
   }
   try {
     const result: string = await m.kodaGetAudioOutput();
+    // v18: sincronizza cache in-process con lo stato nativo (UserDefaults iOS)
+    if (result === "earpiece" || result === "speaker") {
+      _cachedOverride = result;
+    } else {
+      _cachedOverride = null;
+    }
     return result as KodaAudioMode;
   } catch {
     return "unsupported";

@@ -461,6 +461,20 @@ async function playElevenLabsNativeFromUrl(
       );
       await withTimeout(setIsAudioActiveAsync(true), 1500, "setIsActive(true)");
     }
+    // === KODA v18 JS FIX (ENTRAMBI I PATH: prewarm + else) ===
+    // setAudioModeAsync (usato sia qui che dentro il prewarm) distrugge la
+    // category .playAndRecord/.voiceChat che kodaSetAudioOutput ha appena
+    // settato → l'override manuale viene silenziosamente perso da iOS. Lo
+    // ri-applichiamo qui, dopo che la sessione è stata riattivata. No-op se
+    // l'utente è in modalità "auto".
+    try {
+      const { reapplyKodaAudioOverride } = await import("./kodaAudioOutput");
+      await withTimeout(
+        reapplyKodaAudioOverride(),
+        500,
+        "reapplyKodaAudioOverride"
+      );
+    } catch (_) { /* silent */ }
   }
 
   return await new Promise<boolean>((resolve) => {
