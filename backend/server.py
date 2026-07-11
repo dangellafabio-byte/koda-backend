@@ -74,8 +74,8 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v20-max-utterance-15s+anti-halluc-progressive"
-_KODA_BACKEND_BUILD_TS = "2026-07-11T11:00:00Z"
+_KODA_BACKEND_VERSION = "v21-sentence-end-punctuation-detection"
+_KODA_BACKEND_BUILD_TS = "2026-07-11T11:30:00Z"
 
 
 @api_router.get("/_version")

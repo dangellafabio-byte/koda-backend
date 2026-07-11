@@ -609,12 +609,12 @@ SESSION_HARD_CAP_S = 360.0
 # PCM accumulato via gpt-4o-mini-transcribe e chiudiamo la sessione pulita.
 # Evita il caso di sessioni appese indefinitamente che richiedono la
 # chiusura manuale dell'app.
-MAX_UTTERANCE_NO_FINAL_S = 15.0  # === FIX 2026-07-11 (Fabio "non si ferma mai") ===
-# Ridotto 30→15s: con endpointing=900ms+utterance_end_ms=2000ms per mic
-# interno iPhone, in ambienti rumorosi Deepgram non emette speech_final →
-# il client vede la registrazione durare "all'infinito" fino al safety
-# timeout client di 40s. 15s = MAX utterance sensata su un'app di supporto
-# emotivo (l'utente può sempre continuare a parlare nel turno successivo).
+MAX_UTTERANCE_NO_FINAL_S = 25.0  # === FIX 2026-07-11 (Fabio) — Cap solo safety-net ===
+# Alzato di nuovo 15→25s: il cap deve essere SOLO rete di sicurezza per casi
+# estremi (Deepgram bloccato). Il vero endpointing deve venire da:
+# 1) speech_final di Deepgram (VAD prosodico su pausa naturale)
+# 2) OR interim transcript con punteggiatura finale (. ? !) stabile per 500ms
+# Vedi _interim_sentence_end_watcher più in basso.
 
 
 # ============================================================
@@ -844,6 +844,13 @@ async def voice_stream_handler(
     utterance_text_parts: list[str] = []
     utterance_confidence: Optional[float] = None
     speech_started_at: Optional[float] = None
+    # === FIX 2026-07-11 (Fabio) — Sentence-end detection su punteggiatura ===
+    # Tracciamo l'ultimo is_final Deepgram e se termina con . ? !
+    # Un watcher async chiude la utterance dopo 600ms senza nuovi transcript
+    # se l'ultimo termina con punteggiatura finale → non aspettiamo il
+    # silenzio di 900ms in ambienti rumorosi.
+    last_final_at: float = 0.0
+    last_final_ends_with_punct: bool = False
     audio_bytes_received = 0
     chunks_received = 0
     last_chunk_at = time.time()
@@ -1013,6 +1020,12 @@ async def voice_stream_handler(
 
                     if is_final:
                         utterance_text_parts.append(text)
+                        # === FIX 2026-07-11 (Fabio) — Sentence-end su punteggiatura ===
+                        last_final_at = time.time()
+                        stripped = text.rstrip()
+                        last_final_ends_with_punct = bool(
+                            stripped and stripped[-1] in {".", "?", "!"}
+                        )
                         if not speech_final:
                             # transcript finale parziale (es. fine segmento)
                             await emit_to_client({
@@ -1249,6 +1262,53 @@ async def voice_stream_handler(
 
         watchdog_task = asyncio.create_task(utterance_watchdog_loop())
 
+        # === FIX 2026-07-11 (Fabio "Deep Gram vede la fine della MIA frase") ===
+        # Task veloce che chiude la utterance quando l'ultimo is_final Deepgram
+        # termina con . ? ! e non arrivano nuovi transcript per 600ms.
+        # Serve per ambienti rumorosi dove speech_final non scatta mai (perché
+        # il rumore di fondo fa credere a Deepgram che stai ancora parlando).
+        # NON tocca speech_final legittimi: gira in parallelo e triggera solo
+        # se Deepgram tarda a chiudere.
+        _SENTENCE_END_QUIET_MS = 600  # ms senza nuovi transcript dopo punteggiatura
+        _SENTENCE_END_POLL_S = 0.15   # frequenza polling
+
+        async def sentence_end_watcher_loop() -> None:
+            nonlocal last_final_at, last_final_ends_with_punct
+            while client_alive and dg is not None and not dg._closed:
+                try:
+                    await asyncio.sleep(_SENTENCE_END_POLL_S)
+                except asyncio.CancelledError:
+                    break
+                if pipeline_in_flight:
+                    continue
+                if not last_final_ends_with_punct:
+                    continue
+                if not utterance_text_parts:
+                    continue
+                elapsed_ms = (time.time() - last_final_at) * 1000.0
+                if elapsed_ms < _SENTENCE_END_QUIET_MS:
+                    continue
+                # Chiudi la utterance simulando uno speech_final Deepgram
+                final_text = " ".join(utterance_text_parts).strip()
+                if not final_text:
+                    continue
+                logger.info(
+                    f"[KODA_STREAM sess={short_id}] SENTENCE_END punct-triggered "
+                    f"(quiet={elapsed_ms:.0f}ms, text={final_text!r})"
+                )
+                pcm_snapshot = bytes(utterance_pcm_buffer)
+                utterance_pcm_buffer.clear()
+                utterance_text_parts.clear()
+                last_final_ends_with_punct = False
+                try:
+                    await _trigger_pipeline(final_text, pcm_snapshot)
+                except Exception as e:
+                    logger.error(
+                        f"[KODA_STREAM sess={short_id}] sentence-end pipeline error: {e}"
+                    )
+
+        sentence_end_task = asyncio.create_task(sentence_end_watcher_loop())
+
         # ---------------- 4) Loop principale: leggi audio dal client ----------------
         try:
             while client_alive:
@@ -1421,6 +1481,12 @@ async def voice_stream_handler(
         try:
             watchdog_task.cancel()
             await asyncio.wait_for(watchdog_task, timeout=1.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+            pass
+        # Cancella il sentence-end task (v21)
+        try:
+            sentence_end_task.cancel()
+            await asyncio.wait_for(sentence_end_task, timeout=1.0)
         except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
             pass
 
