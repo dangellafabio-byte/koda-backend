@@ -277,6 +277,19 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
             "pag. 1 pag. 2",
             "capitolo 1 capitolo 2",
             "punto 1 punto 2",
+            # === FIX 2026-07-11 sera (Fabio "Sottotitoli QTSS") ===
+            # Deepgram Nova-2 su audio silenzioso/rumoroso italiano ha
+            # occasionalmente hallucinazioni da YouTube training sui subtitle
+            # services. Osservato in produzione: "Sottotitoli e revisione a
+            # cura di QTSS." Il filtro server.py aveva già questi pattern
+            # per Whisper batch, ma il path streaming voice_stream li aveva
+            # persi. Doppio-guard qui.
+            "qtss",
+            "sottotitoli e revisione",
+            "sottotitoli a cura di",
+            "sottotitoli e traduzione",
+            "revisione a cura di",
+            "sottotitolato",
         )
         low = text.lower()
         if text and any(m in low for m in _HALLUCINATION_MARKERS):

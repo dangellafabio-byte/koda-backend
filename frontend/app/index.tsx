@@ -373,9 +373,9 @@ export default function Taccuino() {
   // inglobato l'ultimo commit.
   useEffect(() => {
     console.log(
-      `[KODA_BUILDTAG] v51-audio-category-fix build=2026-07-11-morning ` +
+      `[KODA_BUILDTAG] v52-earpiece-options-fix build=2026-07-11-afternoon ` +
         `verbose=${KODA_DEBUG_VERBOSE} ` +
-        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,PROXIMITY_OBSERVER_V18,MANUAL_AUDIO_OUTPUT_BUTTON,AUDIO_CATEGORY_FIX_V18,REAPPLY_OVERRIDE_JS,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
+        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,PROXIMITY_OBSERVER_V19,MANUAL_AUDIO_OUTPUT_BUTTON,EARPIECE_OPTIONS_FIX_V19,REAPPLY_OVERRIDE_JS,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V2${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
   }, []);
   const [textInput, setTextInput] = useState("");
@@ -901,6 +901,20 @@ export default function Taccuino() {
   // Ref alla sessione voice streaming attiva. Permette il tap-to-stop sul
   // big button anche quando il flusso voce è streaming (non c'è recRef).
   const streamingSessionRef = useRef<{ stop: () => Promise<void> } | null>(null);
+  // === FIX 2026-07-11 v52 — TAP_STOP EARLY (race pre-session) ===
+  // Race conosciuta: l'utente preme il big button, `setStatus("recording")`
+  // fira subito, ma voiceStreamConverse (async) impiega ~1-5s ad aprire
+  // la WS e chiamare onSession() → durante quel gap, streamingSessionRef
+  // è ancora null. Se l'utente ri-tocca il button (tap-stop) in quella
+  // finestra, il vecchio codice settava solo status=transcribing e non
+  // fermava nulla — poi la sessione partiva comunque e i chunk continuavano
+  // fino al termine naturale.
+  //
+  // FIX: pendingTapStopRef=true quando tap-stop avviene senza sessione.
+  // Nel callback onSession(s), se pendingTapStopRef è true chiamiamo
+  // immediatamente s.stop() e resettiamo il flag. Cosi il "graceful stop"
+  // funziona anche durante l'apertura della WS.
+  const pendingTapStopRef = useRef<boolean>(false);
   // === MUTEX 2026-06-28 — P0 race condition fix (handoff diag log) ===
   // Su iPhone + Android, due meccanismi di restart hands-free firavano
   // entro ~50ms l'uno dall'altro:
@@ -2793,6 +2807,26 @@ export default function Taccuino() {
           console.log(
             `[KODA_STREAM_CLIENT] session ref ${s ? "stored" : "cleared"}`
           );
+          // === FIX 2026-07-11 v52 — TAP_STOP EARLY consumption ===
+          // Se l'utente ha premuto tap-stop DURANTE la fase async pre-WS
+          // (mentre stream stava aprendo la connessione), onBigButton ha
+          // settato pendingTapStopRef=true perché non aveva ancora la
+          // sessione. Ora che l'abbiamo, fermiamo subito con stop() →
+          // il server processerà l'audio già inviato e risponderà,
+          // NON continuiamo a registrare chunk aggiuntivi.
+          if (s && pendingTapStopRef.current) {
+            pendingTapStopRef.current = false;
+            console.log(
+              `[KODA_STREAM_CLIENT] pendingTapStopRef consumed → calling s.stop() now`
+            );
+            try {
+              if (typeof s.stop === "function") {
+                s.stop().catch?.(() => {});
+              } else if (typeof s.abort === "function") {
+                s.abort().catch?.(() => {});
+              }
+            } catch {}
+          }
         },
         onAudioStart: () => {
           setStatus("speaking");
@@ -2908,6 +2942,12 @@ export default function Taccuino() {
       return;
     }
     lastStartTalkAtRef.current = now;
+
+    // === FIX 2026-07-11 v52 — Reset pendingTapStop su nuova sessione ===
+    // Se un tap-stop precedente aveva settato il flag ma non è mai stato
+    // consumato (es. voiceStreamConverse fallì prima di onSession), la
+    // nuova sessione verrebbe stoppata immediatamente. Reset qui.
+    pendingTapStopRef.current = false;
 
     // === GUARD STREAMING SESSION (2026-06-28 v26 — diag log iPhone cascata) ===
     // Se una sessione WebSocket è già attiva, non aprirne un'altra. Questo
@@ -3519,6 +3559,15 @@ export default function Taccuino() {
             s.abort().catch?.(() => {});
           }
         } catch {}
+      } else {
+        // === FIX 2026-07-11 v52 — TAP_STOP EARLY ===
+        // Sessione non ancora aperta (voiceStreamConverse sta ancora facendo
+        // la fase async pre-WS). Settiamo il flag: onSession() lo controllerà
+        // appena ricevuta la sessione e la fermerà subito.
+        pendingTapStopRef.current = true;
+        console.log(
+          `[KODA_TAP_STOP] session ref null → pendingTapStopRef=true (early stop scheduled)`
+        );
       }
       // File-based recorder legacy path (non-streaming)
       if (recRef.current) {
