@@ -270,6 +270,13 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
             "alle sette e mezza",
             "fra dieci minuti",
             "es: alle sette",
+            # === FIX 2026-07-11 pomeriggio (Fabio "Pag. 1 Pag. 2") ===
+            # whisper-1 su audio interamente muto/rumoroso genera enumerazioni
+            # di pagine, capitoli, punti — è un pattern tipico di training su
+            # documenti PDF/libri. Detecter sotto ma anche double-guard qui.
+            "pag. 1 pag. 2",
+            "capitolo 1 capitolo 2",
+            "punto 1 punto 2",
         )
         low = text.lower()
         if text and any(m in low for m in _HALLUCINATION_MARKERS):
@@ -278,8 +285,27 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
                 f"(marker) detected → fallback Deepgram (was: {text!r})"
             )
             return None
+        # === FIX 2026-07-11 (Fabio) — Progressive enumeration hallucination ===
+        # Detecta pattern tipo "X 1 X 2 X 3 X 4 X 5" o "1. Y 2. Y 3. Y":
+        # whisper allucina enumerazioni da training su documenti/PDF.
+        try:
+            words_seq2 = [w.lower().strip(",.!?;:") for w in text.split() if w]
+            # Estrai numeri consecutivi visti nel testo
+            import re as _re
+            nums = [int(w) for w in words_seq2 if _re.fullmatch(r"\d+", w)]
+            if len(nums) >= 4:
+                # Verifica se sono strettamente crescenti di 1 (1,2,3,4,5)
+                is_progressive = all(nums[i + 1] - nums[i] == 1 for i in range(len(nums) - 1))
+                if is_progressive and nums[0] <= 3:  # inizia da 1, 2 o 3
+                    logger.info(
+                        f"[voice_stream sess={session_short}] STT hallucination "
+                        f"(progressive enumeration {nums}) → fallback Deepgram "
+                        f"(was: {text!r})"
+                    )
+                    return None
+        except Exception:
+            pass
         # === FIX 2026-07-11 (Fabio) — Sentence-level repetition ===
-        # whisper-1 su audio muto/rumoroso spesso ripete la stessa frase 2+
         # volte. Es: "Numeri e orari naturali. Numeri e orari naturali."
         # oppure "Grazie mille grazie mille". Detectiamo ripetizioni di
         # sequenze di 2+ parole con span totale ≥50% del testo.
