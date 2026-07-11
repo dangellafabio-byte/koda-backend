@@ -29,13 +29,13 @@ const fs = require("fs");
 const path = require("path");
 const { withDangerousMod } = require("@expo/config-plugins");
 
-const KODA_PATCH_MARKER = "KODA PATCH 2026-07-11 v19 (Voice DSP + 16kHz + PROXIMITY OBSERVER + MANUAL BUTTON + PLAYBACK CATEGORY FIX + EARPIECE OPTIONS FIX)";
+const KODA_PATCH_MARKER = "KODA PATCH 2026-07-11 v20 (WhatsApp pattern: category persistence + Voice DSP + Proximity + Manual Button)";
 const KODA_ANDROID_MARKER = "KODA ANDROID PATCH 2026-07-11 v3 (Proximity Sensor auto-routing + MANUAL BUTTON)";
 // Marker specifico per la seconda patch iOS che inietta AsyncFunction("kodaSetAudioOutput")
 // dentro il ModuleDefinition di ExpoAudio. Idempotente.
-// v19: bump per invalidare cache node_modules su EAS Build e ri-iniettare la
-// versione con il fix earpiece (rimosso .defaultToSpeaker che sovrascriveva override).
-const KODA_V17_ASYNC_MARKER = "KODA_V19_ASYNC_FUNCTION kodaSetAudioOutput";
+// v20: bump per invalidare cache node_modules su EAS Build e ri-iniettare la
+// versione con il fix WhatsApp pattern (category persistence durante TTS).
+const KODA_V17_ASYNC_MARKER = "KODA_V20_ASYNC_FUNCTION kodaSetAudioOutput";
 const KODA_V17_ASYNC_ANDROID_MARKER = "KODA_V17_ANDROID_ASYNC_FUNCTION kodaSetAudioOutput";
 // Marker generico usato per riconoscere QUALSIASI vecchia patch KODA (v11, v12,
 // v13, v14, v15…) presente nel file cached di node_modules. Serve per il revert
@@ -55,9 +55,21 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
       // Voice Processing (AEC/NS/AGC) tramite AVAudioSession.Mode.voiceChat.
       // Stesso preset usato da Siri/FaceTime/WhatsApp. Pulisce rumore
       // motore/vento mantenendo la voce.
-      let recordingMode: AVAudioSession.Mode = (category == .playAndRecord) ? .voiceChat : .default
-      try session.setCategory(category, mode: recordingMode)
-      if category == .playAndRecord {
+      //
+      // === KODA v20 WHATSAPP PATTERN (category persistence) ===
+      // Se JS chiede .playback ma c'è un override manuale attivo
+      // (KodaAudioOverrideMode = earpiece/speaker), FORZIAMO .playAndRecord
+      // per preservare il routing durante il TTS. Questo è esattamente il
+      // pattern usato da WhatsApp/FaceTime/Telegram: la category resta
+      // persistente per tutta la conversazione, il mic viene solo silenziato
+      // (allowsRecording=false) senza cambiare category.
+      // Se nessun override attivo: comportamento invariato.
+      let kodaManualOverride = UserDefaults.standard.string(forKey: "KodaAudioOverrideMode")
+      let kodaEffectiveCategory: AVAudioSession.Category = 
+          (kodaManualOverride != nil && category == .playback) ? .playAndRecord : category
+      let recordingMode: AVAudioSession.Mode = (kodaEffectiveCategory == .playAndRecord) ? .voiceChat : .default
+      try session.setCategory(kodaEffectiveCategory, mode: recordingMode)
+      if kodaEffectiveCategory == .playAndRecord {
         // === KODA v14: proximity monitoring on ===
         DispatchQueue.main.async {
           UIDevice.current.isProximityMonitoringEnabled = true
@@ -141,9 +153,18 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
       }
     } else {
       // === ${KODA_PATCH_MARKER} (ramo options) ===
-      let recordingMode: AVAudioSession.Mode = (category == .playAndRecord) ? .voiceChat : .default
-      try session.setCategory(category, mode: recordingMode, options: sessionOptions)
-      if category == .playAndRecord {
+      // === KODA v20 WHATSAPP PATTERN (category persistence, ramo options) ===
+      let kodaManualOverrideOpt = UserDefaults.standard.string(forKey: "KodaAudioOverrideMode")
+      let kodaEffectiveCategoryOpt: AVAudioSession.Category = 
+          (kodaManualOverrideOpt != nil && category == .playback) ? .playAndRecord : category
+      let recordingMode: AVAudioSession.Mode = (kodaEffectiveCategoryOpt == .playAndRecord) ? .voiceChat : .default
+      // Se override=earpiece e stiamo forzando playAndRecord, rimuoviamo
+      // .defaultToSpeaker dalle options (altrimenti sovrascriverebbe l'override).
+      let kodaEffectiveOptions: AVAudioSession.CategoryOptions = 
+          (kodaManualOverrideOpt == "earpiece" && kodaEffectiveCategoryOpt == .playAndRecord)
+              ? sessionOptions.subtracting(.defaultToSpeaker) : sessionOptions
+      try session.setCategory(kodaEffectiveCategoryOpt, mode: recordingMode, options: kodaEffectiveOptions)
+      if kodaEffectiveCategoryOpt == .playAndRecord {
         DispatchQueue.main.async {
           UIDevice.current.isProximityMonitoringEnabled = true
         }
@@ -466,11 +487,12 @@ function patchExpoAudioSwiftAsyncFunction(projectRoot) {
   // Cache-safe: se esiste già una vecchia iniezione KODA_V*_ASYNC_FUNCTION con
   // versione diversa da quella corrente, la rimuoviamo prima di iniettare la
   // nuova. Serve a bypassare la cache node_modules su EAS Build.
-  // v19: aggiornato per riconoscere sia v17, v18 (vecchie) che v19 (corrente).
+  // v20: aggiornato per riconoscere v17, v18, v19 (vecchie) e v20 (corrente).
   const OLD_ASYNC_MARKERS = [
     "// === KODA_V17_ASYNC_FUNCTION",
     "// === KODA_V18_ASYNC_FUNCTION",
     "// === KODA_V19_ASYNC_FUNCTION",
+    "// === KODA_V20_ASYNC_FUNCTION",
   ];
   const foundOldMarker = OLD_ASYNC_MARKERS.find((m) => content.includes(m));
   if (foundOldMarker && !content.includes(KODA_V17_ASYNC_MARKER)) {
