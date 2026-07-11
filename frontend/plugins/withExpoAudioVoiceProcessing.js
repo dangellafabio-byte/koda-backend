@@ -29,11 +29,13 @@ const fs = require("fs");
 const path = require("path");
 const { withDangerousMod } = require("@expo/config-plugins");
 
-const KODA_PATCH_MARKER = "KODA PATCH 2026-07-11 v17 (Voice DSP + 16kHz + PROXIMITY OBSERVER + MANUAL BUTTON)";
+const KODA_PATCH_MARKER = "KODA PATCH 2026-07-11 v18 (Voice DSP + 16kHz + PROXIMITY OBSERVER + MANUAL BUTTON + PLAYBACK CATEGORY FIX)";
 const KODA_ANDROID_MARKER = "KODA ANDROID PATCH 2026-07-11 v3 (Proximity Sensor auto-routing + MANUAL BUTTON)";
 // Marker specifico per la seconda patch iOS che inietta AsyncFunction("kodaSetAudioOutput")
 // dentro il ModuleDefinition di ExpoAudio. Idempotente.
-const KODA_V17_ASYNC_MARKER = "KODA_V17_ASYNC_FUNCTION kodaSetAudioOutput";
+// v18: bump per invalidare cache node_modules su EAS Build e ri-iniettare la
+// versione con il fix del category (.playAndRecord forzata prima dell'override).
+const KODA_V17_ASYNC_MARKER = "KODA_V18_ASYNC_FUNCTION kodaSetAudioOutput";
 const KODA_V17_ASYNC_ANDROID_MARKER = "KODA_V17_ANDROID_ASYNC_FUNCTION kodaSetAudioOutput";
 // Marker generico usato per riconoscere QUALSIASI vecchia patch KODA (v11, v12,
 // v13, v14, v15…) presente nel file cached di node_modules. Serve per il revert
@@ -313,6 +315,11 @@ const SWIFT_ASYNC_FUNCTION_BLOCK = `    // === ${KODA_V17_ASYNC_MARKER} ===
     // Sostituisce/coesiste con l'observer proximity: se questa funzione viene
     // chiamata con "earpiece"/"speaker", l'observer viene bypassato (via
     // UserDefaults). Chiamata con "auto" rimuove l'override → observer riprende.
+    //
+    // v18 FIX: forziamo AVAudioSession.category = .playAndRecord con
+    // mode .voiceChat PRIMA di chiamare overrideOutputAudioPort. Senza questo,
+    // iOS rifiuta l'override quando la sessione è in .playback (durante TTS)
+    // e la funzione fallisce silenziosamente ritornando "auto:error".
     AsyncFunction("kodaSetAudioOutput") { (output: String) -> String in
       #if os(iOS)
       let session = AVAudioSession.sharedInstance()
@@ -329,15 +336,42 @@ const SWIFT_ASYNC_FUNCTION_BLOCK = `    // === ${KODA_V17_ASYNC_MARKER} ===
         let firstExt = session.currentRoute.outputs.first { extPorts.contains($0.portType) }
         return "external:" + (firstExt?.portName ?? "unknown")
       }
+      // === v18 CATEGORY FIX ===
+      // Se la sessione è in .playback (TTS in corso), overrideOutputAudioPort
+      // viene rifiutata da iOS. Forziamo .playAndRecord/.voiceChat prima.
+      // Manteniamo defaultToSpeaker per rispettare le semantiche pre-esistenti
+      // (senza questa opzione lo speaker esterno si disattiverebbe di default).
+      if session.category != .playAndRecord {
+        do {
+          try session.setCategory(
+            .playAndRecord,
+            mode: .voiceChat,
+            options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP, .allowAirPlay]
+          )
+          try session.setActive(true, options: [])
+        } catch {
+          // Se il cambio category fallisce (rarissimo, tipicamente perché
+          // un'altra app ha il lock esclusivo), continuiamo comunque: forse
+          // eravamo già in .playAndRecord ma con mode diverso.
+        }
+      }
       switch output {
       case "earpiece":
         UserDefaults.standard.set("earpiece", forKey: "KodaAudioOverrideMode")
-        do { try session.overrideOutputAudioPort(.none) } catch {}
-        return "earpiece"
+        do {
+          try session.overrideOutputAudioPort(.none)
+          return "earpiece"
+        } catch {
+          return "earpiece:error"
+        }
       case "speaker":
         UserDefaults.standard.set("speaker", forKey: "KodaAudioOverrideMode")
-        do { try session.overrideOutputAudioPort(.speaker) } catch {}
-        return "speaker"
+        do {
+          try session.overrideOutputAudioPort(.speaker)
+          return "speaker"
+        } catch {
+          return "speaker:error"
+        }
       default: // "auto" o qualsiasi altro valore → rimuovi override
         UserDefaults.standard.removeObject(forKey: "KodaAudioOverrideMode")
         // Riapplica routing basato su proximity corrente
@@ -420,16 +454,18 @@ function patchExpoAudioSwiftAsyncFunction(projectRoot) {
   );
   if (!fs.existsSync(file)) return;
   let content = fs.readFileSync(file, "utf8");
-  // Cache-safe: se esiste già una vecchia iniezione KODA_V17_ASYNC_FUNCTION con
+  // Cache-safe: se esiste già una vecchia iniezione KODA_V*_ASYNC_FUNCTION con
   // versione diversa da quella corrente, la rimuoviamo prima di iniettare la
   // nuova. Serve a bypassare la cache node_modules su EAS Build.
-  const GENERIC_START_MARKER = "// === KODA_V17_ASYNC_FUNCTION";
-  if (
-    content.includes(GENERIC_START_MARKER) &&
-    !content.includes(KODA_V17_ASYNC_MARKER)
-  ) {
-    // Trova il blocco: da "    // === KODA_V17_ASYNC_FUNCTION" fino a "    OnDestroy {"
-    const startAnchor = "    // === KODA_V17_ASYNC_FUNCTION";
+  // v18: aggiornato per riconoscere sia v17 (vecchia) che v18 (corrente).
+  const OLD_ASYNC_MARKERS = [
+    "// === KODA_V17_ASYNC_FUNCTION",
+    "// === KODA_V18_ASYNC_FUNCTION",
+  ];
+  const foundOldMarker = OLD_ASYNC_MARKERS.find((m) => content.includes(m));
+  if (foundOldMarker && !content.includes(KODA_V17_ASYNC_MARKER)) {
+    // Trova il blocco: dal marker vecchio fino a "    OnDestroy {"
+    const startAnchor = "    " + foundOldMarker;
     const endAnchor = "    OnDestroy {";
     const s = content.indexOf(startAnchor);
     const e = content.indexOf(endAnchor, s);
@@ -441,7 +477,7 @@ function patchExpoAudioSwiftAsyncFunction(projectRoot) {
       fs.writeFileSync(file, content, "utf8");
       console.log(
         "[withExpoAudioVoiceProcessing][iOS AsyncFunc] ♻️  Old KODA AsyncFunction " +
-          "detected (different version). Removed before re-injecting current version."
+          "detected (marker: " + foundOldMarker + "). Removed before re-injecting current version."
       );
     }
   }
