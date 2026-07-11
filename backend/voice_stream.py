@@ -609,7 +609,12 @@ SESSION_HARD_CAP_S = 360.0
 # PCM accumulato via gpt-4o-mini-transcribe e chiudiamo la sessione pulita.
 # Evita il caso di sessioni appese indefinitamente che richiedono la
 # chiusura manuale dell'app.
-MAX_UTTERANCE_NO_FINAL_S = 30.0
+MAX_UTTERANCE_NO_FINAL_S = 15.0  # === FIX 2026-07-11 (Fabio "non si ferma mai") ===
+# Ridotto 30→15s: con endpointing=900ms+utterance_end_ms=2000ms per mic
+# interno iPhone, in ambienti rumorosi Deepgram non emette speech_final →
+# il client vede la registrazione durare "all'infinito" fino al safety
+# timeout client di 40s. 15s = MAX utterance sensata su un'app di supporto
+# emotivo (l'utente può sempre continuare a parlare nel turno successivo).
 
 
 # ============================================================
