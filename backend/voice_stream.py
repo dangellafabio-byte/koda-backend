@@ -1269,8 +1269,8 @@ async def voice_stream_handler(
         # il rumore di fondo fa credere a Deepgram che stai ancora parlando).
         # NON tocca speech_final legittimi: gira in parallelo e triggera solo
         # se Deepgram tarda a chiudere.
-        _SENTENCE_END_QUIET_MS = 600  # ms senza nuovi transcript dopo punteggiatura
-        _SENTENCE_END_POLL_S = 0.15   # frequenza polling
+        _SENTENCE_END_QUIET_MS = 500  # ms senza nuovi transcript dopo punteggiatura
+        _SENTENCE_END_POLL_S = 0.10   # frequenza polling (100ms per reattività)
 
         async def sentence_end_watcher_loop() -> None:
             nonlocal last_final_at, last_final_ends_with_punct
