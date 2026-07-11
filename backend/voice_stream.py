@@ -261,6 +261,15 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
             "grazie per l'ascolto",
             "buon proseguimento",
             "grazie per aver visto",
+            # === FIX 2026-07-11 (Fabio) — Whisper prompt-bleed hallucination ===
+            # whisper-1 su audio silenzioso/rumoroso rigurgita frammenti del
+            # prompt biasing. Il prompt in server.py contiene: "Numeri e orari
+            # naturali (es: alle sette e mezza, fra dieci minuti)." Se il testo
+            # trascritto contiene questi frammenti letterali → hallucination.
+            "numeri e orari naturali",
+            "alle sette e mezza",
+            "fra dieci minuti",
+            "es: alle sette",
         )
         low = text.lower()
         if text and any(m in low for m in _HALLUCINATION_MARKERS):
@@ -269,6 +278,35 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
                 f"(marker) detected → fallback Deepgram (was: {text!r})"
             )
             return None
+        # === FIX 2026-07-11 (Fabio) — Sentence-level repetition ===
+        # whisper-1 su audio muto/rumoroso spesso ripete la stessa frase 2+
+        # volte. Es: "Numeri e orari naturali. Numeri e orari naturali."
+        # oppure "Grazie mille grazie mille". Detectiamo ripetizioni di
+        # sequenze di 2+ parole con span totale ≥50% del testo.
+        try:
+            words_lc_seq = [w.lower().strip(",.!?;:") for w in text.split() if w]
+            n_seq = len(words_lc_seq)
+            if n_seq >= 4:
+                # Try sequence length from 2 up to n/2
+                repeat_found = False
+                for L in range(2, min(n_seq // 2 + 1, 8)):  # L=lunghezza sequenza
+                    for start in range(0, n_seq - 2 * L + 1):
+                        seq_a = words_lc_seq[start : start + L]
+                        seq_b = words_lc_seq[start + L : start + 2 * L]
+                        if seq_a == seq_b and len(" ".join(seq_a)) >= 8:
+                            repeat_found = True
+                            break
+                    if repeat_found:
+                        break
+                if repeat_found:
+                    logger.info(
+                        f"[voice_stream sess={session_short}] STT hallucination "
+                        f"(sentence-level repetition) → fallback Deepgram "
+                        f"(was: {text!r})"
+                    )
+                    return None
+        except Exception:
+            pass
         # === FIX 2026-07-02 v42 — Detector ripetizioni patologiche ===
         # gpt-4o-mini-transcribe su audio muto/rumoroso tende a produrre
         # sequenze del tipo "sì sì sì sì sì" o "no no no no no". Se la

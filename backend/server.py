@@ -68,6 +68,32 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
+# ============================================================================
+# BACKEND VERSION MARKER — la fonte unica di verità per capire se il backend
+# deployato in produzione ha i fix più recenti. L'utente può curl -s
+# https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
+# ad ogni fix rilevante lato server.
+# ============================================================================
+_KODA_BACKEND_VERSION = "v18-auth-bound-freemium+whisper1+anti-halluc-sentence-repeat"
+_KODA_BACKEND_BUILD_TS = "2026-07-11T10:00:00Z"
+
+
+@api_router.get("/_version")
+async def _kodabuildversion():
+    return {
+        "version": _KODA_BACKEND_VERSION,
+        "build_ts": _KODA_BACKEND_BUILD_TS,
+        "features": [
+            "auth_bound_freemium",
+            "whisper1_stt_fallback",
+            "hallucination_prompt_bleed_filter",
+            "hallucination_sentence_repetition_filter",
+            "hallucination_nonsense_short_filter",
+            "tap_stop_server_wait",
+        ],
+    }
+
+
 # === FIX 2026-07-03 v40 — Debug endpoint per timing pipeline (Fabio) ===
 # Salva in memoria l'ultimo KODA_PIPELINE_SUMMARY prodotto, così
 # possiamo esporlo via /api/debug/last-turn-timing e leggere il breakdown
