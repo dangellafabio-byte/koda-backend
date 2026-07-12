@@ -49,7 +49,7 @@ import {
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { checkHasSpeech, logGateDecision } from "../lib/silenceGate";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId, preloadFillerPool } from "../lib/speech";
-import { setKodaAudioOutput, getKodaAudioOutput, type KodaAudioMode } from "../lib/kodaAudioOutput";
+// Rimosso import kodaAudioOutput (Modalità Telefono rollback 2026-07-13)
 import { preloadOfflineClips, isOfflineNow, playRandomOfflineClip } from "../lib/offlineClips";
 import { startThinkingSound, stopThinkingSound } from "../lib/thinkingSound";
 import { classifyEmotion, classifyIntent, secureWipeStrings } from "../lib/emotionClassifier";
@@ -678,52 +678,10 @@ export default function Taccuino() {
     } catch {}
   }, []);
   const [showSettings, setShowSettings] = useState(false);
-  // === KODA v17: Modalità Telefono manuale (pulsante UI) ===
-  // Stato locale dell'output audio. Sincronizzato con la native side via
-  // getKodaAudioOutput() al mount e dopo ogni tap del pulsante.
-  // Valori possibili:
-  //   • "auto:speaker" | "auto:earpiece"  → proximity observer decide
-  //   • "earpiece" | "speaker"            → forzato manualmente
-  //   • "external:AirPods" ecc.           → device esterno collegato
-  //   • "unsupported"                     → build senza patch v17 (fallback)
-  const [audioOutMode, setAudioOutMode] = useState<KodaAudioMode>("unsupported");
-
-  // === KODA v17: Sync stato audio output al mount ===
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const mode = await getKodaAudioOutput();
-      if (!cancelled) {
-        setAudioOutMode(mode);
-        console.log(`[KODA_AUDIO_OUT] initial state → ${mode}`);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Handler pulsante: ciclo semplificato a 2 stati (v54 — dopo feedback utente)
-  // Rimossa la modalità Auto (proximity) che era instabile. Restano solo:
-  //   • earpiece → speaker → earpiece
-  // Cuffie/BT esterne auto-rilevate (external:*) restano no-op.
-  const cycleAudioOutput = useCallback(async () => {
-    let next: "earpiece" | "speaker";
-    if (audioOutMode === "speaker" || audioOutMode.startsWith("auto")) {
-      // Speaker o Auto legacy → passa a Earpiece
-      next = "earpiece";
-    } else if (audioOutMode === "earpiece") {
-      // Earpiece → Speaker
-      next = "speaker";
-    } else if (audioOutMode.startsWith("external:")) {
-      return; // BT/AirPods: no-op
-    } else {
-      // primo tap da unsupported → default earpiece
-      next = "earpiece";
-    }
-    const result = await setKodaAudioOutput(next);
-    setAudioOutMode(result);
-  }, [audioOutMode]);
+  // === ROLLBACK 2026-07-13 ===
+  // Rimossa la "Modalità Telefono" (audioOutMode / cycleAudioOutput /
+  // setKodaAudioOutput / getKodaAudioOutput). Vedi
+  // /app/summary/refund_documentation.md per il razionale tecnico.
   const [showInfo, setShowInfo] = useState(false);
   const [showVoicePicker, setShowVoicePicker] = useState(false);
   // === MODALITÀ CONFESSIONALE ===
@@ -4571,52 +4529,9 @@ export default function Taccuino() {
             color={handsFree ? "#34D399" : (theme.isDark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.55)")}
           />
         </TouchableOpacity>
-        {/* Slot destro: [Audio Output KODA v17] + Menu impostazioni */}
+        {/* Slot destro: Menu impostazioni. Pulsante audio Modalità Telefono
+            rimosso nel rollback 2026-07-13 (regressioni STT). */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-          {/* === KODA v17: Modalità Telefono manuale === */}
-          {/* Nascosto se build senza patch v17 (unsupported) → evita UI morta */}
-          {audioOutMode !== "unsupported" && (
-            <TouchableOpacity
-              style={[styles.headerBtn, { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" }]}
-              onPress={cycleAudioOutput}
-              hitSlop={20}
-              testID="audio-out-toggle"
-              accessibilityLabel={
-                audioOutMode.startsWith("external:")
-                  ? `Audio via ${audioOutMode.slice(9)} (esterno)`
-                  : audioOutMode === "earpiece"
-                  ? "Audio auricolare interno, tocca per altoparlante"
-                  : audioOutMode === "speaker"
-                  ? "Audio altoparlante, tocca per automatico"
-                  : "Modalità automatica proximity, tocca per auricolare"
-              }
-            >
-              <Ionicons
-                name={
-                  audioOutMode.startsWith("external:")
-                    ? "headset"
-                    : audioOutMode === "earpiece"
-                    ? "phone-portrait"
-                    : audioOutMode === "speaker"
-                    ? "volume-high"
-                    : "volume-high" // default (no più Auto)
-                }
-                size={22}
-                color={
-                  audioOutMode === "earpiece"
-                    ? "#34D399" // verde = Modalità Telefono attiva
-                    : audioOutMode === "speaker"
-                    ? "#34D399" // v54 FIX: verde anche su Vivavoce (era grigio, bug)
-                    : audioOutMode.startsWith("external:")
-                    ? "#60A5FA" // blu = device esterno
-                    : theme.isDark
-                    ? "rgba(255,255,255,0.55)"
-                    : "rgba(0,0,0,0.55)"
-                }
-              />
-            </TouchableOpacity>
-          )}
-          {/* Slot destro: menu impostazioni (preso dall'old position). */}
           <TouchableOpacity
             ref={menuBtnRef}
             style={[styles.headerBtn, { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" }]}
