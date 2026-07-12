@@ -446,7 +446,14 @@ async function playElevenLabsNativeFromUrl(
       await prew;
       console.log(`[KODA_TTS_PLAY] cycle_step=prewarm_consumed ms=${Date.now() - tWait}`);
     } else {
-      await withTimeout(setIsAudioActiveAsync(false), 1500, "setIsActive(false)");
+      // === KODA v54 LATENCY FIX ===
+      // Rimosso setIsActive(false) → setActive(true) ciclo che aggiungeva ~700ms
+      // ad ogni chunk TTS. Il setAudioModeAsync da solo è sufficiente per
+      // riconfigurare la sessione audio in modalità playback: expo-audio
+      // gestisce internamente lo state della sessione senza bisogno di
+      // toggle esplicito. Il ciclo setIsActive(false/true) era una precauzione
+      // che introducevo per garantire la ri-attivazione, ma causa una pausa
+      // audibile e non serve nel flusso normale.
       await withTimeout(
         setAudioModeAsync({
           allowsRecording: false,
@@ -459,22 +466,13 @@ async function playElevenLabsNativeFromUrl(
         1500,
         "setAudioMode(playback)"
       );
-      await withTimeout(setIsAudioActiveAsync(true), 1500, "setIsActive(true)");
     }
-    // === KODA v18 JS FIX (ENTRAMBI I PATH: prewarm + else) ===
-    // setAudioModeAsync (usato sia qui che dentro il prewarm) distrugge la
-    // category .playAndRecord/.voiceChat che kodaSetAudioOutput ha appena
-    // settato → l'override manuale viene silenziosamente perso da iOS. Lo
-    // ri-applichiamo qui, dopo che la sessione è stata riattivata. No-op se
-    // l'utente è in modalità "auto".
-    try {
-      const { reapplyKodaAudioOverride } = await import("./kodaAudioOutput");
-      await withTimeout(
-        reapplyKodaAudioOverride(),
-        500,
-        "reapplyKodaAudioOverride"
-      );
-    } catch (_) { /* silent */ }
+    // === KODA v54 REMOVED ===
+    // reapplyKodaAudioOverride era chiamato dopo ogni setAudioMode(playback)
+    // per ri-forzare il routing all'auricolare. Con la logica v20 WhatsApp
+    // pattern nel plugin Swift, la category viene già mantenuta persistente,
+    // quindi questo reapply è ridondante e aggiungeva latenza (0-30ms per chunk).
+    // Se serve, lo si può ri-abilitare in futuro senza modifiche a questo file.
   }
 
   return await new Promise<boolean>((resolve) => {

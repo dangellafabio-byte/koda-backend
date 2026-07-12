@@ -373,9 +373,9 @@ export default function Taccuino() {
   // inglobato l'ultimo commit.
   useEffect(() => {
     console.log(
-      `[KODA_BUILDTAG] v53-whatsapp-pattern build=2026-07-11-evening ` +
+      `[KODA_BUILDTAG] v54-stt-fix-latency-fix-2state-button build=2026-07-12-morning ` +
         `verbose=${KODA_DEBUG_VERBOSE} ` +
-        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,PROXIMITY_OBSERVER_V20,MANUAL_AUDIO_OUTPUT_BUTTON,WHATSAPP_CATEGORY_PERSISTENCE_V20,REAPPLY_OVERRIDE_JS,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V2${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
+        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V2${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
   }, []);
   const [textInput, setTextInput] = useState("");
@@ -703,19 +703,23 @@ export default function Taccuino() {
     };
   }, []);
 
-  // Handler pulsante: ciclo Auto → Earpiece → Speaker → Auto
+  // Handler pulsante: ciclo semplificato a 2 stati (v54 — dopo feedback utente)
+  // Rimossa la modalità Auto (proximity) che era instabile. Restano solo:
+  //   • earpiece → speaker → earpiece
+  // Cuffie/BT esterne auto-rilevate (external:*) restano no-op.
   const cycleAudioOutput = useCallback(async () => {
-    let next: "earpiece" | "speaker" | "auto";
-    if (audioOutMode.startsWith("auto")) {
-      next = "earpiece"; // Auto → Earpiece (Modalità Telefono)
+    let next: "earpiece" | "speaker";
+    if (audioOutMode === "speaker" || audioOutMode.startsWith("auto")) {
+      // Speaker o Auto legacy → passa a Earpiece
+      next = "earpiece";
     } else if (audioOutMode === "earpiece") {
-      next = "speaker"; // Earpiece → Speaker
-    } else if (audioOutMode === "speaker") {
-      next = "auto"; // Speaker → Auto (proximity observer)
+      // Earpiece → Speaker
+      next = "speaker";
     } else if (audioOutMode.startsWith("external:")) {
       return; // BT/AirPods: no-op
     } else {
-      return; // unsupported
+      // primo tap da unsupported → default earpiece
+      next = "earpiece";
     }
     const result = await setKodaAudioOutput(next);
     setAudioOutMode(result);
@@ -4595,12 +4599,14 @@ export default function Taccuino() {
                     ? "phone-portrait"
                     : audioOutMode === "speaker"
                     ? "volume-high"
-                    : "sync-outline"
+                    : "volume-high" // default (no più Auto)
                 }
                 size={22}
                 color={
                   audioOutMode === "earpiece"
                     ? "#34D399" // verde = Modalità Telefono attiva
+                    : audioOutMode === "speaker"
+                    ? "#34D399" // v54 FIX: verde anche su Vivavoce (era grigio, bug)
                     : audioOutMode.startsWith("external:")
                     ? "#60A5FA" // blu = device esterno
                     : theme.isDark
