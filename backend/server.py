@@ -74,8 +74,8 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v23-rollback-sentence-end-watcher-disabled"
-_KODA_BACKEND_BUILD_TS = "2026-07-11T11:45:00Z"
+_KODA_BACKEND_VERSION = "v24-adaptive-endpointing"
+_KODA_BACKEND_BUILD_TS = "2026-07-13T13:00:00Z"
 
 
 @api_router.get("/_version")
@@ -90,6 +90,7 @@ async def _kodabuildversion():
             "hallucination_sentence_repetition_filter",
             "hallucination_nonsense_short_filter",
             "tap_stop_server_wait",
+            "adaptive_endpointing_v24",
         ],
     }
 

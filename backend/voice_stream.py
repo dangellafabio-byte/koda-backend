@@ -511,7 +511,10 @@ DG_PARAMS = {
 }
 
 
-def dg_params_for_route(audio_route: Optional[str]) -> Dict[str, str]:
+def dg_params_for_route(
+    audio_route: Optional[str],
+    quality_hint: Optional[float] = None,
+) -> Dict[str, str]:
     """Restituisce i parametri Deepgram tunati per la audio route corrente.
 
     === FIX 2026-07-02 (Fabio furgone) + hotfix regressione DG-400 ===
@@ -524,65 +527,89 @@ def dg_params_for_route(audio_route: Optional[str]) -> Dict[str, str]:
     IMPORTANTE (bugfix iter12): Deepgram Live impone un MINIMO HARD di
     1000ms su `utterance_end_ms`. Valori inferiori causano HTTP 400
     "server rejected WebSocket connection" e la WS non si apre → nessun
-    STT → Koda non risponde. Manteniamo quindi utterance_end_ms=1000
+    STT → Koda non risponde. Manteniamo quindi utterance_end_ms>=1000
     per TUTTE le route e variamo SOLO `endpointing` (minimo ~10ms
     documentato, quindi valori come 150-350 sono tutti validi).
 
+    === FIX 2026-07-13 v24 — ADAPTIVE ENDPOINTING (cross-session) ===
+    Deepgram NON permette di cambiare endpointing/utterance_end_ms
+    a metà sessione WS (parametri fissati alla connessione via query
+    string). Quindi l'adattamento è CROSS-sessione: la cache
+    `_ADAPTIVE_QUALITY_CACHE` traccia EWMA della confidence per client_key
+    (IP + UA hash) e, alla PROSSIMA apertura WS, `quality_hint` (EWMA)
+    modula i parametri:
+      • hint < 0.4  → ambiente rumoroso persistent
+                       endpointing 1500ms, utterance_end_ms 2500ms
+      • 0.4-0.7     → default (nessuna modifica)
+      • hint > 0.7  → ambiente silenzioso
+                       endpointing 600ms, utterance_end_ms 1200ms
+                       (comunque >=1000ms per DG hard-limit)
+    Turno 1 usa sempre i default (no history). Da turno 2+ si adatta.
+
     Args:
-        audio_route: uno di "bluetooth", "wired", "builtin", None (o
-                     stringa sconosciuta → trattata come "builtin").
+        audio_route: uno di "bluetooth", "wired", "builtin", None
+                     (o stringa sconosciuta → trattata come "builtin").
+        quality_hint: EWMA confidence 0.0-1.0 dalle sessioni precedenti
+                      dello stesso client, o None se nessuno storico.
     Returns:
         Copia di DG_PARAMS con endpointing/utterance_end_ms adattati.
     """
     params = dict(DG_PARAMS)
     route = (audio_route or "").strip().lower()
     if route == "bluetooth":
-        # === FIX 2026-07-03 v45 (Fabio "mi tagli il 400 prima di dire chilometri") ===
-        # Log reale: "che cazzo hai capito? 400" — tagliato PRIMA di completare
-        # "chilometri". Fabio stava pensando/dicendo il numero, DG con 900ms
-        # ha chiuso l'utterance perché ha visto silenzio breve dopo "400".
-        # In stato agitato/pensiero (guida stressata, ha appena litigato con
-        # Koda per un errore di comprensione) le pause tra parole possono
-        # arrivare a 1000-1100ms. Alziamo endpointing a 1200ms per Bluetooth
-        # CarPlay: soglia superiore alla pausa massima di riflessione stress.
-        # utterance_end_ms rimane 2000ms (Deepgram aspetta 2s totali per
-        # dichiarare fine utterance).
-        # Trade-off: +300ms sul TTFT audio a fine turno. Accettabile: molto
-        # meglio di essere tagliati mentre stai per completare la parola.
+        # Bluetooth CarPlay: pausa massima di riflessione stress ~1s.
+        # endpointing 1200ms, utterance_end_ms 2000ms (fix v45).
         params["endpointing"] = "1200"
         params["utterance_end_ms"] = "2000"
     elif route == "wired":
-        # Auricolari cablati: contesto tipicamente silenzioso, meno rischio
-        # falsi positivi. Manteniamo un po' più conservativo.
+        # Auricolari cablati: contesto tipicamente silenzioso.
         params["endpointing"] = "350"
         params["utterance_end_ms"] = "1000"
     else:
-        # builtin / unknown: default bilanciato.
-        # === FIX 2026-07-03 v39 (Fabio "mi tagli ancora le frasi") ===
-        # 250ms erano troppo aggressivi per mic interno iPhone: bastava
-        # una pausa di respirazione (~300ms) tra una frase e l'altra
-        # perché Deepgram dichiarasse speech_final → cutoff. Alzato a
-        # 600ms: soglia superiore alla pausa di respirazione (200-400ms)
-        # ma inferiore a una pausa di riflessione (>800ms).
-        # utterance_end_ms alzato 1000→1500: dà a Deepgram un margine
-        # più largo per capire se l'utterance è finita davvero o è solo
-        # una pausa naturale.
-        # Trade-off: +300-500ms di latenza dopo che l'utente ha finito
-        # DAVVERO di parlare (perché DG aspetta più a lungo). In cambio,
-        # niente più cutoff su frasi con pause di respirazione naturali.
-        # === FIX 2026-07-02 v40 (Fabio "Koda mi ha interrotto in furgone") ===
-        # Ancora troppo aggressivo per uso in guida. Pausa media di
-        # riflessione al volante = 700-1200ms (guardi lo specchio,
-        # pensi alla prossima parola). Con 600ms Koda partiva a
-        # rispondere prima che l'utente finisse. Alzato a 900ms
-        # (tollera pausa di respirazione lunga) e utterance_end_ms a
-        # 2000ms (Deepgram aspetta di vedere davvero silenzio prima
-        # di dichiarare fine).
-        # Trade-off aggiuntivo: +300-500ms sul TTFT audio a fine turno.
-        # Accettabile perché elimina il "Koda mi interrompe" — bug
-        # molto più frustrante della latenza.
+        # builtin / unknown: default bilanciato (fix v40 furgone).
         params["endpointing"] = "900"
         params["utterance_end_ms"] = "2000"
+
+    # === v24 ADAPTIVE OVERLAY ===
+    # Applica correzione basata sulla storia di confidence del client.
+    # Overrideiamo SOPRA i preset per-route: se un utente builtin è in
+    # ambiente rumoroso, ha comunque bisogno di endpointing più paziente.
+    if quality_hint is not None:
+        try:
+            q = float(quality_hint)
+        except (TypeError, ValueError):
+            q = None  # type: ignore
+        if q is not None:
+            if q < 0.4:
+                # Rumoroso persistent → più paziente
+                cur_ep = int(params.get("endpointing", "900"))
+                cur_uem = int(params.get("utterance_end_ms", "2000"))
+                params["endpointing"] = str(max(cur_ep, 1500))
+                params["utterance_end_ms"] = str(max(cur_uem, 2500))
+                logger.info(
+                    f"[dg_params_for_route] adaptive: quality_hint={q:.3f} <0.4 "
+                    f"→ endpointing={params['endpointing']}ms "
+                    f"utterance_end_ms={params['utterance_end_ms']}ms"
+                )
+            elif q > 0.7:
+                # Silenzioso persistent → più veloce
+                cur_ep = int(params.get("endpointing", "900"))
+                cur_uem = int(params.get("utterance_end_ms", "2000"))
+                # Non scendere sotto 600ms endpointing (rischio cutoff su respiri)
+                # e min 1000ms utterance_end_ms (hard limit DG).
+                params["endpointing"] = str(min(cur_ep, 600))
+                params["utterance_end_ms"] = str(max(min(cur_uem, 1200), 1000))
+                logger.info(
+                    f"[dg_params_for_route] adaptive: quality_hint={q:.3f} >0.7 "
+                    f"→ endpointing={params['endpointing']}ms "
+                    f"utterance_end_ms={params['utterance_end_ms']}ms"
+                )
+            else:
+                logger.info(
+                    f"[dg_params_for_route] adaptive: quality_hint={q:.3f} in 0.4-0.7 "
+                    f"→ default (endpointing={params['endpointing']}ms, "
+                    f"utterance_end_ms={params['utterance_end_ms']}ms)"
+                )
     # Dev-time + runtime guard: Deepgram richiede utterance_end_ms>=1000.
     # Nota: usiamo un if esplicito invece di `assert` così la protezione
     # resta attiva anche in prod se qualcuno lancia uvicorn con `-O`
@@ -603,6 +630,101 @@ def dg_params_for_route(audio_route: Optional[str]) -> Dict[str, str]:
         )
         params["utterance_end_ms"] = "1000"
     return params
+
+
+# ============================================================
+# ADAPTIVE ENDPOINTING v24 — Cross-session quality cache
+# ============================================================
+# Traccia EWMA della confidence Deepgram per client, così le sessioni
+# successive dello stesso utente possono usare parametri Deepgram tarati
+# sulla qualità reale del suo ambiente audio (invece che solo sulla
+# audio_route bluetooth/wired/builtin).
+#
+# Chiave: fingerprint client (IP + hash user-agent short).
+# Valore: {"ewma_conf": float 0-1, "samples": int, "updated_at": epoch}.
+# TTL: 30 min di inattività → entry scartata (adaptive "dimentica"
+# l'ambiente vecchio: se torni a casa dopo essere stato in furgone,
+# dopo 30min riparti da default).
+#
+# Reset su restart backend: accettabile — worst case, il primo turno post
+# restart usa preset. Zero cost, zero DB, zero side-effects.
+_ADAPTIVE_QUALITY_CACHE: Dict[str, Dict[str, Any]] = {}
+_ADAPTIVE_CACHE_TTL_S = 1800  # 30 minuti
+
+
+def _get_client_key_from_ws(websocket: WebSocket) -> str:
+    """Deriva chiave stabile per client dal WebSocket.
+
+    Preferenza: `X-Forwarded-For` (Kubernetes ingress lo setta correttamente).
+    Fallback: `websocket.client.host`. Aggiungiamo hash a 16 bit dello UA
+    per differenziare device diversi dietro stesso NAT.
+    """
+    try:
+        fwd = websocket.headers.get("x-forwarded-for", "") or ""
+        if fwd:
+            ip = fwd.split(",")[0].strip()
+        elif websocket.client is not None:
+            ip = websocket.client.host or "unknown"
+        else:
+            ip = "unknown"
+        ua = websocket.headers.get("user-agent", "") or ""
+        ua_hash = hash(ua) & 0xFFFF
+        return f"{ip}|{ua_hash:04x}"
+    except Exception:
+        return "unknown|0000"
+
+
+def get_adaptive_quality_hint(client_key: str) -> Optional[float]:
+    """Ritorna EWMA confidence del client se disponibile e non stale.
+
+    Ritorna None se:
+      - Nessuna sessione precedente per questo client
+      - Ultima update > TTL
+    """
+    rec = _ADAPTIVE_QUALITY_CACHE.get(client_key)
+    if not rec:
+        return None
+    if time.time() - rec.get("updated_at", 0) > _ADAPTIVE_CACHE_TTL_S:
+        _ADAPTIVE_QUALITY_CACHE.pop(client_key, None)
+        return None
+    if rec.get("samples", 0) < 1:
+        return None
+    try:
+        return float(rec["ewma_conf"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def update_adaptive_quality_cache(
+    client_key: str,
+    session_conf: float,
+) -> None:
+    """Aggiorna EWMA della confidence per il client dopo una sessione.
+
+    ALPHA=0.35 → l'ultima sessione ha peso 35%, la storia 65%.
+    Bilanciato: reagisce a cambio ambiente (spiaggia → auto) in ~3
+    sessioni consecutive, senza oscillazioni troppo brusche.
+    """
+    try:
+        c = float(session_conf)
+    except (TypeError, ValueError):
+        return
+    if c < 0.0 or c > 1.0:
+        return
+    ALPHA = 0.35
+    rec = _ADAPTIVE_QUALITY_CACHE.get(client_key)
+    if rec is None:
+        rec = {"ewma_conf": c, "samples": 1, "updated_at": time.time()}
+    else:
+        prev = float(rec.get("ewma_conf", c))
+        rec["ewma_conf"] = ALPHA * c + (1.0 - ALPHA) * prev
+        rec["samples"] = int(rec.get("samples", 0)) + 1
+        rec["updated_at"] = time.time()
+    _ADAPTIVE_QUALITY_CACHE[client_key] = rec
+    logger.info(
+        f"[adaptive_cache] client={client_key} session_conf={c:.3f} "
+        f"→ ewma={rec['ewma_conf']:.3f} samples={rec['samples']}"
+    )
 
 # KeepAlive per evitare chiusura WS Deepgram dopo 10s di silenzio.
 DG_KEEPALIVE_INTERVAL_S = 5.0
@@ -964,9 +1086,18 @@ async def voice_stream_handler(
         if not DEEPGRAM_API_KEY:
             await emit_to_client({"type": "error", "message": "STT not configured"})
             return
-        # Params Deepgram tunati per la audio route corrente (bluetooth in
-        # furgone → più aggressivo, wired → più conservativo).
-        dg_params_dyn = dg_params_for_route(audio_route)
+        # === v24 ADAPTIVE ENDPOINTING ===
+        # Deriva chiave client (IP + hash UA) e leggi EWMA confidence dalle
+        # sessioni precedenti. quality_hint None per il PRIMO turno del client
+        # (o dopo TTL 30min di inattività). Da turno 2+ modula i parametri.
+        client_key = _get_client_key_from_ws(websocket)
+        quality_hint = get_adaptive_quality_hint(client_key)
+        logger.info(
+            f"[KODA_STREAM sess={short_id}] adaptive: client_key={client_key} "
+            f"quality_hint={quality_hint!r}"
+        )
+        # Params Deepgram tunati per la audio route corrente + quality hint.
+        dg_params_dyn = dg_params_for_route(audio_route, quality_hint=quality_hint)
         dg = DeepgramLiveSession(session_id=session_id, dg_params=dg_params_dyn)
         try:
             await dg.connect()
@@ -1207,6 +1338,21 @@ async def voice_stream_handler(
                 "audio_duration_ms": audio_duration_ms,
                 "stt_source": transcript_source,  # per diag frontend
             })
+            # === v24 ADAPTIVE — update quality cache dopo ogni stt_final ===
+            # Se abbiamo una confidence valida (>0.0) e testo non vuoto, la
+            # usiamo per aggiornare EWMA del client. Confidence=0 con testo
+            # vuoto (Deepgram non ha sentito voce) NON viene contata:
+            # potrebbe essere silenzio, non necessariamente ambiente rumoroso.
+            # Discrimine importante — evita di penalizzare sessioni "false start".
+            try:
+                if (
+                    conf_snapshot is not None
+                    and float(conf_snapshot) > 0.0
+                    and transcript_used.strip()
+                ):
+                    update_adaptive_quality_cache(client_key, float(conf_snapshot))
+            except (TypeError, ValueError):
+                pass
             try:
                 await run_pipeline_for_text(
                     text=transcript_used,
