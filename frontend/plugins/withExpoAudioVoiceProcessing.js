@@ -381,31 +381,37 @@ const SWIFT_ASYNC_FUNCTION_BLOCK = `    // === ${KODA_V17_ASYNC_MARKER} ===
       }
       // === v18 CATEGORY FIX ===
       // Se la sessione è in .playback (TTS in corso), overrideOutputAudioPort
-      // viene rifiutata da iOS. Forziamo .playAndRecord/.voiceChat prima.
+      // viene rifiutata da iOS. Forziamo .playAndRecord prima.
       //
       // === v19 FIX CRITICO ===
       // NON usare .defaultToSpeaker per il caso "earpiece" — Apple documenta
       // che quel flag sovrascrive silenziosamente overrideOutputAudioPort(.none)
-      // ripristinando lo speaker esterno. Ecco perché nel log v51 il return
-      // era "earpiece" (successo API) ma l'audio usciva comunque dallo speaker.
-      // Options differenziate per caso:
-      //   • earpiece → SENZA .defaultToSpeaker (permette override all'auricolare)
-      //   • speaker/auto → CON .defaultToSpeaker (default corretto)
+      // ripristinando lo speaker esterno.
+      //
+      // === v55 RINFORZO — FORZA SEMPRE ===
+      // Su richiesta esplicita utente: ad OGNI click del pulsante, forza
+      // incondizionatamente category + mode + options + setActive + override.
+      // Rimossa la guardia "if session.category != .playAndRecord" che
+      // saltava la ri-applicazione quando la category era già giusta ma
+      // l'override era stato perso da un evento intermedio (interruption,
+      // background/foreground, TTS cycle). Ora ogni tap del pulsante è
+      // idempotente e riporta lo stato al valore desiderato.
+      //
+      // v54: mode .default (non .voiceChat) per evitare che AEC iOS tagli
+      // la voce ravvicinata come eco.
       let categoryOptions: AVAudioSession.CategoryOptions = (output == "earpiece")
         ? [.allowBluetooth, .allowBluetoothA2DP, .allowAirPlay]
         : [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP, .allowAirPlay]
-      if session.category != .playAndRecord || session.categoryOptions != categoryOptions {
-        do {
-          try session.setCategory(
-            .playAndRecord,
-            mode: .voiceChat,
-            options: categoryOptions
-          )
-          try session.setActive(true, options: [])
-        } catch {
-          // Se il cambio category fallisce (rarissimo, tipicamente perché
-          // un'altra app ha il lock esclusivo), continuiamo comunque.
-        }
+      do {
+        try session.setCategory(
+          .playAndRecord,
+          mode: .default,
+          options: categoryOptions
+        )
+        try session.setActive(true, options: [])
+      } catch {
+        // Se il cambio category fallisce (rarissimo), continuiamo comunque
+        // e proviamo l'override — meglio best-effort che no-op.
       }
       switch output {
       case "earpiece":
