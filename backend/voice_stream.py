@@ -289,7 +289,14 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
             "sottotitoli a cura di",
             "sottotitoli e traduzione",
             "revisione a cura di",
-            "sottotitolato",
+            # === FIX 2026-07-12 (Fabio "Heyum Enterprises") ===
+            # Whisper allucina "Heyum Enterprises Tecniche di mercatizio"
+            # (misto italiano/inglese/russo) su audio con rumore di
+            # sottofondo Bluetooth car. Segnatura training YouTube business.
+            "heyum",
+            "enterprises",
+            "tecniche di mercatizio",
+            "sorrelloni",
         )
         low = text.lower()
         if text and any(m in low for m in _HALLUCINATION_MARKERS):

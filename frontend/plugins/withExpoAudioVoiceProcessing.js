@@ -29,10 +29,9 @@ const fs = require("fs");
 const path = require("path");
 const { withDangerousMod } = require("@expo/config-plugins");
 
-const KODA_PATCH_MARKER = "KODA PATCH 2026-07-12 v21 (STT fix + latency fix + 2-state button)";
+const KODA_PATCH_MARKER = "KODA PATCH 2026-07-12 v22 (Speaker override reapply after setCategory)";
 const KODA_ANDROID_MARKER = "KODA ANDROID PATCH 2026-07-11 v3 (Proximity Sensor auto-routing + MANUAL BUTTON)";
-// v21: bump per invalidare cache node_modules su EAS Build.
-const KODA_V17_ASYNC_MARKER = "KODA_V21_ASYNC_FUNCTION kodaSetAudioOutput";
+const KODA_V17_ASYNC_MARKER = "KODA_V22_ASYNC_FUNCTION kodaSetAudioOutput";
 const KODA_V17_ASYNC_ANDROID_MARKER = "KODA_V17_ANDROID_ASYNC_FUNCTION kodaSetAudioOutput";
 // Marker generico usato per riconoscere QUALSIASI vecchia patch KODA (v11, v12,
 // v13, v14, v15…) presente nel file cached di node_modules. Serve per il revert
@@ -70,6 +69,18 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
           (kodaManualOverride != nil && category == .playback) ? .playAndRecord : category
       let recordingMode: AVAudioSession.Mode = .default
       try session.setCategory(kodaEffectiveCategory, mode: recordingMode)
+      // === KODA v55 CRITICAL FIX ===
+      // Dopo setCategory, iOS resetta l'override precedente. Dobbiamo
+      // ri-applicare l'override manuale QUI, altrimenti il default per
+      // .playAndRecord senza .defaultToSpeaker è l'AURICOLARE, quindi il
+      // pulsante "vivavoce" non funziona (route resta auricolare).
+      if kodaEffectiveCategory == .playAndRecord {
+        if kodaManualOverride == "speaker" {
+          try? session.overrideOutputAudioPort(.speaker)
+        } else if kodaManualOverride == "earpiece" {
+          try? session.overrideOutputAudioPort(.none)
+        }
+      }
       if kodaEffectiveCategory == .playAndRecord {
         // === KODA v14: proximity monitoring on ===
         DispatchQueue.main.async {
@@ -166,6 +177,15 @@ const NEW_BLOCK = `    if sessionOptions.isEmpty {
           (kodaManualOverrideOpt == "earpiece" && kodaEffectiveCategoryOpt == .playAndRecord)
               ? sessionOptions.subtracting(.defaultToSpeaker) : sessionOptions
       try session.setCategory(kodaEffectiveCategoryOpt, mode: recordingMode, options: kodaEffectiveOptions)
+      // === KODA v55 CRITICAL FIX (ramo options) ===
+      // Ri-applica override manuale dopo setCategory (vedi commento ramo isEmpty)
+      if kodaEffectiveCategoryOpt == .playAndRecord {
+        if kodaManualOverrideOpt == "speaker" {
+          try? session.overrideOutputAudioPort(.speaker)
+        } else if kodaManualOverrideOpt == "earpiece" {
+          try? session.overrideOutputAudioPort(.none)
+        }
+      }
       if kodaEffectiveCategoryOpt == .playAndRecord {
         DispatchQueue.main.async {
           UIDevice.current.isProximityMonitoringEnabled = true
@@ -496,6 +516,7 @@ function patchExpoAudioSwiftAsyncFunction(projectRoot) {
     "// === KODA_V19_ASYNC_FUNCTION",
     "// === KODA_V20_ASYNC_FUNCTION",
     "// === KODA_V21_ASYNC_FUNCTION",
+    "// === KODA_V22_ASYNC_FUNCTION",
   ];
   const foundOldMarker = OLD_ASYNC_MARKERS.find((m) => content.includes(m));
   if (foundOldMarker && !content.includes(KODA_V17_ASYNC_MARKER)) {
