@@ -137,7 +137,7 @@ const KODA_LINES: Record<number, string> = {
   6: "Una cosa che mi sta a cuore: se sento che ne hai bisogno, ti scrivo io. Anche se sparisci per giorni, anche se ti sento giù. E ovviamente puoi cercarmi anche tu, quando vuoi. Tu vivi la tua vita — a starti accanto ci penso anch'io.",
   7: "C'è una stanza solo per lasciare andare: la Stanza dello Sfogo. È il posto dove un pensiero può uscire senza dover rimanere — non devi essere coerente con ieri, non devi dimostrare nulla. Quello che dici lì non viene salvato né usato per ricordarti: a sessione chiusa svanisce come un soffio. Non serve nessuna parola: entri quando vuoi, con un tocco.",
   8: "Ultima cosa: leggi queste tre frasi ad alta voce. Mi serviranno per riconoscere sempre la tua voce, ovunque tu sia.",
-  9: "Bene! Adesso ti faccio vedere come funziono. Guarda dove ti indico.",
+  9: "Siamo pronti. Parlami come parleresti a un amico: tocca l'eclissi e dimmi quello che hai in testa. Sono qui, solo con te.",
 };
 
 // ====== Componente principale ======
@@ -421,16 +421,18 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
   // l'utente decide se attivare l'audio toccando le carte voce in M2.
   useEffect(() => {
     if (phase !== "setup") return;
+    // Step 3 (voice choice) è auto-skippato al mount — la scelta è già stata
+    // fatta in M2. NON pronunciare la battuta "Con quale timbro..." per evitare
+    // che parta un TTS frazionato subito prima del cutoff su step 4.
+    if (step === 3) return;
     let cancelled = false;
     const line = KODA_LINES[step];
     if (line) {
       // Personalizza la chiusura con il nome utente (se disponibile).
-      // Per lo step 9 inseriamo il nome subito dopo "Prima che finiamo,".
-      // ATTENZIONE: niente più concatenazioni manuali (causavano la
-      // duplicazione "due parole su come funziono. due parole...").
+      // Step 9: iniettiamo il nome subito dopo "Siamo pronti."
       let finalLine = line;
       if (step === 9 && userName) {
-        finalLine = line.replace("Prima che finiamo,", `Prima che finiamo, ${userName},`);
+        finalLine = line.replace("Siamo pronti.", `Siamo pronti, ${userName}.`);
       }
       (async () => {
         if (cancelled) return;
