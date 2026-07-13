@@ -1,0 +1,111 @@
+name: EAS Update OTA
+
+# ============================================================================
+# Workflow per pubblicare OTA updates JavaScript via EAS Update, senza
+# dover usare terminale locale. Trigger MANUALE da GitHub UI (anche da
+# iPhone via GitHub Mobile app o Safari → github.com → Actions).
+#
+# Setup one-time richiesto (da fare 1 sola volta, poi mai più):
+#   1) Vai su https://expo.dev/settings/access-tokens
+#   2) Crea un nuovo Access Token (nome libero: "GitHub Actions Koda")
+#   3) Copia il token (lo vedi 1 sola volta!)
+#   4) Vai su github.com/dangellafabio-byte/koda-backend
+#      → Settings → Secrets and variables → Actions → New repository secret
+#   5) Name: EXPO_TOKEN     Value: <il token copiato>
+#   6) Salva
+#
+# Uso quotidiano da iPhone:
+#   1) Vai su github.com/dangellafabio-byte/koda-backend/actions
+#   2) Clicca "EAS Update OTA" nella sidebar sinistra
+#   3) Clicca "Run workflow" (bottone verde a destra)
+#   4) Seleziona il branch (di solito main) e il channel (preview)
+#   5) Scrivi un messaggio opzionale (es. "Voce Cielo + UI polish")
+#   6) Clicca "Run workflow"
+#   7) Aspetta 2-3 minuti (barra verde = success)
+#   8) Force-quit + riapri l'app iOS due volte
+#   9) Verifica in fondo alle Impostazioni: BUILD_VERSION deve essere il nuovo
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "EAS Update channel (deve combaciare con quello della build installata)"
+        required: true
+        default: "preview"
+        type: choice
+        options:
+          - preview
+          - production
+          - development
+      message:
+        description: "Messaggio update (es. 'voce Cielo + UI polish')"
+        required: false
+        default: "OTA update"
+        type: string
+
+jobs:
+  update:
+    name: Publish EAS Update
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Yarn cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "yarn"
+          cache-dependency-path: frontend/yarn.lock
+
+      - name: Install EAS CLI
+        run: npm install -g eas-cli@latest
+
+      - name: Verify EXPO_TOKEN presence
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "${EXPO_TOKEN}" ]; then
+            echo "❌ EXPO_TOKEN non configurato nei GitHub Secrets"
+            echo "   Vai su: Settings → Secrets and variables → Actions"
+            echo "   Aggiungi: EXPO_TOKEN = <il tuo token expo.dev/settings/access-tokens>"
+            exit 1
+          fi
+          echo "✅ EXPO_TOKEN presente"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: yarn install --frozen-lockfile
+
+      - name: Publish EAS Update
+        working-directory: frontend
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          echo "📦 Pubblicazione update su channel: ${{ inputs.channel }}"
+          echo "💬 Messaggio: ${{ inputs.message }}"
+          eas update \
+            --channel "${{ inputs.channel }}" \
+            --message "${{ inputs.message }}" \
+            --non-interactive
+
+      - name: Summary
+        run: |
+          echo "## ✅ OTA Update pubblicato" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Channel**: \`${{ inputs.channel }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Messaggio**: ${{ inputs.message }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Prossimi passi (sul tuo iPhone):" >> $GITHUB_STEP_SUMMARY
+          echo "1. Force-quit dell'app Koda (swipe up dallo switcher)" >> $GITHUB_STEP_SUMMARY
+          echo "2. Riapri l'app → aspetta 30s (scarica il bundle)" >> $GITHUB_STEP_SUMMARY
+          echo "3. Force-quit di nuovo + riapri (applica il bundle)" >> $GITHUB_STEP_SUMMARY
+          echo "4. Vai in Impostazioni → in fondo verifica il nuovo BUILD_VERSION" >> $GITHUB_STEP_SUMMARY
