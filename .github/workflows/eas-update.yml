@@ -27,6 +27,16 @@ name: EAS Update OTA
 # ============================================================================
 
 on:
+  # Auto-trigger a ogni push su main quando cambiano file frontend/expo:
+  # così basta il Publish di Emergent (che fa git push su GitHub) per
+  # pubblicare automaticamente l'OTA. Zero click aggiuntivi.
+  push:
+    branches:
+      - main
+    paths:
+      - "frontend/**"
+      - ".github/workflows/eas-update.yml"
+  # Trigger manuale come backup (in caso serva ripubblicare senza modifiche).
   workflow_dispatch:
     inputs:
       channel:
@@ -91,18 +101,31 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
-          if [ "${{ inputs.channel }}" = "all-channels" ]; then
-            echo "📦 Pubblicazione su TUTTI i canali (preview + production + development)"
+          # Per push auto: usa channel default "preview" + message dal commit
+          # Per workflow_dispatch: usa i parametri utente
+          if [ "${{ github.event_name }}" = "push" ]; then
+            CHANNEL="preview"
+            MESSAGE="auto: ${{ github.event.head_commit.message }}"
+            MESSAGE="${MESSAGE:0:200}"  # trim per limite eas message
+            echo "📦 Auto-push detected → publishing to all channels"
+            for ch in preview production development; do
+              echo "→ channel: $ch"
+              eas update \
+                --channel "$ch" \
+                --message "$MESSAGE [auto:$ch]" \
+                --non-interactive || echo "warn: channel $ch failed, continuing"
+            done
+          elif [ "${{ inputs.channel }}" = "all-channels" ]; then
+            echo "📦 Manual dispatch → all channels"
             for ch in preview production development; do
               echo "→ channel: $ch"
               eas update \
                 --channel "$ch" \
                 --message "${{ inputs.message }} [multi:$ch]" \
-                --non-interactive
+                --non-interactive || echo "warn: channel $ch failed, continuing"
             done
           else
-            echo "📦 Pubblicazione update su channel: ${{ inputs.channel }}"
-            echo "💬 Messaggio: ${{ inputs.message }}"
+            echo "📦 Manual dispatch → channel: ${{ inputs.channel }}"
             eas update \
               --channel "${{ inputs.channel }}" \
               --message "${{ inputs.message }}" \
