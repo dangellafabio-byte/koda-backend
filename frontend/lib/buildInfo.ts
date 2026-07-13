@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-07-08 v1.1.0+46";
-export const BUILD_NOTES = "Tap durante recording = graceful stop (Koda risponde). Long-press 500ms = kill-switch privacy. Proximity sensor auto-routing (iOS+Android). Settings modal ottimizzata (removeClippedSubviews, lazy mount).";
+export const BUILD_VERSION = "2026-07-13 v1.1.0+57 (OTA)";
+export const BUILD_NOTES = "UI Impostazioni ridisegnate: sezioni con chip accent, bottoni più grandi, spaziatura +respiro, testo hint più leggibile. Backend v26: memoria voce↔chat persistente MongoDB + adaptive endpointing Deepgram. Nessuna feature funzionale toccata.";
