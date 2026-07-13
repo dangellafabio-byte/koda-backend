@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-07-13 v1.1.0+57 (OTA)";
-export const BUILD_NOTES = "UI Impostazioni ridisegnate: sezioni con chip accent, bottoni più grandi, spaziatura +respiro, testo hint più leggibile. Backend v26: memoria voce↔chat persistente MongoDB + adaptive endpointing Deepgram. Nessuna feature funzionale toccata.";
+export const BUILD_VERSION = "2026-07-13 v1.1.0+58 (OTA)";
+export const BUILD_NOTES = "Voce femminile: Acqua sostituita da Cielo (nuova voce ElevenLabs). Migrazione automatica dei profili esistenti. + UI Impostazioni ridisegnate. Backend v27.";

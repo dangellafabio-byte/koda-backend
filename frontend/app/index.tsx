@@ -793,7 +793,7 @@ export default function Taccuino() {
   // Se poi la fetch al backend riesce, sovrascrive con la risposta server
   // (consente di aggiungere nuove voci in futuro senza ricompilare il client).
   const _DEFAULT_VOICES: VoiceOption[] = [
-    { voice_id: "6TngzmzM89jJ3Y2Yiywr", name: "Acqua", description: "La voce femminile di Koda.", gender: "femminile" as any, accent: "italiano" } as any,
+    { voice_id: "POuqf18evoXOKIqV2Px7", name: "Cielo", description: "La voce femminile di Koda.", gender: "femminile" as any, accent: "italiano" } as any,
     { voice_id: "ll9WG7PDTuyHwgC5MD6g", name: "Vento", description: "La voce maschile di Koda.", gender: "maschile" as any, accent: "italiano" } as any,
   ];
   const [voices, setVoices] = useState<VoiceOption[]>(_DEFAULT_VOICES);

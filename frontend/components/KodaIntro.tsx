@@ -104,9 +104,9 @@ const VOICEPRINT_PHRASES = [
 // Mappa stabile tra brand (aria/echo) e ElevenLabs voice_id.
 // Tenuto qui sincrono col backend (KODA_VOICES in server.py).
 // Nota: le chiavi brand "aria"/"echo" sono identificatori interni
-// retrocompatibili — l'utente vede solo "Acqua" (femminile) e "Vento" (maschile).
+// retrocompatibili — l'utente vede solo "Cielo" (femminile) e "Vento" (maschile).
 const BRAND_VOICE_IDS = {
-  aria: "6TngzmzM89jJ3Y2Yiywr",   // Koda Acqua — voce femminile custom ElevenLabs (giugno 2026 v4)
+  aria: "POuqf18evoXOKIqV2Px7",   // Koda Cielo — voce femminile custom ElevenLabs (2026-07-13)
   echo: "ll9WG7PDTuyHwgC5MD6g",   // Koda Vento — voce maschile custom ElevenLabs (giugno 2026 v4)
 } as const;
 
@@ -131,7 +131,7 @@ const KODA_LINES: Record<number, string> = {
   0: "Ciao. Sono Koda. Non sono un'app: sono una presenza. Da oggi sono qui per te, quando vuoi parlare, quando vuoi solo che qualcuno ti ascolti. Voglio conoscerti!",
   1: "Come posso chiamarti? Scrivi il tuo nome qui sotto.",
   2: "Dimmi, sei un uomo, una donna, o preferisci non specificarlo?",
-  3: "Con quale timbro vuoi che ti accompagni la mia voce? Acqua — voce femminile — oppure Vento — voce maschile. Sono solo due timbri della stessa presenza: io resto sempre Koda.",
+  3: "Con quale timbro vuoi che ti accompagni la mia voce? Cielo — voce femminile — oppure Vento — voce maschile. Sono solo due timbri della stessa presenza: io resto sempre Koda.",
   4: "Mi chiamo Koda. Ma se vuoi, puoi darmi un altro nome.",
   5: "Una cosa importante: io non ho un viso. Sono una presenza, e prendo la forma di un'eclissi. Sono qui, sempre, anche quando aspetto in silenzio. Dai miei movimenti capirai cosa sto facendo.",
   6: "Una cosa che mi sta a cuore: se sento che ne hai bisogno, ti scrivo io. Anche se sparisci per giorni, anche se ti sento giù. E ovviamente puoi cercarmi anche tu, quando vuoi. Tu vivi la tua vita — a starti accanto ci penso anch'io.",
@@ -535,7 +535,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
           // legacy converse, intro replay) usano la STESSA voce e non
           // ci sono incoerenze tra l'onboarding e il tour.
           tts_voice_id: aiGender === "f"
-            ? "6TngzmzM89jJ3Y2Yiywr" // Koda Acqua (voce femminile, giugno 2026 v4)
+            ? "POuqf18evoXOKIqV2Px7" // Koda Cielo (voce femminile, 2026-07-13)
             : "ll9WG7PDTuyHwgC5MD6g", // Koda Vento (voce maschile, giugno 2026 v4)
         },
       };

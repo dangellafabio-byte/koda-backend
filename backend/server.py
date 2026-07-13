@@ -74,8 +74,8 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v26-persistent-auth-bridge"
-_KODA_BACKEND_BUILD_TS = "2026-07-13T15:15:00Z"
+_KODA_BACKEND_VERSION = "v27-voice-cielo"
+_KODA_BACKEND_BUILD_TS = "2026-07-13T16:00:00Z"
 
 
 @api_router.get("/_version")
@@ -1371,7 +1371,7 @@ class TaccuinoSettings(BaseModel):
     night_start_hour: int = 20  # used when theme = "auto-orario"
     # ElevenLabs TTS settings
     tts_provider: str = "elevenlabs"  # "elevenlabs" | "system"
-    tts_voice_id: str = "6TngzmzM89jJ3Y2Yiywr"  # Acqua - voce femminile ufficiale Koda
+    tts_voice_id: str = "POuqf18evoXOKIqV2Px7"  # Cielo - voce femminile ufficiale Koda
     tts_stability: float = 0.5
     tts_similarity_boost: float = 0.75
     # Custom background — either a base64 data URI (user upload) or one of the
@@ -2540,22 +2540,24 @@ async def api_get_profile(request: Request):
         # Best-effort: se la migrazione fallisce, il client comunque
         # forza "notte" come fallback locale.
         pass
-    # === MIGRAZIONE VOCI ElevenLabs → Voice Design Koda (giugno 2026 v4) ===
-    # Acqua è la nuova voce FEMMINILE ufficiale di Koda (6TngzmzM89jJ3Y2Yiywr),
-    # sostituisce la precedente Aria (tCOJUYBo86m5v7hppDc7).
-    # Vento è la nuova voce MASCHILE ufficiale di Koda (ll9WG7PDTuyHwgC5MD6g),
+    # === MIGRAZIONE VOCI ElevenLabs → Voice Design Koda (aggiornata 2026-07-13) ===
+    # Cielo è la nuova voce FEMMINILE ufficiale di Koda (POuqf18evoXOKIqV2Px7),
+    # sostituisce la precedente Acqua (6TngzmzM89jJ3Y2Yiywr) e tutte le voci
+    # femminili intermedie precedenti.
+    # Vento è la voce MASCHILE ufficiale di Koda (ll9WG7PDTuyHwgC5MD6g),
     # sostituisce la precedente Theo (dJwiFcjz9zW5Pge7G8AG).
     # Migra le vecchie voci verso le nuove identità Koda.
     _VOICE_MIGRATION_MAP = {
-        "pFZP5JQG7iQjIQuC4Bku": "6TngzmzM89jJ3Y2Yiywr",  # Lily → Koda Acqua (femminile v4)
-        "nPczCjzI2devNBz1zQrb": "ll9WG7PDTuyHwgC5MD6g",  # Brian → Koda Vento (maschile v4)
+        "pFZP5JQG7iQjIQuC4Bku": "POuqf18evoXOKIqV2Px7",  # Lily → Cielo (femminile 2026-07-13)
+        "nPczCjzI2devNBz1zQrb": "ll9WG7PDTuyHwgC5MD6g",  # Brian → Vento (maschile v4)
         "dJwiFcjz9zW5Pge7G8AG": "ll9WG7PDTuyHwgC5MD6g",  # Theo v3 → Vento (maschile v4)
-        # Vecchie Aria intermedie → nuova Acqua femminile definitiva
-        "q1GF5A2kzAOPv9d5TQEy": "6TngzmzM89jJ3Y2Yiywr",  # vecchia Aria → Acqua
-        "PponuEVSg4RZBO08kPzE": "6TngzmzM89jJ3Y2Yiywr",  # Aria v2 intermedia → Acqua
-        "tCOJUYBo86m5v7hppDc7": "6TngzmzM89jJ3Y2Yiywr",  # Aria v3 → Acqua (giugno 2026 v4)
+        # Voci femminili intermedie → nuova Cielo definitiva (2026-07-13)
+        "q1GF5A2kzAOPv9d5TQEy": "POuqf18evoXOKIqV2Px7",  # vecchia Aria → Cielo
+        "PponuEVSg4RZBO08kPzE": "POuqf18evoXOKIqV2Px7",  # Aria v2 intermedia → Cielo
+        "tCOJUYBo86m5v7hppDc7": "POuqf18evoXOKIqV2Px7",  # Aria v3 → Cielo
+        "6TngzmzM89jJ3Y2Yiywr": "POuqf18evoXOKIqV2Px7",  # Acqua (giu 2026) → Cielo (lug 2026)
         # Failsafe per voci default ElevenLabs ancora salvate in qualche profilo
-        "XrExE9yKIg1WjnnlVkGX": "6TngzmzM89jJ3Y2Yiywr",  # Matilda default → Acqua
+        "XrExE9yKIg1WjnnlVkGX": "POuqf18evoXOKIqV2Px7",  # Matilda default → Cielo
     }
     try:
         old_vid = getattr(p.settings, "tts_voice_id", "") or ""
@@ -5779,7 +5781,7 @@ def _get_eleven_client():
 # Curated list of voices that work well for Italian.
 # (voice_id, display name, short description, gender)
 CURATED_VOICES = [
-    {"voice_id": "6TngzmzM89jJ3Y2Yiywr", "name": "Acqua", "description": "La voce femminile di Koda.", "gender": "femminile", "accent": "italiano"},
+    {"voice_id": "POuqf18evoXOKIqV2Px7", "name": "Cielo", "description": "La voce femminile di Koda.", "gender": "femminile", "accent": "italiano"},
     {"voice_id": "ll9WG7PDTuyHwgC5MD6g", "name": "Vento", "description": "La voce maschile di Koda.", "gender": "maschile", "accent": "italiano"},
 ]
 
@@ -6203,15 +6205,15 @@ def _has_audio_tags(text: str) -> bool:
 # ============================================================
 
 KODA_VOICES: Dict[str, Dict[str, str]] = {
-    # ACQUA — voce custom femminile dell'utente (6TngzmzM89jJ3Y2Yiywr).
-    # La voce femminile UFFICIALE di Koda. Sostituisce la precedente "Aria"
-    # (tCOJUYBo86m5v7hppDc7) — l'utente l'ha trovata più adatta all'identità
-    # del prodotto. La chiave "aria" è mantenuta per retrocompatibilità con
-    # i profili salvati (profile.koda_voice="aria") — gli utenti esistenti
-    # continueranno a ricevere automaticamente la nuova voce.
+    # CIELO — voce custom femminile ufficiale Koda (POuqf18evoXOKIqV2Px7).
+    # Sostituisce "Acqua" (6TngzmzM89jJ3Y2Yiywr) — Fabio 2026-07-13.
+    # La chiave "aria" è mantenuta per retrocompat con i profili salvati
+    # (profile.koda_voice="aria") — gli utenti esistenti riceveranno
+    # automaticamente la nuova voce Cielo via il mapping di migrazione
+    # (vedi CANONICAL_VOICE_MIGRATION più sotto).
     "aria": {
-        "voice_id": "6TngzmzM89jJ3Y2Yiywr",
-        "label": "Acqua",
+        "voice_id": "POuqf18evoXOKIqV2Px7",
+        "label": "Cielo",
         "description": "La voce femminile di Koda.",
     },
     # VENTO — voce custom maschile dell'utente (ll9WG7PDTuyHwgC5MD6g).
