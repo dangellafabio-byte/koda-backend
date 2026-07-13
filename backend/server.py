@@ -74,8 +74,8 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v25-ws-auth-bridge"
-_KODA_BACKEND_BUILD_TS = "2026-07-13T14:30:00Z"
+_KODA_BACKEND_VERSION = "v26-persistent-auth-bridge"
+_KODA_BACKEND_BUILD_TS = "2026-07-13T15:15:00Z"
 
 
 @api_router.get("/_version")
@@ -92,6 +92,7 @@ async def _kodabuildversion():
             "tap_stop_server_wait",
             "adaptive_endpointing_v24",
             "ws_auth_bridge_v25",
+            "persistent_auth_bridge_v26",
         ],
     }
 
@@ -152,6 +153,66 @@ async def release_stale_claim(x_admin_secret: Optional[str] = Header(None)):
 
 
 # ============================================================================
+# v26 — CLEAR VOICE AUTH BRIDGE (admin)
+# ============================================================================
+# Endpoint per svuotare la cache in-memory + collection MongoDB del bridge
+# fingerprint→uid. Usato per debug / reset manuale se la memoria voce
+# risulta "confusa" (es. cambio device sotto stesso IP, comportamento
+# imprevisto). Non richiede rebuild client.
+#
+# Usage:
+#   curl -X POST https://app-finder-408.emergent.host/api/admin/clear_voice_auth_bridge \
+#        -H "X-Admin-Secret: <_ADMIN_SECRET>"
+#
+# Effetto: prossima sessione voce parte da "me" fino al primo HTTP auth call.
+# ============================================================================
+@api_router.post("/admin/clear_voice_auth_bridge")
+async def clear_voice_auth_bridge(
+    x_admin_secret: Optional[str] = Header(None),
+    fingerprint: Optional[str] = None,
+):
+    """Svuota la cache Voice Auth Bridge (in-mem + DB).
+
+    Args:
+        x_admin_secret: header X-Admin-Secret per autenticazione admin.
+        fingerprint: opzionale, se passato svuota SOLO quella entry
+                     (es. "1.2.3.4|abcd"). Default: svuota tutto.
+    """
+    if x_admin_secret != _ADMIN_SECRET:
+        return {"error": "unauthorized"}
+    if fingerprint:
+        # Clear singolo
+        _HTTP_TO_UID_CACHE.pop(fingerprint, None)
+        try:
+            res = await db[_VOICE_AUTH_BRIDGE_COLL].delete_one(
+                {"fingerprint": fingerprint}
+            )
+            return {
+                "ok": True,
+                "cleared_fingerprint": fingerprint,
+                "db_deleted": res.deleted_count,
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    # Clear all
+    mem_count = len(_HTTP_TO_UID_CACHE)
+    _HTTP_TO_UID_CACHE.clear()
+    try:
+        res = await db[_VOICE_AUTH_BRIDGE_COLL].delete_many({})
+        return {
+            "ok": True,
+            "in_memory_cleared": mem_count,
+            "db_deleted": res.deleted_count,
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "in_memory_cleared": mem_count,
+            "error": str(e),
+        }
+
+
+# ============================================================================
 # MULTI-USER UUID (giugno 2026) + AUTH-BOUND FREEMIUM (luglio 2026 v18)
 # ----------------------------------------------------------------------------
 # Ogni request identifica un `current_user_id` con questa priorità:
@@ -202,7 +263,19 @@ _SESSION_UID_CACHE_TTL = 60.0
 # session_token direttamente nel frame start per bypassare del tutto la
 # cache — vedi voice_stream_handler comment corrispondente.
 _HTTP_TO_UID_CACHE: Dict[str, tuple] = {}  # fingerprint → (uid, expiry_epoch)
-_HTTP_TO_UID_CACHE_TTL = 600.0  # 10 minuti
+_HTTP_TO_UID_CACHE_TTL = 600.0  # 10 minuti (hot cache; source of truth = MongoDB)
+
+# === v26 — PERSIST BRIDGE (2026-07-13) ===
+# Cache in-memory sopravvive solo finché il worker resta acceso e finché
+# TTL non scade. Fabio ha esplicitamente richiesto "memoria mai persa,
+# assolutamente MAI". Persistiamo il mapping fingerprint→uid in MongoDB
+# collection `voice_auth_bridge`. La cache in-memory diventa un hot-cache
+# (miss → lookup DB). Il DB documento ha `updated_at` + TTL 30 giorni
+# (auto-cleanup Mongo TTL index). Se un utente sparisce per >30 giorni
+# la sua entry viene rimossa; alla prossima apertura app ripopola con
+# HTTP auth automaticamente.
+_VOICE_AUTH_BRIDGE_COLL = "voice_auth_bridge"
+_VOICE_AUTH_BRIDGE_TTL_DAYS = 30
 
 
 def _client_fingerprint_from_headers(
@@ -228,15 +301,50 @@ def _client_fingerprint_from_headers(
 
 
 def _remember_uid_for_client(fingerprint: str, uid: str) -> None:
-    """Cachea l'uid autenticato per il fingerprint (dopo HTTP auth OK)."""
+    """Cachea l'uid autenticato per il fingerprint (dopo HTTP auth OK).
+
+    v26: doppio-write:
+      • in-memory hot cache (accesso O(1) rapido)
+      • MongoDB `voice_auth_bridge` (persistenza durata 30 giorni TTL)
+    Il write MongoDB è FIRE-AND-FORGET async task, così non rallenta
+    la request HTTP. Se il write DB fallisce (rete/timeout), la hot
+    cache in-mem funziona comunque per le prossime ~10 minuti.
+    """
     import time as _time
     if not uid or uid == "me":
         return
     _HTTP_TO_UID_CACHE[fingerprint] = (uid, _time.time() + _HTTP_TO_UID_CACHE_TTL)
+    # Fire-and-forget: persist in DB per sopravvivere a restart + TTL scaduto.
+    try:
+        asyncio.create_task(_persist_voice_auth_bridge(fingerprint, uid))
+    except Exception:
+        # Se non c'è un event loop (raro, test?), skip persist.
+        pass
+
+
+async def _persist_voice_auth_bridge(fingerprint: str, uid: str) -> None:
+    """Upsert idempotente su collection voice_auth_bridge."""
+    try:
+        await db[_VOICE_AUTH_BRIDGE_COLL].update_one(
+            {"fingerprint": fingerprint},
+            {"$set": {
+                "fingerprint": fingerprint,
+                "uid": uid,
+                "updated_at": datetime.now(timezone.utc),
+            }},
+            upsert=True,
+        )
+    except Exception as e:
+        logger.warning(f"[voice_auth_bridge] persist failed fp={fingerprint} err={e}")
 
 
 def _recall_uid_for_client(fingerprint: str) -> Optional[str]:
-    """Recupera l'uid cachato per il fingerprint se non scaduto."""
+    """Recupera l'uid cachato per il fingerprint dalla hot cache in-memory.
+
+    v26: se miss in-mem, il caller deve fare `await _recall_uid_from_db(...)`.
+    Non facciamo io DB qui perché la funzione è sincrona (chiamata da middleware
+    sync-friendly). Il WS voce async invece userà `_recall_uid_for_client_async`.
+    """
     import time as _time
     rec = _HTTP_TO_UID_CACHE.get(fingerprint)
     if not rec:
@@ -246,6 +354,54 @@ def _recall_uid_for_client(fingerprint: str) -> Optional[str]:
         _HTTP_TO_UID_CACHE.pop(fingerprint, None)
         return None
     return uid
+
+
+async def _recall_uid_for_client_async(fingerprint: str) -> Optional[str]:
+    """Recupera l'uid con fallback DB se hot-cache miss.
+
+    Ordine di lookup:
+      1) hot cache in-mem (fast path, ~10min TTL)
+      2) MongoDB voice_auth_bridge (TTL 30 giorni)
+    Se trovato in DB, ripopola la hot cache.
+    """
+    hot = _recall_uid_for_client(fingerprint)
+    if hot:
+        return hot
+    # DB lookup fallback
+    try:
+        doc = await db[_VOICE_AUTH_BRIDGE_COLL].find_one(
+            {"fingerprint": fingerprint},
+            {"_id": 0, "uid": 1, "updated_at": 1},
+        )
+        if not doc:
+            return None
+        uid = doc.get("uid")
+        if not uid or uid == "me":
+            return None
+        # Ripopola hot cache
+        import time as _time
+        _HTTP_TO_UID_CACHE[fingerprint] = (uid, _time.time() + _HTTP_TO_UID_CACHE_TTL)
+        logger.info(f"[voice_auth_bridge] DB hit fp={fingerprint} → uid={uid[:8]}...")
+        return uid
+    except Exception as e:
+        logger.warning(f"[voice_auth_bridge] DB lookup failed fp={fingerprint} err={e}")
+        return None
+
+
+async def _ensure_voice_auth_bridge_indexes() -> None:
+    """Setup TTL index: entry auto-deleted after 30 days of inactivity.
+
+    Idempotente. Chiamato una volta all'avvio + best-effort ogni tanto.
+    """
+    try:
+        await db[_VOICE_AUTH_BRIDGE_COLL].create_index("fingerprint", unique=True)
+        # TTL index su updated_at: doc scade dopo N giorni di inattività.
+        await db[_VOICE_AUTH_BRIDGE_COLL].create_index(
+            "updated_at",
+            expireAfterSeconds=_VOICE_AUTH_BRIDGE_TTL_DAYS * 86400,
+        )
+    except Exception as e:
+        logger.warning(f"[voice_auth_bridge] index setup failed: {e}")
 
 
 def current_user_id() -> str:
@@ -10214,7 +10370,9 @@ async def api_voice_stream(websocket: WebSocket):
         ua_header=websocket.headers.get("user-agent", "") or "",
         fallback_host=(websocket.client.host if websocket.client else None),
     )
-    uid = _recall_uid_for_client(fp) or "me"
+    # v26: lookup async con fallback DB → memoria condivisa MAI persa
+    # anche dopo restart backend o TTL in-mem scaduto.
+    uid = await _recall_uid_for_client_async(fp) or "me"
     tok = _current_user_id.set(uid)
     if uid != "me":
         logger.info(
@@ -10224,7 +10382,7 @@ async def api_voice_stream(websocket: WebSocket):
     else:
         logger.warning(
             f"[voice/ws] auth-bridge: fingerprint={fp} → uid='me' "
-            f"(cache miss, utente non ha fatto HTTP recente — memoria SEPARATA)"
+            f"(cache miss + DB miss, utente non ha mai fatto HTTP auth — memoria SEPARATA)"
         )
     try:
         await voice_stream_handler(
@@ -10239,14 +10397,14 @@ async def api_voice_stream(websocket: WebSocket):
 @app.websocket("/voice/stream")
 async def voice_stream_root(websocket: WebSocket):
     """Backup WS endpoint per test locali (senza prefix /api).
-    Applica lo stesso auth-bridge v25 dell'endpoint principale.
+    Applica lo stesso auth-bridge v26 dell'endpoint principale.
     """
     fp = _client_fingerprint_from_headers(
         xff_header=websocket.headers.get("x-forwarded-for", "") or "",
         ua_header=websocket.headers.get("user-agent", "") or "",
         fallback_host=(websocket.client.host if websocket.client else None),
     )
-    uid = _recall_uid_for_client(fp) or "me"
+    uid = await _recall_uid_for_client_async(fp) or "me"
     tok = _current_user_id.set(uid)
     try:
         await voice_stream_handler(
@@ -10350,6 +10508,12 @@ async def startup_db_client():
         logger.info("[startup] confessional_buffer TTL index ready")
     except Exception as e:
         logger.warning(f"[startup] confessional_buffer index init failed: {e}")
+    # v26: Voice Auth Bridge (memoria condivisa chat↔voce persistente)
+    try:
+        await _ensure_voice_auth_bridge_indexes()
+        logger.info("[startup] voice_auth_bridge indexes ready")
+    except Exception as e:
+        logger.warning(f"[startup] voice_auth_bridge index init failed: {e}")
     # Block B — fondazione dati V1 (users/conversations/messages + TTL effimeri)
     try:
         await _ensure_v1_foundation_indexes()
