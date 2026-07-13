@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-07-13 v1.1.0+58 (OTA)";
-export const BUILD_NOTES = "Voce femminile: Acqua sostituita da Cielo (nuova voce ElevenLabs). Migrazione automatica dei profili esistenti. + UI Impostazioni ridisegnate. Backend v27.";
+export const BUILD_VERSION = "2026-07-13 v1.1.0+59 (OTA-fix)";
+export const BUILD_NOTES = "OTA fix: runtimeVersion ripristinato a '1.1.0' (stringa fissa) per allineamento con build v56. Voce Cielo + UI Impostazioni ridisegnate. Backend v27.";
