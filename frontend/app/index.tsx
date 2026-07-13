@@ -5278,7 +5278,6 @@ export default function Taccuino() {
                       }}
                       style={[
                         styles.modeBtn,
-                        { paddingHorizontal: 12, paddingVertical: 8 },
                         active && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
                       ]}
                     >
@@ -5317,7 +5316,6 @@ export default function Taccuino() {
                       }}
                       style={[
                         styles.modeBtn,
-                        { paddingHorizontal: 12, paddingVertical: 8 },
                         active && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
                       ]}
                     >
@@ -5531,7 +5529,7 @@ export default function Taccuino() {
                     onPress={() => setTextSize(v)}
                     style={[
                       styles.modeBtn,
-                      { flex: 1, flexDirection: "column", paddingVertical: 8 },
+                      { flex: 1, flexDirection: "column" },
                       active && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
                     ]}
                     testID={`text-size-${v}`}
@@ -5546,7 +5544,7 @@ export default function Taccuino() {
                     >
                       {label}
                     </Text>
-                    <Text style={[styles.modeBtnText, { fontSize: 9, marginTop: 2 }, active && { color: bubbleAccent.color }]}>
+                    <Text style={[styles.modeBtnText, { fontSize: 11, marginTop: 4, fontWeight: "600" }, active && { color: bubbleAccent.color }]}>
                       {name}
                     </Text>
                   </TouchableOpacity>
@@ -7168,21 +7166,52 @@ const makeStyles = (t: any) => StyleSheet.create({
   settingRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 14,
-    gap: 14,
+    paddingVertical: 18,
+    gap: 16,
   },
-  settingLabel: { color: t.text, fontSize: 14, fontWeight: "600" },
-  settingHint: { color: t.textDim, fontSize: 12, marginTop: 3 },
-  divider: { height: 1, backgroundColor: t.divider, marginVertical: 8 },
-
-  settingsSubtitle: {
-    color: t.textMuted,
-    fontSize: 11,
+  // v57 UI polish (Fabio 2026-07-13): +size, +weight, lineHeight esplicito
+  // per allineamento verticale ottimale con emoji (altrimenti su Android
+  // "🌐" e "🎙️" appaiono spostate in verticale rispetto al testo latino).
+  settingLabel: {
+    color: t.text,
+    fontSize: 16,
     fontWeight: "700",
-    letterSpacing: 1,
+    lineHeight: 22,
+    includeFontPadding: false,
+  },
+  // Hint sotto ogni opzione: +size, +lineHeight, colore più contrastato
+  // (t.text con alpha invece di textDim opaco).
+  settingHint: {
+    color: t.textDim,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 4,
+    opacity: 0.9,
+  },
+  // Separatore più marcato tra sezioni: raddoppiato margin verticale e
+  // altezza per creare respiro tra IDENTITÀ / COMPORTAMENTO / TEMA.
+  divider: {
+    height: 1,
+    backgroundColor: t.divider,
+    marginVertical: 24,
+    opacity: 0.7,
+  },
+
+  // Header sezione: chip con bordo accent sinistro + padding, più visibile
+  // e distinto ("badge" style). Usa colore text pieno invece di textMuted.
+  settingsSubtitle: {
+    color: t.text,
+    fontSize: 13,
+    fontWeight: "800",
+    letterSpacing: 1.5,
     textTransform: "uppercase",
-    marginTop: 6,
-    marginBottom: 8,
+    marginTop: 28,
+    marginBottom: 14,
+    paddingLeft: 12,
+    paddingVertical: 4,
+    borderLeftWidth: 3,
+    borderLeftColor: t.primary,
+    alignSelf: "flex-start",
   },
   settingsMemory: {
     color: t.text,
@@ -7374,13 +7403,13 @@ const makeStyles = (t: any) => StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 4,
+    gap: 6,
     backgroundColor: t.surfaceAlt,
     borderColor: t.border,
-    borderWidth: 1,
-    paddingVertical: 12,
-    paddingHorizontal: 4,
-    borderRadius: 14,
+    borderWidth: 1.5,
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    borderRadius: 18,
   },
   modeBtnActive: {
     backgroundColor: t.primary,
@@ -7388,21 +7417,22 @@ const makeStyles = (t: any) => StyleSheet.create({
   },
   modeBtnText: {
     color: t.text,
-    fontSize: 12,
-    fontWeight: "600",
+    fontSize: 14,
+    fontWeight: "700",
     flexShrink: 1,
   },
   modeBtnTextActive: {
     color: t.primaryText,
   },
 
-  // Voice selector
+  // Voice selector — hint sotto un header sezione (es. "Scegli la voce")
+  // v57 UI polish: +fontSize, +lineHeight per leggibilità.
   settingsHint: {
     color: t.textDim,
-    fontSize: 12,
-    lineHeight: 16,
-    marginBottom: 10,
-    marginTop: 2,
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 12,
+    marginTop: 4,
   },
   voicesList: {
     gap: 8,
