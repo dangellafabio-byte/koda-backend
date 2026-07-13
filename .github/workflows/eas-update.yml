@@ -38,6 +38,7 @@ on:
           - preview
           - production
           - development
+          - all-channels
       message:
         description: "Messaggio update (es. 'voce Cielo + UI polish')"
         required: false
@@ -90,12 +91,23 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
-          echo "📦 Pubblicazione update su channel: ${{ inputs.channel }}"
-          echo "💬 Messaggio: ${{ inputs.message }}"
-          eas update \
-            --channel "${{ inputs.channel }}" \
-            --message "${{ inputs.message }}" \
-            --non-interactive
+          if [ "${{ inputs.channel }}" = "all-channels" ]; then
+            echo "📦 Pubblicazione su TUTTI i canali (preview + production + development)"
+            for ch in preview production development; do
+              echo "→ channel: $ch"
+              eas update \
+                --channel "$ch" \
+                --message "${{ inputs.message }} [multi:$ch]" \
+                --non-interactive
+            done
+          else
+            echo "📦 Pubblicazione update su channel: ${{ inputs.channel }}"
+            echo "💬 Messaggio: ${{ inputs.message }}"
+            eas update \
+              --channel "${{ inputs.channel }}" \
+              --message "${{ inputs.message }}" \
+              --non-interactive
+          fi
 
       - name: Summary
         run: |
