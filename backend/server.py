@@ -74,8 +74,8 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v24-adaptive-endpointing"
-_KODA_BACKEND_BUILD_TS = "2026-07-13T13:00:00Z"
+_KODA_BACKEND_VERSION = "v25-ws-auth-bridge"
+_KODA_BACKEND_BUILD_TS = "2026-07-13T14:30:00Z"
 
 
 @api_router.get("/_version")
@@ -91,6 +91,7 @@ async def _kodabuildversion():
             "hallucination_nonsense_short_filter",
             "tap_stop_server_wait",
             "adaptive_endpointing_v24",
+            "ws_auth_bridge_v25",
         ],
     }
 
@@ -176,6 +177,76 @@ _current_user_id: ContextVar[str] = ContextVar("current_user_id", default="me")
 _SESSION_UID_CACHE: Dict[str, tuple] = {}  # token → (uid, expiry_epoch)
 _SESSION_UID_CACHE_TTL = 60.0
 
+# === FIX 2026-07-13 v25 — WS AUTH BRIDGE (memoria condivisa chat↔voce) ===
+# Il middleware auth di FastAPI è @app.middleware("http"), quindi il
+# WebSocket voce (@app.websocket) NON passa dal middleware e resta con
+# current_user_id="me" (default). Risultato: la modalità voce salva
+# timeline sotto profile_id="me", mentre la modalità chat testuale
+# autenticata legge sotto profile_id=<hash email> → DUE storie separate.
+# Fabio ha esplicitamente richiesto memoria condivisa (chat scritta ↔ voce)
+# per tutto ciò che non è modalità Sfogo.
+#
+# Fix backend-only (nessuna build necessaria): il middleware HTTP, quando
+# risolve con successo l'uid da session_token, salva la mappa
+# fingerprint(client_ip + hash user-agent) → uid in questa cache. Poi
+# l'endpoint WS voce, PRIMA di invocare voice_stream_handler, calcola lo
+# stesso fingerprint e legge l'uid dalla cache. Se trovato → setta la
+# ContextVar `_current_user_id` così TUTTI i .find/_uf/insert della
+# pipeline voce operano sotto lo stesso profile_id della chat scritta.
+#
+# TTL 10 minuti: la chat scritta fa periodicamente /profile e /timeline
+# refresh (all'open dell'app), quindi il fingerprint è "fresco". Se
+# l'utente sta usando SOLO la voce per >10 min senza toccare HTTP, la
+# cache scade e la voce torna a fallback "me" (comportamento pre-fix).
+# Fix client-side successivo (nella prossima build) potrà mandare il
+# session_token direttamente nel frame start per bypassare del tutto la
+# cache — vedi voice_stream_handler comment corrispondente.
+_HTTP_TO_UID_CACHE: Dict[str, tuple] = {}  # fingerprint → (uid, expiry_epoch)
+_HTTP_TO_UID_CACHE_TTL = 600.0  # 10 minuti
+
+
+def _client_fingerprint_from_headers(
+    xff_header: str,
+    ua_header: str,
+    fallback_host: Optional[str],
+) -> str:
+    """Fingerprint stabile client per la cache IP→UID.
+    IP presa da X-Forwarded-For (Kubernetes ingress) o fallback host WS.
+    UA hash a 16 bit per differenziare device diversi dietro NAT.
+    """
+    try:
+        if xff_header:
+            ip = xff_header.split(",")[0].strip()
+        elif fallback_host:
+            ip = fallback_host
+        else:
+            ip = "unknown"
+        ua_hash = hash(ua_header or "") & 0xFFFF
+        return f"{ip}|{ua_hash:04x}"
+    except Exception:
+        return "unknown|0000"
+
+
+def _remember_uid_for_client(fingerprint: str, uid: str) -> None:
+    """Cachea l'uid autenticato per il fingerprint (dopo HTTP auth OK)."""
+    import time as _time
+    if not uid or uid == "me":
+        return
+    _HTTP_TO_UID_CACHE[fingerprint] = (uid, _time.time() + _HTTP_TO_UID_CACHE_TTL)
+
+
+def _recall_uid_for_client(fingerprint: str) -> Optional[str]:
+    """Recupera l'uid cachato per il fingerprint se non scaduto."""
+    import time as _time
+    rec = _HTTP_TO_UID_CACHE.get(fingerprint)
+    if not rec:
+        return None
+    uid, exp = rec
+    if exp < _time.time():
+        _HTTP_TO_UID_CACHE.pop(fingerprint, None)
+        return None
+    return uid
+
 
 def current_user_id() -> str:
     """Restituisce l'id utente per la request in corso.
@@ -238,7 +309,12 @@ async def _resolve_uid_from_session(request) -> Optional[str]:
 
 @app.middleware("http")
 async def user_id_middleware(request, call_next):
-    """v18: risolve current_user_id con priorità session → X-User-Id → "me"."""
+    """v18: risolve current_user_id con priorità session → X-User-Id → "me".
+
+    v25 (2026-07-13): dopo aver risolto uid con successo dal session_token,
+    salva la mappa fingerprint(IP + UA) → uid in `_HTTP_TO_UID_CACHE` così
+    l'endpoint WS voce può ricostruire l'uid pur non passando dal middleware.
+    """
     session_uid = await _resolve_uid_from_session(request)
     if session_uid:
         uid = session_uid
@@ -246,6 +322,18 @@ async def user_id_middleware(request, call_next):
         raw = request.headers.get("x-user-id", "") or ""
         raw = raw.strip().lower()
         uid = raw if (_UUID_RE.match(raw) or raw == "me") else "me"
+    # v25: cachea uid per fingerprint (solo se HTTP-authed, no "me" fallback).
+    # Usato dopo dal WS voce per condividere memoria con la chat scritta.
+    try:
+        if session_uid:
+            fp = _client_fingerprint_from_headers(
+                xff_header=request.headers.get("x-forwarded-for", "") or "",
+                ua_header=request.headers.get("user-agent", "") or "",
+                fallback_host=(request.client.host if request.client else None),
+            )
+            _remember_uid_for_client(fp, session_uid)
+    except Exception:
+        pass
     token = _current_user_id.set(uid)
     try:
         return await call_next(request)
@@ -10111,20 +10199,62 @@ async def _run_pipeline_for_streamed_text(
 
 @app.websocket("/api/voice/stream")
 async def api_voice_stream(websocket: WebSocket):
-    """Voice streaming endpoint — Fase 1 Deepgram Live."""
-    await voice_stream_handler(
-        websocket,
-        run_pipeline_for_text=_run_pipeline_for_streamed_text,
+    """Voice streaming endpoint — Fase 1 Deepgram Live.
+
+    === v25 WS AUTH BRIDGE (2026-07-13) ===
+    Setta `_current_user_id` leggendolo dalla cache _HTTP_TO_UID_CACHE
+    popolata dal middleware HTTP recente. Necessario per condivisione
+    memoria chat↔voce (senza questo, la pipeline voce operava con
+    uid="me" e salvava una timeline separata dall'utente autenticato).
+    Reset del ContextVar in finally per sicurezza (anche se le WS non
+    condividono context con altre richieste).
+    """
+    fp = _client_fingerprint_from_headers(
+        xff_header=websocket.headers.get("x-forwarded-for", "") or "",
+        ua_header=websocket.headers.get("user-agent", "") or "",
+        fallback_host=(websocket.client.host if websocket.client else None),
     )
+    uid = _recall_uid_for_client(fp) or "me"
+    tok = _current_user_id.set(uid)
+    if uid != "me":
+        logger.info(
+            f"[voice/ws] auth-bridge: fingerprint={fp} → uid={uid[:8]}... "
+            f"(memoria condivisa con chat scritta OK)"
+        )
+    else:
+        logger.warning(
+            f"[voice/ws] auth-bridge: fingerprint={fp} → uid='me' "
+            f"(cache miss, utente non ha fatto HTTP recente — memoria SEPARATA)"
+        )
+    try:
+        await voice_stream_handler(
+            websocket,
+            run_pipeline_for_text=_run_pipeline_for_streamed_text,
+        )
+    finally:
+        _current_user_id.reset(tok)
 
 
 # Backup path senza /api per test diretti locali.
 @app.websocket("/voice/stream")
 async def voice_stream_root(websocket: WebSocket):
-    await voice_stream_handler(
-        websocket,
-        run_pipeline_for_text=_run_pipeline_for_streamed_text,
+    """Backup WS endpoint per test locali (senza prefix /api).
+    Applica lo stesso auth-bridge v25 dell'endpoint principale.
+    """
+    fp = _client_fingerprint_from_headers(
+        xff_header=websocket.headers.get("x-forwarded-for", "") or "",
+        ua_header=websocket.headers.get("user-agent", "") or "",
+        fallback_host=(websocket.client.host if websocket.client else None),
     )
+    uid = _recall_uid_for_client(fp) or "me"
+    tok = _current_user_id.set(uid)
+    try:
+        await voice_stream_handler(
+            websocket,
+            run_pipeline_for_text=_run_pipeline_for_streamed_text,
+        )
+    finally:
+        _current_user_id.reset(tok)
 
 
 # ============================================================
