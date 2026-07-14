@@ -1,0 +1,80 @@
+RICHIESTA RIMBORSO + ESCALATION — 14 luglio 2026
+=================================================
+
+DA: Fabio D'Angella
+PROGETTO: Koda — L'Amico Fraterno
+BUNDLE ID iOS: com.dangella.koda
+ACCOUNT EXPO: fabiod.labor
+EXPO PROJECT ID: 92cf0b6f-ee99-4fbe-8562-10cfc8a786de
+APP STORE CONNECT APP ID: 6771510634
+APPLE TEAM ID: L8BJUZ3YB5
+REPO GITHUB: github.com/dangellafabio-byte/koda-backend
+
+---
+
+RICHIESTA
+
+Chiedo formalmente:
+
+(1) IL RIMBORSO INTEGRALE dei crediti EAS Build consumati il 13-14
+luglio 2026 per la costruzione della build TestFlight iOS v1.0.113+7
+(build number EAS 1114) e per ogni build precedente collegata a
+questo ciclo di malfunzionamenti.
+
+(2) ESCALATION a un tecnico umano competente. L'agente AI corrente
+ha impiegato un'intera giornata senza riuscire a completare una
+modifica banale (colore di un cerchio) che avrebbe richiesto meno
+di un minuto se il sistema di aggiornamento OTA fosse funzionante.
+
+---
+
+FATTI
+
+1. LA MODIFICA
+Il colore del cerchio della voce femminile "Cielo" nella schermata
+Impostazioni doveva passare da verde a viola. Modifica reale del
+codice: 3 righe in un singolo file (frontend/app/index.tsx).
+Difficoltà tecnica: nulla.
+
+2. IL FALLIMENTO SISTEMATICO DELLA PIPELINE OTA
+Da 24 ore l'aggiornamento non arriva sul dispositivo dell'utente.
+L'agente ha compiuto 6+ diagnosi iterative errate:
+
+- Runtime version mismatch
+- appVersionSource conflict
+- Filtro paths workflow GitHub Actions
+- EXPO_TOKEN pod invalido
+- Trigger manuale workflow (Success, ma bundle non arrivato)
+
+3. FORZATURA DI UNA BUILD TESTFLIGHT NATIVA
+L'agente ha suggerito una nuova build EAS TestFlight per veicolare
+una modifica di UI JavaScript che sarebbe stata un update OTA gratis.
+Consumo di crediti EAS Build non necessari.
+
+4. STATO ATTUALE
+Il workflow GitHub Actions #5 è marcato "Success" con OTA pubblicato
+ma il bundle NON è arrivato al dispositivo iPhone dell'utente, che
+continua a mostrare bundle v1.0.113+7 del 13 luglio con colore
+ancora sbagliato (verde invece di viola).
+
+---
+
+RICHIESTA CONCRETA AL SUPPORTO EMERGENT
+
+A. RIMBORSO
+Restituire i crediti EAS consumati nel ciclo fallito 13-14 luglio.
+
+B. ESCALATION
+Riassegnare l'utente a un operatore umano competente per:
+  - Diagnosticare perché l'OTA "Success" non arriva al dispositivo
+  - Ripristinare una pipeline di aggiornamento affidabile
+  - Prevenire nuovi consumi impropri di crediti
+
+C. CONFERMA
+Comunicare all'utente per email l'esito della richiesta.
+
+---
+
+Firma: Fabio D'Angella
+Contatto: [email registrata su Emergent]
+Data: 14 luglio 2026
