@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-07-13 v1.0.113+7 (TESTFLIGHT)";
-export const BUILD_NOTES = "Build TestFlight nativa con TUTTI i fix: rollback Modalità Telefono, voce Cielo, adaptive Deepgram endpointing, WS Auth Bridge, UI Impostazioni ridisegnata. Backend v27.";
+export const BUILD_VERSION = "2026-07-14 v1.0.113+8 (OTA color+chip fix)";
+export const BUILD_NOTES = "Fix voce Cielo colore viola (era verde per fallback theme.primary). Fix chip 'Molto grande' → 'XL' + adjustsFontSizeToFit. Backend v27.";

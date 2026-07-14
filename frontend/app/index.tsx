@@ -192,10 +192,12 @@ const NAMED_COLORS: Record<string, string> = {
 // Solo "speaking" cambia colore in base alla voce.
 const VOICE_ID_ACQUA = "6TngzmzM89jJ3Y2Yiywr";
 const VOICE_ID_VENTO = "ll9WG7PDTuyHwgC5MD6g";
+const VOICE_ID_CIELO = "POuqf18evoXOKIqV2Px7"; // 2026-07-13: nuova voce femminile ufficiale Koda
 
 const VOICE_SPEAKING_COLORS: Record<string, string> = {
   [VOICE_ID_ACQUA]: "#BD10E0", // viola elettrico (default storico)
   [VOICE_ID_VENTO]: "#2563EB", // cobalto vivo
+  [VOICE_ID_CIELO]: "#BD10E0", // viola elettrico (voce femminile Cielo — allineato a schema femminile=viola)
 };
 
 // Palette [bright, mid, deep] per l'EclipseOrb durante speaking.
@@ -203,6 +205,7 @@ const VOICE_SPEAKING_COLORS: Record<string, string> = {
 const VOICE_SPEAKING_PALETTES: Record<string, [string, string, string]> = {
   [VOICE_ID_ACQUA]: ["#E9D5FF", "#BD10E0", "#7E22CE"],
   [VOICE_ID_VENTO]: ["#93BBFD", "#2563EB", "#1E3A8A"],
+  [VOICE_ID_CIELO]: ["#E9D5FF", "#BD10E0", "#7E22CE"], // stessa palette viola di Acqua
 };
 
 function getVoiceSpeakingColor(voiceId: string | undefined | null): string | undefined {
@@ -5520,7 +5523,7 @@ export default function Taccuino() {
                 { v: 0.85, label: "A", name: "Piccolo" },
                 { v: 1.0,  label: "A", name: "Normale" },
                 { v: 1.15, label: "A", name: "Grande" },
-                { v: 1.35, label: "A", name: "Molto grande" },
+                { v: 1.35, label: "A", name: "XL" },
               ].map(({ v, label, name }) => {
                 const active = Math.abs(textSize - v) < 0.02;
                 return (
@@ -5529,7 +5532,7 @@ export default function Taccuino() {
                     onPress={() => setTextSize(v)}
                     style={[
                       styles.modeBtn,
-                      { flex: 1, flexDirection: "column" },
+                      { flex: 1, flexDirection: "column", paddingHorizontal: 4, minHeight: 56 },
                       active && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
                     ]}
                     testID={`text-size-${v}`}
@@ -5544,7 +5547,12 @@ export default function Taccuino() {
                     >
                       {label}
                     </Text>
-                    <Text style={[styles.modeBtnText, { fontSize: 11, marginTop: 4, fontWeight: "600" }, active && { color: bubbleAccent.color }]}>
+                    <Text
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.7}
+                      style={[styles.modeBtnText, { fontSize: 10, marginTop: 4, fontWeight: "600", textAlign: "center" }, active && { color: bubbleAccent.color }]}
+                    >
                       {name}
                     </Text>
                   </TouchableOpacity>
