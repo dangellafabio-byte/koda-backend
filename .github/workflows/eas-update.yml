@@ -27,15 +27,13 @@ name: EAS Update OTA
 # ============================================================================
 
 on:
-  # Auto-trigger a ogni push su main quando cambiano file frontend/expo:
-  # così basta il Publish di Emergent (che fa git push su GitHub) per
-  # pubblicare automaticamente l'OTA. Zero click aggiuntivi.
+  # Auto-trigger a ogni push su main. RIMOSSO il filtro paths="frontend/**"
+  # perché anche i commit "Auto-generated changes" di Emergent (che toccano
+  # solo .emergent/emergent.yml) devono far partire l'OTA — altrimenti il
+  # workflow non parte mai automaticamente col Publish button.
   push:
     branches:
       - main
-    paths:
-      - "frontend/**"
-      - ".github/workflows/eas-update.yml"
   # Trigger manuale come backup (in caso serva ripubblicare senza modifiche).
   workflow_dispatch:
     inputs:

@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-07-14 v1.0.113+9 (OTA color+chip+backoff)";
-export const BUILD_NOTES = "Fix voce Cielo colore viola. Fix chip 'XL'. Fix loop HF: backoff dopo 3 WS fail consecutivi → messaggio 'Connessione persa. Tocca per riprovare' (non martella più il backend). Backend v27.";
+export const BUILD_VERSION = "2026-07-14 v1.0.113+10 (OTA workflow fix)";
+export const BUILD_NOTES = "Rimosso filtro paths dal workflow GitHub Actions — non partiva sul commit Auto-generated di Emergent. + Cielo viola, chip XL, backoff HF loop. Backend v27.";
