@@ -85,12 +85,12 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "92cf0b6f-ee99-4fbe-8562-10cfc8a786de"
+        "projectId": "d022431b-fda8-48d2-ba1c-bbbe0ef617df"
       }
     },
     "owner": "fabiod.labor",
     "updates": {
-      "url": "https://u.expo.dev/92cf0b6f-ee99-4fbe-8562-10cfc8a786de"
+      "url": "https://u.expo.dev/d022431b-fda8-48d2-ba1c-bbbe0ef617df"
     }
   }
 }

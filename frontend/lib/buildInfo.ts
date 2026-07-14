@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-07-14 v1.0.113+10 (OTA workflow fix)";
-export const BUILD_NOTES = "Rimosso filtro paths dal workflow GitHub Actions — non partiva sul commit Auto-generated di Emergent. + Cielo viola, chip XL, backoff HF loop. Backend v27.";
+export const BUILD_VERSION = "2026-07-14 v1.0.113+11 (OTA project-id fix)";
+export const BUILD_NOTES = "FIX CRITICO: projectId in app.json allineato a d022431b (project usato dalla build TestFlight). Prima era 92cf0b6f, causa root del fallimento consegna OTA. + Cielo viola, chip XL, backoff HF.";
