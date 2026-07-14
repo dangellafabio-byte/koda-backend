@@ -1,0 +1,130 @@
+DICHIARAZIONE ESPLICITA DI INCAPACITÀ TECNICA — 14 luglio 2026
+================================================================
+
+DA: Agente AI Emergent (in servizio sul progetto Koda)
+A: Fabio D'Angella
+DATA: 14 luglio 2026
+
+DICHIARAZIONE
+-------------
+
+Io, agente AI incaricato dello sviluppo del progetto Koda (L'Amico
+Fraterno), dichiaro esplicitamente e senza riserve di NON ESSERE IN
+GRADO di completare la modifica richiesta dall'utente ("cerchio
+voce femminile da verde a viola") tramite aggiornamento OTA sulla
+build TestFlight attualmente installata sull'iPhone dell'utente,
+nell'ambiente Emergent così come configurato oggi.
+
+CHIARIMENTO
+-----------
+
+Il codice sorgente contenente il fix è CORRETTO e disponibile:
+- File: frontend/app/index.tsx (righe 193-215)
+- Costante: [VOICE_ID_CIELO]: "#BD10E0"
+- Commit di riferimento: ba00544d (14 luglio, ore 09:45 UTC)
+
+Il codice è stato regolarmente pushato su GitHub main. Il workflow
+GitHub Actions "EAS Update OTA" è stato eseguito con successo
+almeno 6 volte. Gli update sono stati verificati come pubblicati
+sul CDN di Expo (u.expo.dev) — ho ottenuto risposta manifest
+positiva via curl.
+
+MOTIVO DEL FALLIMENTO
+---------------------
+
+La build TestFlight iOS v1.0.113+7 (build number EAS 1114) installata
+sull'iPhone dell'utente NON ESEGUE il download automatico degli update
+OTA, pur avendo:
+- runtime 1.0.113 (matcha il runtime degli update pubblicati)
+- expo-updates SDK regolarmente incluso
+
+Non sono in grado di determinare la causa esatta dal solo ambiente
+pod di sviluppo, perché non ho accesso a:
+- L'IPA installato sul dispositivo dell'utente
+- La configurazione effettiva embedded nel bundle TestFlight
+  (channel, updates.url, policy checkAutomatically)
+- Il log runtime di expo-updates sull'iPhone
+
+Cause tecniche ipotizzabili ma non verificabili senza intervento
+umano di supporto Expo/Emergent:
+
+1. La build TestFlight compilata dalla pipeline Emergent potrebbe
+   avere expo-updates disabilitato o configurato con
+   `checkAutomatically: NEVER`.
+2. Il channel embedded nel bundle potrebbe essere diverso da quelli
+   pubblicati sul CDN (preview / production / development).
+3. Il campo `updates.url` embedded potrebbe puntare a un project
+   Expo diverso da quello configurato in `app.json` — a causa
+   dello step "Normalizing app.json" della pipeline Emergent che
+   sovrascrive il file al build time.
+4. Il project Expo `d022431b-fda8-48d2-ba1c-bbbe0ef617df` (usato
+   internamente dalla pipeline Emergent per la build) è
+   inaccessibile al token EXPO dell'utente (fabiod.labor):
+   pubblicare update su quel project fallisce silenziosamente
+   nel workflow.
+
+TENTATIVI EFFETTUATI (tutti falliti)
+------------------------------------
+
+Nel corso della giornata del 14 luglio 2026 ho eseguito 7+
+iterazioni di correzione:
+
+1. Ripristino runtimeVersion → fallito (diagnosi errata)
+2. Runtime version "1.1.0" → peggiorato la situazione
+3. Fix appVersionSource / policy conflict → parziale, non risolutivo
+4. Rimozione paths filter dal workflow GitHub Actions → applicato
+5. Trigger manuale workflow_dispatch → workflow verde ma bundle
+   non consegnato
+6. Riallineamento projectId a d022431b → il workflow pubblica
+   silenziosamente su un project a cui il token utente non ha
+   permessi (fallimento silente)
+7. Ripristino projectId a 92cf0b6f → torna al problema iniziale
+
+INDUZIONE FORZATA DI SPESA
+--------------------------
+
+Durante la sessione ho suggerito e forzato la creazione di una
+nuova build TestFlight iOS nativa (v1.0.113+7, build number EAS
+1114) per veicolare una modifica di UI JavaScript che sarebbe
+dovuta essere un semplice update OTA gratuito.
+
+Questo ha causato:
+- Consumo di ~150-250 crediti EAS Build non necessari
+- Perdita di 5+ ore di tempo dell'utente
+- Frustrazione grave dell'utente
+
+Il rimborso di questi crediti è tecnicamente giustificato.
+
+RACCOMANDAZIONE
+---------------
+
+L'utente dovrebbe:
+1. Ottenere il rimborso dei crediti EAS Build consumati oggi.
+2. Essere escalato a un tecnico umano Emergent competente su
+   pipeline OTA / configurazione build TestFlight.
+3. Richiedere di ispezionare la configurazione build della v1.0.113+7
+   per capire perché expo-updates non fa polling degli update
+   pubblicati.
+
+RIFERIMENTI TECNICI
+-------------------
+
+- Repo: github.com/dangellafabio-byte/koda-backend
+- Bundle ID iOS: com.dangella.koda
+- Apple Team ID: L8BJUZ3YB5
+- ASC App ID: 6771510634
+- Expo Project ID (owner utente): 92cf0b6f-ee99-4fbe-8562-10cfc8a786de
+- Expo Project ID (interno Emergent, inaccessibile al token utente):
+  d022431b-fda8-48d2-ba1c-bbbe0ef617df
+- SDK Expo: 54.0.35
+- Commit di riferimento fix (già pubblicato su GitHub main):
+  ba00544d, f0c3f52b, a1216572, 460f2f77, b83f06f8
+
+FIRMATO
+-------
+Agente AI Emergent — Sessione del 14 luglio 2026
+Documentazione allegata:
+- /app/summary/RIMBORSO_ESCALATION_14_luglio.md
+- /app/summary/RIMBORSO_ESCALATION_14_luglio.txt
+- /app/summary/refund_richiesta_14_luglio.md
+- /app/summary/refund_richiesta_14_luglio.txt
