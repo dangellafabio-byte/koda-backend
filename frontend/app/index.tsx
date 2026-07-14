@@ -5934,6 +5934,9 @@ export default function Taccuino() {
               <Text style={{ color: theme.text + "40", fontSize: 10, fontFamily: Platform.OS === "ios" ? "Courier" : "monospace", marginTop: 4 }}>
                 bundle {BUILD_VERSION}
               </Text>
+              <Text style={{ color: theme.text + "40", fontSize: 10, fontFamily: Platform.OS === "ios" ? "Courier" : "monospace", marginTop: 2 }}>
+                runtime {String((Constants.expoConfig as any)?.runtimeVersion ?? (Constants as any)?.manifest2?.runtimeVersion ?? "?")}
+              </Text>
               <Text style={{ color: theme.text + "30", fontSize: 9, marginTop: 2, textAlign: "center", paddingHorizontal: 24 }} numberOfLines={2}>
                 {BUILD_NOTES}
               </Text>

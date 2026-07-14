@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-07-13 v1.1.0+59 (OTA-fix)";
-export const BUILD_NOTES = "OTA fix: runtimeVersion ripristinato a '1.1.0' (stringa fissa) per allineamento con build v56. Voce Cielo + UI Impostazioni ridisegnate. Backend v27.";
+export const BUILD_VERSION = "2026-07-13 v1.0.112+60 (OTA-fix-2)";
+export const BUILD_NOTES = "OTA fix v2: runtimeVersion hardcoded a '1.0.112' (stringa fissa) — aveva policy dinamica che collideva con appVersionSource:remote in eas.json. Voce Cielo + UI Impostazioni. Backend v27.";
