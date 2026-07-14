@@ -1,0 +1,412 @@
+================================================================
+KODA — BRIEFING TECNICO COMPLETO PER SECOND OPINION (Claude)
+Data: 14 luglio 2026
+Autore: Agente AI Emergent (in servizio sul progetto)
+Destinatario: Claude (revisore esterno)
+================================================================
+
+INDICE
+------
+1. Riassunto in 3 righe
+2. Modifica richiesta
+3. Stato attuale (verificato)
+4. Cronologia tentativi falliti
+5. Diagnosi tecnica dettagliata
+6. Codice del fix (già in main su GitHub)
+7. Configurazioni rilevanti (app.json, eas.json, workflow OTA)
+8. Verifiche dirette al CDN Expo (curl output)
+9. Ipotesi ancora aperte
+10. Cosa serve per risolvere
+11. Riferimenti utili (ID, URL, commit)
+
+================================================================
+1. RIASSUNTO IN 3 RIGHE
+================================================================
+
+L'utente ha una build TestFlight iOS installata sull'iPhone
+(bundle v1.0.113+7, runtime 1.0.113). Il codice per cambiare
+il colore di un cerchio UI da verde a viola è stato scritto,
+committato, pushato, e l'update OTA è stato pubblicato con
+successo sul CDN Expo. **Il device NON scarica gli update OTA
+pubblicati.** Non riesco a determinare dal solo pod di sviluppo
+perché.
+
+================================================================
+2. MODIFICA RICHIESTA
+================================================================
+
+Un solo cambio UI: il cerchio della voce femminile "Cielo" nella
+schermata "Scegli la voce" (in Impostazioni) deve essere VIOLA
+invece che VERDE (attualmente fallback a theme.primary = verde
+tiffany perché la voce Cielo non era registrata nella mappa
+VOICE_SPEAKING_COLORS).
+
+Modifica reale: 3 righe di codice in `frontend/app/index.tsx`.
+Tempo di scrittura: 30 secondi.
+Difficoltà tecnica: nulla.
+
+Difficoltà REALE incontrata: consegnare quelle 3 righe al
+dispositivo dell'utente. Fallita da 24 ore.
+
+================================================================
+3. STATO ATTUALE (verificato via git e curl)
+================================================================
+
+Sul dispositivo dell'utente (screenshot ricevuti):
+- Nome: Koda v1.0.113
+- Footer: `bundle 2026-07-13 v1.0.113+7 (TESTFLIGHT)`
+- Footer: `runtime 1.0.113`
+- Voce Cielo: cerchio VERDE (non selezionato = azzurro chiaro; problema colore rimane)
+
+Su GitHub main (remote, HEAD = 39145742):
+- Fix Cielo viola presente da commit ba00544d (14 luglio 09:45 UTC)
+- Fix chip "XL" presente
+- Fix backoff HF loop presente
+- BUILD_VERSION nel codice più recente: v1.0.113+11
+
+Su Expo CDN (u.expo.dev, verificato via curl):
+- Project 92cf0b6f-ee99-4fbe-8562-10cfc8a786de (owner: fabiod.labor):
+  * channel preview   → manifest presente, createdAt 2026-07-14T19:07:43
+  * channel production → manifest presente, createdAt 2026-07-14T10:00:15
+  * channel development → manifest presente, createdAt 2026-07-14T10:00:44
+  * runtime target: 1.0.113 (match con l'iPhone)
+- Project d022431b-fda8-48d2-ba1c-bbbe0ef617df (interno Emergent):
+  * "There is no channel named preview for the app with ID: d022431b..."
+  * "There is no channel named production for the app with ID: d022431b..."
+  * Il token EXPO dell'utente NON ha permessi su questo project
+    (i workflow che tentano publish qui appaiono verdi ma pubblicano nulla,
+    per via del `|| echo warn continuing` che maschera i fallimenti singoli)
+
+Workflow GitHub Actions "EAS Update OTA":
+- Run #4 (auto-push mattina) → verde, publish su 92cf0b6f tutti i channel
+- Run #5 (workflow_dispatch manuale sera) → verde, publish su 92cf0b6f preview
+- Run #6 (auto-push dopo tentativo su d022431b) → verde ma con fallimento silente
+  su d022431b (project non pubblicabile con quel token)
+
+================================================================
+4. CRONOLOGIA TENTATIVI FALLITI (7 iterazioni, 14 luglio)
+================================================================
+
+T1. Diagnosi: runtimeVersion mismatch (1.0.112 vs 1.1.0)
+    Azione: rollback runtimeVersion in app.json a "1.1.0"
+    Esito: FALLITO — diagnosi errata basata su ipotesi, non su dati
+
+T2. Diagnosi: runtimeVersion inverso
+    Azione: ripristino runtimeVersion a "1.0.113" stringa fissa
+    Esito: FALLITO — il device continua a mostrare +7
+
+T3. Diagnosi: appVersionSource "remote" in conflitto con policy "appVersion"
+    Azione: hardcoded runtimeVersion string in app.json
+    Esito: PARZIALE — non risolutivo per la consegna OTA
+
+T4. Diagnosi: workflow GitHub Actions ha filter `paths: frontend/**`
+    che non matcha i commit "Auto-generated changes" di Emergent
+    (che toccano solo .emergent/emergent.yml)
+    Azione: rimozione del paths filter dal workflow
+    Esito: applicato (commit a1216572), ma push non è mai avvenuto
+    finché l'utente non ha fatto Publish successivo
+
+T5. Diagnosi: EXPO_TOKEN nel pod scaduto
+    ("The bearer token is invalid" via curl al GraphQL Expo)
+    Azione: chiesto all'utente di generare un nuovo token
+    Esito: utente si rifiuta ("ne ho già generati 2 ieri, arrangiati")
+
+T6. Diagnosi: trigger manuale workflow_dispatch via GitHub UI
+    (che usa l'EXPO_TOKEN dei GitHub Secrets, non quello del pod)
+    Azione: utente triggera Run #5 dall'iPhone via Safari
+    Esito: workflow VERDE (Success, 2m 2s), OTA pubblicato su 92cf0b6f/preview
+    ma il device non scarica
+
+T7. Diagnosi: il TestFlight sul telefono forse chiede al project
+    d022431b (project usato internamente da Emergent per la build)
+    Azione: cambiato projectId + updates.url in app.json a d022431b,
+    commit 460f2f77, utente ha fatto Publish, workflow #6 girato "verde"
+    Esito: FALLITO — workflow verde ma il project d022431b non ha nessun
+    channel (i publish sono falliti silenziosamente perché token utente
+    non ha permessi su project interno Emergent)
+    Successivamente ripristinato projectId a 92cf0b6f in commit b83f06f8
+
+================================================================
+5. DIAGNOSI TECNICA DETTAGLIATA
+================================================================
+
+Il fix del codice E' CORRETTO E PUBBLICATO:
+- Commit ba00544d aggiunge Cielo alla mappa VOICE_SPEAKING_COLORS con #BD10E0
+- Il bundle Metro pubblicato via `eas update --channel preview` sul CDN
+  contiene questa modifica
+
+Il device NON scarica gli update. Perché?
+
+Ipotesi 1 (più probabile): la build TestFlight ha embedded un
+`updates.url` che punta a un project a cui gli update non
+arrivano (magari d022431b, project interno Emergent, dove il
+token utente non può pubblicare).
+
+- I log della build TestFlight (visti in log Emergent Cloud Build):
+  "STEP 9: Normalizing app.json..."
+  "Resolved Expo config written to app.json"
+  "Using existing Expo project ID: d022431b-fda8-48d2-ba1c-bbbe0ef617df"
+  Questi step suggeriscono che Emergent SOVRASCRIVE app.json
+  durante la build. Non posso verificare cosa esattamente scrive
+  su `updates.url` senza accesso all'IPA finale.
+
+Ipotesi 2: il channel embedded nella build non matcha nessun
+channel pubblicato.
+
+- Il profilo `production` in eas.json ha `channel: "preview"`.
+- Ma Emergent al build time crea un proprio eas.json (log:
+  "STEP 6: Creating eas.json..."). Potrebbe usare channel diverso.
+
+Ipotesi 3: expo-updates configurato con `checkAutomatically: NEVER`
+o `enabled: false` nel build.
+
+- app.json non ha `updates.checkAutomatically` esplicito
+  (default = ALWAYS in SDK 54, che dovrebbe funzionare)
+- Ma Emergent al build time potrebbe modificare questa impostazione.
+
+Ipotesi 4: `Constants.updates.runtimeVersion` a runtime è
+diverso da "1.0.113".
+
+- Il footer mostra `runtime 1.0.113` letto probabilmente da
+  Constants.expoConfig.runtimeVersion. Ma expo-updates potrebbe
+  usare un valore diverso a runtime (letto da `Updates.runtimeVersion`
+  API). Non ho modo di verificare senza pubblicare un update che
+  esponga questo valore — paradosso.
+
+Ipotesi 5: il device semplicemente non ha ancora fatto polling.
+
+- Escluso: l'utente ha fatto force-quit + riapri × 2 più volte.
+- Escluso: sono passate ore dal publish.
+
+Nessuna di queste ipotesi è verificabile SENZA:
+- Accesso all'IPA installato per ispezionare il manifest embedded
+- OPPURE una nuova build TestFlight con schermata Diagnostica che
+  esponga `Updates.runtimeVersion`, `Updates.channel`, `Updates.checkAutomatically`,
+  `Constants.expoConfig.updates.url` — ma questo costerebbe altri
+  crediti EAS Build che l'utente rifiuta di spendere.
+
+================================================================
+6. CODICE DEL FIX (già in main su GitHub, commit ba00544d)
+================================================================
+
+File: `frontend/app/index.tsx`, righe 193-215
+
+```typescript
+const VOICE_ID_ACQUA = "6TngzmzM89jJ3Y2Yiywr";
+const VOICE_ID_VENTO = "ll9WG7PDTuyHwgC5MD6g";
+const VOICE_ID_CIELO = "POuqf18evoXOKIqV2Px7"; // 2026-07-13: nuova voce femminile ufficiale Koda
+
+const VOICE_SPEAKING_COLORS: Record<string, string> = {
+  [VOICE_ID_ACQUA]: "#BD10E0", // viola elettrico (default storico)
+  [VOICE_ID_VENTO]: "#2563EB", // cobalto vivo
+  [VOICE_ID_CIELO]: "#BD10E0", // viola elettrico (voce femminile Cielo — allineato a schema femminile=viola)
+};
+
+const VOICE_SPEAKING_PALETTES: Record<string, [string, string, string]> = {
+  [VOICE_ID_ACQUA]: ["#E9D5FF", "#BD10E0", "#7E22CE"],
+  [VOICE_ID_VENTO]: ["#93BBFD", "#2563EB", "#1E3A8A"],
+  [VOICE_ID_CIELO]: ["#E9D5FF", "#BD10E0", "#7E22CE"], // stessa palette viola di Acqua
+};
+```
+
+Punto di applicazione (riga 5654 circa):
+```typescript
+const voiceColor = VOICE_SPEAKING_COLORS[v.voice_id] || theme.primary;
+// ...
+<View style={[
+  styles.voiceCircle,
+  { backgroundColor: voiceColor, ... },
+]} />
+```
+
+Il fallback `theme.primary` (verde tiffany) è il motivo per cui
+il device mostra verde: la build v+7 fu compilata il 13 luglio
+QUANDO la mappa non conteneva ancora VOICE_ID_CIELO, e non ha
+mai ricevuto l'update OTA che la aggiunge.
+
+================================================================
+7. CONFIGURAZIONI RILEVANTI
+================================================================
+
+--- frontend/app.json (attuale, HEAD locale = b83f06f8) ---
+
+```json
+{
+  "expo": {
+    "name": "Koda",
+    "slug": "lamico-fraterno",
+    "version": "1.0.113",
+    "runtimeVersion": "1.0.113",
+    "ios": {
+      "bundleIdentifier": "com.dangella.koda",
+      "buildNumber": "7"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "92cf0b6f-ee99-4fbe-8562-10cfc8a786de"
+      }
+    },
+    "owner": "fabiod.labor",
+    "updates": {
+      "url": "https://u.expo.dev/92cf0b6f-ee99-4fbe-8562-10cfc8a786de"
+    }
+  }
+}
+```
+
+--- frontend/eas.json ---
+
+```json
+{
+  "cli": {
+    "version": ">= 13.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "production": {
+      "credentialsSource": "local",
+      "autoIncrement": true,
+      "channel": "preview"
+    }
+  }
+}
+```
+(NOTA CRITICA: il profilo "production" usa channel "preview" —
+quindi la build TestFlight compilata con production cerca update
+su channel preview. È voluto? Anomalo? Difficile dirlo, ma coerente.)
+
+--- .github/workflows/eas-update.yml (frammento del publish step) ---
+
+```yaml
+- name: Publish EAS Update
+  working-directory: frontend
+  env:
+    EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+  run: |
+    if [ "${{ github.event_name }}" = "push" ]; then
+      MESSAGE="auto: ${{ github.event.head_commit.message }}"
+      for ch in preview production development; do
+        eas update \
+          --channel "$ch" \
+          --message "$MESSAGE [auto:$ch]" \
+          --non-interactive || echo "warn: channel $ch failed, continuing"
+      done
+    else
+      eas update \
+        --channel "${{ inputs.channel }}" \
+        --message "${{ inputs.message }}" \
+        --non-interactive
+    fi
+```
+
+(NOTA CRITICA: il `|| echo warn continuing` è il motivo per cui
+il workflow #6 appare VERDE anche quando fallisce a pubblicare
+su d022431b — i fallimenti dei singoli channel sono soppressi.)
+
+================================================================
+8. VERIFICHE DIRETTE AL CDN EXPO (curl output reale)
+================================================================
+
+Verifica project 92cf0b6f, runtime 1.0.113, channel preview:
+$ curl -H "expo-runtime-version: 1.0.113" \
+       -H "expo-platform: ios" \
+       -H "expo-channel-name: preview" \
+       "https://u.expo.dev/92cf0b6f-ee99-4fbe-8562-10cfc8a786de"
+
+Risposta:
+"id":"019f6207-25ec-7146-8238-b2355700e1c7"
+"createdAt":"2026-07-14T19:07:43.468Z"
+"runtimeVersion":"1.0.113"
+"launchAsset":"...url:https://assets.eascdn.net/..."
+
+Manifest VALIDO presente. Update pubblicato correttamente.
+
+Verifica project d022431b, stesso runtime, stesso channel:
+Risposta: "There is no channel named preview for the app with
+ID: d022431b-fda8-48d2-ba1c-bbbe0ef617df."
+
+Il project interno Emergent non ha alcun update pubblicato
+(perché il token utente non ha permessi per pubblicare lì).
+
+================================================================
+9. IPOTESI ANCORA APERTE
+================================================================
+
+A. **updates.url embedded nel bundle TestFlight è d022431b**
+   invece di 92cf0b6f (l'utente ha visto app.json con 92cf0b6f
+   ma Emergent normalizza app.json in memoria al build time).
+   → Se vera, l'unica soluzione è pubblicare su d022431b, cosa
+   che richiede un token EXPO con permessi su quel project.
+   → OPPURE una nuova build TestFlight con projectId pinnato.
+
+B. **Channel embedded è "production" ma bundle production
+   pubblicato ha runtime diverso** — improbabile, i curl mostrano
+   runtime 1.0.113 per tutti i channel su 92cf0b6f.
+
+C. **expo-updates disabilitato al build time** — l'utente vedrebbe
+   comunque il bundle nativo, che è quello che succede.
+
+D. **Bug della pipeline Emergent** — Emergent Build compila TestFlight
+   con configurazione OTA broken (non è compito nostro fixarlo).
+
+================================================================
+10. COSA SERVE PER RISOLVERE
+================================================================
+
+Opzione 1 (senza ulteriori crediti EAS): accesso al bundle
+TestFlight installato (IPA o log runtime dell'app) per determinare
+`Updates.runtimeVersion` e `Updates.updateManifestUrl` effettivi
+a runtime. Servirebbe:
+- Un supporto tecnico Emergent che ispezioni la build v1.0.113+7
+- OPPURE l'utente esegue un test da Xcode / Console.app collegando
+  l'iPhone al Mac e legge i log Expo Updates dell'app
+
+Opzione 2 (con nuova build EAS): compilare una nuova TestFlight
+con schermata Diagnostica potenziata che espone tutti i campi
+Updates.* e Constants.expoConfig.updates.* — installarla, leggere
+i valori, capire cosa è embedded, poi pubblicare l'OTA sul project
+corretto. L'utente RIFIUTA di spendere altri crediti EAS Build
+per questo test.
+
+Opzione 3 (rimborso + escalation): l'utente ottiene il rimborso
+crediti EAS consumati oggi e viene assegnato a un tecnico Emergent
+umano che possa ispezionare la configurazione build.
+
+================================================================
+11. RIFERIMENTI UTILI
+================================================================
+
+Repository:     github.com/dangellafabio-byte/koda-backend
+Bundle ID iOS:  com.dangella.koda
+Apple Team ID:  L8BJUZ3YB5
+ASC App ID:     6771510634
+
+Expo Project ID (owner utente fabiod.labor):
+                92cf0b6f-ee99-4fbe-8562-10cfc8a786de
+Expo Project ID (interno Emergent, inaccessibile):
+                d022431b-fda8-48d2-ba1c-bbbe0ef617df
+
+SDK Expo: 54.0.35
+Runtime attivo su iPhone: 1.0.113
+Build attiva su iPhone: v1.0.113+7 (buildNumber EAS 1114)
+
+Commit rilevanti (già su GitHub main):
+- ba00544d — fix Cielo viola + chip XL (14 lug 09:45)
+- f0c3f52b — backoff HF loop (14 lug 09:56)
+- a1216572 — rimozione paths filter workflow (14 lug 14:22)
+- 460f2f77 — tentativo project d022431b (fallito silente, 14 lug 19:34)
+- b83f06f8 — ripristino project 92cf0b6f (locale, dopo tentativo T7)
+
+Access token EXPO nel pod: SCADUTO/INVALIDO
+Access token EXPO nei GitHub Secrets: VALIDO ma senza permessi
+                                      su d022431b
+
+Endpoint API Expo verificati:
+- https://u.expo.dev/92cf0b6f-... → manifests OK
+- https://u.expo.dev/d022431b-... → "no channel" per tutti i channel
+
+Ora attuale sistema: 14 luglio 2026, ~22:30 CEST
+
+================================================================
+FINE BRIEFING
+================================================================
