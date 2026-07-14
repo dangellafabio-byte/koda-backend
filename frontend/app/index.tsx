@@ -880,6 +880,16 @@ export default function Taccuino() {
   // immediatamente s.stop() e resettiamo il flag. Cosi il "graceful stop"
   // funziona anche durante l'apertura della WS.
   const pendingTapStopRef = useRef<boolean>(false);
+
+  // === FIX 2026-07-14 v56 — HF LOOP BACKOFF su WS failures consecutivi ===
+  // Se il backend si riavvia o è irraggiungibile, il vecchio HF loop
+  // martella all'infinito aprendo WS che si chiudono subito con code=0.
+  // Ogni fallimento incrementa questo counter. Al 3° fail consecutivo
+  // pausiamo il loop, mostriamo errore chiaro e aspettiamo tap manuale.
+  // Il counter si azzera su qualsiasi ciclo che completa con successo
+  // (result.ok=true) o su tap manuale utente.
+  const wsFailureCountRef = useRef<number>(0);
+  const WS_FAIL_THRESHOLD = 3;
   // === MUTEX 2026-06-28 — P0 race condition fix (handoff diag log) ===
   // Su iPhone + Android, due meccanismi di restart hands-free firavano
   // entro ~50ms l'uno dall'altro:
@@ -2862,8 +2872,27 @@ export default function Taccuino() {
         console.warn("[stream] failed:", result.error);
         // Se la bolla utente è ancora vuota, rimuoviamo l'optimistic.
         setTimeline((prev) => prev.filter((e) => e.id !== optimisticId || (e as any).text !== "…"));
-        setError("Connessione voce interrotta. Riprova.");
-        setTimeout(() => setError(null), 4000);
+
+        // === FIX 2026-07-14 v56 — Backoff HF loop su WS failures consecutivi ===
+        wsFailureCountRef.current += 1;
+        const failN = wsFailureCountRef.current;
+        console.log(`[KODA_HF_BACKOFF] WS failure #${failN}/${WS_FAIL_THRESHOLD} (err=${result.error})`);
+        if (failN >= WS_FAIL_THRESHOLD) {
+          console.log(`[KODA_HF_BACKOFF] threshold reached → pausing HF loop, waiting for user tap`);
+          setCloseSessionPause(true);
+          closeSessionPauseRef.current = true;
+          setError("Connessione persa. Tocca il cerchio per riprovare.");
+          setTimeout(() => setError(null), 6000);
+        } else {
+          setError("Connessione voce interrotta. Riprova.");
+          setTimeout(() => setError(null), 4000);
+        }
+      } else {
+        // Successo → azzera il counter dei fallimenti consecutivi
+        if (wsFailureCountRef.current > 0) {
+          console.log(`[KODA_HF_BACKOFF] resetting counter (was ${wsFailureCountRef.current})`);
+          wsFailureCountRef.current = 0;
+        }
       }
     } catch (e) {
       console.error("[stream] crash:", e);
@@ -3601,6 +3630,11 @@ export default function Taccuino() {
       console.log("[KODA_CLOSE_SESSION] user tapped — resuming hands-free loop");
       setCloseSessionPause(false);
       closeSessionPauseRef.current = false;
+      // === FIX 2026-07-14 v56 — reset backoff counter on manual tap ===
+      if (wsFailureCountRef.current > 0) {
+        console.log(`[KODA_HF_BACKOFF] user tap → reset WS failure counter (was ${wsFailureCountRef.current})`);
+        wsFailureCountRef.current = 0;
+      }
     }
     // === FIX 2026-06-28 (mutex bypass) ===
     // Tap esplicito dell'utente sull'orb: resetta il debounce così se
