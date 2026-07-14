@@ -2,18 +2,18 @@
   "expo": {
     "name": "Koda",
     "slug": "lamico-fraterno",
-    "version": "1.0.112",
+    "version": "1.0.113",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "koda",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-    "runtimeVersion": "1.0.112",
+    "runtimeVersion": "1.0.113",
     "ios": {
       "supportsTablet": false,
       "usesAppleSignIn": true,
       "bundleIdentifier": "com.dangella.koda",
-      "buildNumber": "6",
+      "buildNumber": "7",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Per ascoltare la tua voce e parlare con Koda",
         "NSPhotoLibraryUsageDescription": "Per scegliere immagini di sfondo personalizzate",
@@ -27,7 +27,7 @@
     },
     "android": {
       "package": "com.dangella.koda",
-      "versionCode": 6,
+      "versionCode": 7,
       "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.RECORD_AUDIO",

@@ -10,5 +10,5 @@
  *
  * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
  */
-export const BUILD_VERSION = "2026-07-13 v1.0.112+60 (OTA-fix-2)";
-export const BUILD_NOTES = "OTA fix v2: runtimeVersion hardcoded a '1.0.112' (stringa fissa) — aveva policy dinamica che collideva con appVersionSource:remote in eas.json. Voce Cielo + UI Impostazioni. Backend v27.";
+export const BUILD_VERSION = "2026-07-13 v1.0.113+7 (TESTFLIGHT)";
+export const BUILD_NOTES = "Build TestFlight nativa con TUTTI i fix: rollback Modalità Telefono, voce Cielo, adaptive Deepgram endpointing, WS Auth Bridge, UI Impostazioni ridisegnata. Backend v27.";
