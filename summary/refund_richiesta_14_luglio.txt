@@ -1,0 +1,54 @@
+RICHIESTA RIMBORSO CREDITI EAS — 14 luglio 2026
+==============================================
+
+DA: Fabio D'Angella
+PROGETTO: Koda — L'Amico Fraterno
+BUNDLE ID iOS: com.dangella.koda
+ACCOUNT EXPO: fabiod.labor
+EXPO PROJECT ID: 92cf0b6f-ee99-4fbe-8562-10cfc8a786de
+APP STORE CONNECT APP ID: 6771510634
+
+OGGETTO
+-------
+Richiesta rimborso crediti EAS Build consumati il 14 luglio 2026 per
+compensare il malfunzionamento del sistema di aggiornamento OTA
+(Expo Updates) all'interno dell'ambiente Emergent.
+
+FATTI
+-----
+1. Per applicare una modifica di UI banale (colore di un cerchio da
+   verde a viola, 3 righe di codice in un singolo file), è stato
+   impossibile per giorni consegnare l'aggiornamento al dispositivo
+   dell'utente tramite Expo Updates (OTA JavaScript).
+
+2. L'agente AI di Emergent ha ripetutamente diagnosticato in modo
+   errato la causa (runtime version, appVersionSource, paths filter
+   nel workflow GitHub Actions), consumando ore di lavoro dell'utente
+   senza risolvere.
+
+3. Alla fine è stato necessario ricompilare una build TestFlight
+   nativa (v1.0.113+7, build number EAS 1114) per veicolare le
+   modifiche → consumo di crediti EAS Build che sarebbero stati
+   evitabili con un OTA funzionante.
+
+4. Ulteriore aggravante: il token EXPO nell'ambiente pod di Emergent
+   risulta scaduto/revocato, impedendo all'agente di pubblicare
+   direttamente l'OTA dall'ambiente stesso.
+
+RICHIESTA
+---------
+Rimborso dei crediti EAS Build consumati:
+- Build TestFlight iOS v1.0.113+7 del 14 luglio 2026
+- Ogni eventuale build precedente collegata allo stesso ciclo di
+  fallimenti OTA (dal 13 al 14 luglio)
+
+INFO DI RIFERIMENTO
+-------------------
+- Repo GitHub: github.com/dangellafabio-byte/koda-backend
+- Runtime OTA target: 1.0.113
+- Apple Team ID: L8BJUZ3YB5
+- SDK Expo: 54.0.35
+
+Log tecnici e cronologia completa disponibili su richiesta.
+
+Firma: Fabio D'Angella
