@@ -8409,7 +8409,102 @@ async def api_voiceprint_enroll(
         except Exception as e:
             logging.warning(f"[voiceprint] DB update failed: {e}")
     logging.info(f"[voiceprint] enrolled {len(saved)} phrases for pid={pid}")
-    return {"ok": True, "saved_count": len(saved), "pid": pid}
+
+    # === ITERAZIONE 2 (2026-07-14) — Estrai embedding reference SUBITO ===
+    # Prima si limitava a salvare i file e marcare pending; ora calcoliamo
+    # l'embedding via Resemblyzer (GE2E, 256-dim) e lo salviamo in MongoDB
+    # come vettore normalizzato, così il gate nel WS voice_stream può
+    # confrontare in tempo reale ogni chunk audio con la voce di riferimento.
+    embedding_ok = False
+    if saved:
+        try:
+            from voiceprint_service import enroll_from_files
+            ref_embedding = enroll_from_files(saved)
+            if ref_embedding is not None:
+                await db.taccuino_profile.update_one(
+                    {"id": pid},
+                    {"$set": {
+                        "voiceprint_embedding": ref_embedding,  # list of 256 floats
+                        "voiceprint_embedding_dim": len(ref_embedding),
+                        "voiceprint_pending": False,
+                        "voiceprint_processed_at": int(_time.time()),
+                    }},
+                    upsert=False,
+                )
+                embedding_ok = True
+                logging.info(f"[voiceprint] reference embedding stored (dim={len(ref_embedding)}) for pid={pid}")
+            else:
+                logging.warning(f"[voiceprint] enroll_from_files returned None for pid={pid} (files unusable?)")
+        except Exception as e:
+            logging.warning(f"[voiceprint] embedding extraction failed for pid={pid}: {e}")
+
+    return {"ok": True, "saved_count": len(saved), "pid": pid, "embedding_ok": embedding_ok}
+
+
+@api_router.get("/profile/voiceprint/status")
+async def api_voiceprint_status():
+    """Stato del voiceprint dell'utente corrente.
+
+    Restituisce: enrolled (bool), embedding_dim (int), threshold (float),
+    enrolled_at (int, epoch), phrase_count (int).
+    Utile per la UI Impostazioni e per diagnostica del gate.
+    """
+    prof_doc = await db.taccuino_profile.find_one(_uf())
+    if not prof_doc:
+        return {"enrolled": False, "reason": "no_profile"}
+    emb = prof_doc.get("voiceprint_embedding")
+    return {
+        "enrolled": bool(emb) and isinstance(emb, list) and len(emb) > 0,
+        "embedding_dim": len(emb) if isinstance(emb, list) else 0,
+        "threshold": float(prof_doc.get("voiceprint_threshold", 0.65)),
+        "enrolled_at": int(prof_doc.get("voiceprint_processed_at") or prof_doc.get("voiceprint_enrolled_at") or 0),
+        "phrase_count": len(prof_doc.get("voiceprint_phrase_paths") or []),
+        "pending": bool(prof_doc.get("voiceprint_pending", False)),
+    }
+
+
+@api_router.post("/profile/voiceprint/reprocess")
+async def api_voiceprint_reprocess():
+    """Ricalcola l'embedding dai file m4a già salvati, senza dover ripetere
+    l'enrollment lato utente. Utile se:
+    - Cambia il modello Resemblyzer
+    - L'utente ha già registrato ma l'iterazione 1 non ha estratto l'embedding
+    - Vogliamo tarare/testare il gate
+    """
+    prof_doc = await db.taccuino_profile.find_one(_uf())
+    if not prof_doc:
+        return {"ok": False, "error": "no_profile"}
+    pid = prof_doc.get("id")
+    if not pid:
+        return {"ok": False, "error": "no_pid"}
+    paths = prof_doc.get("voiceprint_phrase_paths") or []
+    if not paths:
+        # Fallback: cerca i file in filesystem
+        base_dir = f"/app/backend/voiceprint_data/{pid}"
+        import os as _os
+        if _os.path.isdir(base_dir):
+            paths = sorted([_os.path.join(base_dir, f) for f in _os.listdir(base_dir) if f.endswith(".m4a")])
+    if not paths:
+        return {"ok": False, "error": "no_phrase_files", "pid": pid}
+    try:
+        from voiceprint_service import enroll_from_files
+        ref_embedding = enroll_from_files(paths)
+        if ref_embedding is None:
+            return {"ok": False, "error": "embedding_extraction_failed", "pid": pid, "paths_tried": len(paths)}
+        import time as _time
+        await db.taccuino_profile.update_one(
+            {"id": pid},
+            {"$set": {
+                "voiceprint_embedding": ref_embedding,
+                "voiceprint_embedding_dim": len(ref_embedding),
+                "voiceprint_pending": False,
+                "voiceprint_processed_at": int(_time.time()),
+            }}
+        )
+        return {"ok": True, "pid": pid, "embedding_dim": len(ref_embedding), "phrases_used": len(paths)}
+    except Exception as e:
+        logging.warning(f"[voiceprint] reprocess failed for pid={pid}: {e}")
+        return {"ok": False, "error": str(e), "pid": pid}
 
 
 # ============================================================
@@ -10540,6 +10635,29 @@ async def startup_db_client():
         asyncio.create_task(_deepgram_warmup_with_log())
     except Exception as e:
         logger.warning(f"[startup] deepgram warmup scheduling failed: {e}")
+
+    # === VOICEPRINT WARMUP (2026-07-14, Iter 2) ===
+    # Il primo utilizzo dell'encoder Resemblyzer costa ~10s (JIT PyTorch).
+    # Facciamo warmup in background così il primo enrollment/gate è veloce.
+    try:
+        asyncio.create_task(_voiceprint_warmup_with_log())
+    except Exception as e:
+        logger.warning(f"[startup] voiceprint warmup scheduling failed: {e}")
+
+
+async def _voiceprint_warmup_with_log():
+    """Warmup del VoiceEncoder (fire-and-forget, non blocca lo startup)."""
+    try:
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        # Corriamo il warmup in un thread pool per non bloccare l'event loop.
+        def _do_warmup():
+            from voiceprint_service import warmup
+            warmup()
+        await loop.run_in_executor(None, _do_warmup)
+        logger.info("[startup] voiceprint warmup done")
+    except Exception as e:
+        logger.warning(f"[startup] voiceprint warmup error: {e}")
 
 
 async def _deepgram_warmup_with_log():

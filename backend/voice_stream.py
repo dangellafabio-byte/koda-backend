@@ -982,6 +982,45 @@ async def voice_stream_handler(
     dg: Optional[DeepgramLiveSession] = None
     client_alive = True
 
+    # === VOICEPRINT GATE (2026-07-14, Iterazione 2) ===
+    # Carica il voiceprint di riferimento dell'utente autenticato (se esiste)
+    # per filtrare via i chunk audio provenienti da voci diverse (rumore,
+    # vicini, TV, altri parlanti nell'ambiente).
+    # Se il profilo non ha voiceprint enrolled, il gate è DISABILITATO
+    # (passthrough — comportamento identico a prima).
+    voiceprint_ref = None  # np.ndarray 256-dim o None
+    voiceprint_threshold = 0.65
+    voiceprint_stats = {"total": 0, "accepted": 0, "rejected": 0, "sum_score": 0.0}
+    try:
+        # Import lazy per evitare cicli. Usiamo _current_user_id impostato
+        # in server.py prima di invocare questo handler.
+        from server import _current_user_id, db  # type: ignore
+
+        uid = _current_user_id.get() if _current_user_id is not None else "me"
+        if uid and uid != "me":
+            prof = await db.taccuino_profile.find_one({"id": uid})
+            if prof and isinstance(prof.get("voiceprint_embedding"), list):
+                import numpy as _np
+                voiceprint_ref = _np.asarray(prof["voiceprint_embedding"], dtype=_np.float32)
+                voiceprint_threshold = float(prof.get("voiceprint_threshold", 0.65))
+                logger.info(
+                    f"[KODA_STREAM sess={short_id}] voiceprint_gate ACTIVE "
+                    f"uid={uid[:8]}... dim={voiceprint_ref.shape[0]} "
+                    f"threshold={voiceprint_threshold:.2f}"
+                )
+            else:
+                logger.info(
+                    f"[KODA_STREAM sess={short_id}] voiceprint_gate DISABLED "
+                    f"uid={uid[:8]}... reason=no_embedding_in_profile"
+                )
+        else:
+            logger.info(
+                f"[KODA_STREAM sess={short_id}] voiceprint_gate DISABLED reason=anon_user"
+            )
+    except Exception as _vp_err:
+        logger.warning(f"[KODA_STREAM sess={short_id}] voiceprint init failed: {_vp_err}")
+        voiceprint_ref = None
+
     # Stato della utterance corrente
     utterance_text_parts: list[str] = []
     utterance_confidence: Optional[float] = None
@@ -1542,6 +1581,52 @@ async def voice_stream_handler(
                         )
                         continue
 
+                    # === VOICEPRINT GATE (2026-07-14, Iter 2) ===
+                    # Se il profilo utente ha un voiceprint enrolled, calcoliamo
+                    # l'embedding di questo chunk e confrontiamo con la reference.
+                    # Se il cosine similarity è < threshold, il chunk viene
+                    # SCARTATO qui: non va a Deepgram (risparmi crediti), non
+                    # entra nel buffer PCM, non partecipa alla utterance.
+                    #
+                    # Note: chunk grossi (>50KB) e non troppo corti (<1KB scartati
+                    # a monte). Facciamo l'inference SINCRONA (~150ms su CPU) —
+                    # OK perché i chunk arrivano ogni 3s e la pipeline totale
+                    # ha già ~1s di margine.
+                    if voiceprint_ref is not None and len(chunk) >= 4000:
+                        try:
+                            import numpy as _np
+                            from voiceprint_service import (
+                                extract_embedding_from_bytes,
+                                compute_similarity,
+                            )
+                            emb = extract_embedding_from_bytes(chunk, src_format_hint="m4a")
+                            if emb is not None:
+                                score = compute_similarity(emb, voiceprint_ref)
+                                voiceprint_stats["total"] += 1
+                                voiceprint_stats["sum_score"] += score
+                                if score < voiceprint_threshold:
+                                    voiceprint_stats["rejected"] += 1
+                                    logger.info(
+                                        f"[KODA_SPEAKER_REJECT sess={short_id}] "
+                                        f"idx={chunks_received} score={score:.3f} "
+                                        f"threshold={voiceprint_threshold:.2f} "
+                                        f"→ chunk skipped (not user's voice)"
+                                    )
+                                    # NON forward a Deepgram, NON accumulare
+                                    continue
+                                else:
+                                    voiceprint_stats["accepted"] += 1
+                                    if chunks_received % 4 == 0 or chunks_received <= 2:
+                                        logger.info(
+                                            f"[KODA_SPEAKER_ACCEPT sess={short_id}] "
+                                            f"idx={chunks_received} score={score:.3f} "
+                                            f"threshold={voiceprint_threshold:.2f} → forward"
+                                        )
+                        except Exception as _vp_err:
+                            # Fallback safe: se il gate fallisce, passa il chunk
+                            # (preferiamo falso-positivo a bloccare l'utente).
+                            logger.debug(f"[voiceprint] gate error, passthrough: {_vp_err}")
+
                     # Invia a Deepgram
                     await dg.send_pcm(pcm)
                     # === FIX 2026-07-01 — accumula PCM per Whisper override ===
@@ -1651,6 +1736,16 @@ async def voice_stream_handler(
             f"chunks={chunks_received} bytes={audio_bytes_received} "
             f"dur={int((time.time() - started_at) * 1000)}ms"
         )
+        # === VOICEPRINT GATE stats (2026-07-14, Iter 2) ===
+        if voiceprint_ref is not None and voiceprint_stats["total"] > 0:
+            _avg = voiceprint_stats["sum_score"] / voiceprint_stats["total"]
+            logger.info(
+                f"[KODA_SPEAKER_STATS sess={short_id}] "
+                f"total={voiceprint_stats['total']} "
+                f"accepted={voiceprint_stats['accepted']} "
+                f"rejected={voiceprint_stats['rejected']} "
+                f"avg_score={_avg:.3f} threshold={voiceprint_threshold:.2f}"
+            )
         if dg is not None:
             await dg.close_stream()
         # Aspetta che il task DG termini

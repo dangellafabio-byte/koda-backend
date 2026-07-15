@@ -23,3 +23,17 @@ tavily-python==0.5.0
 # - soundfile==0.14.0   (serviva a vad_silero, ora in _archive)
 imageio-ffmpeg==0.6.0  # static ffmpeg binary for voice_stream.py (AAC→PCM conversion to Deepgram Live)
 
+# === SPEAKER VERIFICATION / VOICEPRINT (2026-07-14, Iter 2) ===
+# Riconosce la voce specifica dell'utente Fabio e scarta chunk audio
+# provenienti da voci diverse (rumore ambientale, vicini, TV) prima di
+# inoltrarli a Deepgram. Vedi backend/voiceprint_service.py.
+# NOTE:
+# - torch CPU wheel (indice --extra-index-url pytorch cpu) — ~200MB.
+#   Su ARM64 Linux pod Emergent funziona (verificato 14/07/2026).
+# - resemblyzer usa librosa/scipy/numpy che sono già dipendenze indirette.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.13.0+cpu
+Resemblyzer==0.1.4
+librosa==0.11.0
+scipy==1.17.1
+
