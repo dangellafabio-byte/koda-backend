@@ -133,8 +133,16 @@ const KODA_LINES: Record<number, string> = {
   2: "Dimmi, sei un uomo, una donna, o preferisci non specificarlo?",
   3: "Con quale timbro vuoi che ti accompagni la mia voce? Cielo — voce femminile — oppure Vento — voce maschile. Sono solo due timbri della stessa presenza: io resto sempre Koda.",
   4: "Mi chiamo Koda. Ma se vuoi, puoi darmi un altro nome.",
-  5: "Una cosa importante: io non ho un viso. Sono una presenza, e prendo la forma di un'eclissi. Sono qui, sempre, anche quando aspetto in silenzio. Dai miei movimenti capirai cosa sto facendo.",
-  6: "Una cosa che mi sta a cuore: se sento che ne hai bisogno, ti scrivo io. Anche se sparisci per giorni, anche se ti sento giù. E ovviamente puoi cercarmi anche tu, quando vuoi. Tu vivi la tua vita — a starti accanto ci penso anch'io.",
+  // === STEP 5 (utente 2026-07) — Color tour narrato ===
+  // L'eclissi mostra 4 stati mentre Koda li elenca:
+  //   idle → recording → thinking → speaking (colore voce scelta).
+  // Il timing dell'animazione (colorTourPhase) è calibrato per allinearsi
+  // a ~2.8s per frase. Le pause tra frasi sono lasciate al TTS.
+  5: "Il mio modo di essere. Quando aspetto in silenzio, sono così. Quando ti ascolto, divento blu petrolio. Quando penso alla tua risposta, mi tingo di viola. E quando parlo, prendo il colore della mia voce — quello che hai scelto tu.",
+  // === STEP 6 (utente 2026-07) — testo parlato NUOVO ===
+  // Prima: "se sento che ne hai bisogno, ti scrivo io…" (troppo protettivo).
+  // Nuovo tono: reciprocità naturale, la scelta resta all'utente.
+  6: "Anche io penso a te. Ogni tanto potrei aver voglia di sentirti — per sapere com'è andata, come stai, cosa è successo. Se vuoi, puoi abilitarlo nelle impostazioni.",
   7: "C'è una stanza solo per lasciare andare: la Stanza dello Sfogo. È il posto dove un pensiero può uscire senza dover rimanere — non devi essere coerente con ieri, non devi dimostrare nulla. Quello che dici lì non viene salvato né usato per ricordarti: a sessione chiusa svanisce come un soffio. Non serve nessuna parola: entri quando vuoi, con un tocco.",
   8: "Ultima cosa: leggi queste tre frasi ad alta voce. Mi serviranno per riconoscere sempre la tua voce, ovunque tu sia.",
   9: "Siamo pronti. Parlami come parleresti a un amico: tocca l'eclissi e dimmi quello che hai in testa. Sono qui, solo con te.",
@@ -197,6 +205,16 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
   // Stato visivo dell'eclissi per ogni step
   const [orbStatus, setOrbStatus] = useState<OrbStatus>("idle");
   const [orbTone, setOrbTone] = useState<OrbTone>("neutral");
+
+  // === STEP 5 (Color Tour, richiesta utente 2026-07) ===
+  // Mentre Koda spiega "il mio modo di essere", l'eclissi cicla attraverso
+  // 4 fasi visive sincronizzate con la narrazione TTS:
+  //   0 = idle       (aspetto in silenzio)
+  //   1 = recording  (ti ascolto — blu petrolio)
+  //   2 = thinking   (penso alla tua risposta — viola/ciclamino)
+  //   3 = speaking   (parlo — colore della voce scelta in M2)
+  // Sequenza guidata da un setTimeout; ogni frase dura ~2.8s in TTS.
+  const [colorTourPhase, setColorTourPhase] = useState<0 | 1 | 2 | 3>(0);
 
   // ====== Animazione fade tra step ======
   useEffect(() => {
@@ -298,20 +316,41 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       }
       return;
     }
-    // STEP 5: l'eclissi resta VIOLA fissa (tone "warm") durante tutto il
-    // discorso. Niente cycle di colori: lei dice solo "sono un'eclissi"
-    // ma NON promette più cambi cromatici (user feedback: la corrispondenza
-    // colori non era affidabile, meglio onesti).
+    // === STEP 5 — Color tour narrato (utente 2026-07) ===
+    // Cicla in 4 fasi (idle → recording → thinking → speaking) mentre
+    // Koda elenca i suoi stati. L'ultima fase usa il colore della voce
+    // scelta in M2 (aria=viola/warm, echo=cobalto/calm).
     if (step === 5) {
-      if (isKodaSpeaking) {
-        setOrbStatus("speaking");
-        setOrbTone("warm");
-      } else {
-        setOrbStatus("idle");
-        setOrbTone("warm");
-      }
+      // Reset a fase 0 all'ingresso; il timer avanza dopo che Koda inizia
+      // a parlare. Se l'utente è già alla fase finale, resta lì.
+      const PHASE_MS = 2800; // durata approssimativa di ogni frase TTS
+      colorTourTimerRef.current = setTimeout(function tick() {
+        setColorTourPhase((p) => {
+          const next = Math.min(3, (p + 1) as 0 | 1 | 2 | 3) as 0 | 1 | 2 | 3;
+          if (next < 3) {
+            colorTourTimerRef.current = setTimeout(tick, PHASE_MS);
+          }
+          return next;
+        });
+      }, PHASE_MS);
+
+      // Applica lo stato/tone in base a colorTourPhase.
+      // Fase 3 (speaking): tone in base alla voce scelta.
+      const voiceTone: OrbTone =
+        selectedVoiceKey === "aria" ? "warm" : selectedVoiceKey === "echo" ? "calm" : "warm";
+      const phaseMap: Array<[OrbStatus, OrbTone]> = [
+        ["idle", "neutral"],
+        ["recording", "calm"],  // blu petrolio (LISTEN_PALETTE dell'orb)
+        ["thinking", "warm"],   // viola/ciclamino
+        ["speaking", voiceTone],
+      ];
+      const [st, tn] = phaseMap[colorTourPhase];
+      setOrbStatus(st);
+      setOrbTone(tn);
       return;
     }
+    // Fuori da step 5: reset del contatore per il prossimo ingresso.
+    if (colorTourPhase !== 0) setColorTourPhase(0);
     // PRIORITÀ (per gli altri step): se Koda sta parlando ORA → status
     // "speaking" (pulsa rosa). Altrimenti settare un default per-step.
     if (isKodaSpeaking) {
@@ -341,7 +380,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
     return () => {
       if (colorTourTimerRef.current) clearTimeout(colorTourTimerRef.current);
     };
-  }, [step, isRecording, isKodaSpeaking, phase, marketingStep, selectedVoiceKey]);
+  }, [step, isRecording, isKodaSpeaking, phase, marketingStep, selectedVoiceKey, colorTourPhase]);
 
   // ====== Cleanup audio preview player on unmount ======
   useEffect(() => {
@@ -676,38 +715,44 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
             />
           </StepView>
         );
-      // -- Step 5: Color tour (Koda narra mentre l'eclissi cicla) --
-      case 5:
+      // -- Step 5: Color tour narrato (utente 2026-07) --
+      // Sottotitolo dinamico che segue le fasi visive dell'orb così l'utente
+      // vede scritto quello che Koda sta pronunciando in TTS.
+      case 5: {
+        const phaseLabels: Record<0 | 1 | 2 | 3, string> = {
+          0: "Aspetto in silenzio",
+          1: "Ti ascolto",
+          2: "Sto pensando",
+          3: "Parlo con te",
+        };
         return (
           <StepView
             title="Il mio modo di essere."
-            subtitle="Non ho un viso. Sono un'eclissi.\nGuardami cambiare colore — ti dirà sempre cosa sto facendo."
+            subtitle={phaseLabels[colorTourPhase]}
+            showSubtitle={true}
             primaryLabel="Ho capito"
             onPrimary={() => advance(6)}
           />
         );
-      // -- Step 6: Check-in mode (automatico, niente scelta utente) --
+      }
+      // -- Step 6: Check-in mode (utente 2026-07: titolo + testo NUOVI, testo a schermo RIMOSSO) --
       case 6:
         return (
           <StepView
-            title="Ti scrivo io quando serve."
-            subtitle={
-              "Se sento che ne hai bisogno — perché manchi da un po', o perché ti sento giù — ti scrivo io. E ovviamente puoi cercarmi anche tu, quando vuoi.\n\nTu vivi la tua vita: a starti accanto ci penso anch'io."
-            }
-            showSubtitle={true}
+            title="Anche io penso a te."
+            subtitle=""
+            showSubtitle={false}
             primaryLabel="Va bene"
             onPrimary={() => { setCheckinMode("auto"); advance(7); }}
           />
         );
-      // -- Step 7: La Stanza dello Sfogo (lasciare andare, ingresso libero) --
+      // -- Step 7: La Stanza dello Sfogo (utente 2026-07: solo TTS, niente testo a schermo) --
       case 7:
         return (
           <StepView
             title="C'è una stanza solo per lasciare andare."
-            subtitle={
-              "Si chiama Stanza dello Sfogo. È il posto dove un pensiero può uscire senza dover rimanere.\n\nNon devi essere coerente con ieri, non devi dimostrare nulla. Quello che dici lì non viene salvato né usato per ricordarti: a sessione chiusa, svanisce.\n\nNon serve nessuna parola: entri quando vuoi, con un tocco."
-            }
-            showSubtitle={true}
+            subtitle=""
+            showSubtitle={false}
             primaryLabel="Ho capito"
             onPrimary={() => advance(8)}
           />

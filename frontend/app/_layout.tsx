@@ -72,7 +72,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 }
 
 export default function RootLayout() {
-  const [initialTheme, setInitialTheme] = useState<ThemeName>("sistema");
+  // === DARK MODE DEFAULT AL PRIMO AVVIO (richiesta utente 2026-07) ===
+  // Prima usavamo "sistema" (segue iOS): se il telefono era in light mode
+  // l'utente vedeva l'app in chiaro al primo boot, spesso sgradevole per
+  // un'esperienza notturna/emotiva come Koda. Ora forziamo NOTTE come
+  // default finché l'utente non sceglie esplicitamente un altro tema
+  // dalle Impostazioni. Se profile.settings.theme è già settato in cache
+  // o su server, viene rispettato.
+  const [initialTheme, setInitialTheme] = useState<ThemeName>("notte");
   const [dayStart, setDayStart] = useState(7);
   const [nightStart, setNightStart] = useState(20);
   const [ready, setReady] = useState(false);
@@ -112,7 +119,7 @@ export default function RootLayout() {
       try {
         const cached = await loadProfileCache<any>();
         if (cached) {
-          const t = (cached.settings?.theme as ThemeName) || "sistema";
+          const t = (cached.settings?.theme as ThemeName) || "notte";
           setInitialTheme(t);
           if (typeof cached.settings?.day_start_hour === "number") setDayStart(cached.settings.day_start_hour);
           if (typeof cached.settings?.night_start_hour === "number") setNightStart(cached.settings.night_start_hour);
@@ -145,7 +152,7 @@ export default function RootLayout() {
             setTimeout(() => reject(new Error("profile-cold-timeout")), PROFILE_TIMEOUT_MS)
           ),
         ]);
-        const t = (p.settings?.theme as ThemeName) || "sistema";
+        const t = (p.settings?.theme as ThemeName) || "notte";
         setInitialTheme(t);
         if (typeof p.settings?.day_start_hour === "number") setDayStart(p.settings.day_start_hour);
         if (typeof p.settings?.night_start_hour === "number") setNightStart(p.settings.night_start_hour);

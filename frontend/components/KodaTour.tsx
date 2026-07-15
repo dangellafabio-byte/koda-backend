@@ -53,6 +53,19 @@ interface Props {
 
 // Estrae titolo + descrizione da `speech` se non forniti esplicitamente.
 function extractTitleAndDesc(step: TourStep): { title: string; desc: string } {
+  // === FIX 2026-07 (utente) — supporto label VUOTA (banner nascosto) ===
+  // Se lo step passa `label: ""` esplicitamente, NON estrarre un titolo
+  // dallo speech e NON ricadere sul default "Koda". Restituisci titolo
+  // vuoto: il render della card salta completamente il banner indicatore
+  // in cima, come richiesto per "Eccomi" e "Ecco, è tutto".
+  const hasExplicitEmptyLabel =
+    typeof step.label === "string" && step.label.trim() === "";
+  if (hasExplicitEmptyLabel) {
+    return {
+      title: "",
+      desc: (step.description || step.speech || "").trim(),
+    };
+  }
   if (step.title || step.description) {
     return { title: step.title || "", desc: step.description || step.speech };
   }
@@ -260,7 +273,7 @@ export default function KodaTour({
             },
           ]}
         />
-        <Text style={styles.cardTitle}>{title}</Text>
+        {title ? <Text style={styles.cardTitle}>{title}</Text> : null}
         {desc ? <Text style={styles.cardDesc}>{desc}</Text> : null}
 
         {/* Progress dots */}

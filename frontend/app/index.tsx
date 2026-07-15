@@ -509,7 +509,14 @@ export default function Taccuino() {
     const W = tourDims.width;
     const H = tourDims.height;
     const headerCY = Math.max(insets.top + 28, 70) + 22;
-    const userName = profile?.user_name || "amico";
+    const userNameRaw = (profile?.user_name || "").trim();
+    // === FIX 2026-07 (utente) — niente più fallback "amico" nei testi tour ===
+    // Prima usavamo `profile?.user_name || "amico"`. Se l'utente non aveva
+    // ancora inserito il nome, il tour lo chiamava "amico" — sensazione
+    // fredda e generica. Ora costruiamo un vocativo opzionale che si
+    // aggiunge SOLO se il nome è davvero presente.
+    const userName = userNameRaw || "";
+    const nameVocative = userNameRaw ? `, ${userNameRaw}` : "";
     const orbSize = Math.min(W * 0.78, 360);
     const orbCY = H * 0.46;
     const [hf, conf, menu, orb, hint] = await Promise.all([
@@ -536,7 +543,7 @@ export default function Taccuino() {
         rect: hfRect,
         label: "Hands-free",
         shape: "circle",
-        speech: `Questa è la modalità mani libere, ${userName}. Quando è attiva ti ascolto io. Toccala per fermarla.`,
+        speech: `Questa è la modalità mani libere${nameVocative}. Quando è attiva ti ascolto io. Toccala per fermarla.`,
       },
       {
         page: "voice",
@@ -558,7 +565,13 @@ export default function Taccuino() {
       {
         page: "voice",
         rect: orbRect,
-        label: "Eclissi",
+        // === LABEL VUOTA (utente 2026-07) ===
+        // Il "banner indicatore" al top della card tour (che mostrava
+        // "Eclissi") è stato rimosso su richiesta: quando Koda dice
+        // "Eccomi. Toccami per parlarti" non serve un titolo aggiuntivo
+        // — la voce e la sfera bastano. KodaTour salta il render del
+        // titolo se label è stringa vuota.
+        label: "",
         shape: "circle",
         speech: `Eccomi. Toccami per parlarti, ritoccami per fermarmi.`,
       },
@@ -595,9 +608,13 @@ export default function Taccuino() {
       {
         page: "voice",
         rect: orbRect,
-        label: "Pronti",
+        // Vedi commento sopra "Eccomi": stessa logica, banner indicatore
+        // rimosso per non doppiare il messaggio vocale.
+        label: "",
         shape: "circle",
-        speech: `Ecco, è tutto. Sono qui, ${userName}.`,
+        speech: userNameRaw
+          ? `Ecco, è tutto. Sono qui, ${userNameRaw}.`
+          : `Ecco, è tutto. Sono qui.`,
       },
     ];
   }, [tourDims.width, tourDims.height, insets.top, insets.bottom, profile?.user_name, measureRef]);
@@ -5300,7 +5317,7 @@ export default function Taccuino() {
                 {([
                   { id: "m", label: "Uomo" },
                   { id: "f", label: "Donna" },
-                  { id: "n", label: "Preferisco neutro" },
+                  { id: "n", label: "Neutro" },
                 ] as const).map((opt) => {
                   const active = (profile?.user_gender || "n") === opt.id;
                   return (
@@ -5392,9 +5409,9 @@ export default function Taccuino() {
             <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 10 }]}>
               <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.settingLabel}>💌 Koda mi scrive</Text>
+                  <Text style={styles.settingLabel}>💌 Koda mi scrive quando attivo</Text>
                   <Text style={styles.settingHint}>
-                    Quando attivo, Koda ti scrive di sua iniziativa, quando sente
+                    Se abilitato, Koda ti scrive di sua iniziativa, quando sente
                     che sia il momento giusto. Non è una sveglia — è un gesto suo.
                   </Text>
                 </View>
@@ -5415,7 +5432,7 @@ export default function Taccuino() {
                   thumbColor="#fff"
                 />
               </View>
-              <Text style={[styles.settingHint, { fontSize: 11, marginTop: 2, fontStyle: "italic" }]}>
+              <Text style={[styles.settingHint, { fontSize: 13, marginTop: 2, fontStyle: "italic" }]}>
                 Notifiche locali, niente esce dal telefono se non al momento di generare la frase.
               </Text>
             </View>
@@ -5645,7 +5662,7 @@ export default function Taccuino() {
                   ]}
                 />
               </View>
-              <Text style={[styles.settingsHint, { fontSize: 11, marginTop: 4, fontStyle: "italic" }]}>
+              <Text style={[styles.settingsHint, { fontSize: 13, marginTop: 4, fontStyle: "italic" }]}>
                 Cresce automaticamente man mano che parliamo. I messaggi della Stanza dello Sfogo non contano.
               </Text>
             </View>
@@ -5871,23 +5888,17 @@ export default function Taccuino() {
 
             <View style={styles.divider} />
 
-            <TouchableOpacity
-              onPress={resetMemory}
-              style={styles.dangerBtn}
-              testID="reset-btn"
-            >
-              <Ionicons name="trash-outline" size={16} color={theme.danger} />
-              <Text style={styles.dangerBtnText}>Cancella tutta la memoria</Text>
-            </TouchableOpacity>
-            <Text style={styles.dangerHint}>
-              Reset completo: profilo, taccuino e ogni ricordo.
-            </Text>
+            {/* === CANCELLA MEMORIA — SPOSTATO IN FONDO (richiesta utente 2026-07) ===
+                Prima si trovava subito dopo "Scarica i miei dati", ma
+                l'utente ha chiesto di collocarlo il più in basso possibile,
+                subito sopra il footer con bundle info. In questo modo il
+                gesto distruttivo non è mai immediato durante la lettura
+                normale delle impostazioni. */}
 
             {/* === RIVEDI PRESENTAZIONE DI KODA ===========================
                 Spostato qui dal bottone tre-puntini header (che ora apre
                 queste impostazioni). Resta raggiungibile per chi vuole
                 rifare il setup iniziale (nome, voce, palette, ecc.). */}
-            <View style={styles.divider} />
             <TouchableOpacity
               style={[styles.settingRow, { paddingVertical: 14 }]}
               onPress={() => {
@@ -5905,24 +5916,18 @@ export default function Taccuino() {
               <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
             </TouchableOpacity>
 
-            {/* === PROMESSA DI FERRO (revisione giugno 2026) ===
-                Testo allineato a ciò che fa il backend OGGI:
-                - normale: salvato su MongoDB Atlas (TLS in transito, at-rest encryption Atlas)
-                  → usato solo per costruire la TUA timeline + memoria di Koda
-                - confessionale: NON va nella timeline, vive in confessional_buffer
-                  con TTL (auto-cancellazione) + reset endpoint a chiusura
-                - ghost: rimuove l'entry dalla timeline e dai facts.
-                Rimosso "cifrato" generico (era impreciso) sostituito con
-                descrizione tecnica più onesta. */}
+            {/* === LA MIA PROMESSA (revisione 2026-07, testo utente) ===
+                Versione breve, calda, one-liner. Prima c'era un box con
+                descrizione tecnica dettagliata di modalità normale /
+                Stanza dello Sfogo / Ghost / GDPR — spostata via su
+                richiesta esplicita dell'utente ("verificare se serve,
+                modificare o rimuovere"). Ora resta un solo blocco: la
+                promessa nuda, senza tecnicismi. */}
             <View style={styles.divider} />
-            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>🛡️ Promessa di Ferro</Text>
+            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>🛡️ La mia promessa</Text>
             <View style={styles.promessaBox}>
               <Text style={styles.promessaText}>
-                Quello che mi dici è tra me e te. Niente pubblicità, niente vendita di dati a terzi, niente addestramento di modelli con la tua voce o i tuoi pensieri.{"\n"}{"\n"}
-                <Text style={{ fontWeight: "700" }}>💬 Modalità normale:</Text> i messaggi vengono salvati nel tuo database personale (MongoDB con cifratura at-rest), usati SOLO per costruire la tua timeline e farmi ricordare ciò che mi racconti.{"\n"}{"\n"}
-                <Text style={{ fontWeight: "700" }}>🌬️ Stanza dello Sfogo:</Text> niente entra nella timeline. I messaggi vivono in un buffer temporaneo con auto-cancellazione e quando chiudi la sessione svaniscono dal server.{"\n"}{"\n"}
-                <Text style={{ fontWeight: "700" }}>👻 Pulsante Ghost (tieni premuto un messaggio):</Text> rimuovo l&apos;entry dalla timeline e dai facts associati. Il dato grezzo sparisce dal server.{"\n"}{"\n"}
-                <Text style={{ fontWeight: "700" }}>📤 Esporta tutto (GDPR):</Text> puoi scaricare in qualsiasi momento un archivio JSON con tutti i tuoi dati dalle impostazioni.
+                Quello che mi dici resta tra noi. Non lo vende nessuno, non lo usa nessuno per addestrare altri modelli, non esce dal nostro spazio. È tuo. È nostro.
               </Text>
             </View>
 
@@ -5962,6 +5967,22 @@ export default function Taccuino() {
                 (Updates.checkForUpdateAsync non rispondeva mai su questa
                 pipeline OTA). Rimosso completamente. Se serve ricontrollare
                 la versione bundle, il footer sotto mostra già il numero. */}
+
+            {/* === CANCELLA MEMORIA — POSIZIONE FINALE (2026-07, utente) ===
+                Posizionato subito sopra il footer bundle info per rendere
+                il gesto distruttivo l'ultimo elemento della lista. */}
+            <View style={styles.divider} />
+            <TouchableOpacity
+              onPress={resetMemory}
+              style={styles.dangerBtn}
+              testID="reset-btn"
+            >
+              <Ionicons name="trash-outline" size={16} color={theme.danger} />
+              <Text style={styles.dangerBtnText}>Cancella tutta la memoria</Text>
+            </TouchableOpacity>
+            <Text style={styles.dangerHint}>
+              Reset completo: profilo, taccuino e ogni ricordo.
+            </Text>
 
             {/* === VERSIONE APP ===
                 Footer minimale (senza expo-application per evitare
@@ -7268,7 +7289,7 @@ const makeStyles = (t: any) => StyleSheet.create({
     minHeight: 50,
   },
   confidenceRow: { marginTop: 14 },
-  confidenceLabel: { color: t.textMuted, fontSize: 12, marginBottom: 6 },
+  confidenceLabel: { color: t.textMuted, fontSize: 13, marginBottom: 6, fontWeight: "600" },
   confidenceBar: {
     height: 6,
     borderRadius: 999,
@@ -7293,10 +7314,11 @@ const makeStyles = (t: any) => StyleSheet.create({
     justifyContent: "center",
     marginTop: 6,
   },
-  dangerBtnText: { color: t.danger, fontWeight: "600", fontSize: 13 },
+  dangerBtnText: { color: t.danger, fontWeight: "700", fontSize: 14 },
   dangerHint: {
     color: t.textDim,
-    fontSize: 11,
+    fontSize: 13,
+    lineHeight: 18,
     textAlign: "center",
     marginTop: 6,
   },
@@ -7304,16 +7326,16 @@ const makeStyles = (t: any) => StyleSheet.create({
   promessaBox: {
     backgroundColor: "rgba(15, 23, 42, 0.45)",
     borderRadius: 14,
-    padding: 14,
+    padding: 16,
     marginTop: 10,
     borderWidth: 1,
     borderColor: "rgba(252,165,165,0.25)",
   },
   promessaText: {
     color: t.primaryText,
-    fontSize: 13,
-    lineHeight: 19,
-    opacity: 0.92,
+    fontSize: 14,
+    lineHeight: 22,
+    opacity: 0.95,
   },
 
   toggle: {
@@ -7618,23 +7640,27 @@ const makeStyles = (t: any) => StyleSheet.create({
     borderColor: t.primarySoftBorder,
   },
 
-  // Theme picker
+  // Theme picker — 3 chips (Giorno / Notte / Auto) allineati orizzontalmente
+  // con spazio equo. flex:1 per riempire tutta la larghezza; testo più
+  // grande (14/700) per coerenza col resto della pagina impostazioni.
   themeRow: {
     flexDirection: "row",
-    flexWrap: "wrap",
     gap: 8,
     marginTop: 4,
   },
   themeBtn: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    justifyContent: "center",
+    gap: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 12,
     borderRadius: 999,
     borderWidth: 1,
     backgroundColor: t.surfaceAlt,
     borderColor: t.border,
+    minHeight: 44,
   },
   themeBtnActive: {
     backgroundColor: t.primarySoftBg,
@@ -7647,8 +7673,8 @@ const makeStyles = (t: any) => StyleSheet.create({
   },
   themeBtnText: {
     color: t.text,
-    fontSize: 12,
-    fontWeight: "600",
+    fontSize: 14,
+    fontWeight: "700",
   },
 
   hoursRow: {
@@ -7666,7 +7692,7 @@ const makeStyles = (t: any) => StyleSheet.create({
   },
   hourLabel: {
     color: t.textMuted,
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: "600",
     marginBottom: 8,
     textAlign: "center",
