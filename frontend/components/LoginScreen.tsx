@@ -23,8 +23,9 @@ export default function LoginScreen() {
     setBusy("google");
     try {
       await signInGoogle();
-    } catch {
-      setErr("Accesso Google non riuscito. Riprova.");
+    } catch (e: any) {
+      const msg = String(e?.message || e || "").slice(0, 160);
+      setErr(`Google: ${msg || "errore sconosciuto"}`);
     } finally {
       setBusy(null);
     }
@@ -37,8 +38,13 @@ export default function LoginScreen() {
       await signInApple();
     } catch (e: any) {
       const msg = String(e?.message || "");
-      if (!(msg.includes("canceled") || e?.code === "ERR_REQUEST_CANCELED")) {
-        setErr("Accesso Apple non riuscito.");
+      if (msg.includes("canceled") || e?.code === "ERR_REQUEST_CANCELED") {
+        // Utente ha annullato: nessun errore da mostrare.
+      } else {
+        // === DIAG 2026-07-16 — Mostra l'errore vero, non un generico ===
+        // Così l'utente può leggerlo e comunicarcelo per debug.
+        const shown = (e?.code ? `[${e.code}] ` : "") + msg.slice(0, 200);
+        setErr(`Apple: ${shown || "errore sconosciuto"}`);
       }
     } finally {
       setBusy(null);
@@ -165,6 +171,6 @@ const styles = StyleSheet.create({
   appleTextDisabled: { color: "rgba(255,255,255,0.4)", fontSize: 14, fontWeight: "600" },
   devBtn: { backgroundColor: "rgba(252, 211, 77, 0.10)", borderWidth: 1, borderColor: "rgba(252, 211, 77, 0.45)", marginTop: 8 },
   devText: { color: "#FCD34D", fontSize: 14, fontWeight: "700" },
-  err: { color: "#FCA5A5", fontSize: 14, textAlign: "center", marginBottom: 4 },
+  err: { color: "#FCA5A5", fontSize: 13, textAlign: "center", marginBottom: 8, paddingHorizontal: 12, lineHeight: 18 },
   legal: { color: "rgba(255,255,255,0.35)", fontSize: 12, textAlign: "center", marginTop: 8 },
 });
