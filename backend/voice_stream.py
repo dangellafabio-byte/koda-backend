@@ -1764,6 +1764,36 @@ async def voice_stream_handler(
             f"chunks={chunks_received} bytes={audio_bytes_received} "
             f"dur={int((time.time() - started_at) * 1000)}ms"
         )
+
+        # === FIX 2026-07-16 CRITICO (Fabio "no-transcript-after-stop") ===
+        # Se il client ha chiesto stop ma la pipeline non ha mai emesso
+        # `done` (perché speech_final Deepgram non è mai arrivato E il
+        # buffer PCM era vuoto/troppo piccolo per fallback Whisper), il
+        # client resta appeso 25s e poi vede WS chiudersi senza risposta.
+        # UX: Koda va "thinking → idle" senza dire niente.
+        # RIMEDIO: se il client è ancora connesso e non abbiamo emesso
+        # né `done` né errore, mandiamo un `done` esplicito così il
+        # client esce dallo stato "thinking" e riparte pulito.
+        try:
+            if client_alive and not pipeline_in_flight:
+                await emit_to_client({
+                    "type": "done",
+                    "no_transcript": True,
+                    "reason": (
+                        "no_speech_detected"
+                        if audio_bytes_received > 0
+                        else "no_audio_received"
+                    ),
+                })
+                logger.info(
+                    f"[KODA_STREAM sess={short_id}] emitted synthetic done "
+                    f"(no pipeline ran, chunks={chunks_received})"
+                )
+        except Exception as _done_err:
+            logger.warning(
+                f"[KODA_STREAM sess={short_id}] synthetic done emit failed: {_done_err}"
+            )
+
         # === VOICEPRINT GATE stats (2026-07-14, Iter 2) ===
         if voiceprint_ref is not None and voiceprint_stats["total"] > 0:
             _avg = voiceprint_stats["sum_score"] / voiceprint_stats["total"]

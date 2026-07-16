@@ -1,0 +1,40 @@
+{
+  "summary": "Iter 15 — Verified the Jan 2026 fix for Fabio's 'ws-closed-no-transcript-after-stop' bug in /app/backend/voice_stream.py (lines 1761-1795). Wrote pytest suite /app/backend/tests/test_iter15_synthetic_done_jan2026.py covering 2 WS scenarios + 3 regressions. All 5/5 tests PASS in 8.02s against the public wss URL. Scenario 1 (start → end, 0 audio): server emits {type:'done', no_transcript:true, reason:'no_audio_received'} within ~3s (well under the 25s client timeout). Scenario 2 (start → tiny 200B audio → end): server emits done within budget. Regressions all green: /api/profile returns Fabio (name='Fabio', koda_voice='aria', total_messages=636≥634, onboarded=true, voice_locked=true), /api/auth/apple with fake token → 401, /api/auth/dev-login → 200.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "WS /api/voice/stream",
+        "issue": "Potential duplicate `done` emission on the happy path. In the pipeline success branch (voice_stream.py:1436) a real `{type:'done'}` is emitted, then `pipeline_in_flight=False` is set in the finally block (line 1442). When the end-frame handler subsequently breaks and reaches the cleanup block (line 1778), the guard `client_alive and not pipeline_in_flight` is satisfied, so a *second*, synthetic `{type:'done', no_transcript:true}` is also emitted. On the client (voiceStream.ts:851-858) `onDone` may fire twice before forceCloseWs() closes the socket. Suggest adding a `done_emitted` flag set on any `done` emit and gating line 1778 with `and not done_emitted`."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter15_synthetic_done_jan2026.py",
+    "/app/test_reports/pytest/iter15_synthetic_done.xml"
+  ],
+  "action_items": [
+    "Consider adding a `done_emitted` boolean flag in voice_stream_handler and require `not done_emitted` in the cleanup guard at voice_stream.py:1778, to prevent double `done` on the successful pipeline path (see minor issue above). Not blocking — client callback appears idempotent — but cleaner protocol semantics."
+  ],
+  "critical_code_review_comments": [
+    "voice_stream.py file is 1845 lines — well past the 700-line guideline. Consider splitting into modules (dg_session, pipeline_trigger, handler, watchdogs).",
+    "The synthetic done guard uses `not pipeline_in_flight` which becomes True mid-pipeline and False again after pipeline finish — meaning a completed happy-path pipeline still qualifies for synthetic done emit. A dedicated `done_emitted` flag would make intent explicit."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter15_synthetic_done_jan2026.py (new)",
+    "/app/test_reports/iteration_15.json (new)",
+    "/app/test_reports/pytest/iter15_synthetic_done.xml (new)"
+  ],
+  "success_rate": {"backend": "100% (5/5)", "frontend": "N/A (backend-only run)"},
+  "seed_data_creation": "No seed data created. WS start frames used ephemeral=true so Fabio's timeline is untouched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter 15 verified WS synthetic-done fix. If revisiting: (a) run `pytest backend/tests/test_iter15_synthetic_done_jan2026.py -v` — expects 5/5 pass; (b) if the main agent implements a `done_emitted` flag, re-run to confirm still 5/5 and no regression on synthetic-done timing. Both scenarios (no-audio, tiny-audio) currently return done in <5s.",
+  "rca_of_issue": "Original Fabio bug — client's ws.onclose fires `no-transcript-after-stop` when WS closes without ever receiving a `done` event. Server side, when the end-frame path completed without DG speech_final AND the PCM buffer was empty/tiny, `_trigger_pipeline` was NOT invoked, so no `{type:'done'}` was ever emitted, and cleanup silently closed the socket. Client then timed out at 25s. Fix at voice_stream.py:1777-1795 unconditionally emits a synthetic done (with `no_transcript:true` and reason distinguishing `no_audio_received` vs `no_speech_detected`) before cleanup, guarded by `client_alive and not pipeline_in_flight`. Verified fix reproduces desired behavior in both flavors of the failure mode."
+}
