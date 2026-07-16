@@ -1601,6 +1601,18 @@ async def get_or_create_profile() -> Profile:
     doc = await db.taccuino_profile.find_one({"id": uid}, {"_id": 0})
     if doc:
         try:
+            # === FIX 2026-07-16 CRITICO (Fabio) — DATETIME COERCION ===
+            # Bug storico: alcune update_one hanno scritto `updated_at` come
+            # oggetto datetime invece che ISO string. Il Profile model
+            # richiede str → Pydantic ValidationError → cadeva nel ramo
+            # "create fresh" → sovrascriveva il profilo con vuoto → utente
+            # perdeva 634 messaggi. Coerce PRIMA di validare.
+            for _dt_field in ("updated_at", "created_at", "claimed_at"):
+                _v = doc.get(_dt_field)
+                if isinstance(_v, datetime):
+                    doc[_dt_field] = _v.isoformat()
+            # Ignora campi interni che non fanno parte del Profile model
+            doc.pop("claimed_by", None)
             p = Profile(**doc)
             # === SAFETY NET LINGUA (2026-06-20) ===
             # Forza language="it" se è stato impostato erroneamente a
@@ -5516,7 +5528,7 @@ async def api_ghost_topic(req: dict):
     kept = [p for p in parts if not topic_re.search(p)]
     new_mem = " ".join(kept).strip()
     await db.taccuino_profile.update_one(
-        {"id": profile.id}, {"$set": {"memory_summary": new_mem, "updated_at": datetime.now(timezone.utc)}}
+        {"id": profile.id}, {"$set": {"memory_summary": new_mem, "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
     return {"removed_chars": len(current) - len(new_mem), "memory_summary": new_mem}
 
@@ -5531,7 +5543,7 @@ async def api_reset_history():
     profile = await get_or_create_profile()
     await db.taccuino_profile.update_one(
         {"id": profile.id},
-        {"$set": {"memory_summary": "", "updated_at": datetime.now(timezone.utc)}},
+        {"$set": {"memory_summary": "", "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
     return {"status": "ok"}
 

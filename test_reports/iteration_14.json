@@ -1,0 +1,43 @@
+{
+  "summary": "Iter 14 — Fabio TestFlight 1006 WS bug + profile empty-fallback RCA fix VERIFIED GREEN. All 13 tests pass in /app/backend/tests/test_iter14_fabio_profile_ws_jan2026.py (3.63s). (A) GET /api/profile returns Fabio's real profile: name='Fabio', total_messages=634, koda_voice='aria', onboarded=true, voice_locked=true, updated_at is an ISO string parseable by datetime.fromisoformat. (B) WS /api/voice/stream accepts connection at wss://app-finder-408.preview.emergentagent.com/api/voice/stream, receives start frame (type=start + session_id + audio_route=builtin + mime_type + sample_rate + profile_lang=it + container=aac) and returns {type:'ready', session_id:'<hex>'} well under the 3s budget. No 1006 immediate-close reproduced. (C) POST /api/auth/apple with invalid identity_token='not.a.real.jwt' returns 401 with detail='invalid apple token' (NOT 500 crash) — the try/except at server.py:4914-4916 correctly catches all JWT decode failures. Also confirmed empty body → 4xx (Pydantic 422). (D) POST /api/auth/google/session without X-Session-ID header returns 401 detail='missing session id'. (E) POST /api/auth/dev-login returns 200 with email='dev@koda.local' + valid session_token. (F) 5 sequential GET /api/profile calls all return the same Fabio profile — no oscillation between full/empty (the original repro). MongoDB inspection confirms the 'me' profile now has updated_at, created_at, claimed_at all stored as ISO strings after the data-repair pass. The datetime-coercion block at server.py:1610-1613 correctly handles any legacy doc that still has datetime objects. The 4 previously corrupted profiles are now clean.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "voice_stream.py dg_params_for_route", "issue": "Iter12 test file (test_iter12_whisper_vad_prosody_jan2026.py) has 5 stale assertions: expects endpointing bluetooth=150, wired=350, builtin=250, unknown=250 — but voice_stream.py:562-571 now emits bluetooth=1200, wired=350, builtin=900, unknown=900. Design changed (longer waits, still valid since utterance_end_ms>=1000 for all routes) but tests were not updated. Not blocking iter14, but iter12 suite now shows 5F/20P instead of 25/25. Recommend E1 either revert the endpointing change or update the iter12 test file."},
+      {"endpoint": "GET /api/key-facts", "issue": "(Carried from iter 9→13) Still GLOBAL — not user-scoped. Non-blocking."},
+      {"endpoint": "user_id_middleware", "issue": "(Carried) Silently downgrades non-UUIDv4 X-User-Id to 'me' instead of returning 400. Non-blocking."},
+      {"endpoint": "server.py FastAPI lifespan", "issue": "(Carried) @app.on_event('startup'|'shutdown') DeprecationWarning — migrate to lifespan context manager. Cosmetic."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter14_fabio_profile_ws_jan2026.py",
+    "/app/test_reports/pytest/iter14_results.xml"
+  ],
+  "action_items": [
+    "None P0 for Fabio's bug — datetime-coercion fix + data-repair + eas.json build-URL change all verified. Safe to release build 1.0.116 to TestFlight.",
+    "(P2) Update /app/backend/tests/test_iter12_whisper_vad_prosody_jan2026.py assertions to match the new endpointing values in voice_stream.py:562-571 (bluetooth=1200, wired=350, builtin=900, unknown=900) OR revert the endpointing change if 1200ms bluetooth wait is unintentional. Currently iter12 file shows 5F/20P.",
+    "(Carried code-health) server.py is 10844 lines — schedule a refactor pass."
+  ],
+  "critical_code_review_comments": [
+    "server.py:1610-1613 datetime coercion is well-scoped: only touches (updated_at, created_at, claimed_at), uses isinstance(_v, datetime) so no false-positive on already-ISO strings, and executes BEFORE Pydantic Profile(**doc) so ValidationError can no longer fall through to the create-fresh branch. Solid defense-in-depth.",
+    "server.py:1615 doc.pop('claimed_by', None) is correct — Profile model doesn't declare claimed_by, so removing it before Pydantic prevents a different ValidationError path (extra='forbid' if Profile were strict, or silent drop otherwise). Ensures the fix works for the 'me' doc which does have claimed_by set to eaa56c2e-...",
+    "server.py:5531 and 5546 both correctly use datetime.now(timezone.utc).isoformat() — no more raw datetime writes. Grep confirms these were the only two remaining offenders; all other updated_at writes across server.py already used .isoformat().",
+    "server.py:1661 `except Exception: pass` is still a silent catch-all — but now with the datetime coercion upstream, the practical bug surface has been eliminated. Small hardening idea: add `logger.warning(f'[profile] corrupt doc dropped uid={uid[:8]}... err={e}')` inside the except so future corruption is at least visible in logs instead of silently returning an empty profile again.",
+    "voice_stream.py:1176 emits {type:'ready', session_id} only AFTER dg.connect() succeeds — so if Deepgram is down we get {type:'error', message:'STT unavailable: ...'} instead of a mysterious 1006. Good.",
+    "server.py:4914-4916 auth/apple exception handling correctly maps ALL jwt/JWKS/network failures to 401 (never 500). Confirmed empirically with a bogus 'not.a.real.jwt' token.",
+    "voice_stream.py:997 `from server import _current_user_id, db` is a late import to break the cycle — the pattern works but is fragile. If server.py is ever refactored (see 10844-line action item), this coupling must be preserved."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "13/13 = 100% on iter14 targeted tests", "frontend": "n/a (backend-only per request)"},
+  "seed_data_creation": "None. Test relies on pre-existing 'me' profile (Fabio, 634 msgs) restored by E1's data-repair pass.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter14 verified the Fabio 1006-WS + empty-profile RCA fix. Key artifacts: (1) 'me' profile in test_database.taccuino_profile has name='Fabio', total_messages=634, koda_voice='aria', voice_locked=true, all datetime fields as ISO strings; (2) server.py:1610-1613 datetime coercion runs before Pydantic; (3) server.py:5531/5546 write ISO strings on ghost/topic and reset_history; (4) WS /api/voice/stream returns {type:'ready',session_id} in ~1s after start frame; (5) auth/apple returns 401 on bad token, never 500. To re-run: `pytest /app/backend/tests/test_iter14_fabio_profile_ws_jan2026.py -v`. Note that iter12 suite regressed to 5F/20P (unrelated) because voice_stream.py:562-571 endpointing values changed after iter13 signed off; if E1 wants iter12 green again either revert or update assertions.",
+  "rca_of_issue": "Root cause: legacy update_one calls at server.py:5519 and 5534 wrote `updated_at` as a raw datetime object (not .isoformat()), producing docs like {updated_at: datetime(2026,7,2,17,11,29)}. When get_or_create_profile() loaded such a doc, Profile(**doc) raised ValidationError because Profile.updated_at is typed str. The `except Exception: pass` at line 1661 silently swallowed the error and fell through to the create-fresh branch, overwriting the real 634-msg profile with an empty one. On the mobile client this manifested as intermittent empty profile loads → LoginScreen loop → then WS voice/stream endpoint saw uid='me' after auth-bridge cache miss → tried to load profile inside stream handler → same ValidationError inside dependency → connection abort → client saw code=1006. Fix layers applied: (a) coerce datetime→isoformat before Pydantic (server.py:1610-1613); (b) replace raw datetime writes with .isoformat() at line 5531/5546; (c) DB repair pass on 4 corrupted docs; (d) eas.json points production/preview/preview-android to https://app-finder-408.preview.emergentagent.com. Reproduction (before fix): mongosh 'db.taccuino_profile.updateOne({id:\"me\"},{$set:{updated_at:new Date()}})' → GET /api/profile → empty profile. After fix: same command → GET /api/profile → Fabio 634 (coercion neutralises the sabotage). Verified with 13/13 tests + MongoDB inspection."
+}
