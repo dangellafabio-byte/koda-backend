@@ -1178,6 +1178,12 @@ async def voice_stream_handler(
         # ---------------- 3) Task: leggi eventi da Deepgram ----------------
         # (gira in parallelo al loop di lettura audio dal client)
         pipeline_in_flight = False
+        # === FIX 2026-07-16 (testing_agent iter15) — done_emitted flag ===
+        # Traccia se abbiamo già inviato un `done` al client, così il
+        # blocco di cleanup non emette un secondo `done` sul percorso
+        # felice (pipeline completa → done reale → cleanup vede
+        # pipeline_in_flight=False → altrimenti emetterebbe done duplicato).
+        done_emitted = False
 
         async def dg_event_loop() -> None:
             nonlocal pipeline_in_flight, speech_started_at, utterance_confidence
@@ -1304,7 +1310,7 @@ async def voice_stream_handler(
             Se Whisper riesce → usiamo il suo testo. Altrimenti fallback
             trasparente al testo Deepgram (`final_text`) come prima.
             """
-            nonlocal pipeline_in_flight, utterance_confidence
+            nonlocal pipeline_in_flight, utterance_confidence, done_emitted
             # === FIX 2026-07-09 — Idempotency guard ===
             # Sia dg_event_loop (su speech_final) sia il branch "end" (fallback)
             # possono tentare di chiamare _trigger_pipeline. Se una è già in
@@ -1434,6 +1440,7 @@ async def voice_stream_handler(
                 )
                 if client_alive:
                     await emit_to_client({"type": "done"})
+                    done_emitted = True
             except Exception as e:
                 logger.error(f"[KODA_STREAM sess={short_id}] pipeline crashed: {e}")
                 if client_alive:
@@ -1775,7 +1782,7 @@ async def voice_stream_handler(
         # né `done` né errore, mandiamo un `done` esplicito così il
         # client esce dallo stato "thinking" e riparte pulito.
         try:
-            if client_alive and not pipeline_in_flight:
+            if client_alive and not pipeline_in_flight and not done_emitted:
                 await emit_to_client({
                     "type": "done",
                     "no_transcript": True,
@@ -1785,6 +1792,7 @@ async def voice_stream_handler(
                         else "no_audio_received"
                     ),
                 })
+                done_emitted = True
                 logger.info(
                     f"[KODA_STREAM sess={short_id}] emitted synthetic done "
                     f"(no pipeline ran, chunks={chunks_received})"

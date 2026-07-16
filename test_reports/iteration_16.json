@@ -1,0 +1,41 @@
+{
+  "summary": "Iter 16 — Verified the `done_emitted` flag fix in /app/backend/voice_stream.py that E1 added to prevent duplicate `done` emission on the happy path (real pipeline completes → real done emitted → cleanup should NOT emit synthetic done). Confirmed code shape: `done_emitted = False` at line 1186, `nonlocal done_emitted` at line 1313, `done_emitted = True` at line 1443 (after real done), cleanup guard `not done_emitted` at line 1785. Only TWO `done` emit sites in the entire file (grep-verified: lines 1442 and 1787), both properly flagged/gated. Re-ran iter15 suite → 5/5 PASS (8.05s). Wrote new iter16 suite /app/backend/tests/test_iter16_no_duplicate_done_jan2026.py with 6 tests asserting `len(done_events) == 1` after a 2.5-3s tail window post-first-done → 6/6 PASS (12.20s). Scenarios covered: (a) no-audio → exactly 1 synthetic done reason='no_audio_received', no dupe in tail; (b) tiny 200B audio → exactly 1 done, no dupe in tail; (c) ~1s 400Hz tone (4 chunks streamed) → exactly 1 done, no dupe in tail; (d) regressions: /api/profile returns Fabio (name/aria/634+msgs/onboarded/voice_locked), /api/auth/apple invalid→401, /api/auth/dev-login→200. NOTE on scenario (c): the pure-tone PCM did not transcribe as speech, so the cleanup synthetic path still fired (flavor='synthetic', reason='no_speech_detected') — the exact real-pipeline happy path could not be exercised without valid speech audio. However code inspection + grep proves the fix logic is correct: real done emit sets done_emitted=True BEFORE cleanup runs, and cleanup guard checks `not done_emitted`.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter16_no_duplicate_done_jan2026.py",
+    "/app/backend/tests/test_iter15_synthetic_done_jan2026.py",
+    "/app/test_reports/pytest/iter16_no_duplicate_done.xml",
+    "/app/test_reports/pytest/iter16_iter15_rerun.xml"
+  ],
+  "action_items": [
+    "None blocking. Optional: to fully exercise the real-pipeline happy path in CI, ship a small pre-recorded speech-audio fixture (e.g., 1s of 'ciao' as PCM16 mono @16kHz) under /app/backend/tests/fixtures/ and add a test that sends it, asserts a real (no_transcript!=True) `done`, and asserts len(done_events)==1. This would give end-to-end coverage of the done_emitted flag path currently only proven by code inspection."
+  ],
+  "critical_code_review_comments": [
+    "voice_stream.py is now 1853 lines — over 700-line guideline. Recommend splitting into: dg_session.py, pipeline_trigger.py, handler.py, watchdogs.py (already flagged in iter15).",
+    "The `done_emitted` flag pattern is correct and minimal. Consider extracting a small helper `async def emit_done(payload)` that sets `done_emitted = True` and calls `emit_to_client(payload)` — makes future new done sites impossible to miss."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter16_no_duplicate_done_jan2026.py (new)",
+    "/app/test_reports/iteration_16.json (new)",
+    "/app/test_reports/pytest/iter16_no_duplicate_done.xml (new)",
+    "/app/test_reports/pytest/iter16_iter15_rerun.xml (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (11/11 — 5 iter15 rerun + 6 new iter16)",
+    "frontend": "N/A (backend-only run per review_request)"
+  },
+  "seed_data_creation": "No seed data created. WS start frames use ephemeral=true so Fabio's timeline is untouched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter 16 verified the `done_emitted` protocol-hygiene fix. All iter15 tests still green and new iter16 tests explicitly assert `len(done_events) == 1` with a 2.5-3s tail window after the first `done` to catch any duplicate. The one remaining coverage gap is the *real* happy-path (Deepgram/Whisper transcribes → LLM/TTS pipeline runs → real done emitted → cleanup skipped via done_emitted). This is proven by code review (only 2 done emit sites in the file: line 1442 [real, followed by done_emitted=True on 1443] and line 1787 [synthetic, gated by `not done_emitted` on 1785]) but not by end-to-end test — because sending speech-like audio in a test requires a pre-recorded fixture. If a next iteration adds such a fixture, add a test that: (1) sends real speech audio, (2) waits ~20s, (3) asserts exactly one done event where done.get('no_transcript') is not True.",
+  "rca_of_issue": "N/A — no new issue found. Verifying an already-applied fix. Original minor issue from iter15: cleanup block guard was only `client_alive and not pipeline_in_flight`, which becomes True (`not pipeline_in_flight`) even after a successful pipeline that already emitted `done` (because the finally-block on line 1449 resets `pipeline_in_flight = False`). This would cause a second synthetic `done` to be emitted on the happy path — a protocol-hygiene bug (client callback appeared idempotent but two `done`s were sent). Fix: added `done_emitted` boolean flag flipped True after ANY `done` emit; cleanup guard now `client_alive and not pipeline_in_flight and not done_emitted`. Verified: (a) all iter15 scenarios still pass (5/5), (b) new dedicated no-dupe assertions pass (6/6), (c) grep confirms only 2 done-emit sites in the whole file, both properly instrumented."
+}
