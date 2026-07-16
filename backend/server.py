@@ -10644,6 +10644,57 @@ async def startup_db_client():
     except Exception as e:
         logger.warning(f"[startup] voiceprint warmup scheduling failed: {e}")
 
+    # === P3 TIMELINE TTL AUTO-CLEANUP (2026-07-15, richiesta utente) ===
+    # Task background che elimina le voci di `taccuino_timeline` più
+    # vecchie di 6 mesi. Gira ogni 24h. Vedi `_timeline_ttl_loop`.
+    # Non usiamo MongoDB TTL index perché `timestamp` è ISO-string
+    # (per compat retroattiva) — la comparazione lessicografica ISO-8601
+    # coincide con quella temporale, quindi un $lt basta.
+    try:
+        asyncio.create_task(_timeline_ttl_loop())
+        logger.info(f"[startup] timeline TTL cleanup scheduled ({_TIMELINE_TTL_DAYS}d)")
+    except Exception as e:
+        logger.warning(f"[startup] timeline TTL scheduling failed: {e}")
+
+
+# === P3 TIMELINE TTL — retention 6 mesi (2026-07-15) ===
+_TIMELINE_TTL_DAYS = 180  # 6 mesi
+
+async def _cleanup_timeline_ttl() -> int:
+    """Elimina entry `taccuino_timeline` più vecchie di TIMELINE_TTL_DAYS.
+    Ritorna il numero di doc eliminati."""
+    try:
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(days=_TIMELINE_TTL_DAYS)
+        cutoff_iso = cutoff_dt.isoformat()
+        result = await db.taccuino_timeline.delete_many({"timestamp": {"$lt": cutoff_iso}})
+        return int(result.deleted_count or 0)
+    except Exception as e:
+        logger.warning(f"[timeline_ttl] cleanup query failed: {e}")
+        return 0
+
+async def _timeline_ttl_loop():
+    """Loop di manutenzione: purge taccuino_timeline > 6 mesi ogni 24h.
+
+    Delay iniziale di 60s (lascia partire lo startup pulito, non colpisce
+    la prima richiesta utente). Poi ciclo 24h. Fire-and-forget: se una
+    iterazione fallisce, aspetta comunque l'iterazione successiva."""
+    await asyncio.sleep(60)
+    while True:
+        try:
+            deleted = await _cleanup_timeline_ttl()
+            if deleted:
+                logger.info(
+                    f"[timeline_ttl] cleanup: {deleted} entries deleted "
+                    f"(older than {_TIMELINE_TTL_DAYS}d)"
+                )
+            else:
+                logger.info(f"[timeline_ttl] cleanup: 0 entries (nothing to purge)")
+        except Exception as e:
+            logger.warning(f"[timeline_ttl] loop iteration error: {e}")
+        # Prossima esecuzione fra 24h. Se il container viene killato/restart,
+        # il loop riparte all'avvio successivo con il delay iniziale di 60s.
+        await asyncio.sleep(24 * 60 * 60)
+
 
 async def _voiceprint_warmup_with_log():
     """Warmup del VoiceEncoder (fire-and-forget, non blocca lo startup)."""

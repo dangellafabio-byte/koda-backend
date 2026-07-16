@@ -1137,6 +1137,34 @@ async def voice_stream_handler(
         )
         # Params Deepgram tunati per la audio route corrente + quality hint.
         dg_params_dyn = dg_params_for_route(audio_route, quality_hint=quality_hint)
+
+        # === P2 USER-ADAPTIVE VOCAB (2026-07-15, richiesta utente) ===
+        # Estrae le parole ricorrenti dal `taccuino_timeline` dell'utente
+        # e le aggiunge ai `keyterm` di Deepgram Nova-3. Boosta il
+        # riconoscimento di nomi propri, termini tecnici del suo dominio
+        # e gergo personale. Vedi user_vocab_service.py per dettagli.
+        try:
+            if uid and uid != "me":
+                from user_vocab_service import get_user_keyterms
+                user_terms = await get_user_keyterms(db, uid, max_words=25)
+                if user_terms:
+                    existing = list(dg_params_dyn.get("keyterm", []) or [])
+                    # Dedup case-insensitive: se una parola c'è già nei keyterm
+                    # statici (es. "furgone" nel preset Fabio) non la ripetiamo.
+                    existing_lower = {str(x).lower() for x in existing}
+                    new_terms = [t for t in user_terms if t.lower() not in existing_lower]
+                    if new_terms:
+                        dg_params_dyn["keyterm"] = existing + new_terms
+                        logger.info(
+                            f"[KODA_STREAM sess={short_id}] user_vocab injected: "
+                            f"+{len(new_terms)} personal keyterms "
+                            f"(top5={new_terms[:5]})"
+                        )
+        except Exception as _uv_err:
+            logger.warning(
+                f"[KODA_STREAM sess={short_id}] user_vocab injection failed: {_uv_err}"
+            )
+
         dg = DeepgramLiveSession(session_id=session_id, dg_params=dg_params_dyn)
         try:
             await dg.connect()
