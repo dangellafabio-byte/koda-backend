@@ -143,7 +143,7 @@ const KODA_LINES: Record<number, string> = {
   // Prima: "se sento che ne hai bisogno, ti scrivo io…" (troppo protettivo).
   // Nuovo tono: reciprocità naturale, la scelta resta all'utente.
   6: "Anche io penso a te. Ogni tanto potrei aver voglia di sentirti. Se vuoi, puoi abilitarlo nelle impostazioni.",
-  7: "C'è un posto dove nessuno risponde. A volte non hai bisogno di una risposta: hai bisogno di dire le cose ad alta voce, e sapere che qualcuno c'è. In Lascia andare io ascolto e taccio. Quello che dici non viene trascritto, non viene elaborato, non esce dal telefono. Sparisce nel silenzio.",
+  7: "A volte non hai bisogno di una risposta. Hai bisogno di dire le cose ad alta voce, e sapere che qualcuno c'è. In Lascia andare, Koda ascolta e tace. Quello che dici non viene trascritto, non viene elaborato, non esce dal telefono. Sparisce nel silenzio.",
   8: "Ultima cosa: leggi queste tre frasi ad alta voce. Mi serviranno per riconoscere sempre la tua voce, ovunque tu sia.",
   9: "Siamo pronti. Parlami come parleresti a un amico: tocca l'eclissi e dimmi quello che hai in testa. Sono qui, solo con te.",
 };
