@@ -376,7 +376,7 @@ export default function Taccuino() {
   // inglobato l'ultimo commit.
   useEffect(() => {
     console.log(
-      `[KODA_BUILDTAG] v57-datetime-coercion+synthetic-done+preview-url build=2026-07-16-late ` +
+      `[KODA_BUILDTAG] v58-lascia-andare+datetime-coercion+synthetic-done+preview-url build=2026-07-17 ` +
         `verbose=${KODA_DEBUG_VERBOSE} ` +
         `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
@@ -548,12 +548,12 @@ export default function Taccuino() {
       {
         page: "voice",
         rect: confRect,
-        // === FIX 2026-06-30 — Etichetta tour allineata al testo bottone ===
-        // Prima qui c'era "Confessionale" ma il bottone in tutta l'app dice
-        // "Stanza dello Sfogo" (vedi linea 4467 + paywall.tsx). Allineato.
-        label: "Stanza dello Sfogo",
+        // === FIX 2026-07-17 — Rinomina "Stanza dello Sfogo" → "Lascia andare" ===
+        // Nuovo concept "Un posto dove nessuno risponde": zero rete, VAD
+        // locale, orb come feedback silenzioso.
+        label: "Lascia andare",
         shape: "round",
-        speech: `La Stanza dello Sfogo: un posto dove un pensiero può uscire senza dover rimanere. Quello che ci diciamo qui non viene salvato.`,
+        speech: `Lascia andare: un posto dove nessuno risponde. Quello che dici lì non viene trascritto, non esce dal tuo telefono. Sparisce nel silenzio.`,
       },
       {
         page: "voice",
@@ -4621,38 +4621,26 @@ export default function Taccuino() {
               styles.confessionalToggle,
               confessionalMode && styles.confessionalToggleOn,
             ]}
-            onPress={async () => {
-              if (!confessionalMode) {
-                // ATTIVAZIONE — Manifesto V1: nessuna Parola Segreta.
-                // Mostriamo la schermata d'ingresso, poi si entra liberamente.
-                setShowConfessionalIntro(true);
-                return;
-              } else {
-                // === RESET VOLONTARIO (Manifesto V1) ===
-                // Niente distillazione, niente memoria di lungo termine: il
-                // Confessionale non deve "definirti domani". All'uscita
-                // cancelliamo FISICAMENTE il buffer di sessione sul server
-                // (oltre al TTL 24h di sicurezza).
-                if (confessionalGhostTokenRef.current) {
-                  api.confessionalReset(confessionalGhostTokenRef.current).catch(() => {});
-                  confessionalGhostTokenRef.current = null;
-                }
-                // === ANIMAZIONE DI CHIUSURA — DISATTIVATA (giugno 2026 v5) ===
-                // L'utente non era soddisfatta né del vecchio rituale "burn"
-                // né della nuova "release" sostitutiva. Per ora usciamo SENZA
-                // orpelli grafici (wipe diretto e ritorno alla Home).
-                // L'animazione tornerà quando avremo deciso insieme cosa
-                // mostrare. La pulizia dei dati (timeline.filter, ref reset,
-                // confessionalMode=false) avviene comunque qui.
-                setTimeline((prev) => prev.filter((e) => !e.fortezza));
-                fortezzaUsedThisSessionRef.current = false;
-                confessionalGhostTokenRef.current = null;
+            onPress={() => {
+              // === LASCIA ANDARE (2026-07-17) ============================
+              // Prima: apriva il flusso "Stanza dello Sfogo" (Confessionale
+              // Zero-Knowledge con STT/LLM/TTS cifrati). Nuovo concept
+              // richiesto dall'utente: "Un posto dove nessuno risponde"
+              // — ZERO trascrizione, ZERO Claude, ZERO ElevenLabs, ZERO
+              // rete. Solo VAD locale + orb come feedback silenzioso.
+              // Il vecchio codice confessional resta dormiente in questo
+              // file (rimozione rimandata al prossimo refactor per non
+              // introdurre regressioni). Qui semplicemente navighiamo
+              // al nuovo screen /lascia-andare.
+              try {
+                router.push("/lascia-andare");
+              } catch (e) {
+                console.warn("[LasciaAndare] navigation error:", e);
               }
-              setConfessionalMode((m) => !m);
             }}
             onLongPress={undefined}
             hitSlop={10}
-            testID="confessional-toggle"
+            testID="lascia-andare-toggle"
           >
             <Text
               style={[
@@ -4660,11 +4648,11 @@ export default function Taccuino() {
                 // === FIX 2026-06-28 v30 — bianco SEMPRE ===
                 // L'utente ha chiesto esplicitamente: pill opaca + testo
                 // bianco PIENO in ogni schermata (home + timeline) e in
-                // ogni stato (sfogo attivo o non attivo). Nessun override
-                // condizionale: il bianco #FFFFFF deve restare costante.
+                // ogni stato. Nessun override condizionale: il bianco
+                // #FFFFFF deve restare costante.
               ]}
             >
-              {confessionalMode ? "Stanza dello Sfogo" : "Stanza dello Sfogo"}
+              Lascia andare
             </Text>
           </TouchableOpacity>
         </View>
@@ -5452,7 +5440,7 @@ export default function Taccuino() {
                   <Text style={styles.settingHint}>
                     Permetti a Koda di consultare fonti certificate (ANSA,
                     Repubblica, Wikipedia, meteo.it…) per meteo, notizie e fatti
-                    recenti. Nella Stanza dello Sfogo resta sempre spento.
+                    recenti. In Lascia andare resta sempre spento.
                   </Text>
                 </View>
                 <Switch
@@ -5663,7 +5651,7 @@ export default function Taccuino() {
                 />
               </View>
               <Text style={[styles.settingsHint, { fontSize: 13, marginTop: 4, fontStyle: "italic" }]}>
-                Cresce automaticamente man mano che parliamo. I messaggi della Stanza dello Sfogo non contano.
+                Cresce automaticamente man mano che parliamo. I messaggi in Lascia andare non contano.
               </Text>
             </View>
             <View style={styles.voicesList}>
@@ -5875,8 +5863,8 @@ export default function Taccuino() {
                 <Text style={styles.settingLabel}>📦 Scarica i miei dati</Text>
                 <Text style={styles.settingHint}>
                   Esporta tutto in un file JSON (GDPR): profilo, conversazioni,
-                  ricordi. Le voci della Stanza dello Sfogo restano cifrate — nemmeno
-                  il file le rivela.
+                  ricordi. Lascia andare non finisce mai nell'export — non
+                  esiste sul server.
                 </Text>
               </View>
               {exportingData ? (
@@ -5927,7 +5915,7 @@ export default function Taccuino() {
             <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>🛡️ La mia promessa</Text>
             <View style={styles.promessaBox}>
               <Text style={styles.promessaText}>
-                Quello che mi dici resta tra noi. Non lo vende nessuno, non lo usa nessuno per addestrare altri modelli, non esce dal nostro spazio. È tuo. È nostro.
+                Quello che mi dici resta tra noi. Non lo vende nessuno, non lo usa nessuno per addestrare altri modelli, non esce dal nostro spazio. In Lascia andare non esce nemmeno dal tuo telefono. È tuo. È nostro.
               </Text>
             </View>
 

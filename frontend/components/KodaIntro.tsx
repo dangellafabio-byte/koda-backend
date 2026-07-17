@@ -142,8 +142,8 @@ const KODA_LINES: Record<number, string> = {
   // === STEP 6 (utente 2026-07) — testo parlato NUOVO ===
   // Prima: "se sento che ne hai bisogno, ti scrivo io…" (troppo protettivo).
   // Nuovo tono: reciprocità naturale, la scelta resta all'utente.
-  6: "Anche io penso a te. Ogni tanto potrei aver voglia di sentirti — per sapere com'è andata, come stai, cosa è successo. Se vuoi, puoi abilitarlo nelle impostazioni.",
-  7: "C'è una stanza solo per lasciare andare: la Stanza dello Sfogo. È il posto dove un pensiero può uscire senza dover rimanere — non devi essere coerente con ieri, non devi dimostrare nulla. Quello che dici lì non viene salvato né usato per ricordarti: a sessione chiusa svanisce come un soffio. Non serve nessuna parola: entri quando vuoi, con un tocco.",
+  6: "Anche io penso a te. Ogni tanto potrei aver voglia di sentirti. Se vuoi, puoi abilitarlo nelle impostazioni.",
+  7: "C'è un posto dove nessuno risponde. A volte non hai bisogno di una risposta: hai bisogno di dire le cose ad alta voce, e sapere che qualcuno c'è. In Lascia andare io ascolto e taccio. Quello che dici non viene trascritto, non viene elaborato, non esce dal telefono. Sparisce nel silenzio.",
   8: "Ultima cosa: leggi queste tre frasi ad alta voce. Mi serviranno per riconoscere sempre la tua voce, ovunque tu sia.",
   9: "Siamo pronti. Parlami come parleresti a un amico: tocca l'eclissi e dimmi quello che hai in testa. Sono qui, solo con te.",
 };
@@ -746,11 +746,11 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
             onPrimary={() => { setCheckinMode("auto"); advance(7); }}
           />
         );
-      // -- Step 7: La Stanza dello Sfogo (utente 2026-07: solo TTS, niente testo a schermo) --
+      // -- Step 7: Lascia andare (2026-07-17: nuovo concept "posto dove nessuno risponde") --
       case 7:
         return (
           <StepView
-            title="C'è una stanza solo per lasciare andare."
+            title="Un posto dove nessuno risponde."
             subtitle=""
             showSubtitle={false}
             primaryLabel="Ho capito"
@@ -807,7 +807,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
               "tocca l'eclissi e dimmi quello che hai in testa.\n\n" +
               "Posso ascoltarti, ricordare, farti compagnia.\n" +
               "Quando vuoi solo lasciare andare un pensiero,\n" +
-              "apri la Stanza dello Sfogo: lì niente viene salvato.\n\n" +
+              "apri Lascia andare: lì niente viene salvato.\n\n" +
               "Non posso chiamare nessuno, navigare in internet\n" +
               "o comprare cose. Vivo qui dentro, solo con te."
             }
@@ -957,7 +957,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         title="Le regole del nostro spazio."
         subtitle={
           "🌿  Stanza Quotidiana: qui io ricordo e unisco i punti nel tempo. Parli a voce toccando l'Eclissi, o scrivi scorrendo da destra a sinistra. Quello che ci diciamo qui costruisce continuità.\n\n" +
-          "🌬️  Stanza dello Sfogo: un posto dove un pensiero può uscire senza dover rimanere. Entri con un tocco; quello che ci diciamo lì svanisce a sessione chiusa — non viene salvato e non ti definisce domani.\n\n" +
+          "🌬️  Lascia andare: un posto dove nessuno risponde. Un tocco per entrare; quello che dici lì non viene trascritto, non esce dal telefono, sparisce nel silenzio.\n\n" +
           "⚙️  Controllo totale: nelle impostazioni (⋯) puoi attivare i miei check-in, cambiare tema (Giorno/Notte/Auto) o cancellare l'intera memoria in un tap."
         }
         showSubtitle={true}

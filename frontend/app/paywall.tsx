@@ -2,7 +2,7 @@
  * /paywall — V1 Spec (giugno 2026): Premium UNICO a 4,99€/mese o 39,99€/anno.
  *
  * Strategia V1:
- *   - "Parlare è sempre gratuito" → Stanza dello Sfogo illimitata anche per FREE
+ *   - "Parlare è sempre gratuito" → Stanza dello Sfogo illimitata anche per FREE (rinominata "Lascia andare" 2026-07-17)
  *   - FREE: Stanza Quotidiana con memoria 3 giorni, voce standard
  *   - PREMIUM (mensile o annuale): sblocca memoria completa, voce premium,
  *     check-in proattivi, ricerca web
@@ -133,7 +133,7 @@ export default function PaywallScreen() {
         <View style={styles.titleBlock}>
           <Text style={[styles.title, { color: theme.text }]}>Parlare è sempre gratuito.</Text>
           <Text style={[styles.body, { color: theme.textDim }]}>
-            La Stanza dello Sfogo resterà sempre aperta a tutti.{"\n\n"}
+            Lascia andare resta sempre aperta a tutti.{"\n\n"}
             Koda Premium esiste per chi desidera{" "}
             <Text style={{ color: theme.text, fontWeight: "600" }}>costruire continuità nel tempo</Text>.
           </Text>
@@ -220,7 +220,7 @@ export default function PaywallScreen() {
         {used !== null && used >= 3 && (
           <Text style={[styles.usedNote, { color: theme.textDim }]}>
             Hai usato i tuoi {used} messaggi di prova della Stanza Quotidiana.
-            La Stanza dello Sfogo resta aperta.
+            Lascia andare resta aperta.
           </Text>
         )}
 
