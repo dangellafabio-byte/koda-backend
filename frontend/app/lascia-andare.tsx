@@ -29,6 +29,8 @@ import {
   StyleSheet,
   TouchableOpacity,
   BackHandler,
+  Animated,
+  Easing,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -49,6 +51,21 @@ const SILENCE_DB = -45; // sotto questa soglia → silenzio (isteresi)
 const SILENCE_HOLD_MS = 700; // millisecondi di silenzio per tornare a idle
 const METER_POLL_MS = 100;
 
+// ==== Animation tuning (Fabio 2026-07-17 rev2) ====
+// Ingresso: emergere lento dall'oscurità (2.5s)
+const ENTRY_DURATION_MS = 2500;
+const ENTRY_HINT_DELAY_MS = 1800; // Il testo appare dopo l'orb
+// Uscita: sparire nel nero (1.2s)
+const EXIT_DURATION_MS = 1200;
+// Respiro base: seno lento continuo (~5.2s cycle)
+const BREATH_HALF_CYCLE_MS = 2600;
+const BREATH_SCALE_PEAK = 1.05;
+// Pulsazione voce: espande l'orb in base al livello dB rilevato
+const VOICE_SCALE_MAX = 1.12; // guadagno massimo sulla voce forte
+const VOICE_ATTACK_MS = 180; // salita rapida quando la voce sale
+const VOICE_RELEASE_MS = 500; // discesa più morbida verso il silenzio
+const VOICE_TARGET_DELTA_MIN = 0.015; // soglia anti-jitter per non spammare animazioni
+
 export default function LasciaAndareScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -68,6 +85,25 @@ export default function LasciaAndareScreen() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Guard per evitare doppia teardown
   const teardownStartedRef = useRef(false);
+
+  // === ANIMATED VALUES (Fabio 2026-07-17 rev2) =========================
+  // Combinati via Animated.multiply nel transform: entry × breath × voice
+  // - orbEntryScale: 0.3 → 1.0 all'ingresso, 1.0 → 0 all'uscita
+  // - orbOpacity:    0   → 1   all'ingresso, 1   → 0 all'uscita
+  // - breathScale:   loop 1.0 ↔ 1.05 in seno lento (respiro di base)
+  // - voiceScale:    1.0 ↔ 1.12 in base al dB rilevato (respira con
+  //                  chi parla — attack rapido, release morbido)
+  // - hintOpacity:   fade-in ritardato del testo in basso
+  const orbEntryScale = useRef(new Animated.Value(0.3)).current;
+  const orbOpacity = useRef(new Animated.Value(0)).current;
+  const breathScale = useRef(new Animated.Value(1)).current;
+  const voiceScale = useRef(new Animated.Value(1)).current;
+  const hintOpacity = useRef(new Animated.Value(0)).current;
+  // Ultimo target del voiceScale — evita di animare a ogni frame se il
+  // valore non cambia significativamente (anti-jitter)
+  const lastVoiceTargetRef = useRef(1.0);
+  // Guard uscita: se l'uscita è già iniziata NON riavviamo animazioni
+  const exitingRef = useRef(false);
 
   // === TEARDOWN — chiamato all'uscita ================================
   // 1) ferma il polling
@@ -118,6 +154,72 @@ export default function LasciaAndareScreen() {
     try {
       await setIsAudioActiveAsync(false);
     } catch {}
+  }, []);
+
+  // === ANIMAZIONE DI INGRESSO (2.5s) ===================================
+  // L'orb non appare di botto: emerge lentamente dall'oscurità.
+  // - opacity 0 → 1 in 2.2s (fade morbido)
+  // - scale 0.3 → 1.0 in 2.5s con easing cubic (crescita naturale)
+  // - hint text fade-in ritardato di 1.8s (l'orb arriva prima, il testo poi)
+  // Le animazioni di respiro/voce partono comunque in parallelo — la
+  // loro moltiplicazione con orbEntryScale=0.3 le rende inizialmente
+  // trascurabili, poi si integrano gradualmente man mano che entryScale
+  // sale verso 1.0.
+  useEffect(() => {
+    const entry = Animated.parallel([
+      Animated.timing(orbOpacity, {
+        toValue: 1,
+        duration: ENTRY_DURATION_MS - 300,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+      Animated.timing(orbEntryScale, {
+        toValue: 1,
+        duration: ENTRY_DURATION_MS,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.sequence([
+        Animated.delay(ENTRY_HINT_DELAY_MS),
+        Animated.timing(hintOpacity, {
+          toValue: 1,
+          duration: 800,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ]),
+    ]);
+    entry.start();
+    return () => {
+      // Se il componente viene smontato durante l'entrata, ferma tutto
+      entry.stop();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // === RESPIRO CONTINUO (loop) =========================================
+  // Onda sinusoidale lenta: l'orb "respira" anche in silenzio (~5.2s).
+  // Multiplicative rispetto a orbEntryScale e voiceScale.
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(breathScale, {
+          toValue: BREATH_SCALE_PEAK,
+          duration: BREATH_HALF_CYCLE_MS,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+        Animated.timing(breathScale, {
+          toValue: 1.0,
+          duration: BREATH_HALF_CYCLE_MS,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // === SETUP — chiamato al mount ======================================
@@ -222,6 +324,7 @@ export default function LasciaAndareScreen() {
         // viene MAI letto né trasmesso — verrà cancellato all'uscita.
         lastVoiceAtRef.current = 0;
         pollRef.current = setInterval(() => {
+          if (exitingRef.current) return; // durante l'uscita non aggiorniamo
           try {
             const st = recorderRef.current?.getStatus?.();
             if (!st || !st.isRecording) return;
@@ -241,6 +344,31 @@ export default function LasciaAndareScreen() {
               }
             }
             // Zona morta tra SILENCE_DB e SPEECH_DB → mantieni stato corrente
+
+            // === PULSAZIONE VOCE (orb respira con chi parla) =============
+            // Mappa lineare del dB [-35 → -10] su [1.00 → VOICE_SCALE_MAX].
+            // Sotto SPEECH_DB il target è 1.0 (nessun boost).
+            // Usiamo una soglia anti-jitter (delta > 0.015) per non
+            // spammare animazioni ridondanti a 10 Hz.
+            const voiceTarget =
+              db > SPEECH_DB
+                ? 1.0 +
+                  Math.min(1, Math.max(0, (db - SPEECH_DB) / 25)) *
+                    (VOICE_SCALE_MAX - 1.0)
+                : 1.0;
+            if (
+              Math.abs(voiceTarget - lastVoiceTargetRef.current) >
+              VOICE_TARGET_DELTA_MIN
+            ) {
+              const rising = voiceTarget > lastVoiceTargetRef.current;
+              lastVoiceTargetRef.current = voiceTarget;
+              Animated.timing(voiceScale, {
+                toValue: voiceTarget,
+                duration: rising ? VOICE_ATTACK_MS : VOICE_RELEASE_MS,
+                easing: Easing.out(Easing.quad),
+                useNativeDriver: true,
+              }).start();
+            }
           } catch {
             // metering può fallire brevemente tra state transitions
           }
@@ -272,8 +400,56 @@ export default function LasciaAndareScreen() {
   }, []);
 
   const handleExit = useCallback(async () => {
+    // Idempotent: se l'uscita è già in corso, non ripetiamo
+    if (exitingRef.current) return;
+    exitingRef.current = true;
+
+    // Ferma il polling metering subito così la pulsazione voce
+    // non prova a contrastare l'animazione di scomparsa
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+
+    // Rilassa il voiceScale a 1.0 così l'orb non "salta" durante l'exit
+    voiceScale.stopAnimation();
+    voiceScale.setValue(1.0);
+
+    // === ANIMAZIONE DI USCITA (1.2s) ==================================
+    // L'orb si rimpicciolisce lentamente verso il centro e sparisce nel
+    // nero. Comunica visivamente che quello che è stato detto sparisce
+    // davvero. Poi navighiamo indietro.
+    await new Promise<void>((resolve) => {
+      Animated.parallel([
+        Animated.timing(orbEntryScale, {
+          toValue: 0,
+          duration: EXIT_DURATION_MS,
+          easing: Easing.in(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(orbOpacity, {
+          toValue: 0,
+          duration: EXIT_DURATION_MS,
+          easing: Easing.in(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(hintOpacity, {
+          toValue: 0,
+          duration: 500,
+          easing: Easing.in(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ]).start(() => resolve());
+    });
+
+    // Teardown risorse (recorder, file tmp, audio session) DOPO che
+    // l'animazione è finita per non introdurre jank sul bridge nativo
     await teardown();
-    // router.back() se possibile, altrimenti torna alla home
+
+    // router.back() se possibile, altrimenti torna alla home.
+    // Il layout di expo-router applica il fade tra route (screenOptions
+    // { animation: "fade" } in _layout.tsx) → il ritorno alla schermata
+    // principale è quindi già fluido di suo.
     try {
       if (router.canGoBack()) {
         router.back();
@@ -283,7 +459,7 @@ export default function LasciaAndareScreen() {
     } catch {
       router.replace("/");
     }
-  }, [router, teardown]);
+  }, [router, teardown, orbEntryScale, orbOpacity, hintOpacity, voiceScale]);
 
   // === RENDER ==========================================================
   return (
@@ -307,28 +483,52 @@ export default function LasciaAndareScreen() {
       {/* Orb centrale.
           - "idle" → respiro lento, palette calda
           - "recording" → tiffany freddo, luce che si "raffredda"
-          Nessun testo intorno: silenzio visivo per silenzio uditivo. */}
+          Nessun testo intorno: silenzio visivo per silenzio uditivo.
+
+          Transform combinato: entryScale × breathScale × voiceScale.
+          - entryScale (0.3→1.0): animazione d'ingresso / d'uscita
+          - breathScale (1.0↔1.05): respiro base continuo
+          - voiceScale (1.0↔1.12): pulsazione con la voce dell'utente */}
       <View style={styles.center}>
-        <EclipseOrb
-          status={status}
-          size={260}
-          meterDb={meterDb}
-          meterThreshold={SPEECH_DB}
-        />
+        <Animated.View
+          style={{
+            opacity: orbOpacity,
+            transform: [
+              {
+                scale: Animated.multiply(
+                  orbEntryScale,
+                  Animated.multiply(breathScale, voiceScale)
+                ),
+              },
+            ],
+          }}
+        >
+          <EclipseOrb
+            status={status}
+            size={260}
+            meterDb={meterDb}
+            meterThreshold={SPEECH_DB}
+          />
+        </Animated.View>
       </View>
 
-      {/* Micro-hint in basso — appare 1.5s dopo l'ingresso, poi svanisce.
-          Solo la prima volta rassicura l'utente: "sto ascoltando, ma
-          non ti sto registrando per rispondere". */}
-      <View style={[styles.hintBox, { bottom: Math.max(insets.bottom + 24, 32) }]}>
+      {/* Micro-hint in basso — fade-in ritardato di 1.8s dopo l'ingresso.
+          Rassicura l'utente: "sto ascoltando, ma non ti sto registrando
+          per rispondere". */}
+      <Animated.View
+        style={[
+          styles.hintBox,
+          { bottom: Math.max(insets.bottom + 24, 32), opacity: hintOpacity },
+        ]}
+      >
         {permError ? (
           <Text style={styles.errText}>{permError}</Text>
         ) : (
           <Text style={styles.hintText}>
-            {ready ? "Nessuno ti sente. Sparisce nel silenzio." : "…"}
+            {ready ? "Nessuno ti sente. Sparisce nel silenzio." : ""}
           </Text>
         )}
-      </View>
+      </Animated.View>
     </View>
   );
 }
