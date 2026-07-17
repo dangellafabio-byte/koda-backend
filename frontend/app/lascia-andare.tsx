@@ -60,11 +60,13 @@ const EXIT_DURATION_MS = 1200;
 // Respiro base: seno lento continuo (~5.2s cycle)
 const BREATH_HALF_CYCLE_MS = 2600;
 const BREATH_SCALE_PEAK = 1.05;
-// Pulsazione voce: espande l'orb in base al livello dB rilevato
-const VOICE_SCALE_MAX = 1.12; // guadagno massimo sulla voce forte
-const VOICE_ATTACK_MS = 180; // salita rapida quando la voce sale
-const VOICE_RELEASE_MS = 500; // discesa più morbida verso il silenzio
-const VOICE_TARGET_DELTA_MIN = 0.015; // soglia anti-jitter per non spammare animazioni
+// Pulsazione voce: quando il VAD dice "speaking:true" l'orb entra in un
+// loop di pulsazione ampio e visibile ("respira insieme a chi parla").
+// Quando "speaking:false" torna dolcemente a 1.0 (solo il respiro base
+// del breathScale continua).
+const VOICE_PULSE_PEAK = 1.22; // Espansione ~22% quando l'utente parla
+const VOICE_PULSE_HALF_CYCLE_MS = 650; // 1.3s per un ciclo completo (in/out)
+const VOICE_RELEASE_MS = 500; // Ritorno dolce a 1.0 quando la voce cessa
 
 export default function LasciaAndareScreen() {
   const router = useRouter();
@@ -86,22 +88,21 @@ export default function LasciaAndareScreen() {
   // Guard per evitare doppia teardown
   const teardownStartedRef = useRef(false);
 
-  // === ANIMATED VALUES (Fabio 2026-07-17 rev2) =========================
+  // === ANIMATED VALUES (Fabio 2026-07-17 rev3) =========================
   // Combinati via Animated.multiply nel transform: entry × breath × voice
   // - orbEntryScale: 0.3 → 1.0 all'ingresso, 1.0 → 0 all'uscita
   // - orbOpacity:    0   → 1   all'ingresso, 1   → 0 all'uscita
   // - breathScale:   loop 1.0 ↔ 1.05 in seno lento (respiro di base)
-  // - voiceScale:    1.0 ↔ 1.12 in base al dB rilevato (respira con
-  //                  chi parla — attack rapido, release morbido)
+  // - voiceScale:    LOOP 1.0 ↔ 1.22 quando speaking=true (pulsazione
+  //                  visibile), ritorno a 1.0 quando speaking=false.
+  //                  Rev3: sganciato dal dB grezzo — ora è pilotato dal
+  //                  flag di stato `status` che riflette il VAD.
   // - hintOpacity:   fade-in ritardato del testo in basso
   const orbEntryScale = useRef(new Animated.Value(0.3)).current;
   const orbOpacity = useRef(new Animated.Value(0)).current;
   const breathScale = useRef(new Animated.Value(1)).current;
   const voiceScale = useRef(new Animated.Value(1)).current;
   const hintOpacity = useRef(new Animated.Value(0)).current;
-  // Ultimo target del voiceScale — evita di animare a ogni frame se il
-  // valore non cambia significativamente (anti-jitter)
-  const lastVoiceTargetRef = useRef(1.0);
   // Guard uscita: se l'uscita è già iniziata NON riavviamo animazioni
   const exitingRef = useRef(false);
 
@@ -221,6 +222,55 @@ export default function LasciaAndareScreen() {
     return () => loop.stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // === PULSAZIONE VOCE — pilotata dal flag VAD (rev3, 2026-07-17) =====
+  // Quando il VAD passa a status="recording" (== speaking:true), l'orb
+  // entra in un loop di pulsazione ampio e visibile:
+  //   1.0 → 1.22 → 1.0 in 1.3s (mezzo ciclo ~650ms, seno).
+  // Quando status torna a "idle" (== speaking:false), fermiamo il loop
+  // e riportiamo dolcemente voiceScale a 1.0 in 500ms — l'orb torna così
+  // al solo respiro base (breathScale continua indipendentemente).
+  //
+  // Perché così e non più il dB continuo:
+  //   Prima mappavamo dB → voiceScale in modo continuo con soglia anti-
+  //   jitter (delta 0.015). Nel bundle finale la variazione risultava
+  //   troppo timida per essere visibile sopra il breathScale (5%).
+  //   Ora usiamo direttamente il flag boolean che il VAD già emette →
+  //   pulsazione pronunciata e leggibile a colpo d'occhio.
+  useEffect(() => {
+    if (exitingRef.current) return; // durante l'uscita non tocchiamo la voce
+
+    if (status === "recording") {
+      // Parte dal valore corrente (che dovrebbe essere ~1.0) e loopa
+      const pulseLoop = Animated.loop(
+        Animated.sequence([
+          Animated.timing(voiceScale, {
+            toValue: VOICE_PULSE_PEAK,
+            duration: VOICE_PULSE_HALF_CYCLE_MS,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+          Animated.timing(voiceScale, {
+            toValue: 1.0,
+            duration: VOICE_PULSE_HALF_CYCLE_MS,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      pulseLoop.start();
+      return () => pulseLoop.stop();
+    } else {
+      // Silenzio: ritorno morbido a 1.0. Il breathScale continua da solo.
+      Animated.timing(voiceScale, {
+        toValue: 1.0,
+        duration: VOICE_RELEASE_MS,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }).start();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
 
   // === SETUP — chiamato al mount ======================================
   useEffect(() => {
@@ -344,31 +394,11 @@ export default function LasciaAndareScreen() {
               }
             }
             // Zona morta tra SILENCE_DB e SPEECH_DB → mantieni stato corrente
-
-            // === PULSAZIONE VOCE (orb respira con chi parla) =============
-            // Mappa lineare del dB [-35 → -10] su [1.00 → VOICE_SCALE_MAX].
-            // Sotto SPEECH_DB il target è 1.0 (nessun boost).
-            // Usiamo una soglia anti-jitter (delta > 0.015) per non
-            // spammare animazioni ridondanti a 10 Hz.
-            const voiceTarget =
-              db > SPEECH_DB
-                ? 1.0 +
-                  Math.min(1, Math.max(0, (db - SPEECH_DB) / 25)) *
-                    (VOICE_SCALE_MAX - 1.0)
-                : 1.0;
-            if (
-              Math.abs(voiceTarget - lastVoiceTargetRef.current) >
-              VOICE_TARGET_DELTA_MIN
-            ) {
-              const rising = voiceTarget > lastVoiceTargetRef.current;
-              lastVoiceTargetRef.current = voiceTarget;
-              Animated.timing(voiceScale, {
-                toValue: voiceTarget,
-                duration: rising ? VOICE_ATTACK_MS : VOICE_RELEASE_MS,
-                easing: Easing.out(Easing.quad),
-                useNativeDriver: true,
-              }).start();
-            }
+            // NOTA rev3 (2026-07-17): la pulsazione dell'orb NON è più
+            // pilotata da questo dB grezzo — è invece un loop guidato
+            // dal flag `status` (vedi useEffect sotto). Questo perché il
+            // dB continuo con anti-jitter risultava troppo timido per
+            // essere visibile sopra il respiro di base.
           } catch {
             // metering può fallire brevemente tra state transitions
           }
