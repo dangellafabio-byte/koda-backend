@@ -1,23 +1,14 @@
 /**
  * Taccuino Vivo — API client
  */
+import { KODA_BACKEND_URL } from "./backendUrl";
 
 const detectBackend = (): string => {
-  // EXPO_PUBLIC_BACKEND_URL viene iniettato a build-time da Expo/EAS o a
-  // runtime dal pacchettatore dev. È sempre la fonte di verità.
-  const env = process.env.EXPO_PUBLIC_BACKEND_URL;
-  if (env) {
-    return env.replace(/\/$/, "");
-  }
-  // Sul web (preview) usiamo l'origin corrente — il routing del proxy si
-  // occupa di redirigere /api/* al backend.
-  if (typeof window !== "undefined" && window.location) {
-    return window.location.origin;
-  }
-  // Fallback assoluto: stringa vuota → tutte le chiamate falliranno con
-  // 404 invece di puntare a un dominio sbagliato. È meglio fallire visibile
-  // che mandare il traffico a un host non più di proprietà del progetto.
-  return "";
+  // === PIANO B 2026-07-19 — hardcoded Railway URL ===
+  // EXPO_PUBLIC_BACKEND_URL viene ripristinato automaticamente dal sistema
+  // Emergent al vecchio preview.emergentagent.com. Usiamo KODA_BACKEND_URL
+  // (hardcoded Railway) come SORGENTE UNICA. Vedi lib/backendUrl.ts.
+  return KODA_BACKEND_URL.replace(/\/$/, "");
 };
 
 export const BACKEND = detectBackend();

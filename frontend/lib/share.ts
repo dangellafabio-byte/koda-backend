@@ -1,10 +1,12 @@
 import { Platform, Share } from "react-native";
 import * as Clipboard from "expo-clipboard";
+import { KODA_BACKEND_URL } from "./backendUrl";
 
+// === PIANO B 2026-07-19 — hardcoded Railway URL (vedi lib/backendUrl.ts) ===
 const BASE =
   typeof window !== "undefined" && window.location
     ? window.location.origin
-    : process.env.EXPO_PUBLIC_BACKEND_URL || "";
+    : KODA_BACKEND_URL;
 
 export type ShareStatus = "shared" | "copied" | "error";
 

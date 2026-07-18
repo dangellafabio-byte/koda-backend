@@ -33,7 +33,10 @@ const KEEP_ALIVE_TIMEOUT_MS = 8000; // 8 sec timeout per il ping (best-effort)
 
 async function pingBackend(): Promise<void> {
   try {
-    const base = (process.env.EXPO_PUBLIC_BACKEND_URL || "").replace(/\/$/, "");
+    // === PIANO B 2026-07-19 — hardcoded Railway URL (vedi lib/backendUrl.ts) ===
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { KODA_BACKEND_URL } = require("../lib/backendUrl");
+    const base = (KODA_BACKEND_URL || "").replace(/\/$/, "");
     if (!base) return;
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), KEEP_ALIVE_TIMEOUT_MS);

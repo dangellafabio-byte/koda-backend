@@ -24,11 +24,10 @@
  * totale, comportamento pre-Plan-C identico a prima.
  */
 import { Platform } from "react-native";
+import { KODA_BACKEND_URL } from "./backendUrl";
 
-const BACKEND_URL =
-  process.env.EXPO_PUBLIC_BACKEND_URL ||
-  process.env.EXPO_BACKEND_URL ||
-  "";
+// === PIANO B 2026-07-19 — hardcoded Railway URL (vedi lib/backendUrl.ts) ===
+const BACKEND_URL = KODA_BACKEND_URL;
 
 export type SileroProbeResult = {
   model: string;

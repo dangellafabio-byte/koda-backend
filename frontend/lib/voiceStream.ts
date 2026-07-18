@@ -38,6 +38,7 @@ import {
   RecordingPresets,
 } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
+import { KODA_BACKEND_URL } from "./backendUrl";
 
 // =============================================================
 // CONFIG
@@ -100,8 +101,11 @@ const KEEPALIVE_INTERVAL_MS = 500;
 const MAX_WS_RECONNECTS = 3;
 const RECONNECT_BACKOFF_MS = 350;
 
-const BACKEND_URL =
-  (process.env.EXPO_PUBLIC_BACKEND_URL as string | undefined) || "";
+// === PIANO B 2026-07-19 — hardcoded Railway URL ===
+// EXPO_PUBLIC_BACKEND_URL è stato ripristinato 3 volte da Emergent alla
+// vecchia URL preview.emergentagent.com. Ora usiamo KODA_BACKEND_URL
+// dal file backendUrl.ts (hardcoded Railway). Vedi commento in quel file.
+const BACKEND_URL = KODA_BACKEND_URL;
 
 function buildWsUrl(): string {
   // BACKEND_URL è https://… → converti a wss://…

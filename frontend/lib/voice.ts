@@ -179,10 +179,8 @@ export async function prewarmMic(): Promise<boolean> {
   // sul primo turno, niente 44s di timeout su 4G ballerino in furgone.
   // Idempotente: chiamabile N volte. Non blocca mai prewarmMic.
   try {
-    const BACKEND =
-      process.env.EXPO_PUBLIC_BACKEND_URL ||
-      process.env.EXPO_BACKEND_URL ||
-      "";
+    // === PIANO B 2026-07-19 — hardcoded Railway URL (vedi lib/backendUrl.ts) ===
+    const { KODA_BACKEND_URL: BACKEND } = require("./backendUrl");
     if (BACKEND) {
       // Timeout corto: se la rete è giù, non resta appeso (3s max).
       const c = new AbortController();
