@@ -557,6 +557,25 @@ def dg_params_for_route(
     params = dict(DG_PARAMS)
     route = (audio_route or "").strip().lower()
     if route == "bluetooth":
+        # === FIX 2026-07-18 v60 (Fabio "confidence 0 sempre in macchina") ===
+        # Test in CarPlay Bluetooth: nova-3 (wideband-trained) restituisce
+        # confidence 0.000 sistematicamente. Root cause: audio HFP (Hands-
+        # Free Profile) è narrowband 8 kHz upsamplato → le alte frequenze
+        # non ci sono → le feature acustiche non matchano il training di
+        # nova-3. Fix: switch a `nova-2-phonecall`, che è il modello
+        # Deepgram addestrato ESPLICITAMENTE su audio telefonico narrow-
+        # band. Trade-off accettabile: leggera perdita di accuratezza su
+        # italiano tecnico rispetto a nova-3 in casa/wired, MA su carplay/
+        # bluetooth in auto (dove nova-3 fa ZERO trascrizioni) è un salto
+        # netto in avanti. Le altre route (wired, builtin) restano su
+        # nova-3 → nessun cambio nell'esperienza domestica.
+        # nova-2 NON supporta `keyterm` (nova-3-only): convertiamo la
+        # lista dei keyterm in `keywords` (formato accettato da nova-2).
+        # Ogni elemento va emesso come param separato in `connect()`.
+        params["model"] = "nova-2-phonecall"
+        _keyterm_list = params.pop("keyterm", None)
+        if _keyterm_list:
+            params["keywords"] = _keyterm_list
         # Bluetooth CarPlay: pausa massima di riflessione stress ~1s.
         # endpointing 1200ms, utterance_end_ms 2000ms (fix v45).
         params["endpointing"] = "1200"
@@ -1727,6 +1746,65 @@ async def voice_stream_handler(
                             f"pcm=0B conv_ms={conv_ms} STATUS=convert_failed"
                         )
                         continue
+
+                    # === FIX 2026-07-18 v60 (Fabio "CarPlay silenzioso") ===
+                    # D — PCM stats logging. Il PCM decodificato dovrebbe
+                    # contenere voce quando l'utente parla. Se l'RMS resta
+                    # sempre bassissimo (~-60dB) anche urlando, il segnale
+                    # ricevuto dal microfono è DAVVERO senza voce (probabile
+                    # HFP downsampling che rovina le componenti spettrali).
+                    # RMS + peak per ogni chunk → tracciamo route+device_kind
+                    # per capire il pattern nel log.
+                    # + ffprobe ONE-SHOT sul primo chunk per capire codec/
+                    # sample_rate/bitrate REALI del container iOS (potrebbe
+                    # essere 8kHz upsamplato o 16kHz vero — determinante).
+                    try:
+                        import struct as _st
+                        _n = len(pcm) // 2
+                        if _n > 0:
+                            # decodifica veloce int16 little-endian
+                            _samples = _st.unpack(f"<{_n}h", pcm)
+                            _peak = max(abs(s) for s in _samples)
+                            # RMS (energia media) — approssimazione veloce
+                            _sq_sum = sum(s * s for s in _samples[::4])  # ogni 4° sample per velocità
+                            _rms = int((_sq_sum / max(1, _n // 4)) ** 0.5)
+                            # dB rispetto full-scale int16 (32768)
+                            import math as _m
+                            _rms_db = -100.0 if _rms == 0 else 20.0 * _m.log10(_rms / 32768.0)
+                            _peak_db = -100.0 if _peak == 0 else 20.0 * _m.log10(_peak / 32768.0)
+                            logger.info(
+                                f"[KODA_PCM_STATS sess={short_id}] "
+                                f"idx={chunks_received} aac={len(chunk)}B "
+                                f"pcm={len(pcm)}B samples={_n} "
+                                f"rms_db={_rms_db:.1f} peak_db={_peak_db:.1f} "
+                                f"route={audio_route} conv_ms={conv_ms}"
+                            )
+                    except Exception as _e:
+                        logger.warning(f"[KODA_PCM_STATS] calc failed: {_e}")
+
+                    # Probe input format ONE-SHOT (solo primo chunk della sessione)
+                    if chunks_received == 1:
+                        try:
+                            _probe_proc = await asyncio.create_subprocess_exec(
+                                "ffprobe",
+                                "-v", "error",
+                                "-show_entries", "stream=codec_name,sample_rate,channels,bit_rate",
+                                "-of", "default=noprint_wrappers=1",
+                                "-i", "pipe:0",
+                                stdin=asyncio.subprocess.PIPE,
+                                stdout=asyncio.subprocess.PIPE,
+                                stderr=asyncio.subprocess.PIPE,
+                            )
+                            _pout, _perr = await asyncio.wait_for(
+                                _probe_proc.communicate(input=chunk), timeout=2.0
+                            )
+                            _probe_txt = (_pout or b"").decode("utf-8", "ignore").strip().replace("\n", " | ")
+                            logger.info(
+                                f"[KODA_INPUT_PROBE sess={short_id}] "
+                                f"route={audio_route} chunk#1 → {_probe_txt}"
+                            )
+                        except Exception as _e:
+                            logger.warning(f"[KODA_INPUT_PROBE] ffprobe failed: {_e}")
 
                     # === VOICEPRINT GATE (2026-07-14, Iter 2) ===
                     # Se il profilo utente ha un voiceprint enrolled, calcoliamo

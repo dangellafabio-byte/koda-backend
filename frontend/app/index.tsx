@@ -376,7 +376,7 @@ export default function Taccuino() {
   // inglobato l'ultimo commit.
   useEffect(() => {
     console.log(
-      `[KODA_BUILDTAG] v59-quick-quality-4s+didnt-hear-canned+lascia-andare-vad-pulse+datetime-coercion+synthetic-done+preview-url build=2026-07-18 ` +
+      `[KODA_BUILDTAG] v60-carplay-nova2-phonecall+pcm-stats+quick-quality-4s+didnt-hear-canned+lascia-andare-vad-pulse+datetime-coercion+synthetic-done+preview-url build=2026-07-18 ` +
         `verbose=${KODA_DEBUG_VERBOSE} ` +
         `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
