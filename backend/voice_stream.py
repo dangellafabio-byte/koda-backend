@@ -758,6 +758,17 @@ MAX_UTTERANCE_NO_FINAL_S = 25.0  # === FIX 2026-07-11 (Fabio) — Cap solo safet
 # 2) OR interim transcript con punteggiatura finale (. ? !) stabile per 500ms
 # Vedi _interim_sentence_end_watcher più in basso.
 
+# === FIX 2026-07-18 v59 (Fabio "analisi ambientale su ogni turno è assurdo") ===
+# Quick-quality checkpoint: dopo 4 secondi dall'inizio della utterance corrente,
+# se Deepgram NON ha ancora prodotto alcun transcript finale utile (nessun
+# testo O confidence media < 0.4), forziamo IMMEDIATAMENTE il canned reply
+# "non ti ho sentito" senza aspettare i 25s del watchdog di safety-net e
+# senza chiamare Whisper (spreco di ~2-4s). Il caso "buono" (transcript
+# arriva con senso e conf alta entro 4s) prosegue normalmente con l'endpoint
+# naturale di Deepgram — zero analisi extra, zero latenza aggiuntiva.
+QUICK_QUALITY_CHECK_S = 4.0
+QUICK_QUALITY_MIN_CONF = 0.4
+
 
 # ============================================================
 # AUDIO CONVERSION (AAC → linear16 PCM)
@@ -1311,7 +1322,11 @@ async def voice_stream_handler(
                     await emit_to_client({"type": "error", "message": f"STT error: {msg}"})
                     break
 
-        async def _trigger_pipeline(final_text: str, pcm_snapshot: bytes = b"") -> None:
+        async def _trigger_pipeline(
+            final_text: str,
+            pcm_snapshot: bytes = b"",
+            force_skip_whisper: bool = False,
+        ) -> None:
             """Esegue la pipeline LLM+TTS esistente con il testo trascritto.
 
             === FIX 2026-07-01 — Whisper-1 override ===
@@ -1319,6 +1334,13 @@ async def voice_stream_handler(
             trascriverlo con Whisper-1 (più accurato in italiano rumoroso).
             Se Whisper riesce → usiamo il suo testo. Altrimenti fallback
             trasparente al testo Deepgram (`final_text`) come prima.
+
+            === FIX 2026-07-18 v59 — force_skip_whisper ===
+            Se il chiamante è il quick-quality watchdog (transcript vuoto
+            dopo 4s), passa force_skip_whisper=True: risparmiamo 2-4s di
+            chiamata Whisper — la trascrizione era già "morta" e Whisper
+            su audio senza voce chiara probabilmente ritornerà vuoto anche
+            lui. In questo caso saltiamo dritti al canned reply v58.3.
             """
             nonlocal pipeline_in_flight, utterance_confidence, done_emitted
             # === FIX 2026-07-09 — Idempotency guard ===
@@ -1373,6 +1395,14 @@ async def voice_stream_handler(
             dg_high_confidence = (conf_snapshot is not None and conf_snapshot >= 0.7)
 
             skip_whisper = dg_high_confidence and not suspicious
+            # v59 override: quick-quality watchdog ha già stabilito che questo
+            # turno è "silenzio/rumore" → non spendiamo altri 2-4s in Whisper
+            if force_skip_whisper:
+                skip_whisper = True
+                logger.info(
+                    f"[KODA_STT_OVERRIDE sess={short_id}] "
+                    f"force_skip_whisper=True (quick-quality watchdog) → canned reply diretto"
+                )
 
             if WHISPER_ENABLED and pcm_snapshot and len(pcm_snapshot) > 1600 and not skip_whisper:
                 # 1600B = 0.05s @ 16kHz → skip utterance troppo brevi che
@@ -1467,6 +1497,78 @@ async def voice_stream_handler(
         # il PCM accumulato (Whisper si occupa della trascrizione se il testo
         # Deepgram è vuoto). Evita il caso "furgone rumoroso → DG non decide
         # mai" che lasciava la sessione bloccata indefinitamente.
+        # === FIX 2026-07-18 v59 — Quick-quality watchdog ==================
+        # Fabio ("analisi ambientale su OGNI turno è assurdo"): dopo 4s dallo
+        # start della utterance corrente, controlliamo se abbiamo
+        # ALMENO un transcript utile (testo non vuoto + confidence >= 0.4).
+        # Se NO → forziamo subito il canned reply (v58.3) senza aspettare
+        # i 25s del safety-net + 2-4s di Whisper. Latenza massima nel caso
+        # "silenzio/rumore": ~4-5s totali invece dei 30+ precedenti.
+        # Il caso "buono" (transcript arriva entro 4s) prosegue col flusso
+        # normale (speech_final Deepgram) — questo watchdog esce silente.
+        quick_check_fired = False
+
+        async def quick_quality_watchdog_loop() -> None:
+            nonlocal speech_started_at, quick_check_fired
+            # Aspetta il checkpoint: 4s da speech_started_at, o da started_at
+            # se Deepgram non ha mai emesso SpeechStarted (silenzio totale)
+            while client_alive and dg is not None and not dg._closed:
+                if quick_check_fired or pipeline_in_flight:
+                    return
+                # Riferimento temporale: speech_started_at se disponibile,
+                # altrimenti started_at (per il caso "utente non parla mai")
+                ref_t = speech_started_at if speech_started_at is not None else started_at
+                elapsed = time.time() - ref_t
+                if elapsed >= QUICK_QUALITY_CHECK_S:
+                    break
+                try:
+                    await asyncio.sleep(0.25)  # polling fine per reattività
+                except asyncio.CancelledError:
+                    return
+
+            # Al checkpoint: valuta la qualità del transcript corrente
+            if quick_check_fired or pipeline_in_flight or not client_alive:
+                return
+            quick_check_fired = True
+
+            partial_text = " ".join(utterance_text_parts).strip()
+            conf_now = utterance_confidence if isinstance(utterance_confidence, (int, float)) else None
+            has_meaningful_text = len(partial_text) >= 3
+            has_min_confidence = (conf_now is not None and conf_now >= QUICK_QUALITY_MIN_CONF)
+
+            if has_meaningful_text and has_min_confidence:
+                # Trascrizione sta andando bene → lascia decidere Deepgram
+                # sull'endpoint naturale. Il watchdog v40 (25s) resta come
+                # safety-net.
+                logger.info(
+                    f"[KODA_STREAM sess={short_id}] quick-quality OK: "
+                    f"text={partial_text!r} conf={conf_now} → normal flow"
+                )
+                return
+
+            # Trascrizione fallita: forza canned reply IMMEDIATAMENTE.
+            # Skippa Whisper (spreco), passa direttamente al gate v58.3
+            # in _fast_pipeline_task che emetterà la frase "non ti ho sentito".
+            logger.warning(
+                f"[KODA_STREAM sess={short_id}] QUICK_QUALITY_FAIL after "
+                f"{QUICK_QUALITY_CHECK_S}s: text={partial_text!r} "
+                f"conf={conf_now} → canned reply now (skip Whisper, skip 25s watchdog)"
+            )
+            pcm_snapshot = bytes(utterance_pcm_buffer)
+            utterance_pcm_buffer.clear()
+            utterance_text_parts.clear()
+            speech_started_at = None
+            try:
+                # Testo vuoto → il gate v58.3 in _fast_pipeline_task
+                # emetterà una delle 4 frasi canned via ElevenLabs
+                await _trigger_pipeline("", pcm_snapshot, force_skip_whisper=True)
+            except Exception as e:
+                logger.error(
+                    f"[KODA_STREAM sess={short_id}] quick-quality pipeline error: {e}"
+                )
+
+        quick_quality_task = asyncio.create_task(quick_quality_watchdog_loop())
+
         async def utterance_watchdog_loop() -> None:
             nonlocal speech_started_at
             while client_alive and dg is not None and not dg._closed:
@@ -1833,6 +1935,12 @@ async def voice_stream_handler(
         try:
             watchdog_task.cancel()
             await asyncio.wait_for(watchdog_task, timeout=1.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+            pass
+        # Cancella il quick-quality task (v59)
+        try:
+            quick_quality_task.cancel()
+            await asyncio.wait_for(quick_quality_task, timeout=1.0)
         except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
             pass
         # Cancella il sentence-end task (v21)
