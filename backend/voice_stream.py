@@ -1073,6 +1073,18 @@ async def voice_stream_handler(
     location_region: Optional[str] = None
     location_country: Optional[str] = None
 
+    # === v60.2 plumb (Fabio 2026-07-18) — Audio diag → client ============
+    # Raccogliamo probe (una volta) + RMS dB (ultimi N chunk) per rispedirli
+    # al client incastrati nell'evento stt_final. Quando l'utente scarica
+    # il diag Koda, vedrà dati tipo: [DIAG sr=16000 rms=-42/-38/-41 route=bt]
+    # senza dover andare nel dashboard Emergent per i log backend.
+    session_audio_diag: dict = {
+        "probe": None,      # es. "aac/16000/1ch/32000"
+        "rms_dbs": [],      # ultimi 5 rms in dB
+        "peak_dbs": [],     # ultimi 5 peak in dB
+        "route": None,      # audio_route passato dal client
+    }
+
     async def emit_to_client(event: dict, audio_bytes: Optional[bytes] = None) -> None:
         """Emit verso il client (riusa il pattern del converse-ws esistente)."""
         nonlocal client_alive
@@ -1451,9 +1463,27 @@ async def voice_stream_handler(
                     f"whisper_ms=0 dg_conf={conf_snapshot} whisper_hit=SKIPPED"
                 )
 
+            # === v60.2 plumb — Diag audio inline nell'stt_final ============
+            # Quando la trascrizione è vuota/fallita, prependiamo un marker
+            # "[DIAG probe=... rms=... peak=... route=...]" al testo così
+            # nel diag Koda del client apparirà nel log del client:
+            #   [KODA_STREAM_CLIENT] stt_final text=[DIAG probe=aac/16000/1ch/32000 rms=-42.1,-38.5 route=bluetooth]...
+            # Se la trascrizione ha testo utile, NON tocchiamo — il diag
+            # marker apparirebbe come rumore. Lo aggiungiamo SOLO su empty.
+            _text_out = transcript_used
+            if not (transcript_used or "").strip():
+                _diag_probe = session_audio_diag.get("probe") or "?"
+                _diag_rms = ",".join(str(x) for x in session_audio_diag.get("rms_dbs", []) or ["?"])
+                _diag_peak = ",".join(str(x) for x in session_audio_diag.get("peak_dbs", []) or ["?"])
+                _diag_route = session_audio_diag.get("route") or "?"
+                _text_out = (
+                    f"[DIAG probe={_diag_probe} rms={_diag_rms} "
+                    f"peak={_diag_peak} route={_diag_route}]"
+                )
+
             await emit_to_client({
                 "type": "stt_final",
-                "text": transcript_used,
+                "text": _text_out,
                 "confidence": conf_snapshot,
                 "audio_duration_ms": audio_duration_ms,
                 "stt_source": transcript_source,  # per diag frontend
@@ -1767,6 +1797,14 @@ async def voice_stream_handler(
                                 f"rms_db={_rms_db:.1f} peak_db={_peak_db:.1f} "
                                 f"route={audio_route} conv_ms={conv_ms}"
                             )
+                            # v60.2 plumb — accumula per rispedire al client
+                            session_audio_diag["rms_dbs"].append(round(_rms_db, 1))
+                            session_audio_diag["peak_dbs"].append(round(_peak_db, 1))
+                            if len(session_audio_diag["rms_dbs"]) > 5:
+                                session_audio_diag["rms_dbs"].pop(0)
+                                session_audio_diag["peak_dbs"].pop(0)
+                            if session_audio_diag["route"] is None:
+                                session_audio_diag["route"] = audio_route
                     except Exception as _e:
                         logger.warning(f"[KODA_PCM_STATS] calc failed: {_e}")
 
@@ -1791,6 +1829,22 @@ async def voice_stream_handler(
                                 f"[KODA_INPUT_PROBE sess={short_id}] "
                                 f"route={audio_route} chunk#1 → {_probe_txt}"
                             )
+                            # v60.2 plumb — salviamo il probe per il client
+                            # Formato compatto: codec/sr/ch/br  (es. aac/16000/1/32000)
+                            try:
+                                _probe_fields = {}
+                                for line in (_pout or b"").decode("utf-8", "ignore").splitlines():
+                                    if "=" in line:
+                                        k, v = line.split("=", 1)
+                                        _probe_fields[k.strip()] = v.strip()
+                                session_audio_diag["probe"] = (
+                                    f"{_probe_fields.get('codec_name','?')}/"
+                                    f"{_probe_fields.get('sample_rate','?')}/"
+                                    f"{_probe_fields.get('channels','?')}ch/"
+                                    f"{_probe_fields.get('bit_rate','?')}"
+                                )
+                            except Exception:
+                                pass
                         except Exception as _e:
                             logger.warning(f"[KODA_INPUT_PROBE] ffprobe failed: {_e}")
 
