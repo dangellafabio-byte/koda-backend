@@ -67,10 +67,20 @@ import os
 import struct
 import time
 import uuid
-from typing import Optional, Callable, Awaitable, Any, Dict
+from typing import Optional, Callable, Awaitable, Any, Dict, Tuple
 
 import websockets
 from fastapi import WebSocket, WebSocketDisconnect
+
+# === FIX 2026-07-20 (Fabio "CarPlay silenzioso" — PCM Gain) ===
+# audioop è deprecated in Py3.13 ma disponibile in 3.11 (versione attuale
+# container). Lo usiamo per adaptive gain sui chunk PCM ricevuti da Bluetooth
+# HFP (microfono auto) che tipicamente arriva a -50 dB, sotto la soglia di
+# sensibilità di Deepgram.
+try:
+    import audioop as _audioop  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover - Py3.13+ removal
+    _audioop = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -659,6 +669,66 @@ _ADAPTIVE_QUALITY_CACHE: Dict[str, Dict[str, Any]] = {}
 _ADAPTIVE_CACHE_TTL_S = 1800  # 30 minuti
 
 
+# ============================================================
+# === FIX 2026-07-20 v61 — CarPlay Bluetooth PCM Gain =========
+# ============================================================
+# Il microfono dell'auto tramite HFP Bluetooth manda un segnale
+# molto attenuato (RMS -50/-60 dB, peak -40/-45 dB) — sotto la
+# soglia di sensibilità di Deepgram che ritorna transcript vuoto.
+#
+# Applichiamo adaptive gain lato server SOLO se:
+#   1) audio_route == "bluetooth"
+#   2) peak del chunk < -12 dB (peak_int16 < 8192)
+#
+# Target: peak_int16 = 16000 (~-6dB headroom, evita saturazione).
+# Cap: gain max = 20x (evita di amplificare puro rumore).
+# Skip: gain < 2x → non ne vale la pena.
+#
+# Applichiamo il gain PRIMA di:
+#   - inviarlo a Deepgram (dg.send_pcm)
+#   - accumularlo in utterance_pcm_buffer (usato da Whisper override)
+#
+# Zero rischio di regressione su wired/builtin: la funzione ritorna
+# passthrough (pcm, 1.0) se route != "bluetooth".
+BLUETOOTH_GAIN_TARGET_PEAK = 16000.0  # ~-6 dB below int16 fullscale
+BLUETOOTH_GAIN_THRESHOLD_PEAK = 8192  # ~-12 dB; sotto → applica gain
+BLUETOOTH_GAIN_MIN_APPLIED = 2.0      # <2x non vale la pena
+BLUETOOTH_GAIN_MAX = 20.0             # cap: evita amplificare solo rumore
+
+
+def apply_bluetooth_gain(
+    pcm: bytes,
+    audio_route: Optional[str],
+    peak_int16: int,
+) -> Tuple[bytes, float]:
+    """Adaptive gain su PCM 16-bit little-endian ricevuto da BT auto.
+
+    Returns:
+        (pcm_gained, gain_applied). `gain_applied == 1.0` significa
+        "passthrough nessuna modifica" (route non BT o segnale già ok).
+    """
+    if _audioop is None or not pcm:
+        return pcm, 1.0
+    route = (audio_route or "").strip().lower()
+    if route != "bluetooth":
+        return pcm, 1.0
+    if peak_int16 <= 0 or peak_int16 >= BLUETOOTH_GAIN_THRESHOLD_PEAK:
+        return pcm, 1.0
+    # Calcolo gain: target_peak / current_peak, capped
+    gain = min(BLUETOOTH_GAIN_TARGET_PEAK / float(peak_int16), BLUETOOTH_GAIN_MAX)
+    if gain < BLUETOOTH_GAIN_MIN_APPLIED:
+        return pcm, 1.0
+    try:
+        amplified = _audioop.mul(pcm, 2, gain)
+        return amplified, gain
+    except _audioop.error as _e:  # pragma: no cover - overflow rarissimo
+        logger.warning(f"[KODA_PCM_GAIN] audioop.mul failed: {_e}")
+        return pcm, 1.0
+    except Exception as _e:  # pragma: no cover - safety net
+        logger.warning(f"[KODA_PCM_GAIN] unexpected: {_e}")
+        return pcm, 1.0
+
+
 def _get_client_key_from_ws(websocket: WebSocket) -> str:
     """Deriva chiave stabile per client dal WebSocket.
 
@@ -1083,6 +1153,10 @@ async def voice_stream_handler(
         "rms_dbs": [],      # ultimi 5 rms in dB
         "peak_dbs": [],     # ultimi 5 peak in dB
         "route": None,      # audio_route passato dal client
+        # === v61 BT Gain (2026-07-20) — track ultimo gain applicato ===
+        "gain_last": 1.0,   # ultimo fattore di gain applicato (1.0 = passthrough)
+        "gain_max": 1.0,    # max gain applicato durante la sessione
+        "gain_count": 0,    # quanti chunk hanno ricevuto gain (>1.0)
     }
 
     async def emit_to_client(event: dict, audio_bytes: Optional[bytes] = None) -> None:
@@ -1476,9 +1550,12 @@ async def voice_stream_handler(
                 _diag_rms = ",".join(str(x) for x in session_audio_diag.get("rms_dbs", []) or ["?"])
                 _diag_peak = ",".join(str(x) for x in session_audio_diag.get("peak_dbs", []) or ["?"])
                 _diag_route = session_audio_diag.get("route") or "?"
+                _diag_gain_max = session_audio_diag.get("gain_max", 1.0)
+                _diag_gain_count = session_audio_diag.get("gain_count", 0)
                 _text_out = (
                     f"[DIAG probe={_diag_probe} rms={_diag_rms} "
-                    f"peak={_diag_peak} route={_diag_route}]"
+                    f"peak={_diag_peak} route={_diag_route} "
+                    f"gain_max={_diag_gain_max}x/{_diag_gain_count}ch]"
                 )
 
             await emit_to_client({
@@ -1894,10 +1971,36 @@ async def voice_stream_handler(
                             # (preferiamo falso-positivo a bloccare l'utente).
                             logger.debug(f"[voiceprint] gate error, passthrough: {_vp_err}")
 
+                    # === FIX 2026-07-20 v61 — CarPlay BT PCM Gain ===
+                    # Se il segnale è basso E route=bluetooth, amplifica prima
+                    # di inviarlo a Deepgram e prima di accumularlo per
+                    # Whisper. Vedi apply_bluetooth_gain() sopra per policy.
+                    # `_peak` è stato calcolato nel blocco PCM stats sopra
+                    # (fallback 0 se il blocco è fallito).
+                    try:
+                        _peak_for_gain = int(_peak)  # noqa: F821 (da blocco sopra)
+                    except (NameError, TypeError, ValueError):
+                        _peak_for_gain = 0
+                    pcm_out, _gain = apply_bluetooth_gain(
+                        pcm, audio_route, _peak_for_gain
+                    )
+                    if _gain > 1.0:
+                        session_audio_diag["gain_last"] = round(_gain, 2)
+                        session_audio_diag["gain_count"] += 1
+                        if _gain > session_audio_diag["gain_max"]:
+                            session_audio_diag["gain_max"] = round(_gain, 2)
+                        # Log ogni 4 chunk per non intasare
+                        if chunks_received % 4 == 0 or chunks_received <= 4:
+                            logger.info(
+                                f"[KODA_PCM_GAIN sess={short_id}] "
+                                f"idx={chunks_received} peak={_peak_for_gain} "
+                                f"gain={_gain:.2f}x route={audio_route}"
+                            )
+
                     # Invia a Deepgram
-                    await dg.send_pcm(pcm)
+                    await dg.send_pcm(pcm_out)
                     # === FIX 2026-07-01 — accumula PCM per Whisper override ===
-                    utterance_pcm_buffer.extend(pcm)
+                    utterance_pcm_buffer.extend(pcm_out)
 
                     # Diagnostica granulare (richiesta da Fabio per Xiaomi)
                     if chunks_received % 4 == 0 or chunks_received <= 4:
