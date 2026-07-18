@@ -9054,6 +9054,125 @@ async def _fast_pipeline_task(
         profile = await get_or_create_profile()
         _t_after_profile = time.time()
 
+        # === FIX 2026-07-17 v58.3 — Empty/short transcript → canned reply ===
+        # ROOT CAUSE (Fabio log analysis): quando Deepgram (o Whisper override)
+        # restituisce testo vuoto o whitespace-only (accade in ambiente rumoroso:
+        # macchina, furgone, esterno con vento), la pipeline chiamava Claude
+        # con text="" → Claude non aveva NULLA su cui rispondere → nessuna
+        # frase generata → nessun evento sentence → il client passava da
+        # "thinking" a "idle" SILENZIOSAMENTE. UX: l'utente pensa che Koda
+        # non voglia rispondere.
+        #
+        # FIX: se text è vuoto o < 3 char (dopo strip), emettiamo una risposta
+        # canned di ripetizione con TTS reale (ElevenLabs stessa voce/tono),
+        # e chiudiamo la sessione con `done`. Niente Claude, niente ricordi,
+        # niente scritture su timeline. Costo: solo una piccola chiamata TTS.
+        _stripped = (text or "").strip()
+        if len(_stripped) < 3:
+            import random
+            _phrase = random.choice([
+                "Non ti ho sentito bene, puoi ripetere?",
+                "Scusami, non ho capito. Puoi ridirmelo?",
+                "Mi è sfuggito, come dicevi?",
+                "Non ti ho colto, riprova?",
+            ])
+            logger.info(
+                f"[fast {session_id[:8]}] EMPTY_STT ({text!r}) → canned reply: {_phrase!r}"
+            )
+            # TTS della frase canned. Se ElevenLabs fallisce, mandiamo comunque
+            # l'evento sentence (testo visibile in chat) + meta + done — così
+            # l'utente almeno LEGGE "non ho capito" invece di vedere idle muto.
+            _voice_id = _resolve_voice_id(profile)
+            _client_el_tmp = _get_eleven_client()
+            _audio_bytes: bytes = b""
+            if _client_el_tmp is not None:
+                try:
+                    _vs = _voice_settings_for_tone("calm", None, None)
+                    _tts_lang = (getattr(profile, "language", None) or "it").lower()
+                    if not (isinstance(_tts_lang, str) and len(_tts_lang) == 2):
+                        _tts_lang = "it"
+                    _phrase_norm = _normalize_for_tts_it(_phrase)
+                    _phrase_v3 = f"[gently] {_phrase_norm}"
+
+                    def _do_tts_didnt_hear():
+                        _audio = bytearray()
+                        try:
+                            _gen = _client_el_tmp.text_to_speech.convert(
+                                text=_phrase_v3,
+                                voice_id=_voice_id,
+                                model_id="eleven_v3",
+                                output_format="mp3_44100_128",
+                                language_code=_tts_lang,
+                                voice_settings=_vs,
+                            )
+                            for _chunk in _gen:
+                                if _chunk:
+                                    _audio.extend(_chunk)
+                        except Exception as _e:
+                            logger.warning(f"[fast didnt-hear v3] tts error: {_e}")
+                            # Fallback flash se v3 fallisce
+                            try:
+                                _gen2 = _client_el_tmp.text_to_speech.convert(
+                                    text=_phrase_norm,
+                                    voice_id=_voice_id,
+                                    model_id="eleven_flash_v2_5",
+                                    output_format="mp3_44100_128",
+                                    language_code=_tts_lang,
+                                    voice_settings=_vs,
+                                )
+                                for _c in _gen2:
+                                    if _c:
+                                        _audio.extend(_c)
+                            except Exception as _e2:
+                                logger.warning(f"[fast didnt-hear flash] tts error: {_e2}")
+                        return bytes(_audio)
+
+                    _audio_bytes = await asyncio.to_thread(_do_tts_didnt_hear)
+                except Exception as _e:
+                    logger.warning(f"[fast didnt-hear] TTS pipeline crashed: {_e}")
+                    _audio_bytes = b""
+
+            # Emit sentence: se abbiamo audio, il client lo suona; altrimenti
+            # mostra solo il testo (fallback grazioso).
+            try:
+                await _publish({
+                    "type": "sentence",
+                    "i": 0,
+                    "text": _phrase,
+                    "waveform": None,
+                    "window_ms": 60,
+                }, audio_bytes=_audio_bytes if _audio_bytes else None)
+            except Exception as _e:
+                logger.warning(f"[fast didnt-hear] sentence publish failed: {_e}")
+
+            # Emit meta (per il [KODA_SUMMARY] del client + tone hint per l'orb)
+            try:
+                await _publish({
+                    "type": "meta",
+                    "reply": _phrase,
+                    "voice_text": None,
+                    "tone": "calm",
+                    "actions": [],
+                    "close_session": False,
+                    "debug_v": "v58.3-didnt-hear-canned-2026-07-17",
+                    "model": "canned",
+                    "path": "fast-didnt-hear",
+                    "llm_ttft_ms": 0,
+                    "first_tts_ms": 0,
+                    "first_audio_total_ms": 0,
+                    "no_transcript": True,
+                })
+            except Exception as _e:
+                logger.warning(f"[fast didnt-hear] meta publish failed: {_e}")
+
+            # Emit done → il client esce da "thinking" e torna idle pulito
+            try:
+                await _publish({"type": "done", "no_transcript": True})
+            except Exception as _e:
+                logger.warning(f"[fast didnt-hear] done publish failed: {_e}")
+            await _fast_session_mark_done(session_id)
+            return
+
         # User entry — salvo SUBITO se non ephemeral
         user_entry = TimelineEntry(role="user", text=text, audio_duration_ms=audio_duration_ms)
         if not ephemeral:

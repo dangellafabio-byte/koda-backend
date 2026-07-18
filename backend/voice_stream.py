@@ -1269,12 +1269,22 @@ async def voice_stream_handler(
                     if speech_final and not pipeline_in_flight:
                         final_text = " ".join(utterance_text_parts).strip()
                         utterance_text_parts.clear()
-                        if final_text:
-                            # === FIX 2026-07-01 — Whisper override ===
-                            # Snapshot PCM PRIMA di clear (per Whisper).
-                            pcm_snapshot = bytes(utterance_pcm_buffer)
-                            utterance_pcm_buffer.clear()
-                            await _trigger_pipeline(final_text, pcm_snapshot)
+                        # === FIX 2026-07-17 v58.3 — Empty transcript fires pipeline too ===
+                        # Prima gate: `if final_text:` scartava silenziosamente
+                        # ogni speech_final con testo vuoto (accade in ambiente
+                        # rumoroso: Deepgram endpoint-a la voce ma non riesce
+                        # a decodificarla). Risultato: client "thinking → idle"
+                        # senza feedback → utente pensa che Koda non voglia
+                        # rispondere. Ora triggeriamo la pipeline anche con
+                        # testo vuoto — `_fast_pipeline_task` intercetta empty
+                        # e ritorna un canned reply "Non ti ho sentito bene,
+                        # puoi ripetere?" con TTS reale. Vedi server.py
+                        # `_fast_pipeline_task` gate v58.3.
+                        # === FIX 2026-07-01 — Whisper override ===
+                        # Snapshot PCM PRIMA di clear (per Whisper).
+                        pcm_snapshot = bytes(utterance_pcm_buffer)
+                        utterance_pcm_buffer.clear()
+                        await _trigger_pipeline(final_text, pcm_snapshot)
 
                 elif evt_type == "UtteranceEnd":
                     # Fallback: arriva se l'audio è continuato a entrare ma
@@ -1282,14 +1292,14 @@ async def voice_stream_handler(
                     if not pipeline_in_flight and utterance_text_parts:
                         final_text = " ".join(utterance_text_parts).strip()
                         utterance_text_parts.clear()
-                        if final_text:
-                            logger.info(
-                                f"[KODA_STREAM sess={short_id}] "
-                                f"UtteranceEnd → trigger pipeline (text={final_text!r})"
-                            )
-                            pcm_snapshot = bytes(utterance_pcm_buffer)
-                            utterance_pcm_buffer.clear()
-                            await _trigger_pipeline(final_text, pcm_snapshot)
+                        # v58.3: pipeline triggerata anche su testo vuoto → canned reply
+                        logger.info(
+                            f"[KODA_STREAM sess={short_id}] "
+                            f"UtteranceEnd → trigger pipeline (text={final_text!r})"
+                        )
+                        pcm_snapshot = bytes(utterance_pcm_buffer)
+                        utterance_pcm_buffer.clear()
+                        await _trigger_pipeline(final_text, pcm_snapshot)
 
                 elif evt_type == "Metadata":
                     # Metadata di sessione (ignora per ora)
