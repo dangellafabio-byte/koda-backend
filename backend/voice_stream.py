@@ -557,25 +557,13 @@ def dg_params_for_route(
     params = dict(DG_PARAMS)
     route = (audio_route or "").strip().lower()
     if route == "bluetooth":
-        # === FIX 2026-07-18 v60 (Fabio "confidence 0 sempre in macchina") ===
-        # Test in CarPlay Bluetooth: nova-3 (wideband-trained) restituisce
-        # confidence 0.000 sistematicamente. Root cause: audio HFP (Hands-
-        # Free Profile) è narrowband 8 kHz upsamplato → le alte frequenze
-        # non ci sono → le feature acustiche non matchano il training di
-        # nova-3. Fix: switch a `nova-2-phonecall`, che è il modello
-        # Deepgram addestrato ESPLICITAMENTE su audio telefonico narrow-
-        # band. Trade-off accettabile: leggera perdita di accuratezza su
-        # italiano tecnico rispetto a nova-3 in casa/wired, MA su carplay/
-        # bluetooth in auto (dove nova-3 fa ZERO trascrizioni) è un salto
-        # netto in avanti. Le altre route (wired, builtin) restano su
-        # nova-3 → nessun cambio nell'esperienza domestica.
-        # nova-2 NON supporta `keyterm` (nova-3-only): convertiamo la
-        # lista dei keyterm in `keywords` (formato accettato da nova-2).
-        # Ogni elemento va emesso come param separato in `connect()`.
-        params["model"] = "nova-2-phonecall"
-        _keyterm_list = params.pop("keyterm", None)
-        if _keyterm_list:
-            params["keywords"] = _keyterm_list
+        # === ROLLBACK 2026-07-18 v60.1 — nova-2-phonecall causava HTTP 400 ===
+        # Il tentativo v60 di switchare a nova-2-phonecall su CarPlay è
+        # stato ROLLBACK-ato: Deepgram restituiva HTTP 400 sull'upgrade
+        # WebSocket, bloccando ogni turno voce. Torniamo a nova-3 (default).
+        # Il problema di CarPlay resta aperto — si affronterà con un
+        # approccio diverso (probabilmente un config-plugin native per
+        # forzare wideband audio, non un cambio di modello).
         # Bluetooth CarPlay: pausa massima di riflessione stress ~1s.
         # endpointing 1200ms, utterance_end_ms 2000ms (fix v45).
         params["endpointing"] = "1200"
