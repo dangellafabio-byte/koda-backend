@@ -671,13 +671,16 @@ _ADAPTIVE_CACHE_TTL_S = 1800  # 30 minuti
 
 # ============================================================
 # === FIX 2026-07-20 v61 — CarPlay Bluetooth PCM Gain =========
+# === EXTENDED 2026-07-19 v62 — anche builtin in ambiente rumoroso =====
 # ============================================================
-# Il microfono dell'auto tramite HFP Bluetooth manda un segnale
-# molto attenuato (RMS -50/-60 dB, peak -40/-45 dB) — sotto la
-# soglia di sensibilità di Deepgram che ritorna transcript vuoto.
+# ORIGINALE (v61): il microfono dell'auto tramite HFP Bluetooth manda un
+# segnale molto attenuato (RMS -50/-60 dB, peak -40/-45 dB).
+# ESTESO (v62): il microfono BUILT-IN dell'iPhone in auto (senza CarPlay)
+# ha lo stesso problema: rumore motore + ventilazione + strada coprono la
+# voce → rms_db -38/-42 dB, peak troppo basso per Deepgram.
 #
-# Applichiamo adaptive gain lato server SOLO se:
-#   1) audio_route == "bluetooth"
+# Applichiamo adaptive gain lato server SE:
+#   1) audio_route in ["bluetooth", "builtin", "wired"]  (tutte le route reali)
 #   2) peak del chunk < -12 dB (peak_int16 < 8192)
 #
 # Target: peak_int16 = 16000 (~-6dB headroom, evita saturazione).
@@ -688,12 +691,19 @@ _ADAPTIVE_CACHE_TTL_S = 1800  # 30 minuti
 #   - inviarlo a Deepgram (dg.send_pcm)
 #   - accumularlo in utterance_pcm_buffer (usato da Whisper override)
 #
-# Zero rischio di regressione su wired/builtin: la funzione ritorna
-# passthrough (pcm, 1.0) se route != "bluetooth".
+# Zero rischio di regressione: se peak >= 8192 (segnale già decente),
+# passthrough completo. La funzione si attiva SOLO se davvero serve.
 BLUETOOTH_GAIN_TARGET_PEAK = 16000.0  # ~-6 dB below int16 fullscale
 BLUETOOTH_GAIN_THRESHOLD_PEAK = 8192  # ~-12 dB; sotto → applica gain
 BLUETOOTH_GAIN_MIN_APPLIED = 2.0      # <2x non vale la pena
 BLUETOOTH_GAIN_MAX = 20.0             # cap: evita amplificare solo rumore
+
+# === v62 — route coperte dal gain adattivo ===
+# Include TUTTE le route reali (bluetooth per CarPlay/AirPods, builtin per
+# microfono interno iPhone, wired per cuffie cablate). Il gain scatta comunque
+# solo se peak_int16 < BLUETOOTH_GAIN_THRESHOLD_PEAK, quindi non impatta l'audio
+# già buono.
+_GAIN_ELIGIBLE_ROUTES = frozenset({"bluetooth", "builtin", "wired"})
 
 
 def apply_bluetooth_gain(
@@ -701,16 +711,20 @@ def apply_bluetooth_gain(
     audio_route: Optional[str],
     peak_int16: int,
 ) -> Tuple[bytes, float]:
-    """Adaptive gain su PCM 16-bit little-endian ricevuto da BT auto.
+    """Adaptive gain su PCM 16-bit little-endian per audio a basso volume.
+
+    Nome storico (v61) mantenuto per compatibilità, ma dalla v62 la funzione
+    copre anche `builtin` e `wired` — la selezione avviene puramente sulla base
+    del peak effettivo del chunk (segnale debole → amplifica).
 
     Returns:
         (pcm_gained, gain_applied). `gain_applied == 1.0` significa
-        "passthrough nessuna modifica" (route non BT o segnale già ok).
+        "passthrough nessuna modifica" (route non idonea o segnale già ok).
     """
     if _audioop is None or not pcm:
         return pcm, 1.0
     route = (audio_route or "").strip().lower()
-    if route != "bluetooth":
+    if route not in _GAIN_ELIGIBLE_ROUTES:
         return pcm, 1.0
     if peak_int16 <= 0 or peak_int16 >= BLUETOOTH_GAIN_THRESHOLD_PEAK:
         return pcm, 1.0
