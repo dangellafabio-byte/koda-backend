@@ -16,6 +16,9 @@ import {
   setIsAudioActiveAsync,
   requestRecordingPermissionsAsync,
 } from "expo-audio";
+// === PIANO B 2026-07-19 — static import (era lazy require, sospetto
+// bloccasse silenziosamente il recorder chain su Metro/Hermes) ===
+import { KODA_BACKEND_URL } from "./backendUrl";
 
 export type Recorder = {
   stop: () => Promise<{ uri?: string; blob?: Blob; mime: string; filename: string } | null>;
@@ -179,8 +182,11 @@ export async function prewarmMic(): Promise<boolean> {
   // sul primo turno, niente 44s di timeout su 4G ballerino in furgone.
   // Idempotente: chiamabile N volte. Non blocca mai prewarmMic.
   try {
-    // === PIANO B 2026-07-19 — hardcoded Railway URL (vedi lib/backendUrl.ts) ===
-    const { KODA_BACKEND_URL: BACKEND } = require("./backendUrl");
+    // === PIANO B FIX 2026-07-19 — static import invece di lazy require ===
+    // Il lazy `require("./backendUrl")` causava un throw silenziato che
+    // bloccava la catena di inizializzazione del recorder → Scenario A
+    // (chunks=0 lato server). Confermato da Fabio dal log Railway.
+    const BACKEND = KODA_BACKEND_URL;
     if (BACKEND) {
       // Timeout corto: se la rete è giù, non resta appeso (3s max).
       const c = new AbortController();

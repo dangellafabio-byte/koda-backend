@@ -12,6 +12,8 @@ import { loadProfileCache } from "../lib/localCache";
 import { AuthProvider, useAuth } from "../lib/auth";
 import LoginScreen from "../components/LoginScreen";
 import { installDiagLogger } from "../lib/diagLogger";
+// === PIANO B FIX 2026-07-19 — static import (era lazy require) ===
+import { KODA_BACKEND_URL } from "../lib/backendUrl";
 
 // === DIAG LOGGER (sprint v12) ===
 // Install all'import del modulo (eseguito UNA volta al boot, prima
@@ -33,9 +35,7 @@ const KEEP_ALIVE_TIMEOUT_MS = 8000; // 8 sec timeout per il ping (best-effort)
 
 async function pingBackend(): Promise<void> {
   try {
-    // === PIANO B 2026-07-19 — hardcoded Railway URL (vedi lib/backendUrl.ts) ===
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { KODA_BACKEND_URL } = require("../lib/backendUrl");
+    // === PIANO B FIX 2026-07-19 — static import invece di lazy require ===
     const base = (KODA_BACKEND_URL || "").replace(/\/$/, "");
     if (!base) return;
     const controller = new AbortController();
