@@ -1919,7 +1919,29 @@ async def voice_stream_handler(
                     # PCM stats e del gain. Rimuove rumore motore/ventola/
                     # sibili PRIMA che il gain amplifichi. Latenza <1ms.
                     # Se scipy non è disponibile → passthrough silente.
+                    #
+                    # === v63.1 2026-07-19 — LOG PRE vs POST bandpass ===
+                    # Calcoliamo rms/peak PRIMA del bandpass per Fabio (vedere
+                    # riduzione rumore reale in auto).
+                    _pcm_prefilter = pcm
                     pcm = apply_voice_bandpass(pcm)
+                    try:
+                        import struct as _st_pre
+                        import math as _m_pre
+                        _n_pre = len(_pcm_prefilter) // 2
+                        if _n_pre > 0:
+                            _s_pre = _st_pre.unpack(f"<{_n_pre}h", _pcm_prefilter)
+                            _peak_pre = max(abs(s) for s in _s_pre)
+                            _sq_pre = sum(s * s for s in _s_pre[::4])
+                            _rms_pre = int((_sq_pre / max(1, _n_pre // 4)) ** 0.5)
+                            _rms_db_pre = -100.0 if _rms_pre == 0 else 20.0 * _m_pre.log10(_rms_pre / 32768.0)
+                            _peak_db_pre = -100.0 if _peak_pre == 0 else 20.0 * _m_pre.log10(_peak_pre / 32768.0)
+                            logger.info(
+                                f"[KODA_PCM_STATS_PREFILTER sess={short_id}] "
+                                f"idx={chunks_received} rms_db={_rms_db_pre:.1f} peak_db={_peak_db_pre:.1f}"
+                            )
+                    except Exception as _e_pre:
+                        logger.warning(f"[KODA_PCM_STATS_PREFILTER] calc failed: {_e_pre}")
 
                     # === FIX 2026-07-18 v60 (Fabio "CarPlay silenzioso") ===
                     # D — PCM stats logging. Il PCM decodificato dovrebbe

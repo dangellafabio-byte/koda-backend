@@ -220,6 +220,35 @@ export async function prewarmMic(): Promise<boolean> {
         shouldRouteThroughEarpiece: false,
       });
     } catch {}
+    // === v63.1 2026-07-19 — Runtime check AVAudioSession state ===
+    // Verifica se la patch v56 (.voiceChat) è effettivamente attiva.
+    // Log unico per turno. Se AsyncFunction non è disponibile (patch
+    // non applicata o build vecchia) → silent skip.
+    if (Platform.OS === "ios") {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const AudioMod: any = require("expo-audio");
+        const state = await AudioMod?.NativeModule?.kodaGetAudioSessionState?.();
+        if (state && typeof state === "object") {
+          console.log(
+            `[KODA_AUDIO_MODE] category=${state.category} mode=${state.mode} ` +
+              `sample_rate=${state.sample_rate} pref_sr=${state.preferred_sample_rate} ` +
+              `input=${state.input_port_type}/${state.input_port_name || "?"} ` +
+              `data_source=${state.input_data_source || "?"} ` +
+              `output=${state.output_port_type || "?"}`
+          );
+        } else {
+          console.log(
+            `[KODA_AUDIO_MODE] kodaGetAudioSessionState NOT AVAILABLE — ` +
+              `plugin v63 non presente in questa build`
+          );
+        }
+      } catch (e: any) {
+        console.log(
+          `[KODA_AUDIO_MODE] query failed: ${String(e?.message || e).slice(0, 140)}`
+        );
+      }
+    }
     _nativeReady = true;
     return true;
   } catch {

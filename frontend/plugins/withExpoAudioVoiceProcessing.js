@@ -35,10 +35,42 @@ const path = require("path");
 const { withDangerousMod } = require("@expo/config-plugins");
 
 const KODA_PATCH_MARKER = "KODA PATCH 2026-07-13 v56 (voiceChat mode only, rollback)";
+const KODA_ASYNC_FN_MARKER = "KODA_V63_ASYNC_AUDIO_MODE_QUERY";
 // Marker generico per riconoscere QUALSIASI vecchia patch KODA v11..v55
 // presente nel file cached di node_modules. Serve per revert automatico
 // prima di applicare la versione corrente. NON modificare.
 const KODA_GENERIC_IOS_MARKER = "KODA PATCH";
+
+// === v63 2026-07-19 — Runtime audio mode query =====================
+// AsyncFunction JS-callable che ritorna lo stato REALE di AVAudioSession
+// al momento della chiamata: category, mode, sample_rate, input port.
+// Necessario per verificare se la patch v56 (.voiceChat) è effettivamente
+// attiva runtime — nessun altro modo di controllarlo da JS.
+const ASYNC_FN_BLOCK = `    // === ${KODA_ASYNC_FN_MARKER} ===
+    AsyncFunction("kodaGetAudioSessionState") { () -> [String: Any] in
+      let session = AVAudioSession.sharedInstance()
+      var result: [String: Any] = [:]
+      result["category"] = session.category.rawValue
+      result["mode"] = session.mode.rawValue
+      result["sample_rate"] = session.sampleRate
+      result["preferred_sample_rate"] = session.preferredSampleRate
+      if let input = session.currentRoute.inputs.first {
+        result["input_port_type"] = input.portType.rawValue
+        result["input_port_name"] = input.portName
+        if let ds = input.selectedDataSource {
+          result["input_data_source"] = ds.dataSourceName
+        } else {
+          result["input_data_source"] = "none"
+        }
+      } else {
+        result["input_port_type"] = "none"
+      }
+      if let output = session.currentRoute.outputs.first {
+        result["output_port_type"] = output.portType.rawValue
+      }
+      return result
+    }
+`;
 
 const OLD_BLOCK = `    if sessionOptions.isEmpty {
       try session.setCategory(category, mode: .default)
@@ -191,6 +223,30 @@ function patchExpoAudioSwift(projectRoot) {
   if (reverted !== content) {
     fs.writeFileSync(file, reverted, "utf8");
     content = reverted;
+  }
+
+  // Injection AsyncFunction v63 (indipendente dalla patch mode v56)
+  if (!content.includes(KODA_ASYNC_FN_MARKER)) {
+    // Cerca un anchor per iniettare: subito dopo il primo `Function` block
+    // dentro `Definition {` del modulo AudioModule.
+    const anchor = "    Function(\"setAudioMode\"";
+    const idx = content.indexOf(anchor);
+    if (idx !== -1) {
+      content = content.slice(0, idx) + ASYNC_FN_BLOCK + "\n" + content.slice(idx);
+      fs.writeFileSync(file, content, "utf8");
+      console.log(
+        "[withExpoAudioVoiceProcessing] ✅ AsyncFunction kodaGetAudioSessionState injected (v63)."
+      );
+    } else {
+      console.warn(
+        "[withExpoAudioVoiceProcessing] ⚠️  Anchor 'Function(\"setAudioMode\"' NOT FOUND. " +
+          "AsyncFunction v63 NOT injected. Runtime audio mode check unavailable."
+      );
+    }
+  } else {
+    console.log(
+      "[withExpoAudioVoiceProcessing] AsyncFunction v63 already present. Skipping."
+    );
   }
 
   if (content.includes(KODA_PATCH_MARKER)) {
