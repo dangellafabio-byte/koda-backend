@@ -706,6 +706,64 @@ BLUETOOTH_GAIN_MAX = 20.0             # cap: evita amplificare solo rumore
 _GAIN_ELIGIBLE_ROUTES = frozenset({"bluetooth", "builtin", "wired"})
 
 
+# ============================================================
+# === v63 2026-07-19 — Voice Bandpass Filter (noise suppression) =====
+# ============================================================
+# Ambienti rumorosi (auto in movimento, ventilazione, ufficio con condizionatore)
+# hanno rumore concentrato:
+#   - Motore/vibrazioni:      0-250 Hz     (fondamentale + prime armoniche)
+#   - Ventilazione bassa:     0-500 Hz
+#   - Ventilazione/wind noise: >4000 Hz    (sibili, air movement)
+#
+# La voce umana intellegibile sta tra 300 e 3400 Hz (telephony band).
+# Applicando un bandpass 300-3400 Hz PRIMA del gain, rimuoviamo il rumore
+# ambientale prima di amplificare — così il gain amplifica SOLO la voce,
+# non il rumore.
+#
+# Latenza: ~1 ms per chunk da 3s (48000 sample @ 16kHz). Trascurabile.
+# Zero dipendenze extra: scipy è già in requirements.txt.
+try:
+    import numpy as _np  # type: ignore[import-untyped]
+    from scipy.signal import butter as _butter, sosfilt as _sosfilt  # type: ignore[import-untyped]
+
+    def _build_voice_bandpass_sos(sample_rate: int = 16000):
+        """Costruisce coefficienti SOS per bandpass 300-3400 Hz (telephony band)."""
+        nyq = sample_rate * 0.5
+        low = 300.0 / nyq
+        high = 3400.0 / nyq
+        # Ordine 4 = 4 poli per lato, buon compromesso tra ripidità e latenza
+        return _butter(4, [low, high], btype="band", output="sos")
+
+    _VOICE_BANDPASS_SOS = _build_voice_bandpass_sos(16000)
+    _BANDPASS_AVAILABLE = True
+except Exception as _e:  # pragma: no cover - scipy/numpy dovrebbero esistere
+    logger.warning(f"[KODA_BANDPASS] scipy/numpy import failed: {_e}")
+    _np = None  # type: ignore[assignment]
+    _VOICE_BANDPASS_SOS = None
+    _BANDPASS_AVAILABLE = False
+
+
+def apply_voice_bandpass(pcm: bytes) -> bytes:
+    """Applica un bandpass 300-3400 Hz al PCM 16-bit little-endian mono.
+
+    Rimuove le frequenze fuori dalla banda vocale telefonica, eliminando
+    rumore motore, ventilazione, vibrazioni e sibili di alta frequenza.
+
+    Se scipy/numpy non sono disponibili, ritorna il PCM invariato.
+    Se il PCM è vuoto o troppo corto (< 8 sample), passthrough.
+    """
+    if not _BANDPASS_AVAILABLE or not pcm or len(pcm) < 16:
+        return pcm
+    try:
+        arr = _np.frombuffer(pcm, dtype=_np.int16).astype(_np.float32) / 32768.0
+        filtered = _sosfilt(_VOICE_BANDPASS_SOS, arr)
+        out = _np.clip(filtered * 32768.0, -32768, 32767).astype(_np.int16)
+        return out.tobytes()
+    except Exception as _e:  # pragma: no cover - safety
+        logger.warning(f"[KODA_BANDPASS] filter failed: {_e}")
+        return pcm
+
+
 def apply_bluetooth_gain(
     pcm: bytes,
     audio_route: Optional[str],
@@ -1855,6 +1913,13 @@ async def voice_stream_handler(
                             f"pcm=0B conv_ms={conv_ms} STATUS=convert_failed"
                         )
                         continue
+
+                    # === FIX 2026-07-19 v63 — Voice Bandpass (noise suppression) ===
+                    # Applichiamo bandpass 300-3400Hz al PCM ORA, PRIMA delle
+                    # PCM stats e del gain. Rimuove rumore motore/ventola/
+                    # sibili PRIMA che il gain amplifichi. Latenza <1ms.
+                    # Se scipy non è disponibile → passthrough silente.
+                    pcm = apply_voice_bandpass(pcm)
 
                     # === FIX 2026-07-18 v60 (Fabio "CarPlay silenzioso") ===
                     # D — PCM stats logging. Il PCM decodificato dovrebbe
