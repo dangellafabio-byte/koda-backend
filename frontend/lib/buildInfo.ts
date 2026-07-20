@@ -1,14 +1,19 @@
 /**
  * Build Info — identificatore univoco del bundle JS attualmente in uso.
  *
- * Aggiornare BUILD_VERSION ad OGNI modifica significativa di UI/logica
- * che l'utente deve poter verificare dopo il deployment.
+ * ⚠️  QUESTA STRINGA È HARDCODED. Non viene auto-generata dal build.
+ * Aggiornarla A MANO ad ogni modifica significativa prima di premere
+ * "Publish → Genera build iOS". Serve SOLO a mostrare in-app quale
+ * codice sorgente ha compilato il binario, così l'utente può capire
+ * al volo se la build è fresca o vecchia.
  *
  * Visibile in fondo alle Impostazioni dell'app, in caratteri piccoli.
- * Permette di distinguere a colpo d'occhio se il device ha scaricato
- * il bundle aggiornato o se sta ancora usando una versione precedente.
  *
- * Formato: "YYYY-MM-DD HH:mm" + descrizione breve.
+ * Formato: "YYYY-MM-DD v<app.version>+<changeset> (descrizione)".
  */
-export const BUILD_VERSION = "2026-07-14 v1.0.113+11 (OTA project-id fix)";
-export const BUILD_NOTES = "FIX CRITICO: projectId in app.json allineato a d022431b (project usato dalla build TestFlight). Prima era 92cf0b6f, causa root del fallimento consegna OTA. + Cielo viola, chip XL, backoff HF.";
+export const BUILD_VERSION = "2026-07-20 v1.0.113+12 (Railway + Bandpass + voiceChat runtime check)";
+
+export const BUILD_NOTES =
+  "Backend migrato su Railway (backendUrl.ts hardcoded, bypassa .env reset). " +
+  "Bandpass 300-3400Hz + gain adattivo lato server per pulire rumore motore auto. " +
+  "Plugin nativo iOS con .voiceChat mode (AEC/NS/AGC Apple) + kodaGetAudioSessionState per verifica runtime AVAudioSession.";
