@@ -30,18 +30,25 @@ import {
   formatDiagEventsForExport,
   type DiagEvent,
 } from "../lib/diagLogger";
+import { getLastAudioSessionState, type KodaAudioSessionState } from "../lib/voice";
 
 export default function DiagnosticsScreen() {
   const router = useRouter();
   const [events, setEvents] = useState<DiagEvent[]>([]);
   const [refreshTick, setRefreshTick] = useState(0);
+  // === v63.2 2026-07-20 — card fissa in cima con stato AVAudioSession
+  // Aggiornata ogni 1s come gli eventi. Utente vede a colpo d'occhio se
+  // .voiceChat è attivo o no, senza scrollare i log.
+  const [audioState, setAudioState] = useState<KodaAudioSessionState | null>(null);
 
   // Auto-refresh ogni 1s mentre la schermata è aperta. Costo trascurabile
   // (chiama getDiagEvents che è una slice del buffer).
   useEffect(() => {
     setEvents(getDiagEvents());
+    setAudioState(getLastAudioSessionState());
     const t = setInterval(() => {
       setEvents(getDiagEvents());
+      setAudioState(getLastAudioSessionState());
     }, 1000);
     return () => clearInterval(t);
   }, [refreshTick]);
@@ -103,6 +110,89 @@ export default function DiagnosticsScreen() {
         <Text style={styles.statsTextDim}>
           Cattura: [KODA_VAD] [KODA_TIMING] [KODA_SUMMARY]
         </Text>
+      </View>
+
+      {/* === v63.2 2026-07-20 — AVAudioSession state card ===
+          Mostra lo stato REALE dell'AudioSession iOS letto via plugin nativo
+          `kodaGetAudioSessionState`. Serve per verificare a colpo d'occhio
+          (senza collegarsi a un Mac) se la patch .voiceChat è attiva e quale
+          input il sistema sta usando (BuiltInMic, BluetoothHFP, CarPlay).
+          Se `available=false` → la build non ha il plugin v63 dentro. */}
+      <View style={styles.audioCard}>
+        <Text style={styles.audioCardTitle}>🎙  AVAudioSession (iOS)</Text>
+        {audioState == null ? (
+          <Text style={styles.audioCardEmpty}>
+            Nessuna cattura ancora. Apri il microfono almeno una volta
+            (prewarmMic) e torna qui.
+          </Text>
+        ) : audioState.available ? (
+          <>
+            <View style={styles.audioRow}>
+              <Text style={styles.audioLabel}>Mode</Text>
+              <Text
+                style={[
+                  styles.audioValue,
+                  audioState.mode === "AVAudioSessionModeVoiceChat"
+                    ? styles.audioValueOk
+                    : styles.audioValueWarn,
+                ]}
+                selectable
+              >
+                {audioState.mode || "?"}
+                {audioState.mode === "AVAudioSessionModeVoiceChat" ? "  ✅" : "  ⚠️"}
+              </Text>
+            </View>
+            <View style={styles.audioRow}>
+              <Text style={styles.audioLabel}>Category</Text>
+              <Text style={styles.audioValue} selectable>
+                {audioState.category || "?"}
+              </Text>
+            </View>
+            <View style={styles.audioRow}>
+              <Text style={styles.audioLabel}>Input</Text>
+              <Text style={styles.audioValue} selectable>
+                {audioState.input_port_type || "?"}
+                {audioState.input_port_name ? ` (${audioState.input_port_name})` : ""}
+              </Text>
+            </View>
+            <View style={styles.audioRow}>
+              <Text style={styles.audioLabel}>Data source</Text>
+              <Text style={styles.audioValue} selectable>
+                {audioState.input_data_source || "?"}
+              </Text>
+            </View>
+            <View style={styles.audioRow}>
+              <Text style={styles.audioLabel}>Output</Text>
+              <Text style={styles.audioValue} selectable>
+                {audioState.output_port_type || "?"}
+              </Text>
+            </View>
+            <View style={styles.audioRow}>
+              <Text style={styles.audioLabel}>Sample rate</Text>
+              <Text style={styles.audioValue} selectable>
+                {audioState.sample_rate ?? "?"} Hz
+                {audioState.preferred_sample_rate
+                  ? `  (pref ${audioState.preferred_sample_rate})`
+                  : ""}
+              </Text>
+            </View>
+            <Text style={styles.audioCardMeta}>
+              catturato {Math.round((Date.now() - audioState.captured_at) / 1000)}s fa
+            </Text>
+          </>
+        ) : (
+          <>
+            <Text style={styles.audioCardErr} selectable>
+              ⛔  Plugin nativo NON disponibile
+            </Text>
+            <Text style={styles.audioCardMeta} selectable>
+              {audioState.error || "unknown"}
+            </Text>
+            <Text style={styles.audioCardMeta}>
+              catturato {Math.round((Date.now() - audioState.captured_at) / 1000)}s fa
+            </Text>
+          </>
+        )}
       </View>
 
       <ScrollView
@@ -194,6 +284,68 @@ const styles = StyleSheet.create({
     color: "#888",
     fontSize: 11,
     marginTop: 2,
+  },
+  // === v63.2 2026-07-20 — AVAudioSession state card stili ===
+  audioCard: {
+    marginHorizontal: 12,
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: "#121822",
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#2a3648",
+  },
+  audioCardTitle: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "600",
+    marginBottom: 8,
+  },
+  audioCardEmpty: {
+    color: "#888",
+    fontSize: 12,
+    fontStyle: "italic",
+    lineHeight: 18,
+  },
+  audioCardErr: {
+    color: "#ff8a8a",
+    fontSize: 13,
+    fontWeight: "600",
+    marginBottom: 4,
+  },
+  audioCardMeta: {
+    color: "#666",
+    fontSize: 11,
+    marginTop: 6,
+    fontStyle: "italic",
+  },
+  audioRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 4,
+    gap: 12,
+  },
+  audioLabel: {
+    color: "#8fa4c2",
+    fontSize: 11,
+    fontWeight: "500",
+    width: 90,
+  },
+  audioValue: {
+    color: "#e0e8f5",
+    fontSize: 11,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    flexShrink: 1,
+    textAlign: "right",
+  },
+  audioValueOk: {
+    color: "#7fdc9f",
+    fontWeight: "600",
+  },
+  audioValueWarn: {
+    color: "#ffb87f",
+    fontWeight: "600",
   },
   // vadLinkBtn / vadLinkLabel rimossi insieme al bottone "Diagnostica Neural
   // VAD" (Fabio 2026-06-21). Mantenuti solo come reference storica nel commit.

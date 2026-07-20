@@ -11,9 +11,10 @@
  *
  * Formato: "YYYY-MM-DD v<app.version>+<changeset> (descrizione)".
  */
-export const BUILD_VERSION = "2026-07-20 v1.0.113+12 (Railway + Bandpass + voiceChat runtime check)";
+export const BUILD_VERSION = "2026-07-20 v1.0.113+13 (AVAudioSession diag card + WS piggyback)";
 
 export const BUILD_NOTES =
-  "Backend migrato su Railway (backendUrl.ts hardcoded, bypassa .env reset). " +
-  "Bandpass 300-3400Hz + gain adattivo lato server per pulire rumore motore auto. " +
-  "Plugin nativo iOS con .voiceChat mode (AEC/NS/AGC Apple) + kodaGetAudioSessionState per verifica runtime AVAudioSession.";
+  "Backend Railway + Bandpass 300-3400Hz + gain adattivo (server-side). " +
+  "Plugin nativo iOS .voiceChat mode (AEC/NS/AGC Apple) + kodaGetAudioSessionState. " +
+  "NEW: Diagnostica mostra stato AVAudioSession in card fissa + WS URL " +
+  "trasporta mode/input/output così Railway logga tutto insieme a chunks/bytes.";

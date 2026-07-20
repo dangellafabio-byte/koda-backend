@@ -34,6 +34,35 @@ export type Recorder = {
 let _webPermissionAsked = false;
 let _nativeReady = false;
 
+// === v63.2 2026-07-20 — cache ultimo stato AVAudioSession ==========
+// Salviamo l'ultimo risultato di kodaGetAudioSessionState() così:
+//   1. La schermata Diagnostica può mostrarlo in una card fissa
+//   2. voiceStream.ts può appenderlo come query param del WS URL, così
+//      Railway logga quale AudioSession era attiva quando è arrivato
+//      (o non è arrivato) l'audio.
+// Non è persistente cross-restart — non serve, viene ricalcolato ad ogni
+// prewarmMic().
+export type KodaAudioSessionState = {
+  category?: string;
+  mode?: string;
+  sample_rate?: number;
+  preferred_sample_rate?: number;
+  input_port_type?: string;
+  input_port_name?: string;
+  input_data_source?: string;
+  output_port_type?: string;
+  // meta
+  captured_at: number; // Date.now()
+  available: boolean;  // true se il plugin nativo v63 ha risposto
+  error?: string;
+};
+
+let _lastAudioSessionState: KodaAudioSessionState | null = null;
+
+export function getLastAudioSessionState(): KodaAudioSessionState | null {
+  return _lastAudioSessionState;
+}
+
 // ============ VAD CONSTANTS ============
 // Tuned to ignore background TV/music/chatter and react only to the user
 // speaking near the phone:
@@ -224,12 +253,26 @@ export async function prewarmMic(): Promise<boolean> {
     // Verifica se la patch v56 (.voiceChat) è effettivamente attiva.
     // Log unico per turno. Se AsyncFunction non è disponibile (patch
     // non applicata o build vecchia) → silent skip.
+    // === v63.2 2026-07-20 — salva stato in cache modulo (usato da
+    //   Diagnostica e da voiceStream per piggyback su WS query params).
     if (Platform.OS === "ios") {
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const AudioMod: any = require("expo-audio");
         const state = await AudioMod?.NativeModule?.kodaGetAudioSessionState?.();
         if (state && typeof state === "object") {
+          _lastAudioSessionState = {
+            category: state.category,
+            mode: state.mode,
+            sample_rate: state.sample_rate,
+            preferred_sample_rate: state.preferred_sample_rate,
+            input_port_type: state.input_port_type,
+            input_port_name: state.input_port_name,
+            input_data_source: state.input_data_source,
+            output_port_type: state.output_port_type,
+            captured_at: Date.now(),
+            available: true,
+          };
           console.log(
             `[KODA_AUDIO_MODE] category=${state.category} mode=${state.mode} ` +
               `sample_rate=${state.sample_rate} pref_sr=${state.preferred_sample_rate} ` +
@@ -238,16 +281,33 @@ export async function prewarmMic(): Promise<boolean> {
               `output=${state.output_port_type || "?"}`
           );
         } else {
+          _lastAudioSessionState = {
+            captured_at: Date.now(),
+            available: false,
+            error: "plugin v63 NOT AVAILABLE",
+          };
           console.log(
             `[KODA_AUDIO_MODE] kodaGetAudioSessionState NOT AVAILABLE — ` +
               `plugin v63 non presente in questa build`
           );
         }
       } catch (e: any) {
+        const errMsg = String(e?.message || e).slice(0, 140);
+        _lastAudioSessionState = {
+          captured_at: Date.now(),
+          available: false,
+          error: `query failed: ${errMsg}`,
+        };
         console.log(
-          `[KODA_AUDIO_MODE] query failed: ${String(e?.message || e).slice(0, 140)}`
+          `[KODA_AUDIO_MODE] query failed: ${errMsg}`
         );
       }
+    } else {
+      _lastAudioSessionState = {
+        captured_at: Date.now(),
+        available: false,
+        error: "not iOS (platform=" + Platform.OS + ")",
+      };
     }
     _nativeReady = true;
     return true;

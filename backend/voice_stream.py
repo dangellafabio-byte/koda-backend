@@ -1139,6 +1139,26 @@ async def voice_stream_handler(
     session_id = uuid.uuid4().hex
     short_id = session_id[:8]
     started_at = time.time()
+
+    # === v63.2 2026-07-20 — log query params dal client (piggyback
+    # AVAudioSession state). Il client mobile appende ?mode=voiceChat&
+    # input=BluetoothHFP&... così alla riga di accept del WS abbiamo
+    # subito visibile su Railway quale sessione audio iOS era attiva
+    # quando il client stava aprendo la connessione. Utile per correlare
+    # "chunks=0" con la modalità AVAudioSession.
+    try:
+        qp = dict(websocket.query_params)
+        if qp:
+            qp_short = " ".join(f"{k}={v}" for k, v in qp.items() if k in (
+                "mode", "category", "sr", "input", "data_src", "output",
+                "available", "err", "age_ms"
+            ))
+            logger.info(
+                f"[KODA_CLIENT_AUDIO_MODE sess={short_id}] {qp_short}"
+            )
+    except Exception as _e_qp:
+        logger.debug(f"[KODA_CLIENT_AUDIO_MODE] query_params read failed: {_e_qp}")
+
     dg: Optional[DeepgramLiveSession] = None
     client_alive = True
 
