@@ -249,71 +249,87 @@ export async function prewarmMic(): Promise<boolean> {
         shouldRouteThroughEarpiece: false,
       });
     } catch {}
-    // === v63.1 2026-07-19 — Runtime check AVAudioSession state ===
-    // Verifica se la patch v56 (.voiceChat) è effettivamente attiva.
-    // Log unico per turno. Se AsyncFunction non è disponibile (patch
-    // non applicata o build vecchia) → silent skip.
-    // === v63.2 2026-07-20 — salva stato in cache modulo (usato da
-    //   Diagnostica e da voiceStream per piggyback su WS query params).
-    if (Platform.OS === "ios") {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const AudioMod: any = require("expo-audio");
-        const state = await AudioMod?.NativeModule?.kodaGetAudioSessionState?.();
-        if (state && typeof state === "object") {
-          _lastAudioSessionState = {
-            category: state.category,
-            mode: state.mode,
-            sample_rate: state.sample_rate,
-            preferred_sample_rate: state.preferred_sample_rate,
-            input_port_type: state.input_port_type,
-            input_port_name: state.input_port_name,
-            input_data_source: state.input_data_source,
-            output_port_type: state.output_port_type,
-            captured_at: Date.now(),
-            available: true,
-          };
-          console.log(
-            `[KODA_AUDIO_MODE] category=${state.category} mode=${state.mode} ` +
-              `sample_rate=${state.sample_rate} pref_sr=${state.preferred_sample_rate} ` +
-              `input=${state.input_port_type}/${state.input_port_name || "?"} ` +
-              `data_source=${state.input_data_source || "?"} ` +
-              `output=${state.output_port_type || "?"}`
-          );
-        } else {
-          _lastAudioSessionState = {
-            captured_at: Date.now(),
-            available: false,
-            error: "plugin v63 NOT AVAILABLE",
-          };
-          console.log(
-            `[KODA_AUDIO_MODE] kodaGetAudioSessionState NOT AVAILABLE — ` +
-              `plugin v63 non presente in questa build`
-          );
-        }
-      } catch (e: any) {
-        const errMsg = String(e?.message || e).slice(0, 140);
-        _lastAudioSessionState = {
-          captured_at: Date.now(),
-          available: false,
-          error: `query failed: ${errMsg}`,
-        };
-        console.log(
-          `[KODA_AUDIO_MODE] query failed: ${errMsg}`
-        );
-      }
-    } else {
-      _lastAudioSessionState = {
-        captured_at: Date.now(),
-        available: false,
-        error: "not iOS (platform=" + Platform.OS + ")",
-      };
-    }
+    // === v63.5 2026-07-20 — ROLLBACK: kodaGetAudioSessionState NON più
+    //   chiamato dentro prewarmMic() ===
+    // La chiamata al bridge nativo di expo-audio DENTRO prewarmMic aveva
+    // rotto il flow del recorder su v1.0.133: `prepareToRecordAsync` andava
+    // in "Session activation failed" x5 tentativi → BAIL OUT. Anche se il
+    // codice era dentro try/catch, il tocco dell'AudioSession attraverso
+    // NativeModule.kodaGetAudioSessionState (che quando non è iniettata
+    // ritorna undefined ma passa per il bridge Hermes) creava uno state
+    // anomalo che rompeva la successiva setActive(true) del recorder.
+    //
+    // Fix: il check runtime dell'AudioSession si fa ora SOLO on-demand,
+    // dalla schermata Diagnostica (via refreshAudioSessionState() sotto).
+    // Il flow prewarmMic è tornato IDENTICO a v1.0.132 (funzionante).
     _nativeReady = true;
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Refresh manuale dello stato AVAudioSession. Chiamare SOLO on-demand
+ * (es. quando l'utente apre /diagnostics), MAI dentro prewarmMic o dentro
+ * il ciclo di recording — vedi v63.5 rollback comment sopra.
+ *
+ * Ritorna lo stato letto (o cached se non iOS / plugin non presente).
+ */
+export async function refreshAudioSessionState(): Promise<KodaAudioSessionState | null> {
+  if (Platform.OS !== "ios") {
+    _lastAudioSessionState = {
+      captured_at: Date.now(),
+      available: false,
+      error: "not iOS (platform=" + Platform.OS + ")",
+    };
+    return _lastAudioSessionState;
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const AudioMod: any = require("expo-audio");
+    const state = await AudioMod?.NativeModule?.kodaGetAudioSessionState?.();
+    if (state && typeof state === "object") {
+      _lastAudioSessionState = {
+        category: state.category,
+        mode: state.mode,
+        sample_rate: state.sample_rate,
+        preferred_sample_rate: state.preferred_sample_rate,
+        input_port_type: state.input_port_type,
+        input_port_name: state.input_port_name,
+        input_data_source: state.input_data_source,
+        output_port_type: state.output_port_type,
+        captured_at: Date.now(),
+        available: true,
+      };
+      console.log(
+        `[KODA_AUDIO_MODE] category=${state.category} mode=${state.mode} ` +
+          `sample_rate=${state.sample_rate} pref_sr=${state.preferred_sample_rate} ` +
+          `input=${state.input_port_type}/${state.input_port_name || "?"} ` +
+          `data_source=${state.input_data_source || "?"} ` +
+          `output=${state.output_port_type || "?"}`
+      );
+    } else {
+      _lastAudioSessionState = {
+        captured_at: Date.now(),
+        available: false,
+        error: "plugin v63 NOT AVAILABLE",
+      };
+      console.log(
+        `[KODA_AUDIO_MODE] kodaGetAudioSessionState NOT AVAILABLE — ` +
+          `plugin v63 non presente in questa build`
+      );
+    }
+  } catch (e: any) {
+    const errMsg = String(e?.message || e).slice(0, 140);
+    _lastAudioSessionState = {
+      captured_at: Date.now(),
+      available: false,
+      error: `query failed: ${errMsg}`,
+    };
+    console.log(`[KODA_AUDIO_MODE] query failed: ${errMsg}`);
+  }
+  return _lastAudioSessionState;
 }
 
 /**

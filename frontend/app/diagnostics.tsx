@@ -30,7 +30,7 @@ import {
   formatDiagEventsForExport,
   type DiagEvent,
 } from "../lib/diagLogger";
-import { getLastAudioSessionState, type KodaAudioSessionState } from "../lib/voice";
+import { getLastAudioSessionState, refreshAudioSessionState, type KodaAudioSessionState } from "../lib/voice";
 
 export default function DiagnosticsScreen() {
   const router = useRouter();
@@ -43,11 +43,21 @@ export default function DiagnosticsScreen() {
 
   // Auto-refresh ogni 1s mentre la schermata è aperta. Costo trascurabile
   // (chiama getDiagEvents che è una slice del buffer).
+  // === v63.5 2026-07-20 — refresh AVAudioSession state ON-DEMAND ===
+  // Chiamiamo refreshAudioSessionState() solo qui, al mount. La chiamata
+  // fa hop sul bridge nativo di expo-audio: NON deve mai avvenire dentro
+  // prewarmMic o durante recording perché tocca l'AudioSession e può
+  // rompere la prepareToRecordAsync successiva (regressione v1.0.133).
   useEffect(() => {
     setEvents(getDiagEvents());
-    setAudioState(getLastAudioSessionState());
+    // Refresh immediato al mount (kick del check nativo)
+    refreshAudioSessionState()
+      .then((s) => setAudioState(s))
+      .catch(() => setAudioState(getLastAudioSessionState()));
     const t = setInterval(() => {
       setEvents(getDiagEvents());
+      // Nel loop 1s NON facciamo refresh nativo — solo lettura del cache.
+      // Il refresh nativo si fa una volta al mount, basta.
       setAudioState(getLastAudioSessionState());
     }, 1000);
     return () => clearInterval(t);
