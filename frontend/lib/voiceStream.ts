@@ -38,8 +38,8 @@ import {
   RecordingPresets,
 } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
+// === PIANO B 2026-07-19 — hardcoded Railway URL (bypasses .env reset) ===
 import { KODA_BACKEND_URL } from "./backendUrl";
-import { getLastAudioSessionState } from "./voice";
 
 // =============================================================
 // CONFIG
@@ -102,63 +102,21 @@ const KEEPALIVE_INTERVAL_MS = 500;
 const MAX_WS_RECONNECTS = 3;
 const RECONNECT_BACKOFF_MS = 350;
 
-// === PIANO B 2026-07-19 — hardcoded Railway URL ===
-// EXPO_PUBLIC_BACKEND_URL è stato ripristinato 3 volte da Emergent alla
-// vecchia URL preview.emergentagent.com. Ora usiamo KODA_BACKEND_URL
-// dal file backendUrl.ts (hardcoded Railway). Vedi commento in quel file.
 const BACKEND_URL = KODA_BACKEND_URL;
 
 function buildWsUrl(): string {
   // BACKEND_URL è https://… → converti a wss://…
   // Se manca, fallback su origin corrente (web).
-  const base = (() => {
-    if (BACKEND_URL) {
-      const u = BACKEND_URL.replace(/^http/i, "ws");
-      return `${u.replace(/\/$/, "")}/api/voice/stream`;
-    }
-    if (typeof window !== "undefined" && (window as any).location) {
-      const loc = (window as any).location;
-      const proto = loc.protocol === "https:" ? "wss:" : "ws:";
-      return `${proto}//${loc.host}/api/voice/stream`;
-    }
-    return "ws://localhost:8001/api/voice/stream";
-  })();
-
-  // === v63.2 2026-07-20 — piggyback AVAudioSession state on WS query ===
-  // Il backend (Railway) logga i query params in chiaro all'accept del WS.
-  // Così su Railway si vede subito, alla riga precedente a "chunks=0", quale
-  // AudioSession era attiva quando il client stava aprendo la connessione.
-  // Utile per correlare "chunks=0" con .default (patch non attiva) vs
-  // .voiceChat (patch attiva ma comunque nessun audio → problema altrove).
-  try {
-    const st = getLastAudioSessionState();
-    if (st) {
-      const params: string[] = [];
-      const push = (k: string, v: string | number | undefined) => {
-        if (v === undefined || v === null || v === "") return;
-        params.push(`${k}=${encodeURIComponent(String(v))}`);
-      };
-      push("mode", st.mode);
-      push("category", st.category);
-      push("sr", st.sample_rate);
-      push("input", st.input_port_type);
-      push("data_src", st.input_data_source);
-      push("output", st.output_port_type);
-      push("available", st.available ? "1" : "0");
-      if (st.error) push("err", st.error.slice(0, 80));
-      const age_ms = Date.now() - st.captured_at;
-      push("age_ms", age_ms);
-      if (params.length > 0) {
-        return `${base}?${params.join("&")}`;
-      }
-    } else {
-      return `${base}?available=0&err=${encodeURIComponent("no_prewarm_yet")}`;
-    }
-  } catch {
-    // fail silent: se il piggyback fallisce, meglio aprire il WS senza params
-    // che bloccare tutta la conversazione.
+  if (BACKEND_URL) {
+    const u = BACKEND_URL.replace(/^http/i, "ws");
+    return `${u.replace(/\/$/, "")}/api/voice/stream`;
   }
-  return base;
+  if (typeof window !== "undefined" && (window as any).location) {
+    const loc = (window as any).location;
+    const proto = loc.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${loc.host}/api/voice/stream`;
+  }
+  return "ws://localhost:8001/api/voice/stream";
 }
 
 // =============================================================

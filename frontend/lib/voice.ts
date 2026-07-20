@@ -16,8 +16,7 @@ import {
   setIsAudioActiveAsync,
   requestRecordingPermissionsAsync,
 } from "expo-audio";
-// === PIANO B 2026-07-19 — static import (era lazy require, sospetto
-// bloccasse silenziosamente il recorder chain su Metro/Hermes) ===
+// === PIANO B 2026-07-19 — hardcoded Railway URL (bypasses .env reset) ===
 import { KODA_BACKEND_URL } from "./backendUrl";
 
 export type Recorder = {
@@ -33,35 +32,6 @@ export type Recorder = {
 
 let _webPermissionAsked = false;
 let _nativeReady = false;
-
-// === v63.2 2026-07-20 — cache ultimo stato AVAudioSession ==========
-// Salviamo l'ultimo risultato di kodaGetAudioSessionState() così:
-//   1. La schermata Diagnostica può mostrarlo in una card fissa
-//   2. voiceStream.ts può appenderlo come query param del WS URL, così
-//      Railway logga quale AudioSession era attiva quando è arrivato
-//      (o non è arrivato) l'audio.
-// Non è persistente cross-restart — non serve, viene ricalcolato ad ogni
-// prewarmMic().
-export type KodaAudioSessionState = {
-  category?: string;
-  mode?: string;
-  sample_rate?: number;
-  preferred_sample_rate?: number;
-  input_port_type?: string;
-  input_port_name?: string;
-  input_data_source?: string;
-  output_port_type?: string;
-  // meta
-  captured_at: number; // Date.now()
-  available: boolean;  // true se il plugin nativo v63 ha risposto
-  error?: string;
-};
-
-let _lastAudioSessionState: KodaAudioSessionState | null = null;
-
-export function getLastAudioSessionState(): KodaAudioSessionState | null {
-  return _lastAudioSessionState;
-}
 
 // ============ VAD CONSTANTS ============
 // Tuned to ignore background TV/music/chatter and react only to the user
@@ -211,10 +181,6 @@ export async function prewarmMic(): Promise<boolean> {
   // sul primo turno, niente 44s di timeout su 4G ballerino in furgone.
   // Idempotente: chiamabile N volte. Non blocca mai prewarmMic.
   try {
-    // === PIANO B FIX 2026-07-19 — static import invece di lazy require ===
-    // Il lazy `require("./backendUrl")` causava un throw silenziato che
-    // bloccava la catena di inizializzazione del recorder → Scenario A
-    // (chunks=0 lato server). Confermato da Fabio dal log Railway.
     const BACKEND = KODA_BACKEND_URL;
     if (BACKEND) {
       // Timeout corto: se la rete è giù, non resta appeso (3s max).
@@ -249,87 +215,11 @@ export async function prewarmMic(): Promise<boolean> {
         shouldRouteThroughEarpiece: false,
       });
     } catch {}
-    // === v63.5 2026-07-20 — ROLLBACK: kodaGetAudioSessionState NON più
-    //   chiamato dentro prewarmMic() ===
-    // La chiamata al bridge nativo di expo-audio DENTRO prewarmMic aveva
-    // rotto il flow del recorder su v1.0.133: `prepareToRecordAsync` andava
-    // in "Session activation failed" x5 tentativi → BAIL OUT. Anche se il
-    // codice era dentro try/catch, il tocco dell'AudioSession attraverso
-    // NativeModule.kodaGetAudioSessionState (che quando non è iniettata
-    // ritorna undefined ma passa per il bridge Hermes) creava uno state
-    // anomalo che rompeva la successiva setActive(true) del recorder.
-    //
-    // Fix: il check runtime dell'AudioSession si fa ora SOLO on-demand,
-    // dalla schermata Diagnostica (via refreshAudioSessionState() sotto).
-    // Il flow prewarmMic è tornato IDENTICO a v1.0.132 (funzionante).
     _nativeReady = true;
     return true;
   } catch {
     return false;
   }
-}
-
-/**
- * Refresh manuale dello stato AVAudioSession. Chiamare SOLO on-demand
- * (es. quando l'utente apre /diagnostics), MAI dentro prewarmMic o dentro
- * il ciclo di recording — vedi v63.5 rollback comment sopra.
- *
- * Ritorna lo stato letto (o cached se non iOS / plugin non presente).
- */
-export async function refreshAudioSessionState(): Promise<KodaAudioSessionState | null> {
-  if (Platform.OS !== "ios") {
-    _lastAudioSessionState = {
-      captured_at: Date.now(),
-      available: false,
-      error: "not iOS (platform=" + Platform.OS + ")",
-    };
-    return _lastAudioSessionState;
-  }
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const AudioMod: any = require("expo-audio");
-    const state = await AudioMod?.NativeModule?.kodaGetAudioSessionState?.();
-    if (state && typeof state === "object") {
-      _lastAudioSessionState = {
-        category: state.category,
-        mode: state.mode,
-        sample_rate: state.sample_rate,
-        preferred_sample_rate: state.preferred_sample_rate,
-        input_port_type: state.input_port_type,
-        input_port_name: state.input_port_name,
-        input_data_source: state.input_data_source,
-        output_port_type: state.output_port_type,
-        captured_at: Date.now(),
-        available: true,
-      };
-      console.log(
-        `[KODA_AUDIO_MODE] category=${state.category} mode=${state.mode} ` +
-          `sample_rate=${state.sample_rate} pref_sr=${state.preferred_sample_rate} ` +
-          `input=${state.input_port_type}/${state.input_port_name || "?"} ` +
-          `data_source=${state.input_data_source || "?"} ` +
-          `output=${state.output_port_type || "?"}`
-      );
-    } else {
-      _lastAudioSessionState = {
-        captured_at: Date.now(),
-        available: false,
-        error: "plugin v63 NOT AVAILABLE",
-      };
-      console.log(
-        `[KODA_AUDIO_MODE] kodaGetAudioSessionState NOT AVAILABLE — ` +
-          `plugin v63 non presente in questa build`
-      );
-    }
-  } catch (e: any) {
-    const errMsg = String(e?.message || e).slice(0, 140);
-    _lastAudioSessionState = {
-      captured_at: Date.now(),
-      available: false,
-      error: `query failed: ${errMsg}`,
-    };
-    console.log(`[KODA_AUDIO_MODE] query failed: ${errMsg}`);
-  }
-  return _lastAudioSessionState;
 }
 
 /**
