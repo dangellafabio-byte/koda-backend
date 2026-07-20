@@ -122,6 +122,26 @@ Questo bug **rende impossibile all'utente ottenere una build TestFlight contenen
 più recente**, anche quando il push su GitHub è completato correttamente **prima** del click
 Publish.
 
+## Test di conferma finale (2026-07-20 ~15:00 UTC)
+
+L'utente ha eseguito il seguente test diagnostico definitivo su richiesta dell'agente:
+
+1. **Disinstallazione COMPLETA** dell'app Koda dall'iPhone (tenendo premuto icona → "Elimina app")
+2. **Reinstallazione da TestFlight** della build v1.0.134
+3. **Primo avvio dell'app installata pulita**
+4. Verifica del footer in Impostazioni
+
+Risultato: il footer mostra `bundle 2026-07-20 v1.0.113+15 (plugin loud-fail + anchor fix definitivo)`.
+
+Questo esclude in modo definitivo:
+- Cache OTA locale sul device (l'app è stata cancellata completamente)
+- Cache dei bundle Metro/Hermes (fresh install)
+- Delay di propagazione OTA (nessun OTA scaricato prima del primo avvio)
+
+**Confermato al 100% oggettivamente**: il file `.ipa` nativo generato da EAS Emergent
+per v1.0.134 contiene bundlato il commit `00f3e185` (10:11 UTC), NON il HEAD del remote
+GitHub al momento del click Publish (`c1ff47bf`, 14:15 UTC, 4+ ore prima).
+
 ## Impatto utente
 - 3+ ore di sessione debug attiva
 - 10+ build TestFlight generate senza risultato utilizzabile
