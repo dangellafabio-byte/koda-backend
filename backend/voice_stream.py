@@ -1940,11 +1940,13 @@ async def voice_stream_handler(
                     # sibili PRIMA che il gain amplifichi. Latenza <1ms.
                     # Se scipy non è disponibile → passthrough silente.
                     #
-                    # === v63.1 2026-07-19 — LOG PRE vs POST bandpass ===
-                    # Calcoliamo rms/peak PRIMA del bandpass per Fabio (vedere
-                    # riduzione rumore reale in auto).
+                    # === v63.6 2026-07-20 — BANDPASS DISABILITATO ===
+                    # Utente ha riportato soglia audio troppo alta ("devo urlare
+                    # anche in silenzio"). Ripristino comportamento pre-modifiche
+                    # audio: nessun bandpass, nessun filtro server-side. Il PCM
+                    # raw arriva a Deepgram così come recorded dal client.
                     _pcm_prefilter = pcm
-                    pcm = apply_voice_bandpass(pcm)
+                    # pcm = apply_voice_bandpass(pcm)  # DISABILITATO v63.6
                     try:
                         import struct as _st_pre
                         import math as _m_pre
@@ -2093,30 +2095,16 @@ async def voice_stream_handler(
                             logger.debug(f"[voiceprint] gate error, passthrough: {_vp_err}")
 
                     # === FIX 2026-07-20 v61 — CarPlay BT PCM Gain ===
-                    # Se il segnale è basso E route=bluetooth, amplifica prima
-                    # di inviarlo a Deepgram e prima di accumularlo per
-                    # Whisper. Vedi apply_bluetooth_gain() sopra per policy.
-                    # `_peak` è stato calcolato nel blocco PCM stats sopra
-                    # (fallback 0 se il blocco è fallito).
-                    try:
-                        _peak_for_gain = int(_peak)  # noqa: F821 (da blocco sopra)
-                    except (NameError, TypeError, ValueError):
-                        _peak_for_gain = 0
-                    pcm_out, _gain = apply_bluetooth_gain(
-                        pcm, audio_route, _peak_for_gain
-                    )
-                    if _gain > 1.0:
-                        session_audio_diag["gain_last"] = round(_gain, 2)
-                        session_audio_diag["gain_count"] += 1
-                        if _gain > session_audio_diag["gain_max"]:
-                            session_audio_diag["gain_max"] = round(_gain, 2)
-                        # Log ogni 4 chunk per non intasare
-                        if chunks_received % 4 == 0 or chunks_received <= 4:
-                            logger.info(
-                                f"[KODA_PCM_GAIN sess={short_id}] "
-                                f"idx={chunks_received} peak={_peak_for_gain} "
-                                f"gain={_gain:.2f}x route={audio_route}"
-                            )
+                    # === v63.6 2026-07-20 — GAIN DISABILITATO ===
+                    # Utente ha riportato soglia audio troppo alta ("devo urlare
+                    # anche in silenzio"). Il gain adattivo (fino a 20x) faceva
+                    # emergere il noise floor scatenando falsi positivi VAD e
+                    # alzando la soglia percepita per essere "sentito".
+                    # Ripristino comportamento pre-modifiche audio: gain=1.0
+                    # sempre, nessuna amplificazione server-side.
+                    pcm_out = pcm
+                    _gain = 1.0
+                    # pcm_out, _gain = apply_bluetooth_gain(pcm, audio_route, _peak_for_gain)  # DISABILITATO v63.6
 
                     # Invia a Deepgram
                     await dg.send_pcm(pcm_out)
