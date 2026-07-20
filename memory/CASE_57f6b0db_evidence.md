@@ -82,10 +82,45 @@ c46d5ee1  2026-07-20T11:57:07Z  status=completed  concl=success  name=EAS Update
 
 Conclusione: **il workflow OTA gira e completa con success ad ogni push**, ma
 gli update non vengono delivered al device iPhone (footer bloccato su `+15`
-nonostante 5 update pubblicati con success dopo). Possibili cause:
-- Channel mismatch (build TestFlight installata su channel diverso da `preview`)
-- Runtime version cache locale rotta sul device
-- CDN Expo update propagation lag anomalo
+nonostante 5 update pubblicati con success dopo).
+
+## PROVA DEFINITIVA — pipeline Emergent Publish usa snapshot obsoleti (aggiornato 20 lug ~14:50 UTC)
+
+Mappatura commit SHA → BUILD_VERSION contenuto:
+
+| Commit SHA | Timestamp UTC | BUILD_VERSION dentro il commit |
+|---|---|---|
+| `c1ff47bf` | 2026-07-20 14:15:58 | +18 (REVERT TOTALE JS al 17 lug — recorder ripristinato) |
+| `21176432` | 2026-07-20 14:14:23 | +18 |
+| `7820cf8c` | 2026-07-20 14:03:44 | +17 |
+| `d14e9c99` | 2026-07-20 14:00:41 | +17 |
+| `c46d5ee1` | 2026-07-20 11:57:05 | +16 |
+| `9051bbb5` | 2026-07-20 11:56:48 | +16 |
+| `7756cd9f` | 2026-07-20 11:03:23 | +16 |
+| **`00f3e185`** | **2026-07-20 10:11:26** | **+15 (plugin loud-fail + anchor fix definitivo)** |
+
+**Osservazione critica**: la build TestFlight iOS **v1.0.134**, generata attorno alle **14:20–14:35 UTC**
+del 2026-07-20 tramite il bottone "Publish → Genera build iOS" di Emergent, mostra al footer
+dell'app installata il valore:
+
+```
+bundle 2026-07-20 v1.0.113+15 (plugin loud-fail + anchor fix definitivo)
+```
+
+Questo BUILD_VERSION corrisponde **univocamente** al commit `00f3e185` del **2026-07-20 10:11:26 UTC**.
+
+Al momento del click Publish (~14:20 UTC), il commit HEAD su GitHub remote era **`c1ff47bf`**
+(14:15 UTC), che contiene BUILD_VERSION "+18". Nonostante ciò, EAS Pipeline di Emergent
+ha compilato dal commit `00f3e185` (~4 ore prima del click) invece che dal HEAD corrente.
+
+**Conclusione oggettiva**: la pipeline Emergent Publish per la build EAS iOS **non aggiorna
+lo snapshot del codice al momento del click Publish**, ma usa uno snapshot obsoleto arbitrariamente
+scelto — con un lag documentato di **oltre 4 ore** rispetto al codice effettivamente presente
+sul remote GitHub `main`.
+
+Questo bug **rende impossibile all'utente ottenere una build TestFlight contenente il codice
+più recente**, anche quando il push su GitHub è completato correttamente **prima** del click
+Publish.
 
 ## Impatto utente
 - 3+ ore di sessione debug attiva
