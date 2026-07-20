@@ -227,20 +227,46 @@ function patchExpoAudioSwift(projectRoot) {
 
   // Injection AsyncFunction v63 (indipendente dalla patch mode v56)
   if (!content.includes(KODA_ASYNC_FN_MARKER)) {
-    // Cerca un anchor per iniettare: subito dopo il primo `Function` block
-    // dentro `Definition {` del modulo AudioModule.
-    const anchor = "    Function(\"setAudioMode\"";
-    const idx = content.indexOf(anchor);
+    // === v63.3 2026-07-20 FIX ANCHOR ===
+    // Anchor precedente `Function("setAudioMode"` NON esiste in expo-audio
+    // 1.1.1: la funzione lì si chiama `AsyncFunction("setAudioModeAsync"`.
+    // Il plugin quindi loggava "Anchor NOT FOUND" e falliva silenziosamente
+    // → sul device `[KODA_AUDIO_MODE] plugin v63 NOT AVAILABLE`.
+    //
+    // Fix: proviamo una lista di anchor in ordine di preferenza. Il primo
+    // che matcha viene usato per l'injection. Aggiungeremo anchor future
+    // se la lib rinomina di nuovo.
+    const anchorCandidates = [
+      'AsyncFunction("setAudioModeAsync")',          // expo-audio 1.1.x (attuale)
+      'AsyncFunction("setIsAudioActiveAsync")',      // fallback: subito dopo setAudioModeAsync
+      '    Function("setAudioMode"',                 // vecchio (pre-1.1)
+    ];
+    let idx = -1;
+    let matchedAnchor = "";
+    for (const cand of anchorCandidates) {
+      const i = content.indexOf(cand);
+      if (i !== -1) {
+        // Rewind fino all'inizio della linea (per allineare l'iniezione a
+        // 4 spazi di indent come le sibling AsyncFunction).
+        const lineStart = content.lastIndexOf("\n", i) + 1;
+        idx = lineStart;
+        matchedAnchor = cand;
+        break;
+      }
+    }
     if (idx !== -1) {
       content = content.slice(0, idx) + ASYNC_FN_BLOCK + "\n" + content.slice(idx);
       fs.writeFileSync(file, content, "utf8");
       console.log(
-        "[withExpoAudioVoiceProcessing] ✅ AsyncFunction kodaGetAudioSessionState injected (v63)."
+        "[withExpoAudioVoiceProcessing] ✅ AsyncFunction kodaGetAudioSessionState " +
+          "injected (v63.3, anchor='" + matchedAnchor + "')."
       );
     } else {
       console.warn(
-        "[withExpoAudioVoiceProcessing] ⚠️  Anchor 'Function(\"setAudioMode\"' NOT FOUND. " +
-          "AsyncFunction v63 NOT injected. Runtime audio mode check unavailable."
+        "[withExpoAudioVoiceProcessing] ⚠️  Nessuno degli anchor v63 trovato in " +
+          "AudioModule.swift. Anchor provati: " +
+          anchorCandidates.map((a) => `"${a}"`).join(", ") + ". " +
+          "AsyncFunction v63 NOT injected → runtime audio mode check unavailable."
       );
     }
   } else {

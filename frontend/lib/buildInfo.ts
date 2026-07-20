@@ -11,10 +11,10 @@
  *
  * Formato: "YYYY-MM-DD v<app.version>+<changeset> (descrizione)".
  */
-export const BUILD_VERSION = "2026-07-20 v1.0.113+13 (AVAudioSession diag card + WS piggyback)";
+export const BUILD_VERSION = "2026-07-20 v1.0.113+14 (v63.3 anchor fix — plugin injection ripristinata)";
 
 export const BUILD_NOTES =
-  "Backend Railway + Bandpass 300-3400Hz + gain adattivo (server-side). " +
-  "Plugin nativo iOS .voiceChat mode (AEC/NS/AGC Apple) + kodaGetAudioSessionState. " +
-  "NEW: Diagnostica mostra stato AVAudioSession in card fissa + WS URL " +
-  "trasporta mode/input/output così Railway logga tutto insieme a chunks/bytes.";
+  "FIX CRITICO PLUGIN: anchor kodaGetAudioSessionState era `Function(\"setAudioMode\"` " +
+  "ma in expo-audio 1.1.1 la funzione si chiama `AsyncFunction(\"setAudioModeAsync\")`. " +
+  "L'injection falliva silenziosamente → la card Diagnostica mostrava 'plugin v63 NOT AVAILABLE'. " +
+  "Ora anchor multipli con fallback. La patch .voiceChat era già attiva; ora anche il runtime check funziona.";
