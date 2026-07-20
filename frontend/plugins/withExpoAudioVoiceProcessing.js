@@ -219,6 +219,22 @@ function patchExpoAudioSwift(projectRoot) {
 
   let content = fs.readFileSync(file, "utf8");
 
+  // === v63.4 2026-07-20 — VERBOSE PRE-CHECK ===
+  // Prima di tentare qualsiasi patch, logghiamo cosa vediamo nel file
+  // così nei log EAS Build si vede subito se node_modules è stato
+  // rigenerato correttamente o se abbiamo una cache stale.
+  const swiftHead = content.substring(0, 500).replace(/\n/g, " ");
+  console.log(
+    `[withExpoAudioVoiceProcessing] === PLUGIN START ===\n` +
+      `  file=${file}\n` +
+      `  size=${content.length} bytes\n` +
+      `  head_500=${swiftHead.substring(0, 200)}...\n` +
+      `  contains_setAudioModeAsync=${content.includes('AsyncFunction("setAudioModeAsync")')}\n` +
+      `  contains_OLD_BLOCK=${content.includes("setCategory(category, mode: .default)")}\n` +
+      `  already_has_v56_marker=${content.includes(KODA_PATCH_MARKER)}\n` +
+      `  already_has_v63_marker=${content.includes(KODA_ASYNC_FN_MARKER)}`
+  );
+
   const reverted = revertPreviousKodaIosPatch(content);
   if (reverted !== content) {
     fs.writeFileSync(file, reverted, "utf8");
@@ -226,6 +242,7 @@ function patchExpoAudioSwift(projectRoot) {
   }
 
   // Injection AsyncFunction v63 (indipendente dalla patch mode v56)
+  let v63Injected = false;
   if (!content.includes(KODA_ASYNC_FN_MARKER)) {
     // === v63.3 2026-07-20 FIX ANCHOR ===
     // Anchor precedente `Function("setAudioMode"` NON esiste in expo-audio
@@ -257,19 +274,27 @@ function patchExpoAudioSwift(projectRoot) {
     if (idx !== -1) {
       content = content.slice(0, idx) + ASYNC_FN_BLOCK + "\n" + content.slice(idx);
       fs.writeFileSync(file, content, "utf8");
+      v63Injected = true;
       console.log(
         "[withExpoAudioVoiceProcessing] ✅ AsyncFunction kodaGetAudioSessionState " +
           "injected (v63.3, anchor='" + matchedAnchor + "')."
       );
     } else {
-      console.warn(
-        "[withExpoAudioVoiceProcessing] ⚠️  Nessuno degli anchor v63 trovato in " +
-          "AudioModule.swift. Anchor provati: " +
-          anchorCandidates.map((a) => `"${a}"`).join(", ") + ". " +
-          "AsyncFunction v63 NOT injected → runtime audio mode check unavailable."
+      // === v63.4 2026-07-20 — LOUD FAIL ===
+      // Prima logaggavamo un warn e continuavamo → binario prodotto con
+      // plugin v63 non funzionante e utente costretto a scoprirlo runtime.
+      // Ora falliamo la build: meglio 0 binari che uno rotto silenzioso.
+      throw new Error(
+        `[withExpoAudioVoiceProcessing] ❌ FATAL: nessuno degli anchor v63 trovato in ` +
+          `AudioModule.swift (${file}). Anchor provati: ` +
+          anchorCandidates.map((a) => `"${a}"`).join(", ") +
+          `. La versione di expo-audio ha rinominato nuovamente le API → aggiornare ` +
+          `anchorCandidates nel plugin prima di rifare la build. ` +
+          `File size: ${content.length}b, primi 200 char: ${swiftHead.substring(0, 200)}`
       );
     }
   } else {
+    v63Injected = true;
     console.log(
       "[withExpoAudioVoiceProcessing] AsyncFunction v63 already present. Skipping."
     );
@@ -277,23 +302,34 @@ function patchExpoAudioSwift(projectRoot) {
 
   if (content.includes(KODA_PATCH_MARKER)) {
     console.log(
-      "[withExpoAudioVoiceProcessing] Patch already applied (marker found). Skipping."
+      "[withExpoAudioVoiceProcessing] Patch v56 already applied (marker found). Skipping."
+    );
+    console.log(
+      `[withExpoAudioVoiceProcessing] === PLUGIN DONE === v63=${v63Injected} v56=already_present`
     );
     return;
   }
 
   if (!content.includes(OLD_BLOCK)) {
-    console.warn(
-      "[withExpoAudioVoiceProcessing] Source block not found in AudioModule.swift. " +
-        "expo-audio version may have changed. Voice Processing NOT activated."
+    // === v63.4 2026-07-20 — LOUD FAIL ===
+    // Il .voiceChat mode è il core della patch. Senza questa, il noise
+    // cancellation Apple non è attivo → app inutilizzabile in ambienti
+    // rumorosi (auto, treno, bar). Falliamo la build.
+    throw new Error(
+      `[withExpoAudioVoiceProcessing] ❌ FATAL: OLD_BLOCK non trovato in AudioModule.swift ` +
+        `(${file}). La versione di expo-audio ha cambiato la logica setCategory → ` +
+        `il .voiceChat patch NON può essere applicato. Aggiornare OLD_BLOCK nel plugin ` +
+        `prima di rifare la build. File size: ${content.length}b`
     );
-    return;
   }
 
   const patched = content.replace(OLD_BLOCK, NEW_BLOCK);
   fs.writeFileSync(file, patched, "utf8");
   console.log(
     "[withExpoAudioVoiceProcessing] ✅ Voice Processing patch applied to expo-audio AudioModule.swift"
+  );
+  console.log(
+    `[withExpoAudioVoiceProcessing] === PLUGIN DONE === v63=${v63Injected} v56=injected_now`
   );
 }
 

@@ -11,10 +11,11 @@
  *
  * Formato: "YYYY-MM-DD v<app.version>+<changeset> (descrizione)".
  */
-export const BUILD_VERSION = "2026-07-20 v1.0.113+14 (v63.3 anchor fix — plugin injection ripristinata)";
+export const BUILD_VERSION = "2026-07-20 v1.0.113+15 (plugin loud-fail + anchor fix definitivo)";
 
 export const BUILD_NOTES =
-  "FIX CRITICO PLUGIN: anchor kodaGetAudioSessionState era `Function(\"setAudioMode\"` " +
-  "ma in expo-audio 1.1.1 la funzione si chiama `AsyncFunction(\"setAudioModeAsync\")`. " +
-  "L'injection falliva silenziosamente → la card Diagnostica mostrava 'plugin v63 NOT AVAILABLE'. " +
-  "Ora anchor multipli con fallback. La patch .voiceChat era già attiva; ora anche il runtime check funziona.";
+  "FIX DEFINITIVO PLUGIN: anchor kodaGetAudioSessionState multipli con fallback " +
+  "(setAudioModeAsync / setIsAudioActiveAsync / setAudioMode). " +
+  "Loud-fail se il patch non si applica → build EAS fallisce esplicitamente " +
+  "invece di produrre un binario silenziosamente rotto. Log verbose in prebuild " +
+  "per debug futuro. Se questa card mostra .voiceChat verde ✅ → tutto ok.";
