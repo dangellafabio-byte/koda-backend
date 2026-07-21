@@ -347,4 +347,7 @@ Client audio → SFSpeechRecognizer on-device → transcript → WebSocket → B
 | 2026-07-20 | Approvato piano 3-fasi, priorità Fase A | Utente vuole risultato, non tecnologia. Fase A ha ROI massimo. |
 | 2026-07-20 | Nessuna modifica al codice ora | Pipeline EAS bloccata — cambi non arrivano al device. |
 | 2026-07-20 | Fase B/C solo se Fase A insufficiente | Minimizzare superficie di rischio pre-lancio. |
-| 2026-07-20 | PCM gain resta OFF (voice_stream.py v63.6) | Confermato risoluzione problema "devo urlare". |
+| 2026-07-20 | PCM gain resta OFF (voice_stream.py v63.6) | Risolto solo "devo urlare", NON il problema di fondo. |
+| 2026-07-20 (update PM) | ⚠️ **Correzione stato**: audio NON risolto | Test mattutino conferma: Koda continua a non sentire. Il test di ieri sera era condizione fortunata, non risoluzione. |
+| 2026-07-20 (update PM) | Valutare Fase B (Speech Framework Apple) come primo intervento | Se il rumore rende Deepgram inutilizzabile anche con `.voiceChat` attivo, la soluzione più affidabile è STT on-device Apple. Utente ha esplicitamente chiesto di considerarlo. |
+| 2026-07-20 (update PM) | Zero modifiche fino a sblocco pipeline | Confermato dall'utente. Attendere risposta support@emergent.sh. |
