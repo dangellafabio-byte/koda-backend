@@ -2015,7 +2015,38 @@ export async function voiceStreamConverse(opts: {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { VoiceStreamSession } = require("./voiceStream");
 
-  const session = new VoiceStreamSession({
+  // === FASE B — STT ON-DEVICE APPLE (feature flag) ===
+  // Se EXPO_PUBLIC_USE_CLIENT_STT=true E la piattaforma supporta
+  // SFSpeechRecognizer on-device per italiano, usiamo la sessione client-side
+  // (voiceClientStt.ts). Altrimenti fallback automatico al percorso Deepgram
+  // (voiceStream.ts, comportamento pre-Fase B).
+  const useClientStt = process.env.EXPO_PUBLIC_USE_CLIENT_STT === "true";
+  let SessionCtor: any = VoiceStreamSession;
+  let sttSource: "apple" | "deepgram" = "deepgram";
+  if (useClientStt) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { VoiceClientSttSession } = require("./voiceClientStt");
+      const support = await VoiceClientSttSession.isSupported();
+      if (support.supported) {
+        SessionCtor = VoiceClientSttSession;
+        sttSource = "apple";
+        console.log(`[KODA_STT_SOURCE] engine=apple lang=it-IT ondev=true`);
+      } else {
+        console.log(
+          `[KODA_STT_SOURCE] engine=deepgram (fallback, apple unsupported: ${support.reason})`
+        );
+      }
+    } catch (e: any) {
+      console.log(
+        `[KODA_STT_SOURCE] engine=deepgram (fallback, apple probe failed: ${e?.message || e})`
+      );
+    }
+  } else {
+    console.log(`[KODA_STT_SOURCE] engine=deepgram (feature flag off)`);
+  }
+
+  const session = new SessionCtor({
     onReady: (sessionId: string) => {
       console.log(`[KODA_STREAM_CLIENT] ready sess=${sessionId.slice(0, 8)}`);
     },

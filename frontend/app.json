@@ -77,7 +77,8 @@
           "locationAlwaysAndWhenInUsePermission": "Sapere la tua città per risposte più contestuali"
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      "expo-speech-recognition"
     ],
     "experiments": {
       "typedRoutes": true

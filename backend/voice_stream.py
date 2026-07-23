@@ -1310,12 +1310,139 @@ async def voice_stream_handler(
         location_city = _clip(start_req.get("location_city"))
         location_region = _clip(start_req.get("location_region"))
         location_country = _clip(start_req.get("location_country"))
+        # === FASE B 2026-07-23 — STT ON-DEVICE APPLE (feature flag client-side) ===
+        # Il client (Fase B, iOS) può passare stt_source="client_apple" per
+        # segnalare che la trascrizione viene fatta ON-DEVICE via
+        # SFSpeechRecognizer, e che NON invierà audio binario. Il backend deve:
+        #   1. Saltare la connessione a Deepgram
+        #   2. Aspettare un messaggio {type:"transcript_from_client", text, ...}
+        #   3. Chiamare direttamente la pipeline LLM+TTS con quel testo
+        # Se stt_source non è "client_apple" (o assente) → percorso Deepgram
+        # standard (comportamento pre-Fase B). Costa zero: solo un ramo IF.
+        stt_source = (start_req.get("stt_source") or "deepgram").strip().lower()
         logger.info(
             f"[KODA_STREAM sess={short_id}] start lang={profile_lang} "
             f"ephemeral={ephemeral} container={container} "
+            f"stt_source={stt_source} "
             f"audio_route={audio_route!r} "
             f"city={location_city!r} region={location_region!r} country={location_country!r}"
         )
+
+        # === RAMO FASE B — client STT on-device Apple ==================
+        if stt_source == "client_apple":
+            # Notifica readiness IMMEDIATAMENTE: il client sta già ascoltando
+            # localmente, non ha bisogno di aspettare Deepgram.
+            await emit_to_client({"type": "ready", "session_id": session_id})
+            logger.info(
+                f"[KODA_STREAM sess={short_id}] client_stt mode → skip Deepgram, "
+                f"waiting for transcript_from_client"
+            )
+            # Loop di ricezione: aspetta transcript_from_client, ping, o end.
+            # Timeout hard: 60s senza messaggi → chiudi (protezione zombie).
+            transcript_received = False
+            last_msg_at = time.time()
+            while client_alive and not transcript_received:
+                try:
+                    raw_msg = await asyncio.wait_for(
+                        websocket.receive_text(), timeout=60.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"[KODA_STREAM sess={short_id}] client_stt timeout 60s no msg → closing"
+                    )
+                    await emit_to_client(
+                        {"type": "error", "message": "client_stt_timeout_60s"}
+                    )
+                    return
+                except WebSocketDisconnect:
+                    logger.info(
+                        f"[KODA_STREAM sess={short_id}] client_stt WS disconnected"
+                    )
+                    client_alive = False
+                    return
+                last_msg_at = time.time()
+                try:
+                    msg = json.loads(raw_msg)
+                except json.JSONDecodeError:
+                    continue
+                mtype = msg.get("type")
+                if mtype == "ping":
+                    # keepalive → ignora silenziosamente
+                    continue
+                if mtype == "end":
+                    logger.info(
+                        f"[KODA_STREAM sess={short_id}] client_stt got 'end' without transcript"
+                    )
+                    if client_alive:
+                        await emit_to_client({"type": "done"})
+                    return
+                if mtype == "transcript_from_client":
+                    text_raw = (msg.get("text") or "").strip()
+                    conf_val = msg.get("confidence")
+                    try:
+                        conf_num = float(conf_val) if conf_val is not None else None
+                    except (TypeError, ValueError):
+                        conf_num = None
+                    dur_val = msg.get("duration_ms")
+                    try:
+                        dur_int = int(dur_val) if dur_val is not None else None
+                    except (TypeError, ValueError):
+                        dur_int = None
+                    lang = (msg.get("lang") or "it-IT").strip()
+                    engine = (msg.get("stt_engine") or "apple_sfspeechrecognizer").strip()
+                    logger.info(
+                        f"[KODA_STREAM sess={short_id}] transcript_from_client engine={engine} "
+                        f"lang={lang} conf={conf_num} dur_ms={dur_int} "
+                        f"text_len={len(text_raw)} text={text_raw!r}"
+                    )
+                    transcript_received = True
+                    # Emetti stt_final subito così il client passa in "thinking"
+                    if client_alive:
+                        await emit_to_client({
+                            "type": "stt_final",
+                            "text": text_raw,
+                            "confidence": conf_num,
+                            "audio_duration_ms": dur_int,
+                            "stt_source": engine,
+                        })
+                    # Se testo vuoto → salta pipeline e chiudi puliti
+                    if not text_raw:
+                        logger.info(
+                            f"[KODA_STREAM sess={short_id}] client_stt empty text → no pipeline"
+                        )
+                        if client_alive:
+                            await emit_to_client({"type": "done"})
+                        return
+                    # === Pipeline LLM+TTS (identica al percorso Deepgram) ===
+                    try:
+                        await run_pipeline_for_text(
+                            text=text_raw,
+                            ephemeral=ephemeral,
+                            audio_duration_ms=dur_int,
+                            stt_confidence=conf_num,
+                            emit=emit_to_client,
+                            session_id=session_id,
+                            location_city=location_city,
+                            location_region=location_region,
+                            location_country=location_country,
+                        )
+                        if client_alive:
+                            await emit_to_client({"type": "done"})
+                    except Exception as e:
+                        logger.error(
+                            f"[KODA_STREAM sess={short_id}] client_stt pipeline crashed: {e}"
+                        )
+                        if client_alive:
+                            await emit_to_client(
+                                {"type": "error", "message": str(e)[:200]}
+                            )
+                    return
+                # Messaggio sconosciuto → log e continua
+                logger.debug(
+                    f"[KODA_STREAM sess={short_id}] client_stt unknown msg type={mtype!r}"
+                )
+            return
+        # === FINE RAMO FASE B — sotto continua il percorso Deepgram ======
 
         # ---------------- 2) Connetti a Deepgram ----------------
         if not DEEPGRAM_API_KEY:
