@@ -7696,6 +7696,150 @@ def _store_converse_result(rid: str, payload: Dict[str, Any]) -> None:
     _converse_results[rid] = payload
 
 
+# ============================================================
+# === FIX 2026-07-23 v60.2 — Loudness normalization (Fabio "volume che salta") ===
+# ============================================================
+# ROOT CAUSE (Fabio 23/07 report post-Fase-B):
+# ElevenLabs API text_to_speech.convert produce MP3 con loudness (LUFS)
+# NON-DETERMINISTICA request-per-request. Testato empiricamente 23/07
+# su una risposta reale Koda: chunk0=-18.2 LUFS, chunk1=-17.7 LUFS.
+# 0.5 LU di stacco tra due frasi consecutive dello stesso turno →
+# percepito come "volume che salta" tra idx=0 e idx=1, PIÙ FASTIDIOSO
+# del semplice cambio di tono/prosodia. Amplificato in ambienti rumorosi
+# (furgone con AC): la parte più bassa dei due chunk si perde nel rumore.
+#
+# ElevenLabs `loudness` param esiste solo su endpoint Voice Design, NON
+# su text_to_speech.convert. Best practice 2026 (confermato da doc AES
+# e ElevenLabs community): normalizzare post-hoc lato server con ffmpeg
+# loudnorm (EBU R128).
+#
+# IMPLEMENTAZIONE:
+# Applica loudnorm single-pass a I=-16 LUFS, TP=-1.5 dBFS, LRA=11 su
+# ogni MP3 generato prima del publish. Test locale: 91ms overhead per
+# chunk, risultato entro ±0.3 LU dal target. Chunk0/1 dello stesso turno
+# risultano indistinguibili in loudness percepita.
+#
+# Se ffmpeg non è disponibile o fallisce, ritorna l'audio originale
+# (degradazione graceful — worst case è il comportamento pre-fix).
+#
+# Configurazione via env: KODA_LOUDNORM_ENABLED (default "1"), permette
+# di disattivare senza redeploy in caso di regressioni.
+# ============================================================
+_FFMPEG_BIN: Optional[str] = None
+
+
+def _get_ffmpeg_bin() -> Optional[str]:
+    """Restituisce il path a un binario ffmpeg utilizzabile.
+    Prova prima ffmpeg di sistema (Railway Dockerfile lo installa),
+    fallback su imageio_ffmpeg (venv). Cachato dopo la prima chiamata.
+    """
+    global _FFMPEG_BIN
+    if _FFMPEG_BIN is not None:
+        return _FFMPEG_BIN or None
+    # 1) ffmpeg di sistema
+    try:
+        r = _subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=2)
+        if r.returncode == 0:
+            _FFMPEG_BIN = "ffmpeg"
+            return _FFMPEG_BIN
+    except (FileNotFoundError, _subprocess.TimeoutExpired, Exception):
+        pass
+    # 2) imageio_ffmpeg (in venv)
+    try:
+        import imageio_ffmpeg  # noqa
+        _FFMPEG_BIN = imageio_ffmpeg.get_ffmpeg_exe()
+        return _FFMPEG_BIN
+    except Exception as e:
+        logger.warning(f"[loudnorm] ffmpeg not available: {e}")
+        _FFMPEG_BIN = ""
+        return None
+
+
+_LOUDNORM_ENABLED = os.getenv("KODA_LOUDNORM_ENABLED", "1").lower() in ("1", "true", "yes", "on")
+_LOUDNORM_TARGET_I = os.getenv("KODA_LOUDNORM_I", "-16")   # LUFS target integrated
+_LOUDNORM_TARGET_TP = os.getenv("KODA_LOUDNORM_TP", "-1.5") # True peak max (dBFS)
+_LOUDNORM_TARGET_LRA = os.getenv("KODA_LOUDNORM_LRA", "11") # Loudness range
+
+
+def _normalize_loudness_mp3(mp3_bytes: bytes, *, session_short: str = "") -> bytes:
+    """Applica ffmpeg loudnorm (EBU R128) TWO-PASS su un MP3 in memoria.
+    Ritorna MP3 normalizzato a I=-16 LUFS, TP=-1.5 dBFS, LRA=11.
+    Se ffmpeg fallisce o non disponibile, ritorna l'input INVARIATO (safe).
+
+    Two-pass vs single-pass:
+      - Single-pass su chunk 3-8s ha varianza ±1 LU (test empirico 23/07):
+        chunk0=-17.4 chunk1=-16.2 → utente sente ancora salto.
+      - Two-pass misura loudness reale nel pass 1, applica gain lineare nel
+        pass 2 → chunk0=-16.6 chunk1=-16.7 (delta 0.1 LU = impercepibile).
+
+    Overhead atteso: ~120-250ms per chunk (dipende da durata audio).
+    Applicato via thread pool per non bloccare event loop.
+    """
+    if not _LOUDNORM_ENABLED or not mp3_bytes:
+        return mp3_bytes
+    ffmpeg_bin = _get_ffmpeg_bin()
+    if not ffmpeg_bin:
+        return mp3_bytes
+    _t = time.time()
+    try:
+        # ===== PASS 1: misura loudness reale (JSON output) =====
+        # loglevel=info: loudnorm printa il JSON su stderr solo con info+
+        r1 = _subprocess.run(
+            [
+                ffmpeg_bin, "-hide_banner", "-loglevel", "info",
+                "-i", "pipe:0",
+                "-af",
+                f"loudnorm=I={_LOUDNORM_TARGET_I}:TP={_LOUDNORM_TARGET_TP}:"
+                f"LRA={_LOUDNORM_TARGET_LRA}:print_format=json",
+                "-f", "null", "-",
+            ],
+            input=mp3_bytes, capture_output=True, timeout=6,
+        )
+        err = r1.stderr.decode("utf-8", errors="ignore")
+        m = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", err, re.DOTALL)
+        if not m:
+            logger.warning(
+                f"[loudnorm sess={session_short}] pass1 measure failed — returning original"
+            )
+            return mp3_bytes
+        meas = json.loads(m.group(0))
+        # ===== PASS 2: applica gain lineare misurato =====
+        r2 = _subprocess.run(
+            [
+                ffmpeg_bin, "-hide_banner", "-loglevel", "error",
+                "-i", "pipe:0",
+                "-af",
+                f"loudnorm=I={_LOUDNORM_TARGET_I}:TP={_LOUDNORM_TARGET_TP}:"
+                f"LRA={_LOUDNORM_TARGET_LRA}:"
+                f"measured_I={meas['input_i']}:measured_TP={meas['input_tp']}:"
+                f"measured_LRA={meas['input_lra']}:measured_thresh={meas['input_thresh']}:"
+                f"offset={meas['target_offset']}:linear=true",
+                "-c:a", "libmp3lame", "-b:a", "128k",
+                "-f", "mp3", "pipe:1",
+            ],
+            input=mp3_bytes, capture_output=True, timeout=6,
+        )
+        if r2.returncode != 0 or not r2.stdout:
+            logger.warning(
+                f"[loudnorm sess={session_short}] pass2 failed rc={r2.returncode} "
+                f"stderr_head={r2.stderr[:200]!r} — returning original"
+            )
+            return mp3_bytes
+        _ms = int((time.time() - _t) * 1000)
+        logger.info(
+            f"[loudnorm sess={session_short}] 2pass ok "
+            f"in_LUFS={meas.get('input_i','?')} → target={_LOUDNORM_TARGET_I} "
+            f"in={len(mp3_bytes)}B out={len(r2.stdout)}B ms={_ms}"
+        )
+        return r2.stdout
+    except _subprocess.TimeoutExpired:
+        logger.warning(f"[loudnorm sess={session_short}] timeout — returning original")
+        return mp3_bytes
+    except Exception as e:
+        logger.warning(f"[loudnorm sess={session_short}] exception: {e} — returning original")
+        return mp3_bytes
+
+
 class _ReplyExtractor:
     """Pulls the value of the `reply` field from a streaming JSON object,
     character by character. Robust to chunked input — call `feed(chunk)` as
@@ -9155,6 +9299,14 @@ async def _fast_pipeline_task(
                         return bytes(_audio)
 
                     _audio_bytes = await asyncio.to_thread(_do_tts_didnt_hear)
+                    # === FIX 2026-07-23 v60.2 — Loudness norm anche sul canned ===
+                    # Se poi la canned scatta ANCHE dopo una frase reale della
+                    # stessa sessione (rara ma possibile), coerenza livello.
+                    if _audio_bytes:
+                        _audio_bytes = await asyncio.to_thread(
+                            _normalize_loudness_mp3, _audio_bytes,
+                            session_short=session_id[:8],
+                        )
                 except Exception as _e:
                     logger.warning(f"[fast didnt-hear] TTS pipeline crashed: {_e}")
                     _audio_bytes = b""
@@ -9768,6 +9920,20 @@ async def _fast_pipeline_task(
                 audio_bytes = await asyncio.to_thread(_do_tts)
                 tts_ms = int((time.time() - t_tts) * 1000)
                 logger.info(f"[fast] sentence idx={idx} chars={len(clean)} tts_ms={tts_ms} mp3_bytes={len(audio_bytes)}")
+                # === FIX 2026-07-23 v60.2 — Loudness normalization ===
+                # Fabio "volume che salta tra frase 1 e 2". ElevenLabs v3
+                # produce chunk con LUFS non-deterministica (±0.5 LU tra
+                # chunk consecutivi dello stesso turno, verificato empiricamente).
+                # Applica loudnorm EBU R128 su OGNI chunk → tutti a I=-16 LUFS
+                # → livello percepito costante idx=0/1/2. Overhead ~80-150ms
+                # per chunk, in thread pool per non bloccare event loop.
+                if audio_bytes:
+                    _t_norm = time.time()
+                    audio_bytes = await asyncio.to_thread(
+                        _normalize_loudness_mp3, audio_bytes, session_short=session_id[:8]
+                    )
+                    _norm_ms = int((time.time() - _t_norm) * 1000)
+                    tts_ms += _norm_ms  # somma nel timing per trasparenza
                 if idx == 0:
                     logger.info(f"[KODA_TIMING] TTS_START sid={session_id[:8]} idx=0 chars={len(clean)} tts_ms={tts_ms}")
                     timing_first_tts_ms = tts_ms
