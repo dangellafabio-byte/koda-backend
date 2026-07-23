@@ -50,18 +50,17 @@ import {
   type SentenceMeta,
   type AudioRouteInfo,
 } from "./voiceStream";
+import { kodaBackendWsUrl } from "./backendUrl";
 
 const TAG = "KODA_CLIENT_STT";
 
-// Backend URL — riusiamo la stessa logica di voiceStream.ts (Railway hardcoded)
-const BACKEND_URL_RAW =
-  process.env.EXPO_PUBLIC_BACKEND_URL ||
-  "https://koda-backend-production-4a34.up.railway.app";
-
+// === FIX 2026-07-23 — Usa Railway hardcoded, NON il preview Emergent ===
+// Il preview Emergent (`app-finder-408.emergent.host`) NON ha il backend voice
+// deployato → restituisce 502 sul WS. Il backend Koda vive su Railway
+// (koda-backend-production-4a34.up.railway.app). Usiamo lo stesso helper
+// hardcoded di voiceStream.ts (kodaBackendWsUrl) per garantire coerenza.
 function buildWsUrl(): string {
-  // Converte https://... → wss://... e https://... → ws://... (in dev)
-  const url = BACKEND_URL_RAW.replace(/^http/, "ws");
-  return `${url}/api/voice/stream`;
+  return kodaBackendWsUrl("/api/voice/stream");
 }
 
 /**
