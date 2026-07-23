@@ -7810,7 +7810,19 @@ class _ReplyExtractor:
 # whitespace or end-of-buffer. We avoid splitting on common abbreviations
 # (e.g. "Sig.", "es.") — Italian usage is rare in conversational replies but
 # we still apply a light heuristic: don't split if preceded by 1 lowercase letter.
-_SENTENCE_RE = re.compile(r'(?<![A-Za-z])(?:[.!?…]+|[.!?])(?:["\)\]\s]|$)')
+_SENTENCE_RE = re.compile(r'(?<=[a-zA-ZÀ-ÿ0-9])[.!?…]+(?=[\s"\)\]]|$)')
+# === FIX 2026-07-23 v60 — regex era DEAD CODE ===
+# ROOT CAUSE (Fabio 23/07/2026 "scalino tra frase 1 e 2"):
+# La regex precedente `(?<![A-Za-z])(?:[.!?…]+|[.!?])...` aveva un
+# negative lookbehind `(?<![A-Za-z])` che voleva escludere abbreviazioni
+# ma bloccava TUTTE le frasi normali (che finiscono sempre con
+# lettera + .). Verificato empiricamente: 0/6 frasi italiane realistiche
+# matchavano. Risultato: `_pop_first_sentence` returnava sempre ("", buf)
+# → il ramo "usa frase completa se già presente" era codice morto da
+# chissà quando → chunk idx=0 sempre tagliato al comma-cut aggressivo,
+# mai su punto/exclamation naturale → intonazione ascendente "continuo"
+# invece che chiusa → percepito come scalino di tono nel passaggio a
+# idx=1. Fix: positive lookbehind (lettera/digit + terminator + spazio).
 
 
 def _pop_first_sentence(buf: str) -> tuple[str, str]:
