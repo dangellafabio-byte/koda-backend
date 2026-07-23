@@ -7762,18 +7762,12 @@ _LOUDNORM_TARGET_LRA = os.getenv("KODA_LOUDNORM_LRA", "11") # Loudness range
 
 
 def _normalize_loudness_mp3(mp3_bytes: bytes, *, session_short: str = "") -> bytes:
-    """Applica ffmpeg loudnorm (EBU R128) TWO-PASS su un MP3 in memoria.
-    Ritorna MP3 normalizzato a I=-16 LUFS, TP=-1.5 dBFS, LRA=11.
-    Se ffmpeg fallisce o non disponibile, ritorna l'input INVARIATO (safe).
-
-    Two-pass vs single-pass:
-      - Single-pass su chunk 3-8s ha varianza ±1 LU (test empirico 23/07):
-        chunk0=-17.4 chunk1=-16.2 → utente sente ancora salto.
-      - Two-pass misura loudness reale nel pass 1, applica gain lineare nel
-        pass 2 → chunk0=-16.6 chunk1=-16.7 (delta 0.1 LU = impercepibile).
-
-    Overhead atteso: ~120-250ms per chunk (dipende da durata audio).
-    Applicato via thread pool per non bloccare event loop.
+    """[LEGACY, MANTENUTO PER COMPAT] Normalizzazione assoluta a I=-16 LUFS.
+    ⚠️ Appiattisce la dinamica emotiva tra turni diversi (calmo vs entusiasta
+    finiscono allo stesso livello). Sostituita dal flusso RELATIVE che usa
+    _measure_lufs_only() + _apply_gain_mp3() con reference per-turno.
+    Lasciata solo per il canned "didnt-hear" (chunk singolo, no continuità
+    da preservare) e come fallback safety-net.
     """
     if not _LOUDNORM_ENABLED or not mp3_bytes:
         return mp3_bytes
@@ -7838,6 +7832,187 @@ def _normalize_loudness_mp3(mp3_bytes: bytes, *, session_short: str = "") -> byt
     except Exception as e:
         logger.warning(f"[loudnorm sess={session_short}] exception: {e} — returning original")
         return mp3_bytes
+
+
+# =============================================================================
+# === FIX 2026-07-23 v60.3 — Normalizzazione RELATIVA per-turno ================
+# =============================================================================
+# Fabio insight critico: la v60.2 (loudnorm target assoluto -16 LUFS) elimina
+# lo scalino intra-turno MA appiattisce la dinamica emotiva tra turni:
+#   - Turno "calmo" con [softly]: v3 produce naturalmente ~-19 LUFS → livellato a -16
+#   - Turno "entusiasta" con [energetically]: v3 produce ~-13 LUFS → livellato a -16
+# Risultato: Koda parla sempre allo stesso volume, perde carattere.
+#
+# Fix corretto: normalizzare la RELAZIONE fra chunk DELLO STESSO TURNO
+# (elimina lo scalino), NON un target assoluto. Il chunk 0 diventa il
+# riferimento del turno: qualunque livello LUFS abbia scelto v3, viene
+# preservato tal-quale. I chunk successivi (body idx=1+) vengono allineati
+# a quel riferimento, non a -16.
+#
+# Latenza migliore: chunk 0 solo misurato (~150ms), chunk 1 misura + gain
+# lineare (~250ms) invece dei ~600ms della vecchia two-pass loudnorm.
+# =============================================================================
+
+
+def _measure_lufs_only(mp3_bytes: bytes, ffmpeg_bin: str, *, timeout: float = 5.0) -> Optional[float]:
+    """Restituisce integrated LUFS di un MP3 (pass 1 di loudnorm, no re-encoding).
+    Overhead: ~100-200ms in base alla durata audio. Ritorna None se fallisce.
+    """
+    try:
+        r = _subprocess.run(
+            [
+                ffmpeg_bin, "-hide_banner", "-loglevel", "info",
+                "-i", "pipe:0",
+                "-af",
+                f"loudnorm=I={_LOUDNORM_TARGET_I}:TP={_LOUDNORM_TARGET_TP}:"
+                f"LRA={_LOUDNORM_TARGET_LRA}:print_format=json",
+                "-f", "null", "-",
+            ],
+            input=mp3_bytes, capture_output=True, timeout=timeout,
+        )
+        err = r.stderr.decode("utf-8", errors="ignore")
+        m = re.search(r"\"input_i\"\s*:\s*\"(-?[\d.]+)\"", err)
+        if not m:
+            return None
+        return float(m.group(1))
+    except Exception:
+        return None
+
+
+def _apply_gain_mp3(mp3_bytes: bytes, gain_db: float, ffmpeg_bin: str, *, timeout: float = 5.0) -> Optional[bytes]:
+    """Applica un gain lineare (in dB) all'MP3 tramite ffmpeg volume filter
+    e re-encoda a MP3 128kbps. Molto più veloce di loudnorm pass 2 perché
+    non fa look-ahead / normalizzazione dinamica. Overhead: ~80-150ms.
+    Ritorna None se fallisce.
+    """
+    try:
+        r = _subprocess.run(
+            [
+                ffmpeg_bin, "-hide_banner", "-loglevel", "error",
+                "-i", "pipe:0",
+                "-af", f"volume={gain_db:.2f}dB",
+                "-c:a", "libmp3lame", "-b:a", "128k",
+                "-f", "mp3", "pipe:1",
+            ],
+            input=mp3_bytes, capture_output=True, timeout=timeout,
+        )
+        if r.returncode != 0 or not r.stdout:
+            return None
+        return r.stdout
+    except Exception:
+        return None
+
+
+# Soglia di percezione (Just Noticeable Difference) per loudness: ~1 LU
+# secondo psicoacustica classica; sotto 0.5 LU è impercepibile persino su
+# transizioni immediate. Se il delta rientra qui, skippiamo il gain (evita
+# re-encode inutili + preserva massima naturalezza).
+_LOUDNESS_JND_LU = float(os.getenv("KODA_LOUDNESS_JND_LU", "0.5"))
+
+# Range plausibile per un riferimento LUFS. Se v3 restituisce un valore fuori
+# da questi limiti (glitch API, silenzio, clipping), non lo usiamo come ref e
+# ricadiamo su -16 LUFS (safe default). Speech normale sta sempre in [-24, -10].
+_LUFS_REF_MIN = float(os.getenv("KODA_LUFS_REF_MIN", "-26"))
+_LUFS_REF_MAX = float(os.getenv("KODA_LUFS_REF_MAX", "-8"))
+
+
+def _normalize_chunk_relative(
+    mp3_bytes: bytes,
+    ref_state: Dict[str, Any],
+    *,
+    idx: int = 0,
+    session_short: str = "",
+) -> bytes:
+    """Normalizzazione RELATIVA per-turno.
+
+    ref_state è un dict mutabile scopato al turno corrente. Alla prima chiamata
+    (chunk 0) misura il LUFS e lo salva come riferimento del turno; ritorna
+    l'audio TAL QUALE (preservando il livello naturale scelto da v3 in base
+    al tono). Alle chiamate successive (chunk 1+) misura il LUFS attuale e
+    applica un gain lineare per allinearlo al riferimento; se il delta è
+    sotto la soglia di percezione (~0.5 LU) skippa il gain per preservare la
+    naturalezza al massimo.
+
+    Fallback graceful:
+    - ffmpeg mancante o disabilitato → ritorna audio invariato
+    - misura fallita → ritorna audio invariato
+    - riferimento fuori range plausibile → usa -16 come safe default
+    - gain fallito → ritorna audio invariato
+    """
+    if not _LOUDNORM_ENABLED or not mp3_bytes:
+        return mp3_bytes
+    ffmpeg_bin = _get_ffmpeg_bin()
+    if not ffmpeg_bin:
+        return mp3_bytes
+
+    _t0 = time.time()
+    lufs = _measure_lufs_only(mp3_bytes, ffmpeg_bin)
+    _t_meas = int((time.time() - _t0) * 1000)
+
+    # === Chunk 0: stabilisce il riferimento del turno, no re-encoding ====
+    if ref_state.get("ref_lufs") is None:
+        # Sanity check: chunk 0 deve avere un LUFS "vero" per fare da ancora.
+        # Se la misura fallisce o è fuori range plausibile (glitch, silenzio,
+        # clip), fissiamo un riferimento di sicurezza (-16 LUFS) senza toccare
+        # l'audio: i chunk successivi verranno allineati a quel default.
+        if lufs is None or lufs < _LUFS_REF_MIN or lufs > _LUFS_REF_MAX:
+            ref_state["ref_lufs"] = -16.0
+            ref_state["ref_from"] = "fallback"
+            logger.info(
+                f"[loudnorm sess={session_short}] chunk{idx} ref_lufs=FALLBACK(-16) "
+                f"measured={lufs} out_of_range meas_ms={_t_meas}"
+            )
+        else:
+            ref_state["ref_lufs"] = lufs
+            ref_state["ref_from"] = "measured"
+            logger.info(
+                f"[loudnorm sess={session_short}] chunk{idx} ref_lufs={lufs:.2f} "
+                f"(natural v3 output preserved) meas_ms={_t_meas}"
+            )
+        # NB: nessun re-encoding — restituiamo l'audio ORIGINALE per chunk 0.
+        return mp3_bytes
+
+    # === Chunk 1+: allinea al riferimento del turno ======================
+    ref_lufs: float = ref_state["ref_lufs"]
+    if lufs is None:
+        logger.info(
+            f"[loudnorm sess={session_short}] chunk{idx} measure failed — "
+            f"skipping gain (ref={ref_lufs:.2f})"
+        )
+        return mp3_bytes
+
+    gain_needed = ref_lufs - lufs
+
+    # Se il delta è sotto la Just Noticeable Difference, non toccare.
+    if abs(gain_needed) < _LOUDNESS_JND_LU:
+        logger.info(
+            f"[loudnorm sess={session_short}] chunk{idx} lufs={lufs:.2f} "
+            f"ref={ref_lufs:.2f} delta={gain_needed:+.2f} <JND — no gain applied"
+        )
+        return mp3_bytes
+
+    # Clamp del gain: evita amplificazioni assurde su chunk anomali.
+    # ±6 dB è già oltre il naturale drift tra chunk consecutivi di v3.
+    if gain_needed > 6.0:
+        gain_needed = 6.0
+    elif gain_needed < -6.0:
+        gain_needed = -6.0
+
+    _t1 = time.time()
+    out = _apply_gain_mp3(mp3_bytes, gain_needed, ffmpeg_bin)
+    _t_gain = int((time.time() - _t1) * 1000)
+    if out is None:
+        logger.warning(
+            f"[loudnorm sess={session_short}] chunk{idx} gain apply failed — returning original"
+        )
+        return mp3_bytes
+
+    logger.info(
+        f"[loudnorm sess={session_short}] chunk{idx} relative-norm ok "
+        f"lufs={lufs:.2f} → ref={ref_lufs:.2f} gain={gain_needed:+.2f}dB "
+        f"in={len(mp3_bytes)}B out={len(out)}B meas_ms={_t_meas} gain_ms={_t_gain}"
+    )
+    return out
 
 
 class _ReplyExtractor:
@@ -9713,6 +9888,14 @@ async def _fast_pipeline_task(
         # PROSODY CONTINUITY (Fabio 2026-06-21): tiene la frase appena
         # sintetizzata per passarla come `previous_text` alla successiva.
         _prev_sentence_for_tts: Optional[str] = None
+        # === FIX 2026-07-23 v60.3 — reference LUFS per-turno ================
+        # Stato mutabile scopato a QUESTO turno (una chiamata a
+        # _fast_pipeline_task = un turno di conversazione). Il primo chunk
+        # TTS sintetizzato (idx=0) fissa il livello di riferimento, i chunk
+        # successivi (body idx=1+) verranno allineati a quel livello. Turni
+        # diversi restano naturalmente diversi (calmo ~-19 LUFS, entusiasta
+        # ~-13 LUFS) — la dinamica emotiva di v3 viene preservata.
+        turn_loudness_ref: Dict[str, Any] = {"ref_lufs": None, "ref_from": None}
         ttft_logged = False
         first_audio_logged = False
         current_tone = "warm"
@@ -9920,17 +10103,17 @@ async def _fast_pipeline_task(
                 audio_bytes = await asyncio.to_thread(_do_tts)
                 tts_ms = int((time.time() - t_tts) * 1000)
                 logger.info(f"[fast] sentence idx={idx} chars={len(clean)} tts_ms={tts_ms} mp3_bytes={len(audio_bytes)}")
-                # === FIX 2026-07-23 v60.2 — Loudness normalization ===
-                # Fabio "volume che salta tra frase 1 e 2". ElevenLabs v3
-                # produce chunk con LUFS non-deterministica (±0.5 LU tra
-                # chunk consecutivi dello stesso turno, verificato empiricamente).
-                # Applica loudnorm EBU R128 su OGNI chunk → tutti a I=-16 LUFS
-                # → livello percepito costante idx=0/1/2. Overhead ~80-150ms
-                # per chunk, in thread pool per non bloccare event loop.
+                # === FIX 2026-07-23 v60.3 — Normalizzazione RELATIVA per-turno ===
+                # v60.2 (loudnorm target -16 assoluto) eliminava lo scalino
+                # ma appiattiva la dinamica emotiva tra turni (calmo/entusiasta
+                # arrivavano tutti a -16). Ora chunk 0 stabilisce il riferimento
+                # naturale del turno, chunk 1+ vengono allineati SOLO a QUELLO.
+                # Turni diversi mantengono livelli naturali diversi.
                 if audio_bytes:
                     _t_norm = time.time()
                     audio_bytes = await asyncio.to_thread(
-                        _normalize_loudness_mp3, audio_bytes, session_short=session_id[:8]
+                        _normalize_chunk_relative, audio_bytes, turn_loudness_ref,
+                        idx=idx, session_short=session_id[:8],
                     )
                     _norm_ms = int((time.time() - _t_norm) * 1000)
                     tts_ms += _norm_ms  # somma nel timing per trasparenza
