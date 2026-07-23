@@ -572,6 +572,31 @@ export class VoiceClientSttSession {
           this.callbacks.onReady?.(msg.session_id || "");
         } catch {}
         break;
+      case "stt_interim":
+        // === Safety net 2026-07-23 v3 ===
+        // In Fase B (client_apple), gli interim vengono già emessi
+        // localmente da SFSpeechRecognizer via il callback onInterim
+        // dentro startRecognition(). Il server NON dovrebbe mandare
+        // stt_interim in questo branch. Se lo facesse (es. futuro
+        // cambio), lo passiamo comunque all'upper layer per non
+        // perderlo — è idempotente rispetto al partial locale.
+        try {
+          this.callbacks.onInterim?.(msg.text || "", !!msg.is_final);
+        } catch {}
+        break;
+      case "stt_final":
+        // === Safety net 2026-07-23 v3 ===
+        // In Fase B (client_apple), il client ha GIÀ chiamato
+        // onFinal() dentro dispatchFinalToBackend() PRIMA di mandare
+        // transcript_from_client al server. Il backend in
+        // voice_stream.py branch client_apple emette anche stt_final
+        // come conferma (per allinearsi al percorso Deepgram), ma
+        // ri-innescare onFinal qui causerebbe doppio recording→thinking
+        // e possibili glitch UI. Quindi LOG-ONLY, no callback.
+        console.log(
+          `[${TAG}] stt_final echo (server confirm) text="${(msg.text || "").slice(0, 40)}" — ignoring (already dispatched client-side)`
+        );
+        break;
       case "sentence":
         // === FIX 2026-07-23 v3 — Nome messaggio corretto ===
         // Il backend Koda emette `{"type":"sentence", i, text, waveform, ...}`
