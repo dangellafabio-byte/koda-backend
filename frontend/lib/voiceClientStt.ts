@@ -572,7 +572,16 @@ export class VoiceClientSttSession {
           this.callbacks.onReady?.(msg.session_id || "");
         } catch {}
         break;
-      case "sentence_header":
+      case "sentence":
+        // === FIX 2026-07-23 v3 — Nome messaggio corretto ===
+        // Il backend Koda emette `{"type":"sentence", i, text, waveform, ...}`
+        // seguito dal binary frame MP3. Nella prima versione avevo usato
+        // erroneamente `"sentence_header"` che NON è il vero nome → il
+        // messaggio veniva silenziosamente ignorato → pendingSentenceHeader
+        // restava null → binary frame arrivava senza header pending → onSentence
+        // NON veniva mai chiamato → nessuna coda TTS → thinking→idle direttamente
+        // senza mai passare da "speaking". Verificato in
+        // /app/backend/voice_stream.py:1260 e /app/frontend/lib/voiceStream.ts:836.
         this.pendingSentenceHeader = {
           i: msg.i || 0,
           text: msg.text || "",
@@ -581,6 +590,9 @@ export class VoiceClientSttSession {
           audio_bytes: msg.audio_bytes || 0,
           mime: msg.mime || "audio/mpeg",
         };
+        console.log(
+          `[${TAG}] sentence i=${msg.i || 0} text="${(msg.text || "").slice(0, 40)}${(msg.text || "").length > 40 ? "…" : ""}" bytes=${msg.audio_bytes || 0}`
+        );
         break;
       case "meta":
         try {
