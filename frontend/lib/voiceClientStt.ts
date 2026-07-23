@@ -93,6 +93,16 @@ export class VoiceClientSttSession {
   private currentTranscript = "";
   private currentConfidence: number | null = null;
   private speechStartMs = 0;
+  // === FIX 2026-07-23 v2 — Idempotency guard dispatchFinalToBackend ===
+  // iOS emette event "end" ANCHE dopo isFinal=true, spesso ripetuto decine
+  // di volte fino alla chiusura completa della sessione. Il nostro handler
+  // "end" era un safety net per casi in cui isFinal non arriva, ma senza
+  // guard esplicito re-innescava dispatchFinalToBackend() a ogni "end"
+  // → decine di transcript_from_client duplicati mandati al backend
+  // (visibili nel log Fase B v1 come "sendJson skipped — ws not open"
+  // dopo che il server aveva già risposto). Ora `dispatched=true` blocca
+  // sia dispatch multipli sia il ramo safety net nell'end handler.
+  private dispatched = false;
 
   // Handlers rimuovibili
   private subResult: { remove: () => void } | null = null;
@@ -174,6 +184,7 @@ export class VoiceClientSttSession {
     this.currentTranscript = "";
     this.currentConfidence = null;
     this.speechStartMs = 0;
+    this.dispatched = false;
 
     // 1) Permission check
     const perm = await VoiceClientSttSession.requestPermissions();
@@ -310,6 +321,12 @@ export class VoiceClientSttSession {
     );
 
     this.subEnd = ExpoSpeechRecognitionModule.addListener("end", () => {
+      // iOS può emettere "end" più volte per sessione (specialmente dopo
+      // isFinal). Il guard `dispatched` previene safety net multipli.
+      if (this.dispatched) {
+        // Log molto leggero per non spammare
+        return;
+      }
       console.log(`[${TAG}] end event`);
       // Se non abbiamo ancora inviato final ma abbiamo un transcript accumulato,
       // consideriamolo final (safety net per casi in cui iOS chiude senza
@@ -370,10 +387,14 @@ export class VoiceClientSttSession {
 
   /**
    * Invia il transcript finale al backend + notifica il caller (onFinal).
-   * Idempotente: se doneReceived è già true, no-op.
+   * Idempotente: se già dispatchato o doneReceived, no-op.
    */
   private dispatchFinalToBackend(): void {
-    if (this.doneReceived) return;
+    if (this.dispatched || this.doneReceived) return;
+    // Set flag SUBITO — così ogni chiamata successiva (safety net di end
+    // handler, timeout, ecc.) diventa no-op. Evita 30+ duplicati che iOS
+    // può innescare emettendo "end" ripetutamente.
+    this.dispatched = true;
     const text = (this.currentTranscript || "").trim();
     const conf = this.currentConfidence;
     const durMs = this.speechStartMs
@@ -405,6 +426,11 @@ export class VoiceClientSttSession {
     } catch (e: any) {
       console.log(`[${TAG}] sendJson(transcript_from_client) FAILED: ${e?.message || e}`);
     }
+
+    // Rimuovi listeners SUBITO dopo dispatch. Impedisce che ulteriori "end"
+    // events di iOS re-innescano handler (anche col guard `dispatched`
+    // vogliamo cmq zero rumore log e zero side-effects).
+    this.removeListeners();
 
     // Fermiamo il recognizer (già stopped su isFinal, ma safety)
     try {
