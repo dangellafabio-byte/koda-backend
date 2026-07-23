@@ -253,6 +253,34 @@ export class VoiceClientSttSession {
 
     // 4) Apri WS
     const url = buildWsUrl();
+    // === FIX 2026-07-23 v5 — WARMUP AWAITED PRIMA DI WS =================
+    // Cold start Railway: se il backend è "andato a dormire" per inattività,
+    // il primo WebSocket handshake può prendere 5-12s (log 23/07: 11810ms).
+    // La funzione `prewarmMic()` chiamata da speech.ts già fa una POST a
+    // /api/voice/warmup fire-and-forget → sveglia Railway. Ma il WS parte
+    // in parallelo immediatamente dopo → i due arrivano insieme e Railway
+    // deve completare il boot prima di poter accettare l'upgrade WS.
+    //
+    // Qui aspettiamo esplicitamente il warmup HTTP (max 5s). Cold start:
+    // il POST completa in 5-8s, poi il WS apre in ~500ms → ~5-6s totali
+    // (dimezzato). Warm case: POST in 100-300ms → WS in 500ms → 500-800ms
+    // (invariato rispetto a prima).
+    try {
+      const httpUrl = url.replace(/^ws/, "http").replace(/\/api\/voice\/stream$/, "/api/voice/warmup");
+      const ctrl = new AbortController();
+      const t0 = Date.now();
+      const timer = setTimeout(() => ctrl.abort(), 5000);
+      try {
+        await fetch(httpUrl, { method: "POST", signal: ctrl.signal });
+        clearTimeout(timer);
+        console.log(`[${TAG}] warmup HTTP done in ${Date.now() - t0}ms`);
+      } catch (e: any) {
+        clearTimeout(timer);
+        console.log(`[${TAG}] warmup HTTP failed/timeout in ${Date.now() - t0}ms: ${e?.message || e}`);
+        // Non blocchiamo — proviamo comunque il WS. Se Railway è ancora
+        // freddo, il WS handshake attenderà quel che resta del boot.
+      }
+    } catch {}
     console.log(`[${TAG}] opening WS → ${url} route=${this.audioRoute}`);
     await this.openWs(url);
 
