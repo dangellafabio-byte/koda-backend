@@ -3,6 +3,24 @@
  *
  * === FASE B — STT on-device Apple (SFSpeechRecognizer) ===
  *
+ * ⚠️  REGOLA DI PRIVACY BLOCCANTE (Fabio 2026-07-23) ⚠️
+ * ─────────────────────────────────────────────────────────────
+ * Questo modulo APRE WebSocket verso il backend Koda e INVIA testo
+ * trascritto tramite `{type:"transcript_from_client", text, ...}`.
+ * Il testo LASCIA il device.
+ *
+ * ➤ Modalità **"Lascia andare"** (app/lascia-andare.tsx):
+ *   Il contratto con l'utente è "zero trascrizione, zero rete".
+ *   `lascia-andare.tsx` NON deve MAI importare questo modulo, NON deve
+ *   MAI istanziare `VoiceClientSttSession`, NON deve MAI chiamare
+ *   `speech.ts::voiceStreamConverse()` (che a sua volta usa questo modulo
+ *   via feature flag). Verifica al 2026-07-23: `lascia-andare.tsx` NON
+ *   importa nessuno di questi moduli, ha solo `expo-audio` metering-only
+ *   con VAD locale. Se un giorno cambi lascia-andare, questa regola
+ *   RESTA valida — mai importare voiceClientStt/voiceStream/speech/api
+ *   in quella schermata.
+ * ─────────────────────────────────────────────────────────────
+ *
  * Sessione voice-stream ALTERNATIVA a VoiceStreamSession (che usa Deepgram
  * server-side). Questa classe usa il framework nativo iOS `SFSpeechRecognizer`
  * via il pacchetto `expo-speech-recognition@3.1.3`. La trascrizione avviene
