@@ -281,21 +281,51 @@ Client audio → SFSpeechRecognizer on-device → transcript → WebSocket → B
 
 ### 7.1 iOS `OSStatus 560557684 (!act)` — sessione zombie
 
-**Impatto:** sessione bloccata per fino a 3 minuti (hard-cap 180s). Utente deve chiudere e riaprire app.
+**⚠️ STATUS AGGIORNATO 2026-07-23 v60.4 — MITIGATO PER CAMBIO ARCHITETTURALE + TELEMETRIA ATTIVA**
 
-**Frequenza:** rara, ma potenzialmente presente su:
-- Background/foreground transition
-- Interruzioni chiamata/Siri
-- Route change (Bluetooth connect/disconnect)
+**Storia del bug**:
+Documentato originariamente nel percorso Deepgram legacy (`voiceStream.ts`), dove
+il ciclo chunk N → chunk N+1 (ogni ~2-3s) esponeva ripetutamente la AudioSession
+iOS a race condition durante `prepareToRecordAsync()`. Log tipico:
+`[KODA_STREAM_CLIENT] chunk #2 pre-prepare refresh failed: OSStatus 560557684`.
+Nel caso estremo, iOS lasciava la sessione zombie fino a 3 minuti finché
+l'utente non chiudeva e riapriva l'app.
 
-**Fix proposto (backend + native):**
-1. Nel client `voiceStream.ts`, prima di `prepareToRecordAsync()` del chunk N+1:
-   - Chiamare `AVAudioSession.setActive(false)` esplicitamente dopo il `stop()` del chunk N.
-   - Attendere 50ms (deve rilasciare l'hardware).
-   - Chiamare `AVAudioSession.setActive(true)` prima di `prepareToRecordAsync()`.
-2. Su errore `!act` → retry con backoff esponenziale (max 3 tentativi in 500ms) invece di dare hard-cap.
+**Perché ora non è più P0**:
+Il passaggio a Fase B (client_apple, `voiceClientStt.ts`) ha eliminato per
+architettura il trigger dominante. `ExpoSpeechRecognitionModule` (wrapper
+SFSpeechRecognizer) usa UNA sola sessione continua per turno — non c'è più
+il ciclo prepare/stop ogni 2-3s. Superficie di attacco ridotta a:
+- Route change mid-turno (BT connect/disconnect mentre parli)
+- Interruzione sistema (Siri, chiamata)
+- App backgrounded durante recording
 
-**Priorità:** P2 (non blocca lancio, workaround esiste).
+**Cosa è stato fatto (v60.4, 2026-07-23)**:
+Fix preventivo minimale in `voiceClientStt.ts`:
+1. Su qualsiasi errore SFSpeechRecognizer non-benigno (esclusi `no-speech`
+   e `aborted`), viene eseguito un cycle fire-and-forget di AudioSession:
+   `setAudioModeAsync(allowsRecording:false)` → 300ms wait → `setAudioMode
+   Async(allowsRecording:true)`. Costo zero percepito dall'utente (avviene
+   DOPO che l'errore è già stato propagato).
+2. Log tagged `[AUDIO_ZOMBIE_RECOVERY]` con codice errore e message → grep-
+   per-grep dai log TestFlight per telemetria: se il bug si manifesta in
+   produzione, sappiamo esattamente quante volte e con quali codici.
+3. Nessuna modifica al retry loop (non c'è più — un singolo error chiude
+   il turno immediatamente, l'utente ri-tap → nuovo turno da stato pulito).
+
+**Test in furgone confermato (Fabio, 2026-07-23)**:
+Sessione conversazione >4 minuti, decine di turni, argomento personale
+complesso. Zero canned fallback, zero errori audio, memoria del contesto
+perfetta. Il bug non si è manifestato.
+
+**Criterio di chiusura definitiva**:
+Se in 2 settimane di uso reale il tag `[AUDIO_ZOMBIE_RECOVERY]` non compare
+mai nei log TestFlight → bug definitivamente morto per cambio architetturale,
+il codice v60.4 può essere rimosso in favore di una versione più snella.
+Se compare almeno una volta → analizzare il codice errore, valutare se
+serve un cycle profilattico all'inizio di ogni `start()` (Opzione C).
+
+**Priorità**: RISOLTO (via architettura + telemetria attiva). Nessun blocco per lancio.
 
 ---
 
