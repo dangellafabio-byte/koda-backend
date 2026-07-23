@@ -360,6 +360,36 @@ export class VoiceClientSttSession {
         );
         // "no-speech" e "aborted" sono benigni — no propagate
         if (evt.error === "no-speech" || evt.error === "aborted") return;
+
+        // === FIX 2026-07-23 v60.4 — AudioSession recovery cycle ============
+        // Fabio (23/07 post-checkpoint): il bug 560557684 (`!act`) del vecchio
+        // path Deepgram non dovrebbe più riprodursi qui (SFSpeechRecognizer
+        // ha una sola sessione per turno, non il ciclo chunk N→N+1). MA:
+        // se dovesse comunque succedere — route change, interruzione Siri,
+        // background/foreground mid-turno — SFSpeechRecognizer emette
+        // `error` con OSStatus 560557684 nel message. Se lasciamo la
+        // AudioSession iOS in stato residuale "!act", il PROSSIMO tap-to-
+        // speak potrebbe fallire silenziosamente.
+        //
+        // Fix profilattico: dopo un errore non-benigno eseguiamo un forced
+        // cycle di AudioSession (deactivate → 300ms → reactivate) COSÌ IL
+        // PROSSIMO turno parte da uno stato garantito pulito. Costo zero
+        // percepito dall'utente (avviene DOPO che ha già visto l'errore).
+        //
+        // Log taggato `[AUDIO_ZOMBIE_RECOVERY]` per telemetria: se in 2
+        // settimane non compare mai in produzione, il bug è definitivamente
+        // morto per cambio architetturale e possiamo rimuovere il fix.
+        const msg = String(evt.message || "");
+        const isZombieCandidate =
+          /560557684|!act|not active|session/i.test(msg) ||
+          /audio/i.test(String(evt.error || ""));
+        // Fire-and-forget, non aspettiamo (l'utente ha già ricevuto errore)
+        this.performAudioSessionRecoveryCycle(
+          evt.error,
+          msg,
+          isZombieCandidate
+        ).catch(() => {});
+
         try {
           this.callbacks.onError?.(`client_stt_${evt.error}`);
         } catch {}
@@ -520,6 +550,82 @@ export class VoiceClientSttSession {
     this.removeListeners();
     this.stopKeepalive();
     this.forceCloseWs();
+  }
+
+  /**
+   * === FIX 2026-07-23 v60.4 — AudioSession forced recovery cycle ===
+   * Chiamato in fire-and-forget dopo un `error` non-benigno di
+   * SFSpeechRecognizer. Fa deactivate → 300ms wait → reactivate della
+   * AudioSession iOS in modo che il PROSSIMO turno parta da uno stato
+   * pulito, anche se l'errore ha lasciato la session in stato residuale
+   * "!act" (OSStatus 560557684).
+   *
+   * Log tag `[AUDIO_ZOMBIE_RECOVERY]` è cercabile grep-per-grep dai log
+   * TestFlight/producdion. Se in 2 settimane non compare = bug morto per
+   * cambio architetturale (Fase B), fix rimovibile. Se compare = telemetria
+   * di quante volte scatta e con quali codici — decisione informata sul
+   * prossimo giro.
+   *
+   * NB: NON tocca la WS o il transcript in volo — quelli sono già gestiti
+   * dal listener error che ha già propagato onError all'upper layer. Qui
+   * facciamo solo housekeeping della AudioSession per il turno successivo.
+   */
+  private async performAudioSessionRecoveryCycle(
+    errorCode: string | undefined,
+    errorMsg: string,
+    isZombieCandidate: boolean
+  ): Promise<void> {
+    // Log SEMPRE (anche se non riteniamo sia zombie) — la telemetria vale
+    // più della latenza di una console.log.
+    console.log(
+      `[AUDIO_ZOMBIE_RECOVERY] triggered code=${errorCode || "?"} ` +
+        `msg="${(errorMsg || "").slice(0, 120)}" ` +
+        `zombie_candidate=${isZombieCandidate ? "yes" : "no"}`
+    );
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { setAudioModeAsync } = require("expo-audio");
+      // Step 1: deactivate — dice a iOS "rilascia la session, non serve"
+      try {
+        await setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+          interruptionMode: "mixWithOthers",
+          shouldPlayInBackground: false,
+          shouldRouteThroughEarpiece: false,
+        });
+        console.log(`[AUDIO_ZOMBIE_RECOVERY] step1 deactivate OK`);
+      } catch (e: any) {
+        console.log(
+          `[AUDIO_ZOMBIE_RECOVERY] step1 deactivate FAILED: ${e?.message || e}`
+        );
+      }
+      // Step 2: attendi che iOS rilasci davvero l'hardware audio.
+      // 300ms è il valore empirico dal doc audio-robustness: sotto rischi
+      // race condition, sopra è overkill.
+      await new Promise((r) => setTimeout(r, 300));
+      // Step 3: reactivate in modalità record-ready.
+      try {
+        await setAudioModeAsync({
+          allowsRecording: true,
+          playsInSilentMode: true,
+          interruptionMode: "duckOthers",
+          shouldPlayInBackground: false,
+          shouldRouteThroughEarpiece: false,
+        });
+        console.log(`[AUDIO_ZOMBIE_RECOVERY] step3 reactivate OK`);
+      } catch (e: any) {
+        console.log(
+          `[AUDIO_ZOMBIE_RECOVERY] step3 reactivate FAILED: ${e?.message || e}`
+        );
+      }
+      console.log(`[AUDIO_ZOMBIE_RECOVERY] cycle complete — next turn should start clean`);
+    } catch (outer: any) {
+      // expo-audio require() failed o altro crash: non blocchiamo mai.
+      console.log(
+        `[AUDIO_ZOMBIE_RECOVERY] outer exception: ${outer?.message || outer}`
+      );
+    }
   }
 
   // === WS management (versione semplificata di voiceStream.ts) ===
