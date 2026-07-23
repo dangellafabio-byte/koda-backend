@@ -7856,7 +7856,21 @@ _EARLY_CHUNK_RE = re.compile(r'[,;:]\s')
 # ~7 parole (~2s di audio) → maschera il tempo di generazione della seconda
 # parte. Trade-off: +200-400ms sul primo audio (accettabile, restiamo sotto
 # ~1.9s TTFT audio percepito).
-MIN_FIRST_CHUNK_CHARS = 40
+# === FIX 2026-07-23 v60 — 40 → 80 char per naturalezza transizione ===
+# Fabio (post-Fase-B) report: "cambio di tono netto tra la fine della
+# prima frase e l'inizio della seconda". Root cause: chunk idx=0 con
+# 40 char taglia SEMPRE su virgola/;/: (soft break) → intonazione
+# ascendente "continuo" a fine chunk. Poi body idx=1 (v3 non supporta
+# previous_text, verificato via API 23/07/2026) riparte come "frase
+# fresca" → percepito come stacco.
+# Con 80 char, `_pop_first_sentence` ha molte più chance di catturare
+# un terminatore forte (. ? !) PRIMA del comma-cut → chunk idx=0 finisce
+# con intonazione chiusa → transizione a idx=1 suona come pausa naturale
+# tra due enunciati (invece che scalino).
+# Trade-off: +200-400ms su TTFT audio (idx=0 aspetta più testo da Claude
+# prima di firare TTS). Accettabile: TTFT resta ~1.5-2.0s totali, e la
+# naturalezza percepita migliora significativamente.
+MIN_FIRST_CHUNK_CHARS = 80
 
 
 def _pop_first_chunk_aggressive(buf: str) -> tuple[str, str]:
@@ -9023,6 +9037,7 @@ async def _fast_pipeline_task(
     location_city: Optional[str] = None,
     location_region: Optional[str] = None,
     location_country: Optional[str] = None,
+    stt_source: Optional[str] = None,
 ):
     """Background task: streamma Claude con prompt condensato, frase per
     frase chiama ElevenLabs Flash v2.5, salva ogni MP3 come token e
@@ -9207,6 +9222,19 @@ async def _fast_pipeline_task(
         recent_docs.reverse()
         recent = [TimelineEntry(**d) for d in recent_docs]
         history_str = _format_history_for_llm(recent) if recent else ""
+        # === Diagnostica contesto (Fabio 2026-07-23 v60) ================
+        # Fabio ha segnalato "Koda ha perso il filo del discorso" dopo il
+        # passaggio a Fase B (client_apple). Log esplicito per verificare
+        # in produzione che history venga effettivamente caricata E che
+        # user_id auth-bridge risolva al suo uid (non a "me" isolato).
+        _uid_now = current_user_id()
+        _n_user = sum(1 for e in recent if getattr(e, "role", "") == "user")
+        _n_ai = sum(1 for e in recent if getattr(e, "role", "") == "ai")
+        logger.info(
+            f"[HISTORY sess={session_id[:8]}] uid={_uid_now[:8]} "
+            f"loaded={len(recent)} turns (user={_n_user} ai={_n_ai}) "
+            f"stt_source={stt_source!r} history_chars={len(history_str)}"
+        )
 
         # === FIX 2026-06-26 v18 (Fabio in furgone: "Koda non si ricorda di ieri") ===
         # La pipeline voce NON caricava i ricordi semantici da
@@ -9241,7 +9269,28 @@ async def _fast_pipeline_task(
         # in italiano (conf tipica 0.85-0.99); scatta solo su audio davvero
         # ambiguo. Per ora SOLO comportamento conversazionale — la memoria
         # del contesto attraverso turni la affronteremo dopo (Fase 2).
-        if stt_confidence is not None and stt_confidence < 0.7:
+        #
+        # === FIX 2026-07-23 v60 — Skip su STT Apple on-device ==============
+        # Root cause (Fabio 23/07 report post-Fase-B): Apple SFSpeechRecognizer
+        # restituisce spesso confidence 0.4-0.7 anche su trascrizioni
+        # perfette (normalizza in modo diverso da Deepgram — la sua conf è
+        # una probabilità acustico-linguistica, non semantica). Con threshold
+        # 0.7 tarato per Deepgram, questo blocco entrava ~metà dei turni
+        # Fase B → Claude riceveva l'istruzione "fingi di essere confuso,
+        # chiedi dove ti trovi" → l'utente percepiva Koda come "sordo al
+        # contesto della conversazione".
+        # SFSpeechRecognizer on-device ha già filtro acustico Apple + noise
+        # cancellation hardware iPhone → se produce un transcript, è
+        # affidabile a prescindere dal valore conf. Quindi SKIP totale del
+        # blocco per stt_source apple.
+        # NB: la confidence Apple viene comunque loggata per diagnostica.
+        _is_apple_stt = (stt_source or "").lower() == "apple_sfspeechrecognizer"
+        if _is_apple_stt:
+            logger.info(
+                f"[fast {session_id[:8]}] AUDIO_HONESTY skipped: "
+                f"stt_source=apple (conf={stt_confidence} irrelevant on-device)"
+            )
+        elif stt_confidence is not None and stt_confidence < 0.7:
             sys_prompt = sys_prompt + (
                 f"\n\n━━━ ⚠️ AUDIO DI BASSA QUALITÀ RILEVATO ━━━\n"
                 f"La trascrizione STT di questo turno ha confidenza bassa "
@@ -9593,6 +9642,20 @@ async def _fast_pipeline_task(
                         output_format="mp3_44100_128",  # 128kbps qualità piena, niente chipmunk
                         language_code=tts_lang,  # FORZA la lingua, no auto-detect
                         voice_settings=vs,
+                        # === FIX 2026-07-23 v60 — seed deterministico per turno ===
+                        # Fabio (post-Fase-B) report "cambio di tono netto tra
+                        # frase 1 e 2". v3 NON supporta previous_text (test API
+                        # 23/07: rejected 400 unsupported_model), quindi non
+                        # possiamo catenare prosodia. Ma `seed` v3 accetta:
+                        # stesso seed + stessa voce = caratteristiche vocali
+                        # deterministiche (timbro, pitch base, "personalità").
+                        # Derivato da session_id → tutte le sentence dello
+                        # stesso turno ottengono lo stesso seed → voice
+                        # character più stabile tra idx=0 e idx=1.
+                        # Non risolve prosodia (energia/intonazione), ma
+                        # elimina drift di timbro percepito come "personaggio
+                        # cambiato". Costo zero.
+                        seed=(int(session_id[:8], 16) % 2147483647) if session_id else None,
                         # NIENTE optimize_streaming_latency: anche valore 2
                         # poteva causare artefatti "chipmunk" su Flash v2.5
                         # secondo feedback utente. Default ElevenLabs (1) OK.
@@ -9636,6 +9699,13 @@ async def _fast_pipeline_task(
                     #    supported with the 'eleven_v3' model."
                     # Quindi SU V3 NON passiamo previous_text. Su flash sì
                     # (continua a funzionare come prima).
+                    # === RETEST 2026-07-23 v60 — API ANCORA rifiuta ===
+                    # Retest 23/07: nonostante le docs online lo diano come
+                    # supportato, l'API di produzione restituisce ancora
+                    # 400 unsupported_model. Manteniamo il gate `!= "eleven_v3"`.
+                    # (Rimuoverlo causa fallback a flash su idx>=1 → cambio
+                    # di modello TTS a metà turno = discontinuità PEGGIORE
+                    # dello "scalino" di prosodia originale.)
                     HIGH_ENERGY_TONES = {"energetic", "urgent"}
                     if (
                         previous_text
@@ -10560,6 +10630,7 @@ async def _run_pipeline_for_streamed_text(
     location_city: Optional[str] = None,
     location_region: Optional[str] = None,
     location_country: Optional[str] = None,
+    stt_source: Optional[str] = None,
 ) -> None:
     """Wrap di _fast_pipeline_task per il voice streaming.
 
@@ -10578,6 +10649,7 @@ async def _run_pipeline_for_streamed_text(
         location_city=location_city,
         location_region=location_region,
         location_country=location_country,
+        stt_source=stt_source,
     )
 
 

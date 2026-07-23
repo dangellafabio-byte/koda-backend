@@ -1425,6 +1425,7 @@ async def voice_stream_handler(
                             location_city=location_city,
                             location_region=location_region,
                             location_country=location_country,
+                            stt_source=engine,
                         )
                         if client_alive:
                             await emit_to_client({"type": "done"})
@@ -1810,6 +1811,7 @@ async def voice_stream_handler(
                     location_city=location_city,
                     location_region=location_region,
                     location_country=location_country,
+                    stt_source=transcript_source,
                 )
                 if client_alive:
                     await emit_to_client({"type": "done"})
