@@ -396,9 +396,9 @@ export default function Taccuino() {
   // inglobato l'ultimo commit.
   useEffect(() => {
     console.log(
-      `[KODA_BUILDTAG] v63.4-plugin-loud-fail+anchor-fix-definitivo+railway-hardcoded+diag-card+ws-piggyback build=2026-07-20 ` +
+      `[KODA_BUILDTAG] build-v63.6-xiaomi-fix v63.4-plugin-loud-fail+anchor-fix-definitivo+railway-hardcoded+diag-card+ws-piggyback build=2026-07-24 ` +
         `verbose=${KODA_DEBUG_VERBOSE} ` +
-        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
+        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_TIMEOUT_V63_6${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
   }, []);
   const [textInput, setTextInput] = useState("");
@@ -6278,17 +6278,23 @@ export default function Taccuino() {
                 dopo verifica utente: la catena Deploy → Build è confermata
                 affidabile per questa sessione.
 
-                === NUOVO CANARY: build-admin-whitelist-ready (2026-07-24) ===
-                Rimesso su richiesta utente per verificare che la nuova
-                build TestFlight contenga effettivamente la sezione admin
-                "🔑 Admin — Whitelist unlimited" nelle Impostazioni.
-                Da rimuovere dopo primo test whitelist ok. */}
+                === NUOVO CANARY: build-v63.6-xiaomi-fix (2026-07-24) ===
+                Sostituisce il precedente `build-admin-whitelist-ready`.
+                Marker aggiunto su richiesta esplicita utente per verificare
+                in 10 secondi che la nuova build APK contenga davvero:
+                  - Fix A (v63.5): abort_pre_recognition → propagazione errore
+                  - Fix B (v63.5): mic activation gate (onRecognitionActive)
+                  - Fix v63.6: GPS timeout 1.5s (Xiaomi/MIUI 26s block)
+                Se apri Impostazioni → scrolli in fondo → vedi
+                "build-v63.6-xiaomi-fix" → la build è quella giusta.
+                Se vedi ancora "build-admin-whitelist-ready" o altro →
+                l'APK installato è vecchio, non testare oltre. */}
             <View style={{ alignItems: "center", marginTop: 24, marginBottom: 8 }}>
               <Text style={{ color: theme.text + "55", fontSize: 11, fontStyle: "italic" }}>
                 Koda v{Constants.expoConfig?.version || "1.0.1"}
               </Text>
               <Text style={{ color: theme.text + "33", fontSize: 9, marginTop: 3, letterSpacing: 0.5 }}>
-                build-admin-whitelist-ready
+                build-v63.6-xiaomi-fix
               </Text>
             </View>
 </>)}
