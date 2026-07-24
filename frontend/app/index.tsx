@@ -5899,6 +5899,41 @@ export default function Taccuino() {
               <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
             </TouchableOpacity>
 
+            {/* === RIVEDI IL TOUR (2026-07-24 pre-lancio, punto 1) ===
+                Il tour visivo 9-step NON parte più automaticamente al primo
+                avvio (era troppo pesante per un pubblico TikTok: 20 step
+                totali obbligatori). Ora è opt-in da qui: l'utente lo lancia
+                quando ha voglia di capire l'app, oppure lo ignora e scopre
+                tutto usando. Stesso codice di build/launch del percorso
+                automatico originale, solo triggerato on-demand. */}
+            <TouchableOpacity
+              style={[styles.settingRow, { paddingVertical: 14 }]}
+              onPress={async () => {
+                setShowSettings(false);
+                // Piccolo delay per dare tempo al modale Impostazioni di
+                // chiudersi prima di misurare la UI reale (stesso motivo
+                // del delay 600ms nel percorso automatico post-onboarding).
+                setTimeout(async () => {
+                  try {
+                    const steps = await buildTourSteps();
+                    setTourSteps(steps);
+                    setTourActive(true);
+                  } catch (e) {
+                    console.warn("[tour-replay] buildTourSteps failed:", e);
+                  }
+                }, 350);
+              }}
+              testID="replay-tour-btn"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>🧭 Rivedi il tour</Text>
+                <Text style={styles.settingHint}>
+                  Ti mostro con dei suggerimenti come usare l&apos;eclissi, la scrittura, il Confessionale e Lascia andare.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+            </TouchableOpacity>
+
             {/* === LA MIA PROMESSA (revisione 2026-07, testo utente) ===
                 Versione breve, calda, one-liner. Prima c'era un box con
                 descrizione tecnica dettagliata di modalità normale /
@@ -5995,7 +6030,7 @@ export default function Taccuino() {
                 Koda v{Constants.expoConfig?.version || "1.0.1"}
               </Text>
               <Text style={{ color: theme.text + "33", fontSize: 9, marginTop: 3, letterSpacing: 0.5 }}>
-                build-koda-24jul-fixes
+                build-onboarding-9step
               </Text>
             </View>
 </>)}

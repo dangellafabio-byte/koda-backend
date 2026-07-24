@@ -73,7 +73,13 @@ L'AAC prodotto da `expo-audio` su Android potrebbe:
    - Elimina il problema alla radice — nessun encoding/formato da debuggare
    - Beneficio secondario: latenza inferiore, funziona offline (parzialmente),
      nessun costo Deepgram su Android
-   - Effort stimato: 1-2 giorni
+   - **Effort stimato: 1-2 giorni tecnici ideali → 2-4 giorni realistici con
+     2-3 giri di verifica/fix.** Nota di realismo (dall'utente, sessione
+     2026-07-24): la storia del path iOS ha mostrato che ogni feature audio
+     richiede più iterazioni del previsto (bug non ovvi emergono solo su
+     device reali, disallineamenti build/deploy, edge case OS-specifici).
+     Pianificare il porting con la finestra realistica, non quella ideale,
+     per evitare frustrazione da "fatto → in realtà no → un altro giro".
    - File da toccare: `speech.ts` (feature flag path selection), nuovo
      `voiceClientSttAndroid.ts` sul modello di `voiceClientStt.ts`
 

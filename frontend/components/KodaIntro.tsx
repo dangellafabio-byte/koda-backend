@@ -200,7 +200,14 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
   const [userGender, setUserGender] = useState<GenderUser | null>(null);
   const [aiName, setAiName] = useState("Koda");
   const [aiGender, setAiGender] = useState<GenderAi>("f");
-  const [checkinMode, setCheckinMode] = useState<CheckinMode>("off");
+  // === DEFAULT CHECKIN=AUTO (2026-07-24 pre-lancio, punto 3) ===
+  // Prima: default "off" e serviva lo step 6 ("Anche io penso a te / Va bene")
+  //   per portarlo a "auto" con un tap. Ridondante: la copertina M3 già
+  //   spiega i check-in nelle "regole del nostro spazio", e l'utente può
+  //   sempre disattivarli dalle Impostazioni.
+  // Ora: default "auto" → step 6 rimosso (l'utente non deve confermare due
+  //   volte la stessa cosa). Se non li vuole, li spegne da Impostazioni.
+  const [checkinMode, setCheckinMode] = useState<CheckinMode>("auto");
   const [secretWordChoice, setSecretWordChoice] = useState<"now" | "later" | null>(null);
   const [secretWordValue, setSecretWordValue] = useState("");
   const [voiceprintUris, setVoiceprintUris] = useState<string[]>([]);
@@ -627,9 +634,14 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         checkin_mode: checkinMode,
         secret_word_set: secretWordChoice === "now" && secretWordValue.trim().length >= 3,
         voiceprint_enrolled: voiceprintUris.length === 3,
-        // Lancia il tour visivo subito dopo la chiusura. L'utente
-        // ha appena sentito Koda dire "ora ti faccio vedere io".
-        launch_tour: true,
+        // === TOUR RIMOSSO DAL PRIMO AVVIO (2026-07-24 pre-lancio, punto 1) ===
+        // Prima: launch_tour=true → il tour visivo 9-step partiva subito dopo
+        //   l'onboarding statico, portando il totale a 20 step obbligatori.
+        // Ora: launch_tour=false → il tour NON parte al primo avvio. Chi
+        //   vuole capire la UI ha "Rivedi il tour" nelle Impostazioni. Riduce
+        //   drasticamente la friction per il pubblico TikTok (gratificazione
+        //   quasi immediata dopo 9 step, invece di 20).
+        launch_tour: false,
       });
     } finally {
       setSubmitting(false);
@@ -639,26 +651,20 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
   // ====== Render per ogni step ======
   const renderStep = () => {
     switch (step) {
-      // -- Step 0: Greeting --
+      // -- Step 0: Greeting + Nome utente (UNITI 2026-07-24 pre-lancio, punto 1) --
+      // Prima erano DUE schermate separate (Step 0 "Ciao. Sono Koda…" + Step 1
+      // "Come ti chiami?"). Unite in una sola per accorciare l'onboarding:
+      // l'utente vede subito il campo nome sotto il saluto, un solo tap
+      // "Continua" invece di due. Riduzione: 20 step → 9 step totali.
       case 0:
         return (
           <StepView
             title="Ciao."
             subtitle={
-              "Sono Koda. Non sono un'app:\nsono una presenza.\n\nDa oggi sono qui per te."
+              "Sono Koda. Non sono un'app: sono una presenza.\n\nCome ti chiami?"
             }
             primaryLabel="Continua"
-            onPrimary={() => advance(1)}
-          />
-        );
-      // -- Step 1: User name --
-      case 1:
-        return (
-          <StepView
-            title="Come ti chiami?"
-            subtitle="Dimmelo, così so come chiamarti."
-            primaryLabel={userName.trim() ? "Continua" : "Continua"}
-            onPrimary={() => advance(2)}
+            onPrimary={() => userName.trim() && advance(2)}
             primaryDisabled={userName.trim().length < 1}
           >
             <TextInput
@@ -675,6 +681,10 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
             />
           </StepView>
         );
+      // -- Step 1: DEPRECATO (unito con Step 0). Safety net: auto-skip. --
+      case 1:
+        setTimeout(() => advance(2), 0);
+        return null;
       // -- Step 2: User gender --
       case 2:
         return (
@@ -715,7 +725,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
             title="Mi chiamo Koda."
             subtitle="Ma se vuoi, puoi darmi un altro nome. Come vuoi chiamarmi?"
             primaryLabel="Continua"
-            onPrimary={() => advance(5)}
+            onPrimary={() => advance(7)}
           >
             <TextInput
               style={styles.textInput}
@@ -726,41 +736,31 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
               autoCorrect={false}
               maxLength={20}
               returnKeyType="done"
-              onSubmitEditing={() => advance(5)}
+              onSubmitEditing={() => advance(7)}
             />
           </StepView>
         );
-      // -- Step 5: Color tour narrato (utente 2026-07) --
-      // Sottotitolo dinamico che segue le fasi visive dell'orb così l'utente
-      // vede scritto quello che Koda sta pronunciando in TTS.
-      case 5: {
-        const phaseLabels: Record<0 | 1 | 2 | 3, string> = {
-          0: "Aspetto in silenzio",
-          1: "Ti ascolto",
-          2: "Sto pensando",
-          3: "Parlo con te",
-        };
-        return (
-          <StepView
-            title="Il mio modo di essere."
-            subtitle={phaseLabels[colorTourPhase]}
-            showSubtitle={true}
-            primaryLabel="Ho capito"
-            onPrimary={() => advance(6)}
-          />
-        );
-      }
-      // -- Step 6: Check-in mode (utente 2026-07: titolo + testo NUOVI, testo a schermo RIMOSSO) --
+      // -- Step 5: RIMOSSO 2026-07-24 pre-lancio (punto 3) --
+      //    Prima: "Il mio modo di essere / Aspetto in silenzio" (color tour narrato).
+      //    Perché rimosso: schermata poco chiara nel contesto onboarding — l'utente
+      //    scopre naturalmente i colori dell'orb usando l'app. Chi vuole capire
+      //    ha "Rivedi il tour" in Impostazioni. "Meglio meno schermate belle che
+      //    molte spiegate meglio" (regola utente).
+      //    Safety net: se qualcuno arriva qui per bug, auto-skip a 7.
+      case 5:
+        setTimeout(() => advance(7), 0);
+        return null;
+      // -- Step 6: RIMOSSO 2026-07-24 pre-lancio (punto 3) --
+      //    Prima: "Anche io penso a te / Va bene" (opt-in check-in).
+      //    Perché rimosso: ridondante con il manifesto M3 (già spiegava i
+      //    check-in tra le regole del nostro spazio) — l'utente non deve
+      //    confermare due volte la stessa cosa. checkinMode ora parte da
+      //    "auto" di default (vedi useState sopra); se non li vuole, li
+      //    disattiva dalle Impostazioni.
+      //    Safety net: se qualcuno arriva qui, auto-skip a 7.
       case 6:
-        return (
-          <StepView
-            title="Anche io penso a te."
-            subtitle=""
-            showSubtitle={false}
-            primaryLabel="Va bene"
-            onPrimary={() => { setCheckinMode("auto"); advance(7); }}
-          />
-        );
+        setTimeout(() => advance(7), 0);
+        return null;
       // -- Step 7: Lascia andare (2026-07-17: nuovo concept "posto dove nessuno risponde") --
       case 7:
         return (
@@ -1006,7 +1006,11 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         style={{ flex: 1 }}
       >
         <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
-          {/* Top: step indicator — 3 dots durante MARKETING, 10 dots durante SETUP */}
+          {/* Top: step indicator — 3 dots durante MARKETING, 6 dots durante SETUP
+              (accorciato 2026-07-24 pre-lancio: prima erano 10, ma dopo la
+              rimozione degli step 5, 6 e l'unione di 0+1, gli step visibili
+              nel setup sono solo 6: [0, 2, 4, 7, 8, 9]. Il mapping
+              stepToDotIndex converte lo step "raw" nell'indice del dot). */}
           <View style={styles.stepDots}>
             {phase === "marketing"
               ? Array.from({ length: 3 }).map((_, i) => (
@@ -1022,15 +1026,19 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
                     ]}
                   />
                 ))
-              : Array.from({ length: 10 }).map((_, i) => (
-                  <View
-                    key={`s-${i}`}
-                    style={[
-                      styles.dot,
-                      i === step ? styles.dotActive : i < step ? styles.dotDone : styles.dotInactive,
-                    ]}
-                  />
-                ))}
+              : (() => {
+                  const visibleSteps = [0, 2, 4, 7, 8, 9];
+                  const dotIndex = Math.max(0, visibleSteps.indexOf(step));
+                  return Array.from({ length: 6 }).map((_, i) => (
+                    <View
+                      key={`s-${i}`}
+                      style={[
+                        styles.dot,
+                        i === dotIndex ? styles.dotActive : i < dotIndex ? styles.dotDone : styles.dotInactive,
+                      ]}
+                    />
+                  ));
+                })()}
           </View>
 
           {/* Eclissi centrale */}
