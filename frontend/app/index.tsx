@@ -6015,22 +6015,12 @@ export default function Taccuino() {
                 `runtime`, `BUILD_NOTES` — erano testi tecnici/changelog
                 che trapelavano in produzione. Un utente finale non deve
                 mai vedere note di commit o log di refactor interno.
-
-                === CANARY BUILD MARKER (2026-07-24) ===
-                Piccola stringa fissa "build-koda-24jul-fixes" sotto la
-                version. Serve UNICAMENTE come indicatore visivo per
-                confermare che una nuova build TestFlight ha effettivamente
-                incluso i fix pre-lancio (footer pulito, no selettore "Koda
-                è…", bottone "Hai un problema? Segnala", ecc.).
-                - Se vedi questa stringa → build ha i fix
-                - Se NON la vedi → pipeline sta usando snapshot stale
-                Da rimuovere dopo il primo test riuscito. */}
+                Canary marker "build-onboarding-9step" rimosso 2026-07-24
+                dopo verifica utente: la catena Deploy → Build è confermata
+                affidabile per questa sessione. */}
             <View style={{ alignItems: "center", marginTop: 24, marginBottom: 8 }}>
               <Text style={{ color: theme.text + "55", fontSize: 11, fontStyle: "italic" }}>
                 Koda v{Constants.expoConfig?.version || "1.0.1"}
-              </Text>
-              <Text style={{ color: theme.text + "33", fontSize: 9, marginTop: 3, letterSpacing: 0.5 }}>
-                build-onboarding-9step
               </Text>
             </View>
 </>)}
