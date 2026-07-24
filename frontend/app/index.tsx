@@ -275,6 +275,14 @@ function stripToneMarkerOnly(text: string): string {
 function detectCloseSessionClientSide(text: string | null | undefined): boolean {
   if (!text || typeof text !== "string") return false;
   const userLc = " " + text.toLowerCase().trim() + " ";
+  // === FIX 2026-07-24 — false positive "ciao koda" ===
+  // Alcuni pattern sono ambigui: "ciao koda" può essere APERTURA o CHIUSURA.
+  // Se il testo intero è LUNGO (>4 parole con contenuto oltre al saluto),
+  // è quasi certamente un'apertura ("ciao koda come stai? volevo dirti...").
+  // Solo se il testo è breve (max 3-4 parole totali) consideriamo "ciao/notte
+  // koda/coda" come saluto di chiusura reale.
+  const wordCount = text.trim().split(/\s+/).length;
+  const isShortUtterance = wordCount <= 4;
   const patterns: RegExp[] = [
     /\bci sentiamo (dopo|più tardi|poi|domani)\b/,
     /\bsentiamo (dopo|poi|domani|più tardi|dopo dai|dopo grazie)\b/,
@@ -297,10 +305,6 @@ function detectCloseSessionClientSide(text: string | null | undefined): boolean 
     /\bchiudo qui\b/,
     /\bgrazie (koda|coda),? (ora )?chiudo\b/,
     /\b(ok|va bene|vabbè) (dai )?ci sentiamo\b/,
-    /\bciao (koda|coda)\b/,
-    /\bnotte (koda|coda)\b/,
-    /\barrivederci (koda|coda)?\b/,
-    /\bgrazie (koda|coda)$/,
     /\bgrazie di tutto\b/,
     /\bgrazie (mille )?(davvero |per )?(tutto|ora)\b/,
     /\b(ok |va bene |vabbè )?dai ciao\b/,
@@ -309,7 +313,6 @@ function detectCloseSessionClientSide(text: string | null | undefined): boolean 
     /\bok basta (dai|per )?(oggi|ora|adesso)?\b/,
     /\b(ci vediamo|ci becchiamo) (dopo|domani|poi|più tardi)\b/,
     /\bstacco (ora|adesso|qui)?\b/,
-    /\bok grazie (koda|coda)?\b/,
     /\btelefono dopo\b/,
     /\bchiamo dopo\b/,
     /\bti richiamo\b/,
@@ -317,8 +320,22 @@ function detectCloseSessionClientSide(text: string | null | undefined): boolean 
     /\bok basta parlare\b/,
     /\btaci (un attimo|un po|per favore)?\b/,
   ];
+  // Pattern AMBIGUI — solo se short utterance (evita false positive tipo
+  // "ciao coda come stai" o "grazie coda mi hai aiutato tanto")
+  const ambiguousPatterns: RegExp[] = [
+    /\bciao (koda|coda)\b/,
+    /\bnotte (koda|coda)\b/,
+    /\barrivederci (koda|coda)?\b/,
+    /\bgrazie (koda|coda)$/,
+    /\bok grazie (koda|coda)?\b/,
+  ];
   for (const pat of patterns) {
     if (pat.test(userLc)) return true;
+  }
+  if (isShortUtterance) {
+    for (const pat of ambiguousPatterns) {
+      if (pat.test(userLc)) return true;
+    }
   }
   return false;
 }

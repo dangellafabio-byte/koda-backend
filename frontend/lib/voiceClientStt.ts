@@ -558,6 +558,39 @@ export class VoiceClientSttSession {
     try {
       ExpoSpeechRecognitionModule.stop();
     } catch {}
+
+    // === FIX 2026-07-24 — Opzione B, Android audio session release ===
+    // BUG OSSERVATO su Honor: dopo stop() del Google SpeechRecognizer,
+    // l'audio session Android rimane in stato "record" (mic engaged).
+    // Quando il TTS arriva e forza audio mode a "playback", il playback
+    // parte ma esce MUTO perché Android silenzia l'output se la sessione
+    // è in conflitto con record. Su iOS il problema non si presenta
+    // (SFSpeechRecognizer gestisce meglio il release).
+    // Fix: force explicit `allowsRecording: false` su Android SUBITO dopo
+    // stop(), così l'OS libera il mic e lascia campo al playback TTS.
+    // Non-async per non bloccare il flusso; se fallisce, il TTS potrebbe
+    // uscire muto (rare edge case) ma senza cascading failures.
+    if (Platform.OS === "android") {
+      // Dynamic import (non-blocking) — se expo-audio non è disponibile o
+      // setAudioModeAsync fallisce, il TTS potrebbe restare muto ma
+      // senza cascading failures. Fire-and-forget.
+      import("expo-audio").then((Audio) => {
+        if (Audio?.setAudioModeAsync) {
+          Audio.setAudioModeAsync({
+            allowsRecording: false,
+            playsInSilentMode: true,
+          } as any).catch((e: any) => {
+            console.log(
+              `[${TAG}] android audio release failed (non-fatal): ${e?.message || e}`
+            );
+          });
+        }
+      }).catch((e: any) => {
+        console.log(
+          `[${TAG}] android audio release skip (expo-audio unavailable): ${e?.message || e}`
+        );
+      });
+    }
   }
 
   async stop(): Promise<void> {

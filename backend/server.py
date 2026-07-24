@@ -1449,11 +1449,33 @@ class Profile(BaseModel):
     # Counter dei messaggi di prova consumati prima del paywall.
     # Si incrementa solo se subscription_active=False. Il Confessionale è ESCLUSO
     # da questo counter (privacy first).
-    free_messages_used: int = 0
+    free_messages_used: int = 0  # LEGACY (era lifetime counter). Mantenuto per retro-compat.
+    # === PAYWALL v2 — DAILY LIMITS + 24H BOOST (2026-07-24) ===
+    # Sostituisce il lifetime counter con quota giornaliera che resetta ogni
+    # giorno UTC. Vedi PAYWALL_POLICY.md per whitelist bypass.
+    #
+    # SEMANTICA:
+    # - `daily_turns_used`: turni usati OGGI (chiave giorno = daily_turns_date)
+    # - `daily_turns_date`: chiave giorno in formato "YYYY-MM-DD" (UTC).
+    #   Se il giorno corrente != daily_turns_date → reset counter a 0 al primo
+    #   check.
+    # - `has_used_24h_boost`: True se l'utente è FUORI dalla finestra 24h dalla
+    #   registrazione (vedi profile.created_at). Prime 24h: 20 turni; dopo: 5/gg.
+    #   Il flag NON serve come storage (si può derivare da created_at), ma lo
+    #   teniamo per debug/telemetria.
+    # - `hit_soft_warn_100_today`: True se oggi ha già ricevuto il warning
+    #   soft a 100 turni (evita di ripeterlo per turno successivo dello stesso
+    #   giorno). Reset con nuova daily_turns_date.
+    daily_turns_used: int = 0
+    daily_turns_date: Optional[str] = None  # "2026-07-24"
+    has_used_24h_boost: bool = False
+    hit_soft_warn_100_today: bool = False
     # Stato abbonamento — settato dal webhook RevenueCat. Default False = freemium.
     subscription_active: bool = False
-    subscription_tier: Optional[str] = None  # "essential" | "daily" | "plus" | None
+    subscription_tier: Optional[str] = None  # "monthly" | "annual" | None (v2)
     subscription_expires_at: Optional[str] = None  # ISO datetime
+    subscription_source: Optional[str] = None  # "apple_iap" | "revenuecat" | None
+    rc_app_user_id: Optional[str] = None  # RevenueCat App User ID (opzionale)
     settings: TaccuinoSettings = Field(default_factory=TaccuinoSettings)
     # Personalizzazioni stilistiche (palette colori blob, avatar, ecc.)
     # Salvato come dict aperto per consentire estensioni future senza migrazioni.
@@ -2704,7 +2726,62 @@ async def api_get_usage():
 # il counter viene di fatto bypassato.
 # ============================================================
 
-FREE_TRIAL_MESSAGE_LIMIT = 3
+FREE_TRIAL_MESSAGE_LIMIT = 3  # LEGACY — non più usato dalla v2 daily. Mantenuto per retro-compat.
+
+# ============================================================
+# PAYWALL v2 — DAILY LIMITS + 24H BOOST (2026-07-24)
+# ============================================================
+# Design confermato da Fabio dopo analisi economica sui dati reali
+# (costo/turno ~3.2 c€ post-ottimizzazione max_tokens=200):
+#
+#   FREE tier:
+#     - Prime 24h dalla registrazione: 20 turni (day-1 boost)
+#     - Dopo: 5 turni/giorno (reset a mezzanotte UTC)
+#
+#   PREMIUM tier:
+#     - €14.99/mese o €99.99/anno
+#     - Cap SOFT: 100 turni/giorno → warning gentile "giornata piena"
+#     - Cap HARD: 150 turni/giorno → blocca fino a domani
+#     - 150 × 30gg × 3.2c€ = €14.40 peggior caso, netto €12.74 → -€1.66/mese
+#       (accettabile per protezione anti-abuso senza penalizzare heavy users)
+#
+#   WHITELIST unlimited:
+#     - Bypass tutti i limiti (vedi is_user_unlimited() + PAYWALL_POLICY.md)
+# ============================================================
+
+FREE_DAILY_LIMIT = 5           # turni/giorno per utenti free (post 24h)
+FREE_24H_BOOST = 20            # turni prime 24h dalla registrazione
+PREMIUM_DAILY_HARD_CAP = 150   # cap duro premium/giorno
+PREMIUM_DAILY_SOFT_WARN = 100  # warning gentile premium/giorno
+
+
+def _today_utc_str() -> str:
+    """Chiave giorno per reset counter — mezzanotte UTC. Formato: YYYY-MM-DD."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _within_24h_from_registration(created_at_str: Optional[str]) -> bool:
+    """Restituisce True se sono passate < 24h dalla registrazione.
+    Se created_at_str è invalido o assente, ritorna False (safe: no boost)."""
+    if not created_at_str:
+        return False
+    try:
+        created = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        return (now - created).total_seconds() < 24 * 3600
+    except Exception:
+        return False
+
+
+def _compute_free_limit_today(profile_created_at: Optional[str]) -> tuple[int, bool]:
+    """Ritorna (limite_giornaliero_free, is_24h_boost_active).
+    Se l'utente è entro 24h dalla registrazione → 20 turni; altrimenti → 5.
+    """
+    if _within_24h_from_registration(profile_created_at):
+        return (FREE_24H_BOOST, True)
+    return (FREE_DAILY_LIMIT, False)
 
 
 # ============================================================
@@ -2878,33 +2955,74 @@ def _is_admin_uid(uid: str) -> bool:
 
 
 class FreemiumStatus(BaseModel):
-    free_messages_used: int
-    free_messages_limit: int
-    free_messages_remaining: int
+    # === PAYWALL v2 fields (2026-07-24) ===
+    # Nomi vecchi mantenuti per retro-compat del client, ma semantica cambiata:
+    # ora rappresentano il counter GIORNALIERO (non lifetime).
+    free_messages_used: int          # turni usati OGGI (0-N)
+    free_messages_limit: int         # limite di oggi (5 normale, 20 in 24h boost)
+    free_messages_remaining: int     # limit - used
     subscription_active: bool
     subscription_tier: Optional[str] = None
-    can_send: bool  # True se può inviare ancora (entro limite o abbonato)
-    paywall_required: bool  # True se al prossimo tap deve essere mostrato il paywall
+    can_send: bool                   # True se può inviare ancora
+    paywall_required: bool           # True se al prossimo tap deve vedere il paywall
+    # Nuovi campi v2 (opzionali per retro-compat: vecchi client li ignorano)
+    is_24h_boost_active: bool = False        # utente in prime 24h
+    soft_warning: bool = False               # premium a 100+ turni oggi
+    reset_at: Optional[str] = None           # ISO: quando resetterà il counter (mezzanotte UTC)
+
+
+def _next_utc_midnight_iso() -> str:
+    """ISO datetime della prossima mezzanotte UTC (quando il counter resetterà)."""
+    now = datetime.now(timezone.utc)
+    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return tomorrow.isoformat()
+
+
+async def _reset_daily_counter_if_needed(uid: str) -> dict:
+    """Se daily_turns_date != oggi UTC → resetta counter a 0. Idempotente.
+    Ritorna il profile_doc aggiornato (per non fare 2 query separate)."""
+    today = _today_utc_str()
+    doc = await db.taccuino_profile.find_one({"id": uid})
+    if not doc:
+        return {}
+    stored_date = doc.get("daily_turns_date")
+    if stored_date != today:
+        # Reset atomico: setta date + azzera counter + azzera soft warn flag
+        await db.taccuino_profile.update_one(
+            {"id": uid},
+            {"$set": {
+                "daily_turns_date": today,
+                "daily_turns_used": 0,
+                "hit_soft_warn_100_today": False,
+            }},
+        )
+        # Refresh doc con nuovi valori
+        doc["daily_turns_date"] = today
+        doc["daily_turns_used"] = 0
+        doc["hit_soft_warn_100_today"] = False
+        logger.info(f"[freemium] daily counter reset for uid={uid[:8]} (date={today})")
+    return doc
 
 
 @api_router.get("/freemium/status", response_model=FreemiumStatus)
 async def api_freemium_status():
     """Stato del freemium per il client. Da chiamare al boot e dopo ogni
-    risposta di Koda per aggiornare il contatore visivo (3 → 2 → 1 → 0).
+    risposta di Koda per aggiornare il contatore visivo.
 
-    === WHITELIST BYPASS (2026-07-24, PAYWALL_POLICY.md #0) ===
-    Se l'utente è nella whitelist unlimited (env var o DB), ritorna sempre
-    can_send=True, paywall_required=False, tier="unlimited" — indipendentemente
-    dal counter o dal subscription_active. Vincolo #0: il proprietario e i
-    whitelisted NON DEVONO MAI essere bloccati.
+    === PAYWALL v2 (2026-07-24) ===
+    Logica daily:
+      - FREE prime 24h dalla registrazione: 20 turni
+      - FREE dopo: 5 turni/giorno (reset mezzanotte UTC)
+      - PREMIUM: 150 turni/giorno cap duro, soft warning a 100
+      - WHITELIST: illimitato (bypass tutto)
     """
     p = await get_or_create_profile()
-    used = int(getattr(p, "free_messages_used", 0) or 0)
-    active = bool(getattr(p, "subscription_active", False))
-    tier = getattr(p, "subscription_tier", None)
-
-    # WHITELIST CHECK — priorità massima
     uid = current_user_id()
+
+    # 1. Reset counter se cambio giorno
+    profile_doc = await _reset_daily_counter_if_needed(uid) or {}
+
+    # 2. WHITELIST CHECK — priorità massima (PAYWALL_POLICY.md #0)
     email = await _uid_email_from_session_or_profile(uid)
     unlimited, reason = await is_user_unlimited(email, uid)
     if unlimited:
@@ -2913,42 +3031,68 @@ async def api_freemium_status():
             f"freemium/status → unlimited (all limits skipped)"
         )
         return FreemiumStatus(
-            free_messages_used=used,
-            free_messages_limit=FREE_TRIAL_MESSAGE_LIMIT,
-            free_messages_remaining=FREE_TRIAL_MESSAGE_LIMIT,  # sempre pieno
-            subscription_active=True,  # trattato come premium
+            free_messages_used=0,
+            free_messages_limit=999999,
+            free_messages_remaining=999999,
+            subscription_active=True,
             subscription_tier="unlimited",
             can_send=True,
             paywall_required=False,
+            is_24h_boost_active=False,
+            soft_warning=False,
+            reset_at=None,
         )
 
-    remaining = max(0, FREE_TRIAL_MESSAGE_LIMIT - used)
-    can_send = active or (used < FREE_TRIAL_MESSAGE_LIMIT)
-    paywall_required = (not active) and (used >= FREE_TRIAL_MESSAGE_LIMIT)
+    # 3. Determina limite di oggi in base a subscription e 24h boost
+    used_today = int(profile_doc.get("daily_turns_used", 0) or 0)
+    active = bool(profile_doc.get("subscription_active", False))
+    tier = profile_doc.get("subscription_tier")
+    created_at = profile_doc.get("created_at")
+    is_boost, boost_active = None, False
+
+    if active:
+        # PREMIUM: cap 150/giorno, soft warning a 100
+        limit_today = PREMIUM_DAILY_HARD_CAP
+        soft_warn = used_today >= PREMIUM_DAILY_SOFT_WARN
+    else:
+        # FREE: 20 se dentro 24h, 5 altrimenti
+        limit_today, boost_active = _compute_free_limit_today(created_at)
+        soft_warn = False
+
+    remaining = max(0, limit_today - used_today)
+    can_send = used_today < limit_today
+    paywall_required = (not active) and (used_today >= limit_today)
+
     return FreemiumStatus(
-        free_messages_used=used,
-        free_messages_limit=FREE_TRIAL_MESSAGE_LIMIT,
+        free_messages_used=used_today,
+        free_messages_limit=limit_today,
         free_messages_remaining=remaining,
         subscription_active=active,
         subscription_tier=tier,
         can_send=can_send,
         paywall_required=paywall_required,
+        is_24h_boost_active=boost_active,
+        soft_warning=soft_warn,
+        reset_at=_next_utc_midnight_iso(),
     )
 
 
 @api_router.post("/freemium/increment", response_model=FreemiumStatus)
 async def api_freemium_increment():
-    """Incrementa il counter dei messaggi di prova. Chiamato dal client
-    SOLO dopo un turno completo (utente parla + Koda risponde) e SOLO
-    se NON è in Confessionale (privacy first).
+    """Incrementa il counter dei turni di oggi. Chiamato dal client SOLO dopo
+    un turno completo (utente parla + Koda risponde) e SOLO se NON è in
+    Confessionale (privacy first).
 
-    Se subscription_active=True non incrementa.
-    Se utente in whitelist unlimited (2026-07-24) → NO increment (protegge il counter).
+    === PAYWALL v2 (2026-07-24) ===
+    Incrementa il counter GIORNALIERO daily_turns_used.
+    Se whitelist unlimited → NO increment.
+    Se il giorno è cambiato → reset counter prima di incrementare.
     Idempotenza: race-safe via $inc.
+    Il counter incrementa anche per PREMIUM (per applicare il cap 150).
     """
     uid = current_user_id()
 
-    # WHITELIST CHECK — se unlimited, non tocchiamo il counter
+    # WHITELIST CHECK
     email = await _uid_email_from_session_or_profile(uid)
     unlimited, reason = await is_user_unlimited(email, uid)
     if unlimited:
@@ -2958,17 +3102,18 @@ async def api_freemium_increment():
         )
         return await api_freemium_status()
 
+    # Assicurati che il profilo esista
     profile_doc = await db.taccuino_profile.find_one({"id": uid})
     if not profile_doc:
         await get_or_create_profile()
-        profile_doc = await db.taccuino_profile.find_one({"id": uid})
 
-    active = bool(profile_doc.get("subscription_active", False)) if profile_doc else False
-    if not active:
-        await db.taccuino_profile.update_one(
-            {"id": uid},
-            {"$inc": {"free_messages_used": 1}},
-        )
+    # Reset se cambio giorno + incrementa in modo atomico
+    await _reset_daily_counter_if_needed(uid)
+    await db.taccuino_profile.update_one(
+        {"id": uid},
+        {"$inc": {"daily_turns_used": 1}},
+    )
+
     return await api_freemium_status()
 
 
