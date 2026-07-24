@@ -931,6 +931,25 @@ export default function Taccuino() {
   // funziona anche durante l'apertura della WS.
   const pendingTapStopRef = useRef<boolean>(false);
 
+  // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
+  // BUG OSSERVATO nel log Xiaomi: setStatus("recording") fira IMMEDIATAMENTE
+  // in startTalkStreaming (linea ~2846), ma il microfono REALE parte solo
+  // ~1s dopo (dopo setAudioModeAsync + detectAudioRoute + warmup + openWs
+  // + startRecognition). In quel gap, l'orb sembra in ascolto ma il mic
+  // non registra nulla; se l'utente tocca l'orb (impaziente o pensando
+  // che il tap serva ad ATTIVARE), viene interpretato come stop-utente,
+  // stopRequested=true, la sessione aborta prima di startRecognition
+  // → nessun audio catturato. Combinato al bug HF_LOOP (Fix A), 156
+  // sessioni abortite in 4s.
+  //
+  // Fix: teniamo traccia se il mic è REALMENTE attivo. Il callback
+  // onRecognitionActive (voiceClientStt.ts, chiamato dopo
+  // ExpoSpeechRecognitionModule.start() OK) lo mette a true. Un tap
+  // durante status="recording" ma micReallyActiveRef=false viene
+  // IGNORATO (log-only, no UI change per ora). Diventa false al termine
+  // della sessione (onDone/onError/finally).
+  const micReallyActiveRef = useRef<boolean>(false);
+
   // === FIX 2026-07-14 v56 — HF LOOP BACKOFF su WS failures consecutivi ===
   // Se il backend si riavvia o è irraggiungibile, il vecchio HF loop
   // martella all'infinito aprendo WS che si chiudono subito con code=0.
@@ -2860,6 +2879,11 @@ export default function Taccuino() {
         timeoutMs: confessionalMode ? 360_000 : 240_000,
         onSession: (s: any) => {
           streamingSessionRef.current = s;
+          // === FIX 2026-07-24 v63.5 (Fix B) — reset mic-active gate ===
+          // Nuova sessione: il mic NON è ancora attivo (parte solo dopo
+          // startRecognition, ~1s più tardi). Da qui in poi ignoriamo
+          // i tap sull'orb finché onRecognitionActive non arriva.
+          micReallyActiveRef.current = false;
           console.log(
             `[KODA_STREAM_CLIENT] session ref ${s ? "stored" : "cleared"}`
           );
@@ -2886,6 +2910,11 @@ export default function Taccuino() {
         },
         onAudioStart: () => {
           setStatus("speaking");
+        },
+        // === FIX 2026-07-24 v63.5 (Fix B) — mic really active ===
+        onRecognitionActive: () => {
+          micReallyActiveRef.current = true;
+          console.log(`[KODA_MIC_GATE] mic really active — tap-stop now allowed`);
         },
         onUserFinal: (userText: string, conf: number | null, _dur: number | null) => {
           // === FIX 2026-06-25 v8 ===
@@ -2981,6 +3010,10 @@ export default function Taccuino() {
       setTimeout(() => setError(null), 4000);
     } finally {
       setStatus("idle");
+      // === FIX 2026-07-24 v63.5 (Fix B) — reset mic-active gate ===
+      // Sessione terminata: il mic non è più attivo. Prossima sessione
+      // dovrà re-triggerare onRecognitionActive per riautorizzare i tap.
+      micReallyActiveRef.current = false;
       // === FIX 2026-06-28 v26 (P0 cascata WebSocket — log diag iPhone/Android) ===
       // Il vecchio re-trigger esplicito [KODA_HF_EXPLICIT] è stato RIMOSSO.
       // Causava una CASCATA ESPONENZIALE di sessioni WebSocket:
@@ -3619,6 +3652,25 @@ export default function Taccuino() {
     // Koda non rispondeva mai perché il server chiudeva la sessione senza
     // processare l'utterance. Ora tap = "ho finito parlare, tocca a te".
     if (status === "recording") {
+      // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
+      // Se il microfono REALE non è ancora attivo, IGNORIAMO il tap.
+      // Copriamo entrambi i casi:
+      //   (1) session ref esiste ma mic non ancora partito
+      //       (siamo tra idle→recording e ExpoSpeechRecognitionModule.start OK)
+      //   (2) session ref ancora null (siamo prima che onSession fira,
+      //       nella fase pre-createSession async)
+      // Senza questa gate, un tap prematuro nella finestra ~1s di
+      // startup settava stopRequested=true OR pendingTapStopRef=true
+      // → sessione abortita prima che startRecognition() venga chiamata
+      // → cascata Xiaomi osservata (156 sessioni in 4s, mic mai attivo).
+      // Se davvero l'utente vuole abortire, può usare long-press
+      // (che va sul path abort() e non su stop()).
+      if (!micReallyActiveRef.current) {
+        console.log(
+          `[KODA_TAP_STOP] IGNORED — mic not yet active (startup phase, session_ref=${!!streamingSessionRef.current})`
+        );
+        return;
+      }
       console.log(`[KODA_TAP_STOP] recording → transcribing (graceful stop)`);
       if (streamingSessionRef.current) {
         const s = streamingSessionRef.current as any;
@@ -3635,10 +3687,11 @@ export default function Taccuino() {
           }
         } catch {}
       } else {
-        // === FIX 2026-07-11 v52 — TAP_STOP EARLY ===
-        // Sessione non ancora aperta (voiceStreamConverse sta ancora facendo
-        // la fase async pre-WS). Settiamo il flag: onSession() lo controllerà
-        // appena ricevuta la sessione e la fermerà subito.
+        // === FIX 2026-07-11 v52 — TAP_STOP EARLY (ora unreachable) ===
+        // Con Fix B (v63.5), il tap durante startup viene già filtrato
+        // dalla gate micReallyActiveRef sopra. Questo else branch resta
+        // come safety net per casi non-Native STT (Deepgram legacy),
+        // dove onRecognitionActive non fira e la gate lascia passare.
         pendingTapStopRef.current = true;
         console.log(
           `[KODA_TAP_STOP] session ref null → pendingTapStopRef=true (early stop scheduled)`

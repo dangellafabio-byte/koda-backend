@@ -1922,6 +1922,15 @@ export async function voiceStreamConverse(opts: {
   // Esposizione della sessione attiva al chiamante, per permettergli di
   // chiamare session.stop() da un tap sull'orb (barge-in / stop manuale).
   onSession?: (session: { stop: () => Promise<void> } | null) => void;
+  // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
+  // Fired quando il microfono REALE è partito (dopo
+  // ExpoSpeechRecognitionModule.start() OK, non solo dopo la WS
+  // "ready"). Il caller usa questo signal per capire se un tap
+  // dell'utente durante status="recording" è un legittimo stop
+  // (mic attivo) o un tap prematuro durante lo startup async
+  // (~1s tra idle→recording e mic reale attivo) → in quel caso
+  // il tap va ignorato per evitare la cascata Xiaomi.
+  onRecognitionActive?: () => void;
 } = {}): Promise<FastConverseResult> {
   // === FIX 2026-06-26 v17: default alzato da 60s → 240s ===
   // Allineato con STREAM_HARD_CAP_MS (180s) + margine 60s per LLM+TTS.
@@ -2057,6 +2066,13 @@ export async function voiceStreamConverse(opts: {
   const session = new SessionCtor({
     onReady: (sessionId: string) => {
       console.log(`[KODA_STREAM_CLIENT] ready sess=${sessionId.slice(0, 8)}`);
+    },
+    // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
+    // Forward al caller quando il mic REALE è partito (Native STT:
+    // dopo ExpoSpeechRecognitionModule.start() OK).
+    onRecognitionActive: () => {
+      console.log(`[KODA_STREAM_CLIENT] mic really active (recognition started)`);
+      try { opts.onRecognitionActive?.(); } catch {}
     },
     onInterim: (_text: string, _isFinal: boolean) => {
       // (UI live transcript — riservato per futura visualizzazione,

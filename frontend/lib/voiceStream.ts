@@ -139,6 +139,15 @@ export interface VoiceStreamCallbacks {
   onMeta?: (meta: any) => void;
   onDone?: () => void;
   onError?: (message: string) => void;
+  // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
+  // Fired quando il microfono REALE è partito (Native STT: dopo
+  // ExpoSpeechRecognitionModule.start() OK; Deepgram: dopo primo chunk
+  // registrato). Serve al caller per capire se un tap dell'utente
+  // durante status="recording" arriva DOPO l'attivazione reale del mic
+  // (allora è un legittimo stop dell'utente) o durante la fase di
+  // startup (mic non ancora attivo → tap ignorato, altrimenti si
+  // innesca la cascata di sessioni abortite senza mai registrare).
+  onRecognitionActive?: () => void;
 }
 
 // =============================================================
@@ -516,6 +525,11 @@ export class VoiceStreamSession {
       return;
     }
     this.chunkLoopActive = true;
+    // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
+    // Segnaliamo all'upper layer che il chunk loop (mic reale) è ora
+    // attivo, così eventuali tap dell'utente possono essere trattati
+    // come legittimi stop. Simmetrico a voiceClientStt.ts::startRecognition.
+    try { this.callbacks.onRecognitionActive?.(); } catch {}
     this.chunkLoop().catch((e) => {
       console.warn(`[KODA_STREAM_CLIENT] chunk loop crashed: ${e}`);
       this.callbacks.onError?.(String(e?.message || e));

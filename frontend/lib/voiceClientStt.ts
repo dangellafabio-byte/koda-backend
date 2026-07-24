@@ -324,9 +324,35 @@ export class VoiceClientSttSession {
     });
 
     if (this.stopRequested) {
-      console.log(`[${TAG}] stopRequested=true after openWs → abort startup`);
+      // === FIX 2026-07-24 v63.5 — Xiaomi cascata infinita (Fix A) ===
+      // BUG OSSERVATO nel log Xiaomi (24/07 19:47): startTalkInternal
+      // partiva, streamingSessionRef veniva stored, ma DURANTE la fase
+      // async pre-WS (setAudioModeAsync + detectAudioRoute + warmup +
+      // openWs, ~1s) qualcosa (tap utente impaziente o HF_LOOP che rifira)
+      // chiamava stop() → stopRequested=true. Quando la WS finalmente
+      // apriva, l'abort qui sotto mandava "end" pulito al server, il
+      // server rispondeva "done" pulito, voiceStreamConverse tornava
+      // result.ok=true, HF_BACKOFF azzerava il counter (was 2) e HF_LOOP
+      // ripartiva subito → nuova sessione, stesso abort, stesso "done"
+      // fasullo → CASCATA INFINITA di sessioni abortite senza che
+      // startRecognition() venisse MAI chiamata (mic mai partito, zero
+      // audio catturato). 156 eventi in 4 secondi = ~40 sessioni al sec.
+      //
+      // Fix: propaghiamo un ERRORE esplicito all'upper layer. Così
+      // pipelineError si popola, result.ok=false, HF_BACKOFF conta il
+      // fallimento (#1, #2, #3) e dopo la threshold mette in pausa il
+      // loop mostrando "Connessione persa. Tocca il cerchio per
+      // riprovare." → la cascata si spegne, l'utente vede il problema.
+      console.log(`[${TAG}] stopRequested=true after openWs → abort startup (propagating error, NOT clean done)`);
+      // Marca lo stato come già-notificato così il ws.onclose non genera
+      // un secondo onError/onDone spurii.
+      this.notifiedUpperOnClose = true;
+      this.doneReceived = true;
       try {
-        this.sendJson({ type: "end" });
+        this.callbacks.onError?.("aborted_pre_recognition");
+      } catch {}
+      try {
+        this.forceCloseWs();
       } catch {}
       return;
     }
@@ -473,6 +499,17 @@ export class VoiceClientSttSession {
       }
       ExpoSpeechRecognitionModule.start(startOpts);
       console.log(`[${TAG}] ExpoSpeechRecognitionModule.start() OK`);
+      // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
+      // Segnaliamo all'upper layer che il microfono REALE è ora attivo.
+      // Da qui in poi un tap dell'utente su onBigButton è un legittimo
+      // stop. Prima di questo momento (startup async 1-2s), un tap
+      // aborterebbe la sessione prima che il mic parta → cascata
+      // Xiaomi osservata (vedi Fix A sopra).
+      try {
+        this.callbacks.onRecognitionActive?.();
+      } catch (cbErr: any) {
+        console.log(`[${TAG}] onRecognitionActive callback error (non-fatal): ${cbErr?.message || cbErr}`);
+      }
     } catch (e: any) {
       console.log(`[${TAG}] start() FAILED: ${e?.message || e}`);
       try {
