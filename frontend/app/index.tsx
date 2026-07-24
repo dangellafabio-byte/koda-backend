@@ -443,6 +443,19 @@ export default function Taccuino() {
   // attorno a ciascun elemento UI, mentre Koda parla a voce spiegando
   // cosa fa. Auto-avanzamento al termine di ogni voce.
   const [tourActive, setTourActive] = useState(false);
+
+  // === ADMIN WHITELIST MINI-PANEL (2026-07-24 pre-paywall) ===
+  // Solo l'owner (Fabio) vede la sezione admin nelle Impostazioni per
+  // gestire la whitelist "unlimited". Verificato via GET /api/admin/whoami
+  // al boot; is_admin=false per tutti gli altri. Vedi PAYWALL_POLICY.md.
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [adminUnlimitedList, setAdminUnlimitedList] = useState<
+    Array<{ email: string; uid: string; added_by: string; added_at: string; note?: string | null }>
+  >([]);
+  const [adminAddEmail, setAdminAddEmail] = useState<string>("");
+  const [adminAddNote, setAdminAddNote] = useState<string>("");
+  const [adminBusy, setAdminBusy] = useState<boolean>(false);
+  const [adminError, setAdminError] = useState<string | null>(null);
   const [tourSteps, setTourSteps] = useState<TourStep[]>([]);
   // === Tour step tracker (giugno 2026, round 5) ===
   // Sappiamo quale step del tour è attivo per sincronizzare gli
@@ -1119,6 +1132,19 @@ export default function Taccuino() {
               }
             })();
           }
+          // === ADMIN WHITELIST CHECK (2026-07-24 pre-paywall) ===
+          // Chiediamo al backend se l'uid corrente è admin. Se sì, il
+          // mini-panel in Impostazioni diventa visibile. Silenzioso su
+          // errore (utenti normali riceveranno is_admin=false comunque).
+          (async () => {
+            try {
+              const who = await api.adminWhoAmI();
+              setIsAdmin(!!who?.is_admin);
+            } catch (e) {
+              // Silenzioso — un errore qui non deve interrompere il boot
+              setIsAdmin(false);
+            }
+          })();
           return; // success
         } catch (e) {
           attempt++;
@@ -5948,6 +5974,169 @@ export default function Taccuino() {
                 Quello che mi dici resta tra noi. Non lo vende nessuno, non lo usa nessuno per addestrare altri modelli, non esce dal nostro spazio. In Lascia andare non esce nemmeno dal tuo telefono. È tuo. È nostro.
               </Text>
             </View>
+
+            {/* === MINI-PANEL ADMIN WHITELIST (2026-07-24, PAYWALL_POLICY) ===
+                Visibile SOLO all'owner (backend risponde is_admin=true su
+                /api/admin/whoami). Permette di aggiungere/rimuovere email
+                dalla whitelist "unlimited" senza toccare env var Railway.
+                Le email pre-seed (Fabio, Stefania) non sono rimovibili via UI. */}
+            {isAdmin ? (
+              <>
+                <View style={styles.divider} />
+                <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>
+                  🔑 Admin — Whitelist unlimited
+                </Text>
+                <Text style={[styles.settingHint, { marginBottom: 12, paddingHorizontal: 4 }]}>
+                  Email in questa lista bypassano il paywall (usa turni illimitati).
+                  Le email pre-caricate (te, Stefania) non si possono togliere da qui.
+                </Text>
+
+                {/* Lista attuale con refresh */}
+                <TouchableOpacity
+                  style={[styles.settingRow, { paddingVertical: 10 }]}
+                  onPress={async () => {
+                    setAdminBusy(true);
+                    setAdminError(null);
+                    try {
+                      const list = await api.adminUnlimitedList();
+                      setAdminUnlimitedList(list);
+                    } catch (e: any) {
+                      setAdminError(`Caricamento fallito: ${e?.message || e}`);
+                    } finally {
+                      setAdminBusy(false);
+                    }
+                  }}
+                  testID="admin-refresh-list-btn"
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.settingLabel}>
+                      {adminBusy ? "Caricamento…" : `📋 Aggiorna lista (${adminUnlimitedList.length})`}
+                    </Text>
+                    <Text style={styles.settingHint}>
+                      Tocca per aggiornare l&apos;elenco delle email whitelisted.
+                    </Text>
+                  </View>
+                  <Ionicons name="refresh" size={18} color={theme.text + "88"} />
+                </TouchableOpacity>
+
+                {/* Rendering della lista */}
+                {adminUnlimitedList.map((entry) => {
+                  const isPreseed = [
+                    "dangella.fabio@gmail.com",
+                    "wqm4r4jn7f@privaterelay.appleid.com",
+                    "stefania.russo82@gmail.com",
+                  ].includes(entry.email);
+                  return (
+                    <View
+                      key={entry.email}
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        paddingVertical: 8,
+                        paddingHorizontal: 4,
+                        borderBottomWidth: StyleSheet.hairlineWidth,
+                        borderBottomColor: theme.text + "18",
+                      }}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: theme.text, fontSize: 13 }}>
+                          {entry.email}
+                        </Text>
+                        {entry.note ? (
+                          <Text style={{ color: theme.text + "77", fontSize: 11, marginTop: 2 }}>
+                            {entry.note}
+                          </Text>
+                        ) : null}
+                      </View>
+                      {isPreseed ? (
+                        <Text style={{ color: theme.text + "55", fontSize: 10, fontStyle: "italic" }}>
+                          bloccata
+                        </Text>
+                      ) : (
+                        <TouchableOpacity
+                          onPress={async () => {
+                            setAdminBusy(true);
+                            setAdminError(null);
+                            try {
+                              await api.adminUnlimitedRemove(entry.email);
+                              const list = await api.adminUnlimitedList();
+                              setAdminUnlimitedList(list);
+                            } catch (e: any) {
+                              setAdminError(`Rimozione fallita: ${e?.message || e}`);
+                            } finally {
+                              setAdminBusy(false);
+                            }
+                          }}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          <Ionicons name="trash-outline" size={18} color={theme.danger} />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  );
+                })}
+
+                {/* Form aggiungi */}
+                <View style={{ marginTop: 14, gap: 8 }}>
+                  <TextInput
+                    value={adminAddEmail}
+                    onChangeText={setAdminAddEmail}
+                    placeholder="Nuova email (es. sorella@example.com)"
+                    placeholderTextColor={theme.muted}
+                    style={[styles.input, { paddingVertical: 10, fontSize: 14 }]}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="email-address"
+                  />
+                  <TextInput
+                    value={adminAddNote}
+                    onChangeText={setAdminAddNote}
+                    placeholder="Nota (opzionale, es. Sorella / Tester alfa)"
+                    placeholderTextColor={theme.muted}
+                    style={[styles.input, { paddingVertical: 10, fontSize: 14 }]}
+                    autoCapitalize="sentences"
+                  />
+                  <TouchableOpacity
+                    style={{
+                      backgroundColor: theme.primary,
+                      paddingVertical: 12,
+                      borderRadius: 10,
+                      alignItems: "center",
+                      opacity: adminBusy || !adminAddEmail.trim() ? 0.5 : 1,
+                    }}
+                    disabled={adminBusy || !adminAddEmail.trim()}
+                    onPress={async () => {
+                      const email = adminAddEmail.trim().toLowerCase();
+                      if (!email || !email.includes("@")) return;
+                      setAdminBusy(true);
+                      setAdminError(null);
+                      try {
+                        await api.adminUnlimitedAdd(email, adminAddNote.trim() || undefined);
+                        const list = await api.adminUnlimitedList();
+                        setAdminUnlimitedList(list);
+                        setAdminAddEmail("");
+                        setAdminAddNote("");
+                      } catch (e: any) {
+                        setAdminError(`Aggiunta fallita: ${e?.message || e}`);
+                      } finally {
+                        setAdminBusy(false);
+                      }
+                    }}
+                    testID="admin-add-email-btn"
+                  >
+                    <Text style={{ color: theme.primaryText, fontSize: 14, fontWeight: "600" }}>
+                      {adminBusy ? "Un attimo…" : "➕ Aggiungi alla whitelist"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {adminError ? (
+                  <Text style={{ color: theme.danger, fontSize: 12, marginTop: 8, textAlign: "center" }}>
+                    {adminError}
+                  </Text>
+                ) : null}
+              </>
+            ) : null}
 
             {/* === AIUTO / SEGNALA UN PROBLEMA (2026-07-24 pre-lancio) ===
                 Reframing del vecchio bottone "Diagnostica" — stessa funzione

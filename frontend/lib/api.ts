@@ -289,6 +289,39 @@ export const api = {
     }),
   authLogout: () => jsonReq<{ ok: boolean }>("/auth/logout", { method: "POST" }),
 
+  // === ADMIN — Whitelist unlimited (2026-07-24) ===
+  // Endpoint accessibili SOLO all'owner (Fabio). Il frontend chiama
+  // adminWhoAmI() al boot per capire se mostrare il mini-panel in
+  // Impostazioni; is_admin=false per utenti normali.
+  adminWhoAmI: () =>
+    jsonReq<{ is_admin: boolean; uid_short: string }>("/admin/whoami"),
+  adminUnlimitedList: () =>
+    jsonReq<
+      Array<{
+        email: string;
+        uid: string;
+        added_by: string;
+        added_at: string;
+        note?: string | null;
+      }>
+    >("/admin/unlimited/list"),
+  adminUnlimitedAdd: (email: string, note?: string) =>
+    jsonReq<{
+      email: string;
+      uid: string;
+      added_by: string;
+      added_at: string;
+      note?: string | null;
+    }>("/admin/unlimited/add", {
+      method: "POST",
+      body: JSON.stringify({ email, note }),
+    }),
+  adminUnlimitedRemove: (email: string) =>
+    jsonReq<{ ok: boolean; removed: string }>(
+      `/admin/unlimited/remove?email=${encodeURIComponent(email)}`,
+      { method: "DELETE" }
+    ),
+
   // === Block E ===
   analyticsTrack: (event: string, props?: Record<string, any>) =>
     jsonReq<{ ok: boolean }>("/analytics/track", {

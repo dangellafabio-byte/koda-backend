@@ -2707,6 +2707,176 @@ async def api_get_usage():
 FREE_TRIAL_MESSAGE_LIMIT = 3
 
 
+# ============================================================
+# WHITELIST "UNLIMITED USERS" — bypass paywall
+# ============================================================
+# Policy di riferimento: /app/memory/PAYWALL_POLICY.md
+#
+# Vincolo #0: il proprietario dell'app (Fabio) e chiunque nella whitelist
+# NON DEVONO MAI essere bloccati dal paywall, indipendentemente da quota
+# giornaliera, tier, o subscription state.
+#
+# Storage:
+#   1. Env var `KODA_UNLIMITED_USERS` (fallback + bootstrap iniziale)
+#   2. Collection MongoDB `unlimited_users` (self-service admin)
+#      Documento: {email, uid, added_by, added_at, note}
+#   3. Env var `KODA_UNLIMITED_USER_IDS` (bypass per uid non-emailed)
+#
+# Admin (chi può gestire la whitelist):
+#   - Fabio (proprietario) hardcoded via `_ADMIN_UIDS` — l'unico che può
+#     aggiungere/rimuovere email tramite gli endpoint admin.
+#   - Stefania è unlimited MA non admin (non deve gestire la lista).
+#
+# Cache in-memory con TTL breve (30s) per evitare hit DB su ogni turno.
+# ============================================================
+
+_UNLIMITED_CACHE: dict[str, tuple[bool, float]] = {}  # key: "email|uid" → (is_unlimited, expires_at)
+_UNLIMITED_CACHE_TTL = 30.0  # secondi
+
+# Admin UIDs — derivati dalle email di Fabio via _email_to_uid.
+# Calcolati una volta all'avvio; se cambia lista, riavviare il server.
+_ADMIN_EMAILS_HARDCODED = [
+    "dangella.fabio@gmail.com",
+    "wqm4r4jn7f@privaterelay.appleid.com",
+]
+_ADMIN_UIDS: set[str] = {_email_to_uid(e) for e in _ADMIN_EMAILS_HARDCODED}
+
+# Email pre-seed che ricevono unlimited al boot (owner + Stefania).
+# Vengono inserite in DB solo se non già presenti (idempotente).
+_UNLIMITED_PRESEED_EMAILS = [
+    ("dangella.fabio@gmail.com", "owner (Fabio)"),
+    ("wqm4r4jn7f@privaterelay.appleid.com", "owner Apple relay (Fabio)"),
+    ("stefania.russo82@gmail.com", "Stefania (permanent)"),
+]
+
+
+def _env_unlimited_emails() -> set[str]:
+    """Emails da env var KODA_UNLIMITED_USERS (comma-separated), normalizzate."""
+    raw = os.getenv("KODA_UNLIMITED_USERS", "") or ""
+    return {e.strip().lower() for e in raw.split(",") if e.strip()}
+
+
+def _env_unlimited_uids() -> set[str]:
+    """UID diretti da env var KODA_UNLIMITED_USER_IDS (comma-separated)."""
+    raw = os.getenv("KODA_UNLIMITED_USER_IDS", "") or ""
+    return {i.strip() for i in raw.split(",") if i.strip()}
+
+
+async def is_user_unlimited(email: Optional[str], uid: Optional[str]) -> tuple[bool, str]:
+    """Ritorna (is_unlimited, reason) — reason serve per il log audit.
+
+    Priorità check (in ordine):
+      1. Env var KODA_UNLIMITED_USER_IDS (uid diretto)
+      2. Env var KODA_UNLIMITED_USERS (email)
+      3. Collection MongoDB `unlimited_users` (self-service admin)
+
+    Cache in-memory 30s per non hammer DB.
+    """
+    import time as _time
+    now = _time.time()
+    cache_key = f"{(email or '').lower()}|{uid or ''}"
+    cached = _UNLIMITED_CACHE.get(cache_key)
+    if cached and cached[1] > now:
+        return (cached[0], "cache")
+
+    # 1. uid diretto da env
+    if uid and uid in _env_unlimited_uids():
+        _UNLIMITED_CACHE[cache_key] = (True, now + _UNLIMITED_CACHE_TTL)
+        return (True, "env_uid")
+
+    email_norm = (email or "").strip().lower()
+
+    # 2. email da env
+    if email_norm and email_norm in _env_unlimited_emails():
+        _UNLIMITED_CACHE[cache_key] = (True, now + _UNLIMITED_CACHE_TTL)
+        return (True, "env_email")
+
+    # 3. DB whitelist (self-service)
+    if email_norm:
+        try:
+            doc = await db.unlimited_users.find_one({"email": email_norm})
+            if doc:
+                _UNLIMITED_CACHE[cache_key] = (True, now + _UNLIMITED_CACHE_TTL)
+                return (True, "db_email")
+        except Exception as e:
+            logger.warning(f"[unlimited] DB lookup by email failed: {e}")
+
+    # 4. DB whitelist lookup per uid (fallback quando email non è nota nella
+    # session/profile ma l'uid corrisponde a un email whitelisted). Utile per
+    # test tramite X-User-Id header e per utenti già loggati la cui email
+    # non è stata popolata sul profilo.
+    if uid:
+        try:
+            doc = await db.unlimited_users.find_one({"uid": uid})
+            if doc:
+                _UNLIMITED_CACHE[cache_key] = (True, now + _UNLIMITED_CACHE_TTL)
+                return (True, "db_uid")
+        except Exception as e:
+            logger.warning(f"[unlimited] DB lookup by uid failed: {e}")
+
+    # Non unlimited
+    _UNLIMITED_CACHE[cache_key] = (False, now + _UNLIMITED_CACHE_TTL)
+    return (False, "not_whitelisted")
+
+
+def _invalidate_unlimited_cache():
+    """Pulisce la cache — chiamato dopo add/remove per riflettere subito."""
+    _UNLIMITED_CACHE.clear()
+
+
+async def _uid_email_from_session_or_profile(uid: str) -> Optional[str]:
+    """Best-effort: risolve l'email associata a un uid.
+    Cerca prima nelle sessions attive (auth), poi nel profilo (memoria).
+    Ritorna None se non trovabile."""
+    try:
+        sess = await db.sessions.find_one({"email": {"$exists": True}}, sort=[("_id", -1)])
+        # Nota: sess è generico, meglio un lookup mirato per uid → email.
+        # Per ora usiamo l'auth_email salvata sul profilo se presente.
+    except Exception:
+        pass
+    try:
+        prof = await db.taccuino_profile.find_one({"id": uid})
+        if prof:
+            # Alcuni profili salvano `email` o `auth_email`
+            for key in ("email", "auth_email", "user_email"):
+                v = prof.get(key)
+                if v and isinstance(v, str) and "@" in v:
+                    return v.strip().lower()
+    except Exception:
+        pass
+    return None
+
+
+async def _seed_unlimited_users_once():
+    """Pre-seed idempotente della whitelist al boot con owner + Stefania."""
+    try:
+        for email, note in _UNLIMITED_PRESEED_EMAILS:
+            email_norm = email.strip().lower()
+            existing = await db.unlimited_users.find_one({"email": email_norm})
+            if existing:
+                continue
+            await db.unlimited_users.insert_one({
+                "email": email_norm,
+                "uid": _email_to_uid(email_norm),
+                "added_by": "system_bootstrap",
+                "added_at": datetime.now(timezone.utc),
+                "note": note,
+            })
+            logger.info(f"[unlimited] pre-seeded {email_norm} ({note})")
+    except Exception as e:
+        logger.warning(f"[unlimited] seed failed (non-fatal): {e}")
+
+
+def _is_admin_uid(uid: str) -> bool:
+    """True se l'uid corrente è un admin (owner). Solo Fabio."""
+    return uid in _ADMIN_UIDS
+
+
+# ============================================================
+# FINE modulo WHITELIST
+# ============================================================
+
+
 class FreemiumStatus(BaseModel):
     free_messages_used: int
     free_messages_limit: int
@@ -2720,11 +2890,38 @@ class FreemiumStatus(BaseModel):
 @api_router.get("/freemium/status", response_model=FreemiumStatus)
 async def api_freemium_status():
     """Stato del freemium per il client. Da chiamare al boot e dopo ogni
-    risposta di Koda per aggiornare il contatore visivo (3 → 2 → 1 → 0)."""
+    risposta di Koda per aggiornare il contatore visivo (3 → 2 → 1 → 0).
+
+    === WHITELIST BYPASS (2026-07-24, PAYWALL_POLICY.md #0) ===
+    Se l'utente è nella whitelist unlimited (env var o DB), ritorna sempre
+    can_send=True, paywall_required=False, tier="unlimited" — indipendentemente
+    dal counter o dal subscription_active. Vincolo #0: il proprietario e i
+    whitelisted NON DEVONO MAI essere bloccati.
+    """
     p = await get_or_create_profile()
     used = int(getattr(p, "free_messages_used", 0) or 0)
     active = bool(getattr(p, "subscription_active", False))
     tier = getattr(p, "subscription_tier", None)
+
+    # WHITELIST CHECK — priorità massima
+    uid = current_user_id()
+    email = await _uid_email_from_session_or_profile(uid)
+    unlimited, reason = await is_user_unlimited(email, uid)
+    if unlimited:
+        logger.info(
+            f"[PAYWALL_BYPASS user={email or uid[:8]} reason={reason}] "
+            f"freemium/status → unlimited (all limits skipped)"
+        )
+        return FreemiumStatus(
+            free_messages_used=used,
+            free_messages_limit=FREE_TRIAL_MESSAGE_LIMIT,
+            free_messages_remaining=FREE_TRIAL_MESSAGE_LIMIT,  # sempre pieno
+            subscription_active=True,  # trattato come premium
+            subscription_tier="unlimited",
+            can_send=True,
+            paywall_required=False,
+        )
+
     remaining = max(0, FREE_TRIAL_MESSAGE_LIMIT - used)
     can_send = active or (used < FREE_TRIAL_MESSAGE_LIMIT)
     paywall_required = (not active) and (used >= FREE_TRIAL_MESSAGE_LIMIT)
@@ -2746,9 +2943,21 @@ async def api_freemium_increment():
     se NON è in Confessionale (privacy first).
 
     Se subscription_active=True non incrementa.
+    Se utente in whitelist unlimited (2026-07-24) → NO increment (protegge il counter).
     Idempotenza: race-safe via $inc.
     """
     uid = current_user_id()
+
+    # WHITELIST CHECK — se unlimited, non tocchiamo il counter
+    email = await _uid_email_from_session_or_profile(uid)
+    unlimited, reason = await is_user_unlimited(email, uid)
+    if unlimited:
+        logger.info(
+            f"[PAYWALL_BYPASS user={email or uid[:8]} reason={reason}] "
+            f"freemium/increment skipped (unlimited)"
+        )
+        return await api_freemium_status()
+
     profile_doc = await db.taccuino_profile.find_one({"id": uid})
     if not profile_doc:
         await get_or_create_profile()
@@ -2761,6 +2970,162 @@ async def api_freemium_increment():
             {"$inc": {"free_messages_used": 1}},
         )
     return await api_freemium_status()
+
+
+# ============================================================
+# ADMIN — Whitelist self-service management
+# ============================================================
+# Endpoint accessibili SOLO all'owner (Fabio) via _ADMIN_UIDS check.
+# Permettono di aggiungere/rimuovere email dalla whitelist unlimited
+# senza redeploy o accesso a env var Railway.
+# ============================================================
+
+
+class AdminWhoAmIResponse(BaseModel):
+    is_admin: bool
+    uid_short: str  # solo primi 8 char per privacy nei log
+
+
+class AdminUnlimitedAddRequest(BaseModel):
+    email: str
+    note: Optional[str] = None
+
+
+class AdminUnlimitedEntry(BaseModel):
+    email: str
+    uid: str
+    added_by: str
+    added_at: str  # ISO datetime
+    note: Optional[str] = None
+
+
+def _require_admin() -> str:
+    """Verifica che l'utente corrente sia admin. Ritorna l'uid, o solleva 403."""
+    uid = current_user_id()
+    if not _is_admin_uid(uid):
+        raise HTTPException(status_code=403, detail="admin_only")
+    return uid
+
+
+@api_router.get("/admin/whoami", response_model=AdminWhoAmIResponse)
+async def api_admin_whoami():
+    """Il frontend chiama questo endpoint al boot per capire se mostrare
+    il mini-panel admin nelle Impostazioni. NON solleva 403 — ritorna
+    is_admin=False per gli utenti normali."""
+    uid = current_user_id()
+    return AdminWhoAmIResponse(
+        is_admin=_is_admin_uid(uid),
+        uid_short=uid[:8] if uid else "?",
+    )
+
+
+@api_router.get("/admin/unlimited/list", response_model=List[AdminUnlimitedEntry])
+async def api_admin_unlimited_list():
+    """Ritorna la lista attuale della whitelist unlimited (da MongoDB).
+    Solo owner può leggere."""
+    _require_admin()
+    entries: List[AdminUnlimitedEntry] = []
+    try:
+        cursor = db.unlimited_users.find({}).sort("added_at", -1)
+        async for doc in cursor:
+            added_at = doc.get("added_at")
+            if isinstance(added_at, datetime):
+                added_at_str = added_at.isoformat()
+            else:
+                added_at_str = str(added_at or "")
+            entries.append(AdminUnlimitedEntry(
+                email=doc.get("email", ""),
+                uid=doc.get("uid", ""),
+                added_by=doc.get("added_by", "?"),
+                added_at=added_at_str,
+                note=doc.get("note"),
+            ))
+    except Exception as e:
+        logger.warning(f"[admin/unlimited/list] failed: {e}")
+        raise HTTPException(status_code=500, detail="list_failed")
+    return entries
+
+
+@api_router.post("/admin/unlimited/add", response_model=AdminUnlimitedEntry)
+async def api_admin_unlimited_add(req: AdminUnlimitedAddRequest):
+    """Aggiunge un'email alla whitelist. Idempotente: se già presente,
+    ritorna il documento esistente (non duplica)."""
+    admin_uid = _require_admin()
+    email_norm = (req.email or "").strip().lower()
+    if not email_norm or "@" not in email_norm:
+        raise HTTPException(status_code=400, detail="invalid_email")
+
+    existing = await db.unlimited_users.find_one({"email": email_norm})
+    if existing:
+        # Idempotente: aggiorna solo la nota se fornita
+        if req.note and req.note != existing.get("note"):
+            await db.unlimited_users.update_one(
+                {"email": email_norm},
+                {"$set": {"note": req.note}},
+            )
+            existing["note"] = req.note
+        _invalidate_unlimited_cache()
+        added_at = existing.get("added_at")
+        added_at_str = added_at.isoformat() if isinstance(added_at, datetime) else str(added_at or "")
+        return AdminUnlimitedEntry(
+            email=existing["email"],
+            uid=existing.get("uid", ""),
+            added_by=existing.get("added_by", "?"),
+            added_at=added_at_str,
+            note=existing.get("note"),
+        )
+
+    now = datetime.now(timezone.utc)
+    doc = {
+        "email": email_norm,
+        "uid": _email_to_uid(email_norm),
+        "added_by": f"admin:{admin_uid[:8]}",
+        "added_at": now,
+        "note": req.note,
+    }
+    await db.unlimited_users.insert_one(doc)
+    _invalidate_unlimited_cache()
+    logger.info(f"[admin/unlimited/add] {email_norm} added by {admin_uid[:8]}")
+    return AdminUnlimitedEntry(
+        email=email_norm,
+        uid=doc["uid"],
+        added_by=doc["added_by"],
+        added_at=now.isoformat(),
+        note=req.note,
+    )
+
+
+@api_router.delete("/admin/unlimited/remove")
+async def api_admin_unlimited_remove(email: str):
+    """Rimuove un'email dalla whitelist. Query param: ?email=xxx@yyy.com
+
+    SAFETY: le email pre-seed (owner + Stefania) non possono essere
+    rimosse via API — se sparissero, l'owner rischierebbe di bloccarsi.
+    Per rimuoverle, cambiare il codice sorgente + redeploy.
+    """
+    admin_uid = _require_admin()
+    email_norm = (email or "").strip().lower()
+    if not email_norm:
+        raise HTTPException(status_code=400, detail="email_required")
+
+    preseed_emails = {e for e, _ in _UNLIMITED_PRESEED_EMAILS}
+    if email_norm in preseed_emails:
+        raise HTTPException(
+            status_code=400,
+            detail="cannot_remove_preseed_email",
+        )
+
+    result = await db.unlimited_users.delete_one({"email": email_norm})
+    _invalidate_unlimited_cache()
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="not_found")
+    logger.info(f"[admin/unlimited/remove] {email_norm} removed by {admin_uid[:8]}")
+    return {"ok": True, "removed": email_norm}
+
+
+# ============================================================
+# FINE endpoint ADMIN whitelist
+# ============================================================
 
 
 @api_router.post("/freemium/reset")
@@ -9877,7 +10242,16 @@ async def _fast_pipeline_task(
             stream=True,
             api_key=EMERGENT_LLM_KEY,
             api_base='https://integrations.emergentagent.com/llm',
-            max_tokens=280,
+            # === OTTIMIZZAZIONE COSTI TTS (2026-07-24) ===
+            # Ridotto da 280 → 200 per contenere la lunghezza max della
+            # risposta e quindi il costo ElevenLabs (che è l'85-90% del
+            # costo/turno). 200 tokens ≈ 150 parole ≈ ~700 char TTS max.
+            # La media reale è più bassa (Koda è naturalmente conciso), ma
+            # questo cap protegge da risposte molto lunghe che sballano il
+            # budget. Riduzione stimata: ~25-30% del costo TTS per turno.
+            # Se la qualità delle risposte cala (troncate a metà), rialzare
+            # a 240 come compromesso.
+            max_tokens=200,
             timeout=18,
         )
 
@@ -11215,6 +11589,17 @@ async def startup_db_client():
         logger.info("[startup] voice_auth_bridge indexes ready")
     except Exception as e:
         logger.warning(f"[startup] voice_auth_bridge index init failed: {e}")
+    # === WHITELIST UNLIMITED — pre-seed owner + Stefania (2026-07-24) ===
+    try:
+        await _seed_unlimited_users_once()
+        # Indice unique su email per query veloci + no duplicati
+        try:
+            await db.unlimited_users.create_index("email", unique=True)
+        except Exception as e:
+            logger.warning(f"[startup] unlimited_users index init failed: {e}")
+        logger.info("[startup] unlimited_users whitelist ready")
+    except Exception as e:
+        logger.warning(f"[startup] unlimited_users seed failed: {e}")
     # Block B — fondazione dati V1 (users/conversations/messages + TTL effimeri)
     try:
         await _ensure_v1_foundation_indexes()
