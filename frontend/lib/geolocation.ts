@@ -263,16 +263,68 @@ export async function fetchLocationOnce(opts?: {
       }
     }
 
-    // 2. Ottieni coordinate (accuracy.Balanced = bastano ~100m, città è ovvia)
-    const pos = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Balanced,
-    });
+    // 2. Ottieni coordinate — strategia cache-first (parità iOS/Android)
+    // === FIX 2026-07-24 v63.7 — vedi doc completa in refreshLocationSilent ===
+    // Su MIUI/HyperOS `getCurrentPositionAsync` senza timeout può
+    // bloccare 30+ secondi. Applichiamo la stessa strategia cache-first
+    // usata in refreshLocationSilent per coerenza iOS/Android.
+    let pos: Location.LocationObject | null = null;
 
-    // 3. Reverse-geocode → nome città
-    const places = await Location.reverseGeocodeAsync({
-      latitude: pos.coords.latitude,
-      longitude: pos.coords.longitude,
-    });
+    // 2a) Cache OS (istantaneo su entrambe le piattaforme)
+    try {
+      pos = await Location.getLastKnownPositionAsync({
+        maxAge: 5 * 60 * 1000,
+      });
+      if (pos) {
+        console.log(
+          `[KODA_GEO] fetchLocationOnce cache hit lastKnown (age=${
+            pos.timestamp
+              ? Math.round((Date.now() - pos.timestamp) / 1000)
+              : "?"
+          }s)`
+        );
+      }
+    } catch {
+      pos = null;
+    }
+
+    // 2b) Cache miss → live fix con timeout 5s (fetchLocationOnce è
+    //     più permissivo di refreshLocationSilent perché chiamato al
+    //     boot non su ogni turno: 5s è ok per il boot, ma bounded).
+    if (!pos) {
+      try {
+        pos = await Promise.race<Location.LocationObject | null>([
+          Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          }),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+        ]);
+        if (pos) {
+          console.log(`[KODA_GEO] fetchLocationOnce live fix ok`);
+        } else {
+          console.log(`[KODA_GEO] fetchLocationOnce live fix timeout 5s`);
+        }
+      } catch {
+        pos = null;
+      }
+    }
+
+    if (!pos) {
+      return {
+        ok: false,
+        reason: "no-network",
+        message: "getCurrentPosition timeout/unavailable (MIUI GPS cold-start?)",
+      };
+    }
+
+    // 3. Reverse-geocode → nome città (con timeout 1s per safety)
+    const places = await Promise.race<Location.LocationGeocodedAddress[] | null>([
+      Location.reverseGeocodeAsync({
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000)),
+    ]);
 
     if (!places || places.length === 0) {
       return { ok: false, reason: "no-network", message: "reverse-geocode returned empty" };
