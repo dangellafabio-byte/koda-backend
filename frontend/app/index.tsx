@@ -6206,10 +6206,19 @@ export default function Taccuino() {
                 mai vedere note di commit o log di refactor interno.
                 Canary marker "build-onboarding-9step" rimosso 2026-07-24
                 dopo verifica utente: la catena Deploy → Build è confermata
-                affidabile per questa sessione. */}
+                affidabile per questa sessione.
+
+                === NUOVO CANARY: build-admin-whitelist-ready (2026-07-24) ===
+                Rimesso su richiesta utente per verificare che la nuova
+                build TestFlight contenga effettivamente la sezione admin
+                "🔑 Admin — Whitelist unlimited" nelle Impostazioni.
+                Da rimuovere dopo primo test whitelist ok. */}
             <View style={{ alignItems: "center", marginTop: 24, marginBottom: 8 }}>
               <Text style={{ color: theme.text + "55", fontSize: 11, fontStyle: "italic" }}>
                 Koda v{Constants.expoConfig?.version || "1.0.1"}
+              </Text>
+              <Text style={{ color: theme.text + "33", fontSize: 9, marginTop: 3, letterSpacing: 0.5 }}>
+                build-admin-whitelist-ready
               </Text>
             </View>
 </>)}
