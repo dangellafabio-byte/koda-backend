@@ -87,35 +87,88 @@ export async function refreshLocationSilent(): Promise<boolean> {
     if (existing.status !== Location.PermissionStatus.GRANTED) {
       return false;
     }
-    // === FIX 2026-07-24 v63.6 — timeout interno GPS Xiaomi/Honor ===
-    // Su MIUI/HyperOS, `Location.getCurrentPositionAsync` senza timeout
-    // può bloccare 30+ secondi quando il GPS fa cold-start (bassa
-    // priorità di sistema). Aggiungiamo un timeout esplicito di 1200ms:
-    // se non abbiamo un fix in quel tempo, usiamo l'ultima posizione
-    // conosciuta (getLastKnownPositionAsync) come fallback. Se anche
-    // quello fallisce, ritorniamo false e il caller usa la cache.
+
+    // === FIX 2026-07-24 v63.7 — PARITÀ iOS/Android (root cause) ===
+    //
+    // PROBLEMA OSSERVATO (log Xiaomi 24/07 20:45):
+    //   getCurrentPositionAsync bloccava 26 secondi su MIUI/HyperOS.
+    //   Su iOS la stessa chiamata risponde in ~200-800ms.
+    //
+    // CAUSA:
+    //   • iOS: Core Location ha una cache OS condivisa. Qualsiasi altra
+    //     app o servizio che ha usato la geolocalizzazione di recente
+    //     popola la cache. CLLocationManager.requestLocation() la legge
+    //     PRIMA di chiedere un fix fresco → risposta quasi istantanea.
+    //   • Android/MIUI: FusedLocationProviderClient.getCurrentLocation()
+    //     chiede SEMPRE un fix fresco (PRIORITY_BALANCED_POWER_ACCURACY).
+    //     Non consulta mai la cache OS di sua iniziativa. Su MIUI, con
+    //     GPS in cold-start, aspetta il primo fix hardware — che indoor
+    //     può non arrivare mai.
+    //
+    // FIX (identico comportamento iOS/Android):
+    //   1. PRIMA proviamo `getLastKnownPositionAsync` (cache OS, ~0ms
+    //      su entrambe le piattaforme). È esattamente quello che iOS
+    //      fa trasparentemente dentro `getCurrentPositionAsync`.
+    //   2. SOLO SE la cache è vuota o troppo vecchia (> 5 min), chiediamo
+    //      un fix live con `getCurrentPositionAsync`, cappato a 3 secondi
+    //      per non bloccare la UI (matching il timeout implicito di iOS
+    //      quando la cache è vuota e non c'è WiFi/cell nelle vicinanze).
+    //
+    // NB: GPS RESTA parte del flusso su ENTRAMBE le piattaforme (Fabio
+    // ha chiesto parità iOS/Android, non feature-cutting). Cambia solo
+    // l'ORDINE delle chiamate per rispecchiare la strategia cache-first
+    // che iOS ha implicita a livello OS.
+
     let pos: Location.LocationObject | null = null;
+
+    // 1) Cache OS (istantaneo — matches iOS internal behavior)
     try {
-      pos = await Promise.race<Location.LocationObject | null>([
-        Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        }),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200)),
-      ]);
-    } catch {
+      const cacheT0 = Date.now();
+      pos = await Location.getLastKnownPositionAsync({
+        maxAge: 5 * 60 * 1000, // fino a 5 minuti
+      });
+      const cacheMs = Date.now() - cacheT0;
+      if (pos) {
+        console.log(
+          `[KODA_GEO] cache hit lastKnown (${cacheMs}ms, age=${
+            pos.timestamp ? Math.round((Date.now() - pos.timestamp) / 1000) : "?"
+          }s)`
+        );
+      }
+    } catch (e: any) {
+      console.log(`[KODA_GEO] lastKnown error (non-fatal): ${e?.message || e}`);
       pos = null;
     }
+
+    // 2) Cache miss → fix live con timeout 3s (parità iOS: quando la
+    //    cache iOS è vuota, il sistema chiede WiFi+cell in ~1-3s e poi
+    //    fallisce silenziosamente se il segnale non basta).
     if (!pos) {
-      // Fallback: ultima posizione nota (istantaneo, non richiede GPS fix).
+      const liveT0 = Date.now();
       try {
-        pos = await Location.getLastKnownPositionAsync({
-          maxAge: 5 * 60 * 1000, // fino a 5 minuti fa
-        });
-      } catch {
+        pos = await Promise.race<Location.LocationObject | null>([
+          Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          }),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+        ]);
+        const liveMs = Date.now() - liveT0;
+        if (pos) {
+          console.log(`[KODA_GEO] live fix ok (${liveMs}ms)`);
+        } else {
+          console.log(`[KODA_GEO] live fix timeout after ${liveMs}ms — no location this turn`);
+        }
+      } catch (e: any) {
+        console.log(`[KODA_GEO] live fix error: ${e?.message || e}`);
         pos = null;
       }
     }
+
     if (!pos) return false;
+
+    // Reverse geocode con timeout 800ms (identico iOS/Android, dipende
+    // dal servizio di reverse-geocoding del sistema, di solito veloce
+    // ma capping per safety).
     const places = await Promise.race<Location.LocationGeocodedAddress[] | null>([
       Location.reverseGeocodeAsync({
         latitude: pos.coords.latitude,
