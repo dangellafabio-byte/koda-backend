@@ -9896,6 +9896,19 @@ async def _fast_pipeline_task(
         # diversi restano naturalmente diversi (calmo ~-19 LUFS, entusiasta
         # ~-13 LUFS) — la dinamica emotiva di v3 viene preservata.
         turn_loudness_ref: Dict[str, Any] = {"ref_lufs": None, "ref_from": None}
+        # === FIX 2026-07-24 v60.5 — TTS model lock per-turno =================
+        # Fabio (report 24/07): "prima frase suona grezza, seconda limpidissima
+        # e più acuta — come se venissero generate da due motori diversi".
+        # Root cause: fallback v3→flash è chunk-per-chunk indipendente. Se v3
+        # fallisce solo su chunk 0 (aggressive chunk 40-80 char, al limite
+        # minimo di v3) ma riesce su chunk 1 (body più lungo), l'utente sente
+        # cambio di modello a metà turno (flash grezzo → v3 limpido).
+        # Fix: se v3 fallisce su un chunk, LOCK il resto del turno su flash.
+        # Sacrifichiamo espressività v3 su chunk 1+ per garantire coerenza
+        # timbrica dentro il turno. Meglio "tutto flash" di "misto".
+        # Rimane naturale la variazione tra TURNI diversi (nuovo turno =
+        # nuovo tentativo v3, se riesce restiamo su v3 per tutto quel turno).
+        turn_tts_state: Dict[str, Any] = {"locked_flash": False, "reason": None}
         ttft_logged = False
         first_audio_logged = False
         current_tone = "warm"
@@ -9966,7 +9979,20 @@ async def _fast_pipeline_task(
                 # qualità emotiva "un mondo di differenza". Per un companion
                 # è il tradeoff giusto. Su frasi corte siamo 487ms vs 241ms;
                 # su frasi lunghe 424ms vs 398ms (~zero differenza).
-                model_id = "eleven_v3"
+                # === FIX 2026-07-24 v60.5 — model lock per-turno ===
+                # Se v3 è già fallito una volta in questo turno,
+                # `turn_tts_state["locked_flash"]` è True: saltiamo v3
+                # direttamente su flash per garantire coerenza timbrica
+                # tra chunk 0 e chunk 1+. Vedi commento su turn_tts_state
+                # per la motivazione dettagliata.
+                if turn_tts_state.get("locked_flash"):
+                    model_id = "eleven_flash_v2_5"
+                    logger.info(
+                        f"[fast {session_id[:8]}] TTS idx={idx} model=flash "
+                        f"(locked_this_turn reason={turn_tts_state.get('reason')})"
+                    )
+                else:
+                    model_id = "eleven_v3"
 
                 def _do_tts():
                     audio = bytearray()
@@ -10077,7 +10103,21 @@ async def _fast_pipeline_task(
                     if not audio and model_id == "eleven_v3":
                         logger.warning(
                             f"[fast {session_id[:8]}] v3 empty for idx={idx} "
-                            f"chars={len(clean_tts)} — fallback to flash"
+                            f"chars={len(clean_tts)} — fallback to flash "
+                            f"AND locking flash for rest of turn (v60.5)"
+                        )
+                        # === FIX 2026-07-24 v60.5 — lock flash per resto turno ===
+                        # v3 è fallito su questo chunk. Da questo momento
+                        # in poi, TUTTI i chunk successivi dello stesso
+                        # turno usano flash direttamente (skip v3). Motivo:
+                        # se v3 fallisce ora e riuscisse su un chunk più
+                        # lungo dopo, l'utente sente un cambio di motore
+                        # timbrico a metà risposta ("prima grezza, seconda
+                        # limpida" — Fabio report 24/07). Meglio coerente
+                        # a bassa qualità che incoerente ad alta.
+                        turn_tts_state["locked_flash"] = True
+                        turn_tts_state["reason"] = (
+                            f"v3_empty_on_idx_{idx}_chars_{len(clean_tts)}"
                         )
                         fallback_kwargs = dict(
                             text=clean_tts,  # senza tag v3

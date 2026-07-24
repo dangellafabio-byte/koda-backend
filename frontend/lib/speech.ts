@@ -2181,6 +2181,17 @@ export async function voiceStreamConverse(opts: {
         voice_text: meta.voice_text ?? null,
         tone: (meta.tone as Tone) ?? null,
         actions: Array.isArray(meta.actions) ? meta.actions : [],
+        // === FIX 2026-07-24 v60.5 — close_session regression fix ===
+        // Il refactor Fase B (voiceClientStt.ts, 23/07) ha copiato
+        // questo onMeta dal path Deepgram/HTTP ma ha dimenticato di
+        // propagare `close_session`. Effetto: la logica backend di
+        // "chiusura automatica su saluti di commiato" (ci sentiamo
+        // dopo, buonanotte, arrivederci Koda, vado a letto, ...)
+        // funzionava perfettamente MA il flag veniva scartato prima
+        // di raggiungere index.tsx → l'app restava attiva in loop
+        // registrazione anche dopo che l'utente aveva chiuso.
+        // Simmetrico col path HTTP (riga 1236 di questo file).
+        close_session: !!meta.close_session,
       };
       try { opts.onMeta?.(metaCaptured); } catch {}
     },
