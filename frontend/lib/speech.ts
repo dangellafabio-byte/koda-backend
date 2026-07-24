@@ -2269,9 +2269,32 @@ export async function voiceStreamConverse(opts: {
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const geo = require("./geolocation");
-      // Refresh silenzioso non bloccante (max ~1s su iPhone, ~1.5s Android).
-      // Se fallisce o il permesso non c'è, lascia la cache invariata.
-      try { await geo.refreshLocationSilent(); } catch {}
+      // === FIX 2026-07-24 v63.6 — CAUSA REALE BUG XIAOMI/HONOR MIUI ===
+      // Log Xiaomi 24/07 20:45 ha mostrato che questo await bloccava
+      // per 26 SECONDI (t+54s tap → t+80s session ref stored). Il
+      // commento originale ("max ~1s iPhone, ~1.5s Android") è
+      // sbagliato su MIUI/HyperOS: se il GPS ha fatto cold-start,
+      // `Location.getCurrentPositionAsync` senza timeout esplicito
+      // aspetta finché non trova segnale, che su MIUI con GPS a
+      // bassa priorità può arrivare a 30+ secondi. Risultato: il
+      // microfono si accendeva 26s dopo il tap → l'utente aveva
+      // già smesso di parlare → Google SpeechRecognizer emetteva
+      // `no-speech` → nessuna trascrizione → sessione vuota → HF
+      // loop ripartiva → identico ritardo.
+      //
+      // Fix: Promise.race con timeout 1500ms. Se il GPS non risponde
+      // in tempo, usiamo la cache esistente (popolata all'avvio o al
+      // turno precedente). NON blocchiamo mai più di 1.5s.
+      const refreshWithTimeout = Promise.race([
+        geo.refreshLocationSilent().catch(() => false),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1500)),
+      ]);
+      const geoT0 = Date.now();
+      try { await refreshWithTimeout; } catch {}
+      const geoElapsed = Date.now() - geoT0;
+      if (geoElapsed > 500) {
+        console.log(`[KODA_GEO] refresh SLOW: ${geoElapsed}ms (cap 1500ms)`);
+      }
       const cached = geo.getCachedLocation?.();
       if (cached && cached.city) {
         locCity = cached.city;

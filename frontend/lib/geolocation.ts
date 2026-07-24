@@ -87,13 +87,42 @@ export async function refreshLocationSilent(): Promise<boolean> {
     if (existing.status !== Location.PermissionStatus.GRANTED) {
       return false;
     }
-    const pos = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Balanced,
-    });
-    const places = await Location.reverseGeocodeAsync({
-      latitude: pos.coords.latitude,
-      longitude: pos.coords.longitude,
-    });
+    // === FIX 2026-07-24 v63.6 — timeout interno GPS Xiaomi/Honor ===
+    // Su MIUI/HyperOS, `Location.getCurrentPositionAsync` senza timeout
+    // può bloccare 30+ secondi quando il GPS fa cold-start (bassa
+    // priorità di sistema). Aggiungiamo un timeout esplicito di 1200ms:
+    // se non abbiamo un fix in quel tempo, usiamo l'ultima posizione
+    // conosciuta (getLastKnownPositionAsync) come fallback. Se anche
+    // quello fallisce, ritorniamo false e il caller usa la cache.
+    let pos: Location.LocationObject | null = null;
+    try {
+      pos = await Promise.race<Location.LocationObject | null>([
+        Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200)),
+      ]);
+    } catch {
+      pos = null;
+    }
+    if (!pos) {
+      // Fallback: ultima posizione nota (istantaneo, non richiede GPS fix).
+      try {
+        pos = await Location.getLastKnownPositionAsync({
+          maxAge: 5 * 60 * 1000, // fino a 5 minuti fa
+        });
+      } catch {
+        pos = null;
+      }
+    }
+    if (!pos) return false;
+    const places = await Promise.race<Location.LocationGeocodedAddress[] | null>([
+      Location.reverseGeocodeAsync({
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 800)),
+    ]);
     if (!places || places.length === 0) return false;
     const p = places[0];
     const city =
