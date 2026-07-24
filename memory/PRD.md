@@ -1,5 +1,28 @@
 # Taccuino Vivo — Product Requirements Document
 
+## ⚠️ Policy bloccanti da leggere PRIMA di toccare aree sensibili
+
+Prima di lavorare su queste aree, l'agent DEVE leggere il documento di policy corrispondente:
+
+- **Paywall / Freemium / Subscription gate** → `/app/memory/PAYWALL_POLICY.md`
+  - Requisito bloccante: whitelist "unlimited users" server-side via env var
+    `KODA_UNLIMITED_USERS`. Owner Fabio + sua compagna + beta tester devono
+    restare sempre illimitati, altrimenti Fabio rischia di essere bloccato
+    dalla sua stessa app durante i test. NON implementare paywall senza
+    prima leggere quel doc.
+- **Audio robustness / Bug 560557684 / AudioSession iOS** → `/app/memory/AUDIO_ROBUSTNESS_PLAN.md`
+  - Storia bug + fix v60.4 + telemetria `[AUDIO_ZOMBIE_RECOVERY]` in
+    produzione. Non toccare senza aver capito il quadro (Fase B ha
+    cambiato il perimetro).
+- **Stanza dello Sfogo / Zero-knowledge / Privacy** → `V1_SPEC.md` +
+  `KODA_FULL_PACKAGE.md`. Modalità "Lascia andare" NON deve mai chiamare
+  network/STT/backend. Guardia presente in `app/frontend/app/lascia-andare.tsx`.
+
+Checkpoint stabile corrente: **`v60.4-stable`** su `koda-backend/main`
+(tag annotated, ripristinabile con `git checkout v60.4-stable`).
+
+---
+
 ## Vision
 Un **micro-assistente di quartiere digitale** voice-first, che vive in una **timeline unica** dove la vita scorre. Non una chat. Una **presenza calma, empatica, che ti conosce**, che ti aiuta a tenere insieme soldi, tempo, impegni e — quando serve — a sentirti meno solo.
 
@@ -199,6 +222,15 @@ Stato Block E verificato e completato.
 - P0: Push su GitHub + deploy backend su Railway (per attivare Block E) → poi richiesta build iOS a support@emergent.sh.
 - P1: Validazione Apple Login (solo su build TestFlight reale).
 - P2: Riattivare paywall RevenueCat (ora disattivato per test).
+  - ⚠️ **VINCOLO OWNER (Fabio 2026-07-23)**: prima di scrivere anche una riga
+    di codice paywall, leggere `/app/memory/PAYWALL_POLICY.md`. Contiene la
+    lista dei requisiti bloccanti (whitelist unlimited server-side, env var
+    override in dev, log `[PAYWALL_BYPASS]`, backend-only source of truth).
+    Fabio ha richiesto esplicitamente che il suo account (e quello della
+    compagna, e eventuali beta tester) resti sempre illimitato — la lista
+    va compilata via env var `KODA_UNLIMITED_USERS` PRIMA che il paywall
+    diventi live in produzione. Testare owner-bypass con 50+ turni prima
+    di considerare fatto il feature.
 - P2/P3: Refactor monoliti `server.py` (~7000 righe) e `index.tsx` (~5700 righe).
 
 
