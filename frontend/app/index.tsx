@@ -61,7 +61,10 @@ import {
 } from "../lib/localCache";
 import Constants from "expo-constants";
 import * as Updates from "expo-updates";
-import { BUILD_VERSION, BUILD_NOTES } from "../lib/buildInfo";
+// import { BUILD_VERSION, BUILD_NOTES } from "../lib/buildInfo";
+// ↑ Rimosso dall'UI Impostazioni pre-lancio (2026-07-24): il changelog
+//   tecnico non deve trapelare in produzione. buildInfo.ts resta come
+//   file di riferimento interno per debug/log, ma non è più renderizzato.
 import FortezzaCloseEffect from "../components/FortezzaCloseEffect";
 import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
@@ -1065,6 +1068,24 @@ export default function Taccuino() {
           }
           if (p.settings?.tts_voice_id) {
             setDefaultVoiceId(p.settings.tts_voice_id);
+            // === SYNC ai_gender ← voce (2026-07-24 pre-lancio) ===
+            // Rimosso il selettore esplicito "Koda è…" dalle Impostazioni:
+            // il genere grammaticale di Koda è determinato univocamente
+            // dalla voce scelta. Se il profilo ha ai_gender desincronizzato
+            // (edge case: profilo migrato o cambio voce lato server), lo
+            // riallineiamo silenziosamente qui al boot.
+            //   Cielo (POuqf…Px7) → f
+            //   Vento (ll9WG…MD6g) → m
+            try {
+              const vid = String(p.settings.tts_voice_id || "");
+              const derivedGender =
+                vid === "POuqf18evoXOKIqV2Px7" ? "f"
+                : vid === "ll9WG7PDTuyHwgC5MD6g" ? "m"
+                : null;
+              if (derivedGender && p.ai_gender !== derivedGender) {
+                api.updateProfile({ ai_gender: derivedGender }).catch(() => {});
+              }
+            } catch {}
             // FILLER RIMOSSO (giugno 2026 v6): niente più preload pool —
             // la prima frase reale arriva in ~1.5-2s, basta lo stato
             // visuale dell'orb durante l'attesa.
@@ -5332,43 +5353,17 @@ export default function Taccuino() {
               </View>
             </View>
 
-            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8 }]}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>{profile?.ai_name || "Coda"} è…</Text>
-                <Text style={styles.settingHint}>
-                  Definisce come si esprime di sé (es. &quot;sono qui per te&quot; maschile o femminile).
-                </Text>
-              </View>
-              <View style={{ flexDirection: "row", gap: 8 }}>
-                {([
-                  { id: "f", label: "Femmina" },
-                  { id: "m", label: "Maschio" },
-                  { id: "n", label: "Neutro" },
-                ] as const).map((opt) => {
-                  const active = (profile?.ai_gender || "f") === opt.id;
-                  return (
-                    <TouchableOpacity
-                      key={opt.id}
-                      onPress={async () => {
-                        if (!profile) return;
-                        setProfile({ ...profile, ai_gender: opt.id });
-                        try {
-                          await api.updateProfile({ ai_gender: opt.id });
-                        } catch {}
-                      }}
-                      style={[
-                        styles.modeBtn,
-                        active && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
-                      ]}
-                    >
-                      <Text style={[styles.modeBtnText, active && { color: bubbleAccent.color, fontWeight: "700" }]}>
-                        {opt.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
+            {/* === "Koda è…" (ai_gender) — RIMOSSO 2026-07-24 pre-lancio ===
+                Prima qui c'era un selettore esplicito Femmina/Maschio/Neutro
+                per il genere grammaticale di Koda. Ridondante: durante
+                l'onboarding l'utente sceglie GIÀ la voce (Cielo=femminile,
+                Vento=maschile), e il codice mappa la voce a ai_gender
+                automaticamente (KodaIntro.tsx). Chiedere due scelte separate
+                per la stessa cosa creava confusione ai primi utenti.
+                Il valore ai_gender resta nel profilo, viene solo derivato
+                automaticamente dalla voce, non più esposto in Impostazioni.
+                (Un'eventuale opzione "Neutro" avanzata sarà aggiunta come
+                impostazione nascosta se richiesto — non ora.) */}
 
             <View style={styles.divider} />
             <Text style={styles.settingsSubtitle}>Comportamento</Text>
@@ -5919,12 +5914,13 @@ export default function Taccuino() {
               </Text>
             </View>
 
-            {/* === DIAGNOSTICA (sprint v12) ===
-                Schermata di debug accessibile direttamente da iPhone.
-                Permette di vedere/copiare/condividere gli ultimi log
-                [KODA_VAD], [KODA_TIMING], [KODA_SUMMARY] senza bisogno
-                di Mac + Console.app. Critico per la diagnosi del VAD
-                quando l'utente testa su TestFlight. */}
+            {/* === AIUTO / SEGNALA UN PROBLEMA (2026-07-24 pre-lancio) ===
+                Reframing del vecchio bottone "Diagnostica" — stessa funzione
+                tecnica sotto (raccolta log [KODA_VAD] [KODA_TIMING]
+                [KODA_SUMMARY] + copia/condividi) ma presentata in modo
+                comprensibile per l'utente finale. Così anche dopo il lancio
+                continuiamo a ricevere diagnosi utili dagli utenti reali
+                che incontrano un problema. */}
             <TouchableOpacity
               style={{
                 marginTop: 16,
@@ -5940,12 +5936,18 @@ export default function Taccuino() {
                 closeSettings();
                 setTimeout(() => router.push("/diagnostics"), 200);
               }}
+              testID="report-problem-btn"
             >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                <Ionicons name="bug-outline" size={18} color={theme.text + "99"} />
-                <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500" }}>
-                  Diagnostica
-                </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+                <Ionicons name="help-buoy-outline" size={18} color={theme.text + "99"} />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500" }}>
+                    Hai un problema? Segnala
+                  </Text>
+                  <Text style={{ color: theme.text + "66", fontSize: 11, marginTop: 2 }}>
+                    Raccoglie un piccolo diario tecnico da inviarci per capire cos&apos;è successo.
+                  </Text>
+                </View>
               </View>
               <Ionicons name="chevron-forward" size={16} color={theme.text + "66"} />
             </TouchableOpacity>
@@ -5972,24 +5974,16 @@ export default function Taccuino() {
               Reset completo: profilo, taccuino e ogni ricordo.
             </Text>
 
-            {/* === VERSIONE APP ===
-                Footer minimale (senza expo-application per evitare
-                crash su build che non l'avevano linkato nativamente).
-                Mostra versione semantica + timestamp del bundle JS
-                (utile per verificare a colpo d'occhio se il device
-                ha scaricato l'ultimo OTA o sta usando un bundle vecchio). */}
+            {/* === VERSIONE APP (pre-lancio 2026-07-24) ===
+                Footer minimale: solo versione semantica user-facing.
+                RIMOSSI (richiesta utente pre-lancio): `bundle BUILD_VERSION`,
+                `runtime`, `BUILD_NOTES` — erano testi tecnici/changelog
+                che trapelavano in produzione. Un utente finale non deve
+                mai vedere note di commit o log di refactor interno.
+                Se serve identificare il bundle in debug, usare Diagnostica. */}
             <View style={{ alignItems: "center", marginTop: 24, marginBottom: 8 }}>
               <Text style={{ color: theme.text + "55", fontSize: 11, fontStyle: "italic" }}>
                 Koda v{Constants.expoConfig?.version || "1.0.1"}
-              </Text>
-              <Text style={{ color: theme.text + "40", fontSize: 10, fontFamily: Platform.OS === "ios" ? "Courier" : "monospace", marginTop: 4 }}>
-                bundle {BUILD_VERSION}
-              </Text>
-              <Text style={{ color: theme.text + "40", fontSize: 10, fontFamily: Platform.OS === "ios" ? "Courier" : "monospace", marginTop: 2 }}>
-                runtime {String((Constants.expoConfig as any)?.runtimeVersion ?? (Constants as any)?.manifest2?.runtimeVersion ?? "?")}
-              </Text>
-              <Text style={{ color: theme.text + "30", fontSize: 9, marginTop: 2, textAlign: "center", paddingHorizontal: 24 }} numberOfLines={2}>
-                {BUILD_NOTES}
               </Text>
             </View>
 </>)}
@@ -7091,7 +7085,13 @@ const makeStyles = (t: any) => StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 10,
     paddingHorizontal: 10,
-    backgroundColor: "rgba(15, 23, 42, 0.92)",
+    // === FIX OVERLAP MESSAGGIO/INPUT (2026-07-24 pre-lancio) ===
+    // Prima: rgba(15,23,42,0.92) — 92% opaco → l'ultima bolla utente
+    // scorrendo dietro il campo restava leggermente visibile e "toccava"
+    // il placeholder "Scrivi qui..." creando un fastidioso overlap.
+    // Ora: bg TOTALMENTE OPACO → nessuna trasparenza residua, il testo
+    // dell'ultima bolla non traspare più mai dietro l'input bar.
+    backgroundColor: "rgb(15, 23, 42)",
     borderRadius: 28,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.10)",

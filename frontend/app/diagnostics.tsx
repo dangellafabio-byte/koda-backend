@@ -50,7 +50,7 @@ export default function DiagnosticsScreen() {
     try {
       const txt = formatDiagEventsForExport(events);
       await Clipboard.setStringAsync(txt);
-      Alert.alert("Copiato", `${events.length} eventi copiati negli appunti. Ora incollali pure nella chat o email.`);
+      Alert.alert("Copiato", `Diario tecnico copiato (${events.length} eventi). Ora incollalo nella chat o email al supporto.`);
     } catch (e) {
       Alert.alert("Errore copia", String(e));
     }
@@ -70,12 +70,12 @@ export default function DiagnosticsScreen() {
 
   const handleClear = useCallback(() => {
     Alert.alert(
-      "Pulire il buffer?",
-      "Cancellerà tutti gli eventi catturati finora. Utile prima di riprodurre un bug specifico per avere log puliti.",
+      "Svuotare il diario?",
+      "Cancella tutti gli eventi tecnici raccolti finora. Utile se vuoi riprovare a riprodurre un problema specifico partendo da un diario pulito.",
       [
         { text: "Annulla", style: "cancel" },
         {
-          text: "Pulisci",
+          text: "Svuota",
           style: "destructive",
           onPress: () => {
             clearDiagEvents();
@@ -92,16 +92,21 @@ export default function DiagnosticsScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} hitSlop={12}>
           <Ionicons name="chevron-back" size={24} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.title}>Diagnostica</Text>
+        {/* === TITOLO USER-FRIENDLY (2026-07-24 pre-lancio) ===
+            "Diagnostica" → "Segnala un problema". Stessa funzione tecnica
+            sotto, framing comprensibile per utenti non tecnici. */}
+        <Text style={styles.title}>Segnala un problema</Text>
         <View style={{ width: 24 }} />
       </View>
 
       <View style={styles.statsBar}>
         <Text style={styles.statsText}>
-          {events.length} evento{events.length === 1 ? "" : "i"} catturati
+          {events.length === 0
+            ? "Diario tecnico vuoto"
+            : `Diario tecnico: ${events.length} event${events.length === 1 ? "o" : "i"}`}
         </Text>
         <Text style={styles.statsTextDim}>
-          Cattura: [KODA_VAD] [KODA_TIMING] [KODA_SUMMARY]
+          Riproduci il problema, poi tocca "Condividi" per inviarcelo.
         </Text>
       </View>
 
@@ -112,7 +117,7 @@ export default function DiagnosticsScreen() {
       >
         {events.length === 0 ? (
           <Text style={styles.emptyText}>
-            Nessun evento catturato.{"\n\n"}Apri il microfono o fai una conversazione, poi torna qui per vedere i log.
+            Nessun evento nel diario.{"\n\n"}Riproduci il problema che vuoi segnalarci (parla con Koda, prova la funzione che non va), poi torna qui e tocca "Condividi" per inviarci il diario.
           </Text>
         ) : (
           events.map((ev, i) => (
@@ -146,7 +151,7 @@ export default function DiagnosticsScreen() {
         </TouchableOpacity>
         <TouchableOpacity style={[styles.actionBtn, styles.dangerBtn]} onPress={handleClear}>
           <Ionicons name="trash-outline" size={18} color="#ff8a8a" />
-          <Text style={[styles.actionLabel, { color: "#ff8a8a" }]}>Pulisci</Text>
+          <Text style={[styles.actionLabel, { color: "#ff8a8a" }]}>Svuota</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>

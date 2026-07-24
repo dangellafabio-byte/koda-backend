@@ -189,7 +189,15 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
 
   // Stato dei dati raccolti
   const [userName, setUserName] = useState("");
-  const [userGender, setUserGender] = useState<GenderUser>("m");
+  // === FIX PRE-SELEZIONE GENERE (2026-07-24 pre-lancio) ===
+  // Prima: useState<GenderUser>("m") → "Sono un uomo" appariva pre-selezionato
+  //   di default con bordo evidenziato. Rischio: l'utente premeva Continua
+  //   senza notare la scelta pre-fatta al posto suo.
+  // Ora: `null` iniziale → nessuna opzione pre-selezionata, forziamo scelta
+  //   attiva. Il tap su una qualsiasi delle 3 opzioni avanza subito lo step
+  //   (vedi case 2 di renderStep), quindi non serve un bottone "Continua"
+  //   separato: l'utente NON può proseguire senza aver deciso.
+  const [userGender, setUserGender] = useState<GenderUser | null>(null);
   const [aiName, setAiName] = useState("Koda");
   const [aiGender, setAiGender] = useState<GenderAi>("f");
   const [checkinMode, setCheckinMode] = useState<CheckinMode>("off");
@@ -555,10 +563,17 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
     if (submitting) return;
     setSubmitting(true);
     try {
+      // === SAFETY NET userGender (2026-07-24 pre-lancio) ===
+      // userGender ora parte da `null` per NON pre-selezionare "Uomo".
+      // Il tap sulle 3 opzioni avanza subito lo step, quindi in pratica
+      // arrivare qui con `null` è impossibile. Se succede (edge case:
+      // skip programmatico) fallback a "x" (preferisco non specificarlo),
+      // che è la scelta più neutra e rispettosa.
+      const finalUserGender: GenderUser = userGender ?? "x";
       // 1. Save profile basics
       const patch: any = {
         user_name: userName.trim() || "Amico",
-        user_gender: userGender,
+        user_gender: finalUserGender,
         ai_name: aiName.trim() || "Koda",
         ai_gender: aiGender,
         // koda_voice ('aria' chiara/limpida o 'echo' profonda/avvolgente).
@@ -605,7 +620,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       // 3. Done
       onDone({
         user_name: userName.trim() || "Amico",
-        user_gender: userGender,
+        user_gender: finalUserGender,
         ai_name: aiName.trim() || "Koda",
         ai_gender: aiGender,
         tts_voice_id: patch.settings?.tts_voice_id,
