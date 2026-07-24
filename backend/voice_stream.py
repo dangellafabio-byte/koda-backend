@@ -1310,16 +1310,25 @@ async def voice_stream_handler(
         location_city = _clip(start_req.get("location_city"))
         location_region = _clip(start_req.get("location_region"))
         location_country = _clip(start_req.get("location_country"))
-        # === FASE B 2026-07-23 — STT ON-DEVICE APPLE (feature flag client-side) ===
-        # Il client (Fase B, iOS) può passare stt_source="client_apple" per
-        # segnalare che la trascrizione viene fatta ON-DEVICE via
-        # SFSpeechRecognizer, e che NON invierà audio binario. Il backend deve:
+        # === FASE B 2026-07-23 — STT ON-DEVICE (feature flag client-side) ===
+        # Il client (Fase B) può passare stt_source per segnalare che la
+        # trascrizione avviene ON-DEVICE, e che NON invierà audio binario.
+        # Il backend deve:
         #   1. Saltare la connessione a Deepgram
         #   2. Aspettare un messaggio {type:"transcript_from_client", text, ...}
         #   3. Chiamare direttamente la pipeline LLM+TTS con quel testo
-        # Se stt_source non è "client_apple" (o assente) → percorso Deepgram
-        # standard (comportamento pre-Fase B). Costa zero: solo un ramo IF.
+        #
+        # Supporta:
+        #   - "client_apple"  (iOS, SFSpeechRecognizer) - 2026-07-23
+        #   - "client_google" (Android, Google SpeechRecognizer) - 2026-07-24
+        #     Opzione B: dopo diagnosi Huawei+Honor che ha confermato path
+        #     Deepgram+AAC strutturalmente rotto su Android. Vedi
+        #     /app/memory/ANDROID_STT_DIAGNOSIS.md
+        #
+        # Se stt_source non è in questa lista → percorso Deepgram standard
+        # (comportamento pre-Fase B, ora usato solo come fallback ultra-legacy).
         stt_source = (start_req.get("stt_source") or "deepgram").strip().lower()
+        _client_stt_sources = ("client_apple", "client_google")
         logger.info(
             f"[KODA_STREAM sess={short_id}] start lang={profile_lang} "
             f"ephemeral={ephemeral} container={container} "
@@ -1328,8 +1337,8 @@ async def voice_stream_handler(
             f"city={location_city!r} region={location_region!r} country={location_country!r}"
         )
 
-        # === RAMO FASE B — client STT on-device Apple ==================
-        if stt_source == "client_apple":
+        # === RAMO FASE B — client STT on-device (Apple o Google) ==================
+        if stt_source in _client_stt_sources:
             # Notifica readiness IMMEDIATAMENTE: il client sta già ascoltando
             # localmente, non ha bisogno di aspettare Deepgram.
             await emit_to_client({"type": "ready", "session_id": session_id})

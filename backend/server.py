@@ -9988,11 +9988,21 @@ async def _fast_pipeline_task(
         # affidabile a prescindere dal valore conf. Quindi SKIP totale del
         # blocco per stt_source apple.
         # NB: la confidence Apple viene comunque loggata per diagnostica.
-        _is_apple_stt = (stt_source or "").lower() == "apple_sfspeechrecognizer"
-        if _is_apple_stt:
+        # === OPZIONE B (2026-07-24) — esteso a Google SpeechRecognizer ===
+        # Anche Google SpeechRecognizer on-device Android ha filtri simili
+        # (noise reduction + AEC hardware). La confidence è pertanto
+        # inaffidabile anche lì, e skippiamo AUDIO_HONESTY nella stessa
+        # maniera. Vedi /app/memory/ANDROID_STT_DIAGNOSIS.md
+        _native_stt_engines = (
+            "apple_sfspeechrecognizer",
+            "google_speechrecognizer",
+        )
+        _is_native_stt = (stt_source or "").lower() in _native_stt_engines
+        if _is_native_stt:
             logger.info(
                 f"[fast {session_id[:8]}] AUDIO_HONESTY skipped: "
-                f"stt_source=apple (conf={stt_confidence} irrelevant on-device)"
+                f"stt_source={stt_source} (native on-device, "
+                f"conf={stt_confidence} irrelevant)"
             )
         elif stt_confidence is not None and stt_confidence < 0.7:
             sys_prompt = sys_prompt + (

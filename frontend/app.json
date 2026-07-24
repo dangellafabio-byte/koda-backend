@@ -78,7 +78,16 @@
         }
       ],
       "expo-asset",
-      "expo-speech-recognition"
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Koda ascolta la tua voce per rispondere.",
+          "speechRecognitionPermission": "Per trascrivere quello che dici a Koda.",
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox"
+          ]
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

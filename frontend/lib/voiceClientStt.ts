@@ -142,22 +142,40 @@ export class VoiceClientSttSession {
    * Verifica se questa sessione è UTILIZZABILE su questo device.
    * Chiamato prima di start() dal caller (speech.ts) per decidere fallback.
    * Se ritorna false, il caller deve usare VoiceStreamSession (Deepgram).
+   *
+   * === OPZIONE B (2026-07-24): PORTING ANDROID NATIVE ===
+   * Prima accettava solo iOS. Ora accetta anche Android via
+   * Google SpeechRecognizer on-device (stesso pacchetto expo-speech-recognition).
+   * Diagnosi log Huawei+Honor ha confermato che il path Deepgram AAC è
+   * strutturalmente rotto su Android (probe=? / probe=aac ma trascrizione
+   * vuota) — bypassare Deepgram è ormai l'unica strada realistica.
+   * Vedi /app/memory/ANDROID_STT_DIAGNOSIS.md per la diagnosi completa.
    */
   static async isSupported(): Promise<{
     supported: boolean;
     reason?: string;
   }> {
-    if (Platform.OS !== "ios") {
-      return { supported: false, reason: "platform_not_ios" };
+    if (Platform.OS !== "ios" && Platform.OS !== "android") {
+      return { supported: false, reason: "platform_not_mobile" };
     }
     try {
-      const ondev = ExpoSpeechRecognitionModule.supportsOnDeviceRecognition();
-      if (!ondev) {
-        return { supported: false, reason: "no_ondevice_it" };
-      }
       const avail = ExpoSpeechRecognitionModule.isRecognitionAvailable();
       if (!avail) {
         return { supported: false, reason: "recognition_unavailable" };
+      }
+      // iOS: preferiamo on-device (offline, no latenza cloud, privacy).
+      //   Se non c'è on-device disponibile per italiano, fallback a Deepgram.
+      // Android: on-device NON è sempre disponibile prima di Android 12+
+      //   (Google Assistant offline pack). Accettiamo comunque se
+      //   isRecognitionAvailable=true, perché Google SpeechRecognizer online
+      //   è già molto meglio del path Deepgram+AAC attuale (che è ROTTO).
+      //   L'utente potrebbe consumare data mobile per lo STT online, ma è
+      //   l'unica cosa che funziona finché non ci sono modelli offline.
+      if (Platform.OS === "ios") {
+        const ondev = ExpoSpeechRecognitionModule.supportsOnDeviceRecognition();
+        if (!ondev) {
+          return { supported: false, reason: "no_ondevice_it" };
+        }
       }
       return { supported: true };
     } catch (e: any) {
@@ -191,8 +209,12 @@ export class VoiceClientSttSession {
     locationRegion?: string;
     locationCountry?: string;
   }): Promise<void> {
-    if (Platform.OS !== "ios") {
-      throw new Error("client_stt_ios_only");
+    // === OPZIONE B (2026-07-24): PORTING ANDROID NATIVE ===
+    // Prima accettava solo iOS. Ora accetta Android tramite Google
+    // SpeechRecognizer on-device (o cloud fallback). Vedi commento su
+    // isSupported() e /app/memory/ANDROID_STT_DIAGNOSIS.md
+    if (Platform.OS !== "ios" && Platform.OS !== "android") {
+      throw new Error("client_stt_mobile_only");
     }
     this.startedAt = Date.now();
     this.stopRequested = false;
@@ -285,13 +307,16 @@ export class VoiceClientSttSession {
     await this.openWs(url);
 
     // 5) Frame start → dice al backend: NON aspettare audio binario, aspettare
-    //    invece un transcript_from_client. Nuovo campo: stt_source="client_apple".
+    //    invece un transcript_from_client. Nuovo campo: stt_source dinamico
+    //    per platform. Backend voice_stream.py accetta entrambe le varianti.
+    const sttSource =
+      Platform.OS === "ios" ? "client_apple" : "client_google";
     this.sendJson({
       type: "start",
       ephemeral: !!opts?.ephemeral,
       profile_lang: opts?.profileLang || "it",
       container: "text", // NON aac — backend sa che salta Deepgram
-      stt_source: "client_apple",
+      stt_source: sttSource,
       audio_route: this.audioRoute,
       location_city: opts?.locationCity || undefined,
       location_region: opts?.locationRegion || undefined,
@@ -415,24 +440,38 @@ export class VoiceClientSttSession {
       }
     });
 
-    // Start SFSpeechRecognizer
+    // Start SpeechRecognizer (Apple SFSpeechRecognizer su iOS,
+    // Google SpeechRecognizer su Android)
     try {
-      ExpoSpeechRecognitionModule.start({
+      // === OPZIONE B (2026-07-24) — config platform-specific ===
+      // iOS: preferiamo on-device (offline, latenza minima, privacy).
+      //   iosCategory: playAndRecord + defaultToSpeaker per garantire
+      //   che il mic sia attivo senza spegnere il TTS che parte dopo.
+      // Android: `requiresOnDeviceRecognition` è opzionale (funziona da
+      //   Android 12+ con Google Assistant offline pack). Su device più
+      //   vecchi cade automaticamente su cloud recognition (usa data).
+      //   `iosCategory` viene ignorato ma lo omettiamo per pulizia.
+      //   `androidRecognitionServicePackage` non lo forziamo: il default
+      //   di sistema (Google) è quello che vogliamo.
+      const startOpts: any = {
         lang,
         interimResults: true,
         continuous: false,
         maxAlternatives: 1,
-        requiresOnDeviceRecognition: true,
         addsPunctuation: true,
-        // iOS: configuriamo la category audio session per non conflitto con
-        // il plugin .voiceChat esistente. Usiamo .playAndRecord + mode
-        // .measurement (best per STT su iOS senza toccare AEC/AGC).
-        iosCategory: {
+        // On-device: preferito su entrambe, ma richiesto SOLO su iOS
+        // (dove abbiamo già verificato in isSupported()). Su Android
+        // lasciamo che il sistema decida (potrebbe non essercelo).
+        requiresOnDeviceRecognition: Platform.OS === "ios",
+      };
+      if (Platform.OS === "ios") {
+        startOpts.iosCategory = {
           category: "playAndRecord",
           categoryOptions: ["defaultToSpeaker", "allowBluetooth"],
           mode: "measurement",
-        },
-      });
+        };
+      }
+      ExpoSpeechRecognitionModule.start(startOpts);
       console.log(`[${TAG}] ExpoSpeechRecognitionModule.start() OK`);
     } catch (e: any) {
       console.log(`[${TAG}] start() FAILED: ${e?.message || e}`);
@@ -497,7 +536,14 @@ export class VoiceClientSttSession {
         duration_ms: durMs,
         lang: "it-IT",
         route: this.audioRoute,
-        stt_engine: "apple_sfspeechrecognizer",
+        // === OPZIONE B (2026-07-24) — engine dinamico per platform ===
+        // Backend usa questo campo per skippare AUDIO_HONESTY (STT on-device
+        // ha già filtro acustico HW, la confidence è irrelevante). Google
+        // SpeechRecognizer on-device Android è affidabile quanto Apple.
+        stt_engine:
+          Platform.OS === "ios"
+            ? "apple_sfspeechrecognizer"
+            : "google_speechrecognizer",
       });
     } catch (e: any) {
       console.log(`[${TAG}] sendJson(transcript_from_client) FAILED: ${e?.message || e}`);

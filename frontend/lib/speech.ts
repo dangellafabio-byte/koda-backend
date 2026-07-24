@@ -2015,14 +2015,18 @@ export async function voiceStreamConverse(opts: {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { VoiceStreamSession } = require("./voiceStream");
 
-  // === FASE B — STT ON-DEVICE APPLE (feature flag) ===
-  // Se EXPO_PUBLIC_USE_CLIENT_STT=true E la piattaforma supporta
-  // SFSpeechRecognizer on-device per italiano, usiamo la sessione client-side
-  // (voiceClientStt.ts). Altrimenti fallback automatico al percorso Deepgram
-  // (voiceStream.ts, comportamento pre-Fase B).
+  // === FASE B — STT ON-DEVICE (feature flag) ===
+  // Se EXPO_PUBLIC_USE_CLIENT_STT=true E la piattaforma supporta STT
+  // on-device, usiamo la sessione client-side (voiceClientStt.ts):
+  //   - iOS: SFSpeechRecognizer on-device (2026-07-23, italiano supportato)
+  //   - Android: Google SpeechRecognizer (2026-07-24, Opzione B, on-device
+  //     su Android 12+ o cloud fallback su OS più vecchi)
+  // Altrimenti fallback automatico al percorso Deepgram (voiceStream.ts,
+  // comportamento pre-Fase B — usato solo come safety net legacy).
   const useClientStt = process.env.EXPO_PUBLIC_USE_CLIENT_STT === "true";
   let SessionCtor: any = VoiceStreamSession;
-  let sttSource: "apple" | "deepgram" = "deepgram";
+  let sttSource: "native" | "deepgram" = "deepgram";
+  let sttEngine = "deepgram";
   if (useClientStt) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -2030,16 +2034,20 @@ export async function voiceStreamConverse(opts: {
       const support = await VoiceClientSttSession.isSupported();
       if (support.supported) {
         SessionCtor = VoiceClientSttSession;
-        sttSource = "apple";
-        console.log(`[KODA_STT_SOURCE] engine=apple lang=it-IT ondev=true`);
+        sttSource = "native";
+        sttEngine =
+          Platform.OS === "ios" ? "apple_sfspeechrecognizer" : "google_speechrecognizer";
+        console.log(
+          `[KODA_STT_SOURCE] engine=${sttEngine} platform=${Platform.OS} ondev=true`
+        );
       } else {
         console.log(
-          `[KODA_STT_SOURCE] engine=deepgram (fallback, apple unsupported: ${support.reason})`
+          `[KODA_STT_SOURCE] engine=deepgram (fallback, native unsupported: ${support.reason})`
         );
       }
     } catch (e: any) {
       console.log(
-        `[KODA_STT_SOURCE] engine=deepgram (fallback, apple probe failed: ${e?.message || e})`
+        `[KODA_STT_SOURCE] engine=deepgram (fallback, native probe failed: ${e?.message || e})`
       );
     }
   } else {
