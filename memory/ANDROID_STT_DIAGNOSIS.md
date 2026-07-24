@@ -16,35 +16,48 @@ Apple SFSpeechRecognizer on-device), che bypassa Deepgram completamente.
 
 ---
 
-## Evidenza — Log Honor (2026-07-24)
+## Evidenza — Log Honor (2026-07-24T16:29)
+
+**Confermato: bug identico a Huawei, quindi baseline Android, NON EMUI-specifico.**
 
 ```
 [KODA_STT_SOURCE] engine=deepgram (fallback, apple unsupported: platform_not_ios)
-[KODA_STREAM_CLIENT] audio_route detected → builtin
+[KODA_STREAM_CLIENT] audio_route detected → builtin (device: LLY-LX1 = Honor)
 [KODA_STT_BITRATE_CHECK] platform=android bitrate=64000 sampleRate=16000
   expected_android=64000 expected_ios=32000
-[KODA_STREAM_CLIENT] chunk #1 recording, wait 3000ms...
-[KODA_STREAM_CLIENT_CHUNK] idx=1 size=24504B record_dur=3181ms read=2ms send=7ms
-[KODA_STREAM_CLIENT] stt_final text=[DIAG probe=aac/16000/1ch/64000
-  rms=-27.9 peak=-15.1 route=b... conf=null dur=nullms
+[KODA_STREAM_CLIENT_CHUNK] idx=1 size=26840B record_dur=3644ms read=5ms send=25ms
+[KODA_STREAM_CLIENT] stt_final text=[DIAG probe=? rms=-40.5 peak=-18.8
+  route=builtin gain_max=1... conf=null dur=nullms
+[KODA_STREAM_CLIENT] sentence_header i=0 text="Mi è sfuggito, come dicevi?"
+  ← fallback AI reply (non ha capito la trascrizione)
 ```
 
-**Cosa funziona:**
-- Mic permission granted
-- Audio route detection (builtin microphone)
-- WS opens in 653ms
-- AAC chunk recorded 24504B in 3181ms
-- WS send OK (7ms)
-- RMS -27.9 dB, peak -15.1 dB (livelli audio validi)
-- Bitrate 64000, sampleRate 16000, 1ch (parametri corretti come da config)
+**Comparazione side-by-side Huawei vs Honor:**
 
-**Cosa NON funziona:**
-- Deepgram STT ritorna trascrizione vuota (`conf=null`)
-- Backend fallback → risposta è la DIAG probe echo, non una trascrizione reale
+| Voce | Huawei (test 1) | Honor (test 2) |
+|------|----------------|----------------|
+| STT engine | deepgram (Android) | deepgram (Android) |
+| Bitrate | 64000 | 64000 (identico) |
+| Sample rate | 16000 | 16000 (identico) |
+| Chunk size | 24504 B / 3181ms | 26840 B / 3644ms (simile) |
+| WS send | 7ms | 25ms (network fluctuation, non rilevante) |
+| RMS | -27.9 dB | -40.5 dB (mic Honor più silenzioso o gain diverso) |
+| `[DIAG probe=...]` | `aac/16000/1ch/64000` ← formato riconosciuto | **`?`** ← formato NON riconosciuto dal backend |
+| STT return | `[DIAG probe=aac/...]` | `[DIAG probe=?...]` |
 
-**Riprodotto anche con audio più forte** (RMS -16.2, peak -3.6 in test
-precedente Huawei) → stesso identico output DIAG probe. Esclude "audio
-troppo debole" come causa.
+**Nuova osservazione critica dall'Honor:** il backend probe torna `?` invece del formato — significa che ffprobe/mediainfo lato server NON riesce nemmeno a identificare il container del file AAC prodotto da Honor. **Peggio del caso Huawei**, dove almeno il formato veniva riconosciuto ma Deepgram non trascriveva.
+
+Questo aggiunge una sfumatura all'ipotesi tecnica:
+- Non è "solo" un problema di codec AAC compatibile con Deepgram
+- Alcuni device Android potrebbero produrre AAC malformato / senza header validi che neanche parser generici (ffprobe) riconoscono
+- Rende l'Opzione 2 ("fix formato AAC lato client") ancora più rischiosa: potresti fixarlo su un modello Android e rompersi su un altro
+
+## Conclusione rafforzata (2026-07-24)
+
+**Due device Android diversi (Huawei + Honor), stesso identico sintomo strutturale + variazione peggiorativa su Honor.** Definitivamente NON un problema hardware/OEM-specifico ma architetturale del path Deepgram+AAC su Android.
+
+**Raccomandazione più forte per Opzione B**: porting `expo-speech-recognition` native (Google SpeechRecognizer on-device) è ormai l'unica strada realistica. L'Opzione 2 (fix formato AAC) è potenzialmente un pozzo senza fondo con OEM diversi che producono AAC diversamente. Opzione 1 (porting nativo) risolve alla radice.
+
 
 ---
 
