@@ -596,37 +596,100 @@ export class VoiceClientSttSession {
       ExpoSpeechRecognitionModule.stop();
     } catch {}
 
-    // === FIX 2026-07-24 — Opzione B, Android audio session release ===
-    // BUG OSSERVATO su Honor: dopo stop() del Google SpeechRecognizer,
-    // l'audio session Android rimane in stato "record" (mic engaged).
-    // Quando il TTS arriva e forza audio mode a "playback", il playback
-    // parte ma esce MUTO perché Android silenzia l'output se la sessione
-    // è in conflitto con record. Su iOS il problema non si presenta
-    // (SFSpeechRecognizer gestisce meglio il release).
-    // Fix: force explicit `allowsRecording: false` su Android SUBITO dopo
-    // stop(), così l'OS libera il mic e lascia campo al playback TTS.
-    // Non-async per non bloccare il flusso; se fallisce, il TTS potrebbe
-    // uscire muto (rare edge case) ma senza cascading failures.
+    // === FIX 2026-07-25 v63.8 — TTS MUTO su Android/MIUI (Fix C1) ===
+    //
+    // PROBLEMA (screenshot Fabio 25/07 7:11):
+    //   STT funziona (Google SpeechRecognizer trascrive), Koda risponde
+    //   con TESTO corretto, ma la sua VOCE non esce dall'altoparlante.
+    //   Modalità testo chat → voce audibile. Modalità voce → voce muta.
+    //
+    // ROOT CAUSE:
+    //   Google SpeechRecognizer su Android, quando parte, richiede
+    //   AudioFocus con priorità AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+    //   (ducking). Quando finisce (stop() o naturale), NON rilascia
+    //   AudioFocus esplicitamente — resta detenuto lato app. Quando poi
+    //   ElevenLabs TTS tenta di suonare (via expo-audio createAudioPlayer),
+    //   Android AudioService vede che il nostro processo ha ancora
+    //   AudioFocus in modalità "may_duck" e silenzia lo stream media
+    //   (STREAM_MUSIC) fino a un vero release.
+    //
+    //   Il vecchio fix (v63.4 fire-and-forget setAudioModeAsync) cambiava
+    //   solo la MODE della session ma non toccava AudioFocus. Su iOS il
+    //   problema non si manifesta perché AVAudioSession gestisce
+    //   automaticamente il release quando la category cambia da
+    //   playAndRecord a playback.
+    //
+    // FIX C1 — Cycle esplicito deactivate → wait → reset mode → reactivate:
+    //   1. setIsAudioActiveAsync(false) → chiama abandonAudioFocus() nativo
+    //   2. Wait 150ms → Android AudioService rilascia effettivamente il focus
+    //   3. setAudioModeAsync(playback config)  → mode pulita per media
+    //   4. setIsAudioActiveAsync(true) → riacquisisce focus per STREAM_MUSIC
+    //
+    //   Il cycle aggiunge ~200ms di latenza a dispatchFinalToBackend, ma
+    //   questa funzione è async e non blocca la UI. Il TTS arriverà
+    //   comunque dopo 1-3s (backend deve fare LLM + primo TTS), quindi
+    //   il cycle finisce ampiamente prima che il primo player parta.
+    //
+    // NOTE:
+    //   - Solo Android. iOS lasciato al comportamento nativo che funziona.
+    //   - Await sul cycle (non fire-and-forget) così se TTS parte molto
+    //     veloce (edge case backend caldissimo) è comunque garantito
+    //     avere focus pulito.
+    //   - Ogni step in try/catch: se un passo fallisce, gli altri
+    //     provano comunque. Peggior caso: comportamento come prima
+    //     (TTS muto), mai peggio.
     if (Platform.OS === "android") {
-      // Dynamic import (non-blocking) — se expo-audio non è disponibile o
-      // setAudioModeAsync fallisce, il TTS potrebbe restare muto ma
-      // senza cascading failures. Fire-and-forget.
-      import("expo-audio").then((Audio) => {
-        if (Audio?.setAudioModeAsync) {
-          Audio.setAudioModeAsync({
-            allowsRecording: false,
-            playsInSilentMode: true,
-          } as any).catch((e: any) => {
-            console.log(
-              `[${TAG}] android audio release failed (non-fatal): ${e?.message || e}`
-            );
-          });
+      try {
+        const Audio: any = await import("expo-audio");
+        const t0 = Date.now();
+
+        // 1) Deactivate audio session — rilascia AudioFocus nativo
+        try {
+          if (typeof Audio.setIsAudioActiveAsync === "function") {
+            await Audio.setIsAudioActiveAsync(false);
+            console.log(`[${TAG}] audio focus release step1 (deactivate) ok`);
+          }
+        } catch (e: any) {
+          console.log(`[${TAG}] audio focus release step1 FAILED: ${e?.message || e}`);
         }
-      }).catch((e: any) => {
+
+        // 2) Wait 150ms — Android AudioService rilascia il focus asincrono
+        await new Promise((r) => setTimeout(r, 150));
+
+        // 3) Set playback mode (non più record) — matches TTS_PLAY setup
+        try {
+          if (typeof Audio.setAudioModeAsync === "function") {
+            await Audio.setAudioModeAsync({
+              allowsRecording: false,
+              playsInSilentMode: true,
+              interruptionMode: "doNotMix",
+              shouldRouteThroughEarpiece: false,
+              shouldPlayInBackground: false,
+            } as any);
+            console.log(`[${TAG}] audio focus release step3 (mode=playback) ok`);
+          }
+        } catch (e: any) {
+          console.log(`[${TAG}] audio focus release step3 FAILED: ${e?.message || e}`);
+        }
+
+        // 4) Reactivate audio session — riacquisisce focus per media
+        try {
+          if (typeof Audio.setIsAudioActiveAsync === "function") {
+            await Audio.setIsAudioActiveAsync(true);
+            console.log(`[${TAG}] audio focus release step4 (reactivate) ok`);
+          }
+        } catch (e: any) {
+          console.log(`[${TAG}] audio focus release step4 FAILED: ${e?.message || e}`);
+        }
+
         console.log(
-          `[${TAG}] android audio release skip (expo-audio unavailable): ${e?.message || e}`
+          `[${TAG}] android audio focus cycle done in ${Date.now() - t0}ms (Fix C1 v63.8)`
         );
-      });
+      } catch (e: any) {
+        console.log(
+          `[${TAG}] android audio focus cycle FAILED (non-fatal, TTS may be muted): ${e?.message || e}`
+        );
+      }
     }
   }
 
