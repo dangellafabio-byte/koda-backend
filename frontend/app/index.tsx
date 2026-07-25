@@ -396,9 +396,9 @@ export default function Taccuino() {
   // inglobato l'ultimo commit.
   useEffect(() => {
     console.log(
-      `[KODA_BUILDTAG] build-v64.1-final-cleanup v63.9-audio-and-breath-diag+railway-hardcoded+diag-card+ws-piggyback build=2026-07-26 ` +
+      `[KODA_BUILDTAG] build-v64.2-orb-sfogo-and-voice-sync v64.1-final-cleanup+railway-hardcoded+diag-card+ws-piggyback build=2026-07-26 ` +
         `verbose=${KODA_DEBUG_VERBOSE} ` +
-        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_CACHE_FIRST_V63_7,TTS_AUDIOFOCUS_CYCLE_V63_8_FIX_C1,PRE_STT_AUDIOFOCUS_CYCLE_V63_9_FIX_C2,BREATH_REENABLED_V64_0,TAP_TO_RESET_UNIFIED_V64_0,ANDROID_MIC_WATCHDOG_V64_0,ANDROID_STT_PRE_ABORT_V64_0,KEEP_AWAKE_STABLE_SESSION_V64_0,NEONBORDER_SLOW_ANDROID_V64_1,ANDROID_CONTINUOUS_NO_BEEP_V64_1,ANDROID_SILENCE_TIMEOUT_LONGER_V64_1,ANDROID_NOSPEECH_GRACEFUL_V64_1,PREVIEW_AUDIO_FOCUS_REACQUIRE_V64_1,INTRO_VOICE_PREVIEW_FOCUS_V64_1${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
+        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_CACHE_FIRST_V63_7,TTS_AUDIOFOCUS_CYCLE_V63_8_FIX_C1,PRE_STT_AUDIOFOCUS_CYCLE_V63_9_FIX_C2,BREATH_REENABLED_V64_0,TAP_TO_RESET_UNIFIED_V64_0,ANDROID_MIC_WATCHDOG_V64_0,ANDROID_STT_PRE_ABORT_V64_0,KEEP_AWAKE_STABLE_SESSION_V64_0,NEONBORDER_SLOW_ANDROID_V64_1,ANDROID_CONTINUOUS_NO_BEEP_V64_1,ANDROID_SILENCE_TIMEOUT_LONGER_V64_1,ANDROID_NOSPEECH_GRACEFUL_V64_1,PREVIEW_AUDIO_FOCUS_REACQUIRE_V64_1,INTRO_VOICE_PREVIEW_FOCUS_V64_1,LASCIA_ANDARE_ORB_ALWAYS_RECORDING_V64_2,VOICE_ID_KODA_VOICE_SYNC_V64_2${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
   }, []);
   const [textInput, setTextInput] = useState("");
@@ -4208,7 +4208,46 @@ export default function Taccuino() {
 
   const setVoice = async (voiceId: string) => {
     if (!profile) return;
-    const next = { ...profile, settings: { ...profile.settings, tts_voice_id: voiceId } };
+
+    // === FIX 2026-07-26 v64.1 — Sync koda_voice with voice choice ===
+    //
+    // PROBLEMA (Fabio 26/07 iPhone):
+    //   Utente cambia voce da femminile (Cielo) a maschile (Vento) in
+    //   Impostazioni. Il preview riproduce la voce nuova. MA nella
+    //   conversazione reale la voce resta Cielo (femminile). Su tutti
+    //   i device — non solo iPhone.
+    //
+    // ROOT CAUSE (server.py getMe migration):
+    //   Al prossimo GET /profile il server esegue una sync automatica:
+    //     canonical_vid = _resolve_voice_id(p)  # ← dipende SOLO da p.koda_voice
+    //     if p.settings.tts_voice_id != canonical_vid:
+    //         p.settings.tts_voice_id = canonical_vid   # ← SOVRASCRIVE!
+    //   Perché? Storicamente la fonte di verità era koda_voice (scelto in
+    //   onboarding, "lockato"). Il campo tts_voice_id doveva restarci
+    //   allineato. Cambiare solo tts_voice_id lato client viene "corretto"
+    //   dal server al prossimo profile fetch.
+    //
+    // FIX:
+    //   Quando l'utente cambia voce, mandiamo AL SERVER ANCHE koda_voice
+    //   ("aria" per femminile / "theo" per maschile). Così la sync legge
+    //   koda_voice=theo → resolve → maschile → tts_voice_id resta maschile.
+    //
+    //   Mappa voice_id → koda_voice (sync con backend server.py KODA_VOICES):
+    //     POuqf18evoXOKIqV2Px7 (Cielo)  → "aria"
+    //     ll9WG7PDTuyHwgC5MD6g (Vento) → "theo"
+    //   Per voice_id non mappati (custom / futuri) non mandiamo koda_voice
+    //   e ci fidiamo che il server abbia la mappatura giusta.
+    const VOICE_ID_TO_KODA_VOICE: Record<string, "aria" | "theo"> = {
+      "POuqf18evoXOKIqV2Px7": "aria",  // Cielo — femminile
+      "ll9WG7PDTuyHwgC5MD6g": "theo",  // Vento — maschile
+    };
+    const kodaVoice = VOICE_ID_TO_KODA_VOICE[voiceId];
+
+    const next = {
+      ...profile,
+      settings: { ...profile.settings, tts_voice_id: voiceId },
+      ...(kodaVoice ? { koda_voice: kodaVoice } : {}),
+    };
     setProfile(next);
     setDefaultVoiceId(voiceId);
     // === FIX 2026-06-28 v26 — chiusura sessione attiva al cambio voce ===
@@ -4229,7 +4268,12 @@ export default function Taccuino() {
     // === OFFLINE CLIPS — preload per la nuova voce (idempotente) ===
     try { preloadOfflineClips(voiceId).catch(() => {}); } catch {}
     try {
-      await api.updateProfile({ settings: next.settings } as any);
+      await api.updateProfile({
+        settings: next.settings,
+        // Includi koda_voice se noto per prevenire la sync server-side che
+        // altrimenti sovrascriverebbe tts_voice_id (v64.1 fix voce iPhone).
+        ...(kodaVoice ? { koda_voice: kodaVoice } : {}),
+      } as any);
     } catch {}
   };
 
@@ -6317,7 +6361,7 @@ export default function Taccuino() {
                 Koda v{Constants.expoConfig?.version || "1.0.1"}
               </Text>
               <Text style={{ color: theme.text + "33", fontSize: 9, marginTop: 3, letterSpacing: 0.5 }}>
-                build-v64.1-final-cleanup
+                build-v64.2-orb-sfogo-and-voice-sync
               </Text>
             </View>
 </>)}

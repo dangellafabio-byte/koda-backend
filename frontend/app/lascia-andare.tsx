@@ -71,7 +71,28 @@ const VOICE_RELEASE_MS = 500; // Ritorno dolce a 1.0 quando la voce cessa
 export default function LasciaAndareScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [status, setStatus] = useState<OrbStatus>("idle");
+  // === FIX 2026-07-26 v64.1 — Orb sempre in "recording" nella stanza sfogo ===
+  //
+  // PROBLEMA (Fabio 26/07):
+  //   Nella stanza "Lascia Andare" (sfogo), l'orb appariva statico e
+  //   color sabbia (stato "idle") su tutti i device (Huawei, Xiaomi,
+  //   iPhone). Doveva invece pulsare visibilmente per comunicare
+  //   "Koda ti sta ascoltando incondizionatamente".
+  //
+  // ROOT CAUSE:
+  //   Il VAD partiva da "idle" e passava a "recording" solo se il dB
+  //   grezzo superava SPEECH_DB. Su alcuni device il metering è
+  //   sottostimato (mic sensitivity bassa) o l'utente non parlava
+  //   subito → orb restava sabbia inutilmente.
+  //
+  // FIX (richiesta esplicita utente):
+  //   Nella stanza sfogo l'orb DEVE sempre apparire "in ascolto"
+  //   dal momento dell'ingresso. Partiamo direttamente da "recording"
+  //   invece che "idle". La logica VAD sotto è disattivata per il
+  //   visual state (ora è sempre "recording"); il metering continua
+  //   ad essere letto per altri usi (silence detection UI, ecc.)
+  //   ma non tocca più `status`.
+  const [status, setStatus] = useState<OrbStatus>("recording");
   const [meterDb, setMeterDb] = useState<number>(-100);
   const [ready, setReady] = useState(false);
   const [permError, setPermError] = useState<string | null>(null);
@@ -384,14 +405,20 @@ export default function LasciaAndareScreen() {
             const now = Date.now();
             if (db > SPEECH_DB) {
               lastVoiceAtRef.current = now;
+              // v64.1: già "recording" di default, no-op se non cambia
               setStatus((prev) => (prev === "recording" ? prev : "recording"));
             } else if (db < SILENCE_DB) {
+              // === FIX 2026-07-26 v64.1 — NON tornare mai a "idle" ===
+              // Nella stanza sfogo l'orb deve sempre pulsare come se
+              // stesse ascoltando. Ignoriamo la transizione idle del
+              // vecchio VAD. Il metering continua a girare per altri
+              // eventuali usi ma non cambia più `status`.
+              // (Vecchio codice: setStatus("idle") dopo SILENCE_HOLD_MS)
               const since = lastVoiceAtRef.current
                 ? now - lastVoiceAtRef.current
                 : Infinity;
-              if (since >= SILENCE_HOLD_MS) {
-                setStatus((prev) => (prev === "idle" ? prev : "idle"));
-              }
+              // silence holds tracked ma non trigger visivo — vedi commento sopra
+              void since;
             }
             // Zona morta tra SILENCE_DB e SPEECH_DB → mantieni stato corrente
             // NOTA rev3 (2026-07-17): la pulsazione dell'orb NON è più
