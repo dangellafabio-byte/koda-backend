@@ -463,7 +463,9 @@ export class VoiceClientSttSession {
           console.log(
             `[${TAG}] result FINAL text="${norm.transcript}" conf=${norm.confidence}`
           );
-          this.dispatchFinalToBackend();
+          this.dispatchFinalToBackend().catch((e: any) =>
+            console.log(`[VoiceClientSttSession] dispatchFinal error: ${e?.message || e}`)
+          );
         } else {
           // Log leggero per ridurre spam. Solo primi 40 char.
           const short = norm.transcript.slice(0, 40);
@@ -531,7 +533,9 @@ export class VoiceClientSttSession {
         console.log(
           `[${TAG}] end fired without isFinal → treating currentTranscript as final`
         );
-        this.dispatchFinalToBackend();
+        this.dispatchFinalToBackend().catch((e: any) =>
+          console.log(`[VoiceClientSttSession] dispatchFinal error: ${e?.message || e}`)
+        );
       }
     });
 
@@ -610,7 +614,7 @@ export class VoiceClientSttSession {
    * Invia il transcript finale al backend + notifica il caller (onFinal).
    * Idempotente: se già dispatchato o doneReceived, no-op.
    */
-  private dispatchFinalToBackend(): void {
+  private async dispatchFinalToBackend(): Promise<void> {
     if (this.dispatched || this.doneReceived) return;
     // Set flag SUBITO — così ogni chiamata successiva (safety net di end
     // handler, timeout, ecc.) diventa no-op. Evita 30+ duplicati che iOS
@@ -770,7 +774,9 @@ export class VoiceClientSttSession {
     } catch {}
     // Se abbiamo trascritto qualcosa ma non lo abbiamo ancora inviato → invia
     if (this.currentTranscript && !this.doneReceived) {
-      this.dispatchFinalToBackend();
+      this.dispatchFinalToBackend().catch((e: any) =>
+        console.log(`[VoiceClientSttSession] dispatchFinal error: ${e?.message || e}`)
+      );
     } else {
       // Nessuna trascrizione → manda solo type:end così il backend chiude
       try {
