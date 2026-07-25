@@ -396,9 +396,9 @@ export default function Taccuino() {
   // inglobato l'ultimo commit.
   useEffect(() => {
     console.log(
-      `[KODA_BUILDTAG] build-v63.9-audio-and-breath-diag v63.4-plugin-loud-fail+anchor-fix-definitivo+railway-hardcoded+diag-card+ws-piggyback build=2026-07-25 ` +
+      `[KODA_BUILDTAG] build-v64.0-android-unified-fix v63.9-audio-and-breath-diag+railway-hardcoded+diag-card+ws-piggyback build=2026-07-26 ` +
         `verbose=${KODA_DEBUG_VERBOSE} ` +
-        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_CACHE_FIRST_V63_7,TTS_AUDIOFOCUS_CYCLE_V63_8_FIX_C1,PRE_STT_AUDIOFOCUS_CYCLE_V63_9_FIX_C2,BREATH_DIAG_DISABLE_ANDROID_V63_9${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
+        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_CACHE_FIRST_V63_7,TTS_AUDIOFOCUS_CYCLE_V63_8_FIX_C1,PRE_STT_AUDIOFOCUS_CYCLE_V63_9_FIX_C2,BREATH_REENABLED_V64_0,TAP_TO_RESET_UNIFIED_V64_0,ANDROID_MIC_WATCHDOG_V64_0,ANDROID_STT_PRE_ABORT_V64_0,KEEP_AWAKE_STABLE_SESSION_V64_0${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
   }, []);
   const [textInput, setTextInput] = useState("");
@@ -6293,29 +6293,31 @@ export default function Taccuino() {
                 dopo verifica utente: la catena Deploy → Build è confermata
                 affidabile per questa sessione.
 
-                === CANARY: build-v63.9-audio-and-breath-diag (2026-07-25) ===
-                Include:
-                  - Fix A (v63.5): abort_pre_recognition → propagazione errore
-                  - Fix B (v63.5): mic activation gate (onRecognitionActive)
-                  - Fix v63.7: GPS cache-first (parità iOS/Android)
-                  - Fix C1 (v63.8): AudioFocus cycle DOPO STT stop
-                  - Fix C2 (v63.9): AudioFocus release PRIMA di STT start
-                    (doppia difesa — post-TTS-intro può lasciare focus sporco)
-                  - Test diagnostico (v63.9): breath EclipseOrb disabilitato
-                    SOLO su Android per verificare se è causa del flash
-                    schermo Honor/Huawei. Se il flash sparisce → confermato
-                    → build successivo cerca fix tecnico che mantenga
-                    l'animazione identica a iOS.
+                === CANARY: build-v64.0-android-unified-fix (2026-07-26) ===
+                Include tutto v63.9 + 4 fix Android unificati:
+                  - Fix v64.0 #1: Tap-to-Reset universale (qualsiasi tap
+                    non-idle → hard stop → idle; rimossa la gate mic che
+                    bloccava il tap durante startup)
+                  - Fix v64.0 #2: Android STT pre-abort (+80ms) prima di
+                    ogni start() per forzare reset Google SpeechRecognizer
+                  - Fix v64.0 #3: Watchdog mic silent-fail (5s) — se
+                    speechstart non arriva → propaga errore invece di
+                    lasciare la sessione zombie
+                  - Fix v64.0 #4: Keep-awake STABILE per sessione (60s
+                    idle debounce invece di cycle per status) → risolve
+                    flash schermo Honor/Huawei ogni ~7s
+                  - Bonus: Breath animation ri-abilitata (confermato NON
+                    causa del flash, era il wake-lock cycle)
                 Se apri Impostazioni → scroll in fondo → vedi
-                "build-v63.9-audio-and-breath-diag" → build giusto.
-                Se vedi ancora "build-v63.8-tts-audiofocus" o altro →
+                "build-v64.0-android-unified-fix" → build giusto.
+                Se vedi ancora "build-v63.9-..." o altro →
                 l'APK installato è vecchio, non testare oltre. */}
             <View style={{ alignItems: "center", marginTop: 24, marginBottom: 8 }}>
               <Text style={{ color: theme.text + "55", fontSize: 11, fontStyle: "italic" }}>
                 Koda v{Constants.expoConfig?.version || "1.0.1"}
               </Text>
               <Text style={{ color: theme.text + "33", fontSize: 9, marginTop: 3, letterSpacing: 0.5 }}>
-                build-v63.9-audio-and-breath-diag
+                build-v64.0-android-unified-fix
               </Text>
             </View>
 </>)}
