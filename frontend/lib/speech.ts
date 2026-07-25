@@ -606,6 +606,38 @@ async function playElevenLabsNativeFromUrl(
           }).catch(() => {});
         } catch {}
         console.log(`[KODA_TTS_PLAY] android_audio_mode_forced playback`);
+
+        // === FIX 2026-07-26 v64.1 — AudioFocus re-acquire per preview standalone ===
+        //
+        // PROBLEMA (log Fabio 26/07):
+        //   `android_first_loaded playing=false pos=0.00 dur=3.34` → file MP3
+        //   scaricato e caricato correttamente ma player.play() fallisce
+        //   silenziosamente. Utente segnala: preview voce in Impostazioni /
+        //   Intro non emette audio, rotellina infinita.
+        //
+        // ROOT CAUSE:
+        //   Fix C1/C2 (v63.8/v63.9) rilasciano e riacquisiscono AudioFocus
+        //   correttamente nei flussi STT→TTS conversazione. MA nel path
+        //   PREVIEW VOCE (playFromUrl standalone senza STT prima), non c'è
+        //   mai stato un setIsAudioActiveAsync(true) esplicito che riacquisisca
+        //   il focus dopo splash/intro. Quando l'utente clicca preview, il
+        //   focus può essere ancora "sporco" (residuo da app boot) → play()
+        //   viene ignorato da Android AudioService silenziosamente.
+        //
+        // FIX:
+        //   setIsAudioActiveAsync(true) esplicito PRIMA di player.play().
+        //   Idempotente lato nativo: se il focus è già nostro, no-op.
+        //   Se non lo è, lo riacquisisce → play() funziona.
+        //   Costo: ~10-30ms (trascurabile).
+        //   Solo Android — su iOS il flow AVAudioSession gestisce diversamente.
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const AudioMod: any = require("expo-audio");
+          if (typeof AudioMod.setIsAudioActiveAsync === "function") {
+            AudioMod.setIsAudioActiveAsync(true).catch(() => {});
+            console.log(`[KODA_TTS_PLAY] android_audio_focus_reacquired (v64.1 preview fix)`);
+          }
+        } catch {}
       }
 
       subscription = player.addListener("playbackStatusUpdate", (status: any) => {
@@ -2241,6 +2273,20 @@ export async function voiceStreamConverse(opts: {
       notify();
     },
     onError: (msg: string) => {
+      // === FIX 2026-07-26 v64.1 — no_speech = graceful close, non errore ===
+      // Se il codice cliente STT segnala "no_speech", l'utente ha
+      // taciuto per > silence threshold Android. Non è un errore reale
+      // della pipeline: è una chiusura pulita del turno vuoto. Chiudiamo
+      // la pipeline come completed (pipelineDone) SENZA settare
+      // pipelineError, così l'upper layer riceve ok=true (turno vuoto),
+      // status torna idle, e HF_LOOP può ripartire per un nuovo tentativo
+      // (comportamento simile a iPhone "non ti ho sentito" → retry).
+      if (msg === "no_speech") {
+        console.log("[KODA_STREAM_CLIENT] no_speech from client — graceful close (no error)");
+        pipelineDone = true;
+        notify();
+        return;
+      }
       // Anche su errore: flush pending per non perdere audio già ricevuto.
       if (pendingByIdx.size > 0) {
         const sortedKeys = Array.from(pendingByIdx.keys()).sort((a, b) => a - b);

@@ -445,6 +445,35 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         console.warn("[koda-intro] audio mode setup failed:", e);
       }
     }
+    // === FIX 2026-07-26 v64.1 — Intro voice change audio focus (Android) ===
+    //
+    // PROBLEMA (log Fabio 26/07):
+    //   L'utente cambia voce nell'Intro: il colore/flag si aggiorna
+    //   visivamente ma nessun audio parte. Su Android il player.play()
+    //   fallisce silenziosamente perché l'AudioFocus può essere
+    //   ancora "sporco" (residuo dal TTS di intro/splash che gira
+    //   PRIMA della prima voice preview).
+    //
+    // ROOT CAUSE:
+    //   Il flow nell'Intro NON passa da playElevenLabsNativeFromUrl
+    //   (dove ora facciamo il fix), ma crea direttamente il player
+    //   con createAudioPlayer(). Serve richiamare esplicitamente
+    //   setIsAudioActiveAsync(true) prima di play().
+    //
+    // FIX: su Android, sempre riacquisire il focus prima di play().
+    // Idempotente lato nativo. Costo ~10-30ms.
+    if (Platform.OS === "android") {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const AudioMod: any = require("expo-audio");
+        if (typeof AudioMod.setIsAudioActiveAsync === "function") {
+          await AudioMod.setIsAudioActiveAsync(true);
+          console.log("[koda-intro] android_audio_focus_reacquired (v64.1)");
+        }
+      } catch (e) {
+        console.warn("[koda-intro] focus reacquire failed:", e);
+      }
+    }
     try {
       const url = `${API_BASE}/voice/preview/${key}`;
       const player = createAudioPlayer({ uri: url });

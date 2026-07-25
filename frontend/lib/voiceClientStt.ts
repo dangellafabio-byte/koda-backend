@@ -138,6 +138,15 @@ export class VoiceClientSttSession {
   private micWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   private speechStartReceived = false;
 
+  // === FIX 2026-07-26 v64.1 — no-speech tracking (utente silenzioso) ===
+  // Google SpeechRecognizer emette `error no-speech` se l'utente non
+  // parla dopo N secondi di silenzio (soglia configurata via
+  // androidIntentOptions). Prima trattavamo l'errore come benigno con
+  // return early → il gestore `end` non sapeva se la sessione era
+  // finita per "utente ha finito di parlare" o "utente ha taciuto".
+  // Ora traccciamo il flag così `end` può fare graceful close.
+  private noSpeechReceived = false;
+
   // Route audio (rilevata prima di start)
   private audioRoute: "bluetooth" | "wired" | "builtin" | "unknown" = "unknown";
 
@@ -469,6 +478,8 @@ export class VoiceClientSttSession {
     }
     // Reset watchdog state
     this.speechStartReceived = false;
+    // Reset no-speech flag (v64.1)
+    this.noSpeechReceived = false;
 
     // Registra listeners prima di start()
     this.subSpeechStart = ExpoSpeechRecognitionModule.addListener(
@@ -519,8 +530,19 @@ export class VoiceClientSttSession {
         console.log(
           `[${TAG}] error code=${evt.error} message="${evt.message || ""}"`
         );
-        // "no-speech" e "aborted" sono benigni — no propagate
-        if (evt.error === "no-speech" || evt.error === "aborted") return;
+        // === FIX 2026-07-26 v64.1 — no-speech tracking ===
+        // "no-speech" e "aborted" restano benigni (no propagate crash),
+        // MA per "no-speech" settiamo un flag così il gestore `end`
+        // sa che la sessione si è chiusa per silenzio utente e deve
+        // fare cleanup gracefully (dispatch `end` al backend → done →
+        // idle) invece di lasciare il WS aperto e il UI in "recording"
+        // per sempre (bug utente 26/07: "mic si chiude ma UI resta
+        // bloccata su Recording").
+        if (evt.error === "no-speech") {
+          this.noSpeechReceived = true;
+          return;
+        }
+        if (evt.error === "aborted") return;
 
         // === FIX 2026-07-23 v60.4 — AudioSession recovery cycle ============
         // Fabio (23/07 post-checkpoint): il bug 560557684 (`!act`) del vecchio
@@ -564,7 +586,7 @@ export class VoiceClientSttSession {
         // Log molto leggero per non spammare
         return;
       }
-      console.log(`[${TAG}] end event`);
+      console.log(`[${TAG}] end event (noSpeech=${this.noSpeechReceived})`);
       // Se non abbiamo ancora inviato final ma abbiamo un transcript accumulato,
       // consideriamolo final (safety net per casi in cui iOS chiude senza
       // isFinal=true).
@@ -575,6 +597,41 @@ export class VoiceClientSttSession {
         this.dispatchFinalToBackend().catch((e: any) =>
           console.log(`[VoiceClientSttSession] dispatchFinal error: ${e?.message || e}`)
         );
+        return;
+      }
+      // === FIX 2026-07-26 v64.1 — Graceful cleanup su no-speech ===
+      //
+      // Se end fira SENZA transcript e c'è stato un no-speech (utente
+      // ha taciuto per > silence threshold), la sessione è morta ma:
+      //   - WS resta aperta
+      //   - Backend non ha ricevuto né transcript_from_client né end
+      //   - Upper layer non riceve mai `done` → status resta "recording"
+      //     per sempre → utente vede UI bloccata (bug 26/07)
+      //
+      // Fix: mandiamo `{type:"end"}` al backend che chiude gracefully
+      // la sessione. Il backend risponderà con `done` (o WS.close) →
+      // pipelineDone=true → status torna idle → HF_LOOP può ripartire
+      // per il prossimo turno (comportamento simile a iPhone "retry").
+      if (!this.currentTranscript && !this.doneReceived && this.noSpeechReceived) {
+        console.log(
+          `[${TAG}] end fired with empty transcript + no-speech → sending {type:end} for graceful close`
+        );
+        try {
+          this.sendJson({ type: "end" });
+        } catch {}
+        // Notifica upper layer che la sessione va chiusa (turno vuoto,
+        // niente TTS in arrivo). Usa un codice speciale "no_speech" che
+        // speech.ts può interpretare per NON considerare come errore
+        // pipeline reale.
+        this.dispatched = true;
+        this.doneReceived = true;
+        this.notifiedUpperOnClose = true;
+        try {
+          this.callbacks.onError?.("no_speech");
+        } catch {}
+        this.removeListeners();
+        this.stopKeepalive();
+        this.forceCloseWs();
       }
     });
 
@@ -591,10 +648,37 @@ export class VoiceClientSttSession {
       //   `iosCategory` viene ignorato ma lo omettiamo per pulizia.
       //   `androidRecognitionServicePackage` non lo forziamo: il default
       //   di sistema (Google) è quello che vogliamo.
+      //
+      // === FIX 2026-07-26 v64.1 — Beep sistema + timeout troppo corto ===
+      //
+      // PROBLEMA #1 (Fabio 26/07): Google SpeechRecognizer emette un
+      // beep di sistema all'apertura/chiusura del mic. iPhone non ce l'ha.
+      // Soluzione (documentata nel codice nativo di expo-speech-recognition,
+      // ExpoSpeechService.kt:278): usare `continuous: true` su Android 13+
+      // fa passare il modulo attraverso `EXTRA_AUDIO_SOURCE` con audio
+      // recorder custom, bypassando il beep di sistema.
+      //
+      // PROBLEMA #2: Google chiude troppo velocemente su silenzio (~2s).
+      // Se l'utente ci mette un attimo a rispondere, no-speech scatta e
+      // la sessione si blocca in "recording" senza mai finire.
+      // Soluzione: allungare le soglie via androidIntentOptions.
+      //   - EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 4000ms
+      //     (era 2000ms default) — tolleranza per pause naturali.
+      //   - EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 3000ms
+      //   - EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 500ms
+      //     (permette turni brevi tipo "sì" / "no")
+      //
+      // Nota su continuous:true: NON cambia il flow lato client — Google
+      // emette ancora `result isFinal` + `end` quando l'utente smette di
+      // parlare (grazie alle soglie qui sopra). L'unica differenza reale
+      // è il beep soppresso.
       const startOpts: any = {
         lang,
         interimResults: true,
-        continuous: false,
+        // continuous: true solo su Android per bypassare il beep di sistema.
+        // Su iOS resta false (comportamento invariato, SFSpeechRecognizer
+        // non emette mai beep).
+        continuous: Platform.OS === "android",
         maxAlternatives: 1,
         addsPunctuation: true,
         // On-device: preferito su entrambe, ma richiesto SOLO su iOS
@@ -609,8 +693,17 @@ export class VoiceClientSttSession {
           mode: "measurement",
         };
       }
+      if (Platform.OS === "android") {
+        // Silence timeouts più lunghi per tolleranza pause naturali
+        // (vedi commento sopra Fix v64.1 PROBLEMA #2).
+        startOpts.androidIntentOptions = {
+          EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 4000,
+          EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 3000,
+          EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 500,
+        };
+      }
       ExpoSpeechRecognitionModule.start(startOpts);
-      console.log(`[${TAG}] ExpoSpeechRecognitionModule.start() OK`);
+      console.log(`[${TAG}] ExpoSpeechRecognitionModule.start() OK (v64.1 continuous=${startOpts.continuous})`);
       // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
       // Segnaliamo all'upper layer che il microfono REALE è ora attivo.
       // Da qui in poi un tap dell'utente su onBigButton è un legittimo

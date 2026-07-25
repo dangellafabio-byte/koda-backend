@@ -53,9 +53,22 @@ const STATE_COLORS: Record<NeonBorderStatus, string> = {
   confessional: "#FF1744",// ❤️‍🔥 Scarlatto (STANZA SEGRETA)
 };
 
-// Tutti gli stati hanno pulsazione MOLTO lenta (~7s), quasi immobile,
+// Tutti gli stati hanno pulsazione MOLTO lenta, quasi immobile,
 // per essere una presenza costante senza distrarre.
-const SLOW_CYCLE_MS = 7000;
+//
+// === FIX 2026-07-26 v64.1 — Flash schermo Honor/Huawei EMUI ===
+// Su Android il ciclo di 7s pulsando opacity 0.75→1.0 sul bordo full-screen
+// triggerava il power manager EMUI/HarmonyOS in HDR-boost momentaneo →
+// utente percepiva un "flash" fisico dello schermo ogni ~7 secondi.
+// Fix: su Android rallentiamo il ciclo a 20s e riduciamo l'ampiezza
+// (0.85-1.0 invece di 0.75-1.0). L'effetto respiro resta ma è troppo
+// lento e troppo delicato perché il power manager EMUI lo interpreti
+// come cambio significativo di luminosità.
+// Su iOS resta identico (7s + 0.75-1.0) perché CoreAnimation non ha
+// questo problema.
+const SLOW_CYCLE_MS = Platform.OS === "android" ? 20000 : 7000;
+const OPACITY_MIN = Platform.OS === "android" ? 0.85 : 0.75;
+const OPACITY_MAX = 1.0;
 
 // Display border radius:
 // === FIX #6 (2026-06-22 v6) — Adattamento dinamico al device ===
@@ -130,8 +143,9 @@ export default function NeonBorder({
     return () => anim.stop();
   }, [status, pulse]);
 
-  // opacity quasi fissa: oscilla tra 0.75 e 1.0 (sempre molto visibile)
-  const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.75, 1] });
+  // opacity quasi fissa: oscilla tra OPACITY_MIN e OPACITY_MAX (sempre molto visibile)
+  // Su Android range più stretto (0.85-1.0) per evitare HDR-boost EMUI/HarmonyOS.
+  const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [OPACITY_MIN, OPACITY_MAX] });
 
   // ============ LIQUID NEON FLOW (solo thinking) ============
   // Flusso circolare con scia: una "testa" luminosa corre attorno al perimetro
