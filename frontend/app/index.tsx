@@ -1003,6 +1003,9 @@ export default function Taccuino() {
   // Con il primo tap esplicito siamo certi che l'utente è presente, il
   // sistema audio è "caldo" e tutto parte pulito.
   const userInteractedRef = useRef<boolean>(false);
+  // Timer per debounce del release del wake-lock (60s post-idle senza
+  // nuovi turni). Vedi FIX v64.0 sul flash schermo Honor/Huawei.
+  const keepAwakeReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Pager horizontale: pagina 0 = voce zen, pagina 1 = lettura.
   const pagerRef = useRef<ScrollView>(null);
   // Refs ai veri elementi UI della pagina voce — usati dal Tour guidato per
@@ -1427,35 +1430,95 @@ export default function Taccuino() {
 
 
   // === KEEP SCREEN AWAKE durante conversazione attiva ===
-  // Quando lo schermo iPhone si auto-spegne mentre Koda sta parlando o
-  // mentre stiamo registrando, iOS interrompe l'audio session → la voce
-  // viene tagliata a metà frase. Per evitarlo, teniamo lo schermo sveglio
-  // SOLO quando lo stato è attivo (recording / transcribing / thinking /
-  // speaking). Quando torna idle (champagne), rilasciamo il lock così la
-  // batteria non si scarica e iOS torna a comportarsi normalmente.
+  // === FIX 2026-07-26 v64.0 — HONOR/HUAWEI SCREEN FLASH FIX ===
   //
-  // Tag dedicato "koda-conversation" così se in futuro vorremo altri lock
-  // (es. confessionale) sono indipendenti.
+  // PROBLEMA (log utente 25/07):
+  //   Su Honor/Huawei (EMUI/HarmonyOS) lo schermo lampeggia ~ogni 7s
+  //   durante una conversazione. Test diagnostico ha escluso breath
+  //   animation, JS timers, network polling.
+  //
+  // ROOT CAUSE:
+  //   Il vecchio useEffect chiamava activateKeepAwakeAsync /
+  //   deactivateKeepAwake AD OGNI transizione di status
+  //   (idle→recording→transcribing→thinking→speaking→idle). Su EMUI il
+  //   ciclo del wake-lock viene gestito dal power manager di Huawei che
+  //   emette un brief refresh dello schermo ad ogni riattivazione.
+  //   Con 4-5 status transitions per turno, e turni ogni 5-10s in
+  //   hands-free, il pattern osservato dall'utente (flash ~7s) matcha
+  //   perfettamente.
+  //
+  // FIX:
+  //   1. Attiviamo keep-awake UNA VOLTA quando la sessione diventa
+  //      attiva (userInteractedRef=true, ovvero dopo il primo tap).
+  //   2. NON lo disattiviamo su ogni transizione idle. Restiamo attivi
+  //      per l'intera sessione foreground.
+  //   3. Deactivate solo su:
+  //        - App background/blur (via useFocusEffect cleanup)
+  //        - Debounce di 60s post-idle SENZA nuovi turni (utente ha
+  //          davvero smesso di parlare da un minuto → possiamo lasciare
+  //          spegnere lo schermo).
+  //   4. Su iOS resta identico al comportamento precedente perché iOS
+  //      non ha il problema (AVFoundation non tocca la brightness).
+  //
+  // Su Android il wake-lock resta attivo continuo mentre la app è in
+  // primo piano dopo il primo tap → zero cicli → zero flash.
   useEffect(() => {
-    // expo-keep-awake è buggato su web: chiamare deactivate senza prima
-    // un activate andato a buon fine throwa sync. Su mobile native funziona
-    // perfettamente. Skip totale su web per evitare crash della preview.
     if (Platform.OS === "web") return;
     const TAG = "koda-conversation";
+    // Attiva su qualsiasi stato non-idle O sfogo attivo
     const isActive = status === "recording" || status === "transcribing" ||
                      status === "thinking" || status === "speaking" ||
                      confessionalMode;
-    try {
-      if (isActive) {
+    if (isActive) {
+      // Attiva subito. Idempotente lato nativo — chiamarla mentre già
+      // attivo è no-op quindi zero flash da "riattivazione".
+      try {
         activateKeepAwakeAsync(TAG).catch(() => {});
-      } else {
-        try { deactivateKeepAwake(TAG); } catch {}
+      } catch {}
+      // Se avevamo schedulato un release-debounce, cancellalo — l'utente
+      // è tornato attivo prima dei 60s.
+      if (keepAwakeReleaseTimerRef.current) {
+        clearTimeout(keepAwakeReleaseTimerRef.current);
+        keepAwakeReleaseTimerRef.current = null;
       }
-    } catch {}
+      return;
+    }
+    // Idle: NON deattivare subito. Schedula un release fra 60s. Se
+    // nel frattempo l'utente riparte con un nuovo turno, il release
+    // viene cancellato (vedi sopra). In hands-free tra un turno e
+    // l'altro passano 2-5s → non arriviamo MAI ai 60s → wake-lock
+    // stabile continuo → zero flash EMUI.
+    if (keepAwakeReleaseTimerRef.current) {
+      clearTimeout(keepAwakeReleaseTimerRef.current);
+    }
+    keepAwakeReleaseTimerRef.current = setTimeout(() => {
+      try {
+        deactivateKeepAwake(TAG);
+        console.log("[KODA_WAKELOCK] released after 60s idle debounce");
+      } catch {}
+      keepAwakeReleaseTimerRef.current = null;
+    }, 60_000);
     return () => {
-      try { deactivateKeepAwake(TAG); } catch {}
+      // NB: NON deattivare qui su cleanup di dep change — la cleanup
+      // funziona solo quando l'effect ri-run (che avviene tantissimo).
+      // Lasciamo che il debounce/unmount se ne occupino.
     };
   }, [status, confessionalMode]);
+
+  // Cleanup finale su unmount: rilascia il wake-lock indipendentemente
+  // dal debounce timer.
+  useEffect(() => {
+    return () => {
+      if (Platform.OS === "web") return;
+      if (keepAwakeReleaseTimerRef.current) {
+        clearTimeout(keepAwakeReleaseTimerRef.current);
+        keepAwakeReleaseTimerRef.current = null;
+      }
+      try {
+        deactivateKeepAwake("koda-conversation");
+      } catch {}
+    };
+  }, []);
 
   const saveTheme = async (name: ThemeName) => {
     if (!profile) return;
@@ -3638,84 +3701,36 @@ export default function Taccuino() {
     // Verrà resettato a false quando l'app va in background.
     userInteractedRef.current = true;
 
-    // === TAP GRACEFUL STOP 2026-07-08 (richiesta utente) ===
-    // Cambio comportamento rispetto al vecchio HARD_STOP universale:
-    //   • Tap durante `recording` → session.stop() (invia "end" al server,
-    //     il server elabora e Koda risponde). L'utente ha finito di parlare.
-    //   • Tap durante `speaking` / `thinking` / `transcribing` → abort
-    //     (barge-in: interrompe TTS/pipeline immediatamente).
-    //   • Long-press (delayLongPress=500ms) → HARD_STOP kill-switch privacy
-    //     (vedi onBigButtonLongPress più sotto).
+    // === FIX 2026-07-26 v64.0 — TAP-TO-RESET UNIFICATO (richiesta utente) ===
     //
-    // Motivazione: il vecchio comportamento "un tap = kill switch privacy"
-    // rompeva il flusso naturale walkie-talkie. L'utente premeva stop e
-    // Koda non rispondeva mai perché il server chiudeva la sessione senza
-    // processare l'utterance. Ora tap = "ho finito parlare, tocca a te".
-    if (status === "recording") {
-      // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
-      // Se il microfono REALE non è ancora attivo, IGNORIAMO il tap.
-      // Copriamo entrambi i casi:
-      //   (1) session ref esiste ma mic non ancora partito
-      //       (siamo tra idle→recording e ExpoSpeechRecognitionModule.start OK)
-      //   (2) session ref ancora null (siamo prima che onSession fira,
-      //       nella fase pre-createSession async)
-      // Senza questa gate, un tap prematuro nella finestra ~1s di
-      // startup settava stopRequested=true OR pendingTapStopRef=true
-      // → sessione abortita prima che startRecognition() venga chiamata
-      // → cascata Xiaomi osservata (156 sessioni in 4s, mic mai attivo).
-      // Se davvero l'utente vuole abortire, può usare long-press
-      // (che va sul path abort() e non su stop()).
-      if (!micReallyActiveRef.current) {
-        console.log(
-          `[KODA_TAP_STOP] IGNORED — mic not yet active (startup phase, session_ref=${!!streamingSessionRef.current})`
-        );
-        return;
-      }
-      console.log(`[KODA_TAP_STOP] recording → transcribing (graceful stop)`);
-      if (streamingSessionRef.current) {
-        const s = streamingSessionRef.current as any;
-        try {
-          if (typeof s.stop === "function") {
-            // stop() manda "end" al WS. Il server elabora l'audio, invia
-            // stt_final → meta → done. Le callback onUserFinal/onMeta
-            // aggiorneranno lo status naturalmente (transcribing→thinking
-            // →speaking→idle).
-            s.stop().catch?.(() => {});
-          } else if (typeof s.abort === "function") {
-            // Fallback safety
-            s.abort().catch?.(() => {});
-          }
-        } catch {}
-      } else {
-        // === FIX 2026-07-11 v52 — TAP_STOP EARLY (ora unreachable) ===
-        // Con Fix B (v63.5), il tap durante startup viene già filtrato
-        // dalla gate micReallyActiveRef sopra. Questo else branch resta
-        // come safety net per casi non-Native STT (Deepgram legacy),
-        // dove onRecognitionActive non fira e la gate lascia passare.
-        pendingTapStopRef.current = true;
-        console.log(
-          `[KODA_TAP_STOP] session ref null → pendingTapStopRef=true (early stop scheduled)`
-        );
-      }
-      // File-based recorder legacy path (non-streaming)
-      if (recRef.current) {
-        // Nel non-streaming path, il recorder viene fermato dentro
-        // stopAndConverse() con la pipeline completa. Non lo tocchiamo qui.
-      }
-      // Transizione UI: recording → transcribing. Il resto della pipeline
-      // farà transcribing → thinking → speaking → idle come da flusso normale.
-      setStatus("transcribing");
-      return;
-    }
-
-    // === HARD STOP UNIVERSALE 2026-06-26 (richiesta utente "stop fisico") ===
-    // Ora attivo SOLO quando l'utente tappa durante speaking/thinking/
-    // transcribing (barge-in su TTS o cancellazione pipeline).
-    // - Niente "stop and send" (NO trigger pipeline residua)
-    // - Niente barge-in (NO ripartenza automatica del mic)
-    // - Solo silenzio totale, per privacy / contesti delicati.
+    // COMPORTAMENTO PRECEDENTE (v63.5+):
+    //   • Tap durante `recording` → session.stop() (graceful, invia "end"
+    //     al server e aspetta la risposta di Koda).
+    //   • Tap durante `speaking/thinking/transcribing` → HARD_STOP (kill
+    //     tutto → idle).
+    //
+    // PROBLEMA:
+    //   1. Comportamento inconsistente (a volte reset, a volte "send").
+    //   2. La gate micReallyActiveRef bloccava il tap durante startup →
+    //      su Android, quando il mic si blocca al 2° turno (bug hardware
+    //      Google SpeechRecognizer post-stop), l'utente non poteva
+    //      MAI riprendere il controllo (visivamente "recording" ma tap
+    //      ignorato per sempre).
+    //
+    // NUOVO COMPORTAMENTO (richiesta esplicita Fabio 26/07):
+    //   • Tap durante QUALSIASI stato non-idle (recording, transcribing,
+    //     thinking, speaking) → HARD_STOP totale → idle. NIENTE gate mic.
+    //   • Tap durante idle → avvia nuovo turno (comportamento invariato).
+    //
+    //   Il tap DEVE SEMPRE funzionare come escape universale. Se il mic
+    //   non è ancora attivo perché il HW è in startup, killiamo lo
+    //   stesso la sessione — costa zero (WS abort è idempotente) e
+    //   sblocca situazioni degenerate.
+    //
+    // La logica di kill è la stessa del vecchio HARD_STOP (abort WS,
+    // stop recorder, stop TTS, ecc.), applicata a TUTTI gli stati.
     if (status !== "idle") {
-      console.log(`[KODA_HARD_STOP] tap interrupted state=${status} convActive=${convActiveRef.current}`);
+      console.log(`[KODA_TAP_RESET] tap → hard stop | state=${status} convActive=${convActiveRef.current} micActive=${micReallyActiveRef.current}`);
       // 1) Abort streaming session (chiude WS HARD, niente "end" → niente pipeline server-side)
       if (streamingSessionRef.current) {
         const s = streamingSessionRef.current as any;
@@ -3724,12 +3739,14 @@ export default function Taccuino() {
           if (typeof s.abort === "function") {
             s.abort().catch?.(() => {});
           } else if (typeof s.stop === "function") {
-            // Fallback per safety: se per qualche motivo abort non esistesse
             s.stop().catch?.(() => {});
           }
         } catch {}
       }
-      // 2) Stop file-based recorder se attivo (legacy non-streaming path)
+      // 2) Reset flag pendenti (nel caso il tap arrivi durante lo startup async)
+      pendingTapStopRef.current = false;
+      micReallyActiveRef.current = false;
+      // 3) Stop file-based recorder se attivo (legacy non-streaming path)
       if (recRef.current) {
         try {
           const r = recRef.current as any;
@@ -3737,21 +3754,19 @@ export default function Taccuino() {
           r.stopAndUnloadAsync?.().catch?.(() => {});
         } catch {}
       }
-      // 3) Stop TTS playback in corso + cancel HTTP requests in volo
+      // 4) Stop TTS playback in corso + cancel HTTP requests in volo
       try { SpeechMod.stop(); } catch {}
-      // 4) Disabilita loop hands-free conversazionale
+      // 5) Disabilita loop hands-free conversazionale
       setConvActive(false);
       convActiveRef.current = false;
-      // 5) === FIX 2026-06-26 v13: blocca auto-listen post hard-stop ===
-      // Senza questo, l'useEffect di auto-listen hands-free (riga ~1615)
-      // rilevava status="idle" e ripartiva da solo con startTalkInternal
-      // dopo 450ms → l'utente vedeva il mic riattivarsi e doveva tappare
-      // ancora ("ho schiacciato il pulsante ma non fa niente"). Usiamo lo
-      // stesso pattern di close_session: pause attivo fino al prossimo tap
-      // esplicito sull'orb (il quale, vedi sotto, lo resetta).
+      // 6) Blocca auto-listen post hard-stop finché l'utente non ri-tappa.
+      // Vedi FIX 2026-06-26 v13 — senza questo, il HF loop rilevava
+      // status="idle" e ripartiva da solo dopo 450ms ("ho schiacciato
+      // il pulsante ma non fa niente"). Il tap successivo (branch idle
+      // in fondo a questa funzione) resetta closeSessionPauseRef.
       setCloseSessionPause(true);
       closeSessionPauseRef.current = true;
-      // 6) UI immediatamente in idle
+      // 7) UI immediatamente in idle
       setStatus("idle");
       return;
     }

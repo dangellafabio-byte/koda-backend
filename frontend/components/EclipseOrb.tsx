@@ -25,27 +25,20 @@
  * scale, opacity, translateX) → 60fps garantiti.
  */
 import React, { useEffect, useMemo, useRef } from "react";
-import { View, StyleSheet, Animated, Easing, Platform } from "react-native";
+import { View, StyleSheet, Animated, Easing } from "react-native";
 import Svg, { Defs, RadialGradient, Stop, Circle } from "react-native-svg";
 import { useTheme } from "../lib/theme";
 
-// === TEST DIAGNOSTICO 2026-07-25 v63.9 — bagliore schermo Honor/Huawei ===
-// Utente segnala flash schermo hardware ogni ~7s SOLO su Honor/Huawei
-// (EMUI/HarmonyOS). Test 1+2 hanno escluso JS-timers e network. Il
-// pattern ~7s coincide col ciclo del breath (3.8s×2 = 7.6s), ma la
-// causa è ipotesi non ancora provata al 100%.
-//
-// Questa flag disabilita SOLO il breath cycle SOLO su Android, SOLO
-// in questo build diagnostico v63.9. Se il flash sparisce → confermato
-// colpevole → build successivo cerca soluzione tecnica (window flag
-// Android, cambio scale→opacity, o altro) che elimini flash MANTENENDO
-// l'animazione identica a iOS.
-//
-// SU iOS: TUTTO invariato (breath continua normalmente).
-// SU Android: breath disabilitato per test (orb immobile — atteso).
-// Rimuovere questa flag e riabilitare breath dopo che la vera fix
-// tecnica sarà trovata e testata.
-const KODA_BREATH_DIAGNOSTIC_DISABLE_ANDROID = Platform.OS === "android";
+// === TEST DIAGNOSTICO 2026-07-25 v63.9 — RISOLTO 2026-07-26 v64.0 ===
+// Il test in v63.9 aveva disabilitato il breath cycle su Android per
+// verificare se fosse la causa del flash schermo Honor/Huawei ogni ~7s.
+// Utente ha confermato: flash PRESENTE anche con breath disabilitato.
+// → breath animation NON è la causa. Vera causa: cycle del wake-lock
+// (expo-keep-awake) che riattivava/disattivava lo schermo ad ogni
+// transizione di status. Fix applicata in app/index.tsx (keep-awake
+// stabile per l'intera sessione con debounce sul release).
+// Qui riabilitiamo il breath cycle IDENTICO a iOS.
+const KODA_BREATH_DIAGNOSTIC_DISABLE_ANDROID = false;
 
 export type OrbStatus = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 export type OrbTone =

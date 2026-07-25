@@ -128,6 +128,16 @@ export class VoiceClientSttSession {
   private subEnd: { remove: () => void } | null = null;
   private subSpeechStart: { remove: () => void } | null = null;
 
+  // === FIX 2026-07-26 v64.0 — Watchdog Android mic silent-fail ===
+  // Su Google SpeechRecognizer (Android), specialmente al 2° turno,
+  // ExpoSpeechRecognitionModule.start() può risolvere silenziosamente
+  // senza mai attivare l'hardware mic: nessun evento speechstart, error
+  // o end viene emesso. La sessione resta zombie: UI mostra "recording"
+  // ma il microfono è morto. Il watchdog rileva questo caso e
+  // propaga un errore all'upper layer così il HF backoff può reagire.
+  private micWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private speechStartReceived = false;
+
   // Route audio (rilevata prima di start)
   private audioRoute: "bluetooth" | "wired" | "builtin" | "unknown" = "unknown";
 
@@ -429,18 +439,47 @@ export class VoiceClientSttSession {
     this.startKeepalive();
 
     // 6) Avvia SFSpeechRecognizer on-device (italiano)
-    this.startRecognition(opts?.profileLang || "it");
+    this.startRecognition(opts?.profileLang || "it").catch((e: any) =>
+      console.log(`[${TAG}] startRecognition threw: ${e?.message || e}`)
+    );
   }
 
-  private startRecognition(profileLang: string): void {
+  private async startRecognition(profileLang: string): Promise<void> {
     const lang = profileLang === "it" ? "it-IT" : profileLang;
     console.log(`[${TAG}] startRecognition lang=${lang} ondevice=true`);
+
+    // === FIX 2026-07-26 v64.0 — Pre-abort Android reset ===
+    // Su Google SpeechRecognizer (Android), specialmente sui turni
+    // successivi al 1°, chiamare start() troppo velocemente dopo il
+    // precedente stop() dello stesso sessione può risultare in un
+    // "silent-fail" dove start() ritorna OK ma l'hardware mic non
+    // apre mai. Sintomo utente: UI="recording" ma microfono morto.
+    //
+    // Soluzione empirica: prima di ogni start(), chiamiamo abort()
+    // per forzare un reset del recognizer service Google. abort()
+    // su una sessione idle è idempotente (no-op). Su una sessione
+    // in fase-di-chiusura, forza il release immediato dell'hw.
+    // +50ms di attesa per lasciare a Android il tempo di consolidare
+    // lo stato interno del SpeechRecognizer service.
+    if (Platform.OS === "android") {
+      try {
+        ExpoSpeechRecognitionModule.abort();
+      } catch {}
+      await new Promise((r) => setTimeout(r, 80));
+    }
+    // Reset watchdog state
+    this.speechStartReceived = false;
 
     // Registra listeners prima di start()
     this.subSpeechStart = ExpoSpeechRecognitionModule.addListener(
       "speechstart",
       () => {
         this.speechStartMs = Date.now();
+        this.speechStartReceived = true;
+        if (this.micWatchdogTimer) {
+          clearTimeout(this.micWatchdogTimer);
+          this.micWatchdogTimer = null;
+        }
         console.log(`[${TAG}] speechstart`);
       }
     );
@@ -582,6 +621,42 @@ export class VoiceClientSttSession {
         this.callbacks.onRecognitionActive?.();
       } catch (cbErr: any) {
         console.log(`[${TAG}] onRecognitionActive callback error (non-fatal): ${cbErr?.message || cbErr}`);
+      }
+
+      // === FIX 2026-07-26 v64.0 — Android silent-fail watchdog ===
+      // Su Android (Google SpeechRecognizer), al 2° turno la start()
+      // può risolvere silenziosamente senza mai attivare il mic HW —
+      // nessun evento viene emesso. Il watchdog rileva questo caso.
+      //
+      // Timeout scelto empiricamente:
+      //   • 5000ms → sufficiente per hardware slow (Huawei Kirin ~2s)
+      //   • ma abbastanza corto da non far aspettare un utente vivo
+      //     (che di solito comincia a parlare entro 3s dal tap).
+      //
+      // Se `speechstart` non arriva entro 5s, la sessione è considerata
+      // zombie. Emettiamo error e HF backoff mette in pausa il loop.
+      if (Platform.OS === "android") {
+        if (this.micWatchdogTimer) {
+          clearTimeout(this.micWatchdogTimer);
+        }
+        this.micWatchdogTimer = setTimeout(() => {
+          this.micWatchdogTimer = null;
+          if (this.speechStartReceived) return;
+          if (this.doneReceived || this.stopRequested || this.dispatched) return;
+          console.log(
+            `[${TAG}] MIC_WATCHDOG_TIMEOUT — speechstart never received (5s) — session zombie, propagating error`
+          );
+          // Force reset dell'hw recognizer
+          try { ExpoSpeechRecognitionModule.abort(); } catch {}
+          this.notifiedUpperOnClose = true;
+          this.doneReceived = true;
+          try {
+            this.callbacks.onError?.("android_mic_silent_fail");
+          } catch {}
+          try {
+            this.forceCloseWs();
+          } catch {}
+        }, 5_000);
       }
     } catch (e: any) {
       console.log(`[${TAG}] start() FAILED: ${e?.message || e}`);
@@ -726,8 +801,11 @@ export class VoiceClientSttSession {
           console.log(`[${TAG}] audio focus release step1 FAILED: ${e?.message || e}`);
         }
 
-        // 2) Wait 150ms — Android AudioService rilascia il focus asincrono
-        await new Promise((r) => setTimeout(r, 150));
+        // 2) Wait 250ms — Android AudioService rilascia il focus asincrono
+        // v64.0: aumentato da 150ms a 250ms per EMUI/HarmonyOS (Huawei/Honor)
+        // dove il release del focus è più lento e il ciclo troppo veloce
+        // lasciava lo stato inconsistente, contribuendo al mic-block al 2° turno.
+        await new Promise((r) => setTimeout(r, 250));
 
         // 3) Set playback mode (non più record) — matches TTS_PLAY setup
         try {
@@ -1073,6 +1151,11 @@ export class VoiceClientSttSession {
   }
 
   private removeListeners(): void {
+    // === FIX 2026-07-26 v64.0 — Clear mic watchdog on teardown ===
+    if (this.micWatchdogTimer) {
+      clearTimeout(this.micWatchdogTimer);
+      this.micWatchdogTimer = null;
+    }
     try {
       this.subResult?.remove();
     } catch {}
