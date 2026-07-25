@@ -232,12 +232,69 @@ export class VoiceClientSttSession {
       throw new Error(`permission_denied${perm.canAskAgain ? "" : "_permanent"}`);
     }
 
+    // === FIX 2026-07-25 v63.9 — Fix C2: release AudioFocus PRIMA di STT ===
+    //
+    // PROBLEMA (log Fabio 25/07 06:34):
+    //   Anche dopo il fix v63.7 (GPS cache-first), sessioni STT emettono
+    //   `speechstart` seguito da `error no-speech` in ~2 secondi, in
+    //   cascata. Utente parla ma Google SpeechRecognizer non trascrive.
+    //
+    // ROOT CAUSE:
+    //   Il TTS di intro al login (playElevenLabsNativeFromUrl in
+    //   speech.ts) usa expo-audio createAudioPlayer che, su Android,
+    //   NON rilascia AudioFocus in modo affidabile su MIUI/EMUI dopo
+    //   player.remove(). AudioFocus resta detenuto in ducking mode →
+    //   quando successivamente parte Google SpeechRecognizer, il mic
+    //   apre ma con gain ridotto → speechstart falso (rumore ambientale
+    //   basso) → no-speech dopo 2s.
+    //
+    //   Fix C1 v63.8 rilascia AudioFocus DOPO la sessione STT. Ma la
+    //   PRIMA sessione dopo il login eredita focus sporco dal TTS
+    //   intro (mai pulito). Serve un release simmetrico ANCHE PRIMA.
+    //
+    // FIX C2 — Cycle simmetrico a Fix C1 all'INIZIO di start():
+    //   1. setIsAudioActiveAsync(false) → libera focus da TTS precedente
+    //   2. wait 100ms                    → Android release async
+    //   3. (continua con setAudioModeAsync(record) qui sotto)
+    //   4. setIsAudioActiveAsync(true)   → riacquisisce per record mode
+    //
+    //   +100ms al startup. Trascurabile rispetto ai 1.5s totali.
+    //   Combinato con Fix C1: DOPPIA DIFESA (release prima E dopo).
+    if (Platform.OS === "android") {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const Audio: any = require("expo-audio");
+        const t0 = Date.now();
+
+        // Step 1: deactivate — abandonAudioFocus() nativo
+        try {
+          if (typeof Audio.setIsAudioActiveAsync === "function") {
+            await Audio.setIsAudioActiveAsync(false);
+            console.log(`[${TAG}] pre-STT focus release step1 (deactivate) ok`);
+          }
+        } catch (e: any) {
+          console.log(`[${TAG}] pre-STT focus release step1 FAILED: ${e?.message || e}`);
+        }
+
+        // Step 2: wait — Android AudioService rilascia async
+        await new Promise((r) => setTimeout(r, 100));
+
+        console.log(
+          `[${TAG}] pre-STT focus pre-cycle done in ${Date.now() - t0}ms (Fix C2 v63.9)`
+        );
+      } catch (e: any) {
+        console.log(
+          `[${TAG}] pre-STT focus cycle FAILED (non-fatal): ${e?.message || e}`
+        );
+      }
+    }
+
     // 2) Audio session in record mode PRIMA di detectAudioRoute (stesso trick
     //    di voiceStream.ts riga ~416). Serve perché al turno N+1 la session
     //    può essere in playback-only e detectAudioRoute crasha.
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { setAudioModeAsync } = require("expo-audio");
+      const { setAudioModeAsync, setIsAudioActiveAsync } = require("expo-audio");
       await setAudioModeAsync({
         allowsRecording: true,
         playsInSilentMode: true,
@@ -246,6 +303,18 @@ export class VoiceClientSttSession {
         shouldRouteThroughEarpiece: false,
       });
       console.log(`[${TAG}] setAudioModeAsync(record) OK before detectAudioRoute`);
+
+      // Fix C2 step 4: reactivate per record mode (Android only)
+      if (Platform.OS === "android") {
+        try {
+          if (typeof setIsAudioActiveAsync === "function") {
+            await setIsAudioActiveAsync(true);
+            console.log(`[${TAG}] pre-STT focus reactivate (for record) ok (Fix C2 v63.9)`);
+          }
+        } catch (e: any) {
+          console.log(`[${TAG}] pre-STT focus reactivate FAILED: ${e?.message || e}`);
+        }
+      }
     } catch (e: any) {
       console.log(`[${TAG}] setAudioModeAsync FAILED: ${e?.message || e}`);
     }

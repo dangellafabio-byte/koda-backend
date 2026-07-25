@@ -25,9 +25,27 @@
  * scale, opacity, translateX) → 60fps garantiti.
  */
 import React, { useEffect, useMemo, useRef } from "react";
-import { View, StyleSheet, Animated, Easing } from "react-native";
+import { View, StyleSheet, Animated, Easing, Platform } from "react-native";
 import Svg, { Defs, RadialGradient, Stop, Circle } from "react-native-svg";
 import { useTheme } from "../lib/theme";
+
+// === TEST DIAGNOSTICO 2026-07-25 v63.9 — bagliore schermo Honor/Huawei ===
+// Utente segnala flash schermo hardware ogni ~7s SOLO su Honor/Huawei
+// (EMUI/HarmonyOS). Test 1+2 hanno escluso JS-timers e network. Il
+// pattern ~7s coincide col ciclo del breath (3.8s×2 = 7.6s), ma la
+// causa è ipotesi non ancora provata al 100%.
+//
+// Questa flag disabilita SOLO il breath cycle SOLO su Android, SOLO
+// in questo build diagnostico v63.9. Se il flash sparisce → confermato
+// colpevole → build successivo cerca soluzione tecnica (window flag
+// Android, cambio scale→opacity, o altro) che elimini flash MANTENENDO
+// l'animazione identica a iOS.
+//
+// SU iOS: TUTTO invariato (breath continua normalmente).
+// SU Android: breath disabilitato per test (orb immobile — atteso).
+// Rimuovere questa flag e riabilitare breath dopo che la vera fix
+// tecnica sarà trovata e testata.
+const KODA_BREATH_DIAGNOSTIC_DISABLE_ANDROID = Platform.OS === "android";
 
 export type OrbStatus = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 export type OrbTone =
@@ -168,6 +186,16 @@ export default function EclipseOrb({
 
   // === Continuous breath cycle (always running, regardless of status)
   useEffect(() => {
+    // === TEST DIAGNOSTICO v63.9 ===
+    // Se disabilitato per test (Android only, per verificare bagliore
+    // schermo Honor/Huawei), non avviare il loop e lascia breath a 0.
+    // iOS: sempre attivo. Rimuovere questa gate dopo il test.
+    if (KODA_BREATH_DIAGNOSTIC_DISABLE_ANDROID) {
+      console.log(
+        "[EclipseOrb] BREATH DISABLED (test diagnostico v63.9 — verifica flash Honor/Huawei)"
+      );
+      return;
+    }
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(breath, {
