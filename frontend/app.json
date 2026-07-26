@@ -50,6 +50,7 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      "./plugins/withDisableSentryXcode",
       "expo-router",
       "./plugins/withExpoAudioVoiceProcessing",
       [
@@ -87,8 +88,7 @@
             "com.google.android.googlequicksearchbox"
           ]
         }
-      ],
-      "./plugins/withDisableSentryXcode"
+      ]
     ],
     "experiments": {
       "typedRoutes": true
