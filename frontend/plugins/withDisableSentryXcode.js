@@ -64,6 +64,46 @@ const VANILLA_BUNDLE_SCRIPT = [
 function withPurgeSentryFromXcode(config) {
   return withXcodeProject(config, (config) => {
     const xcodeProject = config.modResults;
+
+    // ============================================================
+    // CINTURA DI SICUREZZA (belt-and-suspenders):
+    // Aggiungiamo SENTRY_ALLOW_FAILURE=true e SENTRY_DISABLE_AUTO_UPLOAD=true
+    // come Xcode Build Settings a livello di ogni configurazione (Debug/Release).
+    // Anche se il "rimuovi entries" qui sotto fallisse per un edge-case sul
+    // mac runner EAS, questi env vars istruiscono sentry-cli a NON far fallire
+    // il build in caso di auth token mancante.
+    //
+    // I build settings Xcode diventano automaticamente env vars per gli
+    // shell script build phases.
+    // ============================================================
+    try {
+      const configurations = xcodeProject.pbxXCBuildConfigurationSection();
+      let safetyAdded = 0;
+      for (const uuid of Object.keys(configurations)) {
+        if (uuid.endsWith("_comment")) continue;
+        const conf = configurations[uuid];
+        if (!conf || !conf.buildSettings) continue;
+        // Aggiungiamo solo se non già presenti (idempotente)
+        if (!conf.buildSettings.SENTRY_ALLOW_FAILURE) {
+          conf.buildSettings.SENTRY_ALLOW_FAILURE = '"true"';
+          safetyAdded++;
+        }
+        if (!conf.buildSettings.SENTRY_DISABLE_AUTO_UPLOAD) {
+          conf.buildSettings.SENTRY_DISABLE_AUTO_UPLOAD = '"true"';
+        }
+      }
+      if (safetyAdded > 0) {
+        console.log(
+          `[withDisableSentryXcode] 🛡️  Cintura sicurezza: SENTRY_ALLOW_FAILURE=true aggiunto a ${safetyAdded} build config`
+        );
+      }
+    } catch (e) {
+      console.warn(
+        "[withDisableSentryXcode] ⚠️  Errore cintura sicurezza (non bloccante):",
+        e.message
+      );
+    }
+
     const buildPhases =
       xcodeProject.hash.project.objects.PBXShellScriptBuildPhase || {};
 
