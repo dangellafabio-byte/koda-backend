@@ -1329,12 +1329,21 @@ async def voice_stream_handler(
         # (comportamento pre-Fase B, ora usato solo come fallback ultra-legacy).
         stt_source = (start_req.get("stt_source") or "deepgram").strip().lower()
         _client_stt_sources = ("client_apple", "client_google")
+        # === FIX 2026-07-26 v64.4 — Voice ID client-authoritative ===
+        # Il client passa esplicitamente il voice_id ElevenLabs per QUESTA
+        # sessione. Se presente, bypassiamo _resolve_voice_id(profile) e
+        # usiamo direttamente questo valore. Serve per aggirare il bug su
+        # iPhone dove il profilo (koda_voice) non viene aggiornato in tempo
+        # sul WS anche se HTTP updateProfile è andato a buon fine.
+        # Se assente/vuoto → fallback storico su _resolve_voice_id(profile).
+        client_voice_id = (start_req.get("voice_id") or "").strip() or None
         logger.info(
             f"[KODA_STREAM sess={short_id}] start lang={profile_lang} "
             f"ephemeral={ephemeral} container={container} "
             f"stt_source={stt_source} "
             f"audio_route={audio_route!r} "
-            f"city={location_city!r} region={location_region!r} country={location_country!r}"
+            f"city={location_city!r} region={location_region!r} country={location_country!r} "
+            f"client_voice_id={client_voice_id!r}"
         )
 
         # === RAMO FASE B — client STT on-device (Apple o Google) ==================
@@ -1435,6 +1444,8 @@ async def voice_stream_handler(
                             location_region=location_region,
                             location_country=location_country,
                             stt_source=engine,
+                            # === FIX v64.4 — client-authoritative voice ===
+                            client_voice_id=client_voice_id,
                         )
                         if client_alive:
                             await emit_to_client({"type": "done"})
@@ -1821,6 +1832,8 @@ async def voice_stream_handler(
                     location_region=location_region,
                     location_country=location_country,
                     stt_source=transcript_source,
+                    # === FIX v64.4 — client-authoritative voice ===
+                    client_voice_id=client_voice_id,
                 )
                 if client_alive:
                     await emit_to_client({"type": "done"})

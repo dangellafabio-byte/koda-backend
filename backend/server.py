@@ -9880,6 +9880,12 @@ async def _fast_pipeline_task(
     location_region: Optional[str] = None,
     location_country: Optional[str] = None,
     stt_source: Optional[str] = None,
+    # === FIX 2026-07-26 v64.4 — client-authoritative voice ===
+    # Se il client fornisce voice_id esplicito nel frame WS start,
+    # lo usiamo qui direttamente per la TTS, bypassando _resolve_voice_id(profile).
+    # Serve per aggirare il bug su iPhone dove il profilo può essere out-of-sync
+    # (setVoice HTTP arrivato ma profile letto dal WS con delay).
+    client_voice_id: Optional[str] = None,
 ):
     """Background task: streamma Claude con prompt condensato, frase per
     frase chiama ElevenLabs Flash v2.5, salva ogni MP3 come token e
@@ -9939,7 +9945,10 @@ async def _fast_pipeline_task(
             # TTS della frase canned. Se ElevenLabs fallisce, mandiamo comunque
             # l'evento sentence (testo visibile in chat) + meta + done — così
             # l'utente almeno LEGGE "non ho capito" invece di vedere idle muto.
-            _voice_id = _resolve_voice_id(profile)
+            # === FIX v64.4 — client_voice_id override ===
+            _voice_id = client_voice_id or _resolve_voice_id(profile)
+            if client_voice_id:
+                logger.info(f"[FAST_PIPELINE didnt_hear] voice_id from CLIENT = {_voice_id}")
             _client_el_tmp = _get_eleven_client()
             _audio_bytes: bytes = b""
             if _client_el_tmp is not None:
@@ -10064,7 +10073,16 @@ async def _fast_pipeline_task(
 
         # Voce: rispetta la scelta UNICA dell'utente (eco/aria) — bloccata
         # dopo l'onboarding. Vedi _resolve_voice_id() per la mappatura.
-        voice_id = _resolve_voice_id(profile)
+        # === FIX 2026-07-26 v64.4 — client_voice_id override ===
+        # Se il client ha passato voice_id esplicito nel WS start, lo
+        # usiamo direttamente. Bypassa il bug iPhone dove il profilo può
+        # essere out-of-sync col cambio voce fresco.
+        voice_id = client_voice_id or _resolve_voice_id(profile)
+        if client_voice_id:
+            logger.info(
+                f"[FAST_PIPELINE] voice_id from CLIENT = {voice_id} "
+                f"(profile.koda_voice={getattr(profile, 'koda_voice', '?')})"
+            )
 
         # Recent context: 16 messaggi (era 8). +500ms TTFT trascurabile,
         # ma Koda non perde il filo di conversazioni multi-turno.

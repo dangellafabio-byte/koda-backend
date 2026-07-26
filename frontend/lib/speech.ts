@@ -1946,6 +1946,13 @@ export async function voiceStreamConverse(opts: {
   ephemeral?: boolean;
   profileLang?: string;
   timeoutMs?: number;
+  // === FIX 2026-07-26 v64.4 — voiceId client-authoritative ===
+  // Se fornito, viene passato al server nel frame `start` del WS.
+  // Il server usa questo voice_id direttamente per la TTS, bypassando
+  // la lettura del profilo (che può essere out-of-sync per bug di
+  // auth-bridge o migration sync). Fallback: se undefined → server
+  // usa _resolve_voice_id(profile) come prima.
+  voiceId?: string;
   onAudioStart?: () => void;
   onMeta?: (meta: FastConverseMeta) => void;
   // Notifica del transcript finale dell'utente (per aggiornare la timeline
@@ -2367,6 +2374,7 @@ export async function voiceStreamConverse(opts: {
       locationCity: locCity,
       locationRegion: locRegion,
       locationCountry: locCountry,
+      voiceId: opts.voiceId,
     });
   } catch (e: any) {
     clearTimeout(hardTimer);

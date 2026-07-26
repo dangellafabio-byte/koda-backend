@@ -227,6 +227,13 @@ export class VoiceClientSttSession {
     locationCity?: string;
     locationRegion?: string;
     locationCountry?: string;
+    // === FIX 2026-07-26 v64.4 — Voice ID esplicito nel WS start ===
+    // Bypass definitivo del bug "voce non cambia in conversazione iPhone":
+    // il client dichiara ESPLICITAMENTE quale voce vuole per questa
+    // sessione. Il server usa questo valore direttamente invece di
+    // leggerlo dal profilo (dove può essere out-of-sync per bug auth-
+    // bridge o migration/reverse-sync). Client-side source of truth.
+    voiceId?: string;
   }): Promise<void> {
     // === OPZIONE B (2026-07-24): PORTING ANDROID NATIVE ===
     // Prima accettava solo iOS. Ora accetta Android tramite Google
@@ -409,7 +416,16 @@ export class VoiceClientSttSession {
       location_city: opts?.locationCity || undefined,
       location_region: opts?.locationRegion || undefined,
       location_country: opts?.locationCountry || undefined,
+      // === FIX v64.4 — client-authoritative voice_id ===
+      // Passiamo esplicitamente il voice_id scelto dall'utente. Il server
+      // lo usa direttamente per la TTS di QUESTA sessione, bypassando la
+      // lettura profilo (che può essere out-of-sync). Se non specificato,
+      // il server fa il fallback storico su _resolve_voice_id(profile).
+      voice_id: opts?.voiceId || undefined,
     });
+    if (opts?.voiceId) {
+      console.log(`[${TAG}] WS start sent voice_id=${opts.voiceId} (client-authoritative)`);
+    }
 
     if (this.stopRequested) {
       // === FIX 2026-07-24 v63.5 — Xiaomi cascata infinita (Fix A) ===
