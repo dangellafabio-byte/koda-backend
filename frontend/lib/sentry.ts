@@ -1,210 +1,104 @@
 /**
- * sentry.ts — Inizializzazione Sentry per Koda / L'Amico Fraterno
+ * sentry.ts — STUB NO-OP (v65.1 — 26 luglio 2026)
  *
- * Region: EU (Frankfurt) — enforced dal DSN dell'organizzazione EU.
- * Session Replay: DISATTIVATO al lancio (privacy). Riconsiderare dopo 2-4 settimane.
- * Sample rates: errori 100%, performance 20%.
+ * ⚠️  STATO: Sentry TEMPORANEAMENTE DISATTIVATO
  *
- * Env vars richieste:
- *   EXPO_PUBLIC_SENTRY_DSN — public DSN progetto koda-mobile
+ * MOTIVO: il pacchetto `@sentry/react-native` è stato rimosso da package.json
+ * il 25 luglio 2026 perché il suo script Xcode `Upload Debug Symbols to Sentry`
+ * fa fallire la build iOS EAS senza `SENTRY_AUTH_TOKEN` (che deve essere
+ * fornito come EAS Secret dall'utente — non ancora disponibile).
  *
- * Chiamare initSentry() UNA SOLA VOLTA in app/_layout.tsx PRIMA di qualsiasi render.
+ * Questo file mantiene la stessa API pubblica (`initSentry`, `Sentry.wrap`,
+ * `Sentry.captureException`, ...) come no-op, così tutti gli import esistenti
+ * continuano a funzionare senza modifiche nel resto del codice.
+ *
+ * ==== RIATTIVAZIONE FUTURA ====
+ * Quando l'utente fornirà il Sentry Auth Token:
+ *   1. `yarn add @sentry/react-native@~8` (versione compatibile Expo SDK 54)
+ *   2. Aggiungere `SENTRY_AUTH_TOKEN` come EAS Secret via https://expo.dev
+ *   3. Sostituire questo file con il vecchio implementato (git history)
+ *   4. Rimuovere lo script `postinstall` che pulisce node_modules/@sentry
  */
 
-import * as Sentry from "@sentry/react-native";
-import { Platform } from "react-native";
-import Constants from "expo-constants";
-import { scrubEventForPrivacy, scrubBreadcrumbForPrivacy } from "./sentryPrivacy";
-
-const SENTRY_DSN = process.env.EXPO_PUBLIC_SENTRY_DSN || "";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type AnyFn = (...args: any[]) => any;
 
 /**
- * Rileva se stiamo girando in Expo Go (SDK 50+).
- * Alcune feature (native frames, initial display) richiedono dev/prod build.
+ * Stub Sentry — API identica a `@sentry/react-native` ma no-op.
+ * Tutti i metodi sono safe da chiamare, non lanciano, non fanno nulla.
  */
-function isRunningInExpoGo(): boolean {
-  return Constants.appOwnership === "expo";
-}
+export const Sentry = {
+  // HOC wrap — ritorna il componente invariato
+  wrap<T>(component: T): T {
+    return component;
+  },
+  // Error capture
+  captureException(_error: unknown, _hint?: unknown): string {
+    return "";
+  },
+  captureMessage(_message: string, _level?: string): string {
+    return "";
+  },
+  // Breadcrumbs
+  addBreadcrumb(_breadcrumb: unknown): void {
+    /* no-op */
+  },
+  // User / tags / context
+  setUser(_user: unknown): void {
+    /* no-op */
+  },
+  setTag(_key: string, _value: unknown): void {
+    /* no-op */
+  },
+  setContext(_name: string, _context: unknown): void {
+    /* no-op */
+  },
+  // Scope
+  withScope(callback: (scope: any) => void): void {
+    try {
+      callback({
+        setTag: () => {},
+        setContext: () => {},
+        setExtra: () => {},
+        setUser: () => {},
+        setLevel: () => {},
+        setFingerprint: () => {},
+      });
+    } catch {
+      /* no-op */
+    }
+  },
+  // Flush / close
+  async flush(_timeout?: number): Promise<boolean> {
+    return true;
+  },
+  async close(_timeout?: number): Promise<boolean> {
+    return true;
+  },
+  // Native crash test (dev only)
+  nativeCrash(): void {
+    /* no-op */
+  },
+  // Session Replay stub
+  getReplay(): null {
+    return null;
+  },
+};
 
-let _sentryInitialized = false;
+let _warned = false;
 
+/**
+ * Inizializza Sentry — attualmente NO-OP.
+ * Idempotente e safe.
+ */
 export function initSentry(): void {
-  if (_sentryInitialized) {
-    return;
-  }
-
-  if (!SENTRY_DSN) {
-    // In dev senza DSN, evita di crashare — logga solo
+  if (_warned) return;
+  _warned = true;
+  // Log solo in dev per ricordare che è disattivato
+  if (__DEV__) {
     // eslint-disable-next-line no-console
-    console.warn(
-      "[Sentry] EXPO_PUBLIC_SENTRY_DSN non impostato — crash reporting DISABILITATO"
+    console.info(
+      "[Sentry] STUB attivo — crash reporting DISATTIVATO. Vedi lib/sentry.ts per riattivazione."
     );
-    return;
-  }
-
-  try {
-    Sentry.init({
-      dsn: SENTRY_DSN,
-
-      // === Privacy: NIENTE PII automatico ===
-      sendDefaultPii: false,
-
-      // === Sampling ===
-      sampleRate: 1.0,          // 100% errori
-      tracesSampleRate: 0.2,    // 20% performance
-
-      // === Release info (per matching source maps + aggregazione) ===
-      release: `${(Constants.expoConfig?.slug || "koda")}@${
-        Constants.expoConfig?.version || "unknown"
-      }`,
-      dist: String(
-        Platform.OS === "ios"
-          ? Constants.expoConfig?.ios?.buildNumber || "0"
-          : Constants.expoConfig?.android?.versionCode || 0
-      ),
-
-      // === Environment tag ===
-      environment: __DEV__ ? "development" : "production",
-
-      // === Integrations ===
-      // - reactNativeTracingIntegration: navigation + performance tracing (auto per expo-router)
-      // - Nota: expoRouterIntegration dedicata non è disponibile in v7.2.0,
-      //   ma reactNativeTracingIntegration copre le transazioni di navigazione base.
-      integrations: [
-        Sentry.reactNativeTracingIntegration(),
-      ],
-
-      // === Native frames tracking (solo su dev/prod build, non Expo Go) ===
-      enableNativeFramesTracking: !isRunningInExpoGo(),
-
-      // === App hang tracking (solo dev/prod build) ===
-      enableAppHangTracking: !isRunningInExpoGo(),
-
-      // === Privacy hooks — CRITICI ===
-      beforeSend: (event, hint) => scrubEventForPrivacy(event, hint),
-      beforeBreadcrumb: (breadcrumb, hint) =>
-        scrubBreadcrumbForPrivacy(breadcrumb, hint),
-
-      // === Debug (solo in dev per non spammare production) ===
-      debug: __DEV__,
-
-      // === Ignora errori "attesi" ===
-      ignoreErrors: [
-        // Errori di rete transitori — non actionable
-        "Network request failed",
-        "AbortError",
-        // WebSocket close normale
-        "WebSocket connection closed",
-      ],
-    });
-
-    // Tag globali di sessione — coarse metadata, no PII
-    Sentry.setTag("platform", Platform.OS);
-    Sentry.setTag("app_version", Constants.expoConfig?.version || "unknown");
-    Sentry.setTag(
-      "build_number",
-      Platform.OS === "ios"
-        ? String(Constants.expoConfig?.ios?.buildNumber || "0")
-        : String(Constants.expoConfig?.android?.versionCode || 0)
-    );
-    Sentry.setTag(
-      "expo_go",
-      isRunningInExpoGo() ? "true" : "false"
-    );
-
-    _sentryInitialized = true;
-    // eslint-disable-next-line no-console
-    console.log("[Sentry] initialized ✓");
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn("[Sentry] init failed:", err);
   }
 }
-
-/**
- * Imposta contesto utente ANONIMIZZATO (hashed ID).
- * MAI passare email/username plaintext. Chiamare all'onboarding/login.
- */
-export function setSentryUser(
-  hashedProfileId: string | null,
-  extra?: {
-    subscription_tier?: string;
-    stt_engine?: string;
-    hands_free?: boolean;
-    audio_route?: string;
-  }
-): void {
-  if (!_sentryInitialized) return;
-  try {
-    if (hashedProfileId) {
-      Sentry.setUser({ id: hashedProfileId });
-    } else {
-      Sentry.setUser(null);
-    }
-    if (extra?.subscription_tier) {
-      Sentry.setTag("subscription_tier", extra.subscription_tier);
-    }
-    if (extra?.stt_engine) {
-      Sentry.setTag("stt_engine", extra.stt_engine);
-    }
-    if (typeof extra?.hands_free === "boolean") {
-      Sentry.setTag("hands_free", String(extra.hands_free));
-    }
-    if (extra?.audio_route) {
-      Sentry.setTag("audio_route", extra.audio_route);
-    }
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn("[Sentry] setSentryUser failed:", err);
-  }
-}
-
-/**
- * Aggiorna tag di sessione dinamicamente (STT engine, audio route, hands-free).
- * Utile quando l'utente cambia device/output audio a runtime.
- */
-export function updateSentrySessionTags(
-  tags: Record<string, string | number | boolean>
-): void {
-  if (!_sentryInitialized) return;
-  try {
-    for (const [key, value] of Object.entries(tags)) {
-      Sentry.setTag(key, String(value));
-    }
-  } catch {
-    // silent
-  }
-}
-
-/**
- * Cattura eccezione con contesto aggiuntivo (safe, viene comunque scrubbato).
- */
-export function captureKodaError(
-  error: unknown,
-  context?: { category?: string; extra?: Record<string, any> }
-): void {
-  if (!_sentryInitialized) return;
-  try {
-    Sentry.withScope((scope) => {
-      if (context?.category) {
-        scope.setTag("koda_error_category", context.category);
-      }
-      if (context?.extra) {
-        scope.setContext("koda_context", context.extra);
-      }
-      Sentry.captureException(error);
-    });
-  } catch {
-    // silent
-  }
-}
-
-/**
- * Test intenzionale — chiamare da un bottone dev per verificare che Sentry funzioni.
- */
-export function triggerSentryTestError(): void {
-  throw new Error("Koda Sentry test error — this is intentional");
-}
-
-// Ri-esporta Sentry per chiamate avanzate dai singoli moduli
-export { Sentry };

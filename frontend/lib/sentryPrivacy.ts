@@ -14,7 +14,29 @@
  * NB: user.id deve arrivare già hashato SHA256 dal chiamante (mai email/username plaintext).
  */
 
-import type { Breadcrumb, ErrorEvent, EventHint, BreadcrumbHint } from "@sentry/react-native";
+// === STUB TYPES (v65.1) ===
+// @sentry/react-native rimosso da package.json (26 lug 2026, vedi lib/sentry.ts).
+// Ridefiniamo qui i type minimi necessari per non rompere le firme delle funzioni
+// di scrubbing (che vengono comunque chiamate solo se Sentry è attivo — vedi stub).
+// Quando Sentry verrà riattivato, reimportare da `@sentry/react-native`.
+type Breadcrumb = {
+  category?: string;
+  message?: string;
+  data?: Record<string, unknown>;
+  [k: string]: unknown;
+};
+type ErrorEvent = {
+  message?: string;
+  exception?: { values?: Array<{ value?: string; [k: string]: unknown }> };
+  user?: Record<string, unknown>;
+  contexts?: Record<string, unknown>;
+  extra?: Record<string, unknown>;
+  request?: Record<string, unknown>;
+  breadcrumbs?: Breadcrumb[];
+  [k: string]: unknown;
+};
+type EventHint = unknown;
+type BreadcrumbHint = unknown;
 
 // === Chiavi che quasi sicuramente contengono testo utente / TTS / STT ===
 const SENSITIVE_KEY_PATTERNS = [
