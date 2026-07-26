@@ -12,6 +12,19 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Callable, Awaitable
 import uuid
 from datetime import datetime, timezone, timedelta
+
+# === .env deve essere caricato PRIMA dell'init Sentry (SENTRY_DSN_BACKEND) ===
+load_dotenv()
+
+# === SENTRY 2026-07-26 v65 — crash reporting backend (EU region) ===
+# Init il più presto possibile per catturare crash all'avvio.
+# Se SENTRY_DSN_BACKEND non è configurato, no-op silenzioso.
+try:
+    from observability import init_sentry
+    init_sentry()
+except Exception as _sentry_err:  # noqa: BLE001
+    # Sentry NON deve mai bloccare l'avvio del server
+    logging.getLogger(__name__).warning(f"[Sentry] init skipped: {_sentry_err}")
 try:
     # === CONTESTO TEMPORALE LOCALE (fix 2026-06-20) ===
     # ZoneInfo è in stdlib da Python 3.9+. Lo usiamo per costruire l'ora

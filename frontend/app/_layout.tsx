@@ -14,6 +14,13 @@ import LoginScreen from "../components/LoginScreen";
 import { installDiagLogger } from "../lib/diagLogger";
 // === PIANO B FIX 2026-07-19 — static import (era lazy require) ===
 import { KODA_BACKEND_URL } from "../lib/backendUrl";
+// === SENTRY 2026-07-26 v65 — crash reporting + error tracking (EU region) ===
+// Init PRIMA di qualsiasi altro modulo che possa emettere errori.
+import { initSentry, Sentry } from "../lib/sentry";
+
+// === SENTRY INIT (deve stare in cima, prima di React) ===
+// Idempotente — safe anche in caso di doppio import.
+initSentry();
 
 // === DIAG LOGGER (sprint v12) ===
 // Install all'import del modulo (eseguito UNA volta al boot, prima
@@ -74,7 +81,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-export default function RootLayout() {
+function RootLayout() {
   // === DARK MODE DEFAULT AL PRIMO AVVIO (richiesta utente 2026-07) ===
   // Prima usavamo "sistema" (segue iOS): se il telefono era in light mode
   // l'utente vedeva l'app in chiaro al primo boot, spesso sgradevole per
@@ -253,3 +260,7 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   root: { flex: 1 },
 });
+
+// === SENTRY 2026-07-26 v65 — Wrap RootLayout per tracing automatico
+// touch events + interaction breadcrumbs + navigation transactions.
+export default Sentry.wrap(RootLayout);
