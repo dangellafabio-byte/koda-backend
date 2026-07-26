@@ -11593,6 +11593,13 @@ async def _run_pipeline_for_streamed_text(
     location_region: Optional[str] = None,
     location_country: Optional[str] = None,
     stt_source: Optional[str] = None,
+    # === FIX 2026-07-26 v64.5 — Propagazione client_voice_id ===
+    # v64.4 aveva aggiunto client_voice_id lato client (voiceStream.ts) e
+    # lato _fast_pipeline_task (destinatario finale), ma ha DIMENTICATO
+    # questo wrapper intermedio → ogni turno WS crashava con:
+    # "_run_pipeline_for_streamed_text() got an unexpected keyword argument
+    # 'client_voice_id'" → conversazione iOS completamente rotta.
+    client_voice_id: Optional[str] = None,
 ) -> None:
     """Wrap di _fast_pipeline_task per il voice streaming.
 
@@ -11612,6 +11619,7 @@ async def _run_pipeline_for_streamed_text(
         location_region=location_region,
         location_country=location_country,
         stt_source=stt_source,
+        client_voice_id=client_voice_id,
     )
 
 
