@@ -42,3 +42,4 @@ app-example
 credentials/*.p12
 credentials/*.mobileprovision
 credentials/*.cer
+credentials.json
