@@ -87,7 +87,8 @@
             "com.google.android.googlequicksearchbox"
           ]
         }
-      ]
+      ],
+      "./plugins/withDisableSentryXcode"
     ],
     "experiments": {
       "typedRoutes": true
