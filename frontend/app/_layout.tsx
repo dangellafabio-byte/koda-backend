@@ -253,6 +253,4 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
 });
 
-// === SENTRY 2026-07-26 v65 — Wrap RootLayout per tracing automatico
-// touch events + interaction breadcrumbs + navigation transactions.
 export default RootLayout;
