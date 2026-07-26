@@ -15,7 +15,9 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app"
+        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app",
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true",
+        "SENTRY_ALLOW_FAILURE": "true"
       },
       "channel": "development"
     },
@@ -31,7 +33,9 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app"
+        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app",
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true",
+        "SENTRY_ALLOW_FAILURE": "true"
       },
       "channel": "preview"
     },
@@ -45,7 +49,9 @@
       "autoIncrement": true,
       "credentialsSource": "local",
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app"
+        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app",
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true",
+        "SENTRY_ALLOW_FAILURE": "true"
       },
       "channel": "preview"
     },
@@ -56,7 +62,9 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app"
+        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app",
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true",
+        "SENTRY_ALLOW_FAILURE": "true"
       },
       "channel": "preview"
     }
