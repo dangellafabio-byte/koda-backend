@@ -1,12 +1,9 @@
 // metro.config.js
-// === SENTRY 2026-07-26 v65 — getSentryExpoConfig per Debug ID nei source maps ===
-// Sostituisce getDefaultConfig di Expo; Sentry aggiunge Debug IDs ai bundle
-// così gli stack trace in produzione risalgono ai file sorgente originali.
-const { getSentryExpoConfig } = require("@sentry/react-native/metro");
+const { getDefaultConfig } = require("expo/metro-config");
 const path = require('path');
 const { FileStore } = require('metro-cache');
 
-const config = getSentryExpoConfig(__dirname);
+const config = getDefaultConfig(__dirname);
 
 // Use a stable on-disk store (shared across web/android)
 const root = process.env.METRO_CACHE_ROOT || path.join(__dirname, '.metro-cache');

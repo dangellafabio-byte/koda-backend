@@ -87,15 +87,6 @@
             "com.google.android.googlequicksearchbox"
           ]
         }
-      ],
-      [
-        "@sentry/react-native/expo",
-        {
-          "url": "https://sentry.io/",
-          "note": "Auth via SENTRY_AUTH_TOKEN env var (EAS secret in production)",
-          "project": "koda-mobile",
-          "organization": "lamico-fraterno"
-        }
       ]
     ],
     "experiments": {
