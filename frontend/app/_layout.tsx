@@ -14,14 +14,6 @@ import LoginScreen from "../components/LoginScreen";
 import { installDiagLogger } from "../lib/diagLogger";
 // === PIANO B FIX 2026-07-19 — static import (era lazy require) ===
 import { KODA_BACKEND_URL } from "../lib/backendUrl";
-// === SENTRY 2026-07-26 v65 — crash reporting + error tracking (EU region) ===
-// Init PRIMA di qualsiasi altro modulo che possa emettere errori.
-import { initSentry, Sentry } from "../lib/sentry";
-
-// === SENTRY INIT (deve stare in cima, prima di React) ===
-// Idempotente — safe anche in caso di doppio import.
-initSentry();
-
 // === DIAG LOGGER (sprint v12) ===
 // Install all'import del modulo (eseguito UNA volta al boot, prima
 // che qualsiasi altro modulo possa emettere console.log KODA_*).
@@ -263,4 +255,4 @@ const styles = StyleSheet.create({
 
 // === SENTRY 2026-07-26 v65 — Wrap RootLayout per tracing automatico
 // touch events + interaction breadcrumbs + navigation transactions.
-export default Sentry.wrap(RootLayout);
+export default RootLayout;

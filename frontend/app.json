@@ -50,7 +50,6 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      "./plugins/withDisableSentryXcode",
       "expo-router",
       "./plugins/withExpoAudioVoiceProcessing",
       [
