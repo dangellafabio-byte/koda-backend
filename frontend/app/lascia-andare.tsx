@@ -234,16 +234,12 @@ export default function LasciaAndareScreen() {
     ]);
     entry.start();
 
-    // === PRESENZA VOCALE — Apertura (2026-07-27) =====================
-    // Riproduzione della frase pre-registrata "Prenditi il tuo tempo."
-    // in parallelo con l'animazione di ingresso. Fire-and-forget:
-    // non blocchiamo l'orb se il playback ha ritardo o fallisce.
-    // La durata del clip (~1-1.5s) rientra nella finestra dell'entry
-    // animation (2.5s), quindi voce e apparizione sono sincroni per
-    // sensazione: l'orb "arriva" mentre la voce arriva.
-    playOpenPhrase(voiceKey).catch((e) => {
-      console.warn("[LasciaAndare] open phrase failed:", e);
-    });
+    // Nota (2026-07-27 v2): la riproduzione della frase di apertura
+    // NON avviene più qui. È stata spostata dentro il setup useEffect,
+    // PRIMA di attivare il microfono, per garantire che l'audio esca
+    // dallo speaker principale (non dall'earpiece iOS) e che parta
+    // correttamente su Android (dove il recorder rubava il focus audio).
+    // Vedi commento "PRESENZA VOCALE — Apertura" nel setup useEffect.
 
     return () => {
       // Se il componente viene smontato durante l'entrata, ferma tutto
@@ -345,7 +341,56 @@ export default function LasciaAndareScreen() {
           return;
         }
 
-        // Modalità audio: recording, no ducking
+        // === FIX 2026-07-27 v2 — Audio session in DUE FASI ===============
+        //
+        // BUG risolto (segnalato dall'utente dopo la prima versione):
+        //   - iPhone: la frase di apertura si sentiva dall'EARPIECE (auricolare
+        //     in alto) invece che dal vivavoce. Causa: se `allowsRecording: true`
+        //     è già attivo quando parte il playback, iOS mette la audio session
+        //     in categoria "PlayAndRecord" che routa di default all'earpiece.
+        //   - Android (Huawei, Honor): la frase di apertura non si sentiva
+        //     proprio. Causa: il recorder attivato prima del player prendeva
+        //     l'audio focus, il player non riusciva a partire.
+        //
+        // FIX: separiamo in due fasi la audio session
+        //   FASE 1 — PLAYBACK ONLY (allowsRecording: false)
+        //     → categoria Playback su iOS, route allo SPEAKER
+        //     → nessun mic attivo, il player ha via libera anche su Android
+        //     → riproduciamo "Prenditi il tuo tempo." e ATTENDIAMO che finisca
+        //   FASE 2 — RECORDING (allowsRecording: true)
+        //     → categoria PlayAndRecord su iOS (il mic è ora attivo per il VAD)
+        //     → prepareToRecordAsync + record() + polling metering
+        //
+        // La stessa strategia viene usata in reverse in handleExit per la
+        // frase di chiusura.
+
+        // FASE 1: Audio mode = PLAYBACK only (speaker routing)
+        try {
+          await setAudioModeAsync({
+            allowsRecording: false,
+            playsInSilentMode: true,
+            shouldPlayInBackground: false,
+            shouldRouteThroughEarpiece: false,
+          });
+          await setIsAudioActiveAsync(true);
+        } catch {}
+
+        if (cancelled) return;
+
+        // === PRESENZA VOCALE — Apertura (v2, 2026-07-27) ================
+        // Riproduzione BLOCCANTE della frase di apertura mentre l'audio
+        // session è ancora in modalità playback → speaker principale.
+        // Fire-and-forget su errore (non vogliamo bloccare l'utente se
+        // il file audio non parte per qualche motivo).
+        try {
+          await playOpenPhrase(voiceKey);
+        } catch (e) {
+          console.warn("[LasciaAndare] open phrase failed:", e);
+        }
+
+        if (cancelled) return;
+
+        // FASE 2: Audio mode = RECORDING (mic attivo per il VAD)
         try {
           await setAudioModeAsync({
             allowsRecording: true,
@@ -507,12 +552,51 @@ export default function LasciaAndareScreen() {
     voiceScale.stopAnimation();
     voiceScale.setValue(1.0);
 
-    // === PRESENZA VOCALE — Chiusura (2026-07-27) =====================
-    // Riproduzione della frase pre-registrata "Grazie per averlo lasciato
-    // andare." PRIMA che l'orb inizi a scomparire. Sequenza cerimoniale
-    // richiesta dall'utente (Opzione B):
+    // === FIX 2026-07-27 v2 — Rilascio mic PRIMA della frase di chiusura ==
+    // Stessa strategia in reverse rispetto al setup:
+    //   1) Fermiamo e rilasciamo il recorder (libera il mic)
+    //   2) Passiamo la audio session a PLAYBACK-ONLY (speaker su iOS)
+    //   3) Riproduciamo la frase di chiusura
+    //   4) Animazione di uscita + teardown finale
+    //
+    // Perché così: se restassimo in modalità "PlayAndRecord" mentre suoniamo
+    // la chiusura, iPhone routerebbe il suono all'earpiece (auricolare)
+    // e Android potrebbe non riprodurlo del tutto.
+    const rec = recorderRef.current;
+    if (rec) {
+      try {
+        await rec.stop();
+      } catch {}
+      try {
+        // Cattura l'URI PRIMA di release per la cancellazione file
+        const statusUrl = rec.getStatus?.()?.url || null;
+        const directUri = rec.uri || null;
+        tempUriRef.current = statusUrl || directUri || tempUriRef.current;
+      } catch {}
+      try {
+        rec.release?.();
+      } catch {}
+      recorderRef.current = null;
+    }
+
+    // Passa la audio session in modalità PLAYBACK-only per garantire
+    // lo speaker (non l'earpiece) sulla frase di chiusura.
+    try {
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+        shouldPlayInBackground: false,
+        shouldRouteThroughEarpiece: false,
+      });
+      await setIsAudioActiveAsync(true);
+    } catch {}
+
+    // === PRESENZA VOCALE — Chiusura (v2, 2026-07-27) =================
+    // Riproduzione BLOCCANTE della frase pre-registrata "Grazie per averlo
+    // lasciato andare." PRIMA che l'orb inizi a scomparire. Sequenza
+    // cerimoniale richiesta dall'utente (Opzione B):
     //   1) La stanza resta visibile e l'orb continua il suo respiro
-    //   2) Koda pronuncia la frase di chiusura (~1.5s)
+    //   2) Koda pronuncia la frase di chiusura (~1.5s) dallo SPEAKER
     //   3) SOLO al termine del playback parte l'animazione di uscita
     //
     // Se il playback fallisce o timeouta (safety 5s nel modulo helper),
@@ -550,8 +634,8 @@ export default function LasciaAndareScreen() {
       ]).start(() => resolve());
     });
 
-    // Teardown risorse (recorder, file tmp, audio session) DOPO che
-    // l'animazione è finita per non introdurre jank sul bridge nativo
+    // Teardown risorse (file tmp, audio session) DOPO che l'animazione
+    // è finita. Il recorder è già stato fermato/rilasciato sopra.
     await teardown();
 
     // router.back() se possibile, altrimenti torna alla home.
