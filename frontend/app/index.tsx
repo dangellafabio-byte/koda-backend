@@ -4835,8 +4835,27 @@ export default function Taccuino() {
               // file (rimozione rimandata al prossimo refactor per non
               // introdurre regressioni). Qui semplicemente navighiamo
               // al nuovo screen /lascia-andare.
+              //
+              // === 2026-07-27 — Presenza vocale in apertura/chiusura ===
+              // Passiamo la voce Koda scelta dall'utente come route param
+              // così la Stanza sa quale file audio pre-registrato
+              // riprodurre ("Prenditi il tuo tempo" all'apertura,
+              // "Grazie per averlo lasciato andare" alla chiusura).
+              // Mappatura (sync con backend server.py KODA_VOICES):
+              //   POuqf18evoXOKIqV2Px7 (Cielo)  → "aria"
+              //   ll9WG7PDTuyHwgC5MD6g (Vento) → "theo"
+              // Preferiamo koda_voice se presente (fonte di verità),
+              // altrimenti derivo da tts_voice_id, altrimenti "aria" (default).
+              const VID_TO_KV: Record<string, "aria" | "theo"> = {
+                "POuqf18evoXOKIqV2Px7": "aria",
+                "ll9WG7PDTuyHwgC5MD6g": "theo",
+              };
+              const kv =
+                ((profile as any)?.koda_voice as string | undefined) ||
+                VID_TO_KV[(profile?.settings?.tts_voice_id as string) || ""] ||
+                "aria";
               try {
-                router.push("/lascia-andare");
+                router.push(`/lascia-andare?voice=${encodeURIComponent(kv)}`);
               } catch (e) {
                 console.warn("[LasciaAndare] navigation error:", e);
               }

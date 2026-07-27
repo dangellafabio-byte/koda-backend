@@ -32,7 +32,7 @@ import {
   Animated,
   Easing,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
@@ -44,6 +44,11 @@ import {
 } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 import EclipseOrb, { OrbStatus } from "../components/EclipseOrb";
+import {
+  playOpenPhrase,
+  playClosePhrase,
+  stopAll as stopVoicePhrase,
+} from "../lib/lasciaAndareVoice";
 
 // ==== VAD tuning (calibrato sulla stessa scala di lib/voice.ts) ====
 const SPEECH_DB = -35; // sopra questa soglia → voce presente
@@ -71,6 +76,22 @@ const VOICE_RELEASE_MS = 500; // Ritorno dolce a 1.0 quando la voce cessa
 export default function LasciaAndareScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  // === VOICE PARAM (2026-07-27) — presenza vocale in apertura/chiusura ===
+  //
+  // La schermata riceve la voce Koda scelta dall'utente come route param
+  // (es. router.push("/lascia-andare?voice=aria")). Serve per riprodurre
+  // due brevi frasi pre-registrate:
+  //   - Apertura: "Prenditi il tuo tempo."
+  //   - Chiusura: "Grazie per averlo lasciato andare."
+  //
+  // I file audio sono BUNDLED con l'app (assets/sounds/lascia-andare/*.mp3)
+  // — nessuna chiamata di rete a runtime, coerentemente col vincolo di
+  // privacy della Stanza dello Sfogo.
+  //
+  // Chiavi accettate: "aria"|"cielo" (femminile) | "echo"|"vento" (maschile).
+  // Fallback Cielo se assente o non riconosciuta.
+  const params = useLocalSearchParams<{ voice?: string }>();
+  const voiceKey = (params?.voice as string) || "aria";
   // === FIX 2026-07-26 v64.1 — Orb sempre in "recording" nella stanza sfogo ===
   //
   // PROBLEMA (Fabio 26/07):
@@ -212,9 +233,23 @@ export default function LasciaAndareScreen() {
       ]),
     ]);
     entry.start();
+
+    // === PRESENZA VOCALE — Apertura (2026-07-27) =====================
+    // Riproduzione della frase pre-registrata "Prenditi il tuo tempo."
+    // in parallelo con l'animazione di ingresso. Fire-and-forget:
+    // non blocchiamo l'orb se il playback ha ritardo o fallisce.
+    // La durata del clip (~1-1.5s) rientra nella finestra dell'entry
+    // animation (2.5s), quindi voce e apparizione sono sincroni per
+    // sensazione: l'orb "arriva" mentre la voce arriva.
+    playOpenPhrase(voiceKey).catch((e) => {
+      console.warn("[LasciaAndare] open phrase failed:", e);
+    });
+
     return () => {
       // Se il componente viene smontato durante l'entrata, ferma tutto
       entry.stop();
+      // Ferma anche eventuale playback in corso (safety net)
+      stopVoicePhrase();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -472,6 +507,22 @@ export default function LasciaAndareScreen() {
     voiceScale.stopAnimation();
     voiceScale.setValue(1.0);
 
+    // === PRESENZA VOCALE — Chiusura (2026-07-27) =====================
+    // Riproduzione della frase pre-registrata "Grazie per averlo lasciato
+    // andare." PRIMA che l'orb inizi a scomparire. Sequenza cerimoniale
+    // richiesta dall'utente (Opzione B):
+    //   1) La stanza resta visibile e l'orb continua il suo respiro
+    //   2) Koda pronuncia la frase di chiusura (~1.5s)
+    //   3) SOLO al termine del playback parte l'animazione di uscita
+    //
+    // Se il playback fallisce o timeouta (safety 5s nel modulo helper),
+    // proseguiamo comunque con l'uscita — non blocchiamo mai l'utente.
+    try {
+      await playClosePhrase(voiceKey);
+    } catch (e) {
+      console.warn("[LasciaAndare] close phrase failed:", e);
+    }
+
     // === ANIMAZIONE DI USCITA (1.2s) ==================================
     // L'orb si rimpicciolisce lentamente verso il centro e sparisce nel
     // nero. Comunica visivamente che quello che è stato detto sparisce
@@ -516,7 +567,7 @@ export default function LasciaAndareScreen() {
     } catch {
       router.replace("/");
     }
-  }, [router, teardown, orbEntryScale, orbOpacity, hintOpacity, voiceScale]);
+  }, [router, teardown, orbEntryScale, orbOpacity, hintOpacity, voiceScale, voiceKey]);
 
   // === RENDER ==========================================================
   return (
