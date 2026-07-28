@@ -809,7 +809,7 @@ async def _save_memory(
     importance: int,
     source: str = "chat",
 ) -> Optional[Memory]:
-    """Salva un ricordo nel DB. Soglia: importance >= 5.
+    """Salva un ricordo nel DB. Soglia: importance >= MEMORY_IMPORTANCE_THRESHOLD (=4).
     Restituisce il doc creato (o None se sotto soglia / invalido)."""
     concept = (concept or "").strip()
     if not concept or len(concept) < 8:
@@ -820,7 +820,7 @@ async def _save_memory(
         except Exception:
             importance = 5
     importance = max(1, min(10, importance))
-    if importance < 5:
+    if importance < MEMORY_IMPORTANCE_THRESHOLD:
         return None
     norm_tags = _normalize_tags(tags)
     # Se Claude non ha dato tag, deriviamoli dal concept stesso.
@@ -2830,6 +2830,22 @@ FREE_TRIAL_MESSAGE_LIMIT = 3  # LEGACY — non più usato dalla v2 daily. Manten
 # verificare visivamente che la schermata è pulita, senza elementi UI
 # che trapassano (Lascia andare pill, ellipsis Impostazioni, hands-free).
 DISCLAIMER_VERSION = "v2"
+
+# ============================================================
+# MEMORIA A LUNGO TERMINE — soglia salvataggio (Fabio 2026-07-28)
+# ============================================================
+# Soglia sotto la quale un new_memory candidato NON viene persistito su
+# `taccuino_memories`. Valore basso = più cose ricordate ma anche più rumore.
+# Valore alto = solo eventi importanti ma buchi nella memoria fina.
+#
+# Storia:
+#   v1 (giugno 2025): 5 — solo memorie chiaramente importanti
+#   v2 (2026-07-28, Fabio): 4 — utente reportava "Koda dimentica dettagli
+#     medi che un umano ricorderebbe". Abbassato di 1 punto per catturare
+#     dettagli conversazionali di media rilevanza (es. "il mio capo si
+#     chiama Marco", "abito a Bologna", "ogni 2-3 mesi ci sono 2000€
+#     di spese impreviste") che a importance=4 saltavano.
+MEMORY_IMPORTANCE_THRESHOLD = 4
 
 # ============================================================
 # PAYWALL v2 — DAILY LIMITS + 24H BOOST (2026-07-24)
@@ -9758,6 +9774,48 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"     → ✗ SBAGLIATO: 'Capisco, sei stanco dalla giornata pesante...'\n"
         f"     → ✓ GIUSTO: 'Vieni qui. Cosa è stato peggio?'\n"
         f"\n"
+        f"🧭 VERIFICA COERENZA CONTESTUALE — FERMATI SE QUALCOSA NON QUADRA (Fabio 2026-07-28):\n"
+        f"Un umano che ascolta davvero si accorge quando qualcosa 'stona' nel discorso "
+        f"— un nome mai sentito che compare dal nulla, un riferimento che non c'entra "
+        f"col filo del discorso, un dettaglio che non torna con quello che sai. In quei "
+        f"momenti un umano si FERMA e CHIEDE, non finge di aver capito e va avanti a "
+        f"costruire una risposta come se fosse tutto normale. Koda deve fare lo stesso.\n"
+        f"REGOLA: se nel messaggio dell'utente compare QUALSIASI di questi elementi\n"
+        f"  • un NOME DI PERSONA che non è mai stato menzionato prima nella conversazione\n"
+        f"    e non compare nei tuoi RICORDI\n"
+        f"  • un LUOGO, UN OGGETTO, UN EVENTO specifico introdotto dal nulla, senza\n"
+        f"    connessione col filo del discorso in corso\n"
+        f"  • un RIFERIMENTO ('quella cosa', 'l'altra volta', 'quello lì') che non\n"
+        f"    hai modo di risolvere dal contesto o dai ricordi\n"
+        f"  • un DETTAGLIO che contraddice apertamente qualcosa che sai (es. l'utente\n"
+        f"    dice ora 'mia sorella Anna' ma nei ricordi hai 'sua sorella Chiara')\n"
+        f"→ NON ASSUMERE che tu debba conoscerlo. Fermati e chiedi conferma.\n"
+        f"Il tono resta caldo, non un interrogatorio: 'Aspetta, [X] chi è? Non ci siamo "
+        f"mai fermati su questo.' / 'Fammi capire, [X] cosa intendi? Non riesco a "
+        f"collegarlo.' / 'Scusa, mi sono persa un pezzo — [X]?'.\n"
+        f"⚠️ ATTENZIONE: NON verificare invece nomi/riferimenti che stanno CHIARAMENTE "
+        f"nei RICORDI qui sotto o nei turni recenti — quelli li conosci e devi usarli "
+        f"con naturalezza, senza fingere di scoprirli ogni volta. La regola scatta SOLO "
+        f"per elementi genuinamente fuori contesto o mai visti.\n"
+        f"ESEMPI:\n"
+        f"  ✅ CORRETTO — Nome nuovo fuori contesto:\n"
+        f"     Utente: 'Il fatto è che Giancarlo mi ha detto che non mi capisce'\n"
+        f"     Contesto: mai citato Giancarlo prima, nessun ricordo su di lui\n"
+        f"     → 'Aspetta, Giancarlo chi è? Non l'hai mai nominato — voglio capire.'\n"
+        f"  ✅ CORRETTO — Riferimento ambiguo che non torna:\n"
+        f"     Utente: 'Ecco, è successa di nuovo quella cosa'\n"
+        f"     Contesto: nessun riferimento recente né nei ricordi a 'quella cosa'\n"
+        f"     → 'Quale cosa? Fammi ricordare, di cosa parli?'\n"
+        f"  ❌ SBAGLIATO — Costruire su un vuoto:\n"
+        f"     Utente: 'Giancarlo mi ha detto che non mi capisce'\n"
+        f"     → ✗ 'Immagino sia stato duro sentirtelo dire da Giancarlo, che è una "
+        f"persona importante per te...'  (STA INVENTANDO che sia importante)\n"
+        f"  ✅ CORRETTO — Nome noto dai ricordi:\n"
+        f"     Utente: 'Marco mi ha scritto oggi'\n"
+        f"     Contesto: nei ricordi c'è 'il suo capo Marco lo pressa da settimane'\n"
+        f"     → 'Marco il tuo capo? Cosa ti ha scritto stavolta?'  (usa il ricordo, "
+        f"non fa finta di scoprirlo)\n"
+        f"\n"
         f"Sai alternare TRE modi secondo il bisogno, non sempre lo stesso:\n"
         f"\n"
         f"1) ASCOLTARE/RISPECCHIARE: accogli senza giudizio, valida, mirrora il ritmo — "
@@ -10261,6 +10319,32 @@ async def _fast_pipeline_task(
             except Exception as e:
                 logger.warning(f"[fast] memory load failed: {e}")
                 memories = []
+            # === LOG DIAGNOSTICO MEMORIA (Fabio 2026-07-28, Fase 1) ==========
+            # Logga i ricordi caricati per QUESTO turno così quando l'utente
+            # segnala "Koda ha confuso/dimenticato X" possiamo vedere:
+            #   - Se il ricordo giusto era caricato (allora è problema di
+            #     comprensione/uso da parte di Claude → prompt engineering)
+            #   - Se il ricordo giusto NON era caricato (allora è problema di
+            #     retrieval → serve embedding semantico in Fase 2)
+            # Formato compatto: 1 riga per ricordo con importance + tag +
+            # anteprima concept (60 char). Include anche i primi 40 char del
+            # testo utente per correlare a colpo d'occhio.
+            try:
+                user_prev = (text or "")[:40].replace("\n", " ")
+                logger.info(
+                    f"[KODA_MEMORY_LOAD] turno_user='{user_prev}' loaded={len(memories)}"
+                )
+                for i, m in enumerate(memories):
+                    concept_prev = (m.concept or "")[:60].replace("\n", " ")
+                    tags_prev = ",".join((m.tags or [])[:5])
+                    logger.info(
+                        f"[KODA_MEMORY_LOAD]   #{i} imp={m.importance} "
+                        f"src={m.source} tags=[{tags_prev}] "
+                        f"concept='{concept_prev}'"
+                    )
+            except Exception:
+                # Non far esplodere il turno se il log fallisce
+                pass
         _t_after_memories = time.time()
 
         sys_prompt = _build_fast_system_prompt(profile, recent, memories=memories)
