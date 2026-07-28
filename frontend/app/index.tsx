@@ -77,6 +77,7 @@ import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
 import KodaSplash from "../components/KodaSplash";
 import KodaTour, { TourStep } from "../components/KodaTour";
 import DisclaimerScreen from "../components/DisclaimerScreen";
+import * as ScreenDimmer from "../lib/screenDimmer";
 import * as SecureStore from "expo-secure-store";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
@@ -1331,6 +1332,11 @@ export default function Taccuino() {
       if (next === "background" || next === "inactive") {
         // App va in background: ferma TUTTO subito.
         userInteractedRef.current = false;
+        // === AUTO-DIM (2026-07-28) — stop e restore brightness ==============
+        // Quando l'app va in background dobbiamo ripristinare la brightness
+        // originale (iOS resetta comunque da solo ma noi puliamo lo stato
+        // interno per non applicare fade "fantasma" al ritorno).
+        try { ScreenDimmer.stopWatching(); } catch {}
         if (recRef.current) {
           try { recRef.current.cancel?.(); } catch {}
           recRef.current = null;
@@ -1551,6 +1557,40 @@ export default function Taccuino() {
       try {
         deactivateKeepAwake("koda-conversation");
       } catch {}
+    };
+  }, []);
+
+  // === AUTO-DIM SCHERMO durante hands-free (Fabio 2026-07-28) =================
+  // Riduce il consumo batteria/calore su iPhone durante conversazione hands-free
+  // quando l'utente non sta toccando lo schermo (sta solo ascoltando/parlando).
+  //
+  // Regola concordata:
+  //   - Stati attivi che triggerano il watching:
+  //       recording, thinking, speaking, o Stanza dello Sfogo attiva
+  //   - Dopo 35s di inattività touch → fade graduale a 50% (2s)
+  //   - Al primo touch → restore rapido al 100% originale (300ms)
+  //   - Su uscita dallo stato attivo (idle) → restore automatico
+  //   - Un solo livello di dim (50%, non ulteriori scaglioni sotto)
+  //
+  // Il monitoraggio del touch avviene sul View root via onStartShouldSetResponder
+  // (vedi return principale) → chiama ScreenDimmer.noteInteraction() ad ogni tap.
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    const isHandsFreeActive =
+      status === "recording" || status === "thinking" || status === "speaking";
+    if (isHandsFreeActive) {
+      // Fire-and-forget; l'implementazione è idempotente
+      ScreenDimmer.startWatching().catch(() => {});
+    } else {
+      ScreenDimmer.stopWatching().catch(() => {});
+    }
+  }, [status]);
+
+  // Cleanup finale del dimmer su unmount — safety net per assicurare
+  // che la brightness sia sempre restaurata, anche in caso di crash/exit.
+  useEffect(() => {
+    return () => {
+      ScreenDimmer.stopWatching().catch(() => {});
     };
   }, []);
 
@@ -6764,7 +6804,22 @@ export default function Taccuino() {
     // ignorati intenzionalmente: il tema vince sempre
   }
   return (
-    <View style={{ flex: 1 }}>
+    <View
+      style={{ flex: 1 }}
+      // === AUTO-DIM SCHERMO — hook touch a livello root (2026-07-28) ===
+      // onStartShouldSetResponder è un handler passivo: fired al primo
+      // tocco senza consumare l'evento (ritorna false → l'evento continua
+      // a propagare ai figli). Ogni volta che l'utente tocca lo schermo:
+      //   - Se siamo dimmerati → ScreenDimmer.noteInteraction() fa fade UP
+      //   - Reset del timer di 35s per il prossimo dim
+      // No-op se ScreenDimmer non è in watching (fuori da hands-free).
+      onStartShouldSetResponder={() => {
+        try {
+          ScreenDimmer.noteInteraction();
+        } catch {}
+        return false; // Non consumiamo l'evento
+      }}
+    >
       {screenInner}
       {confessionalTint}
       {neonBorderEl}
