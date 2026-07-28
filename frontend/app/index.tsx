@@ -76,6 +76,7 @@ import LiquidInversionBg from "../components/LiquidInversionBg";
 import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
 import KodaSplash from "../components/KodaSplash";
 import KodaTour, { TourStep } from "../components/KodaTour";
+import DisclaimerScreen from "../components/DisclaimerScreen";
 import * as SecureStore from "expo-secure-store";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
@@ -348,6 +349,18 @@ export default function Taccuino() {
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
+  // === DISCLAIMER blocking overlay (Fabio 2026-07-28) =========================
+  // `disclaimerState`:
+  //   'loading'  → chiamata /legal/disclaimer/status in corso (nascondi UI)
+  //   'blocking' → utente non ha accettato (o versione diversa) → mostra overlay
+  //   'accepted' → utente ha accettato la versione corrente → render app normale
+  // Al boot facciamo un GET al backend per capire lo stato reale.
+  // Su errore di rete assumiamo 'accepted' (fail-open): meglio mostrare l'app
+  // che bloccarla se il backend non risponde — l'utente potrà accettare
+  // al prossimo boot quando la connessione torna.
+  const [disclaimerState, setDisclaimerState] = useState<
+    "loading" | "blocking" | "accepted"
+  >("loading");
   const [status, _setStatusRaw] = useState<Status>("idle");
   // === FIX 2026-06-28 v32 — DIAG STATUS TRACING ===
   // Wrapper su setStatus per loggare OGNI transizione di stato con
@@ -398,8 +411,29 @@ export default function Taccuino() {
     console.log(
       `[KODA_BUILDTAG] build-v64.4-client-voice-id-ws v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=2026-07-26 ` +
         `verbose=${KODA_DEBUG_VERBOSE} ` +
-        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_CACHE_FIRST_V63_7,TTS_AUDIOFOCUS_CYCLE_V63_8_FIX_C1,PRE_STT_AUDIOFOCUS_CYCLE_V63_9_FIX_C2,BREATH_REENABLED_V64_0,TAP_TO_RESET_UNIFIED_V64_0,ANDROID_MIC_WATCHDOG_V64_0,ANDROID_STT_PRE_ABORT_V64_0,KEEP_AWAKE_STABLE_SESSION_V64_0,NEONBORDER_SLOW_ANDROID_V64_1,ANDROID_CONTINUOUS_NO_BEEP_V64_1,ANDROID_SILENCE_TIMEOUT_LONGER_V64_1,ANDROID_NOSPEECH_GRACEFUL_V64_1,PREVIEW_AUDIO_FOCUS_REACQUIRE_V64_1,INTRO_VOICE_PREVIEW_FOCUS_V64_1,LASCIA_ANDARE_ORB_ALWAYS_RECORDING_V64_2,VOICE_ID_KODA_VOICE_SYNC_V64_2${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
+        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_CACHE_FIRST_V63_7,TTS_AUDIOFOCUS_CYCLE_V63_8_FIX_C1,PRE_STT_AUDIOFOCUS_CYCLE_V63_9_FIX_C2,BREATH_REENABLED_V64_0,TAP_TO_RESET_UNIFIED_V64_0,ANDROID_MIC_WATCHDOG_V64_0,ANDROID_STT_PRE_ABORT_V64_0,KEEP_AWAKE_STABLE_SESSION_V64_0,NEONBORDER_SLOW_ANDROID_V64_1,ANDROID_CONTINUOUS_NO_BEEP_V64_1,ANDROID_SILENCE_TIMEOUT_LONGER_V64_1,ANDROID_NOSPEECH_GRACEFUL_V64_1,PREVIEW_AUDIO_FOCUS_REACQUIRE_V64_1,INTRO_VOICE_PREVIEW_FOCUS_V64_1,LASCIA_ANDARE_ORB_ALWAYS_RECORDING_V64_2,VOICE_ID_KODA_VOICE_SYNC_V64_2,DISCLAIMER_OVERLAY_V64_5${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
+  }, []);
+
+  // === DISCLAIMER — check al boot (Fabio 2026-07-28) =========================
+  // Chiama /legal/disclaimer/status per capire se mostrare l'overlay blocking.
+  // Fail-open in caso di errore: se il backend è irraggiungibile mostriamo
+  // comunque l'app, l'accettazione si potrà fare al prossimo boot online.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const st = await api.getDisclaimerStatus();
+        if (cancelled) return;
+        setDisclaimerState(st.needs_acceptance ? "blocking" : "accepted");
+      } catch (e) {
+        console.warn("[DISCLAIMER] status check failed, fail-open:", e);
+        if (!cancelled) setDisclaimerState("accepted");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
   const [textInput, setTextInput] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -6737,6 +6771,17 @@ export default function Taccuino() {
       {activationPulseEl}
       {tourOverlay}
       {!tourActive && !confessionalMode ? <ProactiveOffer theme={theme} /> : null}
+      {/* === DISCLAIMER blocking overlay (Fabio 2026-07-28) ==================
+          Coperto TUTTO il resto quando `disclaimerState === "blocking"`.
+          Reso in ultimo così sta sopra ogni altro layer (tour, splash, ecc.).
+          Al tap "Ho capito" il componente chiama l'endpoint di accettazione
+          e triggera onAccepted → passiamo lo state a "accepted" e l'overlay
+          scompare rivelando l'app sottostante. */}
+      {disclaimerState === "blocking" ? (
+        <View style={StyleSheet.absoluteFill}>
+          <DisclaimerScreen onAccepted={() => setDisclaimerState("accepted")} />
+        </View>
+      ) : null}
     </View>
   );
 }

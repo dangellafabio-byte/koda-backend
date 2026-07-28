@@ -541,6 +541,37 @@ export const api = {
       throw e;
     }
   },
+
+  // === DISCLAIMER "Koda non è terapia" (Fabio 2026-07-28) ==================
+  // Wrapper per l'overlay onboarding che chiarisce che Koda non sostituisce
+  // un percorso professionale. `getDisclaimerStatus()` viene chiamato al
+  // boot dell'app per capire se mostrare l'overlay blocking;
+  // `acceptDisclaimer()` viene chiamato al tap "Ho capito" per registrare
+  // timestamp + versione accettata sul profilo.
+  getDisclaimerStatus: async (): Promise<{
+    current_version: string;
+    accepted_version: string | null;
+    accepted_at: string | null;
+    needs_acceptance: boolean;
+  }> => {
+    const r = await fetch(`${API_BASE}/legal/disclaimer/status`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  },
+  acceptDisclaimer: async (): Promise<{
+    accepted_at: string;
+    accepted_version: string;
+  }> => {
+    const r = await fetch(`${API_BASE}/legal/disclaimer/accept`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    if (!r.ok) {
+      const t = await r.text().catch(() => "");
+      throw new Error(`HTTP ${r.status}: ${t.slice(0, 200)}`);
+    }
+    return r.json();
+  },
 };
 
 // Tone -> color/icon map (UI helper)

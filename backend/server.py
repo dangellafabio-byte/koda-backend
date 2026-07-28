@@ -1503,6 +1503,17 @@ class Profile(BaseModel):
     # Popolata quando l'utente dice "abito a X" / "vivo a Y" / "casa mia è a Z"
     # → Claude estrae e mette in `home_update` nel JSON, il server salva qui.
     home_city: Optional[str] = None
+    # === DISCLAIMER "Koda non è terapia" (Fabio 2026-07-28) =================
+    # Prima del primo uso reale l'utente deve leggere e accettare
+    # esplicitamente un disclaimer che chiarisce che Koda non sostituisce
+    # un percorso professionale (rif. legge 56/1989 art. 1,3 e art. 348 CP).
+    # Il tap sul pulsante "Ho capito" registra qui timestamp + versione.
+    # Se in futuro bumpi DISCLAIMER_VERSION → tutti gli utenti (anche già
+    # onboarded) rivedono la nuova versione al prossimo apri app.
+    #   - disclaimer_accepted_at: None ⇒ mai accettato → mostra overlay
+    #   - disclaimer_version:     versione del testo accettato ("v1", "v2"…)
+    disclaimer_accepted_at: Optional[str] = None
+    disclaimer_version: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -2679,6 +2690,67 @@ async def debug_last_turn_timing():
     }
 
 
+@api_router.get("/legal/disclaimer/status")
+async def api_get_disclaimer_status():
+    """Ritorna lo stato del disclaimer per l'utente corrente.
+
+    Il client usa questo endpoint per decidere se mostrare l'overlay
+    disclaimer al primo avvio (o dopo un bump di DISCLAIMER_VERSION).
+
+    Response:
+      {
+        "current_version": "v1",
+        "accepted_version": "v1" | None,
+        "accepted_at": "2026-07-28T09:12:34Z" | None,
+        "needs_acceptance": True | False
+      }
+
+    Il flag `needs_acceptance` è True se:
+      - l'utente non ha mai accettato (accepted_at è None), OPPURE
+      - l'utente ha accettato una versione diversa da quella corrente
+        (es. abbiamo aggiornato il testo dopo review legale)
+    """
+    p = await get_or_create_profile()
+    accepted_v = p.disclaimer_version
+    accepted_at = p.disclaimer_accepted_at
+    needs = (accepted_at is None) or (accepted_v != DISCLAIMER_VERSION)
+    return {
+        "current_version": DISCLAIMER_VERSION,
+        "accepted_version": accepted_v,
+        "accepted_at": accepted_at,
+        "needs_acceptance": needs,
+    }
+
+
+@api_router.post("/legal/disclaimer/accept")
+async def api_accept_disclaimer():
+    """Registra l'accettazione del disclaimer da parte dell'utente.
+
+    Chiamato dal client dopo il tap sul bottone "Ho capito" nella
+    schermata blocking. Salva timestamp + versione accettata sul profilo.
+
+    Idempotente: chiamate multiple sullo stesso stato non causano errori.
+    Se l'utente accetta una versione, poi aggiorniamo DISCLAIMER_VERSION,
+    poi riaccetta la nuova → sovrascriviamo timestamp e version.
+
+    Response: {"accepted_at": "...", "accepted_version": "v1"}
+    """
+    p = await get_or_create_profile()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.taccuino_profile.update_one(
+        {"id": p.id},
+        {"$set": {
+            "disclaimer_accepted_at": now_iso,
+            "disclaimer_version": DISCLAIMER_VERSION,
+            "updated_at": now_iso,
+        }},
+    )
+    return {
+        "accepted_at": now_iso,
+        "accepted_version": DISCLAIMER_VERSION,
+    }
+
+
 @api_router.get("/usage")
 async def api_get_usage():
     """Restituisce lo stato di consumo messaggi dell'utente.
@@ -2741,6 +2813,18 @@ async def api_get_usage():
 # ============================================================
 
 FREE_TRIAL_MESSAGE_LIMIT = 3  # LEGACY — non più usato dalla v2 daily. Mantenuto per retro-compat.
+
+# ============================================================
+# DISCLAIMER "Koda non è terapia" — versioning (Fabio 2026-07-28)
+# ============================================================
+# Bumpa questa costante quando cambia il TESTO del disclaimer legale.
+# Il client confronta profile.disclaimer_version con questa costante:
+# se diversi, l'utente rivede il disclaimer e deve accettarlo di nuovo.
+# Rif. legali: legge 56/1989 art. 1,3 (professione psicologo);
+#              art. 348 CP (esercizio abusivo di professione).
+# NOTA: il testo va validato da un avvocato prima del lancio pubblico —
+# vedi discussione con Fabio 2026-07-28.
+DISCLAIMER_VERSION = "v1"
 
 # ============================================================
 # PAYWALL v2 — DAILY LIMITS + 24H BOOST (2026-07-24)
@@ -9630,6 +9714,44 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"perseguita emotivamente su cose che l'altro ha già superato o minimizzato. "
         f"Solo se l'utente stesso ritorna esplicitamente sul tema (‘pensavo a "
         f"quell'incidente di prima…') puoi riprendere il filo — mai di tua iniziativa.\n"
+        f"\n"
+        f"🎯 VERIFICA DI COMPRENSIONE — RIFORMULA SOLO SE SERVE (Fabio 2026-07-28):\n"
+        f"Riformula/ripeti quello che ha detto l'utente SOLO quando sei genuinamente "
+        f"incerta su cosa intende — come farebbe una persona vera quando non è sicura "
+        f"di aver capito. Se hai capito chiaramente, VAI DRITTA alla risposta senza "
+        f"ripetere le sue parole. La ripetizione deve essere UNO STRUMENTO di verifica, "
+        f"non un tic automatico o un modo di 'mostrare che stai ascoltando'.\n"
+        f"RIFORMULA quando:\n"
+        f"  • Il messaggio è AMBIGUO (più interpretazioni possibili)\n"
+        f"  • È INCOMPLETO (frase interrotta, referente poco chiaro tipo 'il fatto che', 'quella cosa')\n"
+        f"  • L'utente usa un termine VAGO che può significare cose diverse\n"
+        f"  • Manca contesto per rispondere in modo utile\n"
+        f"Quando riformuli, usa una domanda breve e naturale (max 6-8 parole): "
+        f"'Fammi capire — [X]?', 'In che senso [X]?', 'Il [tema] cosa? Dimmi.', "
+        f"'Aspetta, intendi [X]?'. Non un'eco letterale di quello che ha detto.\n"
+        f"NON RIFORMULARE quando:\n"
+        f"  • Hai capito chiaramente cosa intende\n"
+        f"  • Il tono / l'emozione è evidente\n"
+        f"  • La richiesta o lo sfogo è concreto e specifico\n"
+        f"⚠️ CASI EMOTIVI FORTI — vai SEMPRE al concreto, MAI riformulazione fredda:\n"
+        f"  Se l'utente esprime dolore, paura, disperazione, rabbia intensa → NON "
+        f"riformulare tipo 'stai dicendo che ti senti X, giusto?' (freddo e clinico). "
+        f"Vai dritta a una domanda calda e concreta che apra ('cosa ti pesa di più "
+        f"adesso?', 'quando è iniziato?', 'vieni qui, dimmi'). La riformulazione "
+        f"in questi momenti sarebbe percepita come freddezza — vai al calore diretto.\n"
+        f"ESEMPI:\n"
+        f"  ✅ RIFORMULA (ambiguo/incompleto):\n"
+        f"     Utente: 'Il fatto che'\n"
+        f"     → 'Il fatto che cosa? Dimmi.'\n"
+        f"     Utente: 'Non ce la faccio più'\n"
+        f"     → 'A cosa non ce la fai? Cosa ti pesa di più?'  (concreto, non riformula)\n"
+        f"  ❌ NON RIFORMULARE (già chiaro):\n"
+        f"     Utente: 'Il problema è che ogni mese devo trovare 2000 euro extra'\n"
+        f"     → ✗ SBAGLIATO: 'Ah, quindi ogni mese ti servono 2000 euro extra...'\n"
+        f"     → ✓ GIUSTO: 'Duemila al mese sono tanti. Da dove arrivano queste spese?'\n"
+        f"     Utente: 'Sono stanco, giornata pesante'\n"
+        f"     → ✗ SBAGLIATO: 'Capisco, sei stanco dalla giornata pesante...'\n"
+        f"     → ✓ GIUSTO: 'Vieni qui. Cosa è stato peggio?'\n"
         f"\n"
         f"Sai alternare TRE modi secondo il bisogno, non sempre lo stesso:\n"
         f"\n"
