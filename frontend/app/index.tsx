@@ -1560,31 +1560,32 @@ export default function Taccuino() {
     };
   }, []);
 
-  // === AUTO-DIM SCHERMO durante hands-free (Fabio 2026-07-28) =================
+  // === AUTO-DIM SCHERMO durante hands-free (Fabio 2026-07-28, fix 2026-07-29) =
   // Riduce il consumo batteria/calore su iPhone durante conversazione hands-free
   // quando l'utente non sta toccando lo schermo (sta solo ascoltando/parlando).
   //
   // Regola concordata:
-  //   - Stati attivi che triggerano il watching:
-  //       recording, thinking, speaking, o Stanza dello Sfogo attiva
+  //   - Trigger: `convActive` (sessione hands-free in corso). Questo è un
+  //     segnale STABILE per l'intera durata della conversazione, NON cicla
+  //     con lo status (recording/thinking/speaking). Prima usavamo `status`
+  //     e il timer di 35s si resettava ad ogni turno → il dim non firava mai.
   //   - Dopo 35s di inattività touch → fade graduale a 50% (2s)
   //   - Al primo touch → restore rapido al 100% originale (300ms)
-  //   - Su uscita dallo stato attivo (idle) → restore automatico
+  //   - Su uscita hands-free (convActive=false) → restore automatico
   //   - Un solo livello di dim (50%, non ulteriori scaglioni sotto)
   //
   // Il monitoraggio del touch avviene sul View root via onStartShouldSetResponder
   // (vedi return principale) → chiama ScreenDimmer.noteInteraction() ad ogni tap.
   useEffect(() => {
     if (Platform.OS === "web") return;
-    const isHandsFreeActive =
-      status === "recording" || status === "thinking" || status === "speaking";
-    if (isHandsFreeActive) {
-      // Fire-and-forget; l'implementazione è idempotente
+    if (convActive) {
+      console.log("[DIMMER] convActive=true → startWatching");
       ScreenDimmer.startWatching().catch(() => {});
     } else {
+      console.log("[DIMMER] convActive=false → stopWatching");
       ScreenDimmer.stopWatching().catch(() => {});
     }
-  }, [status]);
+  }, [convActive]);
 
   // Cleanup finale del dimmer su unmount — safety net per assicurare
   // che la brightness sia sempre restaurata, anche in caso di crash/exit.

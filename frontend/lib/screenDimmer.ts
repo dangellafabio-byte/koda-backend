@@ -38,6 +38,17 @@ import * as Brightness from "expo-brightness";
 import { Platform } from "react-native";
 
 // ============================================================================
+// Debug logging (Fabio 2026-07-29 — fix "dim non funziona")
+// ============================================================================
+// I log restano ATTIVI in produzione perché il dim si testa solo su
+// dispositivo reale hands-free (loop di 35s → non riproducibile in web).
+// Il costo è trascurabile (~1 log ogni 35s + touch events).
+const DBG = true;
+function log(...args: any[]) {
+  if (DBG) console.log("[DIMMER]", ...args);
+}
+
+// ============================================================================
 // Config (concordata con Fabio 2026-07-28)
 // ============================================================================
 /** Delay in ms prima di iniziare a dimmerare dopo l'ultima interazione. */
@@ -95,10 +106,12 @@ async function captureOriginalIfNeeded(): Promise<void> {
     const cur = await Brightness.getBrightnessAsync();
     originalBrightness = cur;
     currentAppliedBrightness = cur;
-  } catch {
+    log("captureOriginal ok — brightness=", cur.toFixed(3));
+  } catch (e) {
     // Se non riusciamo a leggere, assumiamo 1.0 come safety (nessun dim)
     originalBrightness = 1.0;
     currentAppliedBrightness = 1.0;
+    log("captureOriginal FAIL (fallback 1.0) — err=", String(e));
   }
 }
 
@@ -117,6 +130,7 @@ function animateBrightness(
   clearFadeTimer();
   const steps = Math.max(1, Math.round(durationMs / FADE_TICK_MS));
   let step = 0;
+  log(`animate: ${from.toFixed(3)} → ${to.toFixed(3)} in ${durationMs}ms (${steps} steps)`);
   fadeTimer = setInterval(async () => {
     step += 1;
     const t = Math.min(1, step / steps);
@@ -126,12 +140,14 @@ function animateBrightness(
     currentAppliedBrightness = clamped;
     try {
       await Brightness.setBrightnessAsync(clamped);
-    } catch {
-      // Silent — se fallisce (es. permessi Android), interrompiamo il fade
+    } catch (e) {
+      // Log e interrompi: senza brightness non ha senso continuare
+      log("setBrightnessAsync FAIL — err=", String(e));
       clearFadeTimer();
       return;
     }
     if (step >= steps) {
+      log(`animate DONE at ${clamped.toFixed(3)}`);
       clearFadeTimer();
       if (onComplete) onComplete();
     }
@@ -146,18 +162,27 @@ function animateBrightness(
  * Inizia a monitorare per il dimmer. Chiamato quando entriamo in stato
  * attivo (recording/thinking/speaking). Cattura brightness originale e
  * fa partire l'idle timer.
- * Idempotente: se già watching, non fa nulla.
+ *
+ * IDEMPOTENZA CRITICA (fix Fabio 2026-07-29):
+ *   Se già in watching o oltre, NON facciamo nulla — NON resettiamo il
+ *   timer. Prima resettavamo, ma durante hands-free lo `status` cicla
+ *   rapidamente (recording→thinking→speaking→recording…) e ogni cambio
+ *   chiamava startWatching → resetIdleTimer → il timer di 35s non
+ *   arrivava MAI a scadere → dim non partiva mai.
+ *   Ora il timer viene resettato SOLO da noteInteraction() (touch reale
+ *   utente), come da spec "timer basato su tocco utente".
  */
 export async function startWatching(): Promise<void> {
   // Web: expo-brightness non è supportato. No-op silenzioso.
   if (Platform.OS === "web") return;
   if (state !== "off") {
-    // Se siamo già watching (o oltre), non ricominciamo — solo reset del timer
-    resetIdleTimer();
+    // Già watching: NO-OP totale. Il cambio di stato di Koda (recording
+    // → thinking → speaking) NON deve resettare il timer di inattività.
     return;
   }
   await captureOriginalIfNeeded();
   state = "watching";
+  log("startWatching → armed idle timer (35s)");
   resetIdleTimer();
 }
 
@@ -173,6 +198,7 @@ export async function stopWatching(): Promise<void> {
   const wasDimmed = state === "dimming" || state === "dimmed" || state === "restoring";
   const from = currentAppliedBrightness ?? originalBrightness ?? 1.0;
   const to = originalBrightness ?? 1.0;
+  log(`stopWatching (wasDimmed=${wasDimmed}, from=${from.toFixed(3)}, to=${to.toFixed(3)})`);
   state = "off";
   if (wasDimmed && Math.abs(from - to) > 0.01) {
     // Restore graduale a original (rapido, 300ms)
@@ -205,6 +231,7 @@ export function noteInteraction(): void {
   if (state === "dimming" || state === "dimmed" || state === "restoring") {
     const from = currentAppliedBrightness ?? originalBrightness ?? 1.0;
     const to = originalBrightness ?? 1.0;
+    log(`noteInteraction → restore from ${from.toFixed(3)} to ${to.toFixed(3)}`);
     if (Math.abs(from - to) > 0.01) {
       state = "restoring";
       animateBrightness(from, to, FADE_UP_MS, () => {
@@ -238,17 +265,23 @@ export function resetIdleTimer(): void {
  * fade DOWN al 50% del valore originale.
  */
 async function triggerDim(): Promise<void> {
-  if (state !== "watching") return;
+  if (state !== "watching") {
+    log(`triggerDim skipped — state=${state}`);
+    return;
+  }
   const from = currentAppliedBrightness ?? originalBrightness ?? 1.0;
   const target = (originalBrightness ?? 1.0) * DIM_FACTOR;
+  log(`triggerDim FIRED — from=${from.toFixed(3)} target=${target.toFixed(3)}`);
   if (from <= target + 0.01) {
     // Già sotto il target (l'utente ha già impostato manualmente basso) → skip
+    log("triggerDim skipped — already below target");
     state = "dimmed";
     return;
   }
   state = "dimming";
   animateBrightness(from, target, FADE_DOWN_MS, () => {
     state = "dimmed";
+    log("triggerDim complete — state=dimmed");
   });
 }
 
