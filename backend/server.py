@@ -2824,7 +2824,12 @@ FREE_TRIAL_MESSAGE_LIMIT = 3  # LEGACY — non più usato dalla v2 daily. Manten
 #              art. 348 CP (esercizio abusivo di professione).
 # NOTA: il testo va validato da un avvocato prima del lancio pubblico —
 # vedi discussione con Fabio 2026-07-28.
-DISCLAIMER_VERSION = "v1"
+# 2026-07-28 (bump v1→v2): non c'è cambio di testo, il bump è solo per
+# forzare la ri-visualizzazione dell'overlay dopo il fix grafico (uso
+# di React Native Modal invece di View absoluteFill) — così l'utente può
+# verificare visivamente che la schermata è pulita, senza elementi UI
+# che trapassano (Lascia andare pill, ellipsis Impostazioni, hands-free).
+DISCLAIMER_VERSION = "v2"
 
 # ============================================================
 # PAYWALL v2 — DAILY LIMITS + 24H BOOST (2026-07-24)
