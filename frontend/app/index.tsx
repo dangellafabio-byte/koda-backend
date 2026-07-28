@@ -6772,16 +6772,34 @@ export default function Taccuino() {
       {tourOverlay}
       {!tourActive && !confessionalMode ? <ProactiveOffer theme={theme} /> : null}
       {/* === DISCLAIMER blocking overlay (Fabio 2026-07-28) ==================
-          Coperto TUTTO il resto quando `disclaimerState === "blocking"`.
-          Reso in ultimo così sta sopra ogni altro layer (tour, splash, ecc.).
-          Al tap "Ho capito" il componente chiama l'endpoint di accettazione
-          e triggera onAccepted → passiamo lo state a "accepted" e l'overlay
-          scompare rivelando l'app sottostante. */}
-      {disclaimerState === "blocking" ? (
-        <View style={StyleSheet.absoluteFill}>
-          <DisclaimerScreen onAccepted={() => setDisclaimerState("accepted")} />
-        </View>
-      ) : null}
+          Uso il componente Modal nativo di React Native (non un semplice
+          View absoluteFill) per garantire:
+            - Copertura totale dello schermo (viene reso in una layer
+              nativa separata, sopra QUALSIASI cosa nell'app inclusi
+              elementi con position:absolute e z-index alti)
+            - Blocco degli input sottostanti (touch pass-through impossibile)
+            - Blocco del tasto Back Android (non richiediamo onRequestClose,
+              così è impossibile chiudere senza tap esplicito)
+          statusBarTranslucent=true su Android per estendersi sotto la barra.
+          animationType="fade" per apparizione morbida.
+
+          Bug fix precedente (Fabio 2026-07-28): l'implementazione a View
+          absoluteFill lasciava trapassare pill "Lascia andare", ellipsis
+          impostazioni e bottone hands-free per via del loro zIndex alto.
+          Il Modal risolve alla radice perché è renderizzato in una window
+          nativa separata. */}
+      <Modal
+        visible={disclaimerState === "blocking"}
+        transparent={false}
+        animationType="fade"
+        statusBarTranslucent
+        presentationStyle="fullScreen"
+        hardwareAccelerated
+        // Volutamente niente onRequestClose: l'unica via d'uscita è il
+        // bottone "Ho capito", non il tasto Back Android.
+      >
+        <DisclaimerScreen onAccepted={() => setDisclaimerState("accepted")} />
+      </Modal>
     </View>
   );
 }
