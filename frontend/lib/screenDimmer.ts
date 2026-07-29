@@ -254,8 +254,10 @@ export function noteInteraction(): void {
 export function resetIdleTimer(): void {
   if (state === "off") return;
   clearIdleTimer();
+  log(`resetIdleTimer — timer armato per ${IDLE_BEFORE_DIM_MS}ms (state=${state})`);
   // Aspetta IDLE_BEFORE_DIM_MS senza altre interazioni → dim
   idleTimer = setTimeout(() => {
+    log("idle timer scaduto → triggerDim()");
     triggerDim();
   }, IDLE_BEFORE_DIM_MS);
 }
