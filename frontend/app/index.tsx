@@ -408,9 +408,18 @@ export default function Taccuino() {
   // AppState guard + verbose AppState log + anomaly detection).
   // Se NON vediamo questa riga, l'APK è stantio o la build non ha
   // inglobato l'ultimo commit.
+  //
+  // 🚨 IMPORTANTE (Fabio 2026-07-29): la costante KODA_BUILD_SHORT_TAG viene
+  // usata SIA nel console.log SIA nel display in Impostazioni (~riga 6552).
+  // In passato c'era una stringa hardcoded separata in Impostazioni che
+  // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
+  // buildtag → l'utente pensava che la build non contenesse i fix mentre
+  // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
+  const KODA_BUILD_SHORT_TAG = "build-v64.7-nospeech-backoff";
+  const KODA_BUILD_DATE = "2026-07-29";
   useEffect(() => {
     console.log(
-      `[KODA_BUILDTAG] build-v64.7-nospeech-backoff v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=2026-07-29 ` +
+      `[KODA_BUILDTAG] ${KODA_BUILD_SHORT_TAG} v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=${KODA_BUILD_DATE} ` +
         `verbose=${KODA_DEBUG_VERBOSE} ` +
         `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_CACHE_FIRST_V63_7,TTS_AUDIOFOCUS_CYCLE_V63_8_FIX_C1,PRE_STT_AUDIOFOCUS_CYCLE_V63_9_FIX_C2,BREATH_REENABLED_V64_0,TAP_TO_RESET_UNIFIED_V64_0,ANDROID_MIC_WATCHDOG_V64_0,ANDROID_STT_PRE_ABORT_V64_0,KEEP_AWAKE_STABLE_SESSION_V64_0,NEONBORDER_SLOW_ANDROID_V64_1,ANDROID_CONTINUOUS_NO_BEEP_V64_1,ANDROID_SILENCE_TIMEOUT_LONGER_V64_1,ANDROID_NOSPEECH_GRACEFUL_V64_1,PREVIEW_AUDIO_FOCUS_REACQUIRE_V64_1,INTRO_VOICE_PREVIEW_FOCUS_V64_1,LASCIA_ANDARE_ORB_ALWAYS_RECORDING_V64_2,VOICE_ID_KODA_VOICE_SYNC_V64_2,DISCLAIMER_OVERLAY_V64_5,SCREEN_DIMMER_V2_FIX_V64_6,NOSPEECH_BACKOFF_V64_7${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
@@ -6549,7 +6558,7 @@ export default function Taccuino() {
                 Koda v{Constants.expoConfig?.version || "1.0.1"}
               </Text>
               <Text style={{ color: theme.text + "33", fontSize: 9, marginTop: 3, letterSpacing: 0.5 }}>
-                build-v64.4-client-voice-id-ws
+                {KODA_BUILD_SHORT_TAG}
               </Text>
             </View>
 </>)}
