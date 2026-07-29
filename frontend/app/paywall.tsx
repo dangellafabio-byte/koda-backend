@@ -26,6 +26,7 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../lib/theme";
 import { api } from "../lib/api";
+import { kodaBackendHttpUrl } from "../lib/backendUrl";
 
 type PlanId = "monthly" | "yearly";
 
@@ -53,8 +54,12 @@ const PLANS: PlanInfo[] = [
   },
 ];
 
-const PRIVACY_URL = "https://koda-backend-production-4a34.up.railway.app/api/legal/privacy";
-const TOS_URL = "https://koda-backend-production-4a34.up.railway.app/api/legal/terms";
+// === URL Legali (Fabio 2026-07-29) ==========================================
+// Derivati da KODA_BACKEND_URL (backendUrl.ts) invece di hardcoded, così
+// se un domani cambia il backend basta aggiornare la costante in un
+// unico posto (backendUrl.ts) e Privacy/Terms si aggiornano di conseguenza.
+const PRIVACY_URL = kodaBackendHttpUrl("/api/legal/privacy");
+const TOS_URL = kodaBackendHttpUrl("/api/legal/terms");
 
 export default function PaywallScreen() {
   const router = useRouter();
