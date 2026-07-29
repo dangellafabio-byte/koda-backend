@@ -410,9 +410,9 @@ export default function Taccuino() {
   // inglobato l'ultimo commit.
   useEffect(() => {
     console.log(
-      `[KODA_BUILDTAG] build-v64.6-dimmer-fix v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=2026-07-29 ` +
+      `[KODA_BUILDTAG] build-v64.7-nospeech-backoff v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=2026-07-29 ` +
         `verbose=${KODA_DEBUG_VERBOSE} ` +
-        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_CACHE_FIRST_V63_7,TTS_AUDIOFOCUS_CYCLE_V63_8_FIX_C1,PRE_STT_AUDIOFOCUS_CYCLE_V63_9_FIX_C2,BREATH_REENABLED_V64_0,TAP_TO_RESET_UNIFIED_V64_0,ANDROID_MIC_WATCHDOG_V64_0,ANDROID_STT_PRE_ABORT_V64_0,KEEP_AWAKE_STABLE_SESSION_V64_0,NEONBORDER_SLOW_ANDROID_V64_1,ANDROID_CONTINUOUS_NO_BEEP_V64_1,ANDROID_SILENCE_TIMEOUT_LONGER_V64_1,ANDROID_NOSPEECH_GRACEFUL_V64_1,PREVIEW_AUDIO_FOCUS_REACQUIRE_V64_1,INTRO_VOICE_PREVIEW_FOCUS_V64_1,LASCIA_ANDARE_ORB_ALWAYS_RECORDING_V64_2,VOICE_ID_KODA_VOICE_SYNC_V64_2,DISCLAIMER_OVERLAY_V64_5,SCREEN_DIMMER_V2_FIX_V64_6${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
+        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_CACHE_FIRST_V63_7,TTS_AUDIOFOCUS_CYCLE_V63_8_FIX_C1,PRE_STT_AUDIOFOCUS_CYCLE_V63_9_FIX_C2,BREATH_REENABLED_V64_0,TAP_TO_RESET_UNIFIED_V64_0,ANDROID_MIC_WATCHDOG_V64_0,ANDROID_STT_PRE_ABORT_V64_0,KEEP_AWAKE_STABLE_SESSION_V64_0,NEONBORDER_SLOW_ANDROID_V64_1,ANDROID_CONTINUOUS_NO_BEEP_V64_1,ANDROID_SILENCE_TIMEOUT_LONGER_V64_1,ANDROID_NOSPEECH_GRACEFUL_V64_1,PREVIEW_AUDIO_FOCUS_REACQUIRE_V64_1,INTRO_VOICE_PREVIEW_FOCUS_V64_1,LASCIA_ANDARE_ORB_ALWAYS_RECORDING_V64_2,VOICE_ID_KODA_VOICE_SYNC_V64_2,DISCLAIMER_OVERLAY_V64_5,SCREEN_DIMMER_V2_FIX_V64_6,NOSPEECH_BACKOFF_V64_7${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
   }, []);
 
@@ -2151,8 +2151,36 @@ export default function Taccuino() {
       console.log("[KODA_HF_GUARD] blocked: streamingSessionRef.current is non-null (stream already active)");
       return;
     }
+    // === NO-SPEECH BACKOFF LOGIC (Fabio 2026-07-29) =========================
+    // Se il turno appena chiuso NON ha avuto parlato reale (no_speech
+    // timeout, WS chiusa senza transcript), incrementa il counter e applica
+    // il delay progressivo. Dopo 5 no_speech consecutivi, FERMA il loop
+    // (richiede tap utente) — evita che il mic continui a riaprirsi per
+    // ore se l'utente ha dimenticato l'app aperta (batteria + AudioSession iOS).
+    let scheduleDelayMs = 450;
+    const turnWasSilent = !turnHadSpeechRef.current;
+    if (turnWasSilent) {
+      noSpeechCountRef.current += 1;
+      if (noSpeechCountRef.current >= MAX_NO_SPEECH_ATTEMPTS) {
+        // Soglia raggiunta: pausiamo il loop, serve tap dell'utente
+        console.log(
+          `[KODA_HF_BACKOFF_NOSPEECH] ${noSpeechCountRef.current} no_speech consecutivi → STOP loop (richiede tap utente)`
+        );
+        setCloseSessionPause(true);
+        closeSessionPauseRef.current = true;
+        noSpeechCountRef.current = 0; // reset per la prossima sessione manuale
+        return; // NON schedulare startTalkInternal
+      }
+      // Applica delay progressivo (indice = count - 1: 1° no-speech → 450ms)
+      scheduleDelayMs =
+        NO_SPEECH_BACKOFF_DELAYS_MS[noSpeechCountRef.current - 1] ?? 5000;
+      console.log(
+        `[KODA_HF_BACKOFF_NOSPEECH] no_speech #${noSpeechCountRef.current}/${MAX_NO_SPEECH_ATTEMPTS} → riapri fra ${scheduleDelayMs}ms`
+      );
+    }
+
     // Tutte le guardie superate — schedula il restart.
-    console.log("[KODA_HF_LOOP] all guards passed — scheduling startTalkInternal in 450ms");
+    console.log(`[KODA_HF_LOOP] all guards passed — scheduling startTalkInternal in ${scheduleDelayMs}ms`);
     // breve pausa di respiro per evitare di registrare la coda del TTS
     // e per dare al sistema audio iOS il tempo di switchare la sessione.
     const t = setTimeout(() => {
@@ -2176,7 +2204,7 @@ export default function Taccuino() {
       startTalkInternal(true).catch((e) => {
         console.log(`[KODA_HF_LOOP] startTalkInternal threw: ${e?.message || e}`);
       });
-    }, 450);
+    }, scheduleDelayMs);
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, handsFree, profile?.id, showOnboarding, showColorIntro, showSealSetup, sealUnlocking, showSettings, tourActive]);
@@ -2856,6 +2884,26 @@ export default function Taccuino() {
   const emptyTurnsRef = useRef(0); // n. vuoti consecutivi nel loop conversazione
   const lastAwarenessIdx = useRef(-1);
 
+  // === NO-SPEECH BACKOFF (Fabio 2026-07-29) =================================
+  // Se l'utente lascia l'app aperta ma smette di parlare, il loop hands-free
+  // rischia di ciclare all'infinito (open mic → 5s silenzio → no_speech →
+  // reopen mic → ...) consumando batteria e stressando l'AudioSession iOS
+  // (osservato errore `OSStatus 560557684` dopo troppi cicli rapidi).
+  //
+  // SPEC (concordata con Fabio):
+  //   - Contatore `noSpeechCountRef` incrementa ad ogni turno vuoto (no_speech)
+  //   - Reset a 0 quando l'utente parla davvero (onUserFinal riceve testo)
+  //   - Delay progressivi per riaprire il mic dopo un no_speech:
+  //       1° → 450ms, 2° → 2s, 3° → 5s, 4° → 5s, 5° → 5s
+  //   - Dopo 5 no_speech consecutivi → STOP: torna idle, richiede tap utente.
+  //     (evita che il mic continui ad aprirsi per ore se dimentichi l'app aperta)
+  //   - `turnHadSpeechRef` è il flag interno: settato a false all'apertura di
+  //     ogni sessione, a true quando arriva un `onUserFinal` con testo valido.
+  const NO_SPEECH_BACKOFF_DELAYS_MS = [450, 2000, 5000, 5000, 5000] as const;
+  const MAX_NO_SPEECH_ATTEMPTS = 5;
+  const noSpeechCountRef = useRef(0);
+  const turnHadSpeechRef = useRef(false);
+
   // === OFFLINE CLIPS ANTI-LOOP (sprint 2026-06-20) ===
   // Conta clip offline consecutive riprodotte senza che la rete sia tornata.
   // Dopo N=3 clip consecutive l'utente ha capito che è offline → usciamo dal
@@ -3068,6 +3116,16 @@ export default function Taccuino() {
           // che impiega Claude a generare la risposta + TTS — l'utente
           // pensava che stesse ancora registrando.
           setStatus("thinking");
+          // === NO-SPEECH BACKOFF (2026-07-29) — parlato vero → reset ===
+          // L'utente ha parlato davvero (transcript non vuoto arriva qui).
+          // Marca il turno come "aveva parlato" così l'HF loop NON incrementa
+          // il contatore no-speech, e resetta il contatore così i prossimi
+          // eventuali no_speech ripartono dal delay più corto (450ms).
+          turnHadSpeechRef.current = true;
+          if (noSpeechCountRef.current > 0) {
+            console.log(`[KODA_HF_BACKOFF_NOSPEECH] user parlato → reset counter (era ${noSpeechCountRef.current})`);
+            noSpeechCountRef.current = 0;
+          }
           // Aggiorna la bolla utente col testo trascritto reale.
           setTimeline((prev) =>
             prev.map((e) =>
@@ -3200,6 +3258,15 @@ export default function Taccuino() {
     // consumato (es. voiceStreamConverse fallì prima di onSession), la
     // nuova sessione verrebbe stoppata immediatamente. Reset qui.
     pendingTapStopRef.current = false;
+
+    // === NO-SPEECH BACKOFF (2026-07-29) — reset flag "aveva parlato" ===
+    // All'inizio di ogni sessione mic, resettiamo il flag turnHadSpeechRef.
+    // Se durante la sessione arriva un `onUserFinal` con testo, il flag
+    // diventa true e il counter no-speech si azzera. Se invece la sessione
+    // si chiude senza mai vedere parlato (es. no_speech timeout, WS chiusa
+    // senza transcript), il flag resta false e l'HF loop incrementerà il
+    // counter e userà il delay progressivo alla prossima riapertura.
+    turnHadSpeechRef.current = false;
 
     // === GUARD STREAMING SESSION (2026-06-28 v26 — diag log iPhone cascata) ===
     // Se una sessione WebSocket è già attiva, non aprirne un'altra. Questo
