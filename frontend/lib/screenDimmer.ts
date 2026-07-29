@@ -45,7 +45,7 @@ import { Platform } from "react-native";
 // Il costo è trascurabile (~1 log ogni 35s + touch events).
 const DBG = true;
 function log(...args: any[]) {
-  if (DBG) console.log("[DIMMER]", ...args);
+  if (DBG) console.log("[KODA_DIMMER]", ...args);
 }
 
 // ============================================================================

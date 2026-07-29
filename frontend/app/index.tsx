@@ -1579,10 +1579,10 @@ export default function Taccuino() {
   useEffect(() => {
     if (Platform.OS === "web") return;
     if (convActive) {
-      console.log("[DIMMER] convActive=true → startWatching");
+      console.log("[KODA_DIMMER] convActive=true → startWatching");
       ScreenDimmer.startWatching().catch(() => {});
     } else {
-      console.log("[DIMMER] convActive=false → stopWatching");
+      console.log("[KODA_DIMMER] convActive=false → stopWatching");
       ScreenDimmer.stopWatching().catch(() => {});
     }
   }, [convActive]);
