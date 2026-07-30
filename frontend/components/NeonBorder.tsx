@@ -189,10 +189,21 @@ export default function NeonBorder({
   const headOffset = Animated.subtract(dashOffset, new Animated.Value(trailLen - headLen)) as any;
 
   // ============ RENDER ============
-  // v64.10: bordo con colore che sfuma dolcemente al cambio stato (500ms
-  // single-shot), opacity fissa a 1.0, nessuna oscillazione ciclica.
-  // Glow neon (elevation/shadowRadius) STATICO — non pulsa più → nessun
-  // trigger del power manager EMUI/HarmonyOS.
+  // v64.11 (2026-08 fix Honor): bordo con colore che sfuma dolcemente al
+  // cambio stato (500ms single-shot), opacity fissa a 1.0, nessuna
+  // oscillazione ciclica.
+  //
+  // === RIMOZIONE elevation + shadowRadius ===
+  // Storia: elevation:18 su View absoluteFill causava un alone SCURO fisso
+  // lungo tutto il perimetro interno su smartphone Honor (EMUI/MagicOS).
+  // Android rende `elevation` come drop-shadow reale: su una superficie
+  // grande quanto lo schermo, l'ombra proiettata risulta come una vignette
+  // scura permanente. Non era "neon glow" ma inquinamento visivo.
+  // Anche shadowRadius:28 su iOS creava un effetto simile (meno marcato).
+  //
+  // Nuova specifica: bordo pulito, solo `borderColor` + `borderWidth`.
+  // I colori shocking-neon (#00F5D4 tiffany, #EC4899 ciclamino, ecc.)
+  // sono già sufficientemente vividi da leggersi come "neon" senza glow.
   return (
     <Animated.View
       pointerEvents="none"
@@ -203,16 +214,6 @@ export default function NeonBorder({
           borderWidth: thickness,
           borderRadius: DISPLAY_RADIUS,
           opacity: 1.0,
-          ...Platform.select({
-            ios: {
-              shadowColor: color,
-              shadowOpacity: 1,
-              shadowRadius: 28,
-              shadowOffset: { width: 0, height: 0 },
-            },
-            android: { elevation: 18 },
-            default: {},
-          }),
         },
       ]}
     />
