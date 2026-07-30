@@ -12,7 +12,7 @@
  *    del solito spinner.
  *  - Colori shocking neon (validati).
  */
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { StyleSheet, Animated, Easing, Platform, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Rect } from "react-native-svg";
@@ -53,22 +53,25 @@ const STATE_COLORS: Record<NeonBorderStatus, string> = {
   confessional: "#FF1744",// ❤️‍🔥 Scarlatto (STANZA SEGRETA)
 };
 
-// Tutti gli stati hanno pulsazione MOLTO lenta, quasi immobile,
-// per essere una presenza costante senza distrarre.
+// Tutti gli stati sono FISSI, senza pulsazione ciclica.
 //
-// === FIX 2026-07-26 v64.1 — Flash schermo Honor/Huawei EMUI ===
-// Su Android il ciclo di 7s pulsando opacity 0.75→1.0 sul bordo full-screen
-// triggerava il power manager EMUI/HarmonyOS in HDR-boost momentaneo →
-// utente percepiva un "flash" fisico dello schermo ogni ~7 secondi.
-// Fix: su Android rallentiamo il ciclo a 20s e riduciamo l'ampiezza
-// (0.85-1.0 invece di 0.75-1.0). L'effetto respiro resta ma è troppo
-// lento e troppo delicato perché il power manager EMUI lo interpreti
-// come cambio significativo di luminosità.
-// Su iOS resta identico (7s + 0.75-1.0) perché CoreAnimation non ha
-// questo problema.
-const SLOW_CYCLE_MS = Platform.OS === "android" ? 20000 : 7000;
-const OPACITY_MIN = Platform.OS === "android" ? 0.85 : 0.75;
-const OPACITY_MAX = 1.0;
+// === RISCRITTURA 2026-07-30 v64.10 — Fix definitivo flash Android ===
+// Storia: il ciclo di pulsazione (SLOW_CYCLE_MS) causava un flash schermo
+// periodico su Xiaomi/Honor EMUI/HarmonyOS (misurato ~19s = 20s del ciclo).
+// Test binario confermò la causa. L'oscillazione era comunque impercettibile
+// a occhio (bordo 3px con 15% variazione opacità), ma il compositor Android
+// la vedeva e triggerava HDR-boost momentaneo → flash visibile.
+//
+// Nuova specifica (Fabio 2026-07-30):
+//   ❌ NIENTE oscillazione ciclica nel tempo (rimosso SLOW_CYCLE_MS e loop)
+//   ✅ Transizione FLUIDA di colore quando lo stato cambia (~500ms), come
+//      fa l'orb quando cambia stato. Single-shot, non ciclica: parte al
+//      cambio stato e si ferma.
+//   ✅ Opacity fissa a 1.0 (bordo sempre pienamente visibile)
+//   ✅ Elevation/shadowRadius mantenuti (glow neon statico, non pulsa più)
+//
+// Il comportamento è ora identico su iOS e Android.
+const COLOR_TRANSITION_MS = 500;
 
 // Display border radius:
 // === FIX #6 (2026-06-22 v6) — Adattamento dinamico al device ===
@@ -118,34 +121,36 @@ export default function NeonBorder({
     ? speakingColorOverride
     : baseColor;
 
-  // ============ PULSAZIONE LENTA (tutti gli stati tranne thinking) ============
-  const pulse = useRef(new Animated.Value(0)).current;
+  // ============ TRANSIZIONE FLUIDA DEL COLORE AL CAMBIO STATO =================
+  // NIENTE animation loop. Un solo Animated.timing single-shot che parte al
+  // cambio di colore, dura 500ms, e si ferma. Zero consumo CPU quando lo
+  // stato è stabile → nessun trigger del power manager EMUI su Android.
+  const colorProgress = useRef(new Animated.Value(1)).current;
+  const prevColorRef = useRef(color);
+  const [prevColor, setPrevColor] = useState(color);
+  const [currColor, setCurrColor] = useState(color);
   useEffect(() => {
-    pulse.setValue(0);
-    if (status === "thinking") return; // thinking ha la sua animazione (chase)
-    const anim = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: SLOW_CYCLE_MS / 2,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulse, {
-          toValue: 0,
-          duration: SLOW_CYCLE_MS / 2,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    anim.start();
-    return () => anim.stop();
-  }, [status, pulse]);
+    if (color === prevColorRef.current) return;
+    // Il colore è cambiato: parti dal vecchio e sfuma al nuovo in 500ms.
+    setPrevColor(prevColorRef.current);
+    setCurrColor(color);
+    prevColorRef.current = color;
+    colorProgress.setValue(0);
+    Animated.timing(colorProgress, {
+      toValue: 1,
+      duration: COLOR_TRANSITION_MS,
+      easing: Easing.inOut(Easing.ease),
+      // useNativeDriver:false è OBBLIGATORIO per animare colori in RN.
+      // Ma è single-shot (500ms), non ciclico → nessun trigger periodico
+      // del compositor Android come lo era il vecchio loop.
+      useNativeDriver: false,
+    }).start();
+  }, [color, colorProgress]);
 
-  // opacity quasi fissa: oscilla tra OPACITY_MIN e OPACITY_MAX (sempre molto visibile)
-  // Su Android range più stretto (0.85-1.0) per evitare HDR-boost EMUI/HarmonyOS.
-  const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [OPACITY_MIN, OPACITY_MAX] });
+  const animatedBorderColor = colorProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [prevColor, currColor],
+  });
 
   // ============ LIQUID NEON FLOW (solo thinking) ============
   // Flusso circolare con scia: una "testa" luminosa corre attorno al perimetro
@@ -184,21 +189,20 @@ export default function NeonBorder({
   const headOffset = Animated.subtract(dashOffset, new Animated.Value(trailLen - headLen)) as any;
 
   // ============ RENDER ============
-  // NB: thinking ora usa lo stesso bordo fisso degli altri stati (user
-  // feedback: "togli il bordo che si muove, fallo fisso come tutti").
-  // L'effetto chase Liquid Neon Flow è disabilitato per ora.
-  //
-  // Tutti gli stati: bordo fisso arrotondato con pulsazione lentissima
+  // v64.10: bordo con colore che sfuma dolcemente al cambio stato (500ms
+  // single-shot), opacity fissa a 1.0, nessuna oscillazione ciclica.
+  // Glow neon (elevation/shadowRadius) STATICO — non pulsa più → nessun
+  // trigger del power manager EMUI/HarmonyOS.
   return (
     <Animated.View
       pointerEvents="none"
       style={[
         styles.frame,
         {
-          borderColor: color,
+          borderColor: animatedBorderColor,
           borderWidth: thickness,
           borderRadius: DISPLAY_RADIUS,
-          opacity,
+          opacity: 1.0,
           ...Platform.select({
             ios: {
               shadowColor: color,
