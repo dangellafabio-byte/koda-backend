@@ -6692,18 +6692,14 @@ export default function Taccuino() {
             💧 Verde acqua = thinking        (sto pensando)
             💜 Magenta    = speaking        (sto parlando io)
 
-          === TEST DIAGNOSTICO 2026-07-30 v64.8 ================================
-          RadialGlow è sospettato come causa del flash + lentezza su Android
-          (SVG full-screen con Animated.timing useNativeDriver:false che pulsa
-          anche in idle → EMUI/HarmonyOS lo interpreta come cambio luminosità
-          globale + consumo CPU JS-thread costante).
-          Su Android RadialGlow è DISABILITATO in questa build per verificare
-          l'ipotesi. Se il flash sparisce E la lentezza migliora → causa
-          confermata → prossimo passo: riscrivere RadialGlow con
-          useNativeDriver:true (soluzione pulita, non disabilitazione).
-          Su iOS resta identico (nessun problema segnalato).
+          === TEST DIAGNOSTICO 2026-07-30 v64.8 — ESITO NEGATIVO ================
+          Ipotesi: RadialGlow causava il flash + lentezza su Android.
+          Test: disattivato RadialGlow su Android. Verdetto utente: flash
+          ancora presente → RADIALGLOW ESCLUSO come causa. Ripristinato
+          rendering normale su tutte le piattaforme (nessun senso lasciarlo
+          disattivato se non è la causa).
           ==================================================================== */}
-      {Platform.OS !== "android" && <RadialGlow status={status as any} />}
+      <RadialGlow status={status as any} />
 
       {/* CONFESSIONALE — animazione di CHIUSURA (release / closure 2026-06 v4).
           Si attiva SEMPRE quando l'utente esce dal confessionale, sia dalla
