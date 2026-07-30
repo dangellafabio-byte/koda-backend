@@ -60,14 +60,25 @@ const STATE_COLORS: Record<NeonBorderStatus, string> = {
 // Su Android il ciclo di 7s pulsando opacity 0.75→1.0 sul bordo full-screen
 // triggerava il power manager EMUI/HarmonyOS in HDR-boost momentaneo →
 // utente percepiva un "flash" fisico dello schermo ogni ~7 secondi.
-// Fix: su Android rallentiamo il ciclo a 20s e riduciamo l'ampiezza
-// (0.85-1.0 invece di 0.75-1.0). L'effetto respiro resta ma è troppo
-// lento e troppo delicato perché il power manager EMUI lo interpreti
-// come cambio significativo di luminosità.
-// Su iOS resta identico (7s + 0.75-1.0) perché CoreAnimation non ha
-// questo problema.
-const SLOW_CYCLE_MS = Platform.OS === "android" ? 20000 : 7000;
-const OPACITY_MIN = Platform.OS === "android" ? 0.85 : 0.75;
+// Fix v64.1: su Android rallentato il ciclo a 20s e ridotta ampiezza.
+//
+// === FIX 2026-07-30 v64.8 — Flash Android RECIDIVO ===
+// Il fix v64.1 NON aveva risolto il problema (recidiva confermata dall'utente
+// il 2026-07-30). Il flash su Android non era causato SOLO dall'oscillazione
+// di opacity, ma anche/soprattutto da:
+//   1. elevation: 18 sul bordo full-screen → EMUI/HarmonyOS ridisegna il
+//      layer d'ombra sotto il View ad ogni frame → power manager triggera
+//      HDR-boost anche in assenza di visibile cambio di opacity.
+//   2. Animated.loop mai fermato → il compositor Android continua a fare
+//      lavoro periodico anche quando l'animazione è "lenta e delicata".
+// Nuovo approccio (v64.8): su Android l'animazione è DISABILITATA del tutto
+// (opacity fissa 1.0) e l'elevation è portata a 0. Il bordo resta visibile,
+// colorato per stato, ma senza nessun effetto che il power manager possa
+// interpretare come "cambio di luminosità". Su iOS resta identico
+// (CoreAnimation non ha questi problemi).
+const IS_ANDROID = Platform.OS === "android";
+const SLOW_CYCLE_MS = 7000; // usato solo su iOS ora
+const OPACITY_MIN = 0.75;   // usato solo su iOS ora
 const OPACITY_MAX = 1.0;
 
 // Display border radius:
@@ -119,8 +130,16 @@ export default function NeonBorder({
     : baseColor;
 
   // ============ PULSAZIONE LENTA (tutti gli stati tranne thinking) ============
-  const pulse = useRef(new Animated.Value(0)).current;
+  // Su Android l'animazione è DISABILITATA completamente (fix v64.8):
+  // opacity fissa a 1.0, nessun Animated.loop attivo. Il compositor
+  // Android non fa lavoro periodico → nessun trigger power manager EMUI.
+  const pulse = useRef(new Animated.Value(1)).current; // parte a 1 (opacity max)
   useEffect(() => {
+    if (IS_ANDROID) {
+      // Nessuna animazione su Android → opacity resta fissa a 1.0
+      pulse.setValue(1);
+      return;
+    }
     pulse.setValue(0);
     if (status === "thinking") return; // thinking ha la sua animazione (chase)
     const anim = Animated.loop(
@@ -143,9 +162,11 @@ export default function NeonBorder({
     return () => anim.stop();
   }, [status, pulse]);
 
-  // opacity quasi fissa: oscilla tra OPACITY_MIN e OPACITY_MAX (sempre molto visibile)
-  // Su Android range più stretto (0.85-1.0) per evitare HDR-boost EMUI/HarmonyOS.
-  const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [OPACITY_MIN, OPACITY_MAX] });
+  // opacity: su iOS oscilla tra OPACITY_MIN e OPACITY_MAX (respiro).
+  // Su Android è FISSA a 1.0 (nessuna animazione, evita HDR-boost EMUI).
+  const opacity = IS_ANDROID
+    ? 1.0
+    : pulse.interpolate({ inputRange: [0, 1], outputRange: [OPACITY_MIN, OPACITY_MAX] });
 
   // ============ LIQUID NEON FLOW (solo thinking) ============
   // Flusso circolare con scia: una "testa" luminosa corre attorno al perimetro
@@ -165,20 +186,15 @@ export default function NeonBorder({
   const trailDashArray = `${trailLen} ${perimeter}`;
 
   const dashOffset = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    dashOffset.setValue(0);
-    if (status !== "thinking") return;
-    const anim = Animated.loop(
-      Animated.timing(dashOffset, {
-        toValue: -perimeter,
-        duration: 2400,
-        easing: Easing.linear,
-        useNativeDriver: false,
-      })
-    );
-    anim.start();
-    return () => anim.stop();
-  }, [status, perimeter, dashOffset]);
+  // === FIX 2026-07-30 v64.8 — DEAD CODE ANIMATION rimossa ===
+  // Prima qui c'era un Animated.loop con useNativeDriver: false che girava
+  // sul JS thread ogni volta che lo status passava a "thinking". Il problema:
+  // il chase Liquid Neon Flow è stato disabilitato tempo fa (vedi commento nel
+  // return più sotto), quindi `dashOffset` NON viene mai usato nel render.
+  // Il loop era quindi puro spreco di CPU JS-thread → contribuiva alla
+  // lentezza generale su Android (JS engine più lento).
+  // Se un giorno vorremo riabilitare il chase, basta rimettere il useEffect
+  // originale (git blame per versione precedente).
   // Offset per la testa: stessa posizione della scia + lunghezza scia
   // (così la testa è SOPRA la coda della scia, illuminandone l'estremità).
   const headOffset = Animated.subtract(dashOffset, new Animated.Value(trailLen - headLen)) as any;
@@ -206,7 +222,12 @@ export default function NeonBorder({
               shadowRadius: 28,
               shadowOffset: { width: 0, height: 0 },
             },
-            android: { elevation: 18 },
+            // === FIX 2026-07-30 v64.8 ===
+            // Elevation a 0 su Android per evitare che EMUI/HarmonyOS ridisegni
+            // il layer d'ombra sotto il View full-screen ad ogni frame → era una
+            // delle cause del flash schermo Honor/Huawei. Il bordo colorato resta
+            // ben visibile anche senza elevation (borderWidth + colore neon).
+            android: { elevation: 0 },
             default: {},
           }),
         },
