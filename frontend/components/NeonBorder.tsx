@@ -90,6 +90,7 @@ export default function NeonBorder({
   status,
   thickness = 3,
   speakingColorOverride,
+  radiusOverride,
 }: {
   status: NeonBorderStatus;
   thickness?: number;
@@ -97,23 +98,57 @@ export default function NeonBorder({
    *  Serve per legare il colore dell'orb/bordo alla voce scelta
    *  (es. Acqua=viola, Vento=cobalto). */
   speakingColorOverride?: string;
+  /** Override del corner radius calcolato euristicamente. Utile se un
+   *  dispositivo specifico (Honor XY, Xiaomi ZZ) ha una curvatura schermo
+   *  che l'euristica non azzecca — passa il valore corretto da index.tsx. */
+  radiusOverride?: number;
 }) {
   const { width: W, height: H } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  // Stima del corner radius reale del display:
-  //   insets.top ≥ 50 → Dynamic Island (iPhone 14 Pro+)         → ~55
-  //   insets.top ≥ 40 → notch standard (iPhone X..13)           → ~47
-  //   insets.top ≥ 30 → notch piccolo / Android moderno         → ~38
-  //   insets.top ≥ 24 → status bar normale (Android tablet)     → ~18
-  //   altro           → schermo squadrato (iPhone SE, vecchi)   → ~14
-  const dynamicRadius =
-    insets.top >= 50 ? 55 :
-    insets.top >= 40 ? 47 :
-    insets.top >= 30 ? 38 :
-    insets.top >= 24 ? 18 :
-    14;
-  // Su web/tablet usiamo un valore conservativo
-  const DISPLAY_RADIUS = Platform.OS === "web" ? 24 : dynamicRadius;
+
+  // === CALCOLO CORNER RADIUS DELLO SCHERMO ===
+  //
+  // Ogni dispositivo ha una curvatura degli angoli fisicamente diversa.
+  // La vera rilevazione automatica richiederebbe un native module (Android
+  // 12+ espone `WindowInsets.getRoundedCorner()`, iOS ha una tabella per
+  // modello). Per ora usiamo una euristica pragmatica per piattaforma.
+  //
+  // iOS: `insets.top` correla bene col corner radius reale.
+  //   Dynamic Island (iPhone 14 Pro+)  → insets.top ~59 → radius 55
+  //   Notch standard (iPhone X..13)    → insets.top ~47 → radius 47
+  //   Notch piccolo (iPhone Xr, ecc.)  → insets.top ~44 → radius 40
+  //   iPad / iPhone SE (squadrati)     → insets.top ~20 → radius 14
+  //
+  // Android: `insets.top` NON correla col radius (uno smartphone Honor con
+  //   status bar 28px può avere angoli da 42-48px). Usiamo una euristica
+  //   basata sulla dimensione schermo: smartphone moderni 2020+ tipicamente
+  //   32-48px, tablet più squadrati. Default smartphone Android = 42
+  //   (valore medio che si adatta a Honor, Xiaomi, Samsung, Pixel, OnePlus).
+  //
+  // Se il default non combacia su un dispositivo specifico, l'utente può
+  // passare `radiusOverride` dal chiamante (app/index.tsx).
+  const shortSide = Math.min(W, H);
+  const isTabletSize = shortSide >= 600;
+
+  const computedRadius = (() => {
+    if (Platform.OS === "web") return 24;
+
+    if (Platform.OS === "ios") {
+      if (isTabletSize) return 18; // iPad
+      return insets.top >= 55 ? 55 :
+             insets.top >= 45 ? 47 :
+             insets.top >= 35 ? 40 :
+             insets.top >= 25 ? 22 :
+             14;
+    }
+
+    // Android
+    if (isTabletSize) return 16; // Android tablet (schermi tipicamente squadrati)
+    // Smartphone Android moderno: curva generosa (Honor, Xiaomi, Samsung, Pixel)
+    return 42;
+  })();
+
+  const DISPLAY_RADIUS = radiusOverride ?? computedRadius;
   const baseColor = STATE_COLORS[status];
   // Override dinamico per "speaking" — legato alla voce scelta dall'utente.
   // Per gli altri stati il colore resta sempre fisso.
