@@ -12004,6 +12004,26 @@ async def voicelab(name: str):
     if not path.exists():
         raise HTTPException(404, f"lab '{safe}' not generated")
     return FileResponse(str(path), media_type="audio/mpeg")
+
+# === PROMO ASSETS (TikTok/Instagram teaser production) ================
+# Serve i file MP3 generati da /app/scripts/generate_teaser.py.
+# Endpoint temporaneo di produzione contenuti — non usato dall'app,
+# solo per far scaricare i master audio al proprietario senza dover
+# passare da servizi di hosting con pubblicità aggressive (tmpfiles.org,
+# ecc.). Da rimuovere dopo il primo montaggio video se non serve più.
+@app.get("/api/promo/{name}")
+async def promo_asset(name: str):
+    safe = name.replace("/", "").replace("..", "").replace("\\", "")
+    path = Path("/app/scripts/output") / safe
+    if not path.exists() or not path.is_file():
+        raise HTTPException(404, f"promo asset '{safe}' not found")
+    # Content-Disposition: attachment → forza download invece di preview
+    return FileResponse(
+        str(path),
+        media_type="audio/mpeg",
+        filename=safe,
+        headers={"Content-Disposition": f'attachment; filename="{safe}"'},
+    )
 # ============================================================================
 
 app.add_middleware(
