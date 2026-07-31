@@ -12,12 +12,16 @@
  *    del solito spinner.
  *  - Colori shocking neon (validati).
  */
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { StyleSheet, Animated, Easing, Platform, useWindowDimensions } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { StyleSheet, Platform, useWindowDimensions } from "react-native";
+import Reanimated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  interpolateColor,
+  Easing as ReanimatedEasing,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Svg, { Rect } from "react-native-svg";
-
-const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
 export type NeonBorderStatus = "idle" | "recording" | "thinking" | "speaking" | "confessional" | "listening";
 
@@ -84,7 +88,6 @@ const COLOR_TRANSITION_MS = 500;
 // superiore. Notch/Island ≥ 30px → device con corner radius pieno (47-55).
 // Notch piccolo o assente → schermo squadrato (~14px o meno).
 // Calcoliamo runtime via useSafeAreaInsets per essere universali.
-const DEFAULT_RADIUS = 47;
 
 export default function NeonBorder({
   status,
@@ -157,71 +160,51 @@ export default function NeonBorder({
     : baseColor;
 
   // ============ TRANSIZIONE FLUIDA DEL COLORE AL CAMBIO STATO =================
-  // NIENTE animation loop. Un solo Animated.timing single-shot che parte al
-  // cambio di colore, dura 500ms, e si ferma. Zero consumo CPU quando lo
-  // stato è stabile → nessun trigger del power manager EMUI su Android.
-  const colorProgress = useRef(new Animated.Value(1)).current;
+  // === v64.12 (2026-08 fix sync Honor): migrato ad REANIMATED 3 ===
+  // Storia: usavamo Animated.timing di React Native con useNativeDriver:false
+  // (obbligatorio per animare `borderColor` in RN). Su iPhone/iPad il thread
+  // JS è veloce e l'animazione partiva subito → sync perfetto con l'orb (che
+  // cambia colore istantaneamente al cambio stato).
+  // Su Honor / Android sotto carico (WebSocket voce, VAD, audio decode) il
+  // thread JS era occupato → Animated.timing partiva in ritardo di ~500ms
+  // → utente vedeva bordo aggiornarsi 0.5s dopo l'eclissi. Non accettabile.
+  //
+  // Fix definitivo: Reanimated 3 esegue l'animazione sul thread NATIVO UI,
+  // indipendente dal carico JS. Il colore parte a cambiare immediatamente
+  // al momento del cambio prop → sync perfetto con l'orb su ogni dispositivo.
+  const colorProgress = useSharedValue(1);
   const prevColorRef = useRef(color);
   const [prevColor, setPrevColor] = useState(color);
   const [currColor, setCurrColor] = useState(color);
   useEffect(() => {
     if (color === prevColorRef.current) return;
-    // Il colore è cambiato: parti dal vecchio e sfuma al nuovo in 500ms.
+    // Il colore è cambiato: parti dal vecchio e sfuma al nuovo in 500ms
+    // sul thread UI nativo (indipendente dal JS thread).
     setPrevColor(prevColorRef.current);
     setCurrColor(color);
     prevColorRef.current = color;
-    colorProgress.setValue(0);
-    Animated.timing(colorProgress, {
-      toValue: 1,
+    colorProgress.value = 0;
+    colorProgress.value = withTiming(1, {
       duration: COLOR_TRANSITION_MS,
-      easing: Easing.inOut(Easing.ease),
-      // useNativeDriver:false è OBBLIGATORIO per animare colori in RN.
-      // Ma è single-shot (500ms), non ciclico → nessun trigger periodico
-      // del compositor Android come lo era il vecchio loop.
-      useNativeDriver: false,
-    }).start();
+      easing: ReanimatedEasing.inOut(ReanimatedEasing.ease),
+    });
   }, [color, colorProgress]);
 
-  const animatedBorderColor = colorProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [prevColor, currColor],
-  });
+  const animatedBorderStyle = useAnimatedStyle(() => ({
+    borderColor: interpolateColor(
+      colorProgress.value,
+      [0, 1],
+      [prevColor, currColor],
+    ),
+  }));
 
-  // ============ LIQUID NEON FLOW (solo thinking) ============
-  // Flusso circolare con scia: una "testa" luminosa corre attorno al perimetro
-  // arrotondato, seguita da una "scia" più lunga e sfumata. Loop continuo.
-  // Implementato con DUE Rect SVG sovrapposti che condividono lo stesso
-  // dashOffset animato:
-  //   1) "scia" = dashLen lunga (30% perim), opacity bassa, no glow forte
-  //   2) "testa" = dashLen corta (6% perim), opacity 1, glow massimo
-  // L'effetto visivo è: una luce neon che scorre come liquido lungo il bordo.
-  const perimeter = useMemo(() => {
-    const r = DISPLAY_RADIUS;
-    return 2 * (W + H) - 8 * r + 2 * Math.PI * r;
-  }, [W, H, DISPLAY_RADIUS]);
-  const headLen = Math.max(40, perimeter * 0.06);
-  const trailLen = Math.max(120, perimeter * 0.30);
-  const headDashArray = `${headLen} ${perimeter}`;
-  const trailDashArray = `${trailLen} ${perimeter}`;
-
-  const dashOffset = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    dashOffset.setValue(0);
-    if (status !== "thinking") return;
-    const anim = Animated.loop(
-      Animated.timing(dashOffset, {
-        toValue: -perimeter,
-        duration: 2400,
-        easing: Easing.linear,
-        useNativeDriver: false,
-      })
-    );
-    anim.start();
-    return () => anim.stop();
-  }, [status, perimeter, dashOffset]);
-  // Offset per la testa: stessa posizione della scia + lunghezza scia
-  // (così la testa è SOPRA la coda della scia, illuminandone l'estremità).
-  const headOffset = Animated.subtract(dashOffset, new Animated.Value(trailLen - headLen)) as any;
+  // ============ CODICE MORTO RIMOSSO (v64.12) ============
+  // Il vecchio "LIQUID NEON FLOW" (luce che scorre lungo il perimetro
+  // durante `thinking`) era stato scritto ma mai renderizzato — restava
+  // calcolato in memoria e faceva girare un Animated.loop su useNativeDriver:
+  // false che comunque scaldava il JS thread. Rimosso completamente qui.
+  // Se in futuro si vuole recuperare l'effetto, va reimplementato con
+  // Reanimated + react-native-svg Reanimated bindings.
 
   // ============ RENDER ============
   // v64.11 (2026-08 fix Honor): bordo con colore che sfuma dolcemente al
@@ -240,16 +223,16 @@ export default function NeonBorder({
   // I colori shocking-neon (#00F5D4 tiffany, #EC4899 ciclamino, ecc.)
   // sono già sufficientemente vividi da leggersi come "neon" senza glow.
   return (
-    <Animated.View
+    <Reanimated.View
       pointerEvents="none"
       style={[
         styles.frame,
         {
-          borderColor: animatedBorderColor,
           borderWidth: thickness,
           borderRadius: DISPLAY_RADIUS,
           opacity: 1.0,
         },
+        animatedBorderStyle,
       ]}
     />
   );
