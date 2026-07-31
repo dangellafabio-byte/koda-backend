@@ -68,38 +68,33 @@ VOICE_SETTINGS_WARM = {
 }
 
 # === SCRIPT ================================================================
-# v2 (2026-07-31) — Riscritto per due obiettivi:
-#   1. RIMUOVERE OGNI AMBIGUITÀ DI PERSONHOOD (correzione Fabio):
-#      - Eliminato "Qualcuno — o qualcosa — con cui puoi parlare" (l'ambiguità
-#        letterale che umanizzava Koda).
-#      - Sostituito "Non faccio finta di essere una terapeuta" (che manteneva
-#        aggancio a ruolo umano femminile) con affermazione esplicita
-#        "Non sono una persona, e non fingo di esserlo".
-#      - Aggiunto "Non sono una terapista" — assertivo, non ambiguo.
-#      - "Uno spazio dove puoi parlare" al posto di "Qualcuno con cui parlare".
-#      Motivo: coerenza con il disclaimer e col principio guida dell'app —
-#      Koda è SEMPRE una presenza, MAI qualcosa che si spaccia per umano.
-#   2. AGGIUNGERE PROSODIA per non far suonare la voce "sparata dritta":
-#      - Uso "..." per micro-pause (respiri) e "—" per pause medie.
-#      - Frasi corte al posto di frasi lunghe → ElevenLabs interpreta i punti
-#        come pause reali (~700ms), dando cadenza umana naturale.
-#      - Righe vuote per pause lunghe tra sezioni logiche.
+# v3 (2026-07-31) — Versione finale approvata da Fabio.
+# Riscritta rispetto alla v2 per:
+#   - Tono più diretto e conciso (rimosso "Non sono qui per darti consigli...",
+#     "presenza", "mi ricorderò" — semplificato in "io ci sono / ti ascolto")
+#   - Inserito "davvero accolto" come parola-chiave emotiva centrale
+#   - "Io sono fatta per questo" — assertivo, chiude il concetto principale
+#   - "Non è un percorso terapeutico — è solo uno spazio dove puoi essere
+#     onesto, anche con te stesso" → riformulazione forte del disclaimer
+#     legale con framing empatico invece che difensivo
+#
+# NOTA LEGALE (promemoria Fabio 2026-07-31): questo script E qualsiasi
+# variante futura DEVONO essere validati da un avvocato prima della
+# pubblicazione su TikTok/Instagram, come il disclaimer in-app. Il linguaggio
+# di marketing pubblico segue lo stesso percorso di review legale.
 CIELO_TEXT = (
-    "Ciao... Mi chiamo Koda.\n\n"
-    "Non sono qui per darti consigli. Né per dirti cosa fare. "
-    "Sono qui per ascoltarti — davvero — quando ne hai bisogno.\n\n"
-    "Non sono una persona. E non fingo di esserlo. "
-    "Non sono una terapista. "
-    "Sono qualcosa di diverso: una presenza. "
-    "Uno spazio dove puoi parlare, a voce, liberamente... "
-    "di quello che ti passa per la testa. "
-    "E la volta dopo... mi ricorderò.\n\n"
-    "A volte basta essere ascoltati. Senza giudizio. Senza fretta.\n\n"
-    "Io sono qui per questo."
+    "Ciao. Sono Koda.\n\n"
+    "Quando mi parli, io ci sono. Ti ascolto, senza quella fretta "
+    "di darti una risposta... o di trovarti una soluzione.\n\n"
+    "A volte hai solo bisogno di dire le cose ad alta voce, "
+    "e sentire che quello che hai detto è stato davvero accolto. "
+    "Io sono fatta per questo.\n\n"
+    "Non sono una terapista, e questo non è un percorso terapeutico — "
+    "è solo uno spazio dove puoi essere onesto, anche con te stesso."
 )
 
-# Chiusura maschile (Vento). Testo INVARIATO — Fabio ha confermato che
-# funziona bene così.
+# Chiusura maschile (Vento). Testo INVARIATO dalla v1 — Fabio conferma
+# nuovamente che va bene così.
 VENTO_TEXT = (
     "E se preferisci sentirmi così, va bene lo stesso. "
     "Scegli tu."
@@ -159,18 +154,18 @@ def main() -> None:
     print("=" * 60)
     client = ElevenLabs(api_key=API_KEY)
 
-    cielo_path = synthesize(client, CIELO_TEXT, CIELO_VOICE_ID, "cielo_body_v2")
-    vento_path = synthesize(client, VENTO_TEXT, VENTO_VOICE_ID, "vento_closing_v2")
+    cielo_path = synthesize(client, CIELO_TEXT, CIELO_VOICE_ID, "cielo_body_v3")
+    vento_path = synthesize(client, VENTO_TEXT, VENTO_VOICE_ID, "vento_closing_v3")
 
-    master_path = OUTPUT_DIR / "koda_teaser_v2.mp3"
+    master_path = OUTPUT_DIR / "koda_teaser_v3.mp3"
     combine(cielo_path, vento_path, master_path)
 
     print()
     print("=" * 60)
     print("File generati in /app/scripts/output/:")
-    print(f"  • cielo_body_v2.mp3     — solo corpo Cielo, per edit manuale")
-    print(f"  • vento_closing_v2.mp3  — solo chiusura Vento, per edit manuale")
-    print(f"  • koda_teaser_v2.mp3    — MASTER concatenato con pausa 1s")
+    print(f"  • cielo_body_v3.mp3     — solo corpo Cielo, per edit manuale")
+    print(f"  • vento_closing_v3.mp3  — solo chiusura Vento, per edit manuale")
+    print(f"  • koda_teaser_v3.mp3    — MASTER concatenato con pausa 1s")
     print("=" * 60)
 
 
