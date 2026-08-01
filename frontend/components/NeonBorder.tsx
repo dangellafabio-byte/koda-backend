@@ -12,15 +12,8 @@
  *    del solito spinner.
  *  - Colori shocking neon (validati).
  */
-import React, { useEffect, useRef, useState } from "react";
-import { StyleSheet, Platform, useWindowDimensions } from "react-native";
-import Reanimated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  interpolateColor,
-  Easing as ReanimatedEasing,
-} from "react-native-reanimated";
+import React from "react";
+import { StyleSheet, Platform, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export type NeonBorderStatus = "idle" | "recording" | "thinking" | "speaking" | "confessional" | "listening";
@@ -57,25 +50,20 @@ const STATE_COLORS: Record<NeonBorderStatus, string> = {
   confessional: "#FF1744",// ❤️‍🔥 Scarlatto (STANZA SEGRETA)
 };
 
-// Tutti gli stati sono FISSI, senza pulsazione ciclica.
+// Tutti gli stati sono FISSI, senza pulsazione ciclica, senza fade.
 //
 // === RISCRITTURA 2026-07-30 v64.10 — Fix definitivo flash Android ===
-// Storia: il ciclo di pulsazione (SLOW_CYCLE_MS) causava un flash schermo
-// periodico su Xiaomi/Honor EMUI/HarmonyOS (misurato ~19s = 20s del ciclo).
-// Test binario confermò la causa. L'oscillazione era comunque impercettibile
-// a occhio (bordo 3px con 15% variazione opacità), ma il compositor Android
-// la vedeva e triggerava HDR-boost momentaneo → flash visibile.
+// Il ciclo di pulsazione (SLOW_CYCLE_MS) causava un flash schermo periodico
+// su Xiaomi/Honor EMUI/HarmonyOS. Rimossa oscillazione ciclica.
 //
-// Nuova specifica (Fabio 2026-07-30):
-//   ❌ NIENTE oscillazione ciclica nel tempo (rimosso SLOW_CYCLE_MS e loop)
-//   ✅ Transizione FLUIDA di colore quando lo stato cambia (~500ms), come
-//      fa l'orb quando cambia stato. Single-shot, non ciclica: parte al
-//      cambio stato e si ferma.
-//   ✅ Opacity fissa a 1.0 (bordo sempre pienamente visibile)
-//   ✅ Elevation/shadowRadius mantenuti (glow neon statico, non pulsa più)
+// === v64.11 — Rimozione elevation/shadow ===
+// elevation:18 causava vignette scura permanente su Honor. Rimossa.
 //
-// Il comportamento è ora identico su iOS e Android.
-const COLOR_TRANSITION_MS = 500;
+// === v64.13 (2026-07-31) — Sync perfetto con l'orb ===
+// Rimosso anche il fade di 500ms sul cambio colore. L'orb (EclipseOrb)
+// cambia colore ISTANTANEAMENTE via useMemo → il bordo deve fare uguale
+// per essere sincronizzato. Ora il colore è applicato direttamente allo
+// style come step function (0ms), senza animazione intermedia.
 
 // Display border radius:
 // === FIX #6 (2026-06-22 v6) — Adattamento dinamico al device ===
@@ -159,80 +147,50 @@ export default function NeonBorder({
     ? speakingColorOverride
     : baseColor;
 
-  // ============ TRANSIZIONE FLUIDA DEL COLORE AL CAMBIO STATO =================
-  // === v64.12 (2026-08 fix sync Honor): migrato ad REANIMATED 3 ===
-  // Storia: usavamo Animated.timing di React Native con useNativeDriver:false
-  // (obbligatorio per animare `borderColor` in RN). Su iPhone/iPad il thread
-  // JS è veloce e l'animazione partiva subito → sync perfetto con l'orb (che
-  // cambia colore istantaneamente al cambio stato).
-  // Su Honor / Android sotto carico (WebSocket voce, VAD, audio decode) il
-  // thread JS era occupato → Animated.timing partiva in ritardo di ~500ms
-  // → utente vedeva bordo aggiornarsi 0.5s dopo l'eclissi. Non accettabile.
+  // ============ CAMBIO COLORE ISTANTANEO (v64.13) =============================
+  // === STORIA DEL PROBLEMA E SOLUZIONE DEFINITIVA ===
+  // v64.10-12: il bordo aveva un fade di 500ms sul cambio colore, prima con
+  // Animated di RN (JS thread, lento su Honor), poi con Reanimated (thread
+  // nativo UI, veloce). Ma anche con Reanimated il fade DURA 500ms →
+  // l'utente percepiva un desync di ~500ms con l'eclissi (EclipseOrb), che
+  // invece cambia colore ISTANTANEAMENTE (useMemo, 0ms transition).
   //
-  // Fix definitivo: Reanimated 3 esegue l'animazione sul thread NATIVO UI,
-  // indipendente dal carico JS. Il colore parte a cambiare immediatamente
-  // al momento del cambio prop → sync perfetto con l'orb su ogni dispositivo.
-  const colorProgress = useSharedValue(1);
-  const prevColorRef = useRef(color);
-  const [prevColor, setPrevColor] = useState(color);
-  const [currColor, setCurrColor] = useState(color);
-  useEffect(() => {
-    if (color === prevColorRef.current) return;
-    // Il colore è cambiato: parti dal vecchio e sfuma al nuovo in 500ms
-    // sul thread UI nativo (indipendente dal JS thread).
-    setPrevColor(prevColorRef.current);
-    setCurrColor(color);
-    prevColorRef.current = color;
-    colorProgress.value = 0;
-    colorProgress.value = withTiming(1, {
-      duration: COLOR_TRANSITION_MS,
-      easing: ReanimatedEasing.inOut(ReanimatedEasing.ease),
-    });
-  }, [color, colorProgress]);
-
-  const animatedBorderStyle = useAnimatedStyle(() => ({
-    borderColor: interpolateColor(
-      colorProgress.value,
-      [0, 1],
-      [prevColor, currColor],
-    ),
-  }));
-
-  // ============ CODICE MORTO RIMOSSO (v64.12) ============
+  // v64.13 (2026-07-31, Fabio): sync perfetto richiede che entrambi i
+  // componenti abbiano la STESSA curva di transizione. EclipseOrb usa
+  // step function (0ms) → NeonBorder DEVE fare lo stesso.
+  //
+  // Approccio: nessuna animazione. Il colore viene applicato direttamente
+  // come style. React ri-renderizza entrambi i componenti nello stesso
+  // ciclo → sync garantito matematicamente su ogni piattaforma, senza
+  // dipendenze da JS thread, native driver, o library di animazione.
+  //
+  // Trade-off accettato: perdiamo la sfumatura morbida del fade. Ma il
+  // requisito primario ("sync perfetto con l'orb") è non negoziabile.
+  //
+  // ============ CODICE MORTO RIMOSSO ============
   // Il vecchio "LIQUID NEON FLOW" (luce che scorre lungo il perimetro
-  // durante `thinking`) era stato scritto ma mai renderizzato — restava
-  // calcolato in memoria e faceva girare un Animated.loop su useNativeDriver:
-  // false che comunque scaldava il JS thread. Rimosso completamente qui.
-  // Se in futuro si vuole recuperare l'effetto, va reimplementato con
-  // Reanimated + react-native-svg Reanimated bindings.
+  // durante `thinking`) era stato scritto ma mai renderizzato — rimosso
+  // completamente in v64.12.
 
   // ============ RENDER ============
-  // v64.11 (2026-08 fix Honor): bordo con colore che sfuma dolcemente al
-  // cambio stato (500ms single-shot), opacity fissa a 1.0, nessuna
-  // oscillazione ciclica.
   //
-  // === RIMOZIONE elevation + shadowRadius ===
-  // Storia: elevation:18 su View absoluteFill causava un alone SCURO fisso
-  // lungo tutto il perimetro interno su smartphone Honor (EMUI/MagicOS).
-  // Android rende `elevation` come drop-shadow reale: su una superficie
-  // grande quanto lo schermo, l'ombra proiettata risulta come una vignette
-  // scura permanente. Non era "neon glow" ma inquinamento visivo.
-  // Anche shadowRadius:28 su iOS creava un effetto simile (meno marcato).
-  //
-  // Nuova specifica: bordo pulito, solo `borderColor` + `borderWidth`.
-  // I colori shocking-neon (#00F5D4 tiffany, #EC4899 ciclamino, ecc.)
-  // sono già sufficientemente vividi da leggersi come "neon" senza glow.
+  // === RIMOZIONE elevation + shadowRadius (v64.11) ===
+  // elevation:18 su View absoluteFill causava un alone SCURO fisso lungo
+  // il perimetro interno su smartphone Honor (EMUI/MagicOS). Android
+  // rende `elevation` come drop-shadow reale → su superficie a schermo
+  // pieno = vignette scura permanente. Rimosso; il neon-effect si ottiene
+  // dai colori vividi + spessore 3px, senza glow artificiale.
   return (
-    <Reanimated.View
+    <View
       pointerEvents="none"
       style={[
         styles.frame,
         {
+          borderColor: color,
           borderWidth: thickness,
           borderRadius: DISPLAY_RADIUS,
           opacity: 1.0,
         },
-        animatedBorderStyle,
       ]}
     />
   );
