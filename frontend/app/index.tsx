@@ -422,13 +422,13 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v64.14-perf-diag+bubble-memo";
-  const KODA_BUILD_DATE = "2026-07-31";
+  const KODA_BUILD_SHORT_TAG = "build-v64.15-scrollpeek-ref-fix";
+  const KODA_BUILD_DATE = "2026-08-01";
   useEffect(() => {
     console.log(
       `[KODA_BUILDTAG] ${KODA_BUILD_SHORT_TAG} v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=${KODA_BUILD_DATE} ` +
         `verbose=${KODA_DEBUG_VERBOSE} ` +
-        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_CACHE_FIRST_V63_7,TTS_AUDIOFOCUS_CYCLE_V63_8_FIX_C1,PRE_STT_AUDIOFOCUS_CYCLE_V63_9_FIX_C2,BREATH_REENABLED_V64_0,TAP_TO_RESET_UNIFIED_V64_0,ANDROID_MIC_WATCHDOG_V64_0,ANDROID_STT_PRE_ABORT_V64_0,KEEP_AWAKE_STABLE_SESSION_V64_0,NEONBORDER_SLOW_ANDROID_V64_1,ANDROID_CONTINUOUS_NO_BEEP_V64_1,ANDROID_SILENCE_TIMEOUT_LONGER_V64_1,ANDROID_NOSPEECH_GRACEFUL_V64_1,PREVIEW_AUDIO_FOCUS_REACQUIRE_V64_1,INTRO_VOICE_PREVIEW_FOCUS_V64_1,LASCIA_ANDARE_ORB_ALWAYS_RECORDING_V64_2,VOICE_ID_KODA_VOICE_SYNC_V64_2,DISCLAIMER_OVERLAY_V64_5,SCREEN_DIMMER_V2_FIX_V64_6,NOSPEECH_BACKOFF_V64_7,NEONBORDER_STATIC_V64_10,NEONBORDER_NO_ELEVATION_V64_11,NEONBORDER_DYNAMIC_RADIUS_V64_11,DIAGNOSTICS_SAFEAREA_XIAOMI_V64_12,NEONBORDER_INSTANT_COLOR_SYNC_V64_13,BUBBLE_MEMO_V64_14,PERF_DIAG_V64_14${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
+        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_CACHE_FIRST_V63_7,TTS_AUDIOFOCUS_CYCLE_V63_8_FIX_C1,PRE_STT_AUDIOFOCUS_CYCLE_V63_9_FIX_C2,BREATH_REENABLED_V64_0,TAP_TO_RESET_UNIFIED_V64_0,ANDROID_MIC_WATCHDOG_V64_0,ANDROID_STT_PRE_ABORT_V64_0,KEEP_AWAKE_STABLE_SESSION_V64_0,NEONBORDER_SLOW_ANDROID_V64_1,ANDROID_CONTINUOUS_NO_BEEP_V64_1,ANDROID_SILENCE_TIMEOUT_LONGER_V64_1,ANDROID_NOSPEECH_GRACEFUL_V64_1,PREVIEW_AUDIO_FOCUS_REACQUIRE_V64_1,INTRO_VOICE_PREVIEW_FOCUS_V64_1,LASCIA_ANDARE_ORB_ALWAYS_RECORDING_V64_2,VOICE_ID_KODA_VOICE_SYNC_V64_2,DISCLAIMER_OVERLAY_V64_5,SCREEN_DIMMER_V2_FIX_V64_6,NOSPEECH_BACKOFF_V64_7,NEONBORDER_STATIC_V64_10,NEONBORDER_NO_ELEVATION_V64_11,NEONBORDER_DYNAMIC_RADIUS_V64_11,DIAGNOSTICS_SAFEAREA_XIAOMI_V64_12,NEONBORDER_INSTANT_COLOR_SYNC_V64_13,BUBBLE_MEMO_V64_14,PERF_DIAG_V64_14,SCROLLPEEK_REF_FIX_V64_15${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
   }, []);
 
@@ -4643,9 +4643,17 @@ export default function Taccuino() {
   //     from the timeline + current hour. No persistent state needed.
   const ambient = useOrbAmbient(timeline);
 
-  // Live scroll-peek: tracks scroll velocity so the Orb leans toward the
-  // direction of recent scrolling (then gently returns to centre).
-  const [scrollPeek, setScrollPeek] = useState(0);
+  // === v64.15 (2026-08-01) PERF FIX — scrollPeek convertito da useState a useRef ===
+  // Prima: `useState(0)` chiamato dentro onTimelineScroll (~30 volte/s).
+  // Ogni setState triggerava un re-render del root Taccuino (8000 righe).
+  // Il root re-render invalidava anche le Bubble (memo shallow-check falliva
+  // sui callback e derivati inline creati ogni render).
+  // Risultato misurato v64.14: FPS 13-20 durante scroll, 285 Bubble render/s.
+  //
+  // scrollPeek NON è letto da nessuna parte nel render → era dead state.
+  // Convertito a useRef: i calcoli restano identici (velocity smoothing per
+  // eventuale futuro utilizzo Orb-lean), ma zero re-render del root.
+  const scrollPeekRef = useRef(0);
   const lastScrollY = useRef(0);
   const scrollDecayTimer = useRef<any>(null);
   // === SCROLL-TO-BOTTOM FAB STATE (Fix 2026-06-22) ===
@@ -4702,14 +4710,16 @@ export default function Taccuino() {
     const contentH = e?.nativeEvent?.contentSize?.height ?? 0;
     const delta = y - lastScrollY.current;
     lastScrollY.current = y;
-    // Coda peeks UP when user scrolls up (looking back), DOWN when scrolling down
-    setScrollPeek((prev) => {
-      const next = prev * 0.6 + delta * 1.4;
-      return Math.max(-100, Math.min(100, next));
-    });
+    // Coda peeks UP when user scrolls up (looking back), DOWN when scrolling down.
+    // v64.15: aggiorna ref invece di setState → zero re-render root
+    scrollPeekRef.current = Math.max(-100, Math.min(100, scrollPeekRef.current * 0.6 + delta * 1.4));
     if (scrollDecayTimer.current) clearTimeout(scrollDecayTimer.current);
-    scrollDecayTimer.current = setTimeout(() => setScrollPeek(0), 350);
+    scrollDecayTimer.current = setTimeout(() => {
+      scrollPeekRef.current = 0;
+    }, 350);
     // distanza dal fondo: se >120px → mostra FAB, altrimenti nascondilo.
+    // isNearBottom RESTA state perché è letto nel render (mostra/nasconde FAB),
+    // ma cambia raramente (solo al passaggio della soglia dei 120px).
     const distFromBottom = Math.max(0, contentH - (y + layoutH));
     const near = distFromBottom < 120;
     if (near !== isNearBottomRef.current) {
