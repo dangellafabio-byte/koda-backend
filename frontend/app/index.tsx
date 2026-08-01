@@ -92,6 +92,7 @@ import ProactiveOffer from "../components/ProactiveOffer";
 import { useRouter } from "expo-router";
 import type { SafetyCheckResult, FreemiumStatus as FreemiumStatusType } from "../lib/api";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
+import { useRenderCounter, startFpsMonitor } from "../lib/perfDiag";
 import { useFonts } from "expo-font";
 // === Caveat font (Fabio 2026-06-21 v15): caricato via expo-font + file
 // .ttf locali in assets/fonts/. Sostituisce @expo-google-fonts/caveat che
@@ -345,6 +346,12 @@ function detectCloseSessionClientSide(text: string | null | undefined): boolean 
 
 
 export default function Taccuino() {
+  // === v64.14 PROFILING — conta render del root e attiva FPS monitor
+  // (attivi solo con EXPO_PUBLIC_KODA_PERF_DIAG=1)
+  useRenderCounter("KODA_PERF_ROOT");
+  useEffect(() => {
+    startFpsMonitor();
+  }, []);
   const insets = useSafeAreaInsets();
   const { theme, themeName, setThemeName, setHours, dayStart, nightStart } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
@@ -415,13 +422,13 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v64.13-instant-color-sync";
+  const KODA_BUILD_SHORT_TAG = "build-v64.14-perf-diag+bubble-memo";
   const KODA_BUILD_DATE = "2026-07-31";
   useEffect(() => {
     console.log(
       `[KODA_BUILDTAG] ${KODA_BUILD_SHORT_TAG} v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=${KODA_BUILD_DATE} ` +
         `verbose=${KODA_DEBUG_VERBOSE} ` +
-        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_CACHE_FIRST_V63_7,TTS_AUDIOFOCUS_CYCLE_V63_8_FIX_C1,PRE_STT_AUDIOFOCUS_CYCLE_V63_9_FIX_C2,BREATH_REENABLED_V64_0,TAP_TO_RESET_UNIFIED_V64_0,ANDROID_MIC_WATCHDOG_V64_0,ANDROID_STT_PRE_ABORT_V64_0,KEEP_AWAKE_STABLE_SESSION_V64_0,NEONBORDER_SLOW_ANDROID_V64_1,ANDROID_CONTINUOUS_NO_BEEP_V64_1,ANDROID_SILENCE_TIMEOUT_LONGER_V64_1,ANDROID_NOSPEECH_GRACEFUL_V64_1,PREVIEW_AUDIO_FOCUS_REACQUIRE_V64_1,INTRO_VOICE_PREVIEW_FOCUS_V64_1,LASCIA_ANDARE_ORB_ALWAYS_RECORDING_V64_2,VOICE_ID_KODA_VOICE_SYNC_V64_2,DISCLAIMER_OVERLAY_V64_5,SCREEN_DIMMER_V2_FIX_V64_6,NOSPEECH_BACKOFF_V64_7,NEONBORDER_STATIC_V64_10,NEONBORDER_NO_ELEVATION_V64_11,NEONBORDER_DYNAMIC_RADIUS_V64_11,DIAGNOSTICS_SAFEAREA_XIAOMI_V64_12,NEONBORDER_INSTANT_COLOR_SYNC_V64_13${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
+        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_CACHE_FIRST_V63_7,TTS_AUDIOFOCUS_CYCLE_V63_8_FIX_C1,PRE_STT_AUDIOFOCUS_CYCLE_V63_9_FIX_C2,BREATH_REENABLED_V64_0,TAP_TO_RESET_UNIFIED_V64_0,ANDROID_MIC_WATCHDOG_V64_0,ANDROID_STT_PRE_ABORT_V64_0,KEEP_AWAKE_STABLE_SESSION_V64_0,NEONBORDER_SLOW_ANDROID_V64_1,ANDROID_CONTINUOUS_NO_BEEP_V64_1,ANDROID_SILENCE_TIMEOUT_LONGER_V64_1,ANDROID_NOSPEECH_GRACEFUL_V64_1,PREVIEW_AUDIO_FOCUS_REACQUIRE_V64_1,INTRO_VOICE_PREVIEW_FOCUS_V64_1,LASCIA_ANDARE_ORB_ALWAYS_RECORDING_V64_2,VOICE_ID_KODA_VOICE_SYNC_V64_2,DISCLAIMER_OVERLAY_V64_5,SCREEN_DIMMER_V2_FIX_V64_6,NOSPEECH_BACKOFF_V64_7,NEONBORDER_STATIC_V64_10,NEONBORDER_NO_ELEVATION_V64_11,NEONBORDER_DYNAMIC_RADIUS_V64_11,DIAGNOSTICS_SAFEAREA_XIAOMI_V64_12,NEONBORDER_INSTANT_COLOR_SYNC_V64_13,BUBBLE_MEMO_V64_14,PERF_DIAG_V64_14${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
   }, []);
 
@@ -7076,7 +7083,7 @@ function MiniOrb({ color = "#7C3AED" }: { color?: string }) {
   );
 }
 
-function Bubble({
+function BubbleImpl({
   entry,
   onReplay,
   onGhost,
@@ -7101,6 +7108,9 @@ function Bubble({
    */
   aiFontFamily?: string;
 }) {
+  // === v64.14 PROFILING — conta render della Bubble (attivo solo con
+  // EXPO_PUBLIC_KODA_PERF_DIAG=1). Zero overhead se disattivato.
+  useRenderCounter("KODA_PERF_TIMELINE_BUBBLE");
   const { theme } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const isUser = entry.role === "user";
@@ -7278,6 +7288,37 @@ function Bubble({
     </View>
   );
 }
+
+// === v64.14 — React.memo wrapper con equality check custom ==================
+// Bubble era ridipinta ad ogni render di MainRoot (index.tsx, 8300 righe)
+// perché la sua definizione era `function Bubble(...)` senza memo. Su Android
+// con thread JS più lento questo diventava un collo di bottiglia visibile
+// nello scroll della timeline chat.
+//
+// L'equality check confronta i prop shallow — tutti primitive tranne
+// `entry`, `bubbleAccent` e i callback. Per `entry` confrontiamo per
+// identità di riferimento (accettabile — la timeline non muta gli entry
+// esistenti, ne aggiunge di nuovi). Per `bubbleAccent` confrontiamo il
+// campo `color` che è quello che cambia realmente. I callback devono
+// essere stabili (useCallback lato chiamante) per beneficiare della memo.
+function arePropsEqualBubble(
+  prev: React.ComponentProps<typeof BubbleImpl>,
+  next: React.ComponentProps<typeof BubbleImpl>,
+): boolean {
+  return (
+    prev.entry === next.entry &&
+    prev.bubbleStyle === next.bubbleStyle &&
+    prev.textOnBubble === next.textOnBubble &&
+    prev.textSize === next.textSize &&
+    prev.aiFontFamily === next.aiFontFamily &&
+    prev.bubbleAccent.color === next.bubbleAccent.color &&
+    prev.bubbleAccent.soft === next.bubbleAccent.soft &&
+    prev.onReplay === next.onReplay &&
+    prev.onGhost === next.onGhost
+  );
+}
+
+const Bubble = React.memo(BubbleImpl, arePropsEqualBubble);
 
 const makeStyles = (t: any) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: t.bg },
