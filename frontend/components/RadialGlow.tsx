@@ -1,17 +1,36 @@
 /**
  * RadialGlow — Alone radiale che parte dal centro (dove c'è il blob) e si
- * propaga verso i bordi sfumando in trasparenza. Sostituisce il vecchio
- * NeonBorder (bordi laterali) con un'aura più "viva" che sembra emanata
- * dalla macchia stessa.
+ * propaga verso i bordi sfumando in trasparenza.
  *
  * Stati & colori (coerenti con OrganicBlob):
- *  - idle       → ambra molto tenue
- *  - recording  → ambra calda viva ("tocca a te / ti ascolto")
- *  - thinking   → verde acqua ("Coda elabora")
- *  - speaking   → magenta-viola ("Coda parla")
+ *  - idle       → viola profondo (presenza)
+ *  - recording  → blu petrolio (ti ascolto)
+ *  - thinking   → ciclamino (elabora)
+ *  - speaking   → viola (override dal blob)
  *
  * Implementazione: SVG fullscreen con un RadialGradient centrato.
- * Pulsa via Animated opacity (battito lento, calmo).
+ *
+ * === v64.17 (2026-08-01) — REWRITE PERFORMANCE-FIRST ===
+ * Il vecchio RadialGlow aveva una `Animated.loop` continua con 4 timing su
+ * `useNativeDriver: false` che pulsava l'opacity di un SVG a schermo pieno
+ * 24/7 (anche in idle). Su iPhone il thread JS era abbastanza veloce da
+ * reggere, ma su Xiaomi tablet Android il FPS crollava da 120 → 13 anche
+ * quando l'utente non stava facendo nulla (misurato v64.15).
+ *
+ * Test A/B v64.16 (RadialGlow disabilitato solo su Android):
+ *   FPS idle: 13 → 120  (+800%)
+ *   FPS scroll: 11 → 120 (+700%)
+ * Causa confermata con numeri reali.
+ *
+ * Fix definitivo (questo file):
+ *   - RIMOSSA pulsazione continua (Animated.loop) — modulava opacity 70-100%
+ *     di un alone già molto tenue (idle 0.05, recording 0.30), impatto
+ *     visivo trascurabile ma costo perf enorme.
+ *   - MANTENUTO fade colore su cambio stato (700ms ease-out) — è la parte
+ *     "viva" dell'alone, importante per la sincronia con l'orb centrale.
+ *   - MANTENUTA transizione opacity su cambio stato (Animated.timing 600ms,
+ *     single-shot, non loop → non trigger power manager Android).
+ *   - Riabilitato su ENTRAMBE le piattaforme (parità visiva iOS/Android).
  */
 import React, { useEffect, useRef, useState } from "react";
 import { View, StyleSheet, Animated, Easing, Dimensions } from "react-native";
@@ -24,11 +43,13 @@ const STATE_COLORS: Record<GlowStatus, string> = {
   recording: "#0E7C7B",    // BLU PETROLIO (ti ascolto)
   transcribing: "#BE185D", // CICLAMINO (ponte pensiero/trascrizione)
   thinking: "#BE185D",     // CICLAMINO (sto pensando)
-  speaking: "#7C3AED",     // VIOLA — viene comunque override dal blob, qui è solo base
+  speaking: "#7C3AED",     // VIOLA — override dal blob, qui è base
 };
 
-// Opacità centrale (vicino al blob) in base allo stato — ridotte per
-// non competere visivamente con i colori dell'Eclissi al centro.
+// Opacità dell'alone in base allo stato. In v64.16 il valore era modulato
+// da un pulse tra 70-100% (es. idle: 0.035↔0.05, recording: 0.21↔0.30).
+// In v64.17 usiamo direttamente il valore massimo — l'occhio non distingueva
+// comunque la modulazione su un'aura così tenue.
 const STATE_OPACITY: Record<GlowStatus, number> = {
   idle: 0.05,
   recording: 0.30,
@@ -37,9 +58,8 @@ const STATE_OPACITY: Record<GlowStatus, number> = {
   speaking: 0.20,
 };
 
-// === RGB interpolation helpers (transizioni colore graduali)
+// === RGB interpolation helpers (transizioni colore graduali) ==========
 function hexToRgb(hex: string | undefined | null): [number, number, number] {
-  // Difensivo: se hex è null/undefined/non-string, ritorniamo bianco/grigio.
   if (!hex || typeof hex !== "string") return [229, 231, 235]; // #E5E7EB
   const h = hex.replace("#", "");
   const v = h.length === 3
@@ -67,10 +87,14 @@ export default function RadialGlow({
   const targetColor = STATE_COLORS[status];
   const targetOpacity = STATE_OPACITY[status];
 
+  // Fade opacity — Animated.Value che parte da 0 e sale al target su
+  // cambio stato. Single-shot, non ciclico → nessun trigger continuo del
+  // power manager Android. Su cambio stato si aggiorna in 600ms.
   const opacityAnim = useRef(new Animated.Value(0)).current;
-  const pulse = useRef(new Animated.Value(0)).current;
 
-  // === TRANSIZIONE COLORE GRADUALE (700ms ease-out) ===
+  // === TRANSIZIONE COLORE GRADUALE (700ms ease-out) =====================
+  // Solo su cambio stato: interpolazione RGB via requestAnimationFrame.
+  // Single-shot, 42 render in 700ms poi si ferma → costo marginale.
   const [color, setColor] = useState<string>(targetColor);
   const fromColorRef = useRef<string>(targetColor);
   const targetColorRef = useRef<string>(targetColor);
@@ -88,74 +112,27 @@ export default function RadialGlow({
       const elapsed = Date.now() - animStartRef.current;
       const t = Math.min(1, elapsed / DUR);
       const eased = 1 - Math.pow(1 - t, 3);
-      setColor(lerpColor(fromColorRef.current, targetColorRef.current, eased));
+      const c = lerpColor(fromColorRef.current, targetColorRef.current, eased);
+      setColor(c);
       if (t < 1) requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
     return () => { cancelled = true; };
   }, [targetColor]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fade verso il target opacity allo stato corrente
+  // Fade opacità al target sul cambio stato. Anche questo è SINGLE-SHOT
+  // (600ms poi si ferma) → nessuna oscillazione continua, nessun consumo
+  // CPU quando lo stato è stabile.
   useEffect(() => {
     Animated.timing(opacityAnim, {
       toValue: targetOpacity,
       duration: 600,
       easing: Easing.out(Easing.quad),
+      // useNativeDriver:false è obbligatorio per animare props SVG.
+      // Ma è single-shot → nessun problema di perf su Android.
       useNativeDriver: false,
     }).start();
   }, [targetOpacity, opacityAnim]);
-
-  // Pulsazione: per "speaking" simuliamo la cadenza vocale con bursts
-  // rapidi e random (sillabe). Per gli altri stati, respiro regolare.
-  useEffect(() => {
-    if (status !== "speaking") {
-      const cycleMs =
-        status === "recording" ? 1400 :
-        status === "thinking" ? 1100 :
-        3000;
-      const anim = Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulse, {
-            toValue: 1,
-            duration: cycleMs / 2,
-            easing: Easing.inOut(Easing.sin),
-            useNativeDriver: false,
-          }),
-          Animated.timing(pulse, {
-            toValue: 0,
-            duration: cycleMs / 2,
-            easing: Easing.inOut(Easing.sin),
-            useNativeDriver: false,
-          }),
-        ])
-      );
-      anim.start();
-      return () => anim.stop();
-    }
-    // SPEAKING → bursts random (sillabe), durata 80-180ms ciascuno
-    let cancelled = false;
-    const burst = () => {
-      if (cancelled) return;
-      const target = 0.3 + Math.random() * 0.7;
-      const dur = 70 + Math.random() * 120;
-      Animated.timing(pulse, {
-        toValue: target,
-        duration: dur,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: false,
-      }).start(() => {
-        if (!cancelled) burst();
-      });
-    };
-    burst();
-    return () => { cancelled = true; };
-  }, [status, pulse]);
-
-  // Calcolo opacity finale come (base × (0.7..1.0) del pulse)
-  const finalOpacity = Animated.multiply(
-    opacityAnim,
-    pulse.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1.0] })
-  );
 
   const { width, height } = Dimensions.get("window");
   const W = Math.max(width, 360);
@@ -188,7 +165,7 @@ export default function RadialGlow({
           width={W}
           height={H}
           fill="url(#glowGrad)"
-          opacity={finalOpacity as any}
+          opacity={opacityAnim as any}
         />
       </Svg>
     </View>
