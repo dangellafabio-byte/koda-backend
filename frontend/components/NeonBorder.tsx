@@ -79,16 +79,24 @@ const STATE_COLORS: Record<NeonBorderStatus, string> = {
 
 export default function NeonBorder({
   status,
-  thickness = 3,
+  thickness,
   speakingColorOverride,
+  idleColorOverride,
   radiusOverride,
 }: {
   status: NeonBorderStatus;
+  /** Se non fornito: 3px iOS/web, 4px Android (curva schermo "mangia" il bordo,
+   *  serve leggermente più spessore per essere ugualmente visibile). */
   thickness?: number;
   /** Se fornito e status === "speaking", sostituisce il viola fisso #BD10E0.
    *  Serve per legare il colore dell'orb/bordo alla voce scelta
    *  (es. Acqua=viola, Vento=cobalto). */
   speakingColorOverride?: string;
+  /** Se fornito e status === "idle", sostituisce lo champagne #D4B896.
+   *  Alcuni utenti su schermi curvi Honor/Xiaomi trovano lo champagne poco
+   *  visibile: possono scegliere un colore più contrastato via Impostazioni
+   *  → Bordo → "Colore idle alternativo". */
+  idleColorOverride?: string;
   /** Override del corner radius calcolato euristicamente. Utile se un
    *  dispositivo specifico (Honor XY, Xiaomi ZZ) ha una curvatura schermo
    *  che l'euristica non azzecca — passa il valore corretto da index.tsx. */
@@ -113,11 +121,18 @@ export default function NeonBorder({
   // Android: `insets.top` NON correla col radius (uno smartphone Honor con
   //   status bar 28px può avere angoli da 42-48px). Usiamo una euristica
   //   basata sulla dimensione schermo: smartphone moderni 2020+ tipicamente
-  //   32-48px, tablet più squadrati. Default smartphone Android = 42
-  //   (valore medio che si adatta a Honor, Xiaomi, Samsung, Pixel, OnePlus).
+  //   42-52px, tablet più squadrati.
+  //
+  //   === FIX Honor curved edges (2026-08-02, Fabio) ===
+  //   Alzato il default da 42 → 48. Su Honor con schermo curvo pronunciato,
+  //   42px lasciava il bordo "dentro" la curva fisica → invisibile agli
+  //   angoli. 48px lo porta più fuori sui device curvi senza penalizzare
+  //   Samsung/Pixel (schermi più squadrati) che al massimo hanno un radius
+  //   leggermente esuberante ma comunque visibile.
   //
   // Se il default non combacia su un dispositivo specifico, l'utente può
-  // passare `radiusOverride` dal chiamante (app/index.tsx).
+  // passare `radiusOverride` dal chiamante (app/index.tsx, che lo prende
+  // dallo slider di calibrazione in Impostazioni → Bordo).
   const shortSide = Math.min(W, H);
   const isTabletSize = shortSide >= 600;
 
@@ -135,17 +150,24 @@ export default function NeonBorder({
 
     // Android
     if (isTabletSize) return 16; // Android tablet (schermi tipicamente squadrati)
-    // Smartphone Android moderno: curva generosa (Honor, Xiaomi, Samsung, Pixel)
-    return 42;
+    // Smartphone Android moderno: curva generosa (Honor curvo, Xiaomi, Samsung, Pixel)
+    return 48;
   })();
 
   const DISPLAY_RADIUS = radiusOverride ?? computedRadius;
+  // Thickness default per piattaforma: Android +1px per compensare il "mangia
+  // bordo" delle curve fisiche degli schermi curvi Honor/Xiaomi.
+  const effectiveThickness = thickness ?? (Platform.OS === "android" ? 4 : 3);
   const baseColor = STATE_COLORS[status];
   // Override dinamico per "speaking" — legato alla voce scelta dall'utente.
-  // Per gli altri stati il colore resta sempre fisso.
-  const color = (status === "speaking" && speakingColorOverride)
-    ? speakingColorOverride
-    : baseColor;
+  // Override statico per "idle" — permette calibrazione utente su schermi
+  // curvi dove lo champagne default si vede poco. Per gli altri stati il
+  // colore resta sempre fisso (l'utente non deve poter cambiare i colori
+  // di feedback delle azioni — parte del linguaggio visivo dell'app).
+  const color =
+    (status === "speaking" && speakingColorOverride) ? speakingColorOverride :
+    (status === "idle" && idleColorOverride) ? idleColorOverride :
+    baseColor;
 
   // ============ CAMBIO COLORE ISTANTANEO (v64.13) =============================
   // === STORIA DEL PROBLEMA E SOLUZIONE DEFINITIVA ===
@@ -187,7 +209,7 @@ export default function NeonBorder({
         styles.frame,
         {
           borderColor: color,
-          borderWidth: thickness,
+          borderWidth: effectiveThickness,
           borderRadius: DISPLAY_RADIUS,
           opacity: 1.0,
         },

@@ -89,6 +89,14 @@ import InfoModal from "../components/InfoModal";
 import SafetyAlert from "../components/SafetyAlert";
 import FreemiumCounter from "../components/FreemiumCounter";
 import ProactiveOffer from "../components/ProactiveOffer";
+import {
+  loadBorderCalibration,
+  saveBorderCalibration,
+  resetBorderCalibration,
+  ALT_IDLE_COLOR,
+  DEFAULT_CALIBRATION,
+  type BorderCalibration,
+} from "../lib/borderCalibration";
 import { useRouter } from "expo-router";
 import type { SafetyCheckResult, FreemiumStatus as FreemiumStatusType } from "../lib/api";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
@@ -782,6 +790,43 @@ export default function Taccuino() {
     } catch {}
   }, []);
   const [showSettings, setShowSettings] = useState(false);
+  // === BORDER CALIBRATION (2026-08-02, Fabio dopo bug Honor curved edges) ===
+  // Alcuni schermi Android (Honor curvo, Xiaomi 4-lati curvi) hanno curve
+  // fisiche che "mangiano" il NeonBorder default → utente calibra da
+  // Impostazioni → Bordo. Persistito in SecureStore locale (per-device),
+  // NON nel profilo cloud: è una preferenza legata alla fisica dello
+  // schermo, non all'identità utente.
+  const [borderCal, setBorderCal] = useState<BorderCalibration>(DEFAULT_CALIBRATION);
+  useEffect(() => {
+    (async () => {
+      try {
+        const cal = await loadBorderCalibration();
+        setBorderCal(cal);
+      } catch {}
+    })();
+  }, []);
+  // === AUDIO PREWARM iOS/Android (2026-08-02, Fabio "primo istante magico") ===
+  // Al mount della home, configuriamo la audio session iOS in modo che il
+  // primo TTS di Koda non paghi i 100-200ms di setup iniziale. Impatta
+  // direttamente la percezione delle "prime 3-5 parole" — quelle che
+  // devono stregare l'utente. Idempotente, no-op se già configurato altrove.
+  useEffect(() => {
+    (async () => {
+      try {
+        const { setAudioModeAsync } = await import("expo-audio");
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          allowsRecording: false,
+          shouldPlayInBackground: false,
+          interruptionMode: "duckOthers",
+          interruptionModeAndroid: "duckOthers",
+        });
+        console.log("[HOME] audio session prewarmed (v65 first-word magic)");
+      } catch (e) {
+        console.warn("[HOME] audio prewarm skipped:", e);
+      }
+    })();
+  }, []);
   // === ROLLBACK 2026-07-13 ===
   // Rimossa la "Modalità Telefono" (audioOutMode / cycleAudioOutput /
   // setKodaAudioOutput / getKodaAudioOutput). Vedi
@@ -5972,6 +6017,141 @@ export default function Taccuino() {
 
             <View style={styles.divider} />
 
+            {/* === BORDO — Calibrazione utente (2026-08-02, Fabio) ============
+                Su alcuni schermi curvi Android (Honor, Xiaomi 4-lati) il
+                NeonBorder default si vede poco perché la curvatura fisica
+                del vetro lo copre agli angoli. L'utente può calibrare
+                radius/spessore/colore idle a occhio, valori persistiti
+                per-device in SecureStore locale. */}
+            <View style={styles.divider} />
+            <Text style={styles.settingsSubtitle}>Bordo dello schermo</Text>
+            <Text style={styles.settingsHint}>
+              Se il bordo colorato di Koda si vede poco agli angoli del tuo
+              telefono, usa questi controlli per calibrarlo.
+            </Text>
+
+            {/* Slider raggio angoli */}
+            <View style={{ marginTop: 12 }}>
+              <Text style={styles.settingsHint}>
+                Raggio angoli: {borderCal.radius ?? "auto"}
+                {borderCal.radius !== null ? " px" : " (rilevato)"}
+              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
+                <TouchableOpacity
+                  onPress={async () => {
+                    const cur = borderCal.radius ?? 48;
+                    const next: BorderCalibration = { ...borderCal, radius: Math.max(0, cur - 4) };
+                    setBorderCal(next);
+                    await saveBorderCalibration(next);
+                  }}
+                  style={[styles.modeBtn, { paddingHorizontal: 14, minHeight: 40 }]}
+                  accessibilityLabel="Riduci raggio bordo"
+                >
+                  <Text style={{ color: theme.text, fontSize: 18, fontWeight: "600" }}>−</Text>
+                </TouchableOpacity>
+                <View style={{ flex: 1, height: 6, backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 3 }}>
+                  <View
+                    style={{
+                      height: "100%",
+                      width: `${Math.min(100, ((borderCal.radius ?? 48) / 70) * 100)}%`,
+                      backgroundColor: bubbleAccent.color,
+                      borderRadius: 3,
+                    }}
+                  />
+                </View>
+                <TouchableOpacity
+                  onPress={async () => {
+                    const cur = borderCal.radius ?? 48;
+                    const next: BorderCalibration = { ...borderCal, radius: Math.min(70, cur + 4) };
+                    setBorderCal(next);
+                    await saveBorderCalibration(next);
+                  }}
+                  style={[styles.modeBtn, { paddingHorizontal: 14, minHeight: 40 }]}
+                  accessibilityLabel="Aumenta raggio bordo"
+                >
+                  <Text style={{ color: theme.text, fontSize: 18, fontWeight: "600" }}>+</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Slider spessore */}
+            <View style={{ marginTop: 12 }}>
+              <Text style={styles.settingsHint}>
+                Spessore: {borderCal.thickness ?? "auto"}
+                {borderCal.thickness !== null ? " px" : ` (auto: ${Platform.OS === "android" ? 4 : 3} px)`}
+              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
+                <TouchableOpacity
+                  onPress={async () => {
+                    const cur = borderCal.thickness ?? (Platform.OS === "android" ? 4 : 3);
+                    const next: BorderCalibration = { ...borderCal, thickness: Math.max(2, cur - 1) };
+                    setBorderCal(next);
+                    await saveBorderCalibration(next);
+                  }}
+                  style={[styles.modeBtn, { paddingHorizontal: 14, minHeight: 40 }]}
+                  accessibilityLabel="Riduci spessore bordo"
+                >
+                  <Text style={{ color: theme.text, fontSize: 18, fontWeight: "600" }}>−</Text>
+                </TouchableOpacity>
+                <View style={{ flex: 1, height: 6, backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 3 }}>
+                  <View
+                    style={{
+                      height: "100%",
+                      width: `${Math.min(100, ((borderCal.thickness ?? (Platform.OS === "android" ? 4 : 3)) / 6) * 100)}%`,
+                      backgroundColor: bubbleAccent.color,
+                      borderRadius: 3,
+                    }}
+                  />
+                </View>
+                <TouchableOpacity
+                  onPress={async () => {
+                    const cur = borderCal.thickness ?? (Platform.OS === "android" ? 4 : 3);
+                    const next: BorderCalibration = { ...borderCal, thickness: Math.min(6, cur + 1) };
+                    setBorderCal(next);
+                    await saveBorderCalibration(next);
+                  }}
+                  style={[styles.modeBtn, { paddingHorizontal: 14, minHeight: 40 }]}
+                  accessibilityLabel="Aumenta spessore bordo"
+                >
+                  <Text style={{ color: theme.text, fontSize: 18, fontWeight: "600" }}>+</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Toggle colore idle alternativo */}
+            <View style={[styles.settingRow, { marginTop: 12 }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>Colore idle più visibile</Text>
+                <Text style={styles.settingHint}>
+                  Sostituisce il champagne con un azzurro chiaro. Utile su
+                  schermi curvi dove il champagne si vede poco.
+                </Text>
+              </View>
+              <Switch
+                value={borderCal.useAltIdleColor}
+                onValueChange={async (v) => {
+                  const next: BorderCalibration = { ...borderCal, useAltIdleColor: v };
+                  setBorderCal(next);
+                  await saveBorderCalibration(next);
+                }}
+                trackColor={{ false: "#555", true: bubbleAccent.color }}
+              />
+            </View>
+
+            {/* Reset a default */}
+            <TouchableOpacity
+              onPress={async () => {
+                await resetBorderCalibration();
+                setBorderCal(DEFAULT_CALIBRATION);
+              }}
+              style={{ marginTop: 12, alignSelf: "flex-start", paddingVertical: 8, paddingHorizontal: 12 }}
+              accessibilityLabel="Ripristina calibrazione bordo predefinita"
+            >
+              <Text style={[styles.settingsHint, { textDecorationLine: "underline" }]}>
+                Ripristina valori predefiniti
+              </Text>
+            </TouchableOpacity>
+
             {/* === MODALITÀ INPUT RIMOSSA (richiesta utente 2026-06) ===
                 L'utente passa già da voce a scrittura tramite lo swipe tra
                 le due pagine principali (home voce ↔ chat scrittura).
@@ -6825,10 +7005,13 @@ export default function Taccuino() {
   })();
   // Spessore del bordo (in pixel). Il glow vero arriva dal shadow,
   // non serve un bordo spesso: 2-4px sono perfetti.
-  const neonThickness =
+  // Se l'utente ha calibrato un thickness custom (Impostazioni → Bordo),
+  // quello ha priorità assoluta sui default per-stato.
+  const neonThickness = borderCal.thickness ?? (
     neonStatus === "confessional" ? 4 :
     neonStatus === "idle" ? 2 :
-    3;
+    3
+  );
   const neonBorderEl = (
     <NeonBorder
       status={neonStatus}
@@ -6836,6 +7019,8 @@ export default function Taccuino() {
       speakingColorOverride={getVoiceSpeakingColor(
         (profile?.settings as any)?.tts_voice_id
       )}
+      radiusOverride={borderCal.radius ?? undefined}
+      idleColorOverride={borderCal.useAltIdleColor ? ALT_IDLE_COLOR : undefined}
     />
   );
 
