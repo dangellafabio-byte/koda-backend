@@ -3,7 +3,7 @@ import { Platform } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import * as WebBrowser from "expo-web-browser";
 import * as Linking from "expo-linking";
-import { api } from "./api";
+import { api, API_BASE } from "./api";
 import { setAuthTokenMem } from "./authToken";
 
 const TOKEN_KEY = "koda_session_token";
@@ -128,30 +128,74 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     const redirect = Linking.createURL("/");
     const authUrl = `${EMERGENT_AUTH_URL}?redirect=${encodeURIComponent(redirect)}`;
-    // === DIAG 2026-07-16 (utente: "sono entrato una volta, ora non più") ===
-    // Log dettagliato di ogni step Google — così sul prossimo build vediamo
-    // in log dispositivo dov'è la rottura.
+
+    // === FIX 2026-08-02 v65 — WARM-UP BACKEND (Fabio, dopo bug Ivan/Martina) ===
+    // Sveglia il backend Koda PRIMA di aprire il WebBrowser Google, così
+    // quando l'utente completa il login su Google e siamo pronti a chiamare
+    // /api/auth/google/session, il backend è già caldo (nessun cold start
+    // che manda in timeout la finestra critica dopo il redirect).
+    // Non blocca il flow: se il warmup fallisce, continuiamo comunque.
+    // Timeout stretto (3s) — se il backend è davvero morto, il fail arriverà
+    // comunque dopo, e almeno non blocchiamo il tap del pulsante Google.
     try {
-      console.log(`[KODA_AUTH_G] start redirect=${redirect}`);
+      const warmupCtl = new AbortController();
+      const warmupTimer = setTimeout(() => warmupCtl.abort(), 3000);
+      fetch(`${API_BASE}/health`, { signal: warmupCtl.signal })
+        .then(() => console.log("[KODA_AUTH_G] warmup OK"))
+        .catch((e) => console.log(`[KODA_AUTH_G] warmup skip: ${e?.message || e}`))
+        .finally(() => clearTimeout(warmupTimer));
+    } catch {}
+
+    // === FIX 2026-08-02 v65 — RETRY SILENTE (Fabio) ===
+    // Se WebBrowser torna con type=cancel/dismiss OPPURE la chiamata a
+    // /api/auth/google/session va in errore transiente (502, network),
+    // riproviamo UNA volta dopo 2s in modo silenzioso. Copre i falsi
+    // "cancel" da redirect scheme incasinato e i timeout da cold start
+    // upstream Emergent. L'utente non vede nulla: se il retry ha successo,
+    // procede come se il primo tentativo fosse riuscito.
+    const _attemptGoogleFlow = async (attemptIdx: number): Promise<void> => {
+      console.log(`[KODA_AUTH_G] start attempt=${attemptIdx + 1} redirect=${redirect}`);
       const result = await WebBrowser.openAuthSessionAsync(authUrl, redirect);
-      console.log(`[KODA_AUTH_G] result.type=${result.type} url=${(result as any).url || "-"}`);
+      console.log(`[KODA_AUTH_G] attempt=${attemptIdx + 1} result.type=${result.type} url=${(result as any).url || "-"}`);
+
       if (result.type === "success" && result.url) {
         const frag = result.url.split("#")[1] || result.url.split("?")[1] || "";
         const sid = new URLSearchParams(frag).get("session_id");
         console.log(`[KODA_AUTH_G] sid=${sid ? sid.slice(0, 8) + "..." : "null"}`);
-        if (sid) {
+        if (!sid) {
+          throw new Error("google no session_id in redirect url");
+        }
+        try {
           const res = await api.authGoogleSession(sid);
           console.log(`[KODA_AUTH_G] backend OK email=${res.email}`);
           await persistToken(res.session_token);
           await refresh();
-        } else {
-          throw new Error("google no session_id in redirect url");
+          return;
+        } catch (backendErr: any) {
+          // Errore backend (502, timeout, ecc.) — retry candidate se al primo giro
+          if (attemptIdx === 0) {
+            console.log(`[KODA_AUTH_G] backend error, will retry silently: ${backendErr?.message || backendErr}`);
+            await new Promise((r) => setTimeout(r, 2000));
+            return _attemptGoogleFlow(1);
+          }
+          throw backendErr;
         }
-      } else {
-        throw new Error(`google flow not success: type=${result.type}`);
       }
+
+      // type=cancel/dismiss/locked → retry candidate se al primo giro
+      if ((result.type === "cancel" || result.type === "dismiss") && attemptIdx === 0) {
+        console.log(`[KODA_AUTH_G] type=${result.type} at first attempt — retry silently after 2s`);
+        await new Promise((r) => setTimeout(r, 2000));
+        return _attemptGoogleFlow(1);
+      }
+
+      throw new Error(`google flow not success: type=${result.type}`);
+    };
+
+    try {
+      await _attemptGoogleFlow(0);
     } catch (e: any) {
-      console.log(`[KODA_AUTH_G] ERROR: ${e?.message || e}`);
+      console.log(`[KODA_AUTH_G] ERROR (all attempts exhausted): ${e?.message || e}`);
       throw e;
     }
   }, [refresh]);

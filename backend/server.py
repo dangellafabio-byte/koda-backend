@@ -111,6 +111,29 @@ async def _kodabuildversion():
     }
 
 
+# ============================================================
+# HEALTH CHECK — warm-up endpoint (2026-08-02)
+# ============================================================
+# Endpoint LEGGERISSIMO per:
+#   1. Warm-up del backend prima di operazioni critiche (es. Google OAuth
+#      login: il client chiama /api/health NON-bloccante prima di aprire
+#      il WebBrowser Google, così il backend è sveglio quando arriva il
+#      /api/auth/google/session finale).
+#   2. Liveness probe per piattaforme di deploy (Railway, Kubernetes).
+#
+# NON tocca DB, NON tocca upstream, NON logga. Risposta in <5ms tipici.
+# Reso `ok=True` + timestamp per debug latenza fine-a-fine dal client.
+# ============================================================
+@api_router.get("/health")
+async def api_health():
+    """Warm-up + liveness probe. Zero side-effects."""
+    return {
+        "ok": True,
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "version": _KODA_BACKEND_VERSION,
+    }
+
+
 # === FIX 2026-07-03 v40 — Debug endpoint per timing pipeline (Fabio) ===
 # Salva in memoria l'ultimo KODA_PIPELINE_SUMMARY prodotto, così
 # possiamo esporlo via /api/debug/last-turn-timing e leggere il breakdown
@@ -5603,25 +5626,55 @@ async def auth_dev_login(response: Response):
 @api_router.post("/auth/google/session")
 async def auth_google_session(response: Response, x_session_id: Optional[str] = Header(None)):
     """Scambia il session_id Emergent (ricevuto dopo l'OAuth Google) con i
-    dati utente, crea/aggiorna lo User e apre una sessione Koda (7gg)."""
+    dati utente, crea/aggiorna lo User e apre una sessione Koda (7gg).
+
+    === LOGGING STRUTTURATO (2026-08-02) ===
+    Traccia timestamp, sid_prefix, esito upstream Emergent, durata chiamata.
+    Serve per diagnosticare i fallimenti sporadici tipo "invalid state
+    parameter" / "google flow not success" segnalati da Ivan/Martina.
+    """
+    _t_start = datetime.now(timezone.utc)
+    _sid_prefix = (x_session_id[:8] + "...") if x_session_id else "MISSING"
     if not x_session_id:
+        logger.warning(
+            f"[AUTH_GOOGLE ts={_t_start.isoformat()} sid={_sid_prefix}] "
+            f"REJECT missing_session_id"
+        )
         raise HTTPException(status_code=401, detail="missing session id")
     try:
         async with httpx.AsyncClient(timeout=12) as client:
             r = await client.get(_EMERGENT_SESSION_DATA_URL,
                                   headers={"X-Session-ID": x_session_id})
-    except Exception:
+    except Exception as e:
+        _dur_ms = int((datetime.now(timezone.utc) - _t_start).total_seconds() * 1000)
+        logger.error(
+            f"[AUTH_GOOGLE ts={_t_start.isoformat()} sid={_sid_prefix} "
+            f"dur_ms={_dur_ms}] UPSTREAM_ERROR type={type(e).__name__} msg={e}"
+        )
         raise HTTPException(status_code=502, detail="auth upstream error")
+    _dur_ms = int((datetime.now(timezone.utc) - _t_start).total_seconds() * 1000)
     if r.status_code != 200:
+        logger.warning(
+            f"[AUTH_GOOGLE ts={_t_start.isoformat()} sid={_sid_prefix} "
+            f"dur_ms={_dur_ms}] UPSTREAM_STATUS={r.status_code} body={r.text[:200]}"
+        )
         raise HTTPException(status_code=401, detail="invalid session")
     data = r.json()
     email = (data.get("email") or "").strip().lower()
     if not email:
+        logger.warning(
+            f"[AUTH_GOOGLE ts={_t_start.isoformat()} sid={_sid_prefix} "
+            f"dur_ms={_dur_ms}] UPSTREAM_NO_EMAIL data_keys={list(data.keys())}"
+        )
         raise HTTPException(status_code=401, detail="no email")
     await _upsert_user(email, "Google")
     tok = await _create_session(email, data.get("session_token"))
     response.set_cookie("session_token", tok, httponly=True, secure=True,
                         samesite="none", max_age=_SESSION_TTL_DAYS * 24 * 3600, path="/")
+    logger.info(
+        f"[AUTH_GOOGLE ts={_t_start.isoformat()} sid={_sid_prefix} "
+        f"dur_ms={_dur_ms}] OK email={email}"
+    )
     return {"email": email, "name": data.get("name"),
             "picture": data.get("picture"), "session_token": tok}
 
