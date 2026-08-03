@@ -1484,6 +1484,27 @@ class Profile(BaseModel):
     daily_turns_date: Optional[str] = None  # "2026-07-24"
     has_used_24h_boost: bool = False
     hit_soft_warn_100_today: bool = False
+    # === PAYWALL v3 — MINUTI/MESE + CARRYOVER (2026-08-02) ================
+    # Sostituisce PAYWALL v2 (turni/giorno) con budget in MINUTI DI AUDIO KODA
+    # GENERATO al mese, più pool di carryover mensile per tier premium.
+    #
+    # SEMANTICA:
+    # - `minutes_used_this_month`: minuti di audio Koda consumati NEL MESE
+    #   corrente (chiave mese = monthly_reset_date "YYYY-MM"). Float (secondi
+    #   parziali contano). Reset a 0 al cambio mese UTC.
+    # - `monthly_reset_date`: "YYYY-MM" UTC. Se cambia → reset counter + spinta
+    #   dei minuti NON usati nel `minutes_pool_carryover` (fino a pool_max).
+    # - `minutes_pool_carryover`: pool di minuti custoditi da mesi precedenti.
+    #   Consumato SOLO dopo aver esaurito il budget mensile corrente. Tetto
+    #   dipende dal tier (0 / 200 / 1050 min per Mensile/Bimestrale/Annuale).
+    # - `warned_at_90_this_month`: True se l'utente ha già ricevuto il warning
+    #   soft al 90% del budget questo mese. Reset al cambio mese.
+    # - `trial_started_at`: ISO datetime inizio trial (per free trial 15 min/7gg).
+    minutes_used_this_month: float = 0.0
+    monthly_reset_date: Optional[str] = None  # "2026-08" UTC
+    minutes_pool_carryover: float = 0.0
+    warned_at_90_this_month: bool = False
+    trial_started_at: Optional[str] = None  # ISO datetime
     # Stato abbonamento — settato dal webhook RevenueCat. Default False = freemium.
     subscription_active: bool = False
     subscription_tier: Optional[str] = None  # "monthly" | "annual" | None (v2)
@@ -2898,15 +2919,77 @@ MEMORY_IMPORTANCE_THRESHOLD = 4
 #     - Bypass tutti i limiti (vedi is_user_unlimited() + PAYWALL_POLICY.md)
 # ============================================================
 
-FREE_DAILY_LIMIT = 5           # turni/giorno per utenti free (post 24h)
-FREE_24H_BOOST = 20            # turni prime 24h dalla registrazione
-PREMIUM_DAILY_HARD_CAP = 150   # cap duro premium/giorno
-PREMIUM_DAILY_SOFT_WARN = 100  # warning gentile premium/giorno
+FREE_DAILY_LIMIT = 5           # turni/giorno per utenti free (post 24h)   [LEGACY v2]
+FREE_24H_BOOST = 20            # turni prime 24h dalla registrazione        [LEGACY v2]
+PREMIUM_DAILY_HARD_CAP = 150   # cap duro premium/giorno                    [LEGACY v2]
+PREMIUM_DAILY_SOFT_WARN = 100  # warning gentile premium/giorno             [LEGACY v2]
+
+
+# ============================================================
+# PAYWALL v3 — MINUTI/MESE + CARRYOVER (2026-08-02)
+# ============================================================
+# Design confermato da Fabio dopo analisi dati reali dashboard ElevenLabs:
+#   - Costo overage worst-case: €0.044/minuto (v3 + flash mix reale)
+#   - Uso medio realistico: 150-180 min/mese per utente attivo
+#
+#   FREE TRIAL (7 giorni dalla registrazione):
+#     - 15 minuti totali (no daily reset, budget mensile trattato come singolo pool)
+#     - Alla scadenza dei 7gg o al consumo dei 15 min → paywall
+#
+#   PIANI PREMIUM:
+#     - Mensile €19.99   → 100 min/mese, 0 mesi carryover, cap hard 100 min/mese
+#     - Bimestrale €35.99 → 200 min/mese, 1 mese carryover (pool max 200), cap hard 300
+#     - Annuale €209.99  → 350 min/mese, 3 mesi carryover (pool max 1050), cap hard 380
+#
+#   MARGINI WORST-CASE (utente al cap hard mensile in overage puro):
+#     - Mensile: costo €4.40, margine +€15.59 (78%)
+#     - Bimestrale: costo €13.20, margine +€4.80 (27%)
+#     - Annuale: costo €16.72, margine +€0.78 (5%) — protetto da alert 80% plafond
+#
+#   WARNING 90%: alla soglia del 90% del budget corrente (budget + pool utilizzato)
+#     Koda emette una frase in-personaggio come preavviso gentile. Poi si continua
+#     normalmente fino al 100% (cap hard), dove scatta il blocco gentile.
+#
+#   WHITELIST unlimited: bypass tutto (vedi is_user_unlimited() + PAYWALL_POLICY.md).
+# ============================================================
+
+# Free trial
+FREE_TRIAL_MINUTES = 15.0          # minuti totali nel trial
+FREE_TRIAL_DAYS = 7                # durata trial in giorni
+
+# Budget per tier (minuti/mese)
+TIER_MONTHLY_BUDGET = {
+    "monthly":   100.0,
+    "bimonthly": 200.0,
+    "annual":    350.0,
+}
+# Pool massimo di carryover per tier (minuti totali conservabili)
+TIER_POOL_MAX = {
+    "monthly":   0.0,          # 0 mesi carryover
+    "bimonthly": 200.0,        # 1 mese carryover
+    "annual":    1050.0,       # 3 mesi carryover
+}
+# Cap hard mensile di CONSUMO (budget + pool_consumato_nel_mese ≤ hard_cap)
+TIER_MONTHLY_HARD_CAP = {
+    "monthly":   100.0,
+    "bimonthly": 300.0,        # 200 budget + max 100 dal pool
+    "annual":    380.0,        # 350 budget + max 30 dal pool (protezione worst-case)
+}
+# Soglia di warning gentile (percentuale del budget mensile)
+WARNING_THRESHOLD_PCT = 0.90
+
+# Costo di riferimento per calcoli economici (overage worst-case)
+OVERAGE_COST_PER_MINUTE_EUR = 0.044
 
 
 def _today_utc_str() -> str:
     """Chiave giorno per reset counter — mezzanotte UTC. Formato: YYYY-MM-DD."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _this_month_utc_str() -> str:
+    """Chiave mese per reset counter mensile — primo del mese UTC. Formato: YYYY-MM."""
+    return datetime.now(timezone.utc).strftime("%Y-%m")
 
 
 def _within_24h_from_registration(created_at_str: Optional[str]) -> bool:
