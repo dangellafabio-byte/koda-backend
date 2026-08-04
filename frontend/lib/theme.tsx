@@ -111,9 +111,14 @@ const GIORNO: Palette = {
   // (esattamente il colore dello sfondo notte). Mantiene la signature
   // teal-petrolio (#0E7C7B) e il bordeaux della Stanza dello Sfogo
   // (#7A1F2E), che funzionano su entrambi gli sfondi.
+  // === TWEAK 2026-08-04 — "Pietra Serena" ===
+  // Fabio: il crema #F4F2E8 era troppo "carta antica". Passiamo a un
+  // grigio-caldo tipo pietra toscana, che ha ancora sottotono beige
+  // (evita stridore col champagne dell'orb/border) ma senza sembrare
+  // beige. Surface allineato per coerenza tonale delle card.
   isDark: false,
-  bg: "#F4F2E8",
-  surface: "#E8E2D5",
+  bg: "#DDD7CB",
+  surface: "#CBC4B7",
   surfaceAlt: "rgba(31,26,54,0.06)",
   border: "rgba(31,26,54,0.10)",
   divider: "rgba(31,26,54,0.08)",
