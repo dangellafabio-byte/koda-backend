@@ -135,8 +135,10 @@ const BG_PRESETS: BgPreset[] = [
   { id: "notturno", name: "Notturno", colors: ["#000000", "#1A1A2E", "#16213E"] },
   // 2. Aurora: viola intimo (perfetto per la macchia gialla calda)
   { id: "aurora", name: "Aurora", colors: ["#0F0C29", "#302B63", "#24243E"] },
-  // 3. Carta: caldo / diurno per chi preferisce sfondo chiaro
-  { id: "carta", name: "Carta", colors: ["#F5E9D7", "#E8D5B7", "#D4B896"] },
+  // 3. Pietra: grigio caldo / diurno (rinominato da "Carta" — 2026-08-04)
+  //    Colori tarati per "pietra toscana" con sottotono caldo, coerente
+  //    con l'orb champagne al centro. Gradient 3-stop per profondità.
+  { id: "carta", name: "Pietra", colors: ["#E4DED2", "#CBC4B7", "#A8A196"] },
 ];
 
 // === Day separator helper
