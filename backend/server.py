@@ -10898,6 +10898,19 @@ async def _fast_pipeline_task(
         # al comportamento precedente (previous_text only).
         nonlocal_first_request_id: List[Optional[str]] = [None]
 
+        # === OPZIONE B (2026-08-02, Fabio) — Early body flush + overflow ===
+        # `nonlocal_body_request_id` cattura il request_id del CHUNK BODY (idx=1)
+        # così l'eventuale overflow chunk (idx=2+) può fare request stitching su
+        # di lui (flash→flash) per timbro coerente, invece di ricadere sul
+        # request_id di v3 (chunk 0), che è timbricamente diverso.
+        nonlocal_body_request_id: List[Optional[str]] = [None]
+
+        # Soglie per il flush anticipato del body: appena raggiungiamo una di
+        # queste condizioni, il body TTS parte SENZA aspettare la fine dello
+        # streaming LLM. Elimina i ~2s di silenzio tra chunk 0 e body.
+        BODY_EARLY_FLUSH_MIN_SENTENCES = 2
+        BODY_EARLY_FLUSH_MIN_CHARS = 90
+
         async def _gen_and_publish_sentence(idx: int, sentence: str, previous_text: Optional[str] = None):
             nonlocal first_audio_logged, timing_first_tts_ms, timing_first_audio_total_ms, current_tone
             try:
@@ -11072,12 +11085,22 @@ async def _fast_pipeline_task(
                     #    2026-07-23), quindi passiamo SOLO su flash body
                     #  - Se `previous_request_ids` è presente, l'API ignora
                     #    `previous_text` → il second è più potente
+                    # === STITCHING v65.5 (Opzione B, 2026-08-02) ===
+                    # - Chunk 1 (body): stitcha su chunk 0 (v3 → flash)
+                    # - Chunk 2+ (overflow): stitcha su chunk 1 (flash → flash)
+                    #   così TUTTO il body + overflow condivide la stessa
+                    #   prosodia flash, senza salti timbrici interni.
                     if (
                         model_id != "eleven_v3"
                         and current_tone not in HIGH_ENERGY_TONES
-                        and nonlocal_first_request_id[0]
                     ):
-                        kwargs["previous_request_ids"] = [nonlocal_first_request_id[0]]
+                        _prev_req_id = None
+                        if idx >= 2 and nonlocal_body_request_id[0]:
+                            _prev_req_id = nonlocal_body_request_id[0]
+                        elif nonlocal_first_request_id[0]:
+                            _prev_req_id = nonlocal_first_request_id[0]
+                        if _prev_req_id:
+                            kwargs["previous_request_ids"] = [_prev_req_id]
                     try:
                         # === CATTURA REQUEST_ID (2026-08-02, Fabio, Esperimento A) ===
                         # Uso `with_raw_response` per accedere agli headers HTTP
@@ -11103,6 +11126,15 @@ async def _fast_pipeline_task(
                                 logger.info(
                                     f"[fast {session_id[:8]}] stitching: captured "
                                     f"v3 request_id={_req_hdr[:12]}... for body"
+                                )
+                            # === OPZIONE B: cattura anche request_id del body ===
+                            # Il chunk overflow (idx >= 2) userà questo per
+                            # stitching flash→flash sull'audio già generato.
+                            if _req_hdr and idx == 1 and model_id != "eleven_v3":
+                                nonlocal_body_request_id[0] = _req_hdr
+                                logger.info(
+                                    f"[fast {session_id[:8]}] stitching: captured "
+                                    f"body flash request_id={_req_hdr[:12]}... for overflow"
                                 )
                             # Estraggo il generator/iterable di bytes audio
                             _data = getattr(_raw, "data", None)
@@ -11331,6 +11363,14 @@ async def _fast_pipeline_task(
         # streammare), ma il primo chunk è già in playback per l'utente.
         body_buffer: List[str] = []
 
+        # === OPZIONE B (2026-08-02) — Early flush state ===
+        # `body_flushed`: True dopo che il body TTS è partito (early o post-LLM).
+        # `overflow_buffer`: accumula le frasi che arrivano DOPO il flush del
+        # body → verranno emesse come chunk 2 (idx=sentence_idx dopo body)
+        # con request stitching su chunk 1.
+        body_flushed: bool = False
+        overflow_buffer: List[str] = []
+
         async for chunk in stream:
             try:
                 piece = chunk.choices[0].delta.content or ''
@@ -11372,7 +11412,41 @@ async def _fast_pipeline_task(
                             _prev_sentence_for_tts = sent
                             sentence_idx += 1
                         else:
-                            body_buffer.append(sent)
+                            # === OPZIONE B (2026-08-02) — Early body flush ===
+                            # Fase 1: body NON ancora flushato → accumula e
+                            #         controlla soglia. Se soglia raggiunta,
+                            #         flusha ORA (in parallelo, senza aspettare
+                            #         la fine dello stream LLM). Elimina il
+                            #         silenzio ~2s tra chunk 0 e body.
+                            # Fase 2: body GIÀ flushato → accumula in overflow.
+                            if not body_flushed:
+                                body_buffer.append(sent)
+                                _body_chars_now = sum(len(s) for s in body_buffer)
+                                if (
+                                    len(body_buffer) >= BODY_EARLY_FLUSH_MIN_SENTENCES
+                                    or _body_chars_now >= BODY_EARLY_FLUSH_MIN_CHARS
+                                ):
+                                    body_text_early = " ".join(
+                                        s.strip() for s in body_buffer if s and s.strip()
+                                    ).strip()
+                                    if body_text_early:
+                                        logger.info(
+                                            f"[fast {session_id[:8]}] EARLY BODY FLUSH "
+                                            f"(Opzione B): n_sent={len(body_buffer)} "
+                                            f"chars={len(body_text_early)} "
+                                            f"preview={body_text_early[:80]!r}"
+                                        )
+                                        task = asyncio.create_task(_gen_and_publish_sentence(
+                                            sentence_idx, body_text_early,
+                                            previous_text=_prev_sentence_for_tts or None,
+                                        ))
+                                        sentence_tasks.append(task)
+                                        _prev_sentence_for_tts = body_text_early
+                                        sentence_idx += 1
+                                        body_flushed = True
+                                        body_buffer = []
+                            else:
+                                overflow_buffer.append(sent)
             if extractor.reply_finished:
                 break
 
@@ -11381,6 +11455,8 @@ async def _fast_pipeline_task(
             # === FIX 2026-07-02 Opzione A ===
             # Anche il tail (frase finale senza newline terminale) fa parte
             # del body — accumula insieme al resto per prosodia coerente.
+            # === OPZIONE B (2026-08-02) === Se il body è già stato flushato
+            # early, il tail va in overflow (chunk 2), altrimenti nel body.
             if sentence_idx == 0:
                 # Edge case: la risposta era così corta da non triggerare
                 # nemmeno il primo aggressive chunk. Emettiamo il tail come
@@ -11391,18 +11467,22 @@ async def _fast_pipeline_task(
                 sentence_tasks.append(task)
                 _prev_sentence_for_tts = tail
                 sentence_idx += 1
-            else:
+            elif not body_flushed:
                 body_buffer.append(tail)
+            else:
+                overflow_buffer.append(tail)
 
-        # === FIX 2026-07-02 Opzione A — Emetti body unificato ===
-        # Ora che l'LLM ha finito di streammare, se abbiamo accumulato frasi
-        # nel body_buffer le mandiamo a ElevenLabs come UNA sola stringa.
-        # Prosodia coerente per tutto il corpo della risposta.
-        if body_buffer:
+        # === OPZIONE B (2026-08-02) — Post-LLM flush ===
+        # Caso 1: body NON è stato flushato early (risposta cortissima o
+        #         streaming veloce senza raggiungere soglia) → flush normale
+        #         del body_buffer come chunk unificato.
+        # Caso 2: body è già stato flushato early → se overflow_buffer ha
+        #         contenuto, emetti chunk 2 (flash) stitchato su body.
+        if not body_flushed and body_buffer:
             body_text = " ".join(s.strip() for s in body_buffer if s and s.strip()).strip()
             if body_text:
                 logger.info(
-                    f"[fast {session_id[:8]}] body unified TTS: "
+                    f"[fast {session_id[:8]}] body unified TTS (post-LLM): "
                     f"n_sentences={len(body_buffer)} chars={len(body_text)} "
                     f"preview={body_text[:80]!r}"
                 )
@@ -11411,6 +11491,21 @@ async def _fast_pipeline_task(
                 ))
                 sentence_tasks.append(task)
                 _prev_sentence_for_tts = body_text
+                sentence_idx += 1
+        elif body_flushed and overflow_buffer:
+            overflow_text = " ".join(s.strip() for s in overflow_buffer if s and s.strip()).strip()
+            if overflow_text:
+                logger.info(
+                    f"[fast {session_id[:8]}] OVERFLOW chunk (Opzione B): "
+                    f"n_sentences={len(overflow_buffer)} chars={len(overflow_text)} "
+                    f"preview={overflow_text[:80]!r}"
+                )
+                task = asyncio.create_task(_gen_and_publish_sentence(
+                    sentence_idx, overflow_text,
+                    previous_text=_prev_sentence_for_tts or None,
+                ))
+                sentence_tasks.append(task)
+                _prev_sentence_for_tts = overflow_text
                 sentence_idx += 1
 
         if sentence_tasks:
