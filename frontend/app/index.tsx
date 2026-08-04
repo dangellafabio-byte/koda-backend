@@ -4874,7 +4874,7 @@ export default function Taccuino() {
   const isLiquid = theme.name === "liquid";
   const screenInner = (
     <View
-      style={[styles.screen, { backgroundColor: bgValue ? "transparent" : (isAurora ? "#000" : (isLiquid ? "#F4F1EA" : theme.bg)) }]}
+      style={[styles.screen, { backgroundColor: bgValue ? "transparent" : (isAurora ? "#000" : (isLiquid ? "#DDD7CB" : theme.bg)) }]}
     >
       {/* === LIQUID INVERSION LAYER (richiesta utente 2026-06) ===
           Sfondo bianco-latte denso che si "deforma" attorno
