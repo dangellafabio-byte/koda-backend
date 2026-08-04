@@ -771,6 +771,13 @@ export default function Taccuino() {
     } catch {}
   }, []);
   const [showSettings, setShowSettings] = useState(false);
+  // === EASTER EGG DESIGN MOCKUP (2026-08-04, Fabio) ===
+  // Triple-tap sul version footer dentro Impostazioni → naviga a
+  // /mockup-light (schermata di lavoro per decidere i colori del light
+  // mode). Le ref sono al top del component per non essere ricreate
+  // ad ogni render.
+  const mockupTapCountRef = useRef(0);
+  const mockupTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // === BORDER CALIBRATION (2026-08-02, Fabio dopo bug Honor curved edges) ===
   // Alcuni schermi Android (Honor curvo, Xiaomi 4-lati curvi) hanno curve
   // fisiche che "mangiano" il NeonBorder default → utente calibra da
@@ -6595,33 +6602,38 @@ export default function Taccuino() {
                 dopo verifica utente: la catena Deploy → Build è confermata
                 affidabile per questa sessione.
 
-                === CANARY: build-v64.0-android-unified-fix (2026-07-26) ===
-                Include tutto v63.9 + 4 fix Android unificati:
-                  - Fix v64.0 #1: Tap-to-Reset universale (qualsiasi tap
-                    non-idle → hard stop → idle; rimossa la gate mic che
-                    bloccava il tap durante startup)
-                  - Fix v64.0 #2: Android STT pre-abort (+80ms) prima di
-                    ogni start() per forzare reset Google SpeechRecognizer
-                  - Fix v64.0 #3: Watchdog mic silent-fail (5s) — se
-                    speechstart non arriva → propaga errore invece di
-                    lasciare la sessione zombie
-                  - Fix v64.0 #4: Keep-awake STABILE per sessione (60s
-                    idle debounce invece di cycle per status) → risolve
-                    flash schermo Honor/Huawei ogni ~7s
-                  - Bonus: Breath animation ri-abilitata (confermato NON
-                    causa del flash, era il wake-lock cycle)
-                Se apri Impostazioni → scroll in fondo → vedi
-                "build-v64.0-android-unified-fix" → build giusto.
-                Se vedi ancora "build-v63.9-..." o altro →
-                l'APK installato è vecchio, non testare oltre. */}
-            <View style={{ alignItems: "center", marginTop: 24, marginBottom: 8 }}>
+                === EASTER EGG DESIGN MOCKUP (2026-08-04, Fabio) ===
+                Triple-tap sul footer version → naviga a /mockup-light.
+                Gesture invisibile agli utenti normali, come pattern
+                Android "Build number tap 7x" per Developer Mode.
+                Da rimuovere quando il design del light mode è deciso. */}
+            <TouchableOpacity
+              activeOpacity={1}
+              onPress={() => {
+                mockupTapCountRef.current += 1;
+                if (mockupTapTimerRef.current) {
+                  clearTimeout(mockupTapTimerRef.current);
+                }
+                if (mockupTapCountRef.current >= 3) {
+                  mockupTapCountRef.current = 0;
+                  closeSettings();
+                  setTimeout(() => router.push("/mockup-light"), 200);
+                } else {
+                  mockupTapTimerRef.current = setTimeout(() => {
+                    mockupTapCountRef.current = 0;
+                  }, 1500);
+                }
+              }}
+              style={{ alignItems: "center", marginTop: 24, marginBottom: 8 }}
+              testID="version-footer-tap"
+            >
               <Text style={{ color: theme.text + "55", fontSize: 11, fontStyle: "italic" }}>
                 Koda v{Constants.expoConfig?.version || "1.0.1"}
               </Text>
               <Text style={{ color: theme.text + "33", fontSize: 9, marginTop: 3, letterSpacing: 0.5 }}>
                 {KODA_BUILD_SHORT_TAG}
               </Text>
-            </View>
+            </TouchableOpacity>
 </>)}
             </ScrollView>
           </View>
