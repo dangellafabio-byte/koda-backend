@@ -27,7 +27,8 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import { View, StyleSheet, Animated, Easing } from "react-native";
 import Svg, { Defs, RadialGradient, Stop, Circle } from "react-native-svg";
-import { useTheme } from "../lib/theme";
+// Nota: useTheme non è più importato dopo il rollback del 2026-08-04
+//       (l'orb non dipende più dal tema — cambia solo il cielo attorno).
 
 // === TEST DIAGNOSTICO 2026-07-25 v63.9 — RISOLTO 2026-07-26 v64.0 ===
 // Il test in v63.9 aveva disabilitato il breath cycle su Android per
@@ -127,17 +128,20 @@ export default function EclipseOrb({
   speakingPaletteOverride,
   forceVoiceIdentity = false,
 }: Props) {
-  // === FIX 2026-06-29 v37 — Eclissi nel tema giorno (negativo fotografico) ===
-  // Nel tema chiaro il "disco nero" perde senso (sarebbe un buco scuro
-  // dentro un ambiente luminoso). Invertiamo: disco perlato/avorio.
-  // L'alone/halo manteniamo gli STESSI colori della palette (signature
-  // emotiva), ma con opacità ridotte (Strada 1: "ombra colorata"
-  // pittorica, soft, niente neon esplosivi su chiaro).
-  const { theme } = useTheme();
-  const isLight = !theme.isDark;
-  // Multiplier applicato a tutte le opacities dei layer luminosi quando
-  // siamo nel tema chiaro. <1 = più desaturato/sottile.
-  const haloOpacityScale = isLight ? 0.55 : 1.0;
+  // === FIX 2026-08-04 v65 — Eclissi coerente in dark E light mode ===
+  // Il disco centrale nero È l'identità dell'orb (eclissi = disco scuro
+  // + alone luminoso), NON un dettaglio che si inverte tra dark/light.
+  // Precedente logica "negativo fotografico" (disco perlato in light)
+  // ROLLBACKATA: perdeva l'elemento più riconoscibile di Koda e faceva
+  // sembrare l'orb un sole che brilla, non un'eclissi.
+  // Ora cambia SOLO il colore del cielo attorno (theme.bg da indaco a
+  // azzurro); disco e alone restano identici in entrambi i mode.
+  // `haloOpacityScale` era usato per desaturare l'alone in light mode
+  // (0.55). Adesso è 1.0 fisso in entrambi i mode: su cielo azzurro
+  // chiaro l'alone dorato/champagne funziona per contrasto caldo/freddo
+  // classico, non serve desaturarlo. Costante conservata per non toccare
+  // tutte le righe di opacità sotto (moltiplicazione per 1 = no-op).
+  const haloOpacityScale = 1.0;
   // === Palette resolution: tone-driven when speaking, blu petrolio when
   // listening, ciclamino while thinking, viola when idle.
   const palette: [string, string, string] = useMemo(() => {
@@ -580,27 +584,18 @@ export default function EclipseOrb({
       </Animated.View>
 
       {/* === Layer 3: DISCO CENTRALE ===
-          Notte: cerchio nero (scatola nera emotiva, custode dei segreti).
-          Giorno (negativo fotografico): cerchio perlato/avorio — la luce
-          si concentra al centro invece che intorno. Mantiene la stessa
-          metafora di "punto fermo che custodisce", in polarità opposta.
-      */}
+          Cerchio nero SEMPRE — in dark e in light mode. Il disco nero
+          È l'identità dell'orb ("eclissi"). Cambia solo il cielo attorno
+          (indaco vs azzurro) tra i due mode; il centro resta scuro come
+          scatola nera emotiva, custode dei segreti. */}
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
         <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
           <Defs>
-            {isLight ? (
-              <RadialGradient id="disc" cx="42%" cy="38%" r="55%">
-                <Stop offset="0%" stopColor="#FBF8EE" stopOpacity={1} />
-                <Stop offset="60%" stopColor="#F0EADC" stopOpacity={1} />
-                <Stop offset="100%" stopColor="#E5DECB" stopOpacity={1} />
-              </RadialGradient>
-            ) : (
-              <RadialGradient id="disc" cx="42%" cy="38%" r="55%">
-                <Stop offset="0%" stopColor="#0F0F1A" stopOpacity={1} />
-                <Stop offset="60%" stopColor="#050507" stopOpacity={1} />
-                <Stop offset="100%" stopColor="#000000" stopOpacity={1} />
-              </RadialGradient>
-            )}
+            <RadialGradient id="disc" cx="42%" cy="38%" r="55%">
+              <Stop offset="0%" stopColor="#0F0F1A" stopOpacity={1} />
+              <Stop offset="60%" stopColor="#050507" stopOpacity={1} />
+              <Stop offset="100%" stopColor="#000000" stopOpacity={1} />
+            </RadialGradient>
           </Defs>
           <Circle cx={center} cy={center} r={discRadius} fill="url(#disc)" />
         </Svg>
