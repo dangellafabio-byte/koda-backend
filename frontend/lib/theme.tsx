@@ -1,11 +1,22 @@
 /**
- * Taccuino Vivo — Theme system.
- * 5 temi semplici + opzione "Sistema" (segue il telefono).
+ * Koda — Theme system.
+ *
+ * Cleanup 2026-08-04: rimossi i temi legacy LIQUID / CIELO / BOSCO / CILIEGIA
+ * (non selezionabili dall'UI da mesi, ma ancora attivi via profilo legacy →
+ * causavano bug di sfondo persistente). Ora sopravvivono solo:
+ *   - "giorno" (Chiaro ☀️)
+ *   - "notte"  (Scuro 🌙)
+ *   - "auto-orario" (alterna in base all'ora reale)
+ *
+ * `resolveTheme` include una **migration** che rimappa qualsiasi valore
+ * legacy (liquid/cielo/bosco/ciliegia/sistema/altro) a "giorno". Zero
+ * intervento richiesto sull'utente: al primo login post-update, il tema
+ * risolto è coerente con l'UI del selettore.
  */
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { Appearance } from "react-native";
 
-export type ThemeName = "notte" | "giorno" | "liquid" | "cielo" | "bosco" | "ciliegia" | "sistema" | "auto-orario";
+export type ThemeName = "notte" | "giorno" | "auto-orario";
 
 export type Palette = {
   name: ThemeName;
@@ -107,10 +118,10 @@ const GIORNO: Palette = {
   // Riprogettazione completa: invece di un grigio neutro (problemi di
   // contrasto + estraneità al mood Koda), il tema giorno diventa un
   // "negativo fotografico" del tema notte. Stessa struttura emotiva,
-  // luminanza invertita: avorio caldo (luce ambientale) + testo indaco
-  // (esattamente il colore dello sfondo notte). Mantiene la signature
-  // teal-petrolio (#0E7C7B) e il bordeaux della Stanza dello Sfogo
-  // (#7A1F2E), che funzionano su entrambi gli sfondi.
+  // luminanza invertita: testo indaco (esattamente il colore dello
+  // sfondo notte). Mantiene la signature teal-petrolio (#0E7C7B) e il
+  // bordeaux della Stanza dello Sfogo (#7A1F2E), che funzionano su
+  // entrambi gli sfondi.
   // === TWEAK 2026-08-04 — "Pietra Serena" ===
   // Fabio: il crema #F4F2E8 era troppo "carta antica". Passiamo a un
   // grigio-caldo tipo pietra toscana, che ha ancora sottotono beige
@@ -148,161 +159,6 @@ const GIORNO: Palette = {
   },
 };
 
-const CIELO: Palette = {
-  name: "cielo",
-  label: "Cielo",
-  emoji: "💙",
-  isDark: false,
-  bg: "#F0F9FF",
-  surface: "#FFFFFF",
-  surfaceAlt: "#E0F2FE",
-  border: "#BAE6FD",
-  divider: "#E0F2FE",
-  text: "#0C4A6E",
-  textMuted: "#0369A1",
-  textDim: "#7DD3FC",
-  primary: "#0284C7",
-  primaryText: "#FFFFFF",
-  primarySoftBg: "#E0F2FE",
-  primarySoftBorder: "#7DD3FC",
-  userBubble: "#0284C7",
-  userBubbleText: "#FFFFFF",
-  aiBubbleBg: "#FFFFFF",
-  aiBubbleBorder: "#BAE6FD",
-  aiBubbleText: "#0C4A6E",
-  success: "#16A34A",
-  warning: "#D97706",
-  danger: "#DC2626",
-  tone: {
-    neutral: { bg: "#F1F5F9", border: "#CBD5E1" },
-    calm: { bg: "#E0F2FE", border: "#7DD3FC" },
-    warm: { bg: "#FEF3C7", border: "#FCD34D" },
-    energetic: { bg: "#DCFCE7", border: "#86EFAC" },
-    concerned: { bg: "#FFEDD5", border: "#FDBA74" },
-    urgent: { bg: "#FEE2E2", border: "#FCA5A5" },
-  },
-};
-
-const BOSCO: Palette = {
-  name: "bosco",
-  label: "Bosco",
-  emoji: "🌿",
-  isDark: false,
-  bg: "#F0FDF4",
-  surface: "#FFFFFF",
-  surfaceAlt: "#DCFCE7",
-  border: "#BBF7D0",
-  divider: "#DCFCE7",
-  text: "#14532D",
-  textMuted: "#166534",
-  textDim: "#86EFAC",
-  primary: "#16A34A",
-  primaryText: "#FFFFFF",
-  primarySoftBg: "#DCFCE7",
-  primarySoftBorder: "#86EFAC",
-  userBubble: "#16A34A",
-  userBubbleText: "#FFFFFF",
-  aiBubbleBg: "#FFFFFF",
-  aiBubbleBorder: "#BBF7D0",
-  aiBubbleText: "#14532D",
-  success: "#16A34A",
-  warning: "#D97706",
-  danger: "#DC2626",
-  tone: {
-    neutral: { bg: "#F1F5F9", border: "#CBD5E1" },
-    calm: { bg: "#E0F2FE", border: "#7DD3FC" },
-    warm: { bg: "#FEF3C7", border: "#FCD34D" },
-    energetic: { bg: "#DCFCE7", border: "#86EFAC" },
-    concerned: { bg: "#FFEDD5", border: "#FDBA74" },
-    urgent: { bg: "#FEE2E2", border: "#FCA5A5" },
-  },
-};
-
-const CILIEGIA: Palette = {
-  name: "ciliegia",
-  label: "Ciliegia",
-  emoji: "🌸",
-  isDark: false,
-  bg: "#FFF1F2",
-  surface: "#FFFFFF",
-  surfaceAlt: "#FFE4E6",
-  border: "#FECDD3",
-  divider: "#FFE4E6",
-  text: "#881337",
-  textMuted: "#9F1239",
-  textDim: "#FB7185",
-  primary: "#E11D48",
-  primaryText: "#FFFFFF",
-  primarySoftBg: "#FFE4E6",
-  primarySoftBorder: "#FDA4AF",
-  userBubble: "#E11D48",
-  userBubbleText: "#FFFFFF",
-  aiBubbleBg: "#FFFFFF",
-  aiBubbleBorder: "#FECDD3",
-  aiBubbleText: "#881337",
-  success: "#16A34A",
-  warning: "#D97706",
-  danger: "#DC2626",
-  tone: {
-    neutral: { bg: "#F1F5F9", border: "#CBD5E1" },
-    calm: { bg: "#E0F2FE", border: "#7DD3FC" },
-    warm: { bg: "#FEF3C7", border: "#FCD34D" },
-    energetic: { bg: "#DCFCE7", border: "#86EFAC" },
-    concerned: { bg: "#FFEDD5", border: "#FDBA74" },
-    urgent: { bg: "#FEE2E2", border: "#FCA5A5" },
-  },
-};
-
-// === LIQUID INVERSION (richiesta utente 2026-06) ===
-// "Liquido magnetico bianco". Lo sfondo non è statico: vedi il
-// componente <LiquidInversionBg> in /app/frontend/components/.
-// I valori qui sono fallback / accenti UI per i componenti che non
-// passano dal LiquidInversionBg (es. modali). bg bianco-latte, testo
-// nero. Status bar nera (isDark:false).
-const LIQUID: Palette = {
-  name: "liquid",
-  label: "Liquid",
-  emoji: "🥛",
-  isDark: false,
-  bg: "#DDD7CB",
-  surface: "#CBC4B7",
-  surfaceAlt: "rgba(0,0,0,0.05)",
-  border: "rgba(0,0,0,0.10)",
-  divider: "rgba(0,0,0,0.08)",
-  text: "#1A1A1A",
-  textMuted: "#4B5563",
-  textDim: "#6B7280",
-  primary: "#0E7C7B",
-  primaryText: "#FFFFFF",
-  primarySoftBg: "rgba(14,124,123,0.10)",
-  primarySoftBorder: "rgba(14,124,123,0.5)",
-  userBubble: "#0E7C7B",
-  userBubbleText: "#FFFFFF",
-  aiBubbleBg: "#FFFFFF",
-  aiBubbleBorder: "rgba(0,0,0,0.10)",
-  aiBubbleText: "#1A1A1A",
-  success: "#10B981",
-  warning: "#F59E0B",
-  danger: "#DC2626",
-  tone: {
-    neutral: { bg: "#F1F5F9", border: "#CBD5E1" },
-    calm: { bg: "#DBEAFE", border: "#93C5FD" },
-    warm: { bg: "#FEF3C7", border: "#FCD34D" },
-    energetic: { bg: "#DCFCE7", border: "#86EFAC" },
-    concerned: { bg: "#FFEDD5", border: "#FDBA74" },
-    urgent: { bg: "#FEE2E2", border: "#FCA5A5" },
-  },
-};
-
-export const THEMES: Record<Exclude<ThemeName, "sistema">, Palette> = {
-  notte: NOTTE,
-  giorno: GIORNO,
-  liquid: LIQUID,
-  cielo: CIELO,
-  bosco: BOSCO,
-  ciliegia: CILIEGIA,
-};
-
 // Pseudo-palette per il selettore "Auto" — non è un vero tema visivo:
 // quando selezionato, themeName diventa "auto-orario" e il ThemeProvider
 // alterna GIORNO/NOTTE in base all'ORA REALE del giorno (default 7:00 →
@@ -314,23 +170,45 @@ const AUTO_ORARIO_PSEUDO: Palette = {
   emoji: "🔄",
 };
 
-export const THEME_LIST: Palette[] = [GIORNO, NOTTE, AUTO_ORARIO_PSEUDO, LIQUID, CIELO, BOSCO, CILIEGIA];
+export const THEMES: Record<Exclude<ThemeName, "auto-orario">, Palette> = {
+  notte: NOTTE,
+  giorno: GIORNO,
+};
 
-export function resolveTheme(name: ThemeName | undefined | null): Palette {
-  // Retrocompatibilità: vecchi profili con "sistema" usano lo schema di
-  // sistema iOS; nuovi profili con "auto-orario" usano l'ora reale (gestito
-  // nel Provider, qui torniamo solo il fallback NOTTE).
-  if (!name || name === "sistema") {
-    const sysDark = Appearance.getColorScheme() === "dark";
-    return sysDark ? NOTTE : GIORNO;
+export const THEME_LIST: Palette[] = [GIORNO, NOTTE, AUTO_ORARIO_PSEUDO];
+
+/**
+ * Set di temi validi. Qualsiasi valore fuori da qui è considerato legacy
+ * e va rimappato a "giorno" (default sicuro chiaro).
+ */
+const VALID_THEME_NAMES: ReadonlySet<string> = new Set([
+  "giorno",
+  "notte",
+  "auto-orario",
+]);
+
+/**
+ * Migration: rimappa qualsiasi valore legacy o sconosciuto a "giorno".
+ * Necessario perché i profili utente più vecchi possono contenere
+ * "liquid", "cielo", "bosco", "ciliegia", "sistema" ecc.
+ */
+export function normalizeThemeName(name: string | undefined | null): ThemeName {
+  if (name && VALID_THEME_NAMES.has(name)) {
+    return name as ThemeName;
   }
-  if (name === "auto-orario") {
-    // Il vero switch giorno/notte è gestito dal Provider con i `dayStart`/
-    // `nightStart` correnti. Qui torniamo NOTTE come fallback "sicuro".
+  return "giorno";
+}
+
+export function resolveTheme(name: ThemeName | string | undefined | null): Palette {
+  const safe = normalizeThemeName(name as string | undefined | null);
+  if (safe === "auto-orario") {
+    // Il vero switch giorno/notte è gestito dal Provider con i dayStart/
+    // nightStart correnti. Qui torniamo un fallback ragionevole in base
+    // all'ora attuale (7:00 → 20:00 giorno).
     const h = new Date().getHours();
     return h >= 7 && h < 20 ? GIORNO : NOTTE;
   }
-  return THEMES[name] || NOTTE;
+  return THEMES[safe as Exclude<ThemeName, "auto-orario">];
 }
 
 // =================== Context ===================
@@ -362,15 +240,24 @@ export function ThemeProvider({
   initialNightStart = 20,
 }: {
   children: React.ReactNode;
-  initialName?: ThemeName;
+  initialName?: ThemeName | string;
   initialDayStart?: number;
   initialNightStart?: number;
 }) {
-  const [themeName, setThemeName] = useState<ThemeName>(initialName);
+  // Applica la migration già in fase di seed dello state → utenti con
+  // profili legacy vedono subito il tema corretto senza flash intermedi.
+  const [themeName, _setThemeName] = useState<ThemeName>(
+    normalizeThemeName(initialName as string | undefined | null)
+  );
   const [systemScheme, setSystemScheme] = useState(Appearance.getColorScheme());
   const [dayStart, setDayStart] = useState(initialDayStart);
   const [nightStart, setNightStart] = useState(initialNightStart);
   const [, setTick] = useState(0);
+
+  // Wrapper: applica sempre la normalizzazione anche a runtime
+  // (esempio: setThemeName("liquid") viene rimappato a "giorno").
+  const setThemeName = (n: ThemeName | string) =>
+    _setThemeName(normalizeThemeName(n as string));
 
   useEffect(() => {
     const sub = Appearance.addChangeListener((c) => setSystemScheme(c.colorScheme));
@@ -385,9 +272,6 @@ export function ThemeProvider({
   }, [themeName]);
 
   const theme = useMemo(() => {
-    if (themeName === "sistema") {
-      return systemScheme === "dark" ? NOTTE : GIORNO;
-    }
     if (themeName === "auto-orario") {
       const h = new Date().getHours();
       const isDay =
@@ -396,7 +280,7 @@ export function ThemeProvider({
           : h >= dayStart || h < nightStart;
       return isDay ? GIORNO : NOTTE;
     }
-    return THEMES[themeName as Exclude<ThemeName, "sistema" | "auto-orario">] || NOTTE;
+    return THEMES[themeName as Exclude<ThemeName, "auto-orario">] || GIORNO;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [themeName, systemScheme, dayStart, nightStart, /* tick triggers re-render */]);
 

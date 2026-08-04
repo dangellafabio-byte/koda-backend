@@ -72,7 +72,6 @@ import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
 import EclipseOrb from "../components/EclipseOrb";
 import MirrorPool from "../components/MirrorPool";
-import LiquidInversionBg from "../components/LiquidInversionBg";
 import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
 import KodaSplash from "../components/KodaSplash";
 import KodaTour, { TourStep } from "../components/KodaTour";
@@ -120,26 +119,6 @@ import {
 } from "../lib/sealedCrypto";
 
 type Status = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
-
-// === Background presets — gradients evocative of Taccuino Vivo identity
-type BgPreset = {
-  id: string;
-  name: string;
-  colors: [string, string, ...string[]];
-  start?: { x: number; y: number };
-  end?: { x: number; y: number };
-};
-const BG_PRESETS: BgPreset[] = [
-  // Solo 3 sfondi essenziali — meno scelte, meno friction.
-  // 1. Notturno: scuro silenzioso (default per chi vuole zen totale)
-  { id: "notturno", name: "Notturno", colors: ["#000000", "#1A1A2E", "#16213E"] },
-  // 2. Aurora: viola intimo (perfetto per la macchia gialla calda)
-  { id: "aurora", name: "Aurora", colors: ["#0F0C29", "#302B63", "#24243E"] },
-  // 3. Pietra: grigio caldo / diurno (rinominato da "Carta" — 2026-08-04)
-  //    Colori tarati per "pietra toscana" con sottotono caldo, coerente
-  //    con l'orb champagne al centro. Gradient 3-stop per profondità.
-  { id: "carta", name: "Pietra", colors: ["#E4DED2", "#CBC4B7", "#A8A196"] },
-];
 
 // === Day separator helper
 function dayLabelFor(d: Date): string {
@@ -1139,41 +1118,6 @@ export default function Taccuino() {
     };
   }, []);
   const pulse = useRef(new Animated.Value(1)).current;
-  // === AURORA: ciclo neon infinito (richiesta utente 2026-06) ===
-  // Quando il tema è "giorno" (label "Aurora"), interpoliamo il
-  // backgroundColor attraverso 5 tinte neon notturne in un loop di
-  // 5 minuti per ciclo, completamente liscio (linear easing, no step).
-  // L'animazione gira sempre — non spreca CPU rilevabile (1 interpola-
-  // zione di colore per frame sul JS thread).
-  const auroraAnim = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    // === FIX 2026-06-28 v30 — disabilitato anche il loop ===
-    // L'Aurora è già disabilitata visivamente (isAurora=false hardcoded),
-    // ma il loop CPU continuava a girare ogni 5 min per il tema "giorno".
-    // Spreco inutile sul JS-thread su Android (useNativeDriver: false).
-    // Il loop ora non parte mai — se si vuole riabilitare l'Aurora,
-    // bisogna ripristinare anche questo useEffect.
-    return;
-  }, [theme.name, auroraAnim]);
-  // Colori Aurora — sequenza dei colori dell'AURORA BOREALE (richiesta
-  // utente 2026-06). Verde dominante (il colore signature dell'aurora
-  // reale, dovuto all'ossigeno), turchese, blu acqua, viola e magenta
-  // rari ma straordinari. Loop infinito che simula una vera danza
-  // dell'aurora nel cielo notturno.
-  // Sequenza: Verde lime → Verde menta → Turchese → Blu acqua →
-  //           Viola elettrico → Magenta → Verde lime (loop)
-  const auroraBg = auroraAnim.interpolate({
-    inputRange: [0, 0.166, 0.333, 0.5, 0.666, 0.833, 1],
-    outputRange: [
-      "#39FF14", // 1. Verde lime — aurora classica (ossigeno)
-      "#7CFC00", // 2. Verde menta — aurora pulsante
-      "#40E0D0", // 3. Turchese — aurora "alta atmosfera"
-      "#00B7EB", // 4. Blu acqua — bordi dei pennelli aurorali
-      "#9B30FF", // 5. Viola elettrico — aurora rara (azoto)
-      "#FF1493", // 6. Magenta rosa — aurora rosa (rarissima)
-      "#39FF14", // ritorno al verde → loop senza scalino
-    ],
-  });
   const breathe = useRef(new Animated.Value(0)).current;
   // Live meter value (dB) shown as debug visualization during recording
   const [meterDb, setMeterDb] = useState<number | null>(null);
@@ -2044,6 +1988,8 @@ export default function Taccuino() {
           } else if (key === "theme" && typeof value === "string") {
             // Mapping legacy: se Claude ritorna i vecchi alias inglesi,
             // li traduciamo nei nomi italiani veri usati dal ThemeProvider.
+            // 2026-08-04 cleanup: mappiamo tutti gli alias legacy (sistema,
+            // cielo, bosco, ciliegia, ecc.) ai 3 temi ancora esistenti.
             const themeAlias: Record<string, ThemeName> = {
               dark: "notte",
               scuro: "notte",
@@ -2051,19 +1997,22 @@ export default function Taccuino() {
               light: "giorno",
               chiaro: "giorno",
               giorno: "giorno",
-              zen: "sistema",
-              sistema: "sistema",
-              automatico: "sistema",
-              auto: "sistema", // === FIX giugno 2026: "Auto" ora = sistema (segue iOS)
-              "auto-orario": "sistema", // alias legacy → "sistema"
-              cielo: "cielo",
-              azzurro: "cielo",
-              bosco: "bosco",
-              verde: "bosco",
-              ciliegia: "ciliegia",
-              rosa: "ciliegia",
+              // Alias per la modalità automatica orario
+              zen: "auto-orario",
+              sistema: "auto-orario",
+              automatico: "auto-orario",
+              auto: "auto-orario",
+              "auto-orario": "auto-orario",
+              // Alias legacy dei temi rimossi (cielo/bosco/ciliegia): li
+              // rimappiamo a "giorno" per non lasciare l'utente senza tema.
+              cielo: "giorno",
+              azzurro: "giorno",
+              bosco: "giorno",
+              verde: "giorno",
+              ciliegia: "giorno",
+              rosa: "giorno",
             };
-            const mapped = themeAlias[value.toLowerCase()] || (value as ThemeName);
+            const mapped = themeAlias[value.toLowerCase()] || "giorno";
             patch.settings = { ...(profile?.settings || {}), theme: mapped };
             // CRITICO: applichiamo subito il tema al ThemeProvider locale
             // altrimenti il salvataggio nel DB non si vede mai a schermo.
@@ -4644,34 +4593,6 @@ export default function Taccuino() {
   })();
 
   const aiPaused = profile && !profile.settings.ai_enabled;
-  const bgValue: string | null = (profile?.settings as any)?.background ?? null;
-  const bgDim: number = typeof (profile?.settings as any)?.background_dim === "number"
-    ? (profile?.settings as any).background_dim
-    : 0.55;
-  const bgPreset = bgValue && BG_PRESETS.find((p) => p.id === bgValue);
-  // === Sfondo personalizzato ===
-  // Il backend, per evitare di gonfiare ogni /api/profile con un base64 da
-  // centinaia di KB, sostituisce il blob "data:image/...;base64,..." con un
-  // breve placeholder del tipo:
-  //   "@server:/api/profile/background?v=<hash>"
-  // Il frontend deve quindi convertire questo placeholder in una URL HTTP
-  // completa che <ImageBackground> sa caricare. L'hash cambia quando l'utente
-  // carica una nuova foto → forza iOS a riscaricare l'immagine.
-  const isServerBg = typeof bgValue === "string" && bgValue.startsWith("@server:");
-  const isCustomImage = !!bgValue && (
-    bgValue.startsWith("data:") ||
-    bgValue.startsWith("file:") ||
-    bgValue.startsWith("http") ||
-    isServerBg
-  );
-  const bgUri: string | null = (() => {
-    if (!bgValue) return null;
-    if (isServerBg) return `${BACKEND}${bgValue.slice("@server:".length)}`;
-    if (bgValue.startsWith("data:") || bgValue.startsWith("file:") || bgValue.startsWith("http")) {
-      return bgValue;
-    }
-    return null;
-  })();
   const bubbleAccent = useMemo(
     () => resolveBubbleColors((profile?.settings as any)?.bubble_color),
     [(profile?.settings as any)?.bubble_color]
@@ -4865,70 +4786,11 @@ export default function Taccuino() {
   // un bug e non aveva un comportamento corretto. Nessun overlay, nessun
   // timer.
 
-  // Build the screen wrapper with optional background image / gradient
-  // === Aurora DISABILITATA (richiesta utente 2026-06) ===
-  // Il tema "giorno" è ora STATICO color sabbia. Il layer Aurora animato
-  // resta nel codice ma non viene mai mostrato. Per riattivarlo, basta
-  // rimettere isAurora = theme.name === "giorno".
-  const isAurora = false;
-  const isLiquid = theme.name === "liquid";
+  // Build the screen wrapper. Il tema (giorno/notte/auto-orario) è
+  // l'unica fonte del colore di sfondo. I vecchi override (BG_PRESETS,
+  // Liquid, Aurora, immagini custom) sono stati rimossi il 2026-08-04.
   const screenInner = (
-    <View
-      style={[styles.screen, { backgroundColor: bgValue ? "transparent" : (isAurora ? "#000" : (isLiquid ? "#DDD7CB" : theme.bg)) }]}
-    >
-      {/* === LIQUID INVERSION LAYER (richiesta utente 2026-06) ===
-          Sfondo bianco-latte denso che si "deforma" attorno
-          all'eclissi e si lascia colorare dall'interno dal tone
-          dell'eclissi. Vedi components/LiquidInversionBg.tsx. */}
-      {isLiquid && !bgValue && (
-        <LiquidInversionBg
-          tone={lastAiTone}
-          status={status}
-          meterDb={meterDb}
-          meterThreshold={meterThreshold}
-          centerX={0.5}
-          centerY={0.42}
-        />
-      )}
-      {/* === AURORA LAYER (richiesta utente 2026-06) ===
-          Quando il tema è "Aurora", uno strato Animated.View riempie
-          tutto lo schermo e cicla continuamente attraverso 6 tinte
-          neon vibranti (rosa shocking, viola fluo, celeste, verde
-          menta, pesca, magenta). È sotto a tutto il resto e
-          pointerEvents=none così non blocca i tap.
-          Sopra c'è un velo scuro semi-trasparente che attenua il
-          neon abbastanza da mantenere il testo bianco leggibile,
-          dando l'effetto "insegne luminose attraverso una notte
-          fumosa" — la tinta vibra ma non brucia la retina. */}
-      {isAurora && !bgValue && (
-        <>
-          <Animated.View
-            pointerEvents="none"
-            style={{
-              position: "absolute",
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              backgroundColor: auroraBg,
-            }}
-          />
-          <View
-            pointerEvents="none"
-            style={{
-              position: "absolute",
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              // Velo notturno: l'aurora boreale danza nel cielo nero della
-              // notte polare. Velo al 45% per simulare quello scuro su cui
-              // i colori dell'aurora pulsano.
-              backgroundColor: "rgba(0,0,0,0.45)",
-            }}
-          />
-        </>
-      )}
+    <View style={[styles.screen, { backgroundColor: theme.bg }]}>
       {/* Banner di conferma salvataggio — appare per ~4s dopo che KodaIntro
           si chiude, così l'utente capisce che le modifiche sono andate a
           buon fine. Posizionato in alto, sopra il flusso normale. */}
@@ -7091,14 +6953,6 @@ export default function Taccuino() {
     />
   ) : null;
 
-  // === BACKGROUND PRESET/CUSTOM IMAGE DISABLED (richiesta utente 2026-06 #10) ===
-  // Tutto rimosso: niente più sfondi custom, niente preset (notturno/aurora/carta).
-  // L'unico "sfondo" è ora il bg del tema (giorno=bianco, notte=nero/blu).
-  // Le seguenti var sono forzate sempre a null per cortocircuitare la logica
-  // che renderizzava ImageBackground / LinearGradient quando bgValue era settato.
-  if (isCustomImage || bgUri || bgPreset) {
-    // ignorati intenzionalmente: il tema vince sempre
-  }
   return (
     <View
       style={{ flex: 1 }}
@@ -8278,53 +8132,9 @@ const makeStyles = (t: any) => StyleSheet.create({
     borderColor: t.surface,
   },
 
-  // === Background picker (sfondo)
-  bgRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
-  bgChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: t.border,
-    backgroundColor: t.surfaceAlt,
-  },
-  bgChipPlain: {},
-  bgChipUpload: {
-    borderColor: t.primary,
-    borderStyle: "dashed",
-  },
-  bgChipActive: {
-    borderColor: t.primary,
-    backgroundColor: t.primarySoftBg,
-  },
-  bgChipText: { color: t.text, fontSize: 11, fontWeight: "600" },
-  bgSwatch: {
-    width: 16, height: 16, borderRadius: 999,
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
-  },
-  bgDimRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: 12,
-    paddingHorizontal: 4,
-  },
-  bgDimLabel: { color: t.textMuted, fontSize: 12, fontWeight: "600" },
-  bgDimCtrl: { flexDirection: "row", gap: 8 },
-  bgDimDot: {
-    width: 28, height: 28, borderRadius: 999,
-    borderWidth: 1.5, borderColor: t.border,
-    alignItems: "center", justifyContent: "center",
-    backgroundColor: t.surfaceAlt,
-  },
-  bgDimDotActive: { borderColor: t.primary },
-  bgDimDotInner: {
-    width: 18, height: 18, borderRadius: 999,
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
-  },
+  // === Background picker RIMOSSO (2026-08-04) — vedi cleanup dead code.
+  //     Il tema ora determina tutto lo sfondo; niente più chip/preset/dim.
+
   modeBtn: {
     flex: 1,
     flexDirection: "row",
