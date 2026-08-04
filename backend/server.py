@@ -10884,6 +10884,19 @@ async def _fast_pipeline_task(
         # timing_first_audio_total_ms che misura solo "MP3 salvato in cache".
         # Array mutable per permettere assegnazione da closure interna.
         nonlocal_first_publish_ms: List[Optional[int]] = [None]
+        # === REQUEST STITCHING (2026-08-02, Fabio, Esperimento A del "gradino") ===
+        # Container per il request_id ricevuto dalla prima chiamata TTS (v3).
+        # Verrà usato dai chunk successivi (flash body) come `previous_request_ids`,
+        # che passa a ElevenLabs un riferimento all'AUDIO effettivamente generato
+        # dal primo chunk (non solo al testo). Migliora la continuità sonora reale
+        # tra le due parti della stessa risposta.
+        #
+        # Cross-model (v3→flash) è supportato dall'API secondo docs ElevenLabs
+        # 2026 (`request stitching`), con beneficio parziale rispetto allo stesso
+        # modello ma comunque misurabile. Zero costo aggiuntivo, tentativo cauto.
+        # Se l'SDK non supporta `with_raw_response.convert()`, fallback automatico
+        # al comportamento precedente (previous_text only).
+        nonlocal_first_request_id: List[Optional[str]] = [None]
 
         async def _gen_and_publish_sentence(idx: int, sentence: str, previous_text: Optional[str] = None):
             nonlocal first_audio_logged, timing_first_tts_ms, timing_first_audio_total_ms, current_tone
@@ -11044,8 +11057,66 @@ async def _fast_pipeline_task(
                         and model_id != "eleven_v3"
                     ):
                         kwargs["previous_text"] = previous_text[-80:]
+
+                    # === REQUEST STITCHING v65 (2026-08-02, Fabio) ===
+                    # Se il chunk 0 (v3) ci ha lasciato il suo request_id, lo
+                    # passiamo al chunk body (flash) come `previous_request_ids`.
+                    # L'API ElevenLabs userà l'AUDIO effettivamente generato
+                    # dal primo chunk per calibrare prosodia del secondo → il
+                    # gap sonoro tra le due parti dovrebbe attenuarsi
+                    # sensibilmente rispetto al solo previous_text.
+                    #
+                    # Vincoli documentati:
+                    #  - request_id < 2h old (siamo ampiamente dentro)
+                    #  - v3 rifiuta stitching su input (verificato via retest
+                    #    2026-07-23), quindi passiamo SOLO su flash body
+                    #  - Se `previous_request_ids` è presente, l'API ignora
+                    #    `previous_text` → il second è più potente
+                    if (
+                        model_id != "eleven_v3"
+                        and current_tone not in HIGH_ENERGY_TONES
+                        and nonlocal_first_request_id[0]
+                    ):
+                        kwargs["previous_request_ids"] = [nonlocal_first_request_id[0]]
                     try:
-                        gen = client_el.text_to_speech.convert(**kwargs)
+                        # === CATTURA REQUEST_ID (2026-08-02, Fabio, Esperimento A) ===
+                        # Uso `with_raw_response` per accedere agli headers HTTP
+                        # della risposta ElevenLabs, dove sta il `request-id`
+                        # (o `x-request-id` come fallback). Se l'SDK non lo
+                        # supporta o headers mancano, fallback silente al flow
+                        # attuale — zero rischio di regressione.
+                        gen = None
+                        try:
+                            _raw = client_el.text_to_speech.with_raw_response.convert(**kwargs)
+                            _req_hdr = None
+                            try:
+                                _hdrs = getattr(_raw, "headers", None) or {}
+                                # Diversi SDK espongono headers come dict o Headers object
+                                if hasattr(_hdrs, "get"):
+                                    _req_hdr = _hdrs.get("request-id") or _hdrs.get("x-request-id")
+                            except Exception:
+                                _req_hdr = None
+                            # Salvo il request_id SOLO per il chunk 0 (v3) —
+                            # sarà consumato dal body successivo.
+                            if _req_hdr and idx == 0 and model_id == "eleven_v3":
+                                nonlocal_first_request_id[0] = _req_hdr
+                                logger.info(
+                                    f"[fast {session_id[:8]}] stitching: captured "
+                                    f"v3 request_id={_req_hdr[:12]}... for body"
+                                )
+                            # Estraggo il generator/iterable di bytes audio
+                            _data = getattr(_raw, "data", None)
+                            if _data is None and callable(getattr(_raw, "parse", None)):
+                                _data = _raw.parse()
+                            gen = _data
+                        except AttributeError:
+                            # SDK ElevenLabs vecchio senza with_raw_response —
+                            # fallback silente al metodo standard.
+                            gen = client_el.text_to_speech.convert(**kwargs)
+
+                        if gen is None:
+                            gen = client_el.text_to_speech.convert(**kwargs)
+
                         for chunk in gen:
                             if chunk:
                                 audio.extend(chunk)
