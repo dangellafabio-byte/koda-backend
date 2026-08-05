@@ -69,7 +69,7 @@ export type ProfileSettings = {
   voice_response: boolean;
   full_access_mode: boolean;
   input_mode: "voice" | "text";
-  theme: "notte" | "giorno" | "auto-orario";
+  theme: "notte";
   domains: Record<string, boolean>;
   tts_provider?: "elevenlabs" | "system";
   tts_voice_id?: string;

@@ -771,13 +771,6 @@ export default function Taccuino() {
     } catch {}
   }, []);
   const [showSettings, setShowSettings] = useState(false);
-  // === EASTER EGG DESIGN MOCKUP (2026-08-04, Fabio) ===
-  // Triple-tap sul version footer dentro Impostazioni → naviga a
-  // /mockup-light (schermata di lavoro per decidere i colori del light
-  // mode). Le ref sono al top del component per non essere ricreate
-  // ad ogni render.
-  const mockupTapCountRef = useRef(0);
-  const mockupTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // === BORDER CALIBRATION (2026-08-02, Fabio dopo bug Honor curved edges) ===
   // Alcuni schermi Android (Honor curvo, Xiaomi 4-lati curvi) hanno curve
   // fisiche che "mangiano" il NeonBorder default → utente calibra da
@@ -1993,37 +1986,13 @@ export default function Taccuino() {
           } else if (key === "summary_freq" && typeof value === "string") {
             patch.settings = { ...(profile?.settings || {}), summary_freq: value };
           } else if (key === "theme" && typeof value === "string") {
-            // Mapping legacy: se Claude ritorna i vecchi alias inglesi,
-            // li traduciamo nei nomi italiani veri usati dal ThemeProvider.
-            // 2026-08-04 cleanup: mappiamo tutti gli alias legacy (sistema,
-            // cielo, bosco, ciliegia, ecc.) ai 3 temi ancora esistenti.
-            const themeAlias: Record<string, ThemeName> = {
-              dark: "notte",
-              scuro: "notte",
-              notte: "notte",
-              light: "giorno",
-              chiaro: "giorno",
-              giorno: "giorno",
-              // Alias per la modalità automatica orario
-              zen: "auto-orario",
-              sistema: "auto-orario",
-              automatico: "auto-orario",
-              auto: "auto-orario",
-              "auto-orario": "auto-orario",
-              // Alias legacy dei temi rimossi (cielo/bosco/ciliegia): li
-              // rimappiamo a "giorno" per non lasciare l'utente senza tema.
-              cielo: "giorno",
-              azzurro: "giorno",
-              bosco: "giorno",
-              verde: "giorno",
-              ciliegia: "giorno",
-              rosa: "giorno",
-            };
-            const mapped = themeAlias[value.toLowerCase()] || "giorno";
-            patch.settings = { ...(profile?.settings || {}), theme: mapped };
-            // CRITICO: applichiamo subito il tema al ThemeProvider locale
-            // altrimenti il salvataggio nel DB non si vede mai a schermo.
-            try { setThemeName(mapped as ThemeName); } catch {}
+            // === TEMA UNICO (2026-08-04) ===
+            // Koda ora è dark-only. Qualsiasi comando vocale "cambia tema
+            // in X" viene ignorato lato UI — salviamo comunque "notte" nel
+            // profilo per idempotenza. Il ThemeProvider ha setThemeName
+            // come no-op, ma manteniamo la chiamata per compatibilità.
+            patch.settings = { ...(profile?.settings || {}), theme: "notte" };
+            try { setThemeName("notte" as ThemeName); } catch {}
           } else if ((key === "color_recording" || key === "color_speaking" || key === "color_thinking" || key === "color_idle") && typeof value === "string") {
             // Salva il colore dello stato nella mappa profile.style_preferences.palette
             const stateKey = key.replace("color_", ""); // "recording" | "speaking" | ...
@@ -5741,89 +5710,11 @@ export default function Taccuino() {
 
             <View style={styles.divider} />
 
-            <Text style={styles.settingsSubtitle}>Tema</Text>
-            <View style={styles.themeRow}>
-              {/* === FILTRO TEMI (giugno 2026 — "Auto" = orario reale) ===
-                  Chiaro (giorno) + Scuro (notte) + Auto (alterna in base
-                  all'ORA REALE del telefono: 7:00–20:00 chiaro, altrimenti
-                  scuro). NON segue più il dark-mode di iOS. */}
-              {THEME_LIST.filter((p) => p.name === "giorno" || p.name === "notte" || p.name === "auto-orario").map((p) => (
-                <TouchableOpacity
-                  key={p.name}
-                  onPress={() => saveTheme(p.name as ThemeName)}
-                  style={[
-                    styles.themeBtn,
-                    themeName === p.name && styles.themeBtnActive,
-                  ]}
-                  testID={`theme-${p.name}`}
-                >
-                  <View
-                    style={[
-                      styles.themeSwatch,
-                      { backgroundColor: p.primary },
-                    ]}
-                  />
-                  <Text style={styles.themeBtnText}>
-                    {p.emoji} {p.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {themeName === "auto-orario" ? (
-              <View style={styles.hoursRow}>
-                <View style={styles.hourBox}>
-                  <Text style={styles.hourLabel}>☀️ Inizio giorno</Text>
-                  <View style={styles.hourCtrl}>
-                    <TouchableOpacity
-                      onPress={() => saveHours(Math.max(0, dayStart - 1), nightStart)}
-                      style={styles.hourBtn}
-                    >
-                      <Ionicons name="remove" size={18} color={theme.text} />
-                    </TouchableOpacity>
-                    <Text
-                      style={styles.hourValue}
-                      numberOfLines={1}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.7}
-                    >
-                      {String(dayStart).padStart(2, "0")}:00
-                    </Text>
-                    <TouchableOpacity
-                      onPress={() => saveHours(Math.min(23, dayStart + 1), nightStart)}
-                      style={styles.hourBtn}
-                    >
-                      <Ionicons name="add" size={18} color={theme.text} />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-                <View style={styles.hourBox}>
-                  <Text style={styles.hourLabel}>🌙 Inizio notte</Text>
-                  <View style={styles.hourCtrl}>
-                    <TouchableOpacity
-                      onPress={() => saveHours(dayStart, Math.max(0, nightStart - 1))}
-                      style={styles.hourBtn}
-                    >
-                      <Ionicons name="remove" size={18} color={theme.text} />
-                    </TouchableOpacity>
-                    <Text
-                      style={styles.hourValue}
-                      numberOfLines={1}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.7}
-                    >
-                      {String(nightStart).padStart(2, "0")}:00
-                    </Text>
-                    <TouchableOpacity
-                      onPress={() => saveHours(dayStart, Math.min(23, nightStart + 1))}
-                      style={styles.hourBtn}
-                    >
-                      <Ionicons name="add" size={18} color={theme.text} />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </View>
-            ) : null}
+            {/* === TEMA RIMOSSO 2026-08-04 (Fabio, dati alla mano) ===
+                Rimosso il selettore Chiaro/Scuro/Auto: 65-95% degli utenti
+                smartphone preferisce dark; per uso emotivo serale/notturno
+                (caso Koda) la preferenza sale a 87-91%. Koda ora è
+                dark-only. Vedi lib/theme.tsx per la palette unica. */}
 
             <View style={styles.divider} />
 
@@ -6593,47 +6484,17 @@ export default function Taccuino() {
             </Text>
 
             {/* === VERSIONE APP (pre-lancio 2026-07-24) ===
-                Footer minimale: solo versione semantica user-facing.
-                RIMOSSI (richiesta utente pre-lancio): `bundle BUILD_VERSION`,
-                `runtime`, `BUILD_NOTES` — erano testi tecnici/changelog
-                che trapelavano in produzione. Un utente finale non deve
-                mai vedere note di commit o log di refactor interno.
-                Canary marker "build-onboarding-9step" rimosso 2026-07-24
-                dopo verifica utente: la catena Deploy → Build è confermata
-                affidabile per questa sessione.
-
-                === EASTER EGG DESIGN MOCKUP (2026-08-04, Fabio) ===
-                Triple-tap sul footer version → naviga a /mockup-light.
-                Gesture invisibile agli utenti normali, come pattern
-                Android "Build number tap 7x" per Developer Mode.
-                Da rimuovere quando il design del light mode è deciso. */}
-            <TouchableOpacity
-              activeOpacity={1}
-              onPress={() => {
-                mockupTapCountRef.current += 1;
-                if (mockupTapTimerRef.current) {
-                  clearTimeout(mockupTapTimerRef.current);
-                }
-                if (mockupTapCountRef.current >= 3) {
-                  mockupTapCountRef.current = 0;
-                  closeSettings();
-                  setTimeout(() => router.push("/mockup-light"), 200);
-                } else {
-                  mockupTapTimerRef.current = setTimeout(() => {
-                    mockupTapCountRef.current = 0;
-                  }, 1500);
-                }
-              }}
-              style={{ alignItems: "center", marginTop: 24, marginBottom: 8 }}
-              testID="version-footer-tap"
-            >
+                Footer minimale user-facing. NB: il triple-tap Easter egg
+                che puntava a /mockup-light è stato rimosso 2026-08-04
+                insieme al mockup light-mode (tema light rimosso). */}
+            <View style={{ alignItems: "center", marginTop: 24, marginBottom: 8 }}>
               <Text style={{ color: theme.text + "55", fontSize: 11, fontStyle: "italic" }}>
                 Koda v{Constants.expoConfig?.version || "1.0.1"}
               </Text>
               <Text style={{ color: theme.text + "33", fontSize: 9, marginTop: 3, letterSpacing: 0.5 }}>
                 {KODA_BUILD_SHORT_TAG}
               </Text>
-            </TouchableOpacity>
+            </View>
 </>)}
             </ScrollView>
           </View>

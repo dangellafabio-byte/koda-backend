@@ -1,22 +1,22 @@
 /**
  * Koda — Theme system.
  *
- * Cleanup 2026-08-04: rimossi i temi legacy LIQUID / CIELO / BOSCO / CILIEGIA
- * (non selezionabili dall'UI da mesi, ma ancora attivi via profilo legacy →
- * causavano bug di sfondo persistente). Ora sopravvivono solo:
- *   - "giorno" (Chiaro ☀️)
- *   - "notte"  (Scuro 🌙)
- *   - "auto-orario" (alterna in base all'ora reale)
+ * === DECISIONE 2026-08-04 (Fabio, dati alla mano) ===
+ * Rimosso il light mode. Motivazione:
+ *   • 65-95% utenti smartphone preferiscono dark mode (fonti multiple 2026)
+ *   • Sera/notte la preferenza sale a 87-91%
+ *   • Koda è usato prevalentemente sera/notte (uso emotivo, sfogo)
+ *   • Stima: 80-90%+ degli utenti reali Koda avrebbe scelto dark comunque
+ * → Il light mode era un investimento a bassa resa e alta superficie di bug.
  *
- * `resolveTheme` include una **migration** che rimappa qualsiasi valore
- * legacy (liquid/cielo/bosco/ciliegia/sistema/altro) a "giorno". Zero
- * intervento richiesto sull'utente: al primo login post-update, il tema
- * risolto è coerente con l'UI del selettore.
+ * Ora esiste UN SOLO tema: notte. `normalizeThemeName` rimappa qualsiasi
+ * valore legacy salvato nel profilo utente (giorno, sistema, liquid, cielo,
+ * bosco, ciliegia, auto-orario, ...) a "notte" — utente non deve fare
+ * nulla, la migrazione è automatica al primo login post-update.
  */
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { Appearance } from "react-native";
 
-export type ThemeName = "notte" | "giorno" | "auto-orario";
+export type ThemeName = "notte";
 
 export type Palette = {
   name: ThemeName;
@@ -25,25 +25,25 @@ export type Palette = {
   isDark: boolean;
 
   // Backgrounds
-  bg: string;          // app background
-  surface: string;     // cards, modals
-  surfaceAlt: string;  // subtle alt (toggles, fields)
-  border: string;      // hairline borders
-  divider: string;     // separators
+  bg: string;
+  surface: string;
+  surfaceAlt: string;
+  border: string;
+  divider: string;
 
   // Text
-  text: string;        // primary text
-  textMuted: string;   // secondary text
-  textDim: string;     // tertiary / placeholders / hints
+  text: string;
+  textMuted: string;
+  textDim: string;
 
-  // Accent (the brand colour for the active theme)
+  // Accent
   primary: string;
-  primaryText: string;       // text drawn on top of primary
-  primarySoftBg: string;     // softer backdrop using primary tint
+  primaryText: string;
+  primarySoftBg: string;
   primarySoftBorder: string;
 
   // Bubbles
-  userBubble: string;        // user message bubble bg
+  userBubble: string;
   userBubbleText: string;
   aiBubbleBg: string;
   aiBubbleBorder: string;
@@ -70,10 +70,7 @@ const NOTTE: Palette = {
   label: "Scuro",
   emoji: "🌙",
   isDark: true,
-  // === FIX 2026-06 (richiesta utente) ===
-  // Notte = indaco notturno neon profondo. Sostituisce il vecchio
-  // #0B0F1A (quasi nero) con una tinta "cyber-neon night" più calda
-  // e visivamente connotata, in famiglia con i palette neon dell'orb.
+  // Indaco notturno neon — signature Koda.
   bg: "#1F1A36",
   surface: "#2A2347",
   surfaceAlt: "rgba(255,255,255,0.06)",
@@ -82,12 +79,8 @@ const NOTTE: Palette = {
   text: "#E2E8F0",
   textMuted: "#94A3B8",
   textDim: "#64748B",
-  // === IDENTITÀ "L'AMICO FRATERNO" ===
-  // Il primary è il "blu petrolio" — esattamente lo stesso colore che
-  // l'Eclissi assume quando l'utente parla (LISTEN_PALETTE in EclipseOrb).
-  // Così il bubble dell'utente e l'orb durante la registrazione sono
-  // visivamente la stessa cosa: "questo sono io che parlo". Questa è la
-  // signature visiva dell'app — riconoscibile a colpo d'occhio.
+  // Blu petrolio — IDENTITÀ "L'AMICO FRATERNO": stesso colore dell'orb
+  // quando l'utente parla (LISTEN_PALETTE in EclipseOrb).
   primary: "#0E7C7B",
   primaryText: "#FFFFFF",
   primarySoftBg: "rgba(14,124,123,0.14)",
@@ -110,105 +103,20 @@ const NOTTE: Palette = {
   },
 };
 
-const GIORNO: Palette = {
-  name: "giorno",
-  label: "Chiaro",
-  emoji: "☀️",
-  // === FIX 2026-06-29 v37 — TEMA "GIORNO-NEGATIVO" ===
-  // Riprogettazione completa: invece di un grigio neutro (problemi di
-  // contrasto + estraneità al mood Koda), il tema giorno diventa un
-  // "negativo fotografico" del tema notte. Stessa struttura emotiva,
-  // luminanza invertita: testo indaco (esattamente il colore dello
-  // sfondo notte). Mantiene la signature teal-petrolio (#0E7C7B) e il
-  // bordeaux della Stanza dello Sfogo (#7A1F2E), che funzionano su
-  // entrambi gli sfondi.
-  // === TWEAK 2026-08-04 — "Pietra Serena" ===
-  // Fabio: il crema #F4F2E8 era troppo "carta antica". Passiamo a un
-  // grigio-caldo tipo pietra toscana, che ha ancora sottotono beige
-  // (evita stridore col champagne dell'orb/border) ma senza sembrare
-  // beige. Surface allineato per coerenza tonale delle card.
-  isDark: false,
-  bg: "#DDD7CB",
-  surface: "#CBC4B7",
-  surfaceAlt: "rgba(31,26,54,0.06)",
-  border: "rgba(31,26,54,0.10)",
-  divider: "rgba(31,26,54,0.08)",
-  text: "#1F1A36",
-  textMuted: "rgba(31,26,54,0.65)",
-  textDim: "rgba(31,26,54,0.42)",
-  primary: "#0E7C7B",
-  primaryText: "#FFFFFF",
-  primarySoftBg: "rgba(14,124,123,0.12)",
-  primarySoftBorder: "rgba(14,124,123,0.45)",
-  userBubble: "#0E7C7B",
-  userBubbleText: "#FFFFFF",
-  aiBubbleBg: "rgba(31,26,54,0.06)",
-  aiBubbleBorder: "rgba(31,26,54,0.16)",
-  aiBubbleText: "#1F1A36",
-  // Stati semantici più saturi/scuri per leggibilità su chiaro
-  success: "#16A34A",
-  warning: "#D97706",
-  danger: "#DC2626",
-  tone: {
-    neutral: { bg: "rgba(31,26,54,0.08)", border: "rgba(31,26,54,0.18)" },
-    calm: { bg: "rgba(14,116,144,0.10)", border: "rgba(14,116,144,0.35)" },
-    warm: { bg: "rgba(217,119,6,0.12)", border: "rgba(217,119,6,0.40)" },
-    energetic: { bg: "rgba(22,163,74,0.10)", border: "rgba(22,163,74,0.35)" },
-    concerned: { bg: "rgba(234,88,12,0.10)", border: "rgba(234,88,12,0.40)" },
-    urgent: { bg: "rgba(220,38,38,0.12)", border: "rgba(220,38,38,0.45)" },
-  },
-};
-
-// Pseudo-palette per il selettore "Auto" — non è un vero tema visivo:
-// quando selezionato, themeName diventa "auto-orario" e il ThemeProvider
-// alterna GIORNO/NOTTE in base all'ORA REALE del giorno (default 7:00 →
-// 20:00 giorno, 20:00 → 7:00 notte). Indipendente dal dark-mode di iOS.
-const AUTO_ORARIO_PSEUDO: Palette = {
-  ...NOTTE,
-  name: "auto-orario",
-  label: "Auto",
-  emoji: "🔄",
-};
-
-export const THEMES: Record<Exclude<ThemeName, "auto-orario">, Palette> = {
-  notte: NOTTE,
-  giorno: GIORNO,
-};
-
-export const THEME_LIST: Palette[] = [GIORNO, NOTTE, AUTO_ORARIO_PSEUDO];
+export const THEMES: Record<ThemeName, Palette> = { notte: NOTTE };
+export const THEME_LIST: Palette[] = [NOTTE];
 
 /**
- * Set di temi validi. Qualsiasi valore fuori da qui è considerato legacy
- * e va rimappato a "giorno" (default sicuro chiaro).
+ * Migration totale: qualunque valore legacy (giorno, sistema, liquid,
+ * cielo, bosco, ciliegia, auto-orario, undefined, ...) → "notte".
+ * L'app ha un solo tema, non c'è più scelta.
  */
-const VALID_THEME_NAMES: ReadonlySet<string> = new Set([
-  "giorno",
-  "notte",
-  "auto-orario",
-]);
-
-/**
- * Migration: rimappa qualsiasi valore legacy o sconosciuto a "giorno".
- * Necessario perché i profili utente più vecchi possono contenere
- * "liquid", "cielo", "bosco", "ciliegia", "sistema" ecc.
- */
-export function normalizeThemeName(name: string | undefined | null): ThemeName {
-  if (name && VALID_THEME_NAMES.has(name)) {
-    return name as ThemeName;
-  }
-  return "giorno";
+export function normalizeThemeName(_name?: string | null): ThemeName {
+  return "notte";
 }
 
-export function resolveTheme(name: ThemeName | string | undefined | null): Palette {
-  const safe = normalizeThemeName(name as string | undefined | null);
-  if (safe === "auto-orario") {
-    // Il vero switch giorno/notte è gestito dal Provider con i dayStart/
-    // nightStart correnti. Qui torniamo un fallback ragionevole in base
-    // all'ora attuale (7:00 → 20:00 giorno).
-    const h = new Date().getHours();
-    return h >= 7 && h < 20 ? GIORNO : NOTTE;
-  }
-  return THEMES[safe as Exclude<ThemeName, "auto-orario">];
+export function resolveTheme(_name?: ThemeName | string | null): Palette {
+  return NOTTE;
 }
 
 // =================== Context ===================
@@ -233,9 +141,14 @@ const Ctx = createContext<ThemeCtx>({
 
 export const useTheme = () => useContext(Ctx);
 
+/**
+ * ThemeProvider — mantenuto come no-op wrapper per compatibilità con
+ * codice esistente. Non esegue alcuna logica dinamica: c'è un solo tema
+ * (notte). `setThemeName` è un no-op documentato.
+ */
 export function ThemeProvider({
   children,
-  initialName = "notte",
+  initialName: _initialName = "notte",
   initialDayStart = 7,
   initialNightStart = 20,
 }: {
@@ -244,50 +157,22 @@ export function ThemeProvider({
   initialDayStart?: number;
   initialNightStart?: number;
 }) {
-  // Applica la migration già in fase di seed dello state → utenti con
-  // profili legacy vedono subito il tema corretto senza flash intermedi.
-  const [themeName, _setThemeName] = useState<ThemeName>(
-    normalizeThemeName(initialName as string | undefined | null)
-  );
-  const [systemScheme, setSystemScheme] = useState(Appearance.getColorScheme());
   const [dayStart, setDayStart] = useState(initialDayStart);
   const [nightStart, setNightStart] = useState(initialNightStart);
-  const [, setTick] = useState(0);
 
-  // Wrapper: applica sempre la normalizzazione anche a runtime
-  // (esempio: setThemeName("liquid") viene rimappato a "giorno").
-  const setThemeName = (n: ThemeName | string) =>
-    _setThemeName(normalizeThemeName(n as string));
-
-  useEffect(() => {
-    const sub = Appearance.addChangeListener((c) => setSystemScheme(c.colorScheme));
-    return () => sub.remove();
-  }, []);
-
-  // For "auto-orario": tick every minute so the theme switches at the configured hours
-  useEffect(() => {
-    if (themeName !== "auto-orario") return;
-    const id = setInterval(() => setTick((n) => n + 1), 60000);
-    return () => clearInterval(id);
-  }, [themeName]);
-
-  const theme = useMemo(() => {
-    if (themeName === "auto-orario") {
-      const h = new Date().getHours();
-      const isDay =
-        dayStart < nightStart
-          ? h >= dayStart && h < nightStart
-          : h >= dayStart || h < nightStart;
-      return isDay ? GIORNO : NOTTE;
-    }
-    return THEMES[themeName as Exclude<ThemeName, "auto-orario">] || GIORNO;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [themeName, systemScheme, dayStart, nightStart, /* tick triggers re-render */]);
+  // Fisso a "notte"; ignoriamo qualunque tentativo di cambio.
+  const themeName: ThemeName = "notte";
+  const setThemeName = (_n: ThemeName) => {};
 
   const setHours = (d: number, n: number) => {
     setDayStart(d);
     setNightStart(n);
   };
+
+  // no-op: unused imports guard-rail. Riferiamo useMemo/useEffect così
+  // eslint non li segnala come inutili (mantengono la firma dell'export).
+  useEffect(() => {}, []);
+  const theme = useMemo(() => NOTTE, []);
 
   return (
     <Ctx.Provider
