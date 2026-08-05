@@ -40,21 +40,21 @@ type AzureVariant = {
 const AZURE_VARIANTS: AzureVariant[] = [
   {
     key: "A",
-    name: "Cielo Alto",
-    hex: "#B8CFE0",
-    desc: "Ceruleo pulito, alta quota — il più freddo/cristallino",
+    name: "Ceruleo Mediterraneo",
+    hex: "#7FB3D5",
+    desc: "Azzurro bilanciato — cielo estivo Sud Italia (S 47% · L 66%)",
   },
   {
     key: "B",
-    name: "Aria del Mattino",
-    hex: "#C9DCE7",
-    desc: "Atmosferico, diffuso — il più morbido/pacato",
+    name: "Azzurro Delft",
+    hex: "#6E9DC9",
+    desc: "Più scuro/deciso — vira leggermente verso blu, tinta ceramica",
   },
   {
     key: "C",
-    name: "Vetro di Primavera",
-    hex: "#BFD8D9",
-    desc: "Cyan attenuato con touch verde — il più acquoso",
+    name: "Azzurro Ceramica",
+    hex: "#5A8FBF",
+    desc: "Il più intenso — al limite del light mode ancora leggibile",
   },
 ];
 
