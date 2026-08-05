@@ -233,6 +233,17 @@ export const api = {
   recap: (period: "today" | "week" = "today") =>
     jsonReq<{ recap: string; period: string }>(`/recap?period=${period}`),
 
+  // === INTRO-V2 (conversational onboarding) ===
+  /** Deduzione del genere dell'utente a partire dal nome parlato.
+   *  Chiamato UNA volta durante /intro-v2. Il backend usa Claude Haiku
+   *  (via Emergent LLM Key). Se il nome è ambiguo, il client mostra la
+   *  domanda vocale ask_gender come fallback. */
+  introGenderFromName: (name: string) =>
+    jsonReq<{ gender: "m" | "f" | "ambiguous"; confidence: number }>(
+      "/intro/gender-from-name",
+      { method: "POST", body: JSON.stringify({ name }) }
+    ),
+
   listVoices: () =>
     jsonReq<{ voices: VoiceOption[]; enabled: boolean }>("/voices"),
 

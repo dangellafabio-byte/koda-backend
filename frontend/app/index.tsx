@@ -6420,6 +6420,49 @@ export default function Taccuino() {
                     {adminError}
                   </Text>
                 ) : null}
+
+                {/* === INTRO-V2 BETA (2026-08-06, admin only) ===
+                    Nuovo onboarding conversazionale in fase di validazione
+                    su TestFlight. Non ancora attivo per gli utenti finali:
+                    l'accesso è riservato all'owner per QA end-to-end.
+                    Rimuovere dopo GA. */}
+                <View style={styles.divider} />
+                <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>
+                  🧪 Test — Intro conversazionale
+                </Text>
+                <Text style={[styles.settingHint, { marginBottom: 10, paddingHorizontal: 4 }]}>
+                  Il nuovo onboarding voice-only (M2+M3+M4). Non modifica il
+                  tuo profilo se esci con la ×; al termine sovrascrive nome/voce/genere.
+                </Text>
+                <TouchableOpacity
+                  style={{
+                    paddingVertical: 12,
+                    paddingHorizontal: 14,
+                    backgroundColor: theme.text + "0c",
+                    borderRadius: 10,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                  }}
+                  onPress={() => {
+                    closeSettings();
+                    setTimeout(() => router.push("/intro-v2"), 200);
+                  }}
+                  testID="admin-open-intro-v2-btn"
+                >
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+                    <Ionicons name="sparkles-outline" size={18} color={theme.text + "99"} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500" }}>
+                        Prova nuovo intro (beta)
+                      </Text>
+                      <Text style={{ color: theme.text + "66", fontSize: 11, marginTop: 2 }}>
+                        Apre /intro-v2 con reveal Vento + voice choice + gender detection.
+                      </Text>
+                    </View>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={theme.text + "66"} />
+                </TouchableOpacity>
               </>
             ) : null}
 

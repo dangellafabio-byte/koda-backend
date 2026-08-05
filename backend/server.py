@@ -7077,6 +7077,93 @@ def _ai_gender_from_voice(koda_voice: Optional[str]) -> str:
 
 
 # ============================================================
+# INTRO-V2 — Gender detection from name (Claude Haiku)
+# ============================================================
+# Endpoint chiamato dall'intro conversazionale (/intro-v2) subito dopo
+# che l'utente pronuncia il suo nome. Deduce il genere via Claude Haiku
+# (via Emergent LLM Key) così l'app può declinare correttamente ("sei
+# stanco/a", "ciao Fabio caro/cara"). Se il nome è ambiguo (es. "Alex",
+# "Andrea", "Sam"), il client mostra la domanda vocale ask_gender e
+# lascia decidere all'utente.
+#
+# Rate-limit: nessuno esplicito (chiamato UNA volta per utente in tutta
+# la vita dell'app, durante l'onboarding). Il cost cap è naturale.
+
+class IntroGenderRequest(BaseModel):
+    name: str
+
+
+class IntroGenderResponse(BaseModel):
+    gender: str  # "m" | "f" | "ambiguous"
+    confidence: float = 0.0  # 0..1
+
+
+@api_router.post("/intro/gender-from-name", response_model=IntroGenderResponse)
+async def api_intro_gender_from_name(req: IntroGenderRequest):
+    """Deduci il genere di una persona dal solo nome (italiano)."""
+    raw = (req.name or "").strip()
+    if not raw:
+        return IntroGenderResponse(gender="ambiguous", confidence=0.0)
+    # Cap length (nome umano ragionevole) — safety
+    name = raw[:40]
+
+    if not EMERGENT_LLM_KEY:
+        logger.warning("[intro/gender] EMERGENT_LLM_KEY missing → returning ambiguous")
+        return IntroGenderResponse(gender="ambiguous", confidence=0.0)
+
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage  # type: ignore
+        session_id = f"intro-gender-{uuid.uuid4().hex[:8]}"
+        system_prompt = (
+            "Sei un classificatore di nomi italiani. Ricevi un nome (o soprannome) e devi "
+            "rispondere SOLO con JSON, senza testo extra, nel formato: "
+            '{"gender": "m"|"f"|"ambiguous", "confidence": 0.0-1.0}\n'
+            "Regole:\n"
+            "  - 'm' = nome inequivocabilmente maschile in italiano (Marco, Luigi, Giovanni)\n"
+            "  - 'f' = nome inequivocabilmente femminile (Maria, Sofia, Chiara)\n"
+            "  - 'ambiguous' = nomi unisex, stranieri poco riconoscibili, soprannomi "
+            "    (Alex, Andrea in Italia è maschile ma spesso confonde, Sam, Sasha, "
+            "    diminutivi che possono andare in entrambi i sensi)\n"
+            "  - confidence = 0.9+ se molto sicuro, 0.7 se probabile, 0.5 se dubbio\n"
+            "IMPORTANTE: 'Andrea' in Italia è tradizionalmente maschile → gender='m' "
+            "confidence=0.8. Ma se hai il minimo dubbio, preferisci 'ambiguous'.\n"
+            "Non spiegare. Solo JSON."
+        )
+        chat = (
+            LlmChat(
+                api_key=EMERGENT_LLM_KEY,
+                session_id=session_id,
+                system_message=system_prompt,
+            )
+            .with_model("anthropic", "claude-haiku-4-5-20251001")
+            .with_params(max_tokens=60)
+        )
+        reply = await chat.send_message(UserMessage(text=name))
+        import re as _re
+        import json as _json
+        m = _re.search(r"\{[^{}]*\}", reply or "")
+        if not m:
+            logger.warning(f"[intro/gender] no JSON in reply: {reply!r}")
+            return IntroGenderResponse(gender="ambiguous", confidence=0.0)
+        parsed = _json.loads(m.group(0))
+        g_raw = str(parsed.get("gender", "ambiguous")).strip().lower()
+        if g_raw not in ("m", "f", "ambiguous"):
+            g_raw = "ambiguous"
+        try:
+            conf = float(parsed.get("confidence", 0.0))
+        except Exception:
+            conf = 0.0
+        conf = max(0.0, min(1.0, conf))
+        logger.info(f"[intro/gender] name={name!r} → gender={g_raw} conf={conf:.2f}")
+        return IntroGenderResponse(gender=g_raw, confidence=conf)
+    except Exception as e:
+        logger.warning(f"[intro/gender] LLM error: {e}")
+        return IntroGenderResponse(gender="ambiguous", confidence=0.0)
+
+
+
+
+# ============================================================
 # MEMORIA BIOGRAFICA PERMANENTE (key_facts)
 # ============================================================
 # Quando l'utente menziona fatti su di sé (nome dei figli, lavoro, città,
