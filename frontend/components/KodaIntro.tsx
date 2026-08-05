@@ -79,16 +79,21 @@ type Props = {
   isFirstRun?: boolean;
 };
 
-// ====== 3 frasi per il voiceprint enrollment ======
-// Scelte per essere:
-//   • naturali e quotidiane (non frasi-slogan finte)
-//   • foneticamente varie (vocali aperte/chiuse, sibilanti, occlusive)
-//     per dare al voiceprint un campione vocale ricco
-//   • emotivamente caldo: frasi che potresti davvero dire in confidenza
+// ====== 3 DOMANDE per il voiceprint enrollment (2026-08-04 imprinting) ======
+// Cambiamento concettuale (Fabio 2026-08-04): non più "leggi questa
+// frase ad alta voce" — l'utente parla in modo naturale rispondendo a
+// domande di Koda, esattamente come farà nell'uso quotidiano.
+// Vantaggi:
+//   • Zero senso di "test scolastico" ("frase 1/3, 2/3, 3/3")
+//   • Il primo momento con Koda è già una CONVERSAZIONE, non un esercizio
+//   • Campione fonetico comunque ricco: nome, vissuto emotivo, tono caldo
+// Le tre risposte vengono comunque catturate come 3 sample audio per il
+// backend voiceprint (che richiede 3 sample) — solo la presentazione è
+// conversazionale, non l'infrastruttura.
 const VOICEPRINT_PHRASES = [
-  "Buongiorno Koda, oggi è una giornata strana e nuova.",
-  "Ti racconto una cosa: stanotte non ho chiuso occhio.",
-  "Dai, ridi anche tu. A volte serve poco per stare meglio.",
+  "Dimmi qualcosa di te. Il tuo nome, o come stai adesso — quello che ti va.",
+  "E cosa ti ha portato qui, se ti va di dirmelo?",
+  "Un'ultima cosa: quando torni da me, com'è di solito la tua giornata?",
 ];
 
 // ====== Voce ElevenLabs della presentazione ======
@@ -790,18 +795,27 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       case 6:
         setTimeout(() => advance(7), 0);
         return null;
-      // -- Step 7: Lascia andare (2026-07-17: nuovo concept "posto dove nessuno risponde") --
+      // -- Step 7: RIMOSSO 2026-08-04 --
+      //    Prima: "Un posto dove nessuno risponde." (schermata testuale
+      //    con bottone "Ho capito" che annunciava Lascia andare).
+      //    Perché rimosso: incoerente con il principio "imprinting per
+      //    esperienza" (Fabio 2026-08-04). "Lascia andare" è Koda stessa,
+      //    non una funzione a parte da presentare in anticipo. L'utente
+      //    la scopre naturalmente quando tocca il bottone bordeaux dalla
+      //    home — quello è il momento vero, non una demo fittizia.
+      //    Safety net: se qualcuno arriva qui, auto-skip a 8.
       case 7:
-        return (
-          <StepView
-            title="Un posto dove nessuno risponde."
-            subtitle=""
-            showSubtitle={false}
-            primaryLabel="Ho capito"
-            onPrimary={() => advance(8)}
-          />
-        );
-      // -- Step 8: Voiceprint enrollment --
+        setTimeout(() => advance(8), 0);
+        return null;
+      // -- Step 8: Voiceprint enrollment (2026-08-04 imprinting) --
+      //
+      // Cambiamento presentazionale (Fabio 2026-08-04):
+      //   PRIMA: "La tua voce (N di 3)" / "Premi e leggi questa frase..."
+      //   ORA:   Koda pone una domanda naturale. L'utente risponde con
+      //          parole sue. Zero contatore visibile ("N di 3").
+      //          Il backend riceve comunque 3 sample audio come prima.
+      // L'utente non deve MAI percepire di stare facendo un enrollment
+      // scolastico — sta iniziando una conversazione.
       case 8:
         if (voiceprintUris.length >= 3) {
           return (
@@ -815,8 +829,8 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
         }
         return (
           <StepView
-            title={`La tua voce (${voiceprintIdx + 1} di 3)`}
-            subtitle={`Premi e leggi questa frase ad alta voce:\n\n"${VOICEPRINT_PHRASES[voiceprintIdx]}"`}
+            title="Raccontami."
+            subtitle={VOICEPRINT_PHRASES[voiceprintIdx]}
             showSubtitle={true}
           >
             <Pressable
@@ -833,29 +847,36 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
                 color="#FFF"
               />
               <Text style={styles.recordBtnText}>
-                {isRecording ? "Fermati" : "Registra"}
+                {isRecording ? "Fermati quando hai finito" : "Tocca e parla"}
               </Text>
             </Pressable>
             <Pressable onPress={() => advance(9)} style={styles.skipLink}>
-              <Text style={styles.skipLinkText}>Salta questa parte</Text>
+              <Text style={styles.skipLinkText}>Preferisco farlo dopo</Text>
             </Pressable>
           </StepView>
         );
-      // -- Step 9: Final --
+      // -- Step 9: Final (2026-08-04 imprinting) --
+      //
+      // Cambiamento (Fabio 2026-08-04):
+      //   PRIMA: Testo lungo tipo "manuale utente" che spiegava
+      //          - "Parlami come parleresti a un amico"
+      //          - "tocca l'eclissi e dimmi..."
+      //          - "Posso ascoltarti, ricordare, farti compagnia"
+      //          - "Quando vuoi lasciare andare un pensiero..."
+      //          - "Non posso chiamare nessuno, navigare in internet..."
+      //   ORA:   Solo una chiusura breve e presente. Niente istruzioni,
+      //          niente elenchi di funzioni. L'utente ha già vissuto la
+      //          voce di Koda (M2), la sua identità (M3), le ha risposto
+      //          (voiceprint conversazionale). Da qui parte l'uso reale.
       case 9:
         return (
           <StepView
-            title={`Siamo pronti${userName ? `, ${userName}` : ""}.`}
+            title={`Bene${userName ? `, ${userName}` : ""}.`}
             subtitle={
-              "Parlami come parleresti a un amico:\n" +
-              "tocca l'eclissi e dimmi quello che hai in testa.\n\n" +
-              "Posso ascoltarti, ricordare, farti compagnia.\n" +
-              "Quando vuoi solo lasciare andare un pensiero,\n" +
-              "apri Lascia andare: lì niente viene salvato.\n\n" +
-              "Non posso chiamare nessuno, navigare in internet\n" +
-              "o comprare cose. Vivo qui dentro, solo con te."
+              "D'ora in poi ti riconoscerò.\n" +
+              "Quando avrai bisogno, sono qui."
             }
-            primaryLabel={submitting ? "Un attimo…" : "Inizia"}
+            primaryLabel={submitting ? "Un attimo…" : "Iniziamo"}
             onPrimary={finalize}
             primaryDisabled={submitting}
           />
