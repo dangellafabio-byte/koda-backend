@@ -66,6 +66,7 @@ import type {
 } from "expo-speech-recognition";
 import EclipseOrb, { OrbStatus, OrbTone } from "./EclipseOrb";
 import NeonBorder, { NeonBorderStatus } from "./NeonBorder";
+import KodaOrbStage from "./KodaOrbStage";
 import { api, API_BASE } from "../lib/api";
 import { getAuthToken } from "../lib/authToken";
 import { useTheme } from "../lib/theme";
@@ -996,8 +997,12 @@ export default function KodaIntroConversational() {
         <Ionicons name="close" size={20} color="rgba(226,232,240,0.5)" />
       </TouchableOpacity>
 
-      {/* Orb centrale — stessa dimensione E stesso respiro della home */}
-      <View style={styles.centerContainer}>
+      {/* Orb centrale — layout identico alla home tramite <KodaOrbStage>
+          (components/KodaOrbStage.tsx). Nessun paddingTop stimato a mano:
+          la struttura del container è LETTERALMENTE la stessa della Page 0
+          della home, così la posizione verticale dell'orb è garantita
+          identica anche al pixel. */}
+      <KodaOrbStage>
         <Animated.View
           style={[
             styles.orbWrap,
@@ -1023,7 +1028,7 @@ export default function KodaIntroConversational() {
             {labelText}
           </Animated.Text>
         )}
-      </View>
+      </KodaOrbStage>
 
       {/* Mic denied overlay */}
       {micBlocked && (
@@ -1065,45 +1070,12 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   centerContainer: {
+    // OBSOLETO — sostituito da <KodaOrbStage>. Mantengo lo stile
+    // per non rompere ricerche in log/diff storici, ma non è più
+    // referenziato nel JSX (vedi refactor Opzione B 2026-08).
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    // FIX 2026-08-06 iter.5 — posizione orb identica alla home.
-    //
-    // Calcolo ESATTO (non stima):
-    //
-    // HOME struttura verticale:
-    //   [insets.top] + [TopRow ~90px con "Lascia andare" pill] + [ScrollView pager]
-    //     dentro Page 0: paddingTop:90 → poi container flex:1 con orb centrato
-    //
-    // Area utile Page 0 = viewport - insets.top - TopRow(90) - insets.bottom
-    // Centro orb home = insets.top + 90 (topRow) + 90 (paddingTop) + areaPage0/2
-    //                 = insets.top + 180 + (viewport - insets.top - 90 - insets.bottom - 90)/2
-    //
-    // INTRO-V2 struttura verticale (senza TopRow, schermata pulita):
-    //   [insets.top] + [centerContainer flex:1 con paddingTop:X]
-    //
-    // Area utile intro = viewport - insets.top - insets.bottom
-    // Centro orb intro = insets.top + X + (viewport - insets.top - insets.bottom - X)/2
-    //
-    // Per far combaciare i due centri:
-    //   Centro home = Centro intro
-    //   insets.top + 180 + (viewport - insets.top - 90 - insets.bottom - 90)/2
-    //     = insets.top + X + (viewport - insets.top - insets.bottom - X)/2
-    //
-    // Semplificando (chiamiamo V = viewport - insets.top - insets.bottom):
-    //   180 + (V - 180)/2 = X + (V - X)/2
-    //   180 + V/2 - 90 = X + V/2 - X/2
-    //   90 + V/2 = X/2 + V/2
-    //   X/2 = 90
-    //   X = 180
-    //
-    // Quindi paddingTop corretto è 180, non 90.
-    //
-    // Verifica sanity check: 180 = 90 (topRow home) + 90 (paddingTop home Page 0).
-    // Intuitivamente stiamo "compensando" con paddingTop quello che la home ha come
-    // TopRow + paddingTop combinati — che nel nostro caso non abbiamo (schermata pulita).
-    paddingTop: 180,
   },
   orbWrap: {
     alignItems: "center",
