@@ -52,40 +52,44 @@ const VOICES = {
 /**
  * Struttura frasi: chiave stabile → { text, voices, useV3 }
  * - voices: ["cielo", "vento"] o solo uno se voice-specific
- * - useV3: true solo per il primissimo audio del flusso (più intimo)
+ * - useV3: true solo per le frasi più intime che meritano max qualità
+ *
+ * === V2 (2026-08-06, Fabio) ===
+ * Riscrittura completa dell'intro secondo il "Koda Presence System" —
+ * documento fondativo salvato in /app/memory/KODA_PRESENCE_SYSTEM.md.
+ * Meno frasi (5 invece di 11), niente auto-descrizioni, niente Vento reveal,
+ * niente ask_why/ask_day (le domande voiceprint sono state tolte perché
+ * contraddicevano il principio "parlare poco, ascoltare molto").
+ *
+ * La sequenza è: Ciao → Come ti chiami → [Nome pronunciato runtime] →
+ *                Io sono Koda → Grazie di essere qui → Da dove ti va di cominciare
  */
 const CLIPS = [
-  // Turno 1 — Presentazione (v3 per l'intimità della prima frase)
-  { key: "intro_1a", text: "Sono qui. Non ho fretta, non ho bisogno di sapere tutto di te.", voices: ["cielo", "vento"], useV3: true },
-  { key: "intro_1b", text: "Solo di riconoscerti quando torni.", voices: ["cielo", "vento"] },
+  // === INTRO V2 — Sequenza Presence System ===
+  // v3 sulle prime 2 e sull'ultima perché sono i momenti relazionali
+  // più delicati; le altre su flash_v2_5 (costo minore, qualità sufficiente).
+  { key: "ciao", text: "Ciao.", voices: ["cielo"], useV3: true },
+  { key: "come_ti_chiami", text: "Come ti chiami?", voices: ["cielo"] },
+  { key: "io_sono_koda", text: "Io sono Koda.", voices: ["cielo"] },
+  { key: "grazie_di_essere_qui", text: "Grazie di essere qui.", voices: ["cielo"], useV3: true },
+  { key: "da_dove_cominciare", text: "Da dove ti va di cominciare?", voices: ["cielo"], useV3: true },
 
-  // Turno 2 — Domanda del nome
-  { key: "ask_name", text: "Come ti chiamo?", voices: ["cielo", "vento"] },
-
-  // Turno 3 — Domanda del motivo (dopo il "Ciao [Nome], piacere di conoscerti"
-  //           che invece è generato a runtime perché contiene il nome)
-  { key: "ask_why", text: "E cosa ti ha portato qui, se ti va di dirmelo?", voices: ["cielo", "vento"] },
-
-  // Turno 4 — Filler neutro dopo la risposta (evita "Ti capisco" che sarebbe
-  //           presuntuoso; "Grazie" è caldo e neutrale)
-  { key: "filler", text: "Grazie.", voices: ["cielo", "vento"] },
-
-  // Turno 4b — Domanda per secondo sample voiceprint
-  { key: "ask_day", text: "Quando torni da me, com'è di solito la tua giornata?", voices: ["cielo", "vento"] },
-
-  // Turno 5 — Terzo sample voiceprint (facoltativo se i primi 2 bastano)
-  { key: "ask_moment", text: "Un'ultima domanda: raccontami un momento tuo che ti è rimasto in mente.", voices: ["cielo", "vento"] },
-
-  // Turno 7 — Conferma dopo la scelta voce
-  { key: "confirm_choice", text: "Bene. Sarò qui.", voices: ["cielo", "vento"] },
-
-  // Domanda genere (solo se nome ambiguo → deduzione backend fallisce)
-  // Solo Cielo perché in quel punto della conversazione è Cielo a parlare.
-  { key: "ask_gender", text: "Solo per essere sicura — preferisci che ti dia del lui o del lei?", voices: ["cielo"] },
-
-  // Turno 6 — Vento reveal (colpo di scena, solo voce Vento)
-  { key: "vento_reveal_1", text: "Anche io sono Koda.", voices: ["vento"] },
-  { key: "vento_reveal_2", text: "Puoi sceglierci.", voices: ["vento"] },
+  // === INTRO V1 — legacy, tenute qui come riferimento storico. NON usate
+  // dal codice attuale, ma i file MP3 già generati restano su disco fino
+  // a cleanup manuale (non le rigeneriamo, ma non le cancelliamo automaticamente
+  // per evitare che uno script rotto trovi 404 imprevisti).
+  //
+  // { key: "intro_1a", text: "Sono qui. Non ho fretta, non ho bisogno di sapere tutto di te.", voices: ["cielo", "vento"], useV3: true },
+  // { key: "intro_1b", text: "Solo di riconoscerti quando torni.", voices: ["cielo", "vento"] },
+  // { key: "ask_name", text: "Come ti chiamo?", voices: ["cielo", "vento"] },
+  // { key: "ask_why", text: "E cosa ti ha portato qui, se ti va di dirmelo?", voices: ["cielo", "vento"] },
+  // { key: "filler", text: "Grazie.", voices: ["cielo", "vento"] },
+  // { key: "ask_day", text: "Quando torni da me, com'è di solito la tua giornata?", voices: ["cielo", "vento"] },
+  // { key: "ask_moment", text: "Un'ultima domanda: raccontami un momento tuo che ti è rimasto in mente.", voices: ["cielo", "vento"] },
+  // { key: "confirm_choice", text: "Bene. Sarò qui.", voices: ["cielo", "vento"] },
+  // { key: "ask_gender", text: "Solo per essere sicura — preferisci che ti dia del lui o del lei?", voices: ["cielo"] },
+  // { key: "vento_reveal_1", text: "Anche io sono Koda.", voices: ["vento"] },
+  // { key: "vento_reveal_2", text: "Puoi sceglierci.", voices: ["vento"] },
 ];
 
 const MODEL_V3 = "eleven_v3";

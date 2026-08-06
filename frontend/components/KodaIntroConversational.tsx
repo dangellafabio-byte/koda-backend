@@ -1,49 +1,47 @@
 /**
- * KodaIntroConversational.tsx — M2+M3+M4 (2026-08-06, Fabio)
+ * KodaIntroConversational.tsx — V2 (2026-08-06, Fabio)
  *
- * Onboarding conversazionale unificato di Koda: UN SOLO flusso, senza
- * schermate testuali, senza bottoni "Continua/Ho capito", con l'orb
- * che cambia stato dal vivo esattamente come nell'uso quotidiano.
+ * Onboarding conversazionale unificato secondo il "Koda Presence System"
+ * (vedi /app/memory/KODA_PRESENCE_SYSTEM.md).
  *
- * ==== TUTTO IL FLUSSO (M2+M3+M4) ====
+ * Principio: Koda non cerca di sembrare umana. Cerca di essere presente.
+ * Ogni pausa è una partitura, ogni transizione ha inerzia.
  *
- *  1. Silenzio 2.5s — Apertura
- *  2. Cielo: "Sono qui. Non ho fretta…"
- *  3. Cielo: "Solo di riconoscerti quando torni."
- *  4. Cielo: "Come ti chiamo?"
- *  5. STT — cattura nome (12s max) + VU meter orb
- *  6. Think (2s) — background: gender detection via /intro/gender-from-name
- *  7. Runtime TTS Cielo: "Ciao [Nome], piacere di conoscerti."
- *  8. Cielo: "E cosa ti ha portato qui, se ti va di dirmelo?"
- *  9. STT — risposta libera (25s)
- * 10. Think (1.5s)
- * 11. Cielo: "Grazie."
- * 12. Cielo: "Quando torni da me, com'è di solito la tua giornata?"
- * 13. STT — risposta libera (25s)
- * 14. Think (1.5s)
- * 15. Vento: "Anche io sono Koda." (colpo di scena)
- * 16. Vento: "Puoi sceglierci."
- * 17. VOICE CHOICE — STT keyword matching (vocale) → fallback 2 orb tap
- * 18. Speak confirm_choice con voce scelta: "Bene. Sarò qui."
- * 19. [SE gender=ambiguous] Cielo: "Solo per essere sicura — preferisci…"
- * 20. [SE gender=ambiguous] STT — cattura risposta gender (10s)
- * 21. SAVE — api.updateProfile({name, user_gender, koda_voice, ai_gender,
- *     onboarded:true}) + naviga a /
+ * ==== SEQUENZA COMPLETA ====
  *
- * ==== M4 EDGE CASES COPERTI ====
- *   • Mic permission negato → messaggio in-character + bottone "Apri
- *     Impostazioni" (Linking.openSettings()) + skip graceful del flusso
- *   • STT fallisce 2 volte consecutive → fallback TextInput con placeholder
- *     "scrivimi qui" (mantiene il flusso su binario, l'utente scrive
- *     il nome/genere invece di dirlo)
- *   • Voice choice non riconosciuta (STT parsing ambiguo) → dopo 2
- *     tentativi mostra due orb affiancati tap-to-select
- *   • Skip (×) globale → cleanup completo + router.back()
- *   • Runtime TTS fetch fail → skip graceful della frase con nome
- *   • Backend gender detection fail/timeout → fallback ambiguous (chiede)
+ *  [1200ms silenzio apertura — dare spazio, non fretta]
+ *  1. Cielo:  "Ciao."
+ *  [900ms — respiro]
+ *  2. Cielo:  "Come ti chiami?"
+ *  3. [utente parla il proprio nome — STT con retry infinito su silenzio]
+ *  [500ms — PAUSA DI ACCOGLIENZA: il nome è stato ricevuto]
+ *  4. Cielo (runtime TTS): "[Nome]." (con tone: warm)
+ *  [700ms — lasciar risuonare il nome]
+ *  5. Cielo:  "Io sono Koda."
+ *  [1000ms — passaggio a tono relazionale]
+ *  6. Cielo:  "Grazie di essere qui."
+ *  [900ms — respiro prima della domanda aperta]
+ *  7. Cielo:  "Da dove ti va di cominciare?"
+ *  8. [utente parla liberamente — STT con retry]
+ *  9. [Koda LLM risposta LIVE: /api/converse → /api/tts → play — l'onboarding
+ *      si dissolve nella conversazione reale]
+ *  10. [save profilo + transizione fade lunga alla home]
  *
- * Route: /intro-v2 (isolata per testing; il vecchio KodaIntro resta live
- * sulla home finché non è validato su TestFlight).
+ * ==== INVARIANTI (dal Presence System §2) ====
+ *   • Eclissi nera (EclipseOrb), stessa dimensione della home
+ *   • NeonBorder attivo, stesso colore-per-stato della home
+ *   • Nessuna interruzione visiva (tutti i turni nella stessa schermata)
+ *   • Ogni transizione tra stati ha inerzia (600ms di easing nell'orb)
+ *   • Deduzione genere in BACKGROUND (silenziosa, non tocca lo script)
+ *   • Voice choice RIMOSSA (default Cielo, si cambia dopo in impostazioni)
+ *
+ * ==== BUG FIX INCLUSI (2026-08-06) ====
+ *   • Audio session routing corretto: speaker attivo anche senza cuffie
+ *   • STT retry automatico su silenzio: Koda continua ad ascoltare finché
+ *     l'utente non parla davvero (fino a maxMs del turno)
+ *
+ * Route: /intro-v2 (isolata per testing su TestFlight; il vecchio KodaIntro
+ * resta live sulla home finché V2 non è validato).
  */
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
@@ -54,8 +52,7 @@ import {
   Animated,
   Platform,
   Linking,
-  TextInput,
-  Keyboard,
+  Dimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -68,115 +65,75 @@ import type {
   ExpoSpeechRecognitionErrorEvent,
 } from "expo-speech-recognition";
 import EclipseOrb, { OrbStatus, OrbTone } from "./EclipseOrb";
+import NeonBorder, { NeonBorderStatus } from "./NeonBorder";
 import { api, API_BASE } from "../lib/api";
 import { getAuthToken } from "../lib/authToken";
+import { useTheme } from "../lib/theme";
 
 const TAG = "KODA_INTRO_V2";
 
-// ==================== AUDIO CLIP REGISTRY ====================
-// Metro bundler risolve i require() statici in build-time e inlina
-// gli asset nell'IPA. Ogni clip corrisponde a un file MP3 generato
-// da scripts/generate-intro-audio.js (M1).
+// ==================== AUDIO CLIP REGISTRY (V2 — Presence System) ====================
 const CIELO_CLIPS = {
-  intro_1a: require("../assets/sounds/intro/intro_1a-cielo.mp3"),
-  intro_1b: require("../assets/sounds/intro/intro_1b-cielo.mp3"),
-  ask_name: require("../assets/sounds/intro/ask_name-cielo.mp3"),
-  ask_why: require("../assets/sounds/intro/ask_why-cielo.mp3"),
-  filler: require("../assets/sounds/intro/filler-cielo.mp3"),
-  ask_day: require("../assets/sounds/intro/ask_day-cielo.mp3"),
-  confirm_choice: require("../assets/sounds/intro/confirm_choice-cielo.mp3"),
-  ask_gender: require("../assets/sounds/intro/ask_gender-cielo.mp3"),
-};
-const VENTO_CLIPS = {
-  vento_reveal_1: require("../assets/sounds/intro/vento_reveal_1-vento.mp3"),
-  vento_reveal_2: require("../assets/sounds/intro/vento_reveal_2-vento.mp3"),
-  confirm_choice: require("../assets/sounds/intro/confirm_choice-vento.mp3"),
+  ciao: require("../assets/sounds/intro/ciao-cielo.mp3"),
+  come_ti_chiami: require("../assets/sounds/intro/come_ti_chiami-cielo.mp3"),
+  io_sono_koda: require("../assets/sounds/intro/io_sono_koda-cielo.mp3"),
+  grazie_di_essere_qui: require("../assets/sounds/intro/grazie_di_essere_qui-cielo.mp3"),
+  da_dove_cominciare: require("../assets/sounds/intro/da_dove_cominciare-cielo.mp3"),
 };
 
-// ==================== VOICE CONSTANTS ====================
-// Voice IDs ElevenLabs (allineati con backend KODA_VOICES).
-const VOICE_CIELO_ID = "POuqf18evoXOKIqV2Px7"; // aria
-const VOICE_VENTO_ID = "ll9WG7PDTuyHwgC5MD6g"; // theo
+// Voice ID default (Cielo). Voice choice rimossa dall'onboarding V2 —
+// si cambia dopo dalle Impostazioni.
+const VOICE_CIELO_ID = "POuqf18evoXOKIqV2Px7";
 
 // ==================== STATE MACHINE TYPES ====================
 type OrbState = "idle" | "speaking" | "listening" | "thinking";
-type VoiceKey = "cielo" | "vento";
 
-// Cosa fare con il transcript catturato in un turno di listen.
-type ListenPurpose = "capture_name" | "capture_gender" | "voice_choice" | "discard";
+type ListenPurpose = "capture_name" | "capture_free_response";
 
 type Turn =
-  | { kind: "silence"; ms: number }
-  | { kind: "speak"; voice: VoiceKey; clipKey: string }
-  | { kind: "listen"; label?: string; purpose: ListenPurpose; maxMs?: number }
-  | { kind: "think"; ms: number; task?: "gender_lookup" }
-  | { kind: "runtime_tts"; voice: VoiceKey; template: string } // template usa {name}
-  | { kind: "voice_choice_reveal_orbs" } // mostra 2 orb per tap-to-select (fallback UI)
-  | { kind: "conditional_gender_ask" } // se gender==ambiguous, entra nel ramo ask
+  | { kind: "silence"; ms: number; label?: string }
+  | { kind: "speak"; clipKey: keyof typeof CIELO_CLIPS }
+  | { kind: "listen"; purpose: ListenPurpose; maxMs?: number; showLabel?: boolean }
+  | { kind: "runtime_tts_name" } // "[Nome]." — runtime, warm tone
+  | { kind: "live_response" } // /api/converse → /api/tts → play
   | { kind: "save_and_end" };
 
-// Sequenza conversazionale completa.
-// Note su turni condizionali:
-//  - `conditional_gender_ask` è un branching node: se gender!='ambiguous' skippa
-//    i due turni successivi (speak ask_gender + listen capture_gender)
+// La sequenza — ogni pausa ha un'intenzione (vedi documento Presence System §6)
 const CONVERSATION: Turn[] = [
-  // #0
-  { kind: "silence", ms: 2500 },
+  // #0 — apertura silenziosa: dare spazio, non fretta
+  { kind: "silence", ms: 1200, label: "apertura" },
   // #1
-  { kind: "speak", voice: "cielo", clipKey: "intro_1a" },
-  // #2
-  { kind: "silence", ms: 500 },
+  { kind: "speak", clipKey: "ciao" },
+  // #2 — respiro tra saluto e prima domanda
+  { kind: "silence", ms: 900, label: "respiro" },
   // #3
-  { kind: "speak", voice: "cielo", clipKey: "intro_1b" },
-  // #4
-  { kind: "silence", ms: 700 },
-  // #5
-  { kind: "speak", voice: "cielo", clipKey: "ask_name" },
-  // #6 — maxMs alto: Koda attende con retry automatico. Il vero endpoint
-  // della cattura è quando l'utente PARLA (STT emette isFinal). Se non
-  // parla, retry silenzioso finché non arriva un transcript o passa maxMs.
-  { kind: "listen", label: "ti ascolto", purpose: "capture_name", maxMs: 45000 },
-  // #7
-  { kind: "think", ms: 2000, task: "gender_lookup" },
+  { kind: "speak", clipKey: "come_ti_chiami" },
+  // #4 — utente dice il nome. maxMs alto: Koda attende con retry
+  { kind: "listen", purpose: "capture_name", maxMs: 45000, showLabel: true },
+  // #5 — PAUSA DI ACCOGLIENZA: il nome è stato ricevuto. In BACKGROUND
+  //      parte il gender lookup (invisibile, silenzioso)
+  { kind: "silence", ms: 500, label: "accoglienza" },
+  // #6 — "[Nome]." runtime, tone: warm
+  { kind: "runtime_tts_name" },
+  // #7 — lasciar risuonare il nome
+  { kind: "silence", ms: 700, label: "risonanza" },
   // #8
-  { kind: "runtime_tts", voice: "cielo", template: "Ciao {name}, piacere di conoscerti." },
-  // #9
-  { kind: "speak", voice: "cielo", clipKey: "ask_why" },
-  // #10 — risposta libera, tempo lungo (utente può pensare/pausare)
-  { kind: "listen", label: "ti ascolto", purpose: "discard", maxMs: 60000 },
-  // #11
-  { kind: "think", ms: 1500 },
+  { kind: "speak", clipKey: "io_sono_koda" },
+  // #9 — passaggio a tono relazionale
+  { kind: "silence", ms: 1000, label: "relazionale" },
+  // #10
+  { kind: "speak", clipKey: "grazie_di_essere_qui" },
+  // #11 — respiro prima della domanda aperta
+  { kind: "silence", ms: 900, label: "pre-apertura" },
   // #12
-  { kind: "speak", voice: "cielo", clipKey: "filler" },
-  // #13
-  { kind: "silence", ms: 300 },
-  // #14
-  { kind: "speak", voice: "cielo", clipKey: "ask_day" },
-  // #15
-  { kind: "listen", label: "ti ascolto", purpose: "discard", maxMs: 60000 },
-  // #16
-  { kind: "think", ms: 1500 },
-  // #17 — REVEAL VENTO
-  { kind: "speak", voice: "vento", clipKey: "vento_reveal_1" },
-  // #18
-  { kind: "silence", ms: 600 },
-  // #19
-  { kind: "speak", voice: "vento", clipKey: "vento_reveal_2" },
-  // #20 — VOICE CHOICE (risposta breve attesa: "Cielo"/"Vento")
-  { kind: "listen", label: undefined, purpose: "voice_choice", maxMs: 30000 },
-  // #21 — voce sovrascritta a runtime (usa la voce appena scelta)
-  { kind: "speak", voice: "cielo", clipKey: "confirm_choice" },
-  // #22 — branching (if/else, non parla)
-  { kind: "conditional_gender_ask" },
-  // #23
-  { kind: "speak", voice: "cielo", clipKey: "ask_gender" },
-  // #24
-  { kind: "listen", label: "ti ascolto", purpose: "capture_gender", maxMs: 30000 },
-  // #25
+  { kind: "speak", clipKey: "da_dove_cominciare" },
+  // #13 — LIVE RESPONSE: utente parla → converse → TTS → play
+  { kind: "live_response" },
+  // #14 — save profilo + fade a home
   { kind: "save_and_end" },
 ];
 
-// ==================== ORB STATE → EclipseOrb PROPS ====================
+// ==================== ORB STATE → EclipseOrb + NeonBorder ====================
 function orbPropsFor(state: OrbState): { status: OrbStatus; tone: OrbTone | null } {
   switch (state) {
     case "idle":
@@ -190,90 +147,27 @@ function orbPropsFor(state: OrbState): { status: OrbStatus; tone: OrbTone | null
   }
 }
 
+function neonStatusFor(state: OrbState): NeonBorderStatus {
+  switch (state) {
+    case "idle":
+      return "idle";
+    case "speaking":
+      return "speaking";
+    case "listening":
+      return "recording";
+    case "thinking":
+      return "thinking";
+  }
+}
+
 // ==================== VOLUME NORMALIZATION ====================
-// expo-speech-recognition emette `volumechange` con value ∈ [-2, 10].
-// Normalizziamo su [0..1] con compressione sqrt per rispondere anche
-// alle voci morbide.
 function normalizeVolume(rawValue: number): number {
   const clamped = Math.max(-2, Math.min(10, rawValue));
   const linear = (clamped + 2) / 12;
   return Math.sqrt(Math.max(0, linear));
 }
 
-// ==================== KEYWORD MATCHING per VOICE CHOICE ====================
-// Ritorna la voce scelta se riconosciuta, altrimenti null.
-function parseVoiceChoice(transcript: string): VoiceKey | null {
-  const t = transcript.toLowerCase().trim();
-  if (!t) return null;
-  // Cielo — femminile / prima / la donna / voce chiara
-  if (/\bcielo\b|\bprim[ao]\b|\buno\b|\bfemminile\b|\bdonna\b|\blei\b|\bchiar[ao]\b/.test(t)) {
-    return "cielo";
-  }
-  // Vento — maschile / seconda / l'altra / grave / lui
-  if (/\bvento\b|\bsecond[ao]\b|\bdue\b|\baltro\b|\baltra\b|\bmaschile\b|\buomo\b|\blui\b|\bgrav[ae]\b/.test(t)) {
-    return "vento";
-  }
-  return null;
-}
-
-// ==================== KEYWORD MATCHING per GENDER ====================
-function parseUserGender(transcript: string): "m" | "f" | null {
-  const t = transcript.toLowerCase().trim();
-  if (!t) return null;
-  if (/\bl[ei][io]\b|\buomo\b|\bmaschio\b|\bmaschile\b|\bragazz[oi]\b|\bsignore\b/.test(t)) {
-    return "m";
-  }
-  if (/\blei\b|\bdonna\b|\bfemmin[ai]\b|\bragazz[ae]\b|\bsignora\b/.test(t)) {
-    return "f";
-  }
-  return null;
-}
-
-// ==================== RUNTIME TTS FETCH ====================
-// Genera un MP3 al volo dall'endpoint /api/tts (già esistente). Ritorna
-// URI locale usable da createAudioPlayer, o null in caso di fail.
-async function fetchRuntimeTTS(text: string, voice: VoiceKey): Promise<string | null> {
-  try {
-    const voice_id = voice === "vento" ? VOICE_VENTO_ID : VOICE_CIELO_ID;
-    const authTok = getAuthToken();
-    const r = await fetch(`${API_BASE}/tts`, {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        ...(authTok ? { Authorization: `Bearer ${authTok}` } : {}),
-      },
-      body: JSON.stringify({ text, voice_id, tone: "warm" }),
-    });
-    if (!r.ok) {
-      console.warn(`[${TAG}] runtime TTS non OK: ${r.status}`);
-      return null;
-    }
-    const blob = await r.blob();
-    // Convert blob → base64 data URI (funziona su React Native con expo-audio)
-    return await new Promise<string | null>((resolve) => {
-      const reader = new FileReader();
-      reader.onerror = () => resolve(null);
-      reader.onloadend = () => {
-        const result = reader.result;
-        if (typeof result === "string") resolve(result);
-        else resolve(null);
-      };
-      reader.readAsDataURL(blob);
-    });
-  } catch (e) {
-    console.warn(`[${TAG}] runtime TTS fetch failed:`, e);
-    return null;
-  }
-}
-
 // ==================== AUDIO SESSION HELPERS ====================
-// BUG FIX 2026-08-06 — Audio non usciva dallo speaker senza cuffie.
-// Causa: il mio start STT settava `mode: "measurement"` + playAndRecord,
-// che su iOS senza defaultToSpeaker forzato durante playback fa uscire
-// l'audio dall'earpiece (auricolare in cima) invece che dallo speaker.
-// Fix: prima di OGNI turno speak forziamo la audio session in playback
-// puro (speaker), prima di OGNI listen torniamo in modalità recording.
 async function configureAudioForPlayback(): Promise<void> {
   if (Platform.OS === "web") return;
   try {
@@ -304,30 +198,87 @@ async function configureAudioForRecording(): Promise<void> {
   }
 }
 
+// ==================== RUNTIME TTS FETCH ====================
+async function fetchRuntimeTTS(text: string, tone: string = "warm"): Promise<string | null> {
+  try {
+    const authTok = getAuthToken();
+    const r = await fetch(`${API_BASE}/tts`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...(authTok ? { Authorization: `Bearer ${authTok}` } : {}),
+      },
+      body: JSON.stringify({ text, voice_id: VOICE_CIELO_ID, tone }),
+    });
+    if (!r.ok) {
+      console.warn(`[${TAG}] runtime TTS non OK: ${r.status}`);
+      return null;
+    }
+    const blob = await r.blob();
+    return await new Promise<string | null>((resolve) => {
+      const reader = new FileReader();
+      reader.onerror = () => resolve(null);
+      reader.onloadend = () => {
+        const result = reader.result;
+        if (typeof result === "string") resolve(result);
+        else resolve(null);
+      };
+      reader.readAsDataURL(blob);
+    });
+  } catch (e) {
+    console.warn(`[${TAG}] runtime TTS fetch failed:`, e);
+    return null;
+  }
+}
+
+// ==================== CONVERSE (prima risposta LLM live) ====================
+type ConverseAiEntry = { text: string; tone?: string };
+async function fetchConverse(text: string): Promise<ConverseAiEntry | null> {
+  try {
+    const authTok = getAuthToken();
+    const r = await fetch(`${API_BASE}/converse`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...(authTok ? { Authorization: `Bearer ${authTok}` } : {}),
+      },
+      body: JSON.stringify({ text, ephemeral: false }),
+    });
+    if (!r.ok) {
+      console.warn(`[${TAG}] converse non OK: ${r.status}`);
+      return null;
+    }
+    const data = await r.json();
+    const ai = data?.ai_entry;
+    if (!ai?.text) return null;
+    return { text: ai.text, tone: ai.tone || "warm" };
+  } catch (e) {
+    console.warn(`[${TAG}] converse fetch failed:`, e);
+    return null;
+  }
+}
+
 // ==================== COMPONENT ====================
+const { width: WINDOW_WIDTH } = Dimensions.get("window");
+// Stessa formula della home (index.tsx riga 5071)
+const ORB_SIZE = Math.min(WINDOW_WIDTH * 0.78, 360);
+
 export default function KodaIntroConversational() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const theme = useTheme();
   const [turnIdx, setTurnIdx] = useState(0);
   const [orbState, setOrbState] = useState<OrbState>("idle");
   const [labelText, setLabelText] = useState<string | null>(null);
 
-  // === Dati raccolti durante il flusso ===
+  // Dati raccolti
   const [userName, setUserName] = useState<string | null>(null);
-  const [userGender, setUserGender] = useState<"m" | "f" | "ambiguous" | null>(null);
-  const [voiceChoice, setVoiceChoice] = useState<VoiceKey | null>(null);
+  const userGenderRef = useRef<"m" | "f" | "ambiguous" | null>(null);
 
-  // === UI states per fallback M4 ===
-  // Mic permission blocca il flusso? Se true, mostro overlay con "Apri Impostazioni".
+  // Mic permission blocca il flusso?
   const [micBlocked, setMicBlocked] = useState(false);
-  // Contatore fallimenti STT consecutivi (per fallback TextInput dopo 2)
-  const sttFailCountRef = useRef(0);
-  const [textFallbackVisible, setTextFallbackVisible] = useState(false);
-  const [textFallbackValue, setTextFallbackValue] = useState("");
-  const [textFallbackPlaceholder, setTextFallbackPlaceholder] = useState("scrivimi qui…");
-  // Voice choice tap fallback (dopo 2 STT failures nel voice_choice turn)
-  const voiceChoiceAttemptsRef = useRef(0);
-  const [voiceChoiceOrbsVisible, setVoiceChoiceOrbsVisible] = useState(false);
 
   // Traccia se i micro-label sono già stati mostrati (first-time only)
   const shownLabels = useRef<Set<string>>(new Set());
@@ -341,8 +292,8 @@ export default function KodaIntroConversational() {
   const labelOpacity = useRef(new Animated.Value(0)).current;
   const volAnim = useRef(new Animated.Value(0)).current;
   const mountedRef = useRef(true);
-  // Callback pendente per turno TextInput fallback
-  const textFallbackResolverRef = useRef<((text: string) => void) | null>(null);
+  // Fade globale della schermata per transizione morbida a fine intro
+  const screenOpacity = useRef(new Animated.Value(0)).current;
 
   const currentTurn = CONVERSATION[turnIdx];
 
@@ -359,14 +310,10 @@ export default function KodaIntroConversational() {
       listenSafetyRef.current = null;
     }
     for (const sub of sttSubsRef.current) {
-      try {
-        sub.remove();
-      } catch {}
+      try { sub.remove(); } catch {}
     }
     sttSubsRef.current = [];
-    try {
-      ExpoSpeechRecognitionModule.abort();
-    } catch {}
+    try { ExpoSpeechRecognitionModule.abort(); } catch {}
     Animated.timing(volAnim, {
       toValue: 0,
       duration: 300,
@@ -380,14 +327,13 @@ export default function KodaIntroConversational() {
       timerRef.current = null;
     }
     if (currentPlayerRef.current) {
-      try {
-        currentPlayerRef.current.remove();
-      } catch {}
+      try { currentPlayerRef.current.remove(); } catch {}
       currentPlayerRef.current = null;
     }
     stopSTT();
   }, [stopSTT]);
 
+  // Micro-label first-time-only
   const showLabel = useCallback(
     (text: string) => {
       if (shownLabels.current.has(text)) return;
@@ -413,116 +359,52 @@ export default function KodaIntroConversational() {
     [labelOpacity]
   );
 
-  // ==================== TEXT FALLBACK ====================
-  // Mostra un TextInput che si comporta come un "listen" invisibile.
-  // Restituisce il testo inserito via callback.
-  const showTextFallback = useCallback(
-    (placeholder: string): Promise<string> => {
-      setTextFallbackPlaceholder(placeholder);
-      setTextFallbackValue("");
-      setTextFallbackVisible(true);
-      return new Promise<string>((resolve) => {
-        textFallbackResolverRef.current = resolve;
-      });
-    },
-    []
-  );
-
-  const submitTextFallback = useCallback(() => {
-    const text = textFallbackValue.trim();
-    setTextFallbackVisible(false);
-    Keyboard.dismiss();
-    const resolver = textFallbackResolverRef.current;
-    textFallbackResolverRef.current = null;
-    if (resolver) resolver(text);
-  }, [textFallbackValue]);
-
   // ==================== HANDLE LISTEN OUTPUT ====================
-  // Applica il transcript catturato in base a `purpose` e avanza.
+  // Applica il transcript e avanza (o triggera live_response).
   const handleListenOutput = useCallback(
     (rawText: string, purpose: ListenPurpose) => {
       const text = rawText.trim();
       if (purpose === "capture_name") {
+        // Prima parola pulita = nome
         const firstWord = text.split(/\s+/)[0].replace(/[.,!?;:"']/g, "");
         if (firstWord && firstWord.length >= 2) {
-          console.log(`[${TAG}] captured name: "${firstWord}"`);
-          setUserName(firstWord);
-          sttFailCountRef.current = 0;
-        } else {
-          sttFailCountRef.current++;
+          const capitalized = firstWord.charAt(0).toUpperCase() + firstWord.slice(1).toLowerCase();
+          console.log(`[${TAG}] captured name: "${capitalized}" (raw: "${text}")`);
+          setUserName(capitalized);
+          // Avvia gender lookup in BACKGROUND — invisibile, non blocca
+          api.introGenderFromName(capitalized)
+            .then((r) => {
+              const g = r?.gender;
+              const conf = r?.confidence || 0;
+              if (g === "m" || g === "f") {
+                if (conf >= 0.7) {
+                  userGenderRef.current = g;
+                  console.log(`[${TAG}] gender BG lookup: ${g} (conf=${conf.toFixed(2)})`);
+                }
+              }
+            })
+            .catch(() => {}); // silenzioso — Claude userà forme agnostiche
         }
-      } else if (purpose === "capture_gender") {
-        const g = parseUserGender(text);
-        if (g) {
-          console.log(`[${TAG}] captured user_gender: ${g}`);
-          setUserGender(g);
-          sttFailCountRef.current = 0;
-        } else {
-          // Non riconosciuto → default femminile (statisticamente più
-          // frequente nell'onboarding wellness, M4 potrà raffinare)
-          console.log(`[${TAG}] gender not parsable, default f`);
-          setUserGender("f");
-        }
-      } else if (purpose === "voice_choice") {
-        const v = parseVoiceChoice(text);
-        if (v) {
-          console.log(`[${TAG}] captured voice_choice: ${v}`);
-          setVoiceChoice(v);
-          sttFailCountRef.current = 0;
-          voiceChoiceAttemptsRef.current = 0;
-        } else {
-          voiceChoiceAttemptsRef.current++;
-          if (voiceChoiceAttemptsRef.current >= 2) {
-            // Fallback tap orbs — mostra UI (gestito nel render)
-            setVoiceChoiceOrbsVisible(true);
-            // Non avanzare finché l'utente non tocca un orb
-            return;
-          }
-          // 1° tentativo fallito: retry silenziosamente (ripeti listen)
-          // Semplice: torna indietro di 1 (re-esegue lo stesso turno).
-          // In pratica settiamo turnIdx=turnIdx (re-trigger effect) — troppo
-          // complicato, meglio non fare retry qui: forziamo tap.
-          setVoiceChoiceOrbsVisible(true);
-          return;
-        }
+        advance();
+      } else if (purpose === "capture_free_response") {
+        // Passato al chiamante nel turn live_response
+        pendingResponseRef.current = text;
+        advance();
       }
-      // Advance
-      advance();
     },
     [advance]
   );
 
-  // ==================== START LISTEN (STT) ====================
-  // BUG FIX 2026-08-06 — Koda non aspettava la risposta.
-  // Causa: iOS SFSpeechRecognizer chiude su ~2s di silenzio (default hard-coded).
-  // Il vecchio handler avanzava al turno successivo appena "end" arrivava
-  // senza transcript. Se l'utente esitava, veniva "interrotto".
-  //
-  // Fix: introduco RETRY AUTOMATICO. Su end/no-speech senza transcript,
-  // riavvio STT (attesa 200ms per lasciare che il modulo faccia cleanup).
-  // Il vero endpoint è: l'utente PARLA (isFinal=true) → finalize.
-  // La guardia definitiva resta il timer maxMs (safety net del turno).
+  // Storage temp per la risposta libera catturata (usata da live_response)
+  const pendingResponseRef = useRef<string>("");
+
+  // ==================== START LISTEN (STT con retry su silenzio) ====================
   const startListen = useCallback(
-    async (purpose: ListenPurpose, maxMs: number) => {
+    async (purpose: ListenPurpose, maxMs: number, withLabel: boolean) => {
       if (listenActiveRef.current) return;
       listenActiveRef.current = true;
 
-      // Se abbiamo già fallito 2 volte in STT tra i turni, salta a text fallback
-      if (sttFailCountRef.current >= 2 && purpose !== "voice_choice") {
-        listenActiveRef.current = false;
-        console.log(`[${TAG}] stt fail count>=2 → text fallback for ${purpose}`);
-        const placeholder =
-          purpose === "capture_name"
-            ? "scrivi il tuo nome…"
-            : purpose === "capture_gender"
-            ? "uomo o donna?"
-            : "scrivi la tua risposta…";
-        const inputText = await showTextFallback(placeholder);
-        handleListenOutput(inputText, purpose);
-        return;
-      }
-
-      // 1. Permission check + request
+      // 1. Permission
       try {
         const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
         if (!perm.granted) {
@@ -538,17 +420,15 @@ export default function KodaIntroConversational() {
         return;
       }
 
-      // 2. Stato locale del turno di listen (chiusura sopra i listener)
+      // 2. Stato locale del turno
       let capturedTranscript = "";
       let capturedFinal = false;
       const listenStartTime = Date.now();
       let restartAttempts = 0;
-      const MAX_RESTART_ATTEMPTS = 12; // ~24s se ogni ciclo è 2s
-      // Buffer di tempo prima del safety-net: se manca meno di questo,
-      // non tentare un nuovo restart (rischia race con giveUp).
+      const MAX_RESTART_ATTEMPTS = 12;
       const RESTART_MIN_REMAINING_MS = 3000;
 
-      // Build startOpts UNA volta (riusato per restart)
+      // Build startOpts (riusato per restart)
       const startOpts: {
         lang: string;
         interimResults: boolean;
@@ -557,11 +437,7 @@ export default function KodaIntroConversational() {
         addsPunctuation: boolean;
         requiresOnDeviceRecognition: boolean;
         volumeChangeEventOptions: { enabled: boolean; intervalMillis: number };
-        iosCategory?: {
-          category: string;
-          categoryOptions: string[];
-          mode: string;
-        };
+        iosCategory?: { category: string; categoryOptions: string[]; mode: string };
         androidIntentOptions?: Record<string, number>;
       } = {
         lang: "it-IT",
@@ -581,7 +457,6 @@ export default function KodaIntroConversational() {
       }
       if (Platform.OS === "android") {
         startOpts.androidIntentOptions = {
-          // Silenzi tolleranti su Android — l'utente può pensare a lungo
           EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 6000,
           EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 4000,
           EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 500,
@@ -596,29 +471,12 @@ export default function KodaIntroConversational() {
       };
 
       const giveUp = () => {
-        // Nessun transcript entro maxMs / max attempts → fallback contestuale
-        console.log(
-          `[${TAG}] giveUp: no transcript after ${restartAttempts} attempts in ${Date.now() - listenStartTime}ms`
-        );
-        sttFailCountRef.current++;
+        console.log(`[${TAG}] giveUp: no transcript after ${restartAttempts} attempts in ${Date.now() - listenStartTime}ms`);
         stopSTT();
-        if (purpose === "voice_choice") {
-          voiceChoiceAttemptsRef.current++;
-          setVoiceChoiceOrbsVisible(true);
-          return;
-        }
-        if (sttFailCountRef.current >= 2) {
-          const placeholder =
-            purpose === "capture_name"
-              ? "scrivi il tuo nome…"
-              : purpose === "capture_gender"
-              ? "uomo o donna?"
-              : "scrivi la tua risposta…";
-          showTextFallback(placeholder).then((t) =>
-            handleListenOutput(t, purpose)
-          );
-          return;
-        }
+        // Per intro V2 non ho fallback text: se veramente non parla, advance.
+        // Il maxMs alto (45s per nome, 60s per risposta libera) rende
+        // questo scenario molto raro. Se accade, l'intro salva con nome
+        // vuoto e Claude si arrangia.
         advance();
       };
 
@@ -627,79 +485,58 @@ export default function KodaIntroConversational() {
         const elapsed = Date.now() - listenStartTime;
         const remaining = maxMs - elapsed;
         restartAttempts++;
-
         if (remaining < RESTART_MIN_REMAINING_MS || restartAttempts > MAX_RESTART_ATTEMPTS) {
           giveUp();
           return;
         }
-
-        // Piccola pausa per lasciar respirare il modulo, poi restart
-        console.log(
-          `[${TAG}] restart STT (attempt ${restartAttempts}, elapsed ${elapsed}ms, remaining ${remaining}ms)`
-        );
-        try {
-          ExpoSpeechRecognitionModule.abort();
-        } catch {}
+        console.log(`[${TAG}] restart STT (attempt ${restartAttempts}, elapsed ${elapsed}ms, remaining ${remaining}ms)`);
+        try { ExpoSpeechRecognitionModule.abort(); } catch {}
         setTimeout(() => {
           if (!listenActiveRef.current || capturedFinal) return;
-          try {
-            ExpoSpeechRecognitionModule.start(startOpts);
-          } catch (e) {
+          try { ExpoSpeechRecognitionModule.start(startOpts); } catch (e) {
             console.warn(`[${TAG}] restart start() threw:`, e);
             giveUp();
           }
         }, 250);
       };
 
-      // 3. Registra listeners
+      // 3. Listeners
       const subResult = ExpoSpeechRecognitionModule.addListener(
         "result",
         (evt: ExpoSpeechRecognitionResultEvent) => {
           const first = evt.results?.[0];
           if (!first) return;
           const text = first.transcript || "";
-          if (text.length > 0) {
-            capturedTranscript = text;
-          }
+          if (text.length > 0) capturedTranscript = text;
           if (evt.isFinal && text.trim().length > 0) {
-            console.log(`[${TAG}] result FINAL: "${text}" (purpose=${purpose})`);
+            console.log(`[${TAG}] result FINAL: "${text}"`);
             finalize(text);
           }
         }
       );
-
       const subError = ExpoSpeechRecognitionModule.addListener(
         "error",
         (evt: ExpoSpeechRecognitionErrorEvent) => {
-          console.log(`[${TAG}] error code=${evt.error} msg="${evt.message || ""}"`);
-          if (evt.error === "aborted") return; // silenzioso (l'abbiamo abortito noi)
+          if (evt.error === "aborted") return;
           if (evt.error === "no-speech") {
-            // Se abbiamo un transcript parziale valido, usiamolo
             if (capturedTranscript.trim().length > 0) {
               finalize(capturedTranscript);
               return;
             }
-            // Altrimenti retry (BUG FIX: prima qui advance-vamo, ora restart)
             restartOrGiveUp();
             return;
           }
-          // Errori seri (permission mid-flight, audio session): giveUp graceful
           if (!capturedFinal) giveUp();
         }
       );
-
       const subEnd = ExpoSpeechRecognitionModule.addListener("end", () => {
         if (capturedFinal) return;
-        // Se c'è transcript accumulato → usalo come final
         if (capturedTranscript.trim().length > 0) {
           finalize(capturedTranscript);
           return;
         }
-        // BUG FIX 2026-08-06: end senza transcript non deve avanzare.
-        // iOS chiude su ~2s silenzio → dobbiamo riascoltare, non skippare.
         if (listenActiveRef.current) restartOrGiveUp();
       });
-
       const subVolume = ExpoSpeechRecognitionModule.addListener(
         "volumechange",
         (evt: { value?: number }) => {
@@ -712,7 +549,6 @@ export default function KodaIntroConversational() {
           }).start();
         }
       );
-
       sttSubsRef.current = [subResult, subError, subEnd, subVolume];
 
       // 4. Primo start
@@ -726,115 +562,106 @@ export default function KodaIntroConversational() {
         return;
       }
 
-      // 5. Safety net FINALE (garanzia di uscita dopo maxMs)
+      // 5. Micro-label (first-time-only)
+      if (withLabel) showLabel("ti ascolto");
+
+      // 6. Safety net
       listenSafetyRef.current = setTimeout(() => {
         if (capturedFinal) return;
-        console.warn(`[${TAG}] listen safety-net triggered (maxMs=${maxMs})`);
-        if (capturedTranscript.trim().length > 0) {
-          finalize(capturedTranscript);
-        } else {
-          giveUp();
-        }
+        console.warn(`[${TAG}] listen safety-net (maxMs=${maxMs})`);
+        if (capturedTranscript.trim().length > 0) finalize(capturedTranscript);
+        else giveUp();
       }, maxMs);
     },
-    [advance, stopSTT, volAnim, handleListenOutput, showTextFallback]
+    [advance, stopSTT, volAnim, handleListenOutput, showLabel]
   );
 
-  // ==================== BACKGROUND: gender lookup ====================
-  const doGenderLookup = useCallback(async () => {
-    if (!userName) {
-      setUserGender("ambiguous");
-      return;
-    }
-    try {
-      const r = await api.introGenderFromName(userName);
-      const g = r?.gender || "ambiguous";
-      const conf = r?.confidence || 0;
-      // Se ambiguous OR confidence bassa → chiediamo direttamente
-      if (g === "ambiguous" || conf < 0.7) {
-        console.log(`[${TAG}] gender lookup uncertain (g=${g} conf=${conf})`);
-        setUserGender("ambiguous");
-      } else {
-        console.log(`[${TAG}] gender lookup confident: ${g} (conf=${conf})`);
-        setUserGender(g);
-      }
-    } catch (e) {
-      console.warn(`[${TAG}] gender lookup failed:`, e);
-      setUserGender("ambiguous");
-    }
-  }, [userName]);
-
-  // ==================== BACKGROUND: runtime TTS greeting ====================
-  const playRuntimeTTS = useCallback(
-    async (template: string, voice: VoiceKey) => {
-      setOrbState("speaking");
-      // BUG FIX 2026-08-06 — forza speaker prima del playback runtime
-      await configureAudioForPlayback();
-      const text = template.replace("{name}", userName || "amico");
-      const uri = await fetchRuntimeTTS(text, voice);
-      if (!uri) {
-        console.warn(`[${TAG}] runtime TTS skipped (fetch failed)`);
-        timerRef.current = setTimeout(() => advance(), 500);
-        return;
-      }
+  // ==================== PLAY MP3 CLIP ====================
+  const playClip = useCallback(
+    (clipSource: number, onDone: () => void) => {
+      configureAudioForPlayback();
       try {
-        const player = createAudioPlayer({ uri }, { updateInterval: 100 });
+        const player = createAudioPlayer(clipSource, { updateInterval: 100 });
         currentPlayerRef.current = player;
         const onStatus = (status: { didJustFinish?: boolean }) => {
           if (status.didJustFinish) {
-            try {
-              player.removeListener("playbackStatusUpdate", onStatus);
-            } catch {}
-            advance();
+            try { player.removeListener("playbackStatusUpdate", onStatus); } catch {}
+            onDone();
           }
         };
         player.addListener("playbackStatusUpdate", onStatus);
         player.play();
-        // Safety net
+        // Safety net: 15s
         timerRef.current = setTimeout(() => {
-          console.warn(`[${TAG}] runtime TTS safety-net triggered`);
-          advance();
-        }, 12000);
+          console.warn(`[${TAG}] playClip safety-net triggered`);
+          onDone();
+        }, 15000);
       } catch (e) {
-        console.warn(`[${TAG}] runtime TTS play failed:`, e);
-        timerRef.current = setTimeout(() => advance(), 500);
+        console.warn(`[${TAG}] playClip failed:`, e);
+        timerRef.current = setTimeout(onDone, 500);
       }
     },
-    [advance, userName]
+    []
   );
+
+  // ==================== RUNTIME TTS NAME "[Nome]." ====================
+  const playRuntimeName = useCallback(async () => {
+    setOrbState("speaking");
+    await configureAudioForPlayback();
+    const text = userName ? `${userName}.` : "";
+    if (!text) {
+      // Se non abbiamo il nome (fallimento STT), salta senza spendere ElevenLabs
+      timerRef.current = setTimeout(() => advance(), 400);
+      return;
+    }
+    const uri = await fetchRuntimeTTS(text, "warm");
+    if (!uri) {
+      timerRef.current = setTimeout(() => advance(), 400);
+      return;
+    }
+    try {
+      const player = createAudioPlayer({ uri }, { updateInterval: 100 });
+      currentPlayerRef.current = player;
+      const onStatus = (status: { didJustFinish?: boolean }) => {
+        if (status.didJustFinish) {
+          try { player.removeListener("playbackStatusUpdate", onStatus); } catch {}
+          advance();
+        }
+      };
+      player.addListener("playbackStatusUpdate", onStatus);
+      player.play();
+      timerRef.current = setTimeout(() => advance(), 8000);
+    } catch (e) {
+      console.warn(`[${TAG}] runtime TTS name play failed:`, e);
+      timerRef.current = setTimeout(() => advance(), 400);
+    }
+  }, [advance, userName]);
 
   // ==================== SAVE & END ====================
   const doSaveAndEnd = useCallback(async () => {
     setOrbState("thinking");
     try {
-      // Map voice choice → koda_voice (backend key) + ai_gender
-      const koda_voice = voiceChoice === "vento" ? "theo" : "aria";
-      const ai_gender = voiceChoice === "vento" ? "m" : "f";
-      const user_gender =
-        userGender === "m" ? "m" : userGender === "f" ? "f" : undefined;
+      const user_gender = userGenderRef.current;
       await api.updateProfile({
         name: userName || undefined,
-        koda_voice,
-        ai_gender,
-        ...(user_gender ? { user_gender } : {}),
+        koda_voice: "aria", // default Cielo
+        ai_gender: "f",
+        ...(user_gender === "m" || user_gender === "f" ? { user_gender } : {}),
         onboarded: true,
       });
-      console.log(
-        `[${TAG}] profile saved: name=${userName} voice=${koda_voice} ai_g=${ai_gender} u_g=${user_gender}`
-      );
+      console.log(`[${TAG}] profile saved: name=${userName} user_gender=${user_gender}`);
     } catch (e) {
       console.warn(`[${TAG}] profile save failed:`, e);
     }
-    // Brief settle poi torna alla home
-    timerRef.current = setTimeout(() => {
-      // Reset stack navigation e vai alla home
-      try {
-        router.replace("/");
-      } catch {
-        router.back();
-      }
-    }, 800);
-  }, [userName, userGender, voiceChoice, router]);
+    // Fade morbido a home (Presence System §6: nessun cambio secco)
+    Animated.timing(screenOpacity, {
+      toValue: 0,
+      duration: 800,
+      useNativeDriver: true,
+    }).start(() => {
+      try { router.replace("/"); } catch { router.back(); }
+    });
+  }, [userName, router, screenOpacity]);
 
   // ==================== TURN EXECUTOR ====================
   useEffect(() => {
@@ -847,133 +674,240 @@ export default function KodaIntroConversational() {
         timerRef.current = setTimeout(() => advance(), currentTurn.ms);
         break;
       }
-
       case "speak": {
         setOrbState("speaking");
-        // BUG FIX 2026-08-06 — forza speaker prima del playback
-        configureAudioForPlayback();
-        try {
-          // Per confirm_choice: se voiceChoice esiste, usa quella voce
-          let voice = currentTurn.voice;
-          if (currentTurn.clipKey === "confirm_choice" && voiceChoice) {
-            voice = voiceChoice;
-          }
-          const clipMap = voice === "vento" ? VENTO_CLIPS : CIELO_CLIPS;
-          const clipSource = (clipMap as Record<string, number>)[currentTurn.clipKey];
-          if (!clipSource) {
-            console.warn(`[${TAG}] clip not found: ${voice}/${currentTurn.clipKey}`);
-            timerRef.current = setTimeout(() => advance(), 400);
-            break;
-          }
-          const player = createAudioPlayer(clipSource, { updateInterval: 100 });
-          currentPlayerRef.current = player;
-          const onStatus = (status: { didJustFinish?: boolean }) => {
-            if (status.didJustFinish) {
-              try {
-                player.removeListener("playbackStatusUpdate", onStatus);
-              } catch {}
-              advance();
-            }
-          };
-          player.addListener("playbackStatusUpdate", onStatus);
-          player.play();
-          timerRef.current = setTimeout(() => {
-            console.warn(`[${TAG}] speak safety-net for`, currentTurn.clipKey);
-            advance();
-          }, 10000);
-        } catch (e) {
-          console.warn(`[${TAG}] audio playback failed:`, e);
-          timerRef.current = setTimeout(() => advance(), 800);
+        const clipSource = CIELO_CLIPS[currentTurn.clipKey];
+        if (!clipSource) {
+          console.warn(`[${TAG}] clip not found: ${currentTurn.clipKey}`);
+          timerRef.current = setTimeout(() => advance(), 400);
+          break;
         }
+        playClip(clipSource, () => advance());
         break;
       }
-
       case "listen": {
         setOrbState("listening");
-        if (currentTurn.label) showLabel(currentTurn.label);
-        // BUG FIX 2026-08-06 — imposta audio session in modalità recording
         configureAudioForRecording();
         timerRef.current = setTimeout(() => {
-          startListen(currentTurn.purpose, currentTurn.maxMs ?? 20000);
+          startListen(currentTurn.purpose, currentTurn.maxMs ?? 30000, !!currentTurn.showLabel);
         }, 250);
         break;
       }
-
-      case "think": {
-        setOrbState("thinking");
-        showLabel("sto pensando");
-        // Task async in background (gender lookup)
-        if (currentTurn.task === "gender_lookup") {
-          doGenderLookup();
-        }
-        timerRef.current = setTimeout(() => advance(), currentTurn.ms);
+      case "runtime_tts_name": {
+        playRuntimeName();
         break;
       }
+      case "live_response": {
+        // Sequenza inline: listen → thinking → converse → speaking → advance
+        (async () => {
+          setOrbState("listening");
+          await configureAudioForRecording();
+          // Uso una promise + callback custom per capture (non riuso handleListenOutput
+          // perché lì c'è advance automatico che qui NON vogliamo)
+          const transcript = await new Promise<string>((resolve) => {
+            let done = false;
+            const finishOnce = (text: string) => {
+              if (done) return;
+              done = true;
+              resolve(text);
+            };
 
-      case "runtime_tts": {
-        playRuntimeTTS(currentTurn.template, currentTurn.voice);
+            // Config STT + retry — inline per avere controllo diretto
+            let captured = "";
+            let capturedFinal = false;
+            const startedAt = Date.now();
+            let attempts = 0;
+            const MAX_ATT = 12;
+            const MAX_MS = 60000;
+            const MIN_REMAINING = 3000;
+
+            const startOpts: {
+              lang: string;
+              interimResults: boolean;
+              continuous: boolean;
+              maxAlternatives: number;
+              addsPunctuation: boolean;
+              requiresOnDeviceRecognition: boolean;
+              volumeChangeEventOptions: { enabled: boolean; intervalMillis: number };
+              iosCategory?: { category: string; categoryOptions: string[]; mode: string };
+              androidIntentOptions?: Record<string, number>;
+            } = {
+              lang: "it-IT",
+              interimResults: true,
+              continuous: Platform.OS === "android",
+              maxAlternatives: 1,
+              addsPunctuation: true,
+              requiresOnDeviceRecognition: Platform.OS === "ios",
+              volumeChangeEventOptions: { enabled: true, intervalMillis: 80 },
+            };
+            if (Platform.OS === "ios") {
+              startOpts.iosCategory = {
+                category: "playAndRecord",
+                categoryOptions: ["defaultToSpeaker", "allowBluetooth"],
+                mode: "measurement",
+              };
+            }
+            if (Platform.OS === "android") {
+              startOpts.androidIntentOptions = {
+                EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 6000,
+                EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 4000,
+                EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 500,
+              };
+            }
+
+            const stopLocal = () => {
+              try { ExpoSpeechRecognitionModule.abort(); } catch {}
+              for (const s of sttSubsRef.current) { try { s.remove(); } catch {} }
+              sttSubsRef.current = [];
+              Animated.timing(volAnim, { toValue: 0, duration: 300, useNativeDriver: true }).start();
+            };
+
+            const finalizeLocal = (text: string) => {
+              if (capturedFinal) return;
+              capturedFinal = true;
+              stopLocal();
+              finishOnce(text);
+            };
+
+            const restartLocal = () => {
+              if (capturedFinal) return;
+              const elapsed = Date.now() - startedAt;
+              const remaining = MAX_MS - elapsed;
+              attempts++;
+              if (remaining < MIN_REMAINING || attempts > MAX_ATT) {
+                stopLocal();
+                finishOnce(captured);
+                return;
+              }
+              try { ExpoSpeechRecognitionModule.abort(); } catch {}
+              setTimeout(() => {
+                if (capturedFinal) return;
+                try { ExpoSpeechRecognitionModule.start(startOpts); } catch {
+                  stopLocal();
+                  finishOnce(captured);
+                }
+              }, 250);
+            };
+
+            sttSubsRef.current = [
+              ExpoSpeechRecognitionModule.addListener("result", (evt: ExpoSpeechRecognitionResultEvent) => {
+                const first = evt.results?.[0];
+                if (!first) return;
+                const text = first.transcript || "";
+                if (text.length > 0) captured = text;
+                if (evt.isFinal && text.trim().length > 0) finalizeLocal(text);
+              }),
+              ExpoSpeechRecognitionModule.addListener("error", (evt: ExpoSpeechRecognitionErrorEvent) => {
+                if (evt.error === "aborted") return;
+                if (evt.error === "no-speech") {
+                  if (captured.trim().length > 0) { finalizeLocal(captured); return; }
+                  restartLocal();
+                  return;
+                }
+                if (!capturedFinal) { stopLocal(); finishOnce(captured); }
+              }),
+              ExpoSpeechRecognitionModule.addListener("end", () => {
+                if (capturedFinal) return;
+                if (captured.trim().length > 0) { finalizeLocal(captured); return; }
+                restartLocal();
+              }),
+              ExpoSpeechRecognitionModule.addListener("volumechange", (evt: { value?: number }) => {
+                const raw = typeof evt?.value === "number" ? evt.value : -2;
+                const norm = normalizeVolume(raw);
+                Animated.timing(volAnim, { toValue: norm, duration: 120, useNativeDriver: true }).start();
+              }),
+            ];
+
+            try { ExpoSpeechRecognitionModule.start(startOpts); } catch {
+              stopLocal();
+              finishOnce(captured);
+            }
+
+            listenSafetyRef.current = setTimeout(() => {
+              if (capturedFinal) return;
+              stopLocal();
+              finishOnce(captured);
+            }, MAX_MS);
+
+            showLabel("ti ascolto");
+          });
+
+          if (!mountedRef.current) return;
+
+          // Fase B: thinking + converse
+          setOrbState("thinking");
+          showLabel("sto pensando");
+          const userText = (transcript || "").trim();
+          if (!userText) {
+            console.warn(`[${TAG}] live_response: transcript empty, skip converse`);
+            advance();
+            return;
+          }
+          const aiEntry = await fetchConverse(userText);
+          if (!mountedRef.current) return;
+          if (!aiEntry) {
+            console.warn(`[${TAG}] live_response: converse failed, skip`);
+            advance();
+            return;
+          }
+
+          // Fase C: TTS della risposta LLM
+          setOrbState("speaking");
+          await configureAudioForPlayback();
+          const uri = await fetchRuntimeTTS(aiEntry.text, aiEntry.tone || "warm");
+          if (!mountedRef.current) return;
+          if (!uri) {
+            advance();
+            return;
+          }
+          try {
+            const player = createAudioPlayer({ uri }, { updateInterval: 100 });
+            currentPlayerRef.current = player;
+            const onStatus = (status: { didJustFinish?: boolean }) => {
+              if (status.didJustFinish) {
+                try { player.removeListener("playbackStatusUpdate", onStatus); } catch {}
+                advance();
+              }
+            };
+            player.addListener("playbackStatusUpdate", onStatus);
+            player.play();
+            timerRef.current = setTimeout(() => advance(), 30000);
+          } catch (e) {
+            console.warn(`[${TAG}] live_response play failed:`, e);
+            timerRef.current = setTimeout(() => advance(), 400);
+          }
+        })();
         break;
       }
-
-      case "conditional_gender_ask": {
-        // Se gender è già noto (m o f) → salta i 2 turni successivi (ask + listen)
-        if (userGender && userGender !== "ambiguous") {
-          console.log(`[${TAG}] gender=${userGender} → skip ask_gender branch`);
-          advance(3); // skip conditional + speak + listen → arriva a save_and_end
-        } else {
-          advance(1); // procedi con speak ask_gender
-        }
-        break;
-      }
-
       case "save_and_end": {
         doSaveAndEnd();
-        break;
-      }
-
-      case "voice_choice_reveal_orbs": {
-        // Non usato direttamente — è un placeholder per turnare via UI tap
-        setVoiceChoiceOrbsVisible(true);
         break;
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turnIdx]);
 
+  // Mount/unmount + fade-in iniziale della schermata
   useEffect(() => {
     mountedRef.current = true;
-    // BUG FIX 2026-08-06 — prewarm audio session al mount così il primo
-    // playback esce dallo speaker fin dal silenzio iniziale (senza cuffie).
     configureAudioForPlayback();
+    // Fade-in morbido all'ingresso (Presence System §6: inerzia)
+    Animated.timing(screenOpacity, {
+      toValue: 1,
+      duration: 800,
+      useNativeDriver: true,
+    }).start();
     return () => {
       mountedRef.current = false;
       cleanupCurrent();
     };
-  }, [cleanupCurrent]);
+  }, [cleanupCurrent, screenOpacity]);
 
-  // ==================== HANDLERS FALLBACK UI ====================
-  const onTapVoiceChoice = useCallback(
-    (v: VoiceKey) => {
-      console.log(`[${TAG}] voice choice via tap: ${v}`);
-      setVoiceChoice(v);
-      setVoiceChoiceOrbsVisible(false);
-      voiceChoiceAttemptsRef.current = 0;
-      // Se stavamo nel turno listen(voice_choice), avanziamo manualmente
-      if (currentTurn?.kind === "listen" && currentTurn.purpose === "voice_choice") {
-        stopSTT();
-        advance();
-      }
-    },
-    [advance, currentTurn, stopSTT]
-  );
-
+  // ==================== M4: mic denied handlers ====================
   const onOpenSettings = useCallback(() => {
     Linking.openSettings().catch(() => {});
   }, []);
-
   const onMicBlockedContinue = useCallback(() => {
-    // Uscita graceful — utente non può fare l'intro voice-only.
-    // Torna a home (l'app funziona anche senza intro completo).
     setMicBlocked(false);
     cleanupCurrent();
     router.back();
@@ -981,16 +915,27 @@ export default function KodaIntroConversational() {
 
   // ==================== RENDER ====================
   const orbProps = useMemo(() => orbPropsFor(orbState), [orbState]);
+  const neonStatus = useMemo(() => neonStatusFor(orbState), [orbState]);
   const isListening = orbState === "listening";
-
   const orbScale = volAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [1, 1.06],
   });
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top }]}>
-      {/* Skip button (× top-right) */}
+    <Animated.View
+      style={[
+        styles.root,
+        { backgroundColor: theme.bg, opacity: screenOpacity },
+      ]}
+    >
+      {/* NeonBorder — identico alla home, stessi colori-per-stato */}
+      <NeonBorder
+        status={neonStatus}
+        thickness={neonStatus === "idle" ? 2 : 3}
+      />
+
+      {/* Skip (×) discreto in alto a destra */}
       <TouchableOpacity
         onPress={() => {
           cleanupCurrent();
@@ -1003,55 +948,32 @@ export default function KodaIntroConversational() {
         <Ionicons name="close" size={20} color="rgba(226,232,240,0.5)" />
       </TouchableOpacity>
 
-      {/* Orb centrale con VU meter live */}
-      <Animated.View
-        style={[
-          styles.orbWrap,
-          isListening ? { transform: [{ scale: orbScale }] } : null,
-        ]}
-      >
-        <EclipseOrb
-          status={orbProps.status}
-          tone={orbProps.tone}
-          size={220}
-        />
-      </Animated.View>
-
-      {/* Micro-label sotto l'orb (first-time only, fade in/out) */}
-      {labelText && (
-        <Animated.Text
+      {/* Orb centrale — stessa dimensione della home */}
+      <View style={styles.centerContainer}>
+        <Animated.View
           style={[
-            styles.microLabel,
-            { opacity: labelOpacity },
+            styles.orbWrap,
+            isListening ? { transform: [{ scale: orbScale }] } : null,
           ]}
         >
-          {labelText}
-        </Animated.Text>
-      )}
+          <EclipseOrb
+            status={orbProps.status}
+            tone={orbProps.tone}
+            size={ORB_SIZE}
+          />
+        </Animated.View>
 
-      {/* === M4: Voice choice fallback — due orb tap-to-select === */}
-      {voiceChoiceOrbsVisible && (
-        <View style={styles.voiceChoiceRow}>
-          <TouchableOpacity
-            style={styles.voiceOrbBtn}
-            onPress={() => onTapVoiceChoice("cielo")}
-            testID="intro-v2-choose-cielo"
+        {/* Micro-label sotto l'orb (first-time only, fade in/out) */}
+        {labelText && (
+          <Animated.Text
+            style={[styles.microLabel, { opacity: labelOpacity }]}
           >
-            <View style={[styles.voiceOrbDot, { backgroundColor: "#BD10E0" }]} />
-            <Text style={styles.voiceOrbLabel}>Cielo</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.voiceOrbBtn}
-            onPress={() => onTapVoiceChoice("vento")}
-            testID="intro-v2-choose-vento"
-          >
-            <View style={[styles.voiceOrbDot, { backgroundColor: "#3B82F6" }]} />
-            <Text style={styles.voiceOrbLabel}>Vento</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+            {labelText}
+          </Animated.Text>
+        )}
+      </View>
 
-      {/* === M4: Mic permission blocked — full overlay === */}
+      {/* Mic denied overlay */}
       {micBlocked && (
         <View style={styles.micBlockedOverlay}>
           <View style={styles.micBlockedCard}>
@@ -1070,33 +992,7 @@ export default function KodaIntroConversational() {
           </View>
         </View>
       )}
-
-      {/* === M4: Text fallback dopo 2 STT fails === */}
-      {textFallbackVisible && (
-        <View style={styles.textFallbackWrap}>
-          <TextInput
-            value={textFallbackValue}
-            onChangeText={setTextFallbackValue}
-            placeholder={textFallbackPlaceholder}
-            placeholderTextColor="rgba(226,232,240,0.4)"
-            style={styles.textFallbackInput}
-            autoFocus
-            autoCorrect={false}
-            autoCapitalize="words"
-            onSubmitEditing={submitTextFallback}
-            returnKeyType="done"
-            testID="intro-v2-text-fallback"
-          />
-          <TouchableOpacity
-            style={styles.textFallbackBtn}
-            onPress={submitTextFallback}
-            testID="intro-v2-text-submit"
-          >
-            <Ionicons name="arrow-forward" size={18} color="#1F1A36" />
-          </TouchableOpacity>
-        </View>
-      )}
-    </View>
+    </Animated.View>
   );
 }
 
@@ -1104,9 +1000,6 @@ export default function KodaIntroConversational() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#1F1A36",
-    alignItems: "center",
-    justifyContent: "center",
   },
   skipBtn: {
     position: "absolute",
@@ -1119,6 +1012,11 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.06)",
     zIndex: 10,
   },
+  centerContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   orbWrap: {
     alignItems: "center",
     justifyContent: "center",
@@ -1130,41 +1028,6 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
     letterSpacing: 0.3,
   },
-  // Voice choice tap fallback
-  voiceChoiceRow: {
-    position: "absolute",
-    bottom: 120,
-    left: 0,
-    right: 0,
-    flexDirection: "row",
-    justifyContent: "space-evenly",
-    alignItems: "center",
-    gap: 24,
-  },
-  voiceOrbBtn: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 14,
-    paddingHorizontal: 22,
-    borderRadius: 20,
-    backgroundColor: "rgba(255,255,255,0.05)",
-    borderWidth: 1,
-    borderColor: "rgba(212,184,150,0.25)",
-    minWidth: 110,
-  },
-  voiceOrbDot: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    marginBottom: 10,
-  },
-  voiceOrbLabel: {
-    color: "rgba(226,232,240,0.85)",
-    fontSize: 14,
-    fontWeight: "600",
-    letterSpacing: 0.3,
-  },
-  // Mic blocked overlay
   micBlockedOverlay: {
     position: "absolute",
     top: 0,
@@ -1223,35 +1086,5 @@ const styles = StyleSheet.create({
   micBlockedSecondaryText: {
     color: "rgba(226,232,240,0.55)",
     fontSize: 13,
-  },
-  // Text fallback input
-  textFallbackWrap: {
-    position: "absolute",
-    bottom: 60,
-    left: 24,
-    right: 24,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.08)",
-    borderWidth: 1,
-    borderColor: "rgba(212,184,150,0.25)",
-  },
-  textFallbackInput: {
-    flex: 1,
-    color: "#F5E6CC",
-    fontSize: 15,
-    paddingVertical: 6,
-  },
-  textFallbackBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 999,
-    backgroundColor: "#D4B896",
-    alignItems: "center",
-    justifyContent: "center",
   },
 });
