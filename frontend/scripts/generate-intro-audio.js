@@ -128,11 +128,22 @@ function loadApiKey() {
 }
 
 // === TTS single call ==================================================
+// FIX 2026-08-06 iter.5 — voci tagliate su parole corte.
+// Su parole/frasi brevi ("Ciao.", "Come ti chiami?") il modello v3 genera
+// audio senza padding di silenzio all'inizio/fine (7.5KB → ~470ms per un
+// "Ciao." che parlato naturalmente dura 700ms) → sensazione di "tagliato".
+// Fix: aggiungo padding testuale con `...` iniziale/finale che il modello
+// interpreta come pausa espressiva → include silenzio naturale ai bordi.
 async function generateOne(apiKey, voiceId, text, useV3) {
   const modelId = useV3 ? MODEL_V3 : MODEL_FLASH;
   const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${OUTPUT_FORMAT}`;
+  // Padding di silenzio più aggressivo ai bordi (evita audio troncato).
+  // Il singolo "..." era troppo debole su parole corte come "Ciao." → v3
+  // genera lo stesso audio senza padding. Con due gruppi di "..." separati
+  // da virgola, il modello inserisce una pausa forte prima e dopo.
+  const paddedText = `..., ... ${text} ... ,...`;
   const body = {
-    text,
+    text: paddedText,
     model_id: modelId,
     voice_settings: VOICE_SETTINGS,
   };

@@ -589,9 +589,18 @@ export default function KodaIntroConversational() {
   );
 
   // ==================== PLAY MP3 CLIP ====================
+  // FIX 2026-08-06 iter.5 — voci tagliate.
+  // Causa: configureAudioForPlayback era fire-and-forget PRIMA di player.play(),
+  // ma setAudioModeAsync su iOS impiega ~50-200ms per stabilizzare la sessione.
+  // Se play() partiva PRIMA che la nuova modalità fosse attiva, iOS troncava
+  // i primi ms dell'audio (o cambiava routing mid-play).
+  // Fix: await la configureAudioForPlayback + 120ms di grace period prima di play.
   const playClip = useCallback(
-    (clipSource: number, onDone: () => void) => {
-      configureAudioForPlayback();
+    async (clipSource: number, onDone: () => void) => {
+      await configureAudioForPlayback();
+      // Grace period: lascia stabilizzare la audio session prima di play()
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      if (!mountedRef.current) return;
       try {
         const player = createAudioPlayer(clipSource, { updateInterval: 100 });
         currentPlayerRef.current = player;
@@ -1059,11 +1068,42 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    // FIX 2026-08-06 iter.4 — matching home Page 0 layout:
-    // vedi app/index.tsx riga 5011 → `paddingTop: 90`. Senza questo l'orb
-    // si vede 90px più in alto rispetto alla home, dando la sensazione
-    // che "si sposta" nella transizione tra le due schermate.
-    paddingTop: 90,
+    // FIX 2026-08-06 iter.5 — posizione orb identica alla home.
+    //
+    // Calcolo ESATTO (non stima):
+    //
+    // HOME struttura verticale:
+    //   [insets.top] + [TopRow ~90px con "Lascia andare" pill] + [ScrollView pager]
+    //     dentro Page 0: paddingTop:90 → poi container flex:1 con orb centrato
+    //
+    // Area utile Page 0 = viewport - insets.top - TopRow(90) - insets.bottom
+    // Centro orb home = insets.top + 90 (topRow) + 90 (paddingTop) + areaPage0/2
+    //                 = insets.top + 180 + (viewport - insets.top - 90 - insets.bottom - 90)/2
+    //
+    // INTRO-V2 struttura verticale (senza TopRow, schermata pulita):
+    //   [insets.top] + [centerContainer flex:1 con paddingTop:X]
+    //
+    // Area utile intro = viewport - insets.top - insets.bottom
+    // Centro orb intro = insets.top + X + (viewport - insets.top - insets.bottom - X)/2
+    //
+    // Per far combaciare i due centri:
+    //   Centro home = Centro intro
+    //   insets.top + 180 + (viewport - insets.top - 90 - insets.bottom - 90)/2
+    //     = insets.top + X + (viewport - insets.top - insets.bottom - X)/2
+    //
+    // Semplificando (chiamiamo V = viewport - insets.top - insets.bottom):
+    //   180 + (V - 180)/2 = X + (V - X)/2
+    //   180 + V/2 - 90 = X + V/2 - X/2
+    //   90 + V/2 = X/2 + V/2
+    //   X/2 = 90
+    //   X = 180
+    //
+    // Quindi paddingTop corretto è 180, non 90.
+    //
+    // Verifica sanity check: 180 = 90 (topRow home) + 90 (paddingTop home Page 0).
+    // Intuitivamente stiamo "compensando" con paddingTop quello che la home ha come
+    // TopRow + paddingTop combinati — che nel nostro caso non abbiamo (schermata pulita).
+    paddingTop: 180,
   },
   orbWrap: {
     alignItems: "center",
