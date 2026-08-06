@@ -91,7 +91,7 @@ type OrbState = "idle" | "speaking" | "listening" | "thinking";
 type ListenPurpose = "capture_name" | "capture_free_response";
 
 type Turn =
-  | { kind: "silence"; ms: number; label?: string }
+  | { kind: "silence"; ms: number; label?: string; orbState?: OrbState }
   | { kind: "speak"; clipKey: keyof typeof CIELO_CLIPS }
   | { kind: "listen"; purpose: ListenPurpose; maxMs?: number; showLabel?: boolean }
   | { kind: "runtime_tts_name" } // "[Nome]." — runtime, warm tone
@@ -99,46 +99,45 @@ type Turn =
   | { kind: "save_and_end" };
 
 // La sequenza — ogni pausa ha un'intenzione (vedi documento Presence System §6)
-// TIMING (2026-08-06 rev.2): pause aumentate perché EclipseOrb ha
-// una transizione di 600ms tra stati. Se silence < 1200ms non c'è
-// mai un vero momento di "idle percepito" tra due speak → l'utente
-// vede scatti invece di transizioni morbide. Nuovi valori dopo test
-// TestFlight: tutti i silence tra due speak ≥ 1500ms.
+//
+// REGOLA IDLE (2026-08-06 rev.3): l'orb NON deve MAI tornare a idle durante
+// l'intro tranne all'apertura. Tra due frasi di Koda: orb resta in "speaking"
+// (Koda prende fiato, non "si spegne"). Dopo che l'utente parla: orb va in
+// "thinking" (Koda accoglie/riflette). Idle = solo il primissimo momento
+// prima che Koda parli per la prima volta.
 const CONVERSATION: Turn[] = [
-  // #0 — apertura silenziosa: dare spazio, non fretta
-  { kind: "silence", ms: 1500, label: "apertura" },
+  // #0 — apertura silenziosa: UNICO idle di tutto il flusso
+  { kind: "silence", ms: 1500, label: "apertura", orbState: "idle" },
   // #1
   { kind: "speak", clipKey: "ciao" },
-  // #2 — respiro tra saluto e prima domanda (era 900, ora 1500)
-  { kind: "silence", ms: 1500, label: "respiro" },
+  // #2 — respiro tra saluto e prima domanda: Koda NON torna idle,
+  //      resta "speaking" (sta prendendo fiato, non si spegne)
+  { kind: "silence", ms: 1500, label: "respiro", orbState: "speaking" },
   // #3
   { kind: "speak", clipKey: "come_ti_chiami" },
-  // #4 — utente dice il nome. maxMs alto: Koda attende con retry
+  // #4 — utente parla: nessuna pausa prima, direttamente recording
   { kind: "listen", purpose: "capture_name", maxMs: 45000, showLabel: true },
-  // #5 — PAUSA DI ACCOGLIENZA: il nome è stato ricevuto. In BACKGROUND
-  //      parte il gender lookup (invisibile, silenzioso).
-  //      Aumentata da 500 → 900 per dare vero respiro dopo la voce
-  //      dell'utente prima che parta il TTS runtime del nome.
-  { kind: "silence", ms: 900, label: "accoglienza" },
+  // #5 — ACCOGLIENZA: Koda riflette sul nome, NON idle → thinking.
+  //      In BACKGROUND parte il gender lookup silenzioso.
+  { kind: "silence", ms: 900, label: "accoglienza", orbState: "thinking" },
   // #6 — "[Nome]." runtime, tone: warm
   { kind: "runtime_tts_name" },
-  // #7 — lasciar risuonare il nome (era 700, ora 1500)
-  { kind: "silence", ms: 1500, label: "risonanza" },
+  // #7 — risonanza: Koda resta speaking, non torna idle
+  { kind: "silence", ms: 1500, label: "risonanza", orbState: "speaking" },
   // #8
   { kind: "speak", clipKey: "io_sono_koda" },
-  // #9 — passaggio a tono relazionale (era 1000, ora 1800: pausa più
-  //      lunga qui perché è un momento chiave — "Io sono Koda" deve
-  //      posarsi prima di "Grazie di essere qui")
-  { kind: "silence", ms: 1800, label: "relazionale" },
+  // #9 — passaggio a tono relazionale, Koda resta speaking
+  { kind: "silence", ms: 1800, label: "relazionale", orbState: "speaking" },
   // #10
   { kind: "speak", clipKey: "grazie_di_essere_qui" },
-  // #11 — respiro prima della domanda aperta (era 900, ora 1500)
-  { kind: "silence", ms: 1500, label: "pre-apertura" },
+  // #11 — respiro prima della domanda aperta, Koda resta speaking
+  { kind: "silence", ms: 1500, label: "pre-apertura", orbState: "speaking" },
   // #12
   { kind: "speak", clipKey: "da_dove_cominciare" },
-  // #13 — LIVE RESPONSE: utente parla → converse → TTS → play
+  // #13 — LIVE RESPONSE: utente parla → thinking → converse → speaking
+  //       (dentro il turn, gli stati sono gestiti in sequenza inline)
   { kind: "live_response" },
-  // #14 — save profilo + fade a home
+  // #14 — save profilo + fade a home (thinking durante save)
   { kind: "save_and_end" },
 ];
 
@@ -683,7 +682,10 @@ export default function KodaIntroConversational() {
 
     switch (currentTurn.kind) {
       case "silence": {
-        setOrbState("idle");
+        // orbState opzionale — default "idle" per compat, ma nella sequenza V2
+        // TUTTI i silence tra due speak sono orbState="speaking" (Koda non
+        // torna idle tra frase e frase). Idle solo all'apertura.
+        setOrbState(currentTurn.orbState ?? "idle");
         timerRef.current = setTimeout(() => advance(), currentTurn.ms);
         break;
       }
