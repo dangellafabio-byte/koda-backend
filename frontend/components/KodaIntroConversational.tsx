@@ -99,32 +99,41 @@ type Turn =
   | { kind: "save_and_end" };
 
 // La sequenza — ogni pausa ha un'intenzione (vedi documento Presence System §6)
+// TIMING (2026-08-06 rev.2): pause aumentate perché EclipseOrb ha
+// una transizione di 600ms tra stati. Se silence < 1200ms non c'è
+// mai un vero momento di "idle percepito" tra due speak → l'utente
+// vede scatti invece di transizioni morbide. Nuovi valori dopo test
+// TestFlight: tutti i silence tra due speak ≥ 1500ms.
 const CONVERSATION: Turn[] = [
   // #0 — apertura silenziosa: dare spazio, non fretta
-  { kind: "silence", ms: 1200, label: "apertura" },
+  { kind: "silence", ms: 1500, label: "apertura" },
   // #1
   { kind: "speak", clipKey: "ciao" },
-  // #2 — respiro tra saluto e prima domanda
-  { kind: "silence", ms: 900, label: "respiro" },
+  // #2 — respiro tra saluto e prima domanda (era 900, ora 1500)
+  { kind: "silence", ms: 1500, label: "respiro" },
   // #3
   { kind: "speak", clipKey: "come_ti_chiami" },
   // #4 — utente dice il nome. maxMs alto: Koda attende con retry
   { kind: "listen", purpose: "capture_name", maxMs: 45000, showLabel: true },
   // #5 — PAUSA DI ACCOGLIENZA: il nome è stato ricevuto. In BACKGROUND
-  //      parte il gender lookup (invisibile, silenzioso)
-  { kind: "silence", ms: 500, label: "accoglienza" },
+  //      parte il gender lookup (invisibile, silenzioso).
+  //      Aumentata da 500 → 900 per dare vero respiro dopo la voce
+  //      dell'utente prima che parta il TTS runtime del nome.
+  { kind: "silence", ms: 900, label: "accoglienza" },
   // #6 — "[Nome]." runtime, tone: warm
   { kind: "runtime_tts_name" },
-  // #7 — lasciar risuonare il nome
-  { kind: "silence", ms: 700, label: "risonanza" },
+  // #7 — lasciar risuonare il nome (era 700, ora 1500)
+  { kind: "silence", ms: 1500, label: "risonanza" },
   // #8
   { kind: "speak", clipKey: "io_sono_koda" },
-  // #9 — passaggio a tono relazionale
-  { kind: "silence", ms: 1000, label: "relazionale" },
+  // #9 — passaggio a tono relazionale (era 1000, ora 1800: pausa più
+  //      lunga qui perché è un momento chiave — "Io sono Koda" deve
+  //      posarsi prima di "Grazie di essere qui")
+  { kind: "silence", ms: 1800, label: "relazionale" },
   // #10
   { kind: "speak", clipKey: "grazie_di_essere_qui" },
-  // #11 — respiro prima della domanda aperta
-  { kind: "silence", ms: 900, label: "pre-apertura" },
+  // #11 — respiro prima della domanda aperta (era 900, ora 1500)
+  { kind: "silence", ms: 1500, label: "pre-apertura" },
   // #12
   { kind: "speak", clipKey: "da_dove_cominciare" },
   // #13 — LIVE RESPONSE: utente parla → converse → TTS → play
@@ -294,6 +303,10 @@ export default function KodaIntroConversational() {
   const mountedRef = useRef(true);
   // Fade globale della schermata per transizione morbida a fine intro
   const screenOpacity = useRef(new Animated.Value(0)).current;
+  // Breathe loop — respirazione continua dell'orb (identica alla home,
+  // vedi app/index.tsx riga 5040-5050). Senza questo l'orb sembra "morto"
+  // e visivamente più piccolo del suo omologo nella home.
+  const breathe = useRef(new Animated.Value(0)).current;
 
   const currentTurn = CONVERSATION[turnIdx];
 
@@ -887,7 +900,7 @@ export default function KodaIntroConversational() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turnIdx]);
 
-  // Mount/unmount + fade-in iniziale della schermata
+  // Mount/unmount + fade-in iniziale della schermata + breathe loop
   useEffect(() => {
     mountedRef.current = true;
     configureAudioForPlayback();
@@ -897,11 +910,29 @@ export default function KodaIntroConversational() {
       duration: 800,
       useNativeDriver: true,
     }).start();
+    // Breathe loop (identico alla home): 0→1 in 2400ms + 1→0 in 2400ms,
+    // ping-pong infinito. L'output viene interpolato a scale 0.95↔1.07.
+    const breatheLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(breathe, {
+          toValue: 1,
+          duration: 2400,
+          useNativeDriver: true,
+        }),
+        Animated.timing(breathe, {
+          toValue: 0,
+          duration: 2400,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    breatheLoop.start();
     return () => {
       mountedRef.current = false;
+      breatheLoop.stop();
       cleanupCurrent();
     };
-  }, [cleanupCurrent, screenOpacity]);
+  }, [cleanupCurrent, screenOpacity, breathe]);
 
   // ==================== M4: mic denied handlers ====================
   const onOpenSettings = useCallback(() => {
@@ -917,7 +948,13 @@ export default function KodaIntroConversational() {
   const orbProps = useMemo(() => orbPropsFor(orbState), [orbState]);
   const neonStatus = useMemo(() => neonStatusFor(orbState), [orbState]);
   const isListening = orbState === "listening";
-  const orbScale = volAnim.interpolate({
+  // Breathe scale (respiro continuo, identico alla home)
+  const breatheScale = breathe.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.95, 1.07],
+  });
+  // VU meter scale (solo durante listening, sopra il breathe)
+  const vuScale = volAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [1, 1.06],
   });
@@ -948,12 +985,16 @@ export default function KodaIntroConversational() {
         <Ionicons name="close" size={20} color="rgba(226,232,240,0.5)" />
       </TouchableOpacity>
 
-      {/* Orb centrale — stessa dimensione della home */}
+      {/* Orb centrale — stessa dimensione E stesso respiro della home */}
       <View style={styles.centerContainer}>
         <Animated.View
           style={[
             styles.orbWrap,
-            isListening ? { transform: [{ scale: orbScale }] } : null,
+            {
+              transform: isListening
+                ? [{ scale: breatheScale }, { scale: vuScale }]
+                : [{ scale: breatheScale }],
+            },
           ]}
         >
           <EclipseOrb

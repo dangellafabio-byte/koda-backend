@@ -66,11 +66,12 @@ const VOICES = {
  */
 const CLIPS = [
   // === INTRO V2 — Sequenza Presence System ===
-  // v3 sulle prime 2 e sull'ultima perché sono i momenti relazionali
-  // più delicati; le altre su flash_v2_5 (costo minore, qualità sufficiente).
+  // TUTTI su eleven_v3 per uniformità timbrica (fix 2026-08-06):
+  // prima usavo v3 solo su alcune, flash_v2_5 sulle altre → suonavano
+  // diverse tra loro. Ora stessa "gola" per tutte.
   { key: "ciao", text: "Ciao.", voices: ["cielo"], useV3: true },
-  { key: "come_ti_chiami", text: "Come ti chiami?", voices: ["cielo"] },
-  { key: "io_sono_koda", text: "Io sono Koda.", voices: ["cielo"] },
+  { key: "come_ti_chiami", text: "Come ti chiami?", voices: ["cielo"], useV3: true },
+  { key: "io_sono_koda", text: "Io sono Koda.", voices: ["cielo"], useV3: true },
   { key: "grazie_di_essere_qui", text: "Grazie di essere qui.", voices: ["cielo"], useV3: true },
   { key: "da_dove_cominciare", text: "Da dove ti va di cominciare?", voices: ["cielo"], useV3: true },
 
