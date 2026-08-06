@@ -5013,9 +5013,11 @@ export default function Taccuino() {
             La struttura del container è ora estratta in <KodaOrbStage>
             (components/KodaOrbStage.tsx) e condivisa 1:1 con la schermata
             /intro-v2, così l'orb è garantito nella stessa posizione in
-            entrambe le viste, senza guessing di paddingTop. */}
-        <View style={{ width: windowWidth, flex: 1 }}>
-          <KodaOrbStage>
+            entrambe le viste, senza guessing di paddingTop.
+            <KodaOrbStage> è direttamente la "pagina" del ScrollView
+            (largo windowWidth, flex:1 vertical) → nessun wrapper
+            aggiuntivo che potrebbe divergere dal path dell'intro. */}
+        <KodaOrbStage>
             {/* === ECLISSI NASCOSTA IN TEXT MODE (richiesta utente 2026-06) ===
                 In modalità scrittura (inputMode === "text") l'utente NON
                 vuole più vedere l'eclissi/orb da nessuna parte: né nella
@@ -5085,9 +5087,19 @@ export default function Taccuino() {
                   </View>
                 )}
               </Pressable>
-                <Text style={[styles.statusLabel, styles.statusLabelOnBg, { fontSize: 16, marginTop: 8 }]}>
-                  {aiPaused ? "AI in pausa" : ""}
-                </Text>
+                {aiPaused ? (
+                  <Text style={[styles.statusLabel, styles.statusLabelOnBg, { fontSize: 16, marginTop: 8 }]}>
+                    AI in pausa
+                  </Text>
+                ) : null}
+                {/* NOTE 2026-08-06 — Text sopra reso condizionale (era
+                    sempre renderizzato con `""` quando !aiPaused).
+                    Motivo: RN Text con stringa vuota può occupare
+                    line-height + margini nel flex-flow, spostando
+                    l'orb della home rispetto all'intro (che non ha
+                    quel Text). Ora entrambe le schermate hanno
+                    ESATTAMENTE gli stessi children nel flex quando
+                    aiPaused=false → orb nella stessa posizione. */}
               </>
             ) : (
               <>
@@ -5108,7 +5120,6 @@ export default function Taccuino() {
               </View>
             ) : null}
           </KodaOrbStage>
-        </View>
 
         {/* === PAGE 1: READING MODE (timeline) =================== */}
         <View style={{ width: windowWidth, flex: 1 }}>
