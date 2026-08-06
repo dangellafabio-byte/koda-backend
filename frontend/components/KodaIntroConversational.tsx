@@ -1059,6 +1059,11 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
+    // FIX 2026-08-06 iter.4 — matching home Page 0 layout:
+    // vedi app/index.tsx riga 5011 → `paddingTop: 90`. Senza questo l'orb
+    // si vede 90px più in alto rispetto alla home, dando la sensazione
+    // che "si sposta" nella transizione tra le due schermate.
+    paddingTop: 90,
   },
   orbWrap: {
     alignItems: "center",
