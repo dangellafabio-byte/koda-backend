@@ -71,6 +71,15 @@ const CLIPS = [
   // diverse tra loro. Ora stessa "gola" per tutte.
   { key: "ciao", text: "Ciao.", voices: ["cielo"], useV3: true },
   { key: "come_ti_chiami", text: "Come ti chiami?", voices: ["cielo"], useV3: true },
+  // === FIX 2026-08-07 iter.7 — 3 frasi unificate in una sola clip ===
+  // Prima erano 3 speak separate ("Io sono Koda." + silence + "Grazie di
+  // essere qui." + silence + "Da dove ti va di cominciare?") — l'utente
+  // sentiva 3 stacchi netti mentre l'eclissi restava dello stesso colore
+  // (viola/koda_speaking), quindi risultava innaturale.
+  // Ora una singola frase continua, TTS decide da sé le micro-pause
+  // naturali tra le proposizioni. Le 3 clip vecchie NON sono più
+  // usate ma restano su disco (idem legacy sotto).
+  { key: "presentazione_koda", text: "Io sono Koda. Grazie di essere qui. Da dove ti va di cominciare?", voices: ["cielo"], useV3: true },
   { key: "io_sono_koda", text: "Io sono Koda.", voices: ["cielo"], useV3: true },
   { key: "grazie_di_essere_qui", text: "Grazie di essere qui.", voices: ["cielo"], useV3: true },
   { key: "da_dove_cominciare", text: "Da dove ti va di cominciare?", voices: ["cielo"], useV3: true },
@@ -224,8 +233,19 @@ async function main() {
   let totalChars = 0;
   let charsV3 = 0;
   let charsFlash = 0;
+  let skipped = 0;
+
+  const force = process.argv.includes("--force");
 
   for (const j of jobs) {
+    // Skip-if-exists (a meno di --force): rigenera SOLO i file mancanti,
+    // così puoi aggiungere una nuova clip senza rifare tutte le altre e
+    // consumare crediti ElevenLabs.
+    if (!force && fs.existsSync(j.outPath) && fs.statSync(j.outPath).size > 1024) {
+      console.log(`  ⊙ ${path.basename(j.outPath)} già presente (skip; usa --force per rigenerare)`);
+      skipped++;
+      continue;
+    }
     process.stdout.write(`  → ${path.basename(j.outPath)} (${j.useV3 ? "v3" : "flash"}, ${j.text.length} char)… `);
     try {
       const buf = await generateOne(apiKey, j.voiceId, j.text, j.useV3);

@@ -76,6 +76,10 @@ const TAG = "KODA_INTRO_V2";
 const CIELO_CLIPS = {
   ciao: require("../assets/sounds/intro/ciao-cielo.mp3"),
   come_ti_chiami: require("../assets/sounds/intro/come_ti_chiami-cielo.mp3"),
+  // Clip unificata (fix 2026-08-07 iter.7) — sostituisce le 3 clip separate
+  // io_sono_koda / grazie_di_essere_qui / da_dove_cominciare che restano
+  // su disco ma NON sono più referenziate.
+  presentazione_koda: require("../assets/sounds/intro/presentazione_koda-cielo.mp3"),
   io_sono_koda: require("../assets/sounds/intro/io_sono_koda-cielo.mp3"),
   grazie_di_essere_qui: require("../assets/sounds/intro/grazie_di_essere_qui-cielo.mp3"),
   da_dove_cominciare: require("../assets/sounds/intro/da_dove_cominciare-cielo.mp3"),
@@ -90,6 +94,7 @@ const CIELO_CLIPS = {
 const CIELO_CLIP_EXPECTED_TEXT: Record<keyof typeof CIELO_CLIPS, string> = {
   ciao: "Ciao.",
   come_ti_chiami: "Come ti chiami?",
+  presentazione_koda: "Io sono Koda. Grazie di essere qui. Da dove ti va di cominciare?",
   io_sono_koda: "Io sono Koda.",
   grazie_di_essere_qui: "Grazie di essere qui.",
   da_dove_cominciare: "Da dove ti va di cominciare?",
@@ -97,6 +102,7 @@ const CIELO_CLIP_EXPECTED_TEXT: Record<keyof typeof CIELO_CLIPS, string> = {
 const CIELO_CLIP_FILENAME: Record<keyof typeof CIELO_CLIPS, string> = {
   ciao: "assets/sounds/intro/ciao-cielo.mp3",
   come_ti_chiami: "assets/sounds/intro/come_ti_chiami-cielo.mp3",
+  presentazione_koda: "assets/sounds/intro/presentazione_koda-cielo.mp3",
   io_sono_koda: "assets/sounds/intro/io_sono_koda-cielo.mp3",
   grazie_di_essere_qui: "assets/sounds/intro/grazie_di_essere_qui-cielo.mp3",
   da_dove_cominciare: "assets/sounds/intro/da_dove_cominciare-cielo.mp3",
@@ -145,20 +151,19 @@ const CONVERSATION: Turn[] = [
   { kind: "runtime_tts_name" },
   // #7 — risonanza: Koda resta speaking, non torna idle
   { kind: "silence", ms: 1500, label: "risonanza", orbState: "speaking" },
-  // #8
-  { kind: "speak", clipKey: "io_sono_koda" },
-  // #9 — passaggio a tono relazionale, Koda resta speaking
-  { kind: "silence", ms: 1800, label: "relazionale", orbState: "speaking" },
-  // #10
-  { kind: "speak", clipKey: "grazie_di_essere_qui" },
-  // #11 — respiro prima della domanda aperta, Koda resta speaking
-  { kind: "silence", ms: 1500, label: "pre-apertura", orbState: "speaking" },
-  // #12
-  { kind: "speak", clipKey: "da_dove_cominciare" },
-  // #13 — LIVE RESPONSE: utente parla → thinking → converse → speaking
+  // #8 — PRESENTAZIONE UNIFICATA (fix 2026-08-07 iter.7)
+  //     Prima erano 3 clip separate ("Io sono Koda." + silence 1800 +
+  //     "Grazie di essere qui." + silence 1500 + "Da dove ti va di
+  //     cominciare?") — l'utente sentiva 3 stacchi netti mentre l'orb
+  //     restava sempre viola/speaking, quindi risultava innaturale.
+  //     Ora un'unica clip continua: "Io sono Koda. Grazie di essere qui.
+  //     Da dove ti va di cominciare?" (4.0s totali, con micro-pause
+  //     naturali interne gestite da TTS).
+  { kind: "speak", clipKey: "presentazione_koda" },
+  // #9 — LIVE RESPONSE: utente parla → thinking → converse → speaking
   //       (dentro il turn, gli stati sono gestiti in sequenza inline)
   { kind: "live_response" },
-  // #14 — save profilo + fade a home (thinking durante save)
+  // #10 — save profilo + fade a home (thinking durante save)
   { kind: "save_and_end" },
 ];
 
@@ -1101,14 +1106,38 @@ export default function KodaIntroConversational() {
           />
         </Animated.View>
 
-        {/* Micro-label sotto l'orb (first-time only, fade in/out) */}
-        {labelText && (
-          <Animated.Text
-            style={[styles.microLabel, { opacity: labelOpacity }]}
-          >
-            {labelText}
-          </Animated.Text>
-        )}
+        {/* Micro-label sotto l'orb — position:absolute così l'apparire/
+            sparire del label NON entra nel flex-flow di centerContainer
+            e quindi NON sposta più l'orb via justifyContent:center.
+            FIX 2026-08-07 iter.7 — prima il label ("ti ascolto",
+            "sto pensando") era nel flex, con marginTop:32 + fontSize:13
+            aggiungeva ~49px al gruppo di children durante listen/thinking
+            e l'orb si spostava visibilmente in alto rispetto agli altri
+            stati. Ora è un overlay che galleggia sotto l'orb senza
+            impattare la posizione. */}
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: 0,
+            right: 0,
+            // Posiziono il label ~32px sotto il bordo inferiore dell'orb.
+            // Il centro dell'orb è a Vh/2 − 5 (vedi commento in
+            // centerContainer/orbWrap), quindi: bordo inferiore
+            // dell'orb = 50% − 5 + ORB_SIZE/2 → label top = 50% + (ORB_SIZE/2 − 5 + 32) = 50% + ORB_SIZE/2 + 27.
+            marginTop: ORB_SIZE / 2 + 27,
+            alignItems: "center",
+          }}
+        >
+          {labelText && (
+            <Animated.Text
+              style={[styles.microLabel, { opacity: labelOpacity, marginTop: 0 }]}
+            >
+              {labelText}
+            </Animated.Text>
+          )}
+        </View>
       </View>
 
       {/* Mic denied overlay */}
