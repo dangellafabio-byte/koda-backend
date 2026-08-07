@@ -128,22 +128,22 @@ function loadApiKey() {
 }
 
 // === TTS single call ==================================================
-// FIX 2026-08-06 iter.5 — voci tagliate su parole corte.
-// Su parole/frasi brevi ("Ciao.", "Come ti chiami?") il modello v3 genera
-// audio senza padding di silenzio all'inizio/fine (7.5KB → ~470ms per un
-// "Ciao." che parlato naturalmente dura 700ms) → sensazione di "tagliato".
-// Fix: aggiungo padding testuale con `...` iniziale/finale che il modello
-// interpreta come pausa espressiva → include silenzio naturale ai bordi.
+// FIX 2026-08-07 iter.6 — RIMOSSO padding testuale con puntini.
+// Il fix precedente (`..., ... TEXT ... ,...`) risolveva "voce tagliata"
+// ma causava un problema PEGGIO: eleven_v3 vocalizza i puntini di
+// sospensione come suoni umani ("bababa", "mmm", "ah") → l'utente li
+// sente come balbettii tra le parole vere.
+// Soluzione robusta:
+//   1. Input TTS = testo PULITO (nessun padding di puntini)
+//   2. Post-process con ffmpeg: aggiungo 200ms di silenzio all'inizio
+//      + 400ms alla fine → risolve il bug originale di taglio audio
+//      SENZA generare balbettii.
 async function generateOne(apiKey, voiceId, text, useV3) {
   const modelId = useV3 ? MODEL_V3 : MODEL_FLASH;
   const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${OUTPUT_FORMAT}`;
-  // Padding di silenzio più aggressivo ai bordi (evita audio troncato).
-  // Il singolo "..." era troppo debole su parole corte come "Ciao." → v3
-  // genera lo stesso audio senza padding. Con due gruppi di "..." separati
-  // da virgola, il modello inserisce una pausa forte prima e dopo.
-  const paddedText = `..., ... ${text} ... ,...`;
+  // Input pulito — NIENTE padding di puntini che v3 vocalizza.
   const body = {
-    text: paddedText,
+    text,
     model_id: modelId,
     voice_settings: VOICE_SETTINGS,
   };
@@ -163,6 +163,36 @@ async function generateOne(apiKey, voiceId, text, useV3) {
   const arrayBuffer = await res.arrayBuffer();
   return Buffer.from(arrayBuffer);
 }
+
+// === POST-PROCESS: aggiunge silenzio ai bordi con ffmpeg ==============
+// Fix "voce tagliata" senza balbettii: 200ms silenzio all'inizio,
+// 400ms alla fine. Usa adelay + apad per aggiungere silenzio reale al
+// file MP3.
+const { spawnSync } = require("child_process");
+function padSilenceInPlace(mp3Path, leadMs = 200, trailMs = 400) {
+  const tmpPath = mp3Path + ".padded.mp3";
+  // adelay=Nms|Nms aggiunge silenzio all'inizio su entrambi i canali (stereo)
+  // apad aggiunge silenzio di durata specificata alla fine
+  const filter = `adelay=${leadMs}|${leadMs},apad=pad_dur=${(trailMs / 1000).toFixed(3)}`;
+  const result = spawnSync(
+    "ffmpeg",
+    [
+      "-y",
+      "-loglevel", "error",
+      "-i", mp3Path,
+      "-af", filter,
+      "-codec:a", "libmp3lame",
+      "-b:a", "128k",
+      tmpPath,
+    ],
+    { encoding: "utf8" }
+  );
+  if (result.status !== 0) {
+    throw new Error(`ffmpeg padding failed: ${result.stderr || result.stdout || "unknown"}`);
+  }
+  fs.renameSync(tmpPath, mp3Path);
+}
+
 
 // === Main ============================================================
 async function main() {
@@ -200,11 +230,14 @@ async function main() {
     try {
       const buf = await generateOne(apiKey, j.voiceId, j.text, j.useV3);
       fs.writeFileSync(j.outPath, buf);
-      totalBytes += buf.length;
+      // Post-process: aggiungi silenzio ai bordi (200ms + 400ms)
+      padSilenceInPlace(j.outPath, 200, 400);
+      const finalSize = fs.statSync(j.outPath).size;
+      totalBytes += finalSize;
       totalChars += j.text.length;
       if (j.useV3) charsV3 += j.text.length;
       else charsFlash += j.text.length;
-      console.log(`OK (${(buf.length / 1024).toFixed(1)} KB)`);
+      console.log(`OK (${(finalSize / 1024).toFixed(1)} KB, +silence padding)`);
     } catch (e) {
       console.log(`FAILED: ${e.message}`);
       process.exit(1);
