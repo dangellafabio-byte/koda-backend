@@ -81,6 +81,27 @@ const CIELO_CLIPS = {
   da_dove_cominciare: require("../assets/sounds/intro/da_dove_cominciare-cielo.mp3"),
 };
 
+// ==================== EXPECTED TEXT REGISTRY (diag only) ====================
+// Testi canonici approvati (copione Presence System V2) — sorgente:
+// /app/frontend/scripts/generate-intro-audio.js, chiavi corrispondenti.
+// Servono SOLO per il log diagnostico [KODA_INTRO_V2 DIAG] — non usati per
+// logica o rendering. Se il testo pronunciato dall'MP3 diverge da questi,
+// significa che l'MP3 in assets/sounds/intro/ è disallineato con la sorgente.
+const CIELO_CLIP_EXPECTED_TEXT: Record<keyof typeof CIELO_CLIPS, string> = {
+  ciao: "Ciao.",
+  come_ti_chiami: "Come ti chiami?",
+  io_sono_koda: "Io sono Koda.",
+  grazie_di_essere_qui: "Grazie di essere qui.",
+  da_dove_cominciare: "Da dove ti va di cominciare?",
+};
+const CIELO_CLIP_FILENAME: Record<keyof typeof CIELO_CLIPS, string> = {
+  ciao: "assets/sounds/intro/ciao-cielo.mp3",
+  come_ti_chiami: "assets/sounds/intro/come_ti_chiami-cielo.mp3",
+  io_sono_koda: "assets/sounds/intro/io_sono_koda-cielo.mp3",
+  grazie_di_essere_qui: "assets/sounds/intro/grazie_di_essere_qui-cielo.mp3",
+  da_dove_cominciare: "assets/sounds/intro/da_dove_cominciare-cielo.mp3",
+};
+
 // Voice ID default (Cielo). Voice choice rimossa dall'onboarding V2 —
 // si cambia dopo dalle Impostazioni.
 const VOICE_CIELO_ID = "POuqf18evoXOKIqV2Px7";
@@ -393,6 +414,10 @@ export default function KodaIntroConversational() {
   const handleListenOutput = useCallback(
     (rawText: string, purpose: ListenPurpose) => {
       const text = rawText.trim();
+      // === DIAG LOG STT output (2026-08-07) ===
+      try {
+        console.log(`[${TAG} DIAG] STT handleListenOutput purpose="${purpose}" rawText="${rawText}" trimmed="${text}" len=${text.length}`);
+      } catch {}
       if (purpose === "capture_name") {
         // Prima parola pulita = nome
         const firstWord = text.split(/\s+/)[0].replace(/[.,!?;:"']/g, "");
@@ -706,11 +731,21 @@ export default function KodaIntroConversational() {
     if (!currentTurn) return;
     cleanupCurrent();
 
+    // === DIAG LOG turn entry (2026-08-07, richiesta Fabio) ===
+    // Log passivo: nessuna modifica a logica/timing/audio, solo osservazione.
+    // Ci permette di ricostruire dall'esterno la sequenza reale eseguita.
+    try {
+      console.log(`[${TAG} DIAG] enter turn #${turnIdx} kind=${currentTurn.kind}`);
+    } catch {}
+
     switch (currentTurn.kind) {
       case "silence": {
         // orbState opzionale — default "idle" per compat, ma nella sequenza V2
         // TUTTI i silence tra due speak sono orbState="speaking" (Koda non
         // torna idle tra frase e frase). Idle solo all'apertura.
+        try {
+          console.log(`[${TAG} DIAG] silence label="${currentTurn.label ?? ""}" ms=${currentTurn.ms} orbState=${currentTurn.orbState ?? "idle"}`);
+        } catch {}
         setOrbState(currentTurn.orbState ?? "idle");
         timerRef.current = setTimeout(() => advance(), currentTurn.ms);
         break;
@@ -718,6 +753,12 @@ export default function KodaIntroConversational() {
       case "speak": {
         setOrbState("speaking");
         const clipSource = CIELO_CLIPS[currentTurn.clipKey];
+        // === DIAG LOG speak (2026-08-07) ===
+        try {
+          const expected = CIELO_CLIP_EXPECTED_TEXT[currentTurn.clipKey];
+          const filename = CIELO_CLIP_FILENAME[currentTurn.clipKey];
+          console.log(`[${TAG} DIAG] speak clipKey="${currentTurn.clipKey}" file="${filename}" expectedText="${expected}"`);
+        } catch {}
         if (!clipSource) {
           console.warn(`[${TAG}] clip not found: ${currentTurn.clipKey}`);
           timerRef.current = setTimeout(() => advance(), 400);
@@ -728,6 +769,10 @@ export default function KodaIntroConversational() {
       }
       case "listen": {
         setOrbState("listening");
+        // === DIAG LOG listen (2026-08-07) ===
+        try {
+          console.log(`[${TAG} DIAG] listen purpose="${currentTurn.purpose}" maxMs=${currentTurn.maxMs ?? 30000} showLabel=${!!currentTurn.showLabel}`);
+        } catch {}
         configureAudioForRecording();
         timerRef.current = setTimeout(() => {
           startListen(currentTurn.purpose, currentTurn.maxMs ?? 30000, !!currentTurn.showLabel);
@@ -735,6 +780,11 @@ export default function KodaIntroConversational() {
         break;
       }
       case "runtime_tts_name": {
+        // === DIAG LOG runtime_tts_name (2026-08-07) ===
+        try {
+          const nameText = userName ? `${userName}.` : "(nome non catturato, turno saltato)";
+          console.log(`[${TAG} DIAG] runtime_tts_name text="${nameText}" voice_id="${VOICE_CIELO_ID}" tone="warm"`);
+        } catch {}
         playRuntimeName();
         break;
       }
@@ -875,6 +925,11 @@ export default function KodaIntroConversational() {
 
           if (!mountedRef.current) return;
 
+          // === DIAG LOG live_response STT result (2026-08-07) ===
+          try {
+            console.log(`[${TAG} DIAG] live_response STT transcript raw="${transcript}" len=${transcript?.length ?? 0}`);
+          } catch {}
+
           // Fase B: thinking + converse
           setOrbState("thinking");
           showLabel("sto pensando");
@@ -884,6 +939,10 @@ export default function KodaIntroConversational() {
             advance();
             return;
           }
+          // === DIAG LOG converse prompt (2026-08-07) ===
+          try {
+            console.log(`[${TAG} DIAG] converse prompt userText="${userText}" endpoint="${API_BASE}/converse" ephemeral=false`);
+          } catch {}
           const aiEntry = await fetchConverse(userText);
           if (!mountedRef.current) return;
           if (!aiEntry) {
@@ -891,10 +950,18 @@ export default function KodaIntroConversational() {
             advance();
             return;
           }
+          // === DIAG LOG converse response (2026-08-07) ===
+          try {
+            console.log(`[${TAG} DIAG] converse response text="${aiEntry.text}" tone="${aiEntry.tone ?? "warm"}" len=${aiEntry.text?.length ?? 0}`);
+          } catch {}
 
           // Fase C: TTS della risposta LLM
           setOrbState("speaking");
           await configureAudioForPlayback();
+          // === DIAG LOG runtime TTS for LLM response (2026-08-07) ===
+          try {
+            console.log(`[${TAG} DIAG] live_response TTS request text="${aiEntry.text}" voice_id="${VOICE_CIELO_ID}" tone="${aiEntry.tone || "warm"}"`);
+          } catch {}
           const uri = await fetchRuntimeTTS(aiEntry.text, aiEntry.tone || "warm");
           if (!mountedRef.current) return;
           if (!uri) {
