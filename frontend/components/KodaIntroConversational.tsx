@@ -1113,16 +1113,27 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    // Stato pre-refactor: paddingTop stimato a mano (180) — imperfetto ma
-    // è il valore che aveva la build precedente. Mantenuto qui per
-    // continuità mentre analizziamo la causa esatta del disallineamento
-    // dell'intro. NON modificare senza prima documentare la causa
-    // verificata riga per riga.
-    paddingTop: 180,
+    // FIX 2026-08 VERIFICATO EMPIRICAMENTE — misurazione onLayout →
+    // measureInWindow su TestFlight (iPhone 15, Vh=844):
+    //   HOME: cY orb = 416.7  →  formula: cY_home = Vh/2 − 5
+    //   INTRO: cY orb = 512.0  →  formula: cY_intro = (Vh + paddingTop)/2
+    // Con paddingTop:0 + marginBottom:10 su orbWrap:
+    //   cY_intro = Vh/2 − marginBottom/2 = Vh/2 − 5  =  cY_home  ✓
+    // Vale per QUALSIASI viewport perché "la roba sotto l'orb" della
+    // home (gap + statusLabel + gap + hint) ha altezza fissa in pixel,
+    // quindi l'orb della home è sempre 5 px sopra il centro geometrico
+    // dello schermo, e noi replichiamo esattamente quello.
+    // Vecchio valore: paddingTop:180 (stima matematica errata).
+    paddingTop: 0,
   },
   orbWrap: {
     alignItems: "center",
     justifyContent: "center",
+    // FIX 2026-08 VERIFICATO EMPIRICAMENTE — vedi commento in
+    // centerContainer sopra. marginBottom sposta il centro dell'orb
+    // esattamente 5 px sopra il centro geometrico dello schermo,
+    // combaciando con la posizione della home.
+    marginBottom: 10,
   },
   microLabel: {
     marginTop: 32,
