@@ -346,6 +346,25 @@ export default function Taccuino() {
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
+
+  // === ORB MEASURE 2026-08 (debug parity home ↔ intro) ===
+  // measureInWindow ci dà le coordinate assolute dell'orb rispetto alla
+  // viewport. Utente le legge sull'overlay in basso a sinistra e me le
+  // riporta per calcolare l'offset esatto rispetto all'intro. NON stimare,
+  // MISURARE.
+  const orbMeasureRef = useRef<any>(null);
+  const [orbMeasure, setOrbMeasure] = useState<{ y: number; h: number } | null>(null);
+  const measureOrb = useCallback(() => {
+    try {
+      orbMeasureRef.current?.measureInWindow?.((_x: number, y: number, _w: number, h: number) => {
+        if (typeof y === "number" && typeof h === "number") {
+          setOrbMeasure({ y, h });
+          console.log(`[ORB_MEASURE:HOME] y=${y.toFixed(2)} h=${h.toFixed(2)} centerY=${(y + h / 2).toFixed(2)}`);
+        }
+      });
+    } catch {}
+  }, []);
+
   // === DISCLAIMER blocking overlay (Fabio 2026-07-28) =========================
   // `disclaimerState`:
   //   'loading'  → chiamata /legal/disclaimer/status in corso (nascondi UI)
@@ -4767,6 +4786,31 @@ export default function Taccuino() {
   // Liquid, Aurora, immagini custom) sono stati rimossi il 2026-08-04.
   const screenInner = (
     <View style={[styles.screen, { backgroundColor: theme.bg }]}>
+      {/* === ORB MEASURE DEBUG OVERLAY 2026-08 ===
+          Mostra le coordinate assolute dell'orb (misurate con
+          measureInWindow) in basso a sinistra. Serve a confrontare
+          numericamente la posizione dell'orb fra home e /intro-v2.
+          Position absolute → zero impatto sul layout. Da rimuovere
+          dopo la validazione. */}
+      {orbMeasure ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            left: 8,
+            bottom: Math.max(insets.bottom + 4, 8),
+            backgroundColor: "rgba(0,0,0,0.65)",
+            paddingHorizontal: 8,
+            paddingVertical: 4,
+            borderRadius: 6,
+            zIndex: 9999,
+          }}
+        >
+          <Text style={{ color: "#FFFFFF", fontSize: 11, fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }) }}>
+            {`HOME orb y=${orbMeasure.y.toFixed(1)} h=${orbMeasure.h.toFixed(1)} cY=${(orbMeasure.y + orbMeasure.h / 2).toFixed(1)}`}
+          </Text>
+        </View>
+      ) : null}
       {/* Banner di conferma salvataggio — appare per ~4s dopo che KodaIntro
           si chiude, così l'utente capisce che le modifiche sono andate a
           buon fine. Posizionato in alto, sopra il flusso normale. */}
@@ -5038,6 +5082,8 @@ export default function Taccuino() {
                   testID="big-btn-voice"
                 >
                   <Animated.View
+                    ref={orbMeasureRef}
+                    onLayout={measureOrb}
                     style={{
                       transform: [
                         {
