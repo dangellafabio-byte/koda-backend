@@ -66,7 +66,6 @@ import type {
 } from "expo-speech-recognition";
 import EclipseOrb, { OrbStatus, OrbTone } from "./EclipseOrb";
 import NeonBorder, { NeonBorderStatus } from "./NeonBorder";
-import KodaOrbStage from "./KodaOrbStage";
 import { api, API_BASE } from "../lib/api";
 import { getAuthToken } from "../lib/authToken";
 import { useTheme } from "../lib/theme";
@@ -997,12 +996,8 @@ export default function KodaIntroConversational() {
         <Ionicons name="close" size={20} color="rgba(226,232,240,0.5)" />
       </TouchableOpacity>
 
-      {/* Orb centrale — layout identico alla home tramite <KodaOrbStage>
-          (components/KodaOrbStage.tsx). Nessun paddingTop stimato a mano:
-          la struttura del container è LETTERALMENTE la stessa della Page 0
-          della home, così la posizione verticale dell'orb è garantita
-          identica anche al pixel. */}
-      <KodaOrbStage>
+      {/* Orb centrale — stessa dimensione E stesso respiro della home */}
+      <View style={styles.centerContainer}>
         <Animated.View
           style={[
             styles.orbWrap,
@@ -1028,7 +1023,7 @@ export default function KodaIntroConversational() {
             {labelText}
           </Animated.Text>
         )}
-      </KodaOrbStage>
+      </View>
 
       {/* Mic denied overlay */}
       {micBlocked && (
@@ -1070,12 +1065,15 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   centerContainer: {
-    // OBSOLETO — sostituito da <KodaOrbStage>. Mantengo lo stile
-    // per non rompere ricerche in log/diff storici, ma non è più
-    // referenziato nel JSX (vedi refactor Opzione B 2026-08).
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
+    // Stato pre-refactor: paddingTop stimato a mano (180) — imperfetto ma
+    // è il valore che aveva la build precedente. Mantenuto qui per
+    // continuità mentre analizziamo la causa esatta del disallineamento
+    // dell'intro. NON modificare senza prima documentare la causa
+    // verificata riga per riga.
+    paddingTop: 180,
   },
   orbWrap: {
     alignItems: "center",

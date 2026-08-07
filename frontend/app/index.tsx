@@ -71,7 +71,6 @@ import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
 import EclipseOrb from "../components/EclipseOrb";
-import KodaOrbStage from "../components/KodaOrbStage";
 import MirrorPool from "../components/MirrorPool";
 import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
 import KodaSplash from "../components/KodaSplash";
@@ -5008,16 +5007,9 @@ export default function Taccuino() {
         {/* CORREZIONE 2026-06: rimosso il paddingTop/Bottom — la pagina
             è ora un semplice flex-center, e l'orb è davvero al centro
             geometrico dello schermo. La "scorri per leggere" è
-            posizionata absolute al simmetrico dello slot Confessionale.
-            === REFACTOR 2026-08 (Opzione B) ===
-            La struttura del container è ora estratta in <KodaOrbStage>
-            (components/KodaOrbStage.tsx) e condivisa 1:1 con la schermata
-            /intro-v2, così l'orb è garantito nella stessa posizione in
-            entrambe le viste, senza guessing di paddingTop.
-            <KodaOrbStage> è direttamente la "pagina" del ScrollView
-            (largo windowWidth, flex:1 vertical) → nessun wrapper
-            aggiuntivo che potrebbe divergere dal path dell'intro. */}
-        <KodaOrbStage>
+            posizionata absolute al simmetrico dello slot Confessionale. */}
+        <View style={{ width: windowWidth, flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 90 }}>
+          <View style={{ alignItems: "center", justifyContent: "center", flex: 1, gap: 18, paddingHorizontal: 24 }}>
             {/* === ECLISSI NASCOSTA IN TEXT MODE (richiesta utente 2026-06) ===
                 In modalità scrittura (inputMode === "text") l'utente NON
                 vuole più vedere l'eclissi/orb da nessuna parte: né nella
@@ -5087,19 +5079,9 @@ export default function Taccuino() {
                   </View>
                 )}
               </Pressable>
-                {aiPaused ? (
-                  <Text style={[styles.statusLabel, styles.statusLabelOnBg, { fontSize: 16, marginTop: 8 }]}>
-                    AI in pausa
-                  </Text>
-                ) : null}
-                {/* NOTE 2026-08-06 — Text sopra reso condizionale (era
-                    sempre renderizzato con `""` quando !aiPaused).
-                    Motivo: RN Text con stringa vuota può occupare
-                    line-height + margini nel flex-flow, spostando
-                    l'orb della home rispetto all'intro (che non ha
-                    quel Text). Ora entrambe le schermate hanno
-                    ESATTAMENTE gli stessi children nel flex quando
-                    aiPaused=false → orb nella stessa posizione. */}
+                <Text style={[styles.statusLabel, styles.statusLabelOnBg, { fontSize: 16, marginTop: 8 }]}>
+                  {aiPaused ? "AI in pausa" : ""}
+                </Text>
               </>
             ) : (
               <>
@@ -5119,7 +5101,8 @@ export default function Taccuino() {
                 <Text style={{ color: theme.text, fontSize: 12 }}>scorri per leggere</Text>
               </View>
             ) : null}
-          </KodaOrbStage>
+          </View>
+        </View>
 
         {/* === PAGE 1: READING MODE (timeline) =================== */}
         <View style={{ width: windowWidth, flex: 1 }}>
