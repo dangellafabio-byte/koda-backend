@@ -4035,7 +4035,68 @@ async def api_update_profile(update: ProfileUpdate):
 
 @api_router.delete("/profile")
 async def api_reset_profile():
-    """Reset entire memory and profile (free will / privacy)."""
+    """Reset entire memory and profile (free will / privacy).
+
+    FIX 2026-08-08 — Cancellazione atomica del voiceprint.
+    Prima di cancellare il documento profilo su Mongo, cancella anche
+    i file audio grezzi dell'enrollment voiceprint su filesystem:
+      /app/backend/voiceprint_data/{pid}/*.m4a
+    così l'utente non resta con residui audio dopo aver cancellato la
+    memoria. Se la cancellazione filesystem fallisce → 500, NON
+    procediamo con la cancellazione Mongo (evita stato inconsistente
+    "profilo cancellato ma audio ancora sul server").
+
+    Sequenza obbligatoria:
+      1. Determina pid dell'utente corrente.
+      2. Cancella la directory /app/backend/voiceprint_data/{pid}/
+         (tutti i file .m4a + eventuali file derivati).
+      3. Se step 2 fallisce → HTTPException 500, memoria intatta.
+      4. Solo se step 2 passa → cancella profilo, timeline, memories.
+    """
+    import os as _os
+    import shutil as _shutil
+
+    # Step 1: pid dell'utente corrente. Se non risolvibile, fallback "me"
+    # (comportamento legacy, mantenuto per non rompere test/dev).
+    try:
+        pid = current_user_id()
+    except Exception:
+        pid = "me"
+
+    # Step 2: cancella la directory voiceprint dell'utente (se esiste).
+    # Cancellazione ricorsiva: include .m4a, eventuali cache, tutto.
+    voiceprint_dir = _os.path.join("/app/backend/voiceprint_data", pid)
+    vp_removed_files: list[str] = []
+    try:
+        if _os.path.isdir(voiceprint_dir):
+            # Elenca prima per il log, poi rmtree
+            for _root, _dirs, _files in _os.walk(voiceprint_dir):
+                for _fn in _files:
+                    vp_removed_files.append(_fn)
+            _shutil.rmtree(voiceprint_dir)
+            logger.info(
+                f"[reset] voiceprint dir removed: pid={pid} "
+                f"files_removed={len(vp_removed_files)} names={vp_removed_files}"
+            )
+        else:
+            logger.info(f"[reset] voiceprint dir not present for pid={pid} (nothing to remove)")
+    except Exception as _e:
+        # NON procedere con la cancellazione DB: l'utente vedrebbe
+        # "memoria cancellata" ma i suoi file audio resterebbero sul server.
+        logger.error(
+            f"[reset] voiceprint dir removal FAILED: pid={pid} err={_e} "
+            f"→ aborting profile reset to preserve atomicity"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Cancellazione delle registrazioni vocali fallita. "
+                "La memoria NON è stata cancellata per evitare stato "
+                "inconsistente. Riprova o contatta il supporto."
+            ),
+        )
+
+    # Step 3: cancella dati DB (profilo, timeline, ricordi semantici).
     await db.taccuino_profile.delete_many({})
     await db.taccuino_timeline.delete_many(_uf())
     # Cancella anche i ricordi semantici (giugno 2026)
@@ -4043,7 +4104,12 @@ async def api_reset_profile():
         await db.taccuino_memories.delete_many(_memory_filter())
     except Exception as e:
         logger.warning(f"[reset] memories delete failed: {e}")
-    return {"ok": True, "message": "Memoria cancellata."}
+
+    return {
+        "ok": True,
+        "message": "Memoria cancellata.",
+        "voiceprint_files_removed": len(vp_removed_files),
+    }
 
 
 # ============================================================
