@@ -238,10 +238,10 @@ _PRIVACY_BODY = f"""
   né accede ai messaggi del Confessionale in chiaro.
 </p>
 
-<h2>5. Base giuridica e finalità (GDPR art. 6)</h2>
+<h2>5. Base giuridica e finalità (GDPR artt. 6 e 9)</h2>
 <ul>
   <li><strong>Esecuzione del contratto</strong> (art. 6(1)(b)) — per fornirti il servizio richiesto: rispondere ai tuoi messaggi, sintetizzare la voce, tenere memoria delle conversazioni normali.</li>
-  <li><strong>Consenso esplicito</strong> (art. 6(1)(a)) — per la registrazione del voiceprint (opzionale).</li>
+  <li><strong>Consenso esplicito per categorie particolari di dati</strong> (art. 9(2)(a)) — per la registrazione del <em>voiceprint</em> (opzionale). Il voiceprint è un dato biometrico ai sensi dell'art. 9 GDPR: viene utilizzato esclusivamente per verificare che chi parla al microfono sia il legittimo proprietario dell'account (verifica del parlante 1:1), non per identificarti tra più persone né per finalità diverse. Puoi revocare il consenso in qualsiasi momento dalle Impostazioni, con cancellazione atomica sia dell'<em>embedding</em> sia dei file audio grezzi (.m4a) usati in enrollment.</li>
   <li><strong>Legittimo interesse</strong> (art. 6(1)(f)) — per analisi tecniche aggregate (numero messaggi, errori), strettamente anonime.</li>
 </ul>
 
