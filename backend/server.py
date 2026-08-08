@@ -9768,6 +9768,121 @@ async def api_voiceprint_status():
     }
 
 
+@api_router.delete("/profile/voiceprint")
+async def api_voiceprint_delete():
+    """Cancella SOLO il voiceprint dell'utente corrente.
+
+    NUOVO 2026-08-08 — Cancellazione mirata, atomica, del solo voiceprint.
+    Lascia INTATTI: memoria, timeline, conversazioni, account, tutti gli
+    altri campi del profilo. Utile per "revoca del consenso al voiceprint"
+    da parte dell'utente senza dover resettare tutta la memoria.
+
+    Cosa cancella:
+      1. Directory /app/backend/voiceprint_data/{pid}/ ricorsivamente
+         (i 3 .m4a di enrollment + eventuali file derivati).
+      2. Sul documento profilo Mongo, rimuove SOLO i campi voiceprint:
+         voiceprint_embedding, voiceprint_embedding_dim, voiceprint_pending,
+         voiceprint_enrolled_at, voiceprint_processed_at, voiceprint_threshold,
+         voiceprint_phrase_paths.
+
+    Ordine ATOMICO: prima filesystem, poi Mongo. Se il filesystem
+    fallisce → HTTPException 500 e Mongo NON viene toccato (evita stato
+    inconsistente "voiceprint marcato revocato ma file audio ancora sul
+    server").
+
+    Effetto sul comportamento post-cancellazione: il gate di
+    voice_stream.py legge voiceprint_embedding all'apertura di ogni
+    sessione WebSocket. Rimosso il campo, la prossima sessione loggerà
+    `voiceprint_gate DISABLED reason=no_embedding_in_profile` e tutti
+    i chunk audio passeranno senza filtro (esattamente come per un
+    utente che non ha mai fatto enrollment).
+    """
+    import os as _os
+    import shutil as _shutil
+
+    # Step 1: pid dell'utente corrente (identico pattern di DELETE /profile)
+    try:
+        pid = current_user_id()
+    except Exception:
+        pid = "me"
+
+    if not pid or pid == "me":
+        # Utente anonimo: non c'è niente da cancellare, ritorna ok idempotente
+        return {
+            "ok": True,
+            "message": "Nessun voiceprint associato a questo account.",
+            "voiceprint_files_removed": 0,
+            "profile_fields_cleared": 0,
+        }
+
+    # Step 2: cancella la directory voiceprint dell'utente (se esiste)
+    voiceprint_dir = _os.path.join("/app/backend/voiceprint_data", pid)
+    vp_removed_files: list[str] = []
+    try:
+        if _os.path.isdir(voiceprint_dir):
+            for _root, _dirs, _files in _os.walk(voiceprint_dir):
+                for _fn in _files:
+                    vp_removed_files.append(_fn)
+            _shutil.rmtree(voiceprint_dir)
+            logger.info(
+                f"[voiceprint_delete] dir removed: pid={pid} "
+                f"files_removed={len(vp_removed_files)} names={vp_removed_files}"
+            )
+        else:
+            logger.info(f"[voiceprint_delete] dir not present for pid={pid} (nothing to remove)")
+    except Exception as _e:
+        # NON procedere con l'aggiornamento Mongo: preserva atomicità
+        logger.error(
+            f"[voiceprint_delete] dir removal FAILED: pid={pid} err={_e} "
+            f"→ aborting DB update to preserve atomicity"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Cancellazione delle registrazioni vocali fallita. "
+                "Il voiceprint NON è stato revocato per evitare stato "
+                "inconsistente. Riprova o contatta il supporto."
+            ),
+        )
+
+    # Step 3: rimuove SOLO i campi voiceprint dal profilo Mongo.
+    # Uso $unset per lasciare intatti tutti gli altri campi (memoria,
+    # timeline, nome, gender, ecc.).
+    fields_to_unset = {
+        "voiceprint_embedding": "",
+        "voiceprint_embedding_dim": "",
+        "voiceprint_pending": "",
+        "voiceprint_enrolled_at": "",
+        "voiceprint_processed_at": "",
+        "voiceprint_threshold": "",
+        "voiceprint_phrase_paths": "",
+    }
+    result = await db.taccuino_profile.update_one(
+        {"id": pid},
+        {"$unset": fields_to_unset},
+    )
+    fields_cleared = 0
+    # Nota: modified_count è 1 solo se ALMENO uno dei campi era presente.
+    # Se il profilo esiste ma nessun campo voiceprint era set, modified_count=0.
+    # Contiamo esplicitamente prima/dopo per il response.
+    try:
+        prof_after = await db.taccuino_profile.find_one({"id": pid})
+        if prof_after:
+            fields_cleared = sum(
+                1 for k in fields_to_unset.keys() if k not in prof_after
+            )
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "message": "Voiceprint revocato. La memoria e le conversazioni restano intatte.",
+        "voiceprint_files_removed": len(vp_removed_files),
+        "profile_fields_cleared": fields_cleared,
+        "profile_updated": bool(result.modified_count),
+    }
+
+
 @api_router.post("/profile/voiceprint/reprocess")
 async def api_voiceprint_reprocess():
     """Ricalcola l'embedding dai file m4a già salvati, senza dover ripetere
