@@ -1,0 +1,90 @@
+[
+  {
+    "i": 1,
+    "prompt": "Non lo so.",
+    "response": "Mhm. C'è qualcosa che ti turba e non riesci a metterlo a fuoco, vero? Prova a dirmi cos'è che non sai.",
+    "tone": "calm",
+    "chars": 102,
+    "tts_bytes": 122924
+  },
+  {
+    "i": 2,
+    "prompt": "Sono felicissimo cazzo.",
+    "response": "Accidenti, sì? Che è successo? Raccontami.",
+    "tone": "energetic",
+    "chars": 42,
+    "tts_bytes": 37660
+  },
+  {
+    "i": 3,
+    "prompt": "Ho litigato con mia madre.",
+    "response": "Aspetta, ma poco fa mi dicevi che eri felicissimo. Che è successo tra te e tua madre?",
+    "tone": "concerned",
+    "chars": 85,
+    "tts_bytes": 87815
+  },
+  {
+    "i": 4,
+    "prompt": "Boh.",
+    "response": "Ehi, aspetta. Non è un boh quello che sentiamo. C'è qualcosa sotto — magari rabbia, magari confusione. Prendi il tempo che serve e prova a dirmi: cosa è successo esattamente con tua madre?",
+    "tone": "calm",
+    "chars": 188,
+    "tts_bytes": 219472
+  },
+  {
+    "i": 5,
+    "prompt": "Sai che mi è successa una cosa assurda?",
+    "response": "Sì, dimmi. Sono tutta orecchi.",
+    "tone": "warm",
+    "chars": 30,
+    "tts_bytes": 31391
+  },
+  {
+    "i": 6,
+    "prompt": "Non ho voglia di parlare.",
+    "response": "Va bene. Sono qui quando sei pronto.",
+    "tone": "calm",
+    "chars": 36,
+    "tts_bytes": 39750
+  },
+  {
+    "i": 7,
+    "prompt": "Secondo te sto facendo una cazzata?",
+    "response": "Non lo so ancora. Dimmela, la cazzata — così almeno sappiamo di cosa stiamo parlando.",
+    "tone": "calm",
+    "chars": 85,
+    "tts_bytes": 97846
+  },
+  {
+    "i": 8,
+    "prompt": "Mi manca.",
+    "response": "Chi? Raccontami.",
+    "tone": "calm",
+    "chars": 16,
+    "tts_bytes": 26375
+  },
+  {
+    "i": 9,
+    "prompt": "Guarda che giornata di merda.",
+    "response": "Eh, immagino. Vuoi dirmi cos'è successo?",
+    "tone": "concerned",
+    "chars": 40,
+    "tts_bytes": 41839
+  },
+  {
+    "i": 10,
+    "prompt": "Ho appena conosciuto una ragazza.",
+    "response": "Eh, allora dimmela — com'è andata? Dove vi siete conosciuti?",
+    "tone": "warm",
+    "chars": 60,
+    "tts_bytes": 54378
+  },
+  {
+    "i": 11,
+    "prompt": "Lascia stare, non voglio parlarne.",
+    "response": "Ok, va bene. Sono qui se cambi idea, quando vuoi.",
+    "tone": "warm",
+    "chars": 49,
+    "tts_bytes": 41839
+  }
+]

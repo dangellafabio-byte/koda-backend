@@ -2102,6 +2102,14 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"- Mai elenchi puntati o numerati nelle risposte parlate\n"
         f"- Mai più di 2 frasi salvo che l'utente chieda esplicitamente di approfondire\n"
         f"- Mai moralismi, mai diagnosi cliniche ('hai sintomi di...'), mai 'dovresti'\n"
+        f"- VALIDARE ≠ INTERPRETARE (FIX 2026-08-10 clip 04 persona-test): "
+        f"puoi rispecchiare cio' che l'utente PROVA usando le SUE parole ('capisco che sia pesante', "
+        f"'ci sta che ti senta cosi'), ma NON RACCONTARE all'utente cosa sta VIVENDO con parole tue "
+        f"che vadano oltre. Frasi come 'non e' facile tenere insieme questi pezzi', "
+        f"'stai attraversando un momento complesso', 'quello che senti e' un lutto', "
+        f"'e' normale sentirsi lacerati' sono INTERPRETAZIONI che etichettano l'esperienza — VIETATE. "
+        f"Se vuoi mostrare che hai colto, CHIEDI ('cos'e' successo?', 'vuoi raccontarmi?') "
+        f"invece di RIASSUMERE l'esperienza dell'utente al suo posto.\n"
         f"\n"
         # ============================================================
         # COERENZA LOGICA — anti-contraddizione (FIX 2026-05-25)
@@ -3002,7 +3010,7 @@ TIER_MONTHLY_HARD_CAP = {
 WARNING_THRESHOLD_PCT = 0.90
 
 # Costo di riferimento per calcoli economici (overage worst-case)
-OVERAGE_COST_PER_MINUTE_EUR = 0.044
+OVERAGE_COST_PER_MINUTE_EUR = 0.091
 
 
 def _today_utc_str() -> str:
@@ -6790,7 +6798,13 @@ def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], si
     all'orecchio. Range delle variabili:
     - stability: 0.25 (urgent, max espressivo) → 0.55 (calm, sussurrato stabile)
     - style:     0.30 (calm, asciutto) → 0.70 (urgent, drammatico)
-    - speed:     0.92 (calm, lento) → 1.08 (urgent, incalzante)
+    - speed:     0.87 (calm, lento) → 1.15 (urgent, incalzante)
+
+    PACING ADJUSTMENT (2026-08-10, seconda modifica clip persona-test):
+    Ridotti tutti gli speed del ~5-6% per allinearsi al pacing dell'Intro V2.
+    L'utente ha percepito le risposte standard come troppo veloci per la
+    natura contemplativa dell'app. Modifica uniforme su tutti i toni per
+    mantenere lo spread relativo tra di essi.
     Differenza minima ~30% → percepibile come "voce diversa".
     """
     base_similarity = 0.82 if similarity is None else similarity
@@ -6800,31 +6814,31 @@ def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], si
         # sussurrato, lento, asciutto — momenti di intimità profonda
         base_stability = stability if stability is not None else 0.80
         style = 0.15
-        speed = 0.82
+        speed = 0.77
     elif t == "concerned":
         # empatico, profondo, espressivo, decisamente più lento
         base_stability = stability if stability is not None else 0.15
         style = 0.80
-        speed = 0.85
+        speed = 0.80
     elif t == "warm":
         # ★ default: abbraccio caldo, naturale, presente
         base_stability = stability if stability is not None else 0.40
         style = 0.55
-        speed = 0.97
+        speed = 0.91
     elif t == "energetic":
         # vivace, gioioso, leggero, RAPIDO
         base_stability = stability if stability is not None else 0.18
         style = 0.90
-        speed = 1.15
+        speed = 1.08
     elif t == "urgent":
         # safety/emergenza: incalzante, drammatico, rapidissimo
         base_stability = stability if stability is not None else 0.10
         style = 0.95
-        speed = 1.20
+        speed = 1.13
     else:  # neutral — solo per fatti/info neutre (meteo, calcoli)
         base_stability = stability if stability is not None else 0.55
         style = 0.30
-        speed = 1.00
+        speed = 0.94
 
     return {
         "stability": base_stability,
