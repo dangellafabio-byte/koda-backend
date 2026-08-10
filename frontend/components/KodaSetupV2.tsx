@@ -128,15 +128,36 @@ export default function KodaSetupV2() {
 
   const handleDisclaimerContinue = useCallback(() => {
     track(EV_DISCLAIMER_CONTINUED);
+    // === SKIP EMAIL SE IDENTITÀ GIÀ NOTA (2026-08-08, Fabio) ===
+    // OAuth (Google/Apple) è obbligatorio a monte del Setup V2 → auth.user.email
+    // è già valorizzato con l'email verificata dal provider. Chiedere all'utente
+    // di premere "Continua" su un campo pre-riempito è puro attrito senza
+    // guadagno di dato (Neo l'aveva già confermato: quel campo non raccoglie,
+    // solo mostra). Skippiamo lo step "email" andando direttamente a "mic_pre".
+    //
+    // Fallback: se per qualche motivo l'email non è valida (dev-login tester
+    // senza email, OAuth con scope email negato, edge case), mostriamo lo
+    // step "email" come oggi — nessuna regressione per il caso raro.
+    //
+    // Analytics: EV_EMAIL_SUBMITTED continua a firare sempre. Aggiungiamo
+    // il campo `source` per distinguere `oauth_prefill` da `manual` e
+    // misurare quanti utenti finiscono nel fallback.
+    const prefilled = (auth?.user?.email || "").trim();
+    if (EMAIL_RE.test(prefilled)) {
+      const domain = prefilled.split("@")[1] || "unknown";
+      track(EV_EMAIL_SUBMITTED, { email_domain: domain, source: "oauth_prefill" });
+      setStep("mic_pre");
+      return;
+    }
     setStep("email");
-  }, []);
+  }, [auth?.user?.email]);
 
   const handleEmailSubmit = useCallback(() => {
     const trimmed = email.trim();
     if (!EMAIL_RE.test(trimmed)) return;
     Keyboard.dismiss();
     const domain = trimmed.split("@")[1] || "unknown";
-    track(EV_EMAIL_SUBMITTED, { email_domain: domain });
+    track(EV_EMAIL_SUBMITTED, { email_domain: domain, source: "manual" });
     setStep("mic_pre");
   }, [email]);
 
