@@ -69,6 +69,7 @@ import NeonBorder, { NeonBorderStatus } from "./NeonBorder";
 import { api, API_BASE } from "../lib/api";
 import { getAuthToken } from "../lib/authToken";
 import { useTheme } from "../lib/theme";
+import { voiceStreamConverse } from "../lib/speech";
 
 const TAG = "KODA_INTRO_V2";
 
@@ -313,6 +314,28 @@ export default function KodaIntroConversational() {
 
   // Mic permission blocca il flusso?
   const [micBlocked, setMicBlocked] = useState(false);
+
+  // ==================== PHASE STATE (2026-08-08, Opzione D) ====================
+  // Dopo il Turn #10 (save_and_end) NON facciamo più redirect a "/". Restiamo
+  // sulla stessa route, cambiando fase da "intro" (macchina a stati con
+  // turnIdx/CONVERSATION) a "free_talk" (loop libero via voiceStreamConverse,
+  // stesso pattern del hands-free loop di Home).
+  //
+  // Delay tra fine TTS di Koda e riapertura mic in free-talk = 450ms.
+  // Perché 450ms e non 250ms (Turn 4) né ~variabile (Turn 8→9)?
+  //   - Il loop hands-free di Home (index.tsx riga 2167) usa
+  //     `scheduleDelayMs = 450ms` come base del ciclo post-TTS →
+  //     voiceStreamConverse. Questo è ESATTAMENTE il pattern che
+  //     stiamo replicando qui (voiceStreamConverse in loop).
+  //   - Turn 4 (250ms setTimeout) usa il legacy startListen inline,
+  //     Turn 8→9 (~50-200ms audio-config) usa il legacy live_response
+  //     inline. Nessuno dei due è "il" pattern free-talk validato.
+  //   - Fabio valida da mesi 450ms in produzione (Home). Zero valori
+  //     arbitrari nuovi introdotti qui.
+  const [phase, setPhase] = useState<"intro" | "free_talk">("intro");
+  const freeTalkSessionRef = useRef<{ stop: () => Promise<void> } | null>(null);
+  const freeTalkCancelledRef = useRef(false);
+  const FREE_TALK_BREATH_MS = 450;
 
   // Traccia se i micro-label sono già stati mostrati (first-time only)
   const shownLabels = useRef<Set<string>>(new Set());
@@ -706,6 +729,10 @@ export default function KodaIntroConversational() {
   }, [advance, userName]);
 
   // ==================== SAVE & END ====================
+  // 2026-08-08 (Opzione D): NO redirect a "/". Salva il profilo, poi transita
+  // a `phase="free_talk"` restando sulla stessa route. L'utente non percepisce
+  // la fine dell'intro — Koda continua a stare lì e la conversazione prosegue
+  // via voiceStreamConverse in loop (identico al pattern hands-free di Home).
   const doSaveAndEnd = useCallback(async () => {
     setOrbState("thinking");
     try {
@@ -721,15 +748,13 @@ export default function KodaIntroConversational() {
     } catch (e) {
       console.warn(`[${TAG}] profile save failed:`, e);
     }
-    // Fade morbido a home (Presence System §6: nessun cambio secco)
-    Animated.timing(screenOpacity, {
-      toValue: 0,
-      duration: 800,
-      useNativeDriver: true,
-    }).start(() => {
-      try { router.replace("/"); } catch { router.back(); }
-    });
-  }, [userName, router, screenOpacity]);
+    // Transizione a free-talk: NIENTE fade, NIENTE router.replace.
+    // L'orb passa a idle e il loop free-talk parte tramite useEffect dedicato.
+    if (!mountedRef.current) return;
+    console.log(`[${TAG}] intro complete → phase=free_talk (no redirect, same route)`);
+    setOrbState("idle");
+    setPhase("free_talk");
+  }, [userName]);
 
   // ==================== TURN EXECUTOR ====================
   useEffect(() => {
@@ -999,6 +1024,95 @@ export default function KodaIntroConversational() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turnIdx]);
+
+  // ==================== FREE-TALK LOOP (2026-08-08, Opzione D) ====================
+  // Attivo quando `phase === "free_talk"`. Replica ESATTAMENTE il pattern
+  // hands-free di Home (index.tsx riga 2067+): un ciclo che alterna
+  //   [respiro 450ms] → [voiceStreamConverse: mic → STT → LLM → TTS] → [respiro …]
+  // finché il componente non viene smontato o l'utente non chiude via skip.
+  //
+  // Perché duplicare il loop qui invece di navigare a "/"?
+  //   Il requisito prodotto (Fabio, 2026-08-08) è che l'utente NON percepisca
+  //   la fine dell'intro. Un router.replace("/") — anche con fade — è un
+  //   taglio cognitivo: cambia la route, monta index.tsx, la timeline appare
+  //   dal nulla. Restando qui, l'orb resta identico e Koda continua a stare
+  //   con l'utente. La navigazione a Home avverrà in un momento successivo,
+  //   quando l'utente farà un gesto esplicito (tour Punto 5, tba).
+  //
+  // NON usiamo turnHadSpeechRef / no-speech backoff qui: nell'intro appena
+  // concluso l'utente ha già parlato (Turn 9), quindi il primo turno free-talk
+  // parte "pulito". Se successivamente l'utente resta in silenzio, il timeout
+  // interno di voiceStreamConverse (240s) chiude comunque la sessione.
+  useEffect(() => {
+    if (phase !== "free_talk") return;
+    if (!mountedRef.current) return;
+
+    freeTalkCancelledRef.current = false;
+    console.log(`[${TAG}] free_talk loop STARTING`);
+
+    const loop = async () => {
+      // Pulizia difensiva: se qualche timer o STT era ancora attivo dal
+      // Turn 9, lo azzeriamo prima di aprire una nuova sessione streaming.
+      cleanupCurrent();
+
+      while (mountedRef.current && !freeTalkCancelledRef.current) {
+        // Respiro tra fine TTS di Koda e riapertura mic: 450ms (stesso
+        // valore validato nel loop hands-free di Home).
+        setOrbState("idle");
+        await new Promise((r) => setTimeout(r, FREE_TALK_BREATH_MS));
+        if (!mountedRef.current || freeTalkCancelledRef.current) break;
+
+        // Orb → recording (l'apertura reale del mic avviene ~1s dopo,
+        // dentro voiceStreamConverse; onRecognitionActive lo confermerà).
+        setOrbState("listening");
+
+        try {
+          const result = await voiceStreamConverse({
+            profileLang: "it",
+            voiceId: VOICE_CIELO_ID,
+            timeoutMs: 240_000,
+            onSession: (s: { stop: () => Promise<void> } | null) => {
+              freeTalkSessionRef.current = s;
+            },
+            onUserFinal: () => {
+              if (!mountedRef.current) return;
+              setOrbState("thinking");
+            },
+            onAudioStart: () => {
+              if (!mountedRef.current) return;
+              setOrbState("speaking");
+            },
+          });
+          console.log(
+            `[${TAG}] free_talk turn done: ok=${result?.ok !== false} error=${result?.error ?? "n/a"}`
+          );
+        } catch (e: any) {
+          console.warn(`[${TAG}] free_talk turn errored:`, e?.message || e);
+          // Pausa un pelo più lunga su errore per non entrare in loop caldo.
+          if (mountedRef.current && !freeTalkCancelledRef.current) {
+            await new Promise((r) => setTimeout(r, 1200));
+          }
+        } finally {
+          freeTalkSessionRef.current = null;
+        }
+      }
+      console.log(`[${TAG}] free_talk loop STOPPED (mounted=${mountedRef.current}, cancelled=${freeTalkCancelledRef.current})`);
+    };
+
+    loop();
+
+    return () => {
+      freeTalkCancelledRef.current = true;
+      try {
+        const s = freeTalkSessionRef.current;
+        if (s) {
+          s.stop().catch(() => {});
+        }
+      } catch {}
+      freeTalkSessionRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
 
   // Mount/unmount + fade-in iniziale della schermata + breathe loop
   useEffect(() => {
