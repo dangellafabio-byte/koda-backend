@@ -6474,11 +6474,12 @@ export default function Taccuino() {
                     Rimuovere dopo GA. */}
                 <View style={styles.divider} />
                 <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>
-                  🧪 Test — Intro conversazionale
+                  🧪 Test — Setup + Intro conversazionale
                 </Text>
                 <Text style={[styles.settingHint, { marginBottom: 10, paddingHorizontal: 4 }]}>
-                  Il nuovo onboarding voice-only (M2+M3+M4). Non modifica il
-                  tuo profilo se esci con la ×; al termine sovrascrive nome/voce/genere.
+                  Prima di iniziare → Email → Microfono → dissolvenza → Intro V2.
+                  Ripetibile (non scrive stato persistente durante il setup);
+                  al termine dell'Intro sovrascrive nome/voce/genere come prima.
                 </Text>
                 <TouchableOpacity
                   style={{
@@ -6492,7 +6493,7 @@ export default function Taccuino() {
                   }}
                   onPress={() => {
                     closeSettings();
-                    setTimeout(() => router.push("/intro-v2"), 200);
+                    setTimeout(() => router.push("/setup-v2"), 200);
                   }}
                   testID="admin-open-intro-v2-btn"
                 >
@@ -6500,10 +6501,10 @@ export default function Taccuino() {
                     <Ionicons name="sparkles-outline" size={18} color={theme.text + "99"} />
                     <View style={{ flex: 1 }}>
                       <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500" }}>
-                        Prova nuovo intro (beta)
+                        Prova nuovo Setup + Intro (beta)
                       </Text>
                       <Text style={{ color: theme.text + "66", fontSize: 11, marginTop: 2 }}>
-                        Apre /intro-v2 con reveal Vento + voice choice + gender detection.
+                        Disclaimer + email + mic, poi dissolvenza in /intro-v2. Non tocca la produzione.
                       </Text>
                     </View>
                   </View>
