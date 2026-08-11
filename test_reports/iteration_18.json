@@ -1,0 +1,33 @@
+{
+  "summary": "Backend regression for Paywall Trial V3 seed endpoints (Jan 2026, iter18). All 17 pytest cases passed 100%. Verified: (a) /api/dev/trial/seed-expired persists trial_seconds_used=500 to db.taccuino_profile and /api/trial/state returns 'expired' immediately (the trial_dev_override flag correctly bypasses the unlimited whitelist filter for admin Fabio Google); (b) /api/dev/trial/seed-closing yields 'closing' (350s); (c) /api/dev/trial/seed-window-expired yields 'expired' via 6-days-ago window with seconds=0; (d) /api/dev/trial/reset restores active with seconds=0.0 and trial_dev_override=false (no residual); (e) /api/dev/trial/inspect returns raw DB state consistent with the last seed; (f) non-admin caller (random X-User-Id) receives 403 on all 4 POST seed endpoints and on GET /inspect. Bug fixes in _apply_trial_seed (collection taccuino_profile/id instead of profiles/_id) and in api_trial_state (dev_override bypass) are working end-to-end. Frontend route /app/frontend/app/paywall.tsx exists (not runtime-tested per request 'backend only').",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_trial_seed_endpoints_jan2026.py",
+    "/app/test_reports/pytest/iter18_trial_seed.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py:3844-3846 — reset sets trial_started_at/window to None (correct). Confirmed by pytest that these come back as null in JSON response.",
+    "server.py:3459 — trial_dev_override check is placed BEFORE the unlimited whitelist branch, which is the correct order (otherwise admin would always short-circuit to 'active').",
+    "server.py:3161 — MongoDB pipeline update ($ifNull + $add) works only on MongoDB 4.2+; safe here since deployment uses modern MongoDB.",
+    "Non-blocking: /api/dev/trial/* endpoints have no rate-limiting or CSRF; acceptable because gated by _require_admin() and only reachable via header X-User-Id whitelisted UIDs."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_trial_seed_endpoints_jan2026.py (new)"
+  ],
+  "success_rate": {"backend": "100% (17/17)", "frontend": "not tested (per request)"},
+  "seed_data_creation": "None. All modifications on admin profile (ee4e7261-…) were reverted via /api/dev/trial/reset at end of the module (autouse fixture) and final tests explicitly re-verify a clean state (trial_seconds_used=0.0, trial_dev_override=false, both timestamps null).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The /api/dev/trial/* endpoints require X-User-Id header equal to one of the admin UIDs listed in /app/memory/test_credentials.md. The trial_dev_override flag is toggled ON by any seed-* endpoint and OFF by reset — remember to always call reset at end of test to leave admin profile clean. Test file: /app/backend/tests/test_trial_seed_endpoints_jan2026.py — reusable for future regression.",
+  "rca_of_issue": "N/A — verifying fix, no new bug found. Both original bugs (wrong collection write + unlimited bypass) are confirmed fixed by the current code and by observing that /api/trial/state now returns the exact state written by seed endpoints even for an admin (whitelisted unlimited) profile."
+}
