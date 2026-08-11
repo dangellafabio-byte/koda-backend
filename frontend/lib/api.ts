@@ -473,6 +473,21 @@ export const api = {
   getTrialState: () =>
     jsonReq<{ trial_state: "active" | "closing" | "expired" }>("/trial/state"),
 
+  /** === DEV TRIAL SEEDING (2026-08-11) — admin-only ===
+   * Endpoint di test per manipolare lo stato del trial dell'utente admin
+   * corrente senza consumare 7 minuti veri di TTS. Tutti restituiscono
+   * lo stesso TrialSeedResponse con lo stato risultante. */
+  devTrialSeedExpired: () =>
+    jsonReq<any>("/dev/trial/seed-expired", { method: "POST" }),
+  devTrialSeedClosing: () =>
+    jsonReq<any>("/dev/trial/seed-closing", { method: "POST" }),
+  devTrialSeedWindowExpired: () =>
+    jsonReq<any>("/dev/trial/seed-window-expired", { method: "POST" }),
+  devTrialReset: () =>
+    jsonReq<any>("/dev/trial/reset", { method: "POST" }),
+  devTrialInspect: () =>
+    jsonReq<any>("/dev/trial/inspect"),
+
   /** Incrementa il counter messaggi gratis. Da chiamare DOPO un turno
    * completo (utente + Koda), MA SOLO se NON in Confessionale. */
   freemiumIncrement: () =>

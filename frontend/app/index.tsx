@@ -74,7 +74,7 @@ import EclipseOrb from "../components/EclipseOrb";
 import MirrorPool from "../components/MirrorPool";
 import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
 import KodaSplash from "../components/KodaSplash";
-import KodaTour, { TourStep } from "../components/KodaTour";
+import TrialTestPanel from "../components/TrialTestPanel";import KodaTour, { TourStep } from "../components/KodaTour";
 import DisclaimerScreen from "../components/DisclaimerScreen";
 import * as ScreenDimmer from "../lib/screenDimmer";
 import * as SecureStore from "expo-secure-store";
@@ -6531,6 +6531,12 @@ export default function Taccuino() {
                   </View>
                   <Ionicons name="chevron-forward" size={16} color={theme.text + "66"} />
                 </TouchableOpacity>
+
+                {/* === TRIAL TEST PANEL (2026-08-11, Fabio) ===
+                    5 pulsanti per simulare stati del trial senza consumare
+                    7 minuti veri di TTS. Solo admin, gated dallo stesso
+                    isAdmin qui sopra. Componente separato in ../components/. */}
+                <TrialTestPanel visible={true} />
               </>
             ) : null}
 
