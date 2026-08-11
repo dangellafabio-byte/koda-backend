@@ -3724,6 +3724,115 @@ async def api_admin_unlimited_remove(email: str):
 # ============================================================
 
 
+# ============================================================
+# DEV ENDPOINTS — Trial state seeding (2026-08-10, Fabio)
+# ============================================================
+# Endpoint admin-only per manipolare lo stato trial dell'utente corrente
+# senza dover consumare 7 minuti veri di TTS ElevenLabs (~€0.64) per
+# testare l'overlay expired. Utilissimi per QA ripetuti in TestFlight.
+# Gated dietro `_require_admin()` — 403 per utenti normali.
+
+class TrialSeedResponse(BaseModel):
+    ok: bool
+    profile_id: str
+    trial_state: str
+    trial_seconds_used: float
+    trial_started_at: Optional[str]
+    trial_window_started_at: Optional[str]
+
+
+async def _apply_trial_seed(patch: dict) -> TrialSeedResponse:
+    """Helper condiviso: applica $set a trial_* per l'utente corrente,
+    ritorna lo stato risultante. Solo per test."""
+    uid = _require_admin()
+    await db.profiles.update_one({"_id": uid}, {"$set": patch}, upsert=True)
+    p = await get_or_create_profile()
+    return TrialSeedResponse(
+        ok=True,
+        profile_id=uid,
+        trial_state=_compute_trial_state(p),
+        trial_seconds_used=float(getattr(p, "trial_seconds_used", 0.0) or 0.0),
+        trial_started_at=getattr(p, "trial_started_at", None),
+        trial_window_started_at=getattr(p, "trial_window_started_at", None),
+    )
+
+
+@api_router.post("/dev/trial/seed-expired", response_model=TrialSeedResponse)
+async def api_dev_trial_seed_expired():
+    """DEV: forza il trial a stato 'expired' via budget esaurito.
+    Setta trial_seconds_used = 500 (> 420 = 7 min). Il TrialWatcher rileva
+    entro 30s e mostra l'overlay bloccante.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    logger.info("[dev/trial] seed EXPIRED requested")
+    return await _apply_trial_seed({
+        "trial_seconds_used": 500.0,
+        "trial_started_at": now_iso,
+    })
+
+
+@api_router.post("/dev/trial/seed-closing", response_model=TrialSeedResponse)
+async def api_dev_trial_seed_closing():
+    """DEV: forza il trial a stato 'closing' (zona 5-7 min).
+    Setta trial_seconds_used = 350 (>= 300 e < 420). Al prossimo turno
+    Koda riceverà il blocco 'chiusura naturale' nel prompt.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    logger.info("[dev/trial] seed CLOSING requested")
+    return await _apply_trial_seed({
+        "trial_seconds_used": 350.0,
+        "trial_started_at": now_iso,
+    })
+
+
+@api_router.post("/dev/trial/seed-window-expired", response_model=TrialSeedResponse)
+async def api_dev_trial_seed_window_expired():
+    """DEV: forza il trial a stato 'expired' via finestra scaduta.
+    Setta trial_window_started_at = 6 giorni fa (> 5 giorni), lasciando
+    invariato trial_seconds_used (utile per verificare che la finestra
+    scade indipendentemente dal budget residuo).
+    """
+    six_days_ago = (datetime.now(timezone.utc) - timedelta(days=6)).isoformat()
+    logger.info("[dev/trial] seed WINDOW-EXPIRED requested")
+    return await _apply_trial_seed({
+        "trial_window_started_at": six_days_ago,
+    })
+
+
+@api_router.post("/dev/trial/reset", response_model=TrialSeedResponse)
+async def api_dev_trial_reset():
+    """DEV: resetta il trial allo stato iniziale (attivo, 0 secondi usati,
+    finestra non ancora partita). Usalo tra un test e l'altro per tornare
+    a 'active' senza dover rifare l'onboarding.
+    """
+    logger.info("[dev/trial] RESET requested")
+    return await _apply_trial_seed({
+        "trial_seconds_used": 0.0,
+        "trial_started_at": None,
+        "trial_window_started_at": None,
+    })
+
+
+@api_router.get("/dev/trial/inspect", response_model=TrialSeedResponse)
+async def api_dev_trial_inspect():
+    """DEV: mostra lo stato raw del trial per l'utente corrente."""
+    uid = _require_admin()
+    p = await get_or_create_profile()
+    return TrialSeedResponse(
+        ok=True,
+        profile_id=uid,
+        trial_state=_compute_trial_state(p),
+        trial_seconds_used=float(getattr(p, "trial_seconds_used", 0.0) or 0.0),
+        trial_started_at=getattr(p, "trial_started_at", None),
+        trial_window_started_at=getattr(p, "trial_window_started_at", None),
+    )
+
+
+# ============================================================
+# FINE dev endpoints trial
+# ============================================================
+
+
 @api_router.post("/freemium/reset")
 async def api_freemium_reset():
     """DEV/DEBUG: resetta il counter free_messages_used a 0.
