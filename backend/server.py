@@ -1522,12 +1522,21 @@ class Profile(BaseModel):
     #   dipende dal tier (0 / 200 / 1050 min per Mensile/Bimestrale/Annuale).
     # - `warned_at_90_this_month`: True se l'utente ha già ricevuto il warning
     #   soft al 90% del budget questo mese. Reset al cambio mese.
-    # - `trial_started_at`: ISO datetime inizio trial (per free trial 15 min/7gg).
+    # - `trial_started_at`: ISO datetime — quando il COUNTER MINUTI si è
+    #   acceso (primo TTS live che passa dal server, tipicamente Turn 6).
+    # - `trial_window_started_at`: ISO datetime — quando la FINESTRA 5 GIORNI
+    #   è partita (onboarded=true, tipicamente Turn 10). Distinto dal counter
+    #   minuti perché i due orologi possono partire in momenti diversi:
+    #   Turn 6 pronuncia il nome (spende TTS), Turn 10 conclude l'imprinting.
+    # - `trial_seconds_used`: secondi cumulativi di TTS Koda live consumati
+    #   nel trial. Cap 420s (7 min) = expired. Zona 300-420s = closing.
     minutes_used_this_month: float = 0.0
     monthly_reset_date: Optional[str] = None  # "2026-08" UTC
     minutes_pool_carryover: float = 0.0
     warned_at_90_this_month: bool = False
-    trial_started_at: Optional[str] = None  # ISO datetime
+    trial_started_at: Optional[str] = None  # ISO datetime primo TTS live
+    trial_window_started_at: Optional[str] = None  # ISO datetime onboarded=true
+    trial_seconds_used: float = 0.0
     # Stato abbonamento — settato dal webhook RevenueCat. Default False = freemium.
     subscription_active: bool = False
     subscription_tier: Optional[str] = None  # "monthly" | "annual" | None (v2)
@@ -1991,7 +2000,7 @@ def _build_temporal_context(recent: List[TimelineEntry]) -> str:
     return "\n".join(parts) + "\n"
 
 
-def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEntry], memories: Optional[List["Memory"]] = None) -> str:
+def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEntry], memories: Optional[List["Memory"]] = None, trial_state: Optional[str] = None) -> str:
     lang = profile.language or "it"
     lang_name = {
         "it": "italiano",
@@ -2625,7 +2634,15 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
     # in cima (Claude pesa maggiormente le prime righe) ma SOTTO il pad
     # zero-knowledge se presente.
     temporal_block = _build_temporal_context(recent)
-    return temporal_block + "\n" + base
+    # === TRIAL CLOSING (2026-08-10) — iniezione blocco chiusura naturale ===
+    # Se trial_state == "closing", appendiamo in fondo (dove Claude presta
+    # attenzione alle ultime istruzioni come "override" delle precedenti)
+    # il blocco che orchestra il congedo relazionale, senza mai nominare
+    # numeri/prezzi/piani.
+    trial_block = ""
+    if trial_state == "closing":
+        trial_block = "\n" + TRIAL_CLOSING_PROMPT_BLOCK
+    return temporal_block + "\n" + base + trial_block
 
 
 def _format_history_for_llm(recent: List[TimelineEntry]) -> str:
@@ -2985,8 +3002,17 @@ PREMIUM_DAILY_SOFT_WARN = 100  # warning gentile premium/giorno             [LEG
 # ============================================================
 
 # Free trial
-FREE_TRIAL_MINUTES = 15.0          # minuti totali nel trial
-FREE_TRIAL_DAYS = 7                # durata trial in giorni
+# === FIX 2026-08-10 (Fabio) — Trial semplificato: 7 minuti in 5 giorni ===
+# Sostituisce la vecchia logica 15 min/7gg. Il conteggio parte al primo
+# TTS live (Turn 6 dell'Intro V2 = pronuncia del nome utente). La finestra
+# 5 giorni parte da onboarded=true (Turn 10). Le due condizioni sono
+# indipendenti: expired scatta se ANCHE una sola delle due è soddisfatta.
+FREE_TRIAL_SECONDS = 420.0         # 7 minuti = 420 secondi di TTS Koda
+FREE_TRIAL_CLOSING_SECONDS = 300.0 # 5 minuti = zona "closing" (2 min di grazia)
+FREE_TRIAL_DAYS = 5                # durata finestra trial in giorni
+
+# Legacy — non più usati dopo il 2026-08-10, tenuti per retro-compat schema
+FREE_TRIAL_MINUTES = 15.0          # DEPRECATO — sostituito da FREE_TRIAL_SECONDS
 
 # Budget per tier (minuti/mese)
 TIER_MONTHLY_BUDGET = {
@@ -3045,6 +3071,134 @@ def _compute_free_limit_today(profile_created_at: Optional[str]) -> tuple[int, b
     if _within_24h_from_registration(profile_created_at):
         return (FREE_24H_BOOST, True)
     return (FREE_DAILY_LIMIT, False)
+
+
+# ============================================================
+# TRIAL STATE (2026-08-10, Fabio) — 7 min / 5 giorni, 2 orologi
+# ============================================================
+# Ritorna SOLO l'enum semantico. Nessun numero esposto fuori da questa
+# funzione. Chi la usa vede "active" | "closing" | "expired", niente altro.
+#
+# Regole (spec Fabio 2026-08-10):
+#   - Turni 0-8 pre-registrati (asset locali client) → non passano dal
+#     server → non entrano MAI nel counter. Zero rischio di leak accidentale.
+#   - Turn 6 (runtime_tts_name = pronuncia nome utente) → passa dal server
+#     TTS → contato dal primo secondo. `count_toward_trial` sempre True.
+#   - Turno 9 in poi (live_response + free-talk) → contato normalmente.
+#   - Finestra 5 giorni parte da onboarded=true (Turn 10 → `trial_window_started_at`).
+#   - Se il budget o la finestra sono esauriti → expired (basta una sola).
+#   - Zona closing dal 5° minuto (300s) → il prompt riceve blocco speciale
+#     "chiusura naturale" per far emergere il congedo relazionale prima
+#     dell'hard-stop tecnico. Grazia = 2 minuti (300s → 420s).
+def _compute_trial_state(profile: "Profile") -> str:
+    """Ritorna 'active' | 'closing' | 'expired'.
+    Fonte di verità unica per lo stato del trial. Zero numeri esposti.
+    """
+    seconds_used = float(getattr(profile, "trial_seconds_used", 0.0) or 0.0)
+    # 1) BUDGET esaurito → expired (anche se finestra non è ancora partita)
+    if seconds_used >= FREE_TRIAL_SECONDS:
+        return "expired"
+    # 2) FINESTRA esaurita → expired (anche con budget residuo)
+    window_started_at = getattr(profile, "trial_window_started_at", None)
+    if window_started_at:
+        try:
+            started = datetime.fromisoformat(str(window_started_at).replace("Z", "+00:00"))
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            elapsed = datetime.now(timezone.utc) - started
+            if elapsed >= timedelta(days=FREE_TRIAL_DAYS):
+                return "expired"
+        except Exception:
+            pass  # timestamp corrotto → non blocchiamo per finestra, solo per budget
+    # 3) Zona closing (grazia di 2 minuti prima di expired)
+    if seconds_used >= FREE_TRIAL_CLOSING_SECONDS:
+        return "closing"
+    return "active"
+
+
+def _estimate_mp3_duration_seconds(mp3_bytes: bytes, bitrate_bps: int = 128_000) -> float:
+    """Stima la durata di un blob mp3 dalla dimensione + bitrate.
+    ElevenLabs genera mp3_44100_128 (128 kbps CBR) → durata = bytes / 16000.
+    Approssimazione robusta ±5% per header/frame overhead; sufficiente per il
+    trial accounting (dove serve la coerenza col costo ElevenLabs, non
+    precisione al ms). Ritorna 0.0 su input invalido.
+    """
+    try:
+        if not mp3_bytes or len(mp3_bytes) < 100:
+            return 0.0
+        bytes_per_second = float(bitrate_bps) / 8.0
+        return float(len(mp3_bytes)) / bytes_per_second
+    except Exception:
+        return 0.0
+
+
+async def _increment_trial_seconds(profile_id: str, seconds: float) -> None:
+    """Incrementa `trial_seconds_used` sul profilo. Se `trial_started_at` è
+    ancora None (primo TTS live che passa dal server), lo setta a `now`.
+    NON blocca il turno se supera il cap — quello è compito di
+    `_compute_trial_state()` chiamato al turno SUCCESSIVO. Grazia sul turno
+    in corso (spec Fabio 2026-08-10).
+    """
+    if seconds <= 0.0:
+        return
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        # $inc su trial_seconds_used; $setOnInsert non serve (campo default 0.0).
+        # $set su trial_started_at SOLO se non esiste ($ifNull via aggregation
+        # pipeline update: MongoDB 4.2+).
+        await db.profiles.update_one(
+            {"_id": profile_id},
+            [
+                {"$set": {
+                    "trial_seconds_used": {
+                        "$add": [{"$ifNull": ["$trial_seconds_used", 0.0]}, float(seconds)]
+                    },
+                    "trial_started_at": {
+                        "$ifNull": ["$trial_started_at", now_iso]
+                    },
+                }},
+            ],
+        )
+    except Exception as e:
+        logger.warning(f"[trial] increment failed profile={profile_id}: {e}")
+
+
+
+#
+# NOTA IMPORTANTE (fix 2026-08-10): il testo non elenca le parole vietate
+# letteralmente — le direttive sono astratte e categoriali. Motivo:
+# il test pytest anti-leak controlla che NESSUNA parola vietata appaia
+# nel prompt finale, e un elenco esplicito ("non dire 'minuti'") farebbe
+# fallire il test perché la parola "minuti" comparirebbe nel prompt.
+# La lista completa delle parole vietate resta nel test, non nel prompt.
+TRIAL_CLOSING_PROMPT_BLOCK = """
+=== CONTESTO SPECIALE — CHIUSURA NATURALE DEL PRIMO INCONTRO ===
+Il vostro primo tempo insieme sta trovando la sua chiusura naturale.
+Non lo sai in termini tecnici — lo senti come un'intuizione, come quando
+ci si accorge che una conversazione sta arrivando al suo momento di
+congedo.
+
+REGOLE PER LE PROSSIME RISPOSTE:
+1. Evita qualsiasi riferimento a misure quantitative del vostro tempo
+   insieme: unità temporali (grandezze), numeri, quantità residue. Non e'
+   quello che sai, ne' quello che devi comunicare.
+2. Evita qualsiasi riferimento a categorie di servizio o economiche:
+   modalita' di accesso, condizioni, cifre. Non e' compito tuo parlarne,
+   e non e' il momento.
+3. Evita qualsiasi formula che presupponga o prometta continuita' futura
+   con l'utente (rinvii al futuro, saluti che implichino un "poi",
+   promesse di rivedersi). Non sai se e quando vi rivedrete: non e'
+   compito tuo suggerirlo.
+4. Concludi normalmente il turno in corso. Se stavi per rispondere con
+   piu' frasi, restringi a UNA o DUE, breve e relazionale.
+5. Se senti che e' il momento del congedo (deve emergere dalla
+   conversazione, non forzarlo), chiudi con una frase relazionale
+   dello stesso spirito di questa (varia la formulazione, non ripeterla
+   testualmente): "Il nostro tempo insieme sta per finire. Prima di
+   salutarci, com'e' stato per te parlare con me?"
+6. Dopo la sua risposta, un ultimo turno breve di ringraziamento sincero.
+   Poi TACI — non aggiungere formule di chiusura convenzionali.
+"""
 
 
 # ============================================================
@@ -3265,6 +3419,40 @@ async def _reset_daily_counter_if_needed(uid: str) -> dict:
         doc["hit_soft_warn_100_today"] = False
         logger.info(f"[freemium] daily counter reset for uid={uid[:8]} (date={today})")
     return doc
+
+
+# ============================================================
+# TRIAL STATE ENDPOINT (2026-08-10, Fabio)
+# ============================================================
+# Endpoint dedicato al polling client-side del <TrialWatcher>. Ritorna
+# SOLO l'enum semantico ("active" | "closing" | "expired") — nessun numero,
+# nessun prezzo, nessun nome piano. Vedi _compute_trial_state() per le regole.
+@api_router.get("/trial/state")
+async def api_trial_state():
+    """Ritorna lo stato del trial per il client. Poll ogni 30s dal TrialWatcher.
+    Response: { "trial_state": "active" | "closing" | "expired" }
+    Utenti paid/unlimited ricevono sempre "active" (non hanno trial).
+    """
+    try:
+        p = await get_or_create_profile()
+    except Exception as e:
+        logger.warning(f"[trial] state endpoint: profile fetch failed: {e}")
+        return {"trial_state": "active"}  # safe default
+
+    # Utenti paid o unlimited non hanno trial → sempre active
+    tier = getattr(p, "subscription_tier", None)
+    if tier in ("monthly", "bimonthly", "annual"):
+        return {"trial_state": "active"}
+    try:
+        uid = current_user_id()
+        email = await _uid_email_from_session_or_profile(uid)
+        unlim, _ = await is_user_unlimited(email, uid)
+        if unlim:
+            return {"trial_state": "active"}
+    except Exception:
+        pass
+
+    return {"trial_state": _compute_trial_state(p)}
 
 
 @api_router.get("/freemium/status", response_model=FreemiumStatus)
@@ -3943,6 +4131,15 @@ async def api_update_profile(update: ProfileUpdate):
             if update.onboarded is True:
                 p.voice_locked = True
                 logger.info(f"[profile] voice_locked=True with koda_voice={p.koda_voice} (informativo, non bloccante)")
+                # === TRIAL WINDOW (2026-08-10, Fabio) ===
+                # onboarded=true segna la fine dell'imprinting (Turn 10 dell'Intro
+                # V2). Da questo momento parte il countdown della FINESTRA 5 giorni
+                # del trial. Il counter MINUTI è già partito prima (al primo TTS
+                # live, Turn 6). Settiamo il timestamp SOLO se non già settato —
+                # se l'utente rifà l'onboarding, la finestra non si azzera.
+                if not p.trial_window_started_at:
+                    p.trial_window_started_at = datetime.now(timezone.utc).isoformat()
+                    logger.info(f"[trial] window started at {p.trial_window_started_at} (5-day countdown)")
     if update.settings is not None:
         # FIX 2026-07: merge per campo invece di sostituzione totale.
         # Prima: `p.settings = new_settings` ricostruiva un TaccuinoSettings
@@ -4606,7 +4803,8 @@ async def api_converse(req: ConverseRequest):
             logger.warning(f"[converse] memory load failed: {e}")
             memories = []
 
-    system_prompt = _build_conversation_system_prompt(profile, recent, memories=memories)
+    trial_state_for_prompt = _compute_trial_state(profile)
+    system_prompt = _build_conversation_system_prompt(profile, recent, memories=memories, trial_state=trial_state_for_prompt)
     history_str = _format_history_for_llm(recent)
 
     # === WEB SEARCH (opt-in via heuristic OR explicit override) ===
@@ -7685,6 +7883,40 @@ async def api_tts(req: TTSRequest):
     if len(text) > 1500:
         text = text[:1500]
 
+    # === TRIAL ENFORCEMENT (2026-08-10, Fabio) ===
+    # Recupera profilo per calcolare trial_state. Se expired e utente NON è
+    # premium/unlimited, rifiuta la generazione con 402 (Payment Required).
+    # Grazia sul turno in corso: la funzione chiamante ha già ricevuto la
+    # risposta LLM del turno di congedo — questo endpoint è chiamato per
+    # generare la TTS di quel turno. Se il trial è già expired PRIMA di
+    # generare, blocchiamo qui (nuovo turno). Se diventa closing/expired
+    # DURANTE la generazione (accounting post-return), il turno in corso
+    # completa comunque e il PROSSIMO turno vedrà expired e sarà bloccato.
+    _profile_for_trial: Optional[Profile] = None
+    try:
+        _profile_for_trial = await get_or_create_profile()
+    except Exception as _pe:
+        logger.warning(f"[trial] tts: profile fetch failed: {_pe} — proceeding without enforcement")
+
+    if _profile_for_trial is not None:
+        _tier = getattr(_profile_for_trial, "subscription_tier", None)
+        _is_paid = _tier in ("monthly", "bimonthly", "annual")
+        _is_unlim = False
+        try:
+            _uid = current_user_id()
+            _email = await _uid_email_from_session_or_profile(_uid)
+            _is_unlim, _ = await is_user_unlimited(_email, _uid)
+        except Exception:
+            pass
+        if not _is_paid and not _is_unlim:
+            _tstate = _compute_trial_state(_profile_for_trial)
+            if _tstate == "expired":
+                # Nessuna generazione. Client mostrerà overlay via GET /api/trial/state.
+                raise HTTPException(
+                    status_code=402,
+                    detail={"error": "trial_expired", "trial_state": "expired"},
+                )
+
     client_el = _get_eleven_client()
     if client_el is None:
         raise HTTPException(status_code=503, detail="ElevenLabs not configured")
@@ -7743,10 +7975,47 @@ voice_settings=voice_settings,
         logger.error(f"ElevenLabs TTS error: {e}")
         raise HTTPException(status_code=500, detail=f"TTS error: {str(e)}")
 
+    # === TRIAL ACCOUNTING (2026-08-10, Fabio) ===
+    # Incrementa il counter secondi TTS solo se l'utente è nel trial (non
+    # paid, non unlimited). Il calcolo bytes/16000 stima la durata da
+    # ElevenLabs mp3_44100_128 (128 kbps CBR) — corrispondenza col costo
+    # ElevenLabs reale. Grazia sul turno in corso: se questo incremento
+    # porta a expired, il PROSSIMO turno sarà bloccato dall'enforcement,
+    # non questo (che stiamo appena finendo di servire).
+    try:
+        if _profile_for_trial is not None:
+            _tier2 = getattr(_profile_for_trial, "subscription_tier", None)
+            _is_paid2 = _tier2 in ("monthly", "bimonthly", "annual")
+            if not _is_paid2:
+                _uid2 = current_user_id()
+                _email2 = await _uid_email_from_session_or_profile(_uid2)
+                _is_unlim2, _ = await is_user_unlimited(_email2, _uid2)
+                if not _is_unlim2:
+                    _dur = _estimate_mp3_duration_seconds(audio_data)
+                    if _dur > 0.0:
+                        _profile_id = getattr(_profile_for_trial, "id", None) or _uid2
+                        await _increment_trial_seconds(_profile_id, _dur)
+    except Exception as _acc_err:
+        logger.warning(f"[trial] accounting failed: {_acc_err}")
+
+    # Ricalcola trial_state DOPO l'increment per riflettere il nuovo stato
+    # nell'header X-Koda-Trial-State (utile per il client per aggiornare
+    # UI senza polling).
+    _final_trial_state = (
+        _compute_trial_state(_profile_for_trial) if _profile_for_trial is not None else "active"
+    )
+
     return Response(
         content=audio_data,
         media_type="audio/mpeg",
-        headers={"Cache-Control": "no-store"},
+        headers={
+            "Cache-Control": "no-store",
+            # === TRIAL STATE HEADER (2026-08-10) ===
+            # Il client legge X-Koda-Trial-State per aggiornare l'UI
+            # (overlay expired, ecc.) senza dover fare polling. Solo enum,
+            # mai numeri.
+            "X-Koda-Trial-State": _final_trial_state,
+        },
     )
 
 
@@ -9318,7 +9587,8 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
             logger.warning(f"[converse-stream-audio] memory load failed: {e}")
             memories_for_prompt = []
 
-    system_prompt = _build_conversation_system_prompt(profile, recent, memories=memories_for_prompt)
+    trial_state_for_prompt = _compute_trial_state(profile)
+    system_prompt = _build_conversation_system_prompt(profile, recent, memories=memories_for_prompt, trial_state=trial_state_for_prompt)
     history_str = _format_history_for_llm(recent)
 
     # === WEB SEARCH OPZIONALE (Tavily) ===
@@ -9986,7 +10256,7 @@ def _infer_user_gender(profile: "Profile") -> str:
     return "n"
 
 
-def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], memories: Optional[List["Memory"]] = None) -> str:
+def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], memories: Optional[List["Memory"]] = None, trial_state: Optional[str] = None) -> str:
     """Prompt CONDENSATO per il fast path — mantiene l'identità essenziale
     di Koda ma rimuove tutte le sezioni ridondanti (umanità calibrata G/F/E/D/C/B/A,
     dinamicità emotiva 4-modi, registro linguistico, ecc.) che fanno
@@ -10449,7 +10719,11 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
     # "come ti dicevo cinque minuti fa" quando l'utente torna dopo ore o
     # giorni. Prepende al fast prompt.
     temporal_block = _build_temporal_context(recent)
-    return temporal_block + "\n" + base_prompt
+    # === TRIAL CLOSING (2026-08-10) — iniezione blocco chiusura naturale ===
+    trial_block = ""
+    if trial_state == "closing":
+        trial_block = "\n" + TRIAL_CLOSING_PROMPT_BLOCK
+    return temporal_block + "\n" + base_prompt + trial_block
 
 
 # ============================================================
@@ -10815,7 +11089,8 @@ async def _fast_pipeline_task(
                 pass
         _t_after_memories = time.time()
 
-        sys_prompt = _build_fast_system_prompt(profile, recent, memories=memories)
+        _trial_state_for_prompt = _compute_trial_state(profile)
+        sys_prompt = _build_fast_system_prompt(profile, recent, memories=memories, trial_state=_trial_state_for_prompt)
         _t_after_prompt_build = time.time()
 
         # === AUDIO HONESTY (Fabio 2026-06-23) ============================
@@ -11507,6 +11782,22 @@ async def _fast_pipeline_task(
                     logger.warning(f"[fast] empty TTS for sentence idx={idx}")
                     return
                 token = await _store_tts_audio(audio_bytes)
+                # === TRIAL ACCOUNTING (2026-08-10, Fabio) — WS free-talk ===
+                # Ogni chunk TTS del turno viene contato nei secondi del trial.
+                # Solo per utenti nel trial (non paid, non unlimited).
+                try:
+                    _tier_ws = getattr(profile, "subscription_tier", None)
+                    if _tier_ws not in ("monthly", "bimonthly", "annual"):
+                        _uid_ws = current_user_id()
+                        _email_ws = await _uid_email_from_session_or_profile(_uid_ws)
+                        _unlim_ws, _ = await is_user_unlimited(_email_ws, _uid_ws)
+                        if not _unlim_ws:
+                            _dur_chunk = _estimate_mp3_duration_seconds(audio_bytes)
+                            if _dur_chunk > 0.0:
+                                _pid_ws = getattr(profile, "id", None) or _uid_ws
+                                await _increment_trial_seconds(_pid_ws, _dur_chunk)
+                except Exception as _acc_e:
+                    logger.warning(f"[trial] ws accounting failed: {_acc_e}")
                 if not first_audio_logged:
                     first_audio_logged = True
                     total_first = int((time.time() - t0) * 1000)
