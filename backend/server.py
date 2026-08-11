@@ -3449,30 +3449,33 @@ async def api_trial_state():
         p = await get_or_create_profile()
     except Exception as e:
         logger.warning(f"[trial] state endpoint: profile fetch failed: {e}")
-        return {"trial_state": "active"}  # safe default
+        return {"trial_state": "active", "dev_override": False}  # safe default
 
     # === DEV OVERRIDE (2026-08-11) ==========================================
     # Se l'utente ha attivato manualmente il trial override tramite gli
     # endpoint /api/dev/trial/seed-*, saltiamo i filtri paid/unlimited e
     # ritorniamo lo stato calcolato reale. Serve agli admin per testare
     # l'overlay expired sul proprio profilo (che è unlimited-whitelisted).
-    if getattr(p, "trial_dev_override", False):
-        return {"trial_state": _compute_trial_state(p)}
+    # Il flag viene esposto al client così il paywall può decidere se
+    # mostrare la X di uscita (dev override → sì, utente reale → no).
+    dev_override = bool(getattr(p, "trial_dev_override", False))
+    if dev_override:
+        return {"trial_state": _compute_trial_state(p), "dev_override": True}
 
     # Utenti paid o unlimited non hanno trial → sempre active
     tier = getattr(p, "subscription_tier", None)
     if tier in ("monthly", "bimonthly", "annual"):
-        return {"trial_state": "active"}
+        return {"trial_state": "active", "dev_override": False}
     try:
         uid = current_user_id()
         email = await _uid_email_from_session_or_profile(uid)
         unlim, _ = await is_user_unlimited(email, uid)
         if unlim:
-            return {"trial_state": "active"}
+            return {"trial_state": "active", "dev_override": False}
     except Exception:
         pass
 
-    return {"trial_state": _compute_trial_state(p)}
+    return {"trial_state": _compute_trial_state(p), "dev_override": False}
 
 
 @api_router.get("/freemium/status", response_model=FreemiumStatus)

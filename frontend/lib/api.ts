@@ -466,12 +466,15 @@ export const api = {
    * risposta di Koda per aggiornare il contatore visivo (3 → 2 → 1 → 0). */
   freemiumStatus: () => jsonReq<FreemiumStatus>("/freemium/status"),
 
-  /** === TRIAL STATE (2026-08-10) ===
-   * Ritorna solo l'enum "active" | "closing" | "expired" — nessun numero,
-   * nessun prezzo, nessun nome piano. Consumato dal <TrialWatcher> in
-   * polling ogni 30s. Utenti paid/unlimited ricevono sempre "active". */
+  /** === TRIAL STATE (2026-08-10, aggiornato 2026-08-11 con dev_override) ===
+   * Ritorna l'enum "active" | "closing" | "expired" — nessun numero,
+   * nessun prezzo, nessun nome piano. `dev_override` è true solo se
+   * l'admin ha attivato manualmente uno stato via /api/dev/trial/seed-*
+   * (usato dalla UI per abilitare l'uscita dal loop di test).
+   * Consumato dal <TrialWatcher> in polling ogni 30s.
+   * Utenti paid/unlimited ricevono sempre "active" (a meno di dev_override). */
   getTrialState: () =>
-    jsonReq<{ trial_state: "active" | "closing" | "expired" }>("/trial/state"),
+    jsonReq<{ trial_state: "active" | "closing" | "expired"; dev_override?: boolean }>("/trial/state"),
 
   /** === DEV TRIAL SEEDING (2026-08-11) — admin-only ===
    * Endpoint di test per manipolare lo stato del trial dell'utente admin

@@ -35,9 +35,15 @@ const TAG = "KODA_TRIAL_OVERLAY";
 type Props = {
   visible: boolean;
   onDismiss?: () => void;  // opzionale, chiamato quando l'utente naviga a paywall
+  /** Se true, mostra un pulsante secondario "🔧 Reset trial (dev)" che
+   * chiama onDevReset. Serve SOLO agli admin per uscire dal loop di test
+   * senza dover chiudere l'app. Per utenti reali resta hidden — l'overlay
+   * è bloccante by design. */
+  devOverride?: boolean;
+  onDevReset?: () => void | Promise<void>;
 };
 
-export default function TrialExpiredOverlay({ visible, onDismiss }: Props) {
+export default function TrialExpiredOverlay({ visible, onDismiss, devOverride, onDevReset }: Props) {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -145,6 +151,39 @@ export default function TrialExpiredOverlay({ visible, onDismiss }: Props) {
               Vedi i piani
             </Text>
           </Pressable>
+
+          {/* === DEV RESET (admin-only) =====================================
+              Visibile SOLO quando l'admin ha attivato il trial override
+              via /api/dev/trial/seed-*. Serve per uscire dal loop di test
+              senza dover chiudere l'app. Per utenti reali questo pulsante
+              NON viene mai renderizzato — l'overlay resta bloccante. */}
+          {devOverride && (
+            <Pressable
+              onPress={() => {
+                console.log(`[${TAG}] DEV RESET premuto`);
+                onDevReset?.();
+              }}
+              style={({ pressed }) => [
+                styles.devReset,
+                { opacity: pressed ? 0.6 : 1.0 },
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Reset trial (solo dev)"
+            >
+              <Text
+                style={[
+                  styles.devResetText,
+                  {
+                    color: theme.textMuted ?? (theme.isDark
+                      ? "rgba(255,255,255,0.55)"
+                      : "rgba(0,0,0,0.55)"),
+                  },
+                ]}
+              >
+                🔧 Reset trial (dev)
+              </Text>
+            </Pressable>
+          )}
         </View>
       </Animated.View>
     </Modal>
@@ -203,5 +242,19 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     letterSpacing: 0.2,
+  },
+  devReset: {
+    marginTop: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 40,
+  },
+  devResetText: {
+    fontSize: 13,
+    fontWeight: "500",
+    letterSpacing: 0.2,
+    textDecorationLine: "underline",
   },
 });

@@ -45,6 +45,7 @@ export default function TrialWatcher({ children }: Props) {
   const { user } = useAuth();
   const pathname = usePathname();
   const [trialState, setTrialState] = useState<TrialState>("active");
+  const [devOverride, setDevOverride] = useState<boolean>(false);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
 
@@ -60,6 +61,7 @@ export default function TrialWatcher({ children }: Props) {
     try {
       const res = await api.getTrialState();
       const next: TrialState = res?.trial_state ?? "active";
+      const nextOverride = Boolean(res?.dev_override);
       if (!mountedRef.current) return;
       setTrialState((prev) => {
         if (prev !== next) {
@@ -67,6 +69,7 @@ export default function TrialWatcher({ children }: Props) {
         }
         return next;
       });
+      setDevOverride(nextOverride);
     } catch {
       // Silenzio in offline / errore rete. Manteniamo l'ultimo stato.
       // Non spammiamo warn per ogni poll fallito.
@@ -139,6 +142,17 @@ export default function TrialWatcher({ children }: Props) {
       {children}
       <TrialExpiredOverlay
         visible={showOverlay}
+        devOverride={devOverride}
+        onDevReset={async () => {
+          // Solo per admin/dev: reset immediato dello stato trial per
+          // uscire dal loop di test senza dover chiudere l'app.
+          try {
+            await api.devTrialReset();
+            await fetchState();
+          } catch (e) {
+            console.warn(`[${TAG}] dev reset failed:`, e);
+          }
+        }}
         onDismiss={() => {
           // Nessun cambio di stato locale: il polling continuerà a
           // ricontrollare, e se l'utente completa l'acquisto il backend
