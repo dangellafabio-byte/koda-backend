@@ -1537,6 +1537,14 @@ class Profile(BaseModel):
     trial_started_at: Optional[str] = None  # ISO datetime primo TTS live
     trial_window_started_at: Optional[str] = None  # ISO datetime onboarded=true
     trial_seconds_used: float = 0.0
+    # === DEV-ONLY TRIAL OVERRIDE (2026-08-11 fix Fabio) ====================
+    # Flag attivato dagli endpoint /api/dev/trial/seed-* per permettere agli
+    # utenti admin (whitelist unlimited) di VEDERE lo stato trial calcolato,
+    # invece del bypass automatico "sempre active". Senza questo flag l'admin
+    # non può mai testare l'overlay expired sul proprio profilo.
+    # In produzione resta False → comportamento invariato per utenti reali.
+    # Viene resettato a False dall'endpoint /api/dev/trial/reset.
+    trial_dev_override: bool = False
     # Stato abbonamento — settato dal webhook RevenueCat. Default False = freemium.
     subscription_active: bool = False
     subscription_tier: Optional[str] = None  # "monthly" | "annual" | None (v2)
@@ -3146,8 +3154,12 @@ async def _increment_trial_seconds(profile_id: str, seconds: float) -> None:
         # $inc su trial_seconds_used; $setOnInsert non serve (campo default 0.0).
         # $set su trial_started_at SOLO se non esiste ($ifNull via aggregation
         # pipeline update: MongoDB 4.2+).
-        await db.profiles.update_one(
-            {"_id": profile_id},
+        # FIX 2026-08-11 (Fabio): la collection profili è `taccuino_profile`
+        # con chiave `id`, non `profiles`/`_id`. Prima di questo fix ogni
+        # increment finiva in una collection fantasma e il counter non
+        # avanzava mai → paywall trial di fatto inerte.
+        await db.taccuino_profile.update_one(
+            {"id": profile_id},
             [
                 {"$set": {
                     "trial_seconds_used": {
@@ -3438,6 +3450,14 @@ async def api_trial_state():
     except Exception as e:
         logger.warning(f"[trial] state endpoint: profile fetch failed: {e}")
         return {"trial_state": "active"}  # safe default
+
+    # === DEV OVERRIDE (2026-08-11) ==========================================
+    # Se l'utente ha attivato manualmente il trial override tramite gli
+    # endpoint /api/dev/trial/seed-*, saltiamo i filtri paid/unlimited e
+    # ritorniamo lo stato calcolato reale. Serve agli admin per testare
+    # l'overlay expired sul proprio profilo (che è unlimited-whitelisted).
+    if getattr(p, "trial_dev_override", False):
+        return {"trial_state": _compute_trial_state(p)}
 
     # Utenti paid o unlimited non hanno trial → sempre active
     tier = getattr(p, "subscription_tier", None)
@@ -3743,9 +3763,19 @@ class TrialSeedResponse(BaseModel):
 
 async def _apply_trial_seed(patch: dict) -> TrialSeedResponse:
     """Helper condiviso: applica $set a trial_* per l'utente corrente,
-    ritorna lo stato risultante. Solo per test."""
+    ritorna lo stato risultante. Solo per test.
+
+    FIX 2026-08-11 (Fabio): prima chiamava `db.profiles.update_one({"_id": uid})`
+    (collection e chiave sbagliate) → l'update finiva in una collection fantasma
+    e il seed non aveva alcun effetto visibile. Ora: prima assicura che il
+    profilo esista (via get_or_create_profile), poi aggiorna la collection
+    corretta `taccuino_profile` con chiave `id`.
+    """
     uid = _require_admin()
-    await db.profiles.update_one({"_id": uid}, {"$set": patch}, upsert=True)
+    # Assicura che il profilo esista prima di aggiornarlo (evita upsert
+    # parziale che romperebbe la validazione Pydantic al prossimo read).
+    await get_or_create_profile()
+    await db.taccuino_profile.update_one({"id": uid}, {"$set": patch})
     p = await get_or_create_profile()
     return TrialSeedResponse(
         ok=True,
@@ -3768,6 +3798,7 @@ async def api_dev_trial_seed_expired():
     return await _apply_trial_seed({
         "trial_seconds_used": 500.0,
         "trial_started_at": now_iso,
+        "trial_dev_override": True,
     })
 
 
@@ -3782,6 +3813,7 @@ async def api_dev_trial_seed_closing():
     return await _apply_trial_seed({
         "trial_seconds_used": 350.0,
         "trial_started_at": now_iso,
+        "trial_dev_override": True,
     })
 
 
@@ -3796,6 +3828,7 @@ async def api_dev_trial_seed_window_expired():
     logger.info("[dev/trial] seed WINDOW-EXPIRED requested")
     return await _apply_trial_seed({
         "trial_window_started_at": six_days_ago,
+        "trial_dev_override": True,
     })
 
 
@@ -3810,6 +3843,7 @@ async def api_dev_trial_reset():
         "trial_seconds_used": 0.0,
         "trial_started_at": None,
         "trial_window_started_at": None,
+        "trial_dev_override": False,
     })
 
 
