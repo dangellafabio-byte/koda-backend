@@ -477,6 +477,27 @@ export default function Taccuino() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      // === SKIP-SPLASH-AFTER-INTRO (2026-08-11, Fabio) ===
+      // Se l'utente arriva dall'Intro V2 (che ha appena vissuto 10 minuti di
+      // esperienza identitaria), skippa il KodaSplash da 10s per non
+      // interrompere la continuità. Il flag è un timestamp con TTL 60s:
+      // se troppo vecchio (crash tra fine intro e boot, o normale apertura
+      // dopo giorni), viene ignorato. In OGNI caso il flag viene cancellato
+      // qui, così non può restare appeso oltre il primo boot successivo.
+      try {
+        const raw = await SecureStore.getItemAsync("koda_intro_completed_at");
+        if (raw) {
+          // Cancella SEMPRE (anche se ignoriamo poi il valore): garanzia
+          // one-shot che sopravvive a qualsiasi race/crash.
+          try { await SecureStore.deleteItemAsync("koda_intro_completed_at"); } catch {}
+          const ts = parseInt(raw, 10);
+          if (!Number.isNaN(ts) && Date.now() - ts < 60_000) {
+            if (!cancelled) setShowSplash(false);
+          }
+        }
+      } catch {
+        // safe fallback: splash normale
+      }
       try {
         const seen = await SecureStore.getItemAsync("koda_intro_seen");
         if (!cancelled) setShowColorIntro(seen !== "1");

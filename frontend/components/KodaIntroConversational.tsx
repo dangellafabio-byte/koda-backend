@@ -59,6 +59,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import type { AudioPlayer } from "expo-audio";
+import * as SecureStore from "expo-secure-store";
 import { ExpoSpeechRecognitionModule } from "expo-speech-recognition";
 import type {
   ExpoSpeechRecognitionResultEvent,
@@ -742,6 +743,18 @@ export default function KodaIntroConversational() {
       console.warn(`[${TAG}] profile save failed:`, e);
     }
     if (!mountedRef.current) return;
+    // === SKIP-SPLASH FLAG (2026-08-11, Fabio) ===
+    // Scriviamo un timestamp che index.tsx leggerà al mount per decidere se
+    // saltare il KodaSplash da 10s. Il timestamp (invece di un semplice "1")
+    // permette a index.tsx di ignorare il flag se troppo vecchio — così un
+    // eventuale flag "appeso" (crash tra fine Intro e boot) non causerà un
+    // salto splash indebito settimane dopo. Comunque cancellato al primo
+    // boot successivo indipendentemente dall'esito (vedi handler in index.tsx).
+    try {
+      await SecureStore.setItemAsync("koda_intro_completed_at", String(Date.now()));
+    } catch (e) {
+      console.warn(`[${TAG}] set intro_completed_at flag failed:`, e);
+    }
     // Prefetch della Home in background, non blocca il fade
     try {
       // @ts-ignore - prefetch è disponibile su expo-router recenti
