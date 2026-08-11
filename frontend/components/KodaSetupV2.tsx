@@ -80,7 +80,7 @@ const EMAIL_HINT = "Serve per riconoscerti tra un accesso e l'altro.";
 const EMAIL_PLACEHOLDER = "tu@esempio.it";
 const EMAIL_CTA = "Continua";
 
-const MIC_PRE_TITLE = "Un ultimo passaggio";
+const MIC_PRE_TITLE = "Quasi pronto";
 const MIC_PRE_BODY = "Koda ha bisogno del microfono per parlare con te.";
 const MIC_PRE_CTA = "Concedi l'accesso";
 
