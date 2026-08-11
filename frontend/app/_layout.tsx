@@ -11,6 +11,7 @@ import { prewarmAudio } from "../lib/speech";
 import { loadProfileCache } from "../lib/localCache";
 import { AuthProvider, useAuth } from "../lib/auth";
 import LoginScreen from "../components/LoginScreen";
+import TrialWatcher from "../components/TrialWatcher";
 import { installDiagLogger } from "../lib/diagLogger";
 // === PIANO B FIX 2026-07-19 — static import (era lazy require) ===
 import { KODA_BACKEND_URL } from "../lib/backendUrl";
@@ -233,13 +234,15 @@ function RootLayout() {
           >
             <ThemedShell>
               <AuthGate>
-                <Stack
-                  screenOptions={{
-                    headerShown: false,
-                    contentStyle: { backgroundColor: "transparent" },
-                    animation: "fade",
-                  }}
-                />
+                <TrialWatcher>
+                  <Stack
+                    screenOptions={{
+                      headerShown: false,
+                      contentStyle: { backgroundColor: "transparent" },
+                      animation: "fade",
+                    }}
+                  />
+                </TrialWatcher>
               </AuthGate>
             </ThemedShell>
           </ThemeProvider>

@@ -466,6 +466,13 @@ export const api = {
    * risposta di Koda per aggiornare il contatore visivo (3 → 2 → 1 → 0). */
   freemiumStatus: () => jsonReq<FreemiumStatus>("/freemium/status"),
 
+  /** === TRIAL STATE (2026-08-10) ===
+   * Ritorna solo l'enum "active" | "closing" | "expired" — nessun numero,
+   * nessun prezzo, nessun nome piano. Consumato dal <TrialWatcher> in
+   * polling ogni 30s. Utenti paid/unlimited ricevono sempre "active". */
+  getTrialState: () =>
+    jsonReq<{ trial_state: "active" | "closing" | "expired" }>("/trial/state"),
+
   /** Incrementa il counter messaggi gratis. Da chiamare DOPO un turno
    * completo (utente + Koda), MA SOLO se NON in Confessionale. */
   freemiumIncrement: () =>
