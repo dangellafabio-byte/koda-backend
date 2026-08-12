@@ -80,7 +80,6 @@ export default function PaywallScreen() {
   // equilibrato senza favorire l'Annuale).
   const [selectedPlan, setSelectedPlan] = useState<PlanId>("bimonthly");
   const [loading, setLoading] = useState(false);
-  const [used, setUsed] = useState<number | null>(null);
   // Flag admin/dev override — se true il paywall permette una X sempre
   // funzionante. Per utenti reali con trial expired, la X è nascosta
   // (l'enforcement bloccante è voluto).
@@ -88,9 +87,6 @@ export default function PaywallScreen() {
   const [trialExpired, setTrialExpired] = useState<boolean>(false);
 
   useEffect(() => {
-    api.freemiumStatus()
-      .then((s) => setUsed(s.free_messages_used))
-      .catch(() => {});
     // Recupera lo stato trial per decidere se mostrare la X
     api.getTrialState()
       .then((s: any) => {
@@ -167,31 +163,15 @@ export default function PaywallScreen() {
 
         {/* Titolo + claim ufficiale */}
         <View style={styles.titleBlock}>
-          <Text style={[styles.title, { color: theme.text }]}>Parlare è sempre gratuito.</Text>
-          <Text style={[styles.body, { color: theme.textDim }]}>
-            Lascia andare resta sempre aperta a tutti.{"\n\n"}
-            Koda Premium esiste per chi desidera{" "}
-            <Text style={{ color: theme.text, fontWeight: "600" }}>costruire continuità nel tempo</Text>.
+          <Text style={[styles.title, { color: theme.text }]}>
+            Il primo incontro è gratuito.{"\n"}Se vuoi continuare, Koda è qui.
           </Text>
         </View>
 
-        {/* Lista benefici Premium — nessun nome di voce esposto */}
-        <View style={[styles.benefitsBox, { borderColor: theme.border, backgroundColor: theme.surface }]}>
-          <Benefit theme={theme} icon="🧭" text="Ricordare ciò che conta." />
-          <Benefit theme={theme} icon="🪡" text="Ritrovare i propri fili." />
-          <Benefit theme={theme} icon="🌱" text="Accorgersi di quanto sei cambiato lungo il cammino." />
-          <View style={[styles.benefitsDivider, { backgroundColor: theme.border }]} />
-          <Text style={[styles.benefitsListTitle, { color: theme.textDim }]}>Sblocchi:</Text>
-          <Text style={[styles.benefitsList, { color: theme.text }]}>
-            • Memoria completa della Stanza Quotidiana{"\n"}
-            • Continuità illimitata{"\n"}
-            • Voce di Koda{"\n"}
-            • Check-in proattivi{"\n"}
-            • Ricerca web in tempo reale
-          </Text>
-        </View>
-
-        {/* Plan cards — 3 tier, nessun badge fisso */}
+        {/* Plan cards — 3 tier, nessun badge fisso.
+            Nessuna lista "Sblocchi" sopra: le uniche promesse sono ciò che
+            il sistema garantisce oggi (prezzo, minuti/mese, carryover),
+            visibili direttamente sulle card qui sotto. */}
         <View style={{ marginTop: 24, gap: 12 }}>
           {PLANS.map((plan) => {
             const isSel = selectedPlan === plan.id;
@@ -247,13 +227,6 @@ export default function PaywallScreen() {
           <Text style={[styles.restoreText, { color: theme.text }]}>Ripristina acquisti</Text>
         </Pressable>
 
-        {used !== null && used >= 3 && (
-          <Text style={[styles.usedNote, { color: theme.textDim }]}>
-            Hai usato i tuoi {used} messaggi di prova della Stanza Quotidiana.
-            Lascia andare resta aperta.
-          </Text>
-        )}
-
         {/* Legal */}
         <View style={styles.legalRow}>
           <Pressable onPress={() => Linking.openURL(PRIVACY_URL).catch(() => {})}>
@@ -277,14 +250,13 @@ export default function PaywallScreen() {
   );
 }
 
-function Benefit({ theme, icon, text }: { theme: any; icon: string; text: string }) {
-  return (
-    <View style={styles.benefitRow}>
-      <Text style={styles.benefitIcon}>{icon}</Text>
-      <Text style={[styles.benefitText, { color: theme.text }]}>{text}</Text>
-    </View>
-  );
+function Benefit(_props: { theme: any; icon: string; text: string }) {
+  // Componente non più usato dopo rimozione sezione "Sblocchi" (Fabio 2026-08-12).
+  // Mantenuto vuoto per non rompere eventuali import residui.
+  return null;
 }
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const _keepBenefit = Benefit;
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
