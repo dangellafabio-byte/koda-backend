@@ -13410,6 +13410,18 @@ async def api_dbg_trace(body: dict):
 from legal import legal_router  # noqa: E402
 api_router.include_router(legal_router)
 
+# ============================================================
+# POC OpenAI Realtime API (Task 1, ago 2026) — isolato
+# ============================================================
+# Gli endpoint sono TUTTI admin-only e non hanno alcun contatto con
+# la pipeline di produzione Koda. Solo osservabilità/misura.
+try:
+    from poc_openai_realtime import register_poc_routes  # noqa: E402
+    register_poc_routes(api_router, _require_admin)
+    logger.info("[startup] POC OpenAI Realtime routes registered")
+except Exception as _poc_err:  # pragma: no cover
+    logger.warning(f"[startup] POC OpenAI Realtime routes NOT registered: {_poc_err}")
+
 app.include_router(api_router)
 
 # === DEMO SOUNDS (preview only) ============================================
