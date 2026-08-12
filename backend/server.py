@@ -3478,6 +3478,72 @@ async def api_trial_state():
     return {"trial_state": _compute_trial_state(p), "dev_override": False}
 
 
+# ============================================================
+# LASCIA ANDARE — AUTHORIZATION ENDPOINT (Fabio 2026-08-12)
+# ============================================================
+# Lascia Andare è tecnicamente 100% locale (zero rete, zero costo), MA
+# per policy deve essere accessibile SOLO durante trial attivo/closing
+# OPPURE con abbonamento attivo (o whitelist unlimited). Utenti con
+# trial expired e nessun abbonamento devono essere bloccati, senza
+# eccezioni per finestre di polling o offline malizioso.
+#
+# Questo endpoint è la fonte di verità server-side. Il client lo chiama
+# PRIMA di aprire la schermata (dal pulsante home) e DI NUOVO al mount
+# della schermata stessa (belt-and-suspenders). Se il client è offline
+# e non riesce a raggiungere questo endpoint, DI DEFAULT deve bloccare —
+# non consentire. La logica di default-deny sta nel client, ma questo
+# endpoint è il gate autorevole.
+#
+# Response schema:
+#   { "allowed": bool, "reason": "active"|"paid"|"unlimited"|"expired"|"unknown" }
+class LasciaAndareAuthResponse(BaseModel):
+    allowed: bool
+    reason: str
+
+
+@api_router.get("/lascia-andare/authorize", response_model=LasciaAndareAuthResponse)
+async def api_lascia_andare_authorize():
+    """Ritorna se l'utente può accedere a Lascia Andare in questo momento.
+
+    Regole:
+      - Utente premium (subscription_tier in monthly/bimonthly/annual) → allowed
+      - Utente unlimited (whitelist) → allowed
+      - Utente con trial_state in ("active", "closing") → allowed
+      - Utente con trial_state = "expired" e nessuna delle sopra → DENY
+
+    In caso di errore backend (profilo non caricabile), ritorna denied per
+    non aprire varchi accidentali.
+    """
+    try:
+        p = await get_or_create_profile()
+    except Exception as e:
+        logger.warning(f"[lascia-andare-auth] profile fetch failed: {e}")
+        return LasciaAndareAuthResponse(allowed=False, reason="unknown")
+
+    # Paid tier attivo → sempre ok
+    tier = getattr(p, "subscription_tier", None)
+    if tier in ("monthly", "bimonthly", "annual"):
+        return LasciaAndareAuthResponse(allowed=True, reason="paid")
+
+    # Whitelist unlimited (admin/tester) → sempre ok
+    try:
+        uid = current_user_id()
+        email = await _uid_email_from_session_or_profile(uid)
+        unlim, _ = await is_user_unlimited(email, uid)
+        if unlim:
+            return LasciaAndareAuthResponse(allowed=True, reason="unlimited")
+    except Exception:
+        pass
+
+    # Trial state — active/closing = ok, expired = deny
+    tstate = _compute_trial_state(p)
+    if tstate in ("active", "closing"):
+        return LasciaAndareAuthResponse(allowed=True, reason=tstate)
+
+    # tstate == "expired" e nessun bypass → DENY
+    return LasciaAndareAuthResponse(allowed=False, reason="expired")
+
+
 @api_router.get("/freemium/status", response_model=FreemiumStatus)
 async def api_freemium_status():
     """Stato del freemium per il client. Da chiamare al boot e dopo ogni

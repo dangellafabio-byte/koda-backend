@@ -49,6 +49,7 @@ import {
   playClosePhrase,
   stopAll as stopVoicePhrase,
 } from "../lib/lasciaAndareVoice";
+import { api } from "../lib/api";
 
 // ==== VAD tuning (calibrato sulla stessa scala di lib/voice.ts) ====
 const SPEECH_DB = -35; // sopra questa soglia → voce presente
@@ -117,6 +118,17 @@ export default function LasciaAndareScreen() {
   const [meterDb, setMeterDb] = useState<number>(-100);
   const [ready, setReady] = useState(false);
   const [permError, setPermError] = useState<string | null>(null);
+
+  // === LIVELLO 2+3 GUARD (Fabio 2026-08-12) ==========================
+  // Belt-and-suspenders del guard nel pulsante home: qui ricontrolliamo
+  // al mount della schermata. Copre race condition, deep-link diretti,
+  // AsyncStorage compromessa. Default-deny se rete assente o errore.
+  //
+  // "checking" → schermata nera minima, nessun audio permission richiesta,
+  //              nessun recorder inizializzato.
+  // "allowed"  → il resto degli useEffect può procedere normalmente.
+  // "denied"   → router.replace al paywall, nessun audio setup.
+  const [authorized, setAuthorized] = useState<"checking" | "allowed" | "denied">("checking");
 
   // Ref al recorder nativo (istanza AudioRecorder di expo-audio)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -208,7 +220,47 @@ export default function LasciaAndareScreen() {
   // loro moltiplicazione con orbEntryScale=0.3 le rende inizialmente
   // trascurabili, poi si integrano gradualmente man mano che entryScale
   // sale verso 1.0.
+  // === LIVELLO 2+3 AUTHORIZATION GATE (Fabio 2026-08-12) ===============
+  // Chiama /api/lascia-andare/authorize al mount. Se allowed=false o
+  // rete assente/errore → default-deny + replace verso /paywall.
+  // Fino a risposta, `authorized` resta "checking" e la schermata
+  // renderizza solo nero (nessun mic, nessun recorder, nessuna animation).
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let allowed = false;
+      try {
+        const res = await api.authorizeLasciaAndare();
+        allowed = Boolean(res?.allowed);
+      } catch (e) {
+        // Offline / errore rete → default-deny esplicito
+        console.warn("[LasciaAndare] authorize failed at mount (default-deny):", e);
+        allowed = false;
+      }
+      if (cancelled) return;
+      if (allowed) {
+        setAuthorized("allowed");
+      } else {
+        setAuthorized("denied");
+        // Rimanda al paywall. Sostituisce la history così back non
+        // riporta dentro Lascia Andare.
+        try {
+          router.replace("/paywall");
+        } catch (e) {
+          console.warn("[LasciaAndare] replace to /paywall failed:", e);
+          // Fallback: torna a home
+          try { router.replace("/"); } catch {}
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+
+  useEffect(() => {
+    // Guard: non avviare animazioni finché non autorizzato
+    if (authorized !== "allowed") return;
     const entry = Animated.parallel([
       Animated.timing(orbOpacity, {
         toValue: 1,
@@ -248,7 +300,7 @@ export default function LasciaAndareScreen() {
       stopVoicePhrase();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authorized]);
 
   // === RESPIRO CONTINUO (loop) =========================================
   // Onda sinusoidale lenta: l'orb "respira" anche in silenzio (~5.2s).
@@ -326,6 +378,12 @@ export default function LasciaAndareScreen() {
 
   // === SETUP — chiamato al mount ======================================
   useEffect(() => {
+    // === LIVELLO 2+3 GUARD ==============================================
+    // Non chiediamo permessi microfono né inizializziamo il recorder
+    // finché authorize non ha confermato l'accesso. Se denied, il
+    // guard useEffect sopra ha già triggerato router.replace.
+    if (authorized !== "allowed") return;
+
     let cancelled = false;
 
     const setup = async () => {
@@ -654,6 +712,13 @@ export default function LasciaAndareScreen() {
   }, [router, teardown, orbEntryScale, orbOpacity, hintOpacity, voiceScale, voiceKey]);
 
   // === RENDER ==========================================================
+  // Se non ancora autorizzato (in verifica) o negato (transitorio prima
+  // del replace verso /paywall) → schermo nero minimo, nessun contenuto
+  // sensibile né interazione. Questo è il gate visivo del Livello 2+3.
+  if (authorized !== "allowed") {
+    return <View style={[styles.root, { backgroundColor: "#000000" }]} />;
+  }
+
   return (
     <View style={styles.root}>
       {/* Uscita — pulsante discreto in alto a sinistra.

@@ -4942,7 +4942,7 @@ export default function Taccuino() {
               styles.confessionalToggle,
               confessionalMode && styles.confessionalToggleOn,
             ]}
-            onPress={() => {
+            onPress={async () => {
               // === LASCIA ANDARE (2026-07-17) ============================
               // Prima: apriva il flusso "Stanza dello Sfogo" (Confessionale
               // Zero-Knowledge con STT/LLM/TTS cifrati). Nuovo concept
@@ -4972,6 +4972,35 @@ export default function Taccuino() {
                 ((profile as any)?.koda_voice as string | undefined) ||
                 VID_TO_KV[(profile?.settings?.tts_voice_id as string) || ""] ||
                 "aria";
+
+              // === LIVELLO 1 GUARD (Fabio 2026-08-12) =====================
+              // Fonte di verità server-side: chiama /api/lascia-andare/authorize
+              // PRIMA di navigare. Se non allowed o rete assente/errore
+              // → DEFAULT DENY (no varchi anche gratuiti).
+              // Livello 2 (mount check dentro /lascia-andare) fa da belt-and-
+              // suspenders per race condition e deep-link.
+              let allowed = false;
+              try {
+                const res = await api.authorizeLasciaAndare();
+                allowed = Boolean(res?.allowed);
+              } catch (e) {
+                // Offline o errore → default-deny esplicito. Non aprire varchi.
+                console.warn("[LasciaAndare] authorize failed (default-deny):", e);
+                allowed = false;
+              }
+
+              if (!allowed) {
+                Alert.alert(
+                  "Lascia Andare non è disponibile",
+                  "Questa stanza è riservata a chi ha un abbonamento attivo. Scegli un piano per continuare a stare con Koda.",
+                  [
+                    { text: "Non ora", style: "cancel" },
+                    { text: "Vedi i piani", onPress: () => router.push("/paywall") },
+                  ],
+                );
+                return;
+              }
+
               try {
                 router.push(`/lascia-andare?voice=${encodeURIComponent(kv)}`);
               } catch (e) {

@@ -476,6 +476,14 @@ export const api = {
   getTrialState: () =>
     jsonReq<{ trial_state: "active" | "closing" | "expired"; dev_override?: boolean }>("/trial/state"),
 
+  /** === LASCIA ANDARE AUTHORIZATION (2026-08-12) ===
+   * Fonte di verità server-side per l'accesso a Lascia Andare.
+   * Chiamata SEMPRE prima di navigare e/o al mount della schermata.
+   * Se il fetch fallisce (offline), il chiamante DEVE trattare come
+   * denied (default-deny per policy). Non aprire varchi lato client. */
+  authorizeLasciaAndare: () =>
+    jsonReq<{ allowed: boolean; reason: string }>("/lascia-andare/authorize"),
+
   /** === DEV TRIAL SEEDING (2026-08-11) — admin-only ===
    * Endpoint di test per manipolare lo stato del trial dell'utente admin
    * corrente senza consumare 7 minuti veri di TTS. Tutti restituiscono
