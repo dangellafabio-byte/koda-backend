@@ -11989,6 +11989,17 @@ async def _fast_pipeline_task(
                     return bytes(audio)
 
                 t_tts = time.time()
+                # === [KODA_TIMING] TTS_REQUEST (Fabio 2026-08-12) ===
+                # Timestamp di INIZIO chiamata a ElevenLabs. Serve a
+                # distinguere il tempo "prima di iniziare la request" (setup
+                # kwargs, model choice, previous_text prep) dal tempo
+                # "dentro la request" (TTS_TTFB) e dal totale (TTS_START).
+                # Insieme a TTS_TTFB permette di calcolare: overhead_setup =
+                # TTS_REQUEST - LLM_TTFT (ma solo per idx=0).
+                logger.info(
+                    f"[KODA_TIMING] TTS_REQUEST sid={session_id[:8]} idx={idx} "
+                    f"model={model_id} chars={len(clean_tts) if 'clean_tts' in dir() else len(clean)}"
+                )
                 audio_bytes = await asyncio.to_thread(_do_tts)
                 tts_ms = int((time.time() - t_tts) * 1000)
                 logger.info(f"[fast] sentence idx={idx} chars={len(clean)} tts_ms={tts_ms} mp3_bytes={len(audio_bytes)}")
