@@ -27,6 +27,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { TouchableOpacity as GHTouchableOpacity } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
+import HandsFreeOrb from "../components/HandsFreeOrb";
 import { FlashList } from "@shopify/flash-list";
 import LatencyOverlay from "../components/LatencyOverlay";
 import { traceStart, traceMark } from "../lib/latencyTracer";
@@ -4819,12 +4820,15 @@ export default function Taccuino() {
         </View>
       )}
       {/* Toast hands-free: conferma visuale rapida quando l'utente
-          attiva/disattiva la modalità (da voce o da toggle). */}
+          attiva/disattiva la modalità (da voce o da toggle).
+          Posizione (Fabio 2026-08-12): centrato nello spazio negativo tra
+          il pill "Lascia andare" (~top 150) e l'orb eclipse (~top 272) —
+          non deve MAI coprire "Lascia andare" né toccare l'orb. */}
       {handsFreeToast && (
         <View
           style={[
             styles.savedBanner,
-            { top: Math.max(insets.top + 120, 170) },
+            { top: Math.max(insets.top + 195, 235) },
           ]}
           pointerEvents="none"
         >
@@ -4838,12 +4842,13 @@ export default function Taccuino() {
       )}
       {/* Banner "Dimmi, ti ascolto" — appare la prima volta che parte la
           sessione hands-free. Suggerisce all'utente che può iniziare a
-          parlare. Sparisce automaticamente o appena il VAD rileva voce. */}
+          parlare. Sparisce automaticamente o appena il VAD rileva voce.
+          Stessa posizione del toast per coerenza visiva. */}
       {listenBanner && !handsFreeToast && (
         <View
           style={[
             styles.savedBanner,
-            { top: Math.max(insets.top + 120, 170) },
+            { top: Math.max(insets.top + 195, 235) },
           ]}
           pointerEvents="none"
         >
@@ -4860,20 +4865,23 @@ export default function Taccuino() {
         style={[styles.header, { top: Math.max(insets.top + 28, 70), justifyContent: "space-between" }]}
         pointerEvents="box-none"
       >
-        {/* Slot sinistro: toggle Hands-Free. */}
+        {/* Slot sinistro: toggle Hands-Free.
+            Modello mentale (2026-08-12):
+              - default = automatico (hands-free ON): orb piccolo fermo +
+                arco verde che scorre fluido lungo il perimetro.
+              - tap = passa a manuale: orb resta, l'arco sparisce.
+              - tap di nuovo = torna automatico.
+            L'icona è UNA sola (<HandsFreeOrb>), cambia solo il suo stato
+            visivo tramite la prop `active`. */}
         <TouchableOpacity
           ref={handsFreeBtnRef}
           style={[styles.headerBtn, { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" }]}
           onPress={() => setHandsFreeMode(!handsFree)}
           hitSlop={20}
           testID="hands-free-toggle"
-          accessibilityLabel={handsFree ? "Hands-free attivo, tocca per disattivare" : "Hands-free spento, tocca per attivare"}
+          accessibilityLabel={handsFree ? "Modalità automatica attiva, tocca per passare a manuale" : "Modalità manuale, tocca per tornare all'automatico"}
         >
-          <Ionicons
-            name={handsFree ? "pulse" : "pulse-outline"}
-            size={22}
-            color={handsFree ? "#34D399" : (theme.isDark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.55)")}
-          />
+          <HandsFreeOrb active={handsFree} size={26} />
         </TouchableOpacity>
         {/* Slot destro: Menu impostazioni. Pulsante audio Modalità Telefono
             rimosso nel rollback 2026-07-13 (regressioni STT). */}
