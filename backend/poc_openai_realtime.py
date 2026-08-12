@@ -67,10 +67,11 @@ ALLOWED_MODELS = {
     # NB: translate model ha API leggermente diversa; escluso dal POC MVP.
 }
 
-# Voci Realtime API (docs OpenAI). "alloy", "echo", "shimmer" hanno IT
-# discreto; "verse" e "sage" sono i più naturali per italiano.
-ALLOWED_VOICES = {"alloy", "echo", "shimmer", "verse", "sage", "ballad", "coral", "ash"}
-DEFAULT_VOICE = "sage"
+# Voci Realtime API GA (docs OpenAI, ago 2026). Docs raccomanda
+# `marin` o `cedar` come più naturali per qualità. `sage`/`verse` funzionano
+# bene in italiano; `alloy`/`echo` più neutrali.
+ALLOWED_VOICES = {"alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"}
+DEFAULT_VOICE = "marin"
 
 # Pricing token-based (docs OpenAI ago 2026, per 1M token):
 #   gpt-realtime-2.1:
@@ -268,18 +269,31 @@ async def _run_text_turn(
     m.t_connect_ms = int((time.time() - t0) * 1000)
 
     try:
-        # 1. Configura la sessione
+        # 1. Configura la sessione (schema GA agosto 2025+)
+        # NB: schema completamente diverso dalla beta:
+        #   - `session.type: "realtime"` OBBLIGATORIO
+        #   - voce annidata in `audio.output.voice`
+        #   - formati audio annidati in `audio.input.format` / `audio.output.format`
+        #   - `output_modalities` (non più `modalities`)
+        #   - `turn_detection` è in `audio.input.turn_detection`
         await ws.send(json.dumps({
             "type": "session.update",
             "session": {
+                "type": "realtime",
+                "model": model,
                 "instructions": instructions,
-                "voice": voice,
-                "input_audio_format": "pcm16",
-                "output_audio_format": "pcm16",
-                "modalities": ["audio", "text"],
-                # No VAD per il POC testo — inviamo un turno esplicito.
-                "turn_detection": None,
-                "temperature": 0.8,
+                "output_modalities": ["audio"],  # audio include automaticamente il transcript
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": 24000},
+                        # VAD off: mandiamo un turno testuale esplicito.
+                        "turn_detection": None,
+                    },
+                    "output": {
+                        "format": {"type": "audio/pcm", "rate": 24000},
+                        "voice": voice,
+                    },
+                },
             },
         }))
 
@@ -293,13 +307,12 @@ async def _run_text_turn(
             },
         }))
 
-        # 3. Richiedi la risposta (audio + testo)
+        # 3. Richiedi la risposta (audio; il transcript arriva insieme)
         t_send = time.time()
         await ws.send(json.dumps({
             "type": "response.create",
             "response": {
-                "modalities": ["audio", "text"],
-                "voice": voice,
+                "output_modalities": ["audio"],
                 # Cap ragionevole per il POC — 1500 token = ~1.5min audio
                 "max_output_tokens": 1500,
             },
@@ -311,14 +324,15 @@ async def _run_text_turn(
             first_text_seen = False
             async for raw in ws:
                 if isinstance(raw, bytes):
-                    # Realtime API manda tutto in JSON con base64 audio.
+                    # Realtime API GA manda tutto in JSON con base64 audio.
                     continue
                 try:
                     ev = json.loads(raw)
                 except Exception:
                     continue
                 etype = ev.get("type") or ""
-                if etype == "response.audio.delta":
+                # === Schema GA (ago 2025+): audio delta è response.output_audio.delta
+                if etype in ("response.output_audio.delta", "response.audio.delta"):
                     if not first_delta_seen:
                         first_delta_seen = True
                         m.t_first_delta_ms = int((time.time() - t_send) * 1000)
@@ -329,12 +343,18 @@ async def _run_text_turn(
                         m.audio_chunks += 1
                     except Exception:
                         pass
-                elif etype == "response.audio_transcript.delta":
+                elif etype in (
+                    "response.output_audio_transcript.delta",
+                    "response.audio_transcript.delta",
+                ):
                     if not first_text_seen:
                         first_text_seen = True
                         m.t_first_text_ms = int((time.time() - t_send) * 1000)
                     m.transcript_out += (ev.get("delta") or "")
-                elif etype == "response.audio_transcript.done":
+                elif etype in (
+                    "response.output_audio_transcript.done",
+                    "response.audio_transcript.done",
+                ):
                     if not m.transcript_out and ev.get("transcript"):
                         m.transcript_out = ev.get("transcript") or ""
                 elif etype == "response.done":

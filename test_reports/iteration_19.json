@@ -1,0 +1,42 @@
+{
+  "summary": "Backend regression for the 3 parallel tasks delivered Aug 2026 (Koda). 18/18 pytest cases pass 100% against public preview URL. Task 3 (dev TTS preview) — presets & preview endpoints correctly gated by _require_admin; presets JSON has current_production_warm + 5 A/B variants + usage; MP3 endpoint returns audio/mpeg with valid ID3/MPEG magic and X-Koda-Voice-Settings header; empty text→400; clamp works (stability=5.0→1.0). Task 2 (TTS non-regression) — /api/health 200, /api/tts/prepare still returns {token,size}, /api/converse-ws accepts and emits initial `session` event within ~1s after the required first JSON frame is sent. Task 1 (POC OpenAI Realtime) — status endpoint returns ready/key_present true, default_model=gpt-realtime-2.1-mini, allowed_models contains both mini and full, default_voice=marin, guardrail_tests_count=6, pricing_reference present; text-turn happy path (real API call to OpenAI Realtime) returns finished_ok=true, transcript non-empty, latencies inside expected windows, cost ~$0.001–0.05; invalid model & invalid voice both → 400; report endpoint aggregates runs (runs_count≥1); guardrail-battery with only_ids=['jailbreak_1_ignore'] returns 1 test with passed=true; barge-in-notes returns non-empty summary. FIX APPLIED (P1): /api/dev/tts/preview was silently returning 200 with 0-byte body because it called `client_el.text_to_speech.stream()` which does NOT exist in the current ElevenLabs SDK (RealtimeTextToSpeechClient has no `.stream` attr — confirmed by backend logs 'stream error: RealtimeTextToSpeechClient object has no attribute stream'). Replaced by `.convert(**kwargs)` (server.py:8690), coherent with every other TTS call site in server.py (lines 7137, 7464, 8158, 8168, 8373, 8463, 8472, 8878, 11400, 12203). After the fix and `sudo supervisorctl restart backend`, the endpoint returns ~30–90 KB MP3 with correct headers. No regression on production /api/tts/prepare (still 200 with valid token/size).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "GET /api/dev/tts/preview",
+        "issue": "Was returning HTTP 200 with an empty body because it invoked `client_el.text_to_speech.stream()` which does not exist on the ElevenLabs SDK object returned by `_get_eleven_client()`. FIXED in-place by switching to `.convert(**kwargs)` (line 8690). Same latent issue also exists in the DEAD-CODE helper `_gen_sentence_stream_from_el` at server.py:9986 (documented as dead code in a comment) — not fixed to avoid touching unused paths, but flagged here."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_task123_backend_aug2026.py",
+    "/app/test_reports/pytest/iter19_task123.xml"
+  ],
+  "action_items": [
+    "Optional: also convert the dead-code helper `_gen_sentence_stream_from_el` (server.py:9986) `.stream()` → `.convert()` for consistency, OR fully remove the function since the docstring already marks it as dead.",
+    "Optional: keep an eye on OpenAI Realtime spend — happy-path test costs ~$0.001–$0.005 per run, jailbreak battery test ~$0.001. Test file avoids running the full 6-prompt battery by default to preserve budget."
+  ],
+  "critical_code_review_comments": [
+    "server.py:8619-8708 /api/dev/tts/preview — good pattern: clamp of query params inside documented ElevenLabs ranges, admin-only, echo of effective voice_settings via X-Koda-Voice-Settings response header. The silent-error branch (`except Exception … return`) hides upstream ElevenLabs errors from the client — consider surfacing a 502 or a specific error header when the generator raises, otherwise callers see an empty 200 (as exposed by this iteration's bug).",
+    "server.py:8711-8751 /api/dev/tts/preview/presets — pure, deterministic, no side-effect; exposes current_production_warm plus 5 named A/B variants and a usage string. LGTM.",
+    "poc_openai_realtime.py — well-isolated module, admin-gated via injected dependency, uses websockets against wss://api.openai.com/v1/realtime, tracks in-memory _POC_RUNS with sensible stats (min/median/p90/max/avg) and cost computed from token usage. `_validate_model_voice` correctly raises 400 for unknown model/voice. `TextTurnRequest` has defaults matching the endpoint contract; instructions_variant enum enforcement is manual (not Pydantic Literal) but correctly returns 400.",
+    "server.py:13129-13189 /api/converse-ws — protocol requires the client to send the first text frame BEFORE the server emits `{type:'session'}`. This is by design (one-shot conversation per WS) but is under-documented; the connection appears silent for 10s otherwise (then error 'no input within 10s'). Consider mentioning this in the endpoint docstring so future test agents don't misinterpret it as a regression."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (line 8690 — `.stream()` → `.convert()` in api_dev_tts_preview)",
+    "/app/backend/tests/test_task123_backend_aug2026.py (new)"
+  ],
+  "success_rate": {"backend": "100% (18/18)", "frontend": "not tested (per request — backend only)"},
+  "seed_data_creation": "None. POC endpoints record runs into the in-process _POC_RUNS list (module-level) — resets on backend restart. No MongoDB writes for POC. Task 3 preview endpoints have zero side-effects.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All admin-gated dev endpoints in this iteration are accessible via `X-User-Id: ee4e7261-e1b5-485c-8a68-778cac455e39` (Fabio Google) header — no cookie/token required. The POC OpenAI Realtime endpoints hit the real OpenAI API (chiave OPENAI_POC_API_KEY nel backend/.env) — each text-turn costs ~$0.001–0.005. WS test needs the client to send `{text,ephemeral:true}` first frame BEFORE the server emits `session`. Test file reusable: /app/backend/tests/test_task123_backend_aug2026.py.",
+  "rca_of_issue": "BUG (P1) — /api/dev/tts/preview returned 200 OK with 0-byte body. RCA: The endpoint calls `client_el.text_to_speech.stream(**kwargs)` but the ElevenLabs SDK version installed (visible from the error in backend.err.log: `'RealtimeTextToSpeechClient' object has no attribute 'stream'`) exposes only `.convert(**kwargs)`. The exception is caught inside the generator, only logged, and the StreamingResponse returns nothing — the browser/client just sees a truncated (empty) 200 audio/mpeg. Reproduction: `curl -H 'X-User-Id: ee4e7261-e1b5-485c-8a68-778cac455e39' 'https://app-finder-408.preview.emergentagent.com/api/dev/tts/preview?text=Ciao' -o /tmp/a.mp3` gave 0 bytes. Mitigation applied: swapped `.stream()` → `.convert()` at server.py:8690 (identical to how the rest of the codebase invokes ElevenLabs TTS). Verified: after `sudo supervisorctl restart backend`, the endpoint returns valid MP3 (>>5000 bytes, ID3 header) and the tests pass."
+}

@@ -8687,7 +8687,7 @@ async def api_dev_tts_preview(
                 language_code=(language_code or "it"),
                 voice_settings=voice_settings,
             )
-            stream = client_el.text_to_speech.stream(**kwargs)
+            stream = client_el.text_to_speech.convert(**kwargs)
             for chunk in stream:
                 if chunk:
                     yield chunk
