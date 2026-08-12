@@ -11749,6 +11749,11 @@ async def _fast_pipeline_task(
 
                 def _do_tts():
                     audio = bytearray()
+                    # === [KODA_TIMING] anchor for TTS_TTFB (Fabio 2026-08-12) ===
+                    # Timestamp locale che ci permette di misurare quanto
+                    # ElevenLabs impiega a mandare il PRIMO byte MP3 dopo che
+                    # il client_el.text_to_speech.convert() è stato chiamato.
+                    _t_do_tts_start = time.time()
                     # === FIX BUG SPAGNOLO (giugno 2026 v4) ===
                     # eleven_flash_v2_5 è multilingue: SENZA language_code
                     # esplicito, ElevenLabs auto-detecta la lingua dal testo.
@@ -11920,6 +11925,20 @@ async def _fast_pipeline_task(
 
                         for chunk in gen:
                             if chunk:
+                                # === [KODA_TIMING] TTS_TTFB (Fabio 2026-08-12) ===
+                                # Primo byte MP3 ricevuto da ElevenLabs.
+                                # Separa "tempo che ElevenLabs impiega a
+                                # generare il primo audio" da "tempo che
+                                # impiega a completare l'intera generazione".
+                                # Utile per capire se rallentamenti dipendono
+                                # da TTFB (rete/coda ElevenLabs) o dalla
+                                # durata della sintesi.
+                                if idx == 0 and not audio:
+                                    _tts_ttfb_ms = int((time.time() - _t_do_tts_start) * 1000)
+                                    logger.info(
+                                        f"[KODA_TIMING] TTS_TTFB sid={session_id[:8]} "
+                                        f"idx=0 model={model_id} ttfb_ms={_tts_ttfb_ms}"
+                                    )
                                 audio.extend(chunk)
                     except Exception as e:
                         logger.error(f"[fast] tts error: {e}")
@@ -12156,6 +12175,13 @@ async def _fast_pipeline_task(
         body_flushed: bool = False
         overflow_buffer: List[str] = []
 
+        # === [KODA_TIMING] CLAUDE_FIRST_80CHAR (Fabio 2026-08-12) ===============
+        # Traccia quando Claude ha prodotto abbastanza testo per il primo chunk
+        # TTS (soglia MIN_FIRST_CHUNK_CHARS=80). Misura la finestra tra "primo
+        # token Claude" e "chunk 0 pronto per essere inviato a ElevenLabs".
+        # Ci dice quanto la LLM impiega a "prendere il ritmo" oltre il TTFT.
+        _first_80char_logged = False
+
         async for chunk in stream:
             try:
                 piece = chunk.choices[0].delta.content or ''
@@ -12172,6 +12198,14 @@ async def _fast_pipeline_task(
             if new_chars:
                 sentence_buf += new_chars
                 full_reply_chars.append(new_chars)
+                # Marker: primo momento in cui Claude ha prodotto ≥80 char utili.
+                if not _first_80char_logged and len(sentence_buf) >= 80:
+                    _first_80char_logged = True
+                    _c80_ms = int((time.time() - t_llm_start) * 1000)
+                    logger.info(
+                        f"[KODA_TIMING] CLAUDE_FIRST_80CHAR sid={session_id[:8]} "
+                        f"ms_from_llm_start={_c80_ms} ms_from_ttft={_c80_ms - (timing_llm_ttft_ms or 0)}"
+                    )
                 while True:
                     # SOLO sulla prima frase usiamo l'early-chunk aggressivo:
                     # splittiamo al primo soft-break (virgola, due punti, em-dash)
@@ -12807,6 +12841,15 @@ async def _converse_ws_handler(websocket: WebSocket):
             await websocket.send_json({"type": "error", "message": "empty text"})
             await websocket.close()
             return
+        # === [KODA_TIMING] STT_FINAL (Fabio 2026-08-12) ==========================
+        # Timestamp server-side del momento in cui riceviamo il testo finale
+        # dell'utente dal client. Serve a decomporre la latenza end-to-end:
+        # da qui parte il countdown dei 4.5s osservati in TestFlight.
+        _t_stt_final_srv = time.time()
+        logger.info(
+            f"[KODA_TIMING] STT_FINAL sid={session_id[:8] if 'session_id' in dir() else '?'} "
+            f"text_chars={len(text)} stt_conf={req.get('stt_confidence')}"
+        )
         if not EMERGENT_LLM_KEY:
             await websocket.send_json({"type": "error", "message": "LLM key not configured"})
             await websocket.close()
