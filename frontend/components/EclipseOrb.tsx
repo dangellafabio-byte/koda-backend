@@ -69,6 +69,15 @@ type Props = {
    *  sfera l'identità della voce scelta in modo persistente.
    *  Default: false (mantiene il comportamento del main flow). */
   forceVoiceIdentity?: boolean;
+  /** === ORB SILENCE SYNC (Task 2 — Fabio 2026-08) ===
+   *  Se `speechActive === false` durante `status="speaking"`, la
+   *  pulsazione sillabica si smorza automaticamente su un valore
+   *  basso e regolare, così l'orb non "pulsa a vuoto" durante i
+   *  respiri/pause naturali di Koda. Default `true` = comportamento
+   *  attuale invariato. Cambiabile in tempo reale: alla prossima
+   *  chiamata di step() (max ~250ms dopo) il nuovo stato è già in
+   *  effetto. Nessun reset di fase quando torna a true. */
+  speechActive?: boolean;
 };
 
 // === Tone → aurora palette ([bright, mid, deep])
@@ -127,6 +136,7 @@ export default function EclipseOrb({
   meterThreshold,
   speakingPaletteOverride,
   forceVoiceIdentity = false,
+  speechActive = true,
 }: Props) {
   // === FIX 2026-08-04 v65 — Eclissi coerente in dark E light mode ===
   // Il disco centrale nero È l'identità dell'orb (eclissi = disco scuro
@@ -180,6 +190,15 @@ export default function EclipseOrb({
   const speakPulse = useRef(new Animated.Value(0)).current;
   // Recording inward "absorption" pulse
   const listenPulse = useRef(new Animated.Value(0)).current;
+
+  // === ORB SILENCE SYNC (Task 2, Fabio 2026-08) ===
+  // Ref sempre aggiornato al valore corrente di speechActive, così
+  // il closure step() (che vive per l'intero speaking) legge il
+  // valore fresco senza dover ripartire la sequenza.
+  const speechActiveRef = useRef(speechActive);
+  useEffect(() => {
+    speechActiveRef.current = speechActive;
+  }, [speechActive]);
 
   // === Continuous breath cycle (always running, regardless of status)
   useEffect(() => {
@@ -268,7 +287,19 @@ export default function EclipseOrb({
         const rand = Math.random();
         let intensity: number;
         let duration: number;
-        if (phraseCount >= 2 && rand < 0.18) {
+        // === ORB SILENCE SYNC (Task 2, Fabio 2026-08) ===
+        // Se il server ci ha detto che ora Koda sta facendo una pausa
+        // (respiro/silenzio ≥180ms dal RMS parsing), smorziamo la
+        // pulsazione a un valore quasi-piatto per la durata dello
+        // step corrente. Al prossimo step, se il silenzio è finito
+        // (speechActiveRef.current === true), riprende la cadenza
+        // normale senza reset. Fallback L3 implicito: se il server
+        // non manda mai speech_timeline, ref resta true → nessun
+        // cambiamento rispetto al comportamento attuale.
+        if (speechActiveRef.current === false) {
+          intensity = 0.08; // quasi piatto, non spegne del tutto (respiro visivo)
+          duration = 220 + Math.random() * 100; // step un po' più lunghi
+        } else if (phraseCount >= 2 && rand < 0.18) {
           intensity = 1.0;
           duration = 550 + Math.random() * 250;
           phraseCount = 0;

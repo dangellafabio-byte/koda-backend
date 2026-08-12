@@ -371,6 +371,13 @@ export default function Taccuino() {
     "loading" | "blocking" | "accepted"
   >("loading");
   const [status, _setStatusRaw] = useState<Status>("idle");
+  // === ORB SILENCE SYNC (Task 2 — Fabio 2026-08) ===
+  // Toggle in tempo reale che segue i silenzi RMS della TTS di Koda.
+  // `true` = sta parlando davvero → orb pulsa normale.
+  // `false` = silenzio percepito (respiro/pausa) → orb smorza la pulsazione.
+  // Fallback: se il server non manda `speech_timeline` questo resta `true`
+  // per tutto il turno → orb comportamento attuale (nessuna regressione).
+  const [speechActive, setSpeechActive] = useState<boolean>(true);
   // === FIX 2026-06-28 v32 — DIAG STATUS TRACING ===
   // Wrapper su setStatus per loggare OGNI transizione di stato con
   // timestamp + caller. Cruciale per diagnosticare il bug Android
@@ -408,6 +415,16 @@ export default function Taccuino() {
     statusRef.current = next;
     _setStatusRaw(next);
   }, [KODA_DEBUG_VERBOSE]);
+
+  // === ORB SILENCE SYNC — reset speechActive quando Koda smette di
+  // parlare. Se il turno finisce a metà (per errore/interrupt/close),
+  // vogliamo comunque tornare all'orb "attivo" così il prossimo turno
+  // parta pulito, non con una pulsazione smorzata residua.
+  useEffect(() => {
+    if (status !== "speaking" && speechActive === false) {
+      setSpeechActive(true);
+    }
+  }, [status, speechActive]);
 
   // === BUILD VERSION TAG 2026-06-28 v35 ===
   // Logga una sola volta all'avvio una stringa identificativa della build.
@@ -2725,6 +2742,16 @@ export default function Taccuino() {
                       speakingStarted = true;
                       clearTimeout(watchdog);
                       setStatus("speaking");
+                      // Reset a "attivo" quando comincia una nuova sentence.
+                      setSpeechActive(true);
+                    },
+                    // === ORB SILENCE SYNC (Task 2, Fabio 2026-08) ===
+                    // Attiva la desincronizzazione orb ↔ voce reale sui
+                    // silenzi. L'evento arriva ~200-400ms dopo il
+                    // `sentence`, calcolato server-side via RMS parsing
+                    // del MP3. Ignoriamo update dopo `speaking` finito.
+                    onSpeechActive: (active) => {
+                      try { setSpeechActive(!!active); } catch {}
                     },
                     onMeta: (meta) => {
                       capturedMeta = meta;
@@ -5132,6 +5159,7 @@ export default function Taccuino() {
                   >
                     <EclipseOrb
                       status={status}
+                      speechActive={speechActive}
                       // === IDLE = SEMPRE NEUTRAL (verde menta) ===
                       // Prima rimaneva ciclamino/urgente quando Koda era idle
                       // dopo aver dato una risposta "urgent" → l'utente credeva

@@ -8602,6 +8602,157 @@ voice_settings=voice_settings,
     )
 
 
+# ============================================================
+# DEV A/B VOICE TUNING (Task B — Fabio 2026-08)
+# ============================================================
+# Endpoint admin-only per generare rapidamente preview MP3 con parametri
+# ElevenLabs tunabili (stability/style/speed/similarity_boost) SENZA
+# toccare i default di produzione (`_voice_settings_for_tone`).
+#
+# Uso: chiamare da browser/curl passando i parametri come query string.
+# Ritorna un MP3 (audio/mpeg) che il browser riproduce inline. Salvando
+# 3-4 preset diversi in tab separate si fa A/B testing side-by-side.
+#
+# NIENTE tag audio, NIENTE previous_text, NIENTE stitching: vogliamo
+# ISOLARE l'effetto dei soli voice_settings sulla prosodia della frase.
+# ============================================================
+@api_router.get("/dev/tts/preview")
+async def api_dev_tts_preview(
+    text: str = "",
+    voice_id: str = "POuqf18evoXOKIqV2Px7",  # default Cielo (voce Koda produzione)
+    model_id: str = "eleven_flash_v2_5",
+    stability: float = 0.40,
+    style: float = 0.55,
+    speed: float = 0.91,
+    similarity_boost: float = 0.82,
+    use_speaker_boost: bool = True,
+    language_code: str = "it",
+):
+    """DEV-ONLY. Preview MP3 con voice_settings arbitrari.
+
+    Query params sono clampati nei range documentati ElevenLabs:
+      - stability      ∈ [0.0, 1.0]
+      - style          ∈ [0.0, 1.0]
+      - similarity     ∈ [0.0, 1.0]
+      - speed          ∈ [0.7, 1.2]  (fuori range ElevenLabs rifiuta)
+
+    NIENTE tag audio, NIENTE previous_text: risponde SOLO alle variazioni
+    dei voice_settings passati. Perfetto per A/B testing puro.
+
+    Esempio:
+      /api/dev/tts/preview?text=Ciao%20Fabio,%20eccomi.&stability=0.50&style=0.45&speed=0.88
+
+    Ritorna: audio/mpeg (MP3 128kbps) — il browser lo riproduce inline.
+    403 se non admin. 503 se ElevenLabs non configurato.
+    """
+    _require_admin()
+
+    text = (text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty text")
+    if len(text) > 800:
+        text = text[:800]
+
+    client_el = _get_eleven_client()
+    if client_el is None:
+        raise HTTPException(status_code=503, detail="ElevenLabs not configured")
+
+    # Clamp nei range documentati ElevenLabs.
+    def _clamp(v: float, lo: float, hi: float) -> float:
+        try:
+            return max(lo, min(hi, float(v)))
+        except (TypeError, ValueError):
+            return lo
+    voice_settings = {
+        "stability": _clamp(stability, 0.0, 1.0),
+        "similarity_boost": _clamp(similarity_boost, 0.0, 1.0),
+        "style": _clamp(style, 0.0, 1.0),
+        "speed": _clamp(speed, 0.7, 1.2),
+        "use_speaker_boost": bool(use_speaker_boost),
+    }
+    logger.info(
+        f"[dev/tts/preview] admin preview: model={model_id} vid={voice_id[:8]} "
+        f"chars={len(text)} stab={voice_settings['stability']:.2f} "
+        f"style={voice_settings['style']:.2f} speed={voice_settings['speed']:.2f} "
+        f"sim={voice_settings['similarity_boost']:.2f}"
+    )
+
+    def _iter_audio():
+        try:
+            kwargs = dict(
+                text=_strip_audio_tags(text) or text,  # zero tag: solo voice_settings
+                voice_id=voice_id,
+                model_id=model_id,
+                output_format="mp3_44100_128",
+                language_code=(language_code or "it"),
+                voice_settings=voice_settings,
+            )
+            stream = client_el.text_to_speech.stream(**kwargs)
+            for chunk in stream:
+                if chunk:
+                    yield chunk
+        except Exception as e:
+            logger.error(f"[dev/tts/preview] stream error: {e}")
+            # Non yieldiamo nulla → il client vede una risposta troncata.
+            # Meglio di 500: il browser mostra semplicemente audio vuoto.
+
+    return StreamingResponse(
+        _iter_audio(),
+        media_type="audio/mpeg",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+            "X-Koda-Dev-Preview": "1",
+            "X-Koda-Voice-Settings": json.dumps(voice_settings, separators=(",", ":")),
+        },
+    )
+
+
+@api_router.get("/dev/tts/preview/presets")
+async def api_dev_tts_preview_presets():
+    """Ritorna i preset "warm" attuali di produzione + qualche variante
+    A/B suggerita, così l'admin può capire da dove partire. Zero side-effect.
+    """
+    _require_admin()
+    current_warm = _voice_settings_for_tone("warm", None, None)
+    return {
+        "current_production_warm": current_warm,
+        "suggested_ab_variants": [
+            {
+                "name": "A_warm_current",
+                "settings": current_warm,
+                "note": "Default di produzione. Baseline per confronto.",
+            },
+            {
+                "name": "B_warm_more_stable",
+                "settings": {**current_warm, "stability": 0.55, "style": 0.45},
+                "note": "Più stabile, meno drammatico. Test 'meno artefatti'.",
+            },
+            {
+                "name": "C_warm_slower",
+                "settings": {**current_warm, "speed": 0.86, "stability": 0.50},
+                "note": "Più lento e stabile. Test 'contemplativo'.",
+            },
+            {
+                "name": "D_warm_more_expressive",
+                "settings": {**current_warm, "stability": 0.30, "style": 0.65},
+                "note": "Più espressivo, meno controllato. Test 'vivo'.",
+            },
+            {
+                "name": "E_warm_lower_similarity",
+                "settings": {**current_warm, "similarity_boost": 0.70},
+                "note": "Riduce similarity: voce meno rigidamente ancorata al modello sorgente.",
+            },
+        ],
+        "usage": (
+            "GET /api/dev/tts/preview?text=...&stability=0.40&style=0.55&speed=0.91"
+            "&similarity_boost=0.82&voice_id=POuqf18evoXOKIqV2Px7"
+        ),
+    }
+
+
+
+
 @api_router.get("/tts/audio/{token}.mp3")
 async def api_tts_audio(token: str, request: Request):
     """Serve previously prepared TTS audio.
@@ -9121,6 +9272,137 @@ def _compute_waveform_rms(mp3_bytes: bytes) -> Optional[Dict[str, Any]]:
         "duration_ms": int(len(seg)),
         "waveform": [round(float(v), 4) for v in rms.tolist()],
     }
+
+
+# ============================================================
+# ORB↔TTS SILENCE SYNC — Opzione A.3c (Task 2 — Fabio 2026-08)
+# ============================================================
+# Estrae dalla waveform RMS una TIMELINE dei silenzi "percepiti", cioè
+# intervalli [start_ms, end_ms] dove Koda NON sta parlando (respiro,
+# pausa naturale, punteggiatura). Il client la usa per smorzare la
+# pulsazione dell'orb durante queste pause, eliminando la dissonanza
+# cognitiva "orb pulsa ma non sento voce".
+#
+# Fallback a 3 livelli:
+#   L1: pydub/ffmpeg non disponibile → funzione ritorna None → il client
+#       riceve `speech_timeline=null` → orb pulsa come oggi (comportamento
+#       attuale, nessuna regressione).
+#   L2: MP3 decode fallisce (chunk corrotto) → return None → idem.
+#   L3: WS event non arriva (rete drop) → il client ha timeout: se non
+#       riceve `speech_timeline` per una sentence entro 500ms dopo aver
+#       iniziato il playback, cade sul comportamento attuale.
+# ============================================================
+
+# Soglia RMS sotto cui consideriamo "silenzio". Il TTS ElevenLabs
+# normalizzato a ~-16 LUFS ha RMS medio ~0.10-0.18 durante il parlato;
+# durante i respiri/pause i valori scendono ben sotto 0.02.
+SILENCE_RMS_THRESHOLD = 0.020
+# Durata minima di un silenzio per essere considerato "pausa" (ms).
+# Sotto questa soglia sono micro-pause tra fonemi che non giustificano
+# lo spegnimento dell'orb (creerebbero flicker).
+SILENCE_MIN_DURATION_MS = 180
+# Grazia iniziale: i primi N ms non sono mai considerati silenzio,
+# così l'orb parte SEMPRE con la pulsazione appena inizia il playback.
+SILENCE_HEAD_GRACE_MS = 120
+# Grazia finale: gli ultimi N ms non sono mai considerati silenzio,
+# così l'orb non si spegne PRIMA che la voce sia davvero terminata.
+SILENCE_TAIL_GRACE_MS = 80
+
+
+def _compute_speech_timeline(mp3_bytes: bytes) -> Optional[Dict[str, Any]]:
+    """Analizza l'MP3 e ritorna una timeline dei silenzi percepiti.
+
+    Ritorna un dict:
+      {
+        "window_ms": int,       # dimensione della finestra RMS
+        "duration_ms": int,     # durata totale audio
+        "silences": [[s, e], ...],  # intervalli (ms) di silenzio "lungo"
+        "threshold": float,     # soglia RMS usata (per debug)
+        "rms_max": float,       # picco RMS (utile per calibrare in futuro)
+      }
+    o None se pydub/ffmpeg non disponibile o decode fallisce (L1/L2).
+
+    NB: non tocca la funzione `_compute_waveform_rms` esistente per non
+    rompere codice legacy. Fa il proprio decode veloce.
+    """
+    if not _WAVEFORM_OK or not mp3_bytes:
+        return None
+    try:
+        seg = _PydubAudioSegment.from_file(_io.BytesIO(mp3_bytes), format="mp3")
+    except Exception as e:
+        logger.warning(f"[speech_timeline] MP3 decode failed: {e}")
+        return None
+
+    try:
+        samples = _np.array(seg.get_array_of_samples(), dtype=_np.float32)
+        if seg.channels == 2 and len(samples) % 2 == 0:
+            samples = samples.reshape(-1, 2).mean(axis=1)
+        sample_max = float(1 << (8 * seg.sample_width - 1))
+        if sample_max <= 0:
+            return None
+        samples = samples / sample_max
+
+        window_samples = int(seg.frame_rate * WAVEFORM_WINDOW_MS / 1000)
+        if window_samples <= 0:
+            return None
+        n_windows = len(samples) // window_samples
+        if n_windows < 1:
+            return None
+        trimmed = samples[: n_windows * window_samples].reshape(n_windows, window_samples)
+        rms = _np.sqrt((trimmed * trimmed).mean(axis=1))
+        # Smoothing leggero: robusto ai singoli window rumorosi.
+        if len(rms) >= 3:
+            kernel = _np.array([0.25, 0.5, 0.25])
+            rms = _np.convolve(rms, kernel, mode="same")
+
+        # Auto-threshold: se il picco è basso (voce sussurrata) abbassiamo
+        # proporzionalmente la soglia per non chiamare TUTTO silenzio.
+        rms_max = float(rms.max()) if len(rms) else 0.0
+        effective_threshold = SILENCE_RMS_THRESHOLD
+        if rms_max > 0 and rms_max < 0.08:
+            # Voce molto sommessa → threshold = 25% del picco.
+            effective_threshold = max(0.006, rms_max * 0.25)
+
+        # Marchiamo i window sotto soglia.
+        silent_mask = rms < effective_threshold
+
+        # Applichiamo grazie iniziale/finale in campioni di window.
+        head_windows = max(1, SILENCE_HEAD_GRACE_MS // WAVEFORM_WINDOW_MS)
+        tail_windows = max(1, SILENCE_TAIL_GRACE_MS // WAVEFORM_WINDOW_MS)
+        if len(silent_mask) > 0:
+            silent_mask[:head_windows] = False
+            if tail_windows < len(silent_mask):
+                silent_mask[-tail_windows:] = False
+
+        # Estrai run di window silenziosi consecutivi.
+        silences: list = []
+        i = 0
+        n = len(silent_mask)
+        while i < n:
+            if not silent_mask[i]:
+                i += 1
+                continue
+            j = i
+            while j < n and silent_mask[j]:
+                j += 1
+            start_ms = i * WAVEFORM_WINDOW_MS
+            end_ms = j * WAVEFORM_WINDOW_MS
+            if (end_ms - start_ms) >= SILENCE_MIN_DURATION_MS:
+                silences.append([int(start_ms), int(end_ms)])
+            i = j
+
+        return {
+            "window_ms": WAVEFORM_WINDOW_MS,
+            "duration_ms": int(len(seg)),
+            "silences": silences,
+            "threshold": round(float(effective_threshold), 4),
+            "rms_max": round(rms_max, 4),
+        }
+    except Exception as e:
+        logger.warning(f"[speech_timeline] compute failed: {e}")
+        return None
+
+
 
 
 def _store_converse_result(rid: str, payload: Dict[str, Any]) -> None:
@@ -12140,29 +12422,41 @@ async def _fast_pipeline_task(
                     logger.error(f"[fast] publish sentence failed: {e}")
                     return
 
-                # === P3 (2026-06-20): waveform_update DISABILITATO ===
-                # Il client cattura ma IGNORA i waveform_update (vedi
-                # speech.ts riga 926-936). Pubblicarli mantiene il poll
-                # loop aperto inutilmente per 3-5s in più → metrica
-                # "total" gonfiata, log /diagnostics sporcati, CPU spesa
-                # per nulla (decode MP3 + calcolo RMS).
-                # Soluzione: skippiamo completamente il calcolo + publish.
-                # Se in futuro vorremo riattivare l'envelope per sync orb,
-                # basta togliere il commento. Il client è già pronto a
-                # consumarlo (branch `waveform_update` esiste già).
-                #
-                # try:
-                #     wf = await asyncio.to_thread(_compute_waveform_rms, audio_bytes)
-                #     if wf and wf.get("waveform"):
-                #         await _publish({
-                #             "type": "waveform_update",
-                #             "i": idx,
-                #             "token": token,
-                #             "waveform": wf["waveform"],
-                #             "window_ms": wf.get("window_ms", 60),
-                #         })
-                # except Exception as e:
-                #     logger.warning(f"[fast] waveform compute failed: {e}")
+                # === ORB SILENCE SYNC (Task 2 — Fabio 2026-08) ===
+                # Calcoliamo la timeline dei silenzi DELLA SOLA SENTENCE
+                # corrente e la pubblichiamo via WS come evento separato
+                # `speech_timeline`. Non blocca la publish audio (già
+                # inviata sopra): parte in background e arriva quando
+                # arriva. Fallback a 3 livelli:
+                #   L1: pydub/ffmpeg unavail → _compute_speech_timeline
+                #       ritorna None → non pubblichiamo nulla → orb usa
+                #       animazione default (comportamento attuale).
+                #   L2: MP3 decode fail → idem.
+                #   L3: publish fail → catturato sotto → idem.
+                # ZERO impatto su latenza percepita (il primo audio è
+                # già stato pubblicato PRIMA di questa riga).
+                try:
+                    async def _emit_speech_timeline(_idx: int, _token: str, _mp3: bytes):
+                        try:
+                            tl = await asyncio.to_thread(_compute_speech_timeline, _mp3)
+                            if not tl:
+                                return
+                            await _publish({
+                                "type": "speech_timeline",
+                                "i": _idx,
+                                "token": _token,
+                                "duration_ms": tl.get("duration_ms"),
+                                "silences": tl.get("silences") or [],
+                                "window_ms": tl.get("window_ms"),
+                                "threshold": tl.get("threshold"),
+                            })
+                        except Exception as _e:
+                            logger.warning(
+                                f"[fast {session_id[:8]}] speech_timeline emit failed idx={_idx}: {_e}"
+                            )
+                    asyncio.create_task(_emit_speech_timeline(idx, token, bytes(audio_bytes)))
+                except Exception as e:
+                    logger.warning(f"[fast] speech_timeline schedule failed: {e}")
             except Exception as e:
                 logger.error(f"[fast] sentence gen error: {e}")
 

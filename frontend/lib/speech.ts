@@ -1571,6 +1571,15 @@ export async function fastConverseWS(
     timeoutMs?: number;
     // Audio honesty (Fabio 2026-06-23) — vedi commento in fastConverse.
     sttConfidence?: number;
+    // === ORB SILENCE SYNC (Task 2, Fabio 2026-08) ===
+    // Callback invocata quando il playback attraversa un intervallo di
+    // silenzio (respiro / pausa naturale) rilevato dal server via RMS
+    // parsing del MP3. `false` = silenzio in corso → l'orb dovrebbe
+    // smorzare la pulsazione. `true` = torna a parlare.
+    // Fallback silenzioso: se il server non manda `speech_timeline`
+    // (pydub/ffmpeg unavail, decode fail, WS drop) questa callback
+    // non viene mai chiamata → l'orb resta sul comportamento attuale.
+    onSpeechActive?: (active: boolean) => void;
   } = {}
 ): Promise<FastConverseResult> {
   const timeoutMs = opts.timeoutMs ?? 45000;
@@ -1592,6 +1601,18 @@ export async function fastConverseWS(
     window_ms: number;
   };
   const sentenceQueue: SentenceItem[] = [];
+  // === ORB SILENCE SYNC — timeline dei silenzi per sentence idx.
+  // Popolata da eventi `speech_timeline` (potrebbero arrivare in
+  // qualsiasi ordine rispetto al `sentence`). Usata da fireStart per
+  // schedulare i toggle di `onSpeechActive` durante il playback.
+  const silencesByIdx: Map<number, number[][]> = new Map();
+  // Timers attivi per la sentence in playback — cancellati quando
+  // il playback termina (per non fire callback out-of-order).
+  let activeSilenceTimers: ReturnType<typeof setTimeout>[] = [];
+  const clearActiveSilenceTimers = () => {
+    for (const t of activeSilenceTimers) { try { clearTimeout(t); } catch {} }
+    activeSilenceTimers = [];
+  };
   let resolveTokenWait: (() => void) | null = null;
   let metaCaptured: FastConverseMeta | undefined;
   let firstAudioFired = false;
@@ -1657,6 +1678,31 @@ export async function fastConverseWS(
           notify();
         } else if (msg?.type === "session") {
           // ignored: utile per debug
+        } else if (msg?.type === "speech_timeline") {
+          // === ORB SILENCE SYNC (Task 2, Fabio 2026-08) ===
+          // Il server ha calcolato via RMS parsing dell'MP3 la lista
+          // degli intervalli di silenzio per la sentence `msg.i`. La
+          // memorizziamo qui; fireStart la userà per schedulare i
+          // toggle di `onSpeechActive` durante il playback.
+          // Fallback L1/L2: se il server non ne manda (feature ff-off,
+          // pydub unavail, decode fail) semplicemente non popoliamo
+          // la mappa → nessuna callback → orb comportamento attuale.
+          try {
+            const idx = typeof msg.i === "number" ? msg.i : 0;
+            const silences = Array.isArray(msg.silences) ? msg.silences : [];
+            // Filtra intervalli mal formati [start,end] con start<end.
+            const clean: number[][] = [];
+            for (const it of silences) {
+              if (Array.isArray(it) && it.length >= 2) {
+                const s = Number(it[0]);
+                const e = Number(it[1]);
+                if (Number.isFinite(s) && Number.isFinite(e) && e > s) {
+                  clean.push([Math.max(0, Math.floor(s)), Math.floor(e)]);
+                }
+              }
+            }
+            silencesByIdx.set(idx, clean);
+          } catch {}
         }
       } else {
         // Binary frame → bytes audio della frase precedente.
@@ -1753,6 +1799,36 @@ export async function fastConverseWS(
             startReactiveWaveform(item.waveform, item.window_ms || 60);
           }
         } catch {}
+        // === ORB SILENCE SYNC (Task 2, Fabio 2026-08) ===
+        // Schedula toggle di `onSpeechActive` in sincronia con il
+        // playback della sentence corrente. `speech_timeline` è già
+        // arrivato (di solito) subito dopo il `sentence` event; se non
+        // c'è per questa idx (silences vuoto o mai ricevuto → L3
+        // fallback), non facciamo nulla → orb resta sempre "attivo".
+        try {
+          clearActiveSilenceTimers();
+          if (opts.onSpeechActive) {
+            const silences = silencesByIdx.get(item.i);
+            if (silences && silences.length > 0) {
+              // Assumiamo che la sentence stia iniziando ORA (fireStart
+              // è chiamato quando l'audio suona davvero, non quando si
+              // crea il player). Se in futuro vogliamo maggiore
+              // precisione: passare da qui il currentTime del player.
+              // Marchiamo come "attivo" all'inizio (edge caso: se il
+              // primo silence non ha grace head, forza a false subito).
+              try { opts.onSpeechActive?.(true); } catch {}
+              for (const [startMs, endMs] of silences) {
+                const t1 = setTimeout(() => {
+                  try { opts.onSpeechActive?.(false); } catch {}
+                }, Math.max(0, startMs));
+                const t2 = setTimeout(() => {
+                  try { opts.onSpeechActive?.(true); } catch {}
+                }, Math.max(0, endMs));
+                activeSilenceTimers.push(t1, t2);
+              }
+            }
+          }
+        } catch {}
       };
       try {
         if (Platform.OS === "web") {
@@ -1775,6 +1851,11 @@ export async function fastConverseWS(
     clearTimeout(hardTimer);
     if (currentAbort === ac) currentAbort = null;
     speakingNow = false;
+    // === ORB SILENCE SYNC — cleanup timers residui (Fabio 2026-08).
+    // Se una sentence viene interrotta a metà, cancelliamo i toggle
+    // pending così l'orb non riceve un `speech_active=true` fantasma
+    // dopo la fine del turno.
+    try { clearActiveSilenceTimers(); } catch {}
   }
 
   if (ac.signal.aborted) return { ok: false, error: "aborted" };
