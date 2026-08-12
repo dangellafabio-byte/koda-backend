@@ -4559,10 +4559,18 @@ export default function Taccuino() {
   }, [profile?.id]);
 
   /**
+  /**
    * Tap-on-voice-card handler: select the voice AND immediately play a short
    * preview using that voice. One gesture, no separate play button.
+   *
+   * === Rimozione nomi voce dalla preview (Fabio 2026-08-12) ================
+   * Prima: la preview diceva "Ciao, sono ${name}. Sarò io a parlarti..."
+   * dove name = "Cielo"/"Vento". L'utente NON deve mai sentire questi nomi
+   * (decisione già presa per paywall/UI, estesa qui alla preview vocale).
+   * Ora: frase generica identica per entrambe le voci. L'utente riconosce
+   * la voce dal SUONO, non dal nome.
    */
-  const selectAndPreviewVoice = async (voiceId: string, name: string) => {
+  const selectAndPreviewVoice = async (voiceId: string, _name: string) => {
     // Update selection (saves to profile, sets default)
     await setVoice(voiceId);
     // Stop any current playback and play preview with the new voice
@@ -4572,7 +4580,7 @@ export default function Taccuino() {
       // Make sure browser audio is unlocked (web)
       await unlockSpeech();
       await SpeechMod.speak(
-        `Ciao, sono ${name}. Sarò io a parlarti, da adesso.`,
+        `Ciao. Sarò io a parlarti, da adesso.`,
         { language: "it-IT", tone: "warm", voiceId }
       );
     } finally {
