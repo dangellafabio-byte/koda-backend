@@ -1,10 +1,17 @@
 /**
  * HandsFreeOrb — piccolo orb con arco verde fluido lungo il perimetro
- * (Fabio 2026-08-12).
+ * (Fabio 2026-08-12, rifinitura 2026-08-12b).
  *
  * Nuovo controllo di modalità conversazione:
- *   • AUTOMATICO (default)  → orb fermo + arco verde che scorre lento sul bordo
- *   • MANUALE               → orb fermo, nessun arco (colore neutro)
+ *   • AUTOMATICO (default)  → orb verde scuro desaturato + glow tenue
+ *                             + arco verde più brillante che scorre lento
+ *                             sul bordo. Orb e arco sono percepiti come
+ *                             UN UNICO controllo attivo.
+ *   • MANUALE               → orb neutro/grigio, nessun verde, nessun
+ *                             movimento, nessun glow.
+ *
+ * Deve rimanere sempre discreto — non è protagonista dell'header,
+ * l'eclisse centrale sì.
  *
  * Design brief (letterale):
  *   - Non è uno spinner/loader. Non ruota l'intero orb.
@@ -15,9 +22,10 @@
  *   - Concetto visivo: "Koda è ferma, l'automatismo scorre".
  *
  * Implementazione:
- *   - Svg con due layer:
- *       (1) Cerchio base pieno = corpo dell'orb (semitrasparente, immobile)
- *       (2) Arco stroke (~90°) verde, ruotato via Animated.Value su transform
+ *   - Svg con tre layer:
+ *       (1) Cerchio glow esterno (solo automatico, opacità ~0.14)
+ *       (2) Cerchio corpo orb (verde scuro desaturato o grigio neutro)
+ *       (3) Arco stroke (~90°) verde brillante, ruotato via Animated.Value
  *   - Loop lineare in 4s per giro → percezione lenta e continua senza scatti.
  *   - useNativeDriver: true → l'animazione gira sul thread native, zero jank.
  *   - Quando `active === false` la rotazione è comunque montata ma l'arco
@@ -35,8 +43,16 @@ type Props = {
   size?: number;
   /** Colore verde dell'arco. Default #34D399 (stesso usato oggi per hands-free). */
   arcColor?: string;
-  /** Colore del corpo dell'orb (cerchio pieno di sfondo). */
-  orbColor?: string;
+  /** Colore del corpo dell'orb in modalità MANUALE (neutro, no verde). */
+  orbColorInactive?: string;
+  /** Colore del corpo dell'orb in modalità AUTOMATICA — verde scuro/desaturato,
+   *  coerente con arcColor ma NON brillante. Fabio 2026-08-12: l'orb deve
+   *  essere percepito come tutt'uno con l'arco, non come cerchio grigio con
+   *  arco appoggiato sopra. */
+  orbColorActive?: string;
+  /** Colore del glow verde leggero attorno all'orb in modalità automatica.
+   *  Molto tenue — deve solo unificare orb+arco, non richiamare l'attenzione. */
+  glowColor?: string;
 };
 
 const AnimatedSvg = Animated.createAnimatedComponent(Svg);
@@ -45,7 +61,12 @@ export default function HandsFreeOrb({
   active,
   size = 24,
   arcColor = "#34D399",
-  orbColor = "rgba(255,255,255,0.18)",
+  orbColorInactive = "rgba(255,255,255,0.18)",
+  // Verde scuro desaturato — stessa tinta di #34D399 ma con luminanza bassa.
+  // NON deve essere un pallino verde brillante: qui l'orb resta discreto.
+  orbColorActive = "rgba(52, 211, 153, 0.28)",
+  // Glow più tenue ancora — appena sufficiente a legare visivamente arco+corpo.
+  glowColor = "rgba(52, 211, 153, 0.14)",
 }: Props) {
   // Loop di rotazione continuo. Duration = 4000ms → 1 giro ogni 4 secondi.
   // Percezione lenta e fluida. Il valore va da 0 a 1, poi restart senza reset
@@ -94,11 +115,25 @@ export default function HandsFreeOrb({
   };
   const arcPath = `M ${arcStart.x} ${arcStart.y} A ${arcRadius} ${arcRadius} 0 0 1 ${arcEnd.x} ${arcEnd.y}`;
 
+  // Raggio del glow esterno (leggermente più grande dell'orb, opacità bassa,
+  // solo in modalità automatica). Funziona anche su Android senza filtri
+  // esotici perché è semplicemente un Circle grande e semitrasparente.
+  const glowRadius = size * 0.42;
+
+  // Colore effettivo del corpo dell'orb in base allo stato.
+  // Automatico → verde scuro desaturato (unificato con l'arco).
+  // Manuale    → grigio neutro (nessun verde).
+  const currentOrbColor = active ? orbColorActive : orbColorInactive;
+
   return (
     <View style={[styles.container, { width: size, height: size }]} pointerEvents="none">
-      {/* Corpo orb (immobile) */}
+      {/* Base: glow verde tenue (solo in automatico) + corpo orb.
+          Sono nello stesso Svg per compositing pulito, nessun jitter. */}
       <Svg width={size} height={size} style={StyleSheet.absoluteFill}>
-        <Circle cx={cx} cy={cy} r={orbRadius} fill={orbColor} />
+        {active && (
+          <Circle cx={cx} cy={cy} r={glowRadius} fill={glowColor} />
+        )}
+        <Circle cx={cx} cy={cy} r={orbRadius} fill={currentOrbColor} />
       </Svg>
       {/* Arco animato (ruota SOLO lui, orb sotto resta fermo).
           Visibilità gestita da opacità così l'animazione non riparte
