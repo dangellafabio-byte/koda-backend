@@ -315,7 +315,10 @@
         await pc.setLocalDescription(offer);
 
         // POST SDP a OpenAI direttamente (con ephemeral token)
-        const sdpResp = await fetch("https://api.openai.com/v1/realtime?model=" + encodeURIComponent(model), {
+        // Endpoint GA (ago 2025+): /v1/realtime/calls (il vecchio
+        // /v1/realtime?model=... del beta ora ritorna beta_api_shape_disabled).
+        // Il modello è già configurato nell'ephemeral session lato server.
+        const sdpResp = await fetch("https://api.openai.com/v1/realtime/calls", {
           method: "POST",
           headers: {
             "Authorization": "Bearer " + client_secret,
