@@ -12088,6 +12088,11 @@ async def _fast_pipeline_task(
                                 "sub_other_setup_ms": _sub_other_setup_ms,
                                 "claude_ttft_ms": _llm_ttft_ms,
                                 "claude_first_sent_ms": _llm_first_sent_ms,
+                                # === Marker aggiunti 2026-08-12 (Fabio) =========
+                                # Rendono la decomposizione dei 4.5s accessibile
+                                # via HTTP GET, non solo via grep sui log Railway.
+                                "claude_first_80char_ms": _c80_ms if '_first_80char_logged' in dir() and _first_80char_logged else None,
+                                "tts_ttfb_ms": _tts_ttfb_ms if '_tts_ttfb_ms' in dir() else None,
                                 "eleven_tts_ms": _tts_ms,
                                 "overhead_ms": _overhead_ms,
                                 "total_srv_ms": total_first,
