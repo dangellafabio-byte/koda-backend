@@ -39,10 +39,13 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
+from pathlib import Path
 from typing import Any, Optional
 
+import httpx
 import websockets
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
@@ -625,19 +628,15 @@ def register_poc_routes(api_router, require_admin_dep):
                 "un `input_audio_buffer.speech_started` durante `response.output` "
                 "innesca automaticamente un `response.cancel` + `conversation.item.truncate`. "
                 "Latenza tipica documentata: 200-350ms dall'onset vocale utente. "
-                "MISURA REALE richiede client audio in loop (iOS o browser)."
+                "Misurabile ora tramite la demo WebRTC al link /demo."
             ),
-            "measurable_via_poc": False,
-            "why": [
-                "Il barge-in richiede uno stream audio bidirezionale continuo dal microfono.",
-                "Il POC testuale isolato NON può simulare il microfono che intercetta l'output.",
-                "La misura affidabile serve solo su iOS/browser con AVAudioSession dedicata.",
+            "measurable_via_poc": True,
+            "how_to_measure": [
+                "Aprire /api/dev/poc/openai-realtime/demo su Safari iPhone (o Chrome desktop).",
+                "Concedere permesso microfono.",
+                "Parlare — attendere che Koda-POC risponda — interromperla parlando sopra.",
+                "Osservare: entro ~300ms l'audio in uscita si ferma e il modello inizia ad ascoltare la nuova input.",
             ],
-            "recommended_next_step": (
-                "Se il POC text-turn e guardrail passano, procedere a una micro-demo "
-                "iOS (build di 1 pagina isolata) collegando WebRTC alla Realtime API "
-                "per misurare barge-in reale. Costo ~1 giornata di lavoro."
-            ),
             "server_vad_reference": {
                 "type": "server_vad",
                 "threshold": 0.5,
@@ -645,3 +644,93 @@ def register_poc_routes(api_router, require_admin_dep):
                 "silence_duration_ms": 500,
             },
         }
+
+    # ========================================================
+    # DEMO WEBRTC (Fabio, ago 2026) — barge-in reale su Safari
+    # ========================================================
+    # Il POC "text-turn" NON può testare barge-in perché non ha
+    # un microfono che ascolta mentre l'audio esce. Questa demo
+    # apre una vera conversazione voice-to-voice via WebRTC su
+    # gpt-realtime-2.1-mini, voce marin, con server VAD attivo
+    # → barge-in vocale nativo. Uso: aprire /demo su Safari iPhone.
+    #
+    # Sicurezza: la chiave OPENAI_POC_API_KEY resta SUL SERVER.
+    # Il browser riceve solo un `client_secret` effimero (validità
+    # ~1 min) sufficiente per aprire una singola sessione WebRTC.
+    @api_router.post("/dev/poc/openai-realtime/ephemeral-session")
+    async def poc_ephemeral_session():
+        """Genera un client_secret effimero per la connessione WebRTC
+        dal browser. La sessione è pre-configurata con:
+          - Modello: gpt-realtime-2.1-mini
+          - Voce: marin
+          - Instructions: warm_koda (con guardrail)
+          - server_vad ON (barge-in nativo)
+        """
+        require_admin_dep()
+        if not OPENAI_POC_API_KEY:
+            raise HTTPException(503, "OPENAI_POC_API_KEY not configured")
+
+        session_config = {
+            "type": "realtime",
+            "model": DEFAULT_MODEL,
+            "instructions": INSTRUCTIONS_VARIANTS["warm_koda"],
+            "output_modalities": ["audio"],
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 500,
+                        # Il server auto-cancella la response in corso quando
+                        # l'utente inizia a parlare → barge-in nativo.
+                        "interrupt_response": True,
+                        "create_response": True,
+                    },
+                },
+                "output": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "voice": DEFAULT_VOICE,
+                },
+            },
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.post(
+                    "https://api.openai.com/v1/realtime/client_secrets",
+                    headers={
+                        "Authorization": f"Bearer {OPENAI_POC_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"session": session_config},
+                )
+        except Exception as e:
+            logger.error(f"[poc/ephemeral] request failed: {e}")
+            raise HTTPException(502, f"OpenAI ephemeral request failed: {e}")
+
+        if r.status_code >= 400:
+            logger.error(f"[poc/ephemeral] OpenAI returned {r.status_code}: {r.text[:300]}")
+            raise HTTPException(r.status_code, f"OpenAI: {r.text[:200]}")
+
+        data = r.json()
+        # `value` è il token effimero. Non ritorniamo la chiave server.
+        return {
+            "client_secret": data.get("value") or (data.get("client_secret") or {}).get("value"),
+            "expires_at": data.get("expires_at") or (data.get("client_secret") or {}).get("expires_at"),
+            "session": data.get("session") or session_config,
+            "model": DEFAULT_MODEL,
+            "voice": DEFAULT_VOICE,
+        }
+
+    @api_router.get("/dev/poc/openai-realtime/demo", response_class=HTMLResponse)
+    async def poc_demo_page():
+        """Pagina HTML statica per la demo WebRTC. Il gate admin è
+        applicato via cookie/session: se non autenticato, la chiamata
+        interna a /ephemeral-session fallisce con 403 e la UI mostra
+        un errore. La pagina di per sé non contiene segreti."""
+        html_path = Path(__file__).parent / "poc_openai_realtime_demo.html"
+        if not html_path.exists():
+            raise HTTPException(500, "demo html missing")
+        return HTMLResponse(html_path.read_text(encoding="utf-8"))

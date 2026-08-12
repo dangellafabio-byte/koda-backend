@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>Koda POC — Realtime demo</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #07070c;
+      --fg: #ECEEF3;
+      --muted: #8A8FA3;
+      --accent: #34D399;
+      --danger: #EF4444;
+      --card: #12131A;
+      --border: #23252F;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0; padding: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+      min-height: 100vh;
+      min-height: -webkit-fill-available;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 20px 40px;
+      max-width: 640px;
+      margin: 0 auto;
+      gap: 20px;
+    }
+    header {
+      text-align: center;
+      margin-top: 8px;
+    }
+    header h1 { margin: 0 0 6px; font-size: 22px; font-weight: 600; }
+    header p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.4; }
+
+    #orb-wrap {
+      width: 200px; height: 200px;
+      display: flex; align-items: center; justify-content: center;
+      margin: 12px 0;
+    }
+    #orb {
+      width: 160px; height: 160px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%, #34D39944 0%, #0d3d2c 60%, #050807 100%);
+      box-shadow: 0 0 0 1px #34D39922, 0 0 30px #34D39922;
+      transition: transform 0.15s ease-out, box-shadow 0.3s ease-out;
+    }
+    #orb.speaking {
+      background: radial-gradient(circle at 30% 30%, #A78BFAcc 0%, #4C1D95 55%, #050807 100%);
+      box-shadow: 0 0 0 2px #A78BFA55, 0 0 80px #A78BFA55;
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+    #orb.listening {
+      background: radial-gradient(circle at 30% 30%, #00F5D4cc 0%, #0E7C7B 55%, #050807 100%);
+      box-shadow: 0 0 0 2px #00F5D455, 0 0 60px #00F5D455;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    #orb.idle-connected {
+      background: radial-gradient(circle at 30% 30%, #34D399cc 0%, #065f46 55%, #050807 100%);
+      box-shadow: 0 0 0 2px #34D39955, 0 0 40px #34D39944;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+    }
+
+    #status {
+      font-size: 15px;
+      color: var(--muted);
+      min-height: 22px;
+      text-align: center;
+    }
+    #status.error { color: var(--danger); }
+    #status.ok { color: var(--accent); }
+
+    button.primary {
+      background: var(--accent);
+      color: #062d1e;
+      border: 0;
+      border-radius: 999px;
+      padding: 16px 32px;
+      font-size: 17px;
+      font-weight: 600;
+      cursor: pointer;
+      min-width: 220px;
+      transition: opacity 0.2s;
+      touch-action: manipulation;
+    }
+    button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+    button.danger {
+      background: transparent;
+      color: var(--danger);
+      border: 1px solid var(--danger);
+      border-radius: 999px;
+      padding: 12px 24px;
+      font-size: 15px;
+      font-weight: 500;
+      cursor: pointer;
+      min-width: 160px;
+    }
+
+    #transcript-wrap {
+      width: 100%;
+      max-height: 320px;
+      overflow-y: auto;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    #transcript-wrap .line { margin-bottom: 8px; }
+    #transcript-wrap .role {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin-right: 6px;
+    }
+    #transcript-wrap .assistant { color: #DDD6FE; }
+    #transcript-wrap .user { color: #A7F3D0; }
+    #transcript-wrap .system { color: var(--muted); font-style: italic; }
+
+    #metrics {
+      width: 100%;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: var(--muted);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px 12px;
+    }
+    #metrics b { color: var(--fg); font-weight: 500; }
+
+    audio { display: none; }
+    footer {
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+      line-height: 1.5;
+      margin-top: 8px;
+    }
+    footer code {
+      background: #1e1f28;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 11.5px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Koda POC — Realtime</h1>
+    <p>Voice-to-voice demo con <b>gpt-realtime-2.1-mini</b>, voce <b>marin</b>, server VAD ON (barge-in nativo).</p>
+  </header>
+
+  <div id="orb-wrap"><div id="orb"></div></div>
+  <div id="status">Non connesso.</div>
+
+  <button id="btn-start" class="primary">Parla con Koda-POC</button>
+  <button id="btn-stop" class="danger" style="display:none;">Chiudi sessione</button>
+
+  <div id="metrics" style="display:none;">
+    <span>TTFB audio:</span>       <b id="m-ttfb">—</b>
+    <span>Turno corrente:</span>    <b id="m-turn-state">idle</b>
+    <span>Barge-in rilevati:</span> <b id="m-bargein">0</b>
+    <span>Durata sessione:</span>   <b id="m-session-dur">0s</b>
+  </div>
+
+  <div id="transcript-wrap"></div>
+
+  <footer>
+    Sicurezza: la chiave OpenAI resta sul server. Il browser riceve solo un token effimero (~1 min).<br />
+    Se il POC funziona: parla, ascolta, poi <b>parlaci sopra</b> per testare barge-in.<br />
+    <span style="opacity:0.7">endpoint: <code>/api/dev/poc/openai-realtime/</code></span>
+  </footer>
+
+  <audio id="assistant-audio" autoplay playsinline></audio>
+
+  <script>
+  (function () {
+    "use strict";
+
+    const btnStart = document.getElementById("btn-start");
+    const btnStop  = document.getElementById("btn-stop");
+    const statusEl = document.getElementById("status");
+    const orbEl    = document.getElementById("orb");
+    const audioEl  = document.getElementById("assistant-audio");
+    const trWrap   = document.getElementById("transcript-wrap");
+    const metricsEl = document.getElementById("metrics");
+    const mTtfb    = document.getElementById("m-ttfb");
+    const mTurnState = document.getElementById("m-turn-state");
+    const mBargein = document.getElementById("m-bargein");
+    const mSessionDur = document.getElementById("m-session-dur");
+
+    let pc = null;
+    let dc = null;
+    let localStream = null;
+    let sessionStart = 0;
+    let sessionTimer = null;
+    let bargeinCount = 0;
+    let currentResponseStartMs = 0;
+    let currentAssistantLine = null;
+    let currentUserLine = null;
+
+    function setStatus(msg, kind) {
+      statusEl.textContent = msg;
+      statusEl.classList.remove("error", "ok");
+      if (kind === "error") statusEl.classList.add("error");
+      if (kind === "ok") statusEl.classList.add("ok");
+    }
+
+    function setOrb(state) {
+      orbEl.classList.remove("speaking", "listening", "idle-connected");
+      if (state) orbEl.classList.add(state);
+      if (state === "speaking") mTurnState.textContent = "koda parla";
+      else if (state === "listening") mTurnState.textContent = "tu parli";
+      else if (state === "idle-connected") mTurnState.textContent = "in ascolto";
+      else mTurnState.textContent = "idle";
+    }
+
+    function appendLine(role, text) {
+      const div = document.createElement("div");
+      div.className = "line";
+      const roleSpan = document.createElement("span");
+      roleSpan.className = "role " + role;
+      roleSpan.textContent = role === "assistant" ? "Koda" : (role === "user" ? "Tu" : "Sistema");
+      const textSpan = document.createElement("span");
+      textSpan.className = role;
+      textSpan.textContent = text;
+      div.appendChild(roleSpan);
+      div.appendChild(textSpan);
+      trWrap.appendChild(div);
+      trWrap.scrollTop = trWrap.scrollHeight;
+      return textSpan;
+    }
+
+    async function fetchEphemeralSession() {
+      const r = await fetch("/api/dev/poc/openai-realtime/ephemeral-session", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!r.ok) {
+        const txt = await r.text().catch(() => "");
+        throw new Error("ephemeral-session " + r.status + ": " + txt.slice(0, 200));
+      }
+      return r.json();
+    }
+
+    async function start() {
+      try {
+        btnStart.disabled = true;
+        setStatus("Richiedo token effimero…");
+
+        const { client_secret, model } = await fetchEphemeralSession();
+        if (!client_secret) throw new Error("no client_secret in response");
+
+        setStatus("Chiedo permesso microfono…");
+        localStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+          video: false,
+        });
+
+        setStatus("Apro peer connection…");
+        pc = new RTCPeerConnection();
+
+        // Audio remoto → tag <audio>
+        pc.ontrack = (ev) => {
+          if (ev.streams && ev.streams[0]) {
+            audioEl.srcObject = ev.streams[0];
+            audioEl.play().catch(() => {});
+          }
+        };
+
+        // Traccia locale (mic) → verso il server
+        localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+
+        // Data channel per eventi (transcript, VAD, ecc.)
+        dc = pc.createDataChannel("oai-events");
+        dc.onopen = () => {
+          appendLine("system", "Connesso. Puoi parlare.");
+          setOrb("idle-connected");
+          setStatus("Connesso. Parla quando vuoi.", "ok");
+        };
+        dc.onmessage = onDataChannelMessage;
+        dc.onerror = (e) => appendLine("system", "data-channel error: " + (e && e.message || e));
+
+        setStatus("Handshake WebRTC…");
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        // POST SDP a OpenAI direttamente (con ephemeral token)
+        const sdpResp = await fetch("https://api.openai.com/v1/realtime?model=" + encodeURIComponent(model), {
+          method: "POST",
+          headers: {
+            "Authorization": "Bearer " + client_secret,
+            "Content-Type": "application/sdp",
+          },
+          body: offer.sdp,
+        });
+        if (!sdpResp.ok) {
+          const txt = await sdpResp.text().catch(() => "");
+          throw new Error("SDP " + sdpResp.status + ": " + txt.slice(0, 200));
+        }
+        const answerSdp = await sdpResp.text();
+        await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+
+        sessionStart = Date.now();
+        sessionTimer = setInterval(() => {
+          const s = Math.floor((Date.now() - sessionStart) / 1000);
+          mSessionDur.textContent = s + "s";
+        }, 1000);
+
+        metricsEl.style.display = "grid";
+        btnStop.style.display = "";
+      } catch (e) {
+        setStatus("Errore: " + (e && e.message || e), "error");
+        appendLine("system", String(e && e.message || e));
+        cleanup();
+      } finally {
+        btnStart.disabled = false;
+      }
+    }
+
+    function onDataChannelMessage(ev) {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      const t = msg.type || "";
+
+      // Utente inizia a parlare (VAD server)
+      if (t === "input_audio_buffer.speech_started") {
+        setOrb("listening");
+        // Se Koda stava parlando e ora l'utente parla → è un barge-in
+        if (audioEl && !audioEl.paused && currentResponseStartMs > 0) {
+          bargeinCount++;
+          mBargein.textContent = String(bargeinCount);
+          appendLine("system", "[barge-in] interrompo Koda.");
+        }
+      }
+      else if (t === "input_audio_buffer.speech_stopped") {
+        setOrb("idle-connected");
+      }
+      else if (t === "response.created") {
+        currentResponseStartMs = performance.now();
+        setOrb("speaking");
+        currentAssistantLine = appendLine("assistant", "");
+      }
+      else if (t === "response.output_audio.delta" || t === "response.audio.delta") {
+        if (mTtfb.textContent === "—" && currentResponseStartMs > 0) {
+          const dt = Math.round(performance.now() - currentResponseStartMs);
+          mTtfb.textContent = dt + " ms";
+        }
+      }
+      else if (t === "response.output_audio_transcript.delta" || t === "response.audio_transcript.delta") {
+        if (currentAssistantLine) {
+          currentAssistantLine.textContent += (msg.delta || "");
+          trWrap.scrollTop = trWrap.scrollHeight;
+        }
+      }
+      else if (t === "conversation.item.input_audio_transcription.delta") {
+        if (!currentUserLine) currentUserLine = appendLine("user", "");
+        currentUserLine.textContent += (msg.delta || "");
+        trWrap.scrollTop = trWrap.scrollHeight;
+      }
+      else if (t === "conversation.item.input_audio_transcription.completed") {
+        if (!currentUserLine) currentUserLine = appendLine("user", "");
+        if (msg.transcript) currentUserLine.textContent = msg.transcript;
+        currentUserLine = null;
+      }
+      else if (t === "response.done") {
+        setOrb("idle-connected");
+        currentResponseStartMs = 0;
+        currentAssistantLine = null;
+      }
+      else if (t === "response.cancelled" || t === "response.canceled") {
+        setOrb("idle-connected");
+        currentResponseStartMs = 0;
+      }
+      else if (t === "error") {
+        appendLine("system", "API error: " + JSON.stringify(msg.error || msg).slice(0, 200));
+      }
+    }
+
+    function cleanup() {
+      try { if (dc) dc.close(); } catch {}
+      try { if (pc) pc.close(); } catch {}
+      try { if (localStream) localStream.getTracks().forEach((t) => t.stop()); } catch {}
+      try { if (sessionTimer) clearInterval(sessionTimer); } catch {}
+      pc = null; dc = null; localStream = null; sessionTimer = null;
+      setOrb(null);
+      btnStop.style.display = "none";
+      metricsEl.style.display = "none";
+      mTtfb.textContent = "—";
+      mBargein.textContent = "0";
+      mSessionDur.textContent = "0s";
+      bargeinCount = 0;
+      currentResponseStartMs = 0;
+      currentAssistantLine = null;
+      currentUserLine = null;
+      setStatus("Sessione chiusa.");
+    }
+
+    btnStart.addEventListener("click", start);
+    btnStop.addEventListener("click", cleanup);
+  })();
+  </script>
+</body>
+</html>
