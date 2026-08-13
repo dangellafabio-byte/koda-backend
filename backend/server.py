@@ -7093,7 +7093,43 @@ def _get_eleven_client():
     if not _ELEVENLABS_AVAILABLE or not ELEVENLABS_API_KEY:
         return None
     try:
-        _eleven_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+        # === E (2026-08-13 Fabio) — Connection pool tuning ============
+        # SDK ElevenLabs 1.9.0 usa internamente httpx.Client() con default:
+        #   - max_keepalive_connections=20
+        #   - max_connections=100
+        #   - keepalive_expiry=5.0 secondi (PROBLEMA)
+        # In una conversazione real-time, i turni possono essere separati da
+        # più di 5 secondi (l'utente pensa, poi parla). Con keepalive_expiry=5
+        # la connessione TCP+TLS viene chiusa tra i turni → ogni nuovo turno
+        # paga TCP handshake (~30ms) + TLS handshake (~100-150ms).
+        # Iniettiamo un httpx.Client custom con:
+        #   - keepalive_expiry=300s (5 min): la connessione resta calda per
+        #     intere sessioni conversazionali
+        #   - max_keepalive_connections=20: come default
+        #   - timeout=60s: come default SDK
+        #   - follow_redirects=False: ElevenLabs non redirige, evita ricerca
+        # Zero rischio di regressione funzionale (stesso protocollo HTTP/1.1,
+        # stessa API, stesso comportamento). Guadagno atteso sui turni 2+:
+        # ~100-200ms per handshake evitato.
+        import httpx
+        _limits = httpx.Limits(
+            max_keepalive_connections=20,
+            max_connections=100,
+            keepalive_expiry=300.0,
+        )
+        _http_client = httpx.Client(
+            timeout=60.0,
+            follow_redirects=False,
+            limits=_limits,
+        )
+        _eleven_client = ElevenLabs(
+            api_key=ELEVENLABS_API_KEY,
+            httpx_client=_http_client,
+        )
+        logger.info(
+            "[ElevenLabs] client init OK — connection pool tuned "
+            "(keepalive_expiry=300s, max_keepalive=20)"
+        )
         return _eleven_client
     except Exception as e:
         logger.error(f"ElevenLabs client init failed: {e}")
@@ -12093,7 +12129,7 @@ async def _fast_pipeline_task(
                         text=clean_tts_v3,
                         voice_id=voice_id,
                         model_id=model_id,
-                        output_format="mp3_44100_128",  # 128kbps qualità piena, niente chipmunk
+                        output_format="mp3_22050_32",  # B (2026-08-13 Fabio): low-latency MP3 per fast pipeline. Trade-off: sample rate 22.05kHz + 32kbps. Latency gain misurabile via TTS_TTFB.
                         language_code=tts_lang,  # FORZA la lingua, no auto-detect
                         voice_settings=vs,
                         # === FIX 2026-07-23 v60 — seed deterministico per turno ===
@@ -12303,7 +12339,7 @@ async def _fast_pipeline_task(
                             text=clean_tts,  # senza tag v3
                             voice_id=voice_id,
                             model_id="eleven_flash_v2_5",
-                            output_format="mp3_44100_128",
+                            output_format="mp3_22050_32",  # B (2026-08-13): coerente col main path, evita salto bitrate su fallback
                             language_code=tts_lang,
                             voice_settings=vs,
                         )
@@ -12365,7 +12401,11 @@ async def _fast_pipeline_task(
                         _email_ws = await _uid_email_from_session_or_profile(_uid_ws)
                         _unlim_ws, _ = await is_user_unlimited(_email_ws, _uid_ws)
                         if not _unlim_ws:
-                            _dur_chunk = _estimate_mp3_duration_seconds(audio_bytes)
+                            # B (2026-08-13): fast pipeline usa mp3_22050_32 → bitrate 32kbps.
+                            # Passare esplicito evita che il default 128kbps di
+                            # _estimate_mp3_duration_seconds sotto-stimi la durata
+                            # 4×, che farebbe bruciare il trial 4× più veloce.
+                            _dur_chunk = _estimate_mp3_duration_seconds(audio_bytes, bitrate_bps=32_000)
                             if _dur_chunk > 0.0:
                                 _pid_ws = getattr(profile, "id", None) or _uid_ws
                                 await _increment_trial_seconds(_pid_ws, _dur_chunk)
