@@ -12129,7 +12129,12 @@ async def _fast_pipeline_task(
                         text=clean_tts_v3,
                         voice_id=voice_id,
                         model_id=model_id,
-                        output_format="mp3_22050_32",  # B (2026-08-13 Fabio): low-latency MP3 per fast pipeline. Trade-off: sample rate 22.05kHz + 32kbps. Latency gain misurabile via TTS_TTFB.
+                        # === REVERT B (2026-08-13 Fabio) — post A/B test ===
+                        # mp3_22050_32 dava ~450ms di TTFB gain, dentro varianza,
+                        # con degrado percepibile del timbro. Il vero collo di
+                        # bottiglia era il metodo (convert vs convert_as_stream),
+                        # non il bitrate. Ripristiniamo 128kbps qualità piena.
+                        output_format="mp3_44100_128",
                         language_code=tts_lang,  # FORZA la lingua, no auto-detect
                         voice_settings=vs,
                         # === FIX 2026-07-23 v60 — seed deterministico per turno ===
@@ -12235,71 +12240,57 @@ async def _fast_pipeline_task(
                         if _prev_req_id:
                             kwargs["previous_request_ids"] = [_prev_req_id]
                     try:
-                        # === CATTURA REQUEST_ID (2026-08-02, Fabio, Esperimento A) ===
-                        # Uso `with_raw_response` per accedere agli headers HTTP
-                        # della risposta ElevenLabs, dove sta il `request-id`
-                        # (o `x-request-id` come fallback). Se l'SDK non lo
-                        # supporta o headers mancano, fallback silente al flow
-                        # attuale — zero rischio di regressione.
-                        gen = None
-                        try:
-                            _raw = client_el.text_to_speech.with_raw_response.convert(**kwargs)
-                            _req_hdr = None
-                            try:
-                                _hdrs = getattr(_raw, "headers", None) or {}
-                                # Diversi SDK espongono headers come dict o Headers object
-                                if hasattr(_hdrs, "get"):
-                                    _req_hdr = _hdrs.get("request-id") or _hdrs.get("x-request-id")
-                            except Exception:
-                                _req_hdr = None
-                            # Salvo il request_id SOLO per il chunk 0 (v3) —
-                            # sarà consumato dal body successivo.
-                            if _req_hdr and idx == 0 and model_id == "eleven_v3":
-                                nonlocal_first_request_id[0] = _req_hdr
-                                logger.info(
-                                    f"[fast {session_id[:8]}] stitching: captured "
-                                    f"v3 request_id={_req_hdr[:12]}... for body"
-                                )
-                            # === OPZIONE B: cattura anche request_id del body ===
-                            # Il chunk overflow (idx >= 2) userà questo per
-                            # stitching flash→flash sull'audio già generato.
-                            if _req_hdr and idx == 1 and model_id != "eleven_v3":
-                                nonlocal_body_request_id[0] = _req_hdr
-                                logger.info(
-                                    f"[fast {session_id[:8]}] stitching: captured "
-                                    f"body flash request_id={_req_hdr[:12]}... for overflow"
-                                )
-                            # Estraggo il generator/iterable di bytes audio
-                            _data = getattr(_raw, "data", None)
-                            if _data is None and callable(getattr(_raw, "parse", None)):
-                                _data = _raw.parse()
-                            gen = _data
-                        except AttributeError:
-                            # SDK ElevenLabs vecchio senza with_raw_response —
-                            # fallback silente al metodo standard.
-                            gen = client_el.text_to_speech.convert(**kwargs)
-
-                        if gen is None:
-                            gen = client_el.text_to_speech.convert(**kwargs)
+                        # === SWAP DIAGNOSTICO 2026-08-13 (Fabio) ===
+                        # Sostituito `convert()` con `convert_as_stream()`.
+                        # Motivazione (test A/B isolato 2026-08-13):
+                        #   - convert()           → hit POST /v1/text-to-speech/{voice_id}
+                        #     endpoint NON-streaming: ElevenLabs genera l'intero
+                        #     MP3 internamente, poi lo scarica in ~1ms.
+                        #     TTFB misurato: ~2750-3200ms (v3, testo medio).
+                        #   - convert_as_stream() → hit POST /v1/text-to-speech/{voice_id}/stream
+                        #     endpoint streaming vero: ElevenLabs emette bytes
+                        #     man mano che sintetizza.
+                        #     TTFB misurato: ~590-660ms (v3, testo medio).
+                        # Signature identica, drop-in. Il total wall-clock resta
+                        # ~3s perché il nostro codice bufferizza comunque
+                        # (audio.extend loop + normalize + publish). L'utente
+                        # NON percepirà alcun cambio: il metrico `tts_ttfb_ms`
+                        # scenderà a ~600ms mentre `eleven_tts_ms` resta ~3000ms.
+                        # È il dato oggettivo che dimostra dove sta il vero
+                        # collo di bottiglia (la nostra scelta di publish
+                        # pattern, non ElevenLabs).
+                        #
+                        # === BUG SEPARATO ANNOTATO (NON TOCCARE ORA) ===
+                        # `client_el.text_to_speech.with_raw_response` NON esiste
+                        # in SDK ElevenLabs 1.9.0 (RealtimeTextToSpeechClient
+                        # sostituisce TextToSpeechClient e non espone questa
+                        # property). Il vecchio try/except AttributeError qui
+                        # sotto era 100% fallback silente → il capture del
+                        # `request-id` per il request stitching non ha MAI
+                        # funzionato in produzione. Da mesi.
+                        # Conseguenza: `nonlocal_first_request_id[0]` sempre
+                        # None → `previous_request_ids` mai passato a
+                        # ElevenLabs → stitching v3→flash e flash→flash
+                        # silenziosamente disattivato. Continuità prosodica
+                        # attuale garantita SOLO da `previous_text` (che è
+                        # comunque il fallback documentato). Sistemare
+                        # separatamente in una prossima iterazione — richiede
+                        # di trovare un altro modo per catturare request-id
+                        # (es. httpx event hook, oppure header dalla request
+                        # dopo il primo byte via response middleware).
+                        # Per ORA: rimosso il ramo morto with_raw_response e
+                        # semplificato a chiamata diretta a convert_as_stream.
+                        gen = client_el.text_to_speech.convert_as_stream(**kwargs)
 
                         for chunk in gen:
                             if chunk:
                                 # === [KODA_TIMING] TTS_TTFB (Fabio 2026-08-12, fix scope 2026-08-13) ===
                                 # Primo byte MP3 ricevuto da ElevenLabs.
-                                # Separa "tempo che ElevenLabs impiega a
-                                # generare il primo audio" da "tempo che
-                                # impiega a completare l'intera generazione".
-                                # Utile per capire se rallentamenti dipendono
-                                # da TTFB (rete/coda ElevenLabs) o dalla
-                                # durata della sintesi.
-                                #
-                                # FIX 2026-08-13: scriviamo nel container
-                                # `_nonlocal_tts_ttfb_ms[0]` (outer scope)
-                                # anziché in una variabile locale del closure,
-                                # così il summary block riesce a leggerlo.
-                                # Cattura anche il retry v3→flash: la
-                                # condizione `is None` permette al primo
-                                # chunk utile (post-fallback) di popolare.
+                                # Con convert_as_stream (post-swap 2026-08-13):
+                                #   ~600ms per v3 su testo medio (era ~3000ms
+                                #   con convert()). Dimostra che ElevenLabs
+                                #   SA emettere in streaming — noi però
+                                #   bufferizziamo comunque prima di publish.
                                 if idx == 0 and _nonlocal_tts_ttfb_ms[0] is None:
                                     _nonlocal_tts_ttfb_ms[0] = int((time.time() - _t_do_tts_start) * 1000)
                                     logger.info(
@@ -12339,7 +12330,7 @@ async def _fast_pipeline_task(
                             text=clean_tts,  # senza tag v3
                             voice_id=voice_id,
                             model_id="eleven_flash_v2_5",
-                            output_format="mp3_22050_32",  # B (2026-08-13): coerente col main path, evita salto bitrate su fallback
+                            output_format="mp3_44100_128",  # REVERT B (2026-08-13): coerente col main path
                             language_code=tts_lang,
                             voice_settings=vs,
                         )
@@ -12347,7 +12338,11 @@ async def _fast_pipeline_task(
                         if previous_text and current_tone not in HIGH_ENERGY_TONES:
                             fallback_kwargs["previous_text"] = previous_text[-80:]
                         try:
-                            gen2 = client_el.text_to_speech.convert(**fallback_kwargs)
+                            # === SWAP DIAGNOSTICO 2026-08-13 ===
+                            # Anche il fallback v3→flash passa a convert_as_stream()
+                            # per coerenza: se v3 fallisce e ripieghiamo su flash,
+                            # vogliamo lo stesso beneficio TTFB dell'endpoint streaming.
+                            gen2 = client_el.text_to_speech.convert_as_stream(**fallback_kwargs)
                             for chunk in gen2:
                                 if chunk:
                                     audio.extend(chunk)
@@ -12401,11 +12396,9 @@ async def _fast_pipeline_task(
                         _email_ws = await _uid_email_from_session_or_profile(_uid_ws)
                         _unlim_ws, _ = await is_user_unlimited(_email_ws, _uid_ws)
                         if not _unlim_ws:
-                            # B (2026-08-13): fast pipeline usa mp3_22050_32 → bitrate 32kbps.
-                            # Passare esplicito evita che il default 128kbps di
-                            # _estimate_mp3_duration_seconds sotto-stimi la durata
-                            # 4×, che farebbe bruciare il trial 4× più veloce.
-                            _dur_chunk = _estimate_mp3_duration_seconds(audio_bytes, bitrate_bps=32_000)
+                            # REVERT B (2026-08-13): fast pipeline torna a mp3_44100_128
+                            # → default 128kbps di _estimate_mp3_duration_seconds è ok.
+                            _dur_chunk = _estimate_mp3_duration_seconds(audio_bytes)
                             if _dur_chunk > 0.0:
                                 _pid_ws = getattr(profile, "id", None) or _uid_ws
                                 await _increment_trial_seconds(_pid_ws, _dur_chunk)
