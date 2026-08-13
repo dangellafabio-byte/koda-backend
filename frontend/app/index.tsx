@@ -3117,6 +3117,14 @@ export default function Taccuino() {
         // - chat normale: 180s + 60s = 240s
         // - Stanza dello Sfogo: 300s + 60s = 360s
         timeoutMs: confessionalMode ? 360_000 : 240_000,
+        // === ORB SILENCE SYNC (Task 2, Fix Bug #2 — Fabio 2026-08-13) ===
+        // QUESTA è la path REALE del microfono su iPhone. La versione
+        // aggiunta in fastConverseWS (riga 2737 sotto) è un'altra path
+        // che non veniva mai attivata dal flusso vocale reale. Fix:
+        // wiring anche qui in voiceStreamConverse.
+        onSpeechActive: (active: boolean) => {
+          try { setSpeechActive(!!active); } catch {}
+        },
         onSession: (s: any) => {
           streamingSessionRef.current = s;
           // === FIX 2026-07-24 v63.5 (Fix B) — reset mic-active gate ===

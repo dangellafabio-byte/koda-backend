@@ -139,6 +139,17 @@ export interface VoiceStreamCallbacks {
   onMeta?: (meta: any) => void;
   onDone?: () => void;
   onError?: (message: string) => void;
+  // === ORB SILENCE SYNC (Task 2, Fix Bug #2 — Fabio 2026-08-13) ===
+  // Il server ha calcolato via RMS parsing dell'MP3 la lista degli
+  // intervalli di silenzio per la sentence `data.i`. Passata al caller
+  // che la usa per schedulare toggle di `onSpeechActive` durante il
+  // playback dell'audio. Se non definita → l'evento viene ignorato.
+  onSpeechTimeline?: (data: {
+    i: number;
+    silences: number[][];
+    duration_ms?: number;
+    window_ms?: number;
+  }) => void;
   // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
   // Fired quando il microfono REALE è partito (Native STT: dopo
   // ExpoSpeechRecognitionModule.start() OK; Deepgram: dopo primo chunk
@@ -863,6 +874,22 @@ export class VoiceStreamSession {
       };
     } else if (type === "meta") {
       this.callbacks.onMeta?.(evt);
+    } else if (type === "speech_timeline") {
+      // === ORB SILENCE SYNC (Task 2, Fix Bug #2 — Fabio 2026-08-13) ===
+      // Il server invia gli intervalli di silenzio della sentence
+      // `evt.i` calcolati via RMS parsing MP3. Li giriamo al caller
+      // che schedulerà il toggle dell'orb in sincronia col playback.
+      try {
+        const silences = Array.isArray(evt.silences) ? evt.silences : [];
+        this.callbacks.onSpeechTimeline?.({
+          i: typeof evt.i === "number" ? evt.i : 0,
+          silences,
+          duration_ms: typeof evt.duration_ms === "number" ? evt.duration_ms : undefined,
+          window_ms: typeof evt.window_ms === "number" ? evt.window_ms : undefined,
+        });
+      } catch (e) {
+        console.warn(`[KODA_STREAM_CLIENT] onSpeechTimeline callback error: ${e}`);
+      }
     } else if (type === "done") {
       console.log(`[KODA_STREAM_CLIENT] done`);
       this.doneReceived = true;

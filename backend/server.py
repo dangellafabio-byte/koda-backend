@@ -11956,6 +11956,16 @@ async def _fast_pipeline_task(
         # request_id di v3 (chunk 0), che è timbricamente diverso.
         nonlocal_body_request_id: List[Optional[str]] = [None]
 
+        # === FIX Bug #1 (Fabio 2026-08-13) — TTS_TTFB scope container ===
+        # `_tts_ttfb_ms` era definita come variabile locale di
+        # `_gen_and_publish_sentence` (nested closure) → invisibile allo
+        # scope di `_fast_pipeline_task` dove il summary block la legge.
+        # Il check `'_tts_ttfb_ms' in dir()` ritornava sempre False →
+        # `tts_ttfb_ms` sempre `null` nel report /debug/last-turn-timing.
+        # Fix: container mutabile a livello outer, popolato dal closure.
+        # Stesso pattern di `nonlocal_body_request_id` sopra.
+        _nonlocal_tts_ttfb_ms: List[Optional[int]] = [None]
+
         # Soglie per il flush anticipato del body: appena raggiungiamo una di
         # queste condizioni, il body TTS parte SENZA aspettare la fine dello
         # streaming LLM. Elimina i ~2s di silenzio tra chunk 0 e body.
@@ -12207,7 +12217,7 @@ async def _fast_pipeline_task(
 
                         for chunk in gen:
                             if chunk:
-                                # === [KODA_TIMING] TTS_TTFB (Fabio 2026-08-12) ===
+                                # === [KODA_TIMING] TTS_TTFB (Fabio 2026-08-12, fix scope 2026-08-13) ===
                                 # Primo byte MP3 ricevuto da ElevenLabs.
                                 # Separa "tempo che ElevenLabs impiega a
                                 # generare il primo audio" da "tempo che
@@ -12215,11 +12225,19 @@ async def _fast_pipeline_task(
                                 # Utile per capire se rallentamenti dipendono
                                 # da TTFB (rete/coda ElevenLabs) o dalla
                                 # durata della sintesi.
-                                if idx == 0 and not audio:
-                                    _tts_ttfb_ms = int((time.time() - _t_do_tts_start) * 1000)
+                                #
+                                # FIX 2026-08-13: scriviamo nel container
+                                # `_nonlocal_tts_ttfb_ms[0]` (outer scope)
+                                # anziché in una variabile locale del closure,
+                                # così il summary block riesce a leggerlo.
+                                # Cattura anche il retry v3→flash: la
+                                # condizione `is None` permette al primo
+                                # chunk utile (post-fallback) di popolare.
+                                if idx == 0 and _nonlocal_tts_ttfb_ms[0] is None:
+                                    _nonlocal_tts_ttfb_ms[0] = int((time.time() - _t_do_tts_start) * 1000)
                                     logger.info(
                                         f"[KODA_TIMING] TTS_TTFB sid={session_id[:8]} "
-                                        f"idx=0 model={model_id} ttfb_ms={_tts_ttfb_ms}"
+                                        f"idx=0 model={model_id} ttfb_ms={_nonlocal_tts_ttfb_ms[0]}"
                                     )
                                 audio.extend(chunk)
                     except Exception as e:
@@ -12374,7 +12392,7 @@ async def _fast_pipeline_task(
                                 # Rendono la decomposizione dei 4.5s accessibile
                                 # via HTTP GET, non solo via grep sui log Railway.
                                 "claude_first_80char_ms": _c80_ms if '_first_80char_logged' in dir() and _first_80char_logged else None,
-                                "tts_ttfb_ms": _tts_ttfb_ms if '_tts_ttfb_ms' in dir() else None,
+                                "tts_ttfb_ms": _nonlocal_tts_ttfb_ms[0],
                                 "eleven_tts_ms": _tts_ms,
                                 "overhead_ms": _overhead_ms,
                                 "total_srv_ms": total_first,

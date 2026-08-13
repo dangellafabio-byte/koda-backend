@@ -2051,6 +2051,18 @@ export async function voiceStreamConverse(opts: {
   // (~1s tra idle→recording e mic reale attivo) → in quel caso
   // il tap va ignorato per evitare la cascata Xiaomi.
   onRecognitionActive?: () => void;
+  // === ORB SILENCE SYNC (Task 2, Fix Bug #2 — Fabio 2026-08-13) ===
+  // Callback invocata quando il playback attraversa un intervallo di
+  // silenzio (respiro / pausa naturale) rilevato dal server via RMS
+  // parsing del MP3. `false` = silenzio in corso → l'orb dovrebbe
+  // smorzare la pulsazione. `true` = torna a parlare.
+  // Fallback silenzioso: se il server non manda `speech_timeline`
+  // (pydub/ffmpeg unavail, decode fail, WS drop) questa callback
+  // non viene mai chiamata → l'orb resta sul comportamento attuale.
+  // Replica esatta del comportamento in fastConverseWS — questo path
+  // è quello REALMENTE usato dal microfono su iPhone (via
+  // voiceStreamConverse dentro index.tsx riga 3106).
+  onSpeechActive?: (active: boolean) => void;
 } = {}): Promise<FastConverseResult> {
   // === FIX 2026-06-26 v17: default alzato da 60s → 240s ===
   // Allineato con STREAM_HARD_CAP_MS (180s) + margine 60s per LLM+TTS.
@@ -2078,6 +2090,21 @@ export async function voiceStreamConverse(opts: {
     window_ms: number;
   };
   const sentenceQueue: SentenceItem[] = [];
+  // === ORB SILENCE SYNC (Task 2, Fix Bug #2 — Fabio 2026-08-13) ===
+  // Timeline dei silenzi per sentence idx, ricevuta via evento
+  // `speech_timeline` dal backend. Usata da fireStart per schedulare
+  // i toggle di `onSpeechActive` durante il playback della sentence.
+  // Se il server non manda mai speech_timeline per una idx → la mappa
+  // resta vuota → nessun timer schedulato → orb resta "attivo" tutto
+  // il turno (fallback L3).
+  const silencesByIdx: Map<number, number[][]> = new Map();
+  // Timers attivi per la sentence in playback — cancellati quando
+  // il turno finisce (per non fire callback out-of-order).
+  let activeSilenceTimers: ReturnType<typeof setTimeout>[] = [];
+  const clearActiveSilenceTimers = () => {
+    for (const t of activeSilenceTimers) { try { clearTimeout(t); } catch {} }
+    activeSilenceTimers = [];
+  };
   // === FIX 2026-07-01 — "Bipolare" bug (Fabio da log furgone) ===
   // Root cause: il backend genera le frasi in PARALLELO con
   // `asyncio.create_task`. Se la frase idx=1 è più corta della idx=0,
@@ -2213,6 +2240,27 @@ export async function voiceStreamConverse(opts: {
       // gira normalmente dentro playElevenLabsNativeFromUrl quando
       // arriva la prima frase, come in Build #14 che era stabile.
       // prewarmPlaybackSession().catch(() => {});   ← DISABILITATO
+    },
+    // === ORB SILENCE SYNC (Task 2, Fix Bug #2 — Fabio 2026-08-13) ===
+    // Il backend ha calcolato via RMS parsing del MP3 la lista degli
+    // intervalli di silenzio per la sentence `data.i`. Li salviamo
+    // in silencesByIdx; fireStart li userà per schedulare il toggle
+    // di onSpeechActive in sincronia col playback.
+    // Filtra intervalli mal formati (start < end, entrambi finiti).
+    onSpeechTimeline: (data: { i: number; silences: number[][] }) => {
+      try {
+        const clean: number[][] = [];
+        for (const it of (data.silences || [])) {
+          if (Array.isArray(it) && it.length >= 2) {
+            const s = Number(it[0]);
+            const e = Number(it[1]);
+            if (Number.isFinite(s) && Number.isFinite(e) && e > s) {
+              clean.push([Math.max(0, Math.floor(s)), Math.floor(e)]);
+            }
+          }
+        }
+        silencesByIdx.set(data.i, clean);
+      } catch {}
     },
     onSentence: (header: any, audioBuf: ArrayBuffer) => {
       const u8 = new Uint8Array(audioBuf);
@@ -2512,6 +2560,31 @@ export async function voiceStreamConverse(opts: {
             startReactiveWaveform(item.waveform, item.window_ms || 60);
           }
         } catch {}
+        // === ORB SILENCE SYNC (Task 2, Fix Bug #2 — Fabio 2026-08-13) ===
+        // Replica esatta dello scheduling in fastConverseWS. Al momento
+        // in cui l'audio della sentence inizia davvero (fireStart),
+        // schedula setTimeout per ogni intervallo di silenzio ricevuto
+        // dal server. Cancella i timer della sentence precedente per
+        // non far fire out-of-order.
+        try {
+          clearActiveSilenceTimers();
+          if (opts.onSpeechActive) {
+            const silences = silencesByIdx.get(item.i);
+            if (silences && silences.length > 0) {
+              // Marchiamo come "attivo" all'inizio della sentence.
+              try { opts.onSpeechActive?.(true); } catch {}
+              for (const [startMs, endMs] of silences) {
+                const t1 = setTimeout(() => {
+                  try { opts.onSpeechActive?.(false); } catch {}
+                }, Math.max(0, startMs));
+                const t2 = setTimeout(() => {
+                  try { opts.onSpeechActive?.(true); } catch {}
+                }, Math.max(0, endMs));
+                activeSilenceTimers.push(t1, t2);
+              }
+            }
+          }
+        } catch {}
       };
       console.log(
         `[KODA_TTS_PLAY] sent #${sIdx} arrived t+${tArrival - tStreamStart}ms ` +
@@ -2602,6 +2675,12 @@ export async function voiceStreamConverse(opts: {
       if (ac.signal.aborted) break;
     }
   } finally {
+    // === ORB SILENCE SYNC (Task 2, Fix Bug #2 — Fabio 2026-08-13) ===
+    // Cleanup dei timers residui. Se una sentence viene interrotta a
+    // metà (turno cancellato/abortito), cancelliamo i toggle pending
+    // così l'orb non riceve un `speech_active=true` fantasma dopo la
+    // fine del turno.
+    try { clearActiveSilenceTimers(); } catch {}
     // === FIX 2026-07-03 v40 — Fix E: pulizia streamingSessionRef incondizionata ===
     // Bug osservato nel log Fabio del 2026-07-01: quando l'app va in
     // background durante TTS playback e poi torna in foreground, il

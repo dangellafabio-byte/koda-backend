@@ -1199,6 +1199,22 @@ export class VoiceClientSttSession {
           this.callbacks.onMeta?.(msg);
         } catch {}
         break;
+      case "speech_timeline":
+        // === ORB SILENCE SYNC (Task 2, Fix Bug #2 — Fabio 2026-08-13) ===
+        // Copia esatta del case in voiceStream.ts. Il server manda
+        // gli intervalli di silenzio della sentence per lo sync orb.
+        try {
+          const silences = Array.isArray(msg.silences) ? msg.silences : [];
+          this.callbacks.onSpeechTimeline?.({
+            i: typeof msg.i === "number" ? msg.i : 0,
+            silences,
+            duration_ms: typeof msg.duration_ms === "number" ? msg.duration_ms : undefined,
+            window_ms: typeof msg.window_ms === "number" ? msg.window_ms : undefined,
+          });
+        } catch (e) {
+          console.log(`[${TAG}] onSpeechTimeline callback error: ${e}`);
+        }
+        break;
       case "done":
         this.doneReceived = true;
         console.log(`[${TAG}] done`);
