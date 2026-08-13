@@ -2260,6 +2260,15 @@ export async function voiceStreamConverse(opts: {
           }
         }
         silencesByIdx.set(data.i, clean);
+        // === Log positivo (Fabio 2026-08-13) ===
+        // Diagnostica race condition backend→client. Il fireStart di
+        // questa idx (loggato come `[SPEECH_TIMELINE_CLIENT] fireStart
+        // idx=X silences_state=...`) mostra se al momento dell'inizio
+        // playback la timeline era già arrivata o meno.
+        console.log(
+          `[SPEECH_TIMELINE_CLIENT] applied idx=${data.i} clean_count=${clean.length} ` +
+            `sample=${clean[0] ? JSON.stringify(clean[0]) : "none"}`
+        );
       } catch {}
     },
     onSentence: (header: any, audioBuf: ArrayBuffer) => {
@@ -2568,20 +2577,33 @@ export async function voiceStreamConverse(opts: {
         // non far fire out-of-order.
         try {
           clearActiveSilenceTimers();
-          if (opts.onSpeechActive) {
-            const silences = silencesByIdx.get(item.i);
-            if (silences && silences.length > 0) {
-              // Marchiamo come "attivo" all'inizio della sentence.
-              try { opts.onSpeechActive?.(true); } catch {}
-              for (const [startMs, endMs] of silences) {
-                const t1 = setTimeout(() => {
-                  try { opts.onSpeechActive?.(false); } catch {}
-                }, Math.max(0, startMs));
-                const t2 = setTimeout(() => {
-                  try { opts.onSpeechActive?.(true); } catch {}
-                }, Math.max(0, endMs));
-                activeSilenceTimers.push(t1, t2);
-              }
+          const silences = silencesByIdx.get(item.i);
+          const hasCb = !!opts.onSpeechActive;
+          // === Log positivo (Fabio 2026-08-13) ===
+          // Cattura lo stato AL MOMENTO di fireStart. Se silences è
+          // undefined qui, significa che speech_timeline non è ancora
+          // arrivato dal backend (race condition: emit async DOPO
+          // l'audio → orb non parte). Se silences è definito ma vuoto,
+          // il modello TTS non ha silenzi ≥180ms. Se è definito con
+          // count>0 e cb presente, i timer partono.
+          console.log(
+            `[SPEECH_TIMELINE_CLIENT] fireStart idx=${item.i} ` +
+              `has_cb=${hasCb} ` +
+              `silences_state=${silences === undefined ? "not_arrived_yet" : silences.length === 0 ? "empty" : `count=${silences.length}`}`
+          );
+          if (hasCb && silences && silences.length > 0) {
+            // Marchiamo come "attivo" all'inizio della sentence.
+            try { opts.onSpeechActive?.(true); } catch {}
+            for (const [startMs, endMs] of silences) {
+              const t1 = setTimeout(() => {
+                console.log(`[SPEECH_TIMELINE_CLIENT] fire idx=${item.i} → speechActive=false at t=${startMs}ms`);
+                try { opts.onSpeechActive?.(false); } catch {}
+              }, Math.max(0, startMs));
+              const t2 = setTimeout(() => {
+                console.log(`[SPEECH_TIMELINE_CLIENT] fire idx=${item.i} → speechActive=true at t=${endMs}ms`);
+                try { opts.onSpeechActive?.(true); } catch {}
+              }, Math.max(0, endMs));
+              activeSilenceTimers.push(t1, t2);
             }
           }
         } catch {}

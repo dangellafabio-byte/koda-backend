@@ -881,6 +881,18 @@ export class VoiceStreamSession {
       // che schedulerà il toggle dell'orb in sincronia col playback.
       try {
         const silences = Array.isArray(evt.silences) ? evt.silences : [];
+        // === Log positivo (Fabio 2026-08-13) ===
+        // Traccia OGNI ricezione. Cross-check col log backend
+        // [SPEECH_TIMELINE] emit=OK: se il backend logga emit=OK ma
+        // il client NON logga recv, il canale WS/polling perde
+        // eventi (bug di trasporto). Se il client logga recv ma il
+        // caller poi non applica → bug nello scheduler.
+        console.log(
+          `[SPEECH_TIMELINE_CLIENT] recv sid=${(this as any).sessionId?.slice?.(0,8) || "?"} ` +
+            `idx=${evt.i} silences_count=${silences.length} ` +
+            `first_silence=${silences[0] ? JSON.stringify(silences[0]) : "none"} ` +
+            `has_cb=${!!this.callbacks.onSpeechTimeline}`
+        );
         this.callbacks.onSpeechTimeline?.({
           i: typeof evt.i === "number" ? evt.i : 0,
           silences,
@@ -888,7 +900,7 @@ export class VoiceStreamSession {
           window_ms: typeof evt.window_ms === "number" ? evt.window_ms : undefined,
         });
       } catch (e) {
-        console.warn(`[KODA_STREAM_CLIENT] onSpeechTimeline callback error: ${e}`);
+        console.warn(`[SPEECH_TIMELINE_CLIENT] onSpeechTimeline callback error: ${e}`);
       }
     } else if (type === "done") {
       console.log(`[KODA_STREAM_CLIENT] done`);

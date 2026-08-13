@@ -12458,23 +12458,41 @@ async def _fast_pipeline_task(
                         try:
                             tl = await asyncio.to_thread(_compute_speech_timeline, _mp3)
                             if not tl:
+                                logger.info(
+                                    f"[SPEECH_TIMELINE] sid={session_id[:8]} idx={_idx} "
+                                    f"skip=null (pydub unavail o decode fail)"
+                                )
                                 return
+                            silences = tl.get("silences") or []
                             await _publish({
                                 "type": "speech_timeline",
                                 "i": _idx,
                                 "token": _token,
                                 "duration_ms": tl.get("duration_ms"),
-                                "silences": tl.get("silences") or [],
+                                "silences": silences,
                                 "window_ms": tl.get("window_ms"),
                                 "threshold": tl.get("threshold"),
                             })
+                            # === Log positivo per diagnostica (Fabio 2026-08-13) ===
+                            # Traccia OGNI emit con esito: session, idx, count
+                            # dei silenzi e durata. Serve a confermare che
+                            # l'evento parte davvero dal backend, e permette
+                            # cross-check col client log (che ora logga la
+                            # ricezione).
+                            logger.info(
+                                f"[SPEECH_TIMELINE] sid={session_id[:8]} idx={_idx} "
+                                f"emit=OK duration_ms={tl.get('duration_ms')} "
+                                f"silences_count={len(silences)} "
+                                f"first_silence={silences[0] if silences else None}"
+                            )
                         except Exception as _e:
                             logger.warning(
-                                f"[fast {session_id[:8]}] speech_timeline emit failed idx={_idx}: {_e}"
+                                f"[SPEECH_TIMELINE] sid={session_id[:8]} idx={_idx} "
+                                f"emit=FAIL error={_e}"
                             )
                     asyncio.create_task(_emit_speech_timeline(idx, token, bytes(audio_bytes)))
                 except Exception as e:
-                    logger.warning(f"[fast] speech_timeline schedule failed: {e}")
+                    logger.warning(f"[SPEECH_TIMELINE] schedule failed: {e}")
             except Exception as e:
                 logger.error(f"[fast] sentence gen error: {e}")
 
