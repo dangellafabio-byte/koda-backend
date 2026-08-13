@@ -251,12 +251,14 @@
       // Consenti override admin via ?uid=... nella query string (comodo su
       // Safari iPhone dove non c'è cookie di sessione condiviso con l'app).
       // Il gate `_require_admin` legge X-User-Id se presente.
+      // Consenti anche ?variant=full_koda|warm_koda per scegliere il prompt.
       const urlParams = new URLSearchParams(window.location.search);
       const adminUid = urlParams.get("uid");
+      const variant = urlParams.get("variant") || "full_koda";
       const headers = { "Content-Type": "application/json" };
       if (adminUid) headers["X-User-Id"] = adminUid;
 
-      const r = await fetch("/api/dev/poc/openai-realtime/ephemeral-session", {
+      const r = await fetch("/api/dev/poc/openai-realtime/ephemeral-session?variant=" + encodeURIComponent(variant), {
         method: "POST",
         credentials: "include",
         headers,
