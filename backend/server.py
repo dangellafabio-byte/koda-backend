@@ -11904,6 +11904,32 @@ async def _fast_pipeline_task(
         user_payload_parts.append('Rispondi SOLO col JSON, "reply" come primo campo.')
         user_payload = "\n\n".join(user_payload_parts)
 
+        # === CLAUDE TTFT INVESTIGATION (2026-08-13 Fabio) — payload tokens ==========
+        # Conta i token del user_payload usando tiktoken (proxy accurato per
+        # Claude, tipicamente entro ±5% del tokenizer Anthropic reale).
+        # È il costo NON cachato del turno (cache_control marca solo il system
+        # prompt, il user message è sempre fresco). Serve per capire quanto
+        # la latenza Claude dipende dal payload dinamico vs system prompt.
+        _user_payload_tokens = None
+        try:
+            import tiktoken as _tk
+            _enc = _tk.get_encoding("cl100k_base")
+            _user_payload_tokens = len(_enc.encode(user_payload))
+            logger.info(
+                f"[KODA_TIMING] USER_PAYLOAD sid={session_id[:8]} "
+                f"chars={len(user_payload)} tokens_tiktoken={_user_payload_tokens}"
+            )
+        except Exception as _tk_e:
+            logger.warning(f"[KODA_TIMING] tiktoken unavailable: {_tk_e}")
+
+        # === Container nonlocal per catturare metrics dallo stream ===
+        # Popolato durante il loop `async for chunk in stream`. Letto DOPO
+        # gather() dei sentence tasks per patchare l'entry di _LAST_TIMING_SUMMARIES
+        # con i dati Claude reali (usage arriva SOLO nell'ultimo chunk con
+        # stream_options.include_usage=True).
+        _claude_final_usage: Dict[str, Any] = {}  # popolato in loop
+        _claude_wall_ms_container: List[Optional[int]] = [None]  # popolato a fine loop
+
         t_llm_start = time.time()
         logger.info(f"[fast {session_id[:8]}] LLM start, prompt {len(sys_prompt)} chars")
         logger.info(f"[KODA_TIMING] LLM_START sid={session_id[:8]} prompt_chars={len(sys_prompt)}")
@@ -11955,6 +11981,14 @@ async def _fast_pipeline_task(
             # a 240 come compromesso.
             max_tokens=200,
             timeout=18,
+            # === CLAUDE TTFT INVESTIGATION (2026-08-13 Fabio) ================
+            # `include_usage: True` fa arrivare l'oggetto `usage` nell'ULTIMO
+            # chunk dello stream. Contiene: prompt_tokens, completion_tokens,
+            # cache_creation_input_tokens, cache_read_input_tokens.
+            # Serve per verificare se il prompt caching Anthropic è realmente
+            # HIT (cache_read>0) o MISS (cache_creation>0) su ogni turno.
+            # Costo: zero (metadato già calcolato server-side da Anthropic).
+            stream_options={"include_usage": True},
         )
 
         extractor = _ReplyExtractor()
@@ -12593,6 +12627,22 @@ async def _fast_pipeline_task(
         _first_80char_logged = False
 
         async for chunk in stream:
+            # === CLAUDE TTFT INVESTIGATION (2026-08-13) — cattura usage ==========
+            # `include_usage=True` fa arrivare usage nell'ULTIMO chunk (o come
+            # chunk separato senza `content`). Cattura ogni volta che appare —
+            # l'ultima cattura vince (di solito è una sola).
+            _u = getattr(chunk, 'usage', None)
+            if _u is not None:
+                # Salvo campi cruciali in dict così _LAST_TIMING_SUMMARIES può
+                # leggerli anche se l'oggetto Usage viene garbage-collected.
+                try:
+                    _claude_final_usage['prompt_tokens'] = getattr(_u, 'prompt_tokens', None)
+                    _claude_final_usage['completion_tokens'] = getattr(_u, 'completion_tokens', None)
+                    _claude_final_usage['cache_creation_input_tokens'] = getattr(_u, 'cache_creation_input_tokens', 0) or 0
+                    _claude_final_usage['cache_read_input_tokens'] = getattr(_u, 'cache_read_input_tokens', 0) or 0
+                except Exception:
+                    pass
+
             try:
                 piece = chunk.choices[0].delta.content or ''
             except (AttributeError, IndexError):
@@ -12679,6 +12729,24 @@ async def _fast_pipeline_task(
             if extractor.reply_finished:
                 break
 
+        # === CLAUDE TTFT INVESTIGATION (2026-08-13 Fabio) — wall time ==========
+        # Registra il wall-time completo dello stream Claude (da acompletion
+        # start fino all'ultimo chunk consumato). Distinto dal TTFT: se il TTFT
+        # è 800ms e il wall è 2500ms, i restanti 1700ms sono "generazione dopo
+        # il primo token". Se il TTFT è 2500ms e il wall è 2600ms, è tutto TTFT.
+        _claude_wall_ms_container[0] = int((time.time() - t_llm_start) * 1000)
+        logger.info(
+            f"[KODA_TIMING] CLAUDE_WALL sid={session_id[:8]} "
+            f"wall_ms={_claude_wall_ms_container[0]} "
+            f"ttft_ms={timing_llm_ttft_ms} "
+            f"post_ttft_ms={_claude_wall_ms_container[0] - (timing_llm_ttft_ms or 0)} "
+            f"user_payload_tokens={_user_payload_tokens} "
+            f"prompt_tokens={_claude_final_usage.get('prompt_tokens')} "
+            f"completion_tokens={_claude_final_usage.get('completion_tokens')} "
+            f"cache_creation={_claude_final_usage.get('cache_creation_input_tokens', 0)} "
+            f"cache_read={_claude_final_usage.get('cache_read_input_tokens', 0)}"
+        )
+
         tail = sentence_buf.strip()
         if tail:
             # === FIX 2026-07-02 Opzione A ===
@@ -12742,6 +12810,40 @@ async def _fast_pipeline_task(
                 await asyncio.gather(*sentence_tasks, return_exceptions=True)
             except Exception:
                 pass
+
+        # === CLAUDE TTFT INVESTIGATION (2026-08-13 Fabio) — patch retroattivo ==
+        # A questo punto:
+        #  1. Lo stream Claude è finito (usage catturato in _claude_final_usage)
+        #  2. gather ha aspettato le sentence tasks (l'entry _LAST_TIMING_SUMMARIES
+        #     è stata appesa da FIRST_AUDIO — prima frase completata)
+        # Patcho retroattivamente l'ultima entry con i dati Claude reali.
+        # Se per qualche motivo non c'è entry (nessun audio generato) → skip
+        # silente (nessun crash).
+        try:
+            if _LAST_TIMING_SUMMARIES:
+                _last = _LAST_TIMING_SUMMARIES[-1]
+                # Assicura che sia la nostra entry (matching sid) — evita race
+                # condition con altri turni concorrenti sullo stesso deque.
+                if _last.get('sid') == session_id[:8]:
+                    _last['claude_wall_ms'] = _claude_wall_ms_container[0]
+                    _last['user_payload_tokens'] = _user_payload_tokens
+                    _last['prompt_tokens'] = _claude_final_usage.get('prompt_tokens')
+                    _last['completion_tokens'] = _claude_final_usage.get('completion_tokens')
+                    _last['cache_creation_input_tokens'] = _claude_final_usage.get('cache_creation_input_tokens', 0)
+                    _last['cache_read_input_tokens'] = _claude_final_usage.get('cache_read_input_tokens', 0)
+                    # Cache HIT ratio: se cache_read > 0 e cache_creation == 0 → HIT pulito
+                    _cr = _last.get('cache_read_input_tokens', 0) or 0
+                    _cc = _last.get('cache_creation_input_tokens', 0) or 0
+                    if _cr > 0 and _cc == 0:
+                        _last['cache_status'] = 'HIT'
+                    elif _cc > 0 and _cr == 0:
+                        _last['cache_status'] = 'MISS'
+                    elif _cr > 0 and _cc > 0:
+                        _last['cache_status'] = 'PARTIAL'
+                    else:
+                        _last['cache_status'] = 'NONE'
+        except Exception as _patch_e:
+            logger.warning(f"[KODA_CLAUDE_PATCH] failed to patch last summary: {_patch_e}")
 
         # === KODA_CUTOFF_DIAG (Fabio 2026-06-30) ===
         # Riepilogo lato server di tutte le frasi emesse. Quando l'utente
