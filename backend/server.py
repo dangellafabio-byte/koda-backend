@@ -7085,6 +7085,18 @@ ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
 
 _eleven_client = None
 
+# === FIX 2026-08-14 (Fabio) — Storage per-thread per request-id ElevenLabs ===
+# Popolato dall'httpx event hook (`_capture_request_id`) all'arrivo degli
+# header di ogni response ElevenLabs. Il valore è per-thread perché
+# `asyncio.to_thread` esegue le convert() nel default ThreadPoolExecutor:
+# thread diversi = attributi diversi. Chi consuma il request-id (in `_do_tts`)
+# DEVE resettare `_tts_last_request_id_local.request_id = None` PRIMA di
+# ogni chiamata a convert_as_stream() e leggere DOPO il primo chunk.
+# Nota: `_do_tts` per un singolo chunk fa AL MASSIMO 2 chiamate (v3 + fallback
+# flash), quindi il reset è banale — vedi ramo Bug P1 #1 sotto.
+import threading as _threading_mod_stitch  # alias per evitare shadowing locale
+_tts_last_request_id_local = _threading_mod_stitch.local()
+
 
 def _get_eleven_client():
     global _eleven_client
@@ -7117,10 +7129,29 @@ def _get_eleven_client():
             max_connections=100,
             keepalive_expiry=300.0,
         )
+
+        # === FIX 2026-08-14 (Fabio) — Request stitching via httpx event hook ===
+        # SDK ElevenLabs 1.9.0 ha rimosso `with_raw_response.convert()`, quindi
+        # il capture del `request-id` per il request stitching era da mesi
+        # silenziosamente broken. Fix: agganciamo un `event_hooks["response"]`
+        # sul httpx.Client sottostante. L'hook viene invocato appena arrivano
+        # gli header della response (PRIMA del body streaming), quindi possiamo
+        # leggere l'header `request-id` e salvarlo in un threading.local
+        # (isolato tra thread worker di `asyncio.to_thread` — vedi
+        # `_tts_last_request_id_local` più avanti).
+        def _capture_request_id(response):
+            try:
+                rid = response.headers.get("request-id") or response.headers.get("x-request-id")
+                if rid:
+                    _tts_last_request_id_local.request_id = rid
+            except Exception:
+                pass
+
         _http_client = httpx.Client(
             timeout=60.0,
             follow_redirects=False,
             limits=_limits,
+            event_hooks={"response": [_capture_request_id]},
         )
         _eleven_client = ElevenLabs(
             api_key=ELEVENLABS_API_KEY,
@@ -7128,7 +7159,7 @@ def _get_eleven_client():
         )
         logger.info(
             "[ElevenLabs] client init OK — connection pool tuned "
-            "(keepalive_expiry=300s, max_keepalive=20)"
+            "(keepalive_expiry=300s, max_keepalive=20) + request-id capture hook"
         )
         return _eleven_client
     except Exception as e:
@@ -12314,6 +12345,15 @@ async def _fast_pipeline_task(
                         # dopo il primo byte via response middleware).
                         # Per ORA: rimosso il ramo morto with_raw_response e
                         # semplificato a chiamata diretta a convert_as_stream.
+                        #
+                        # === FIX 2026-08-14 (Fabio) — Capture request-id via httpx hook ===
+                        # Reset del threading.local PRIMA della chiamata: garantisce
+                        # che il valore letto dopo appartenga a QUESTA convert(),
+                        # non a una precedente riutilizzata dal ThreadPoolExecutor.
+                        try:
+                            _tts_last_request_id_local.request_id = None
+                        except Exception:
+                            pass
                         gen = client_el.text_to_speech.convert_as_stream(**kwargs)
 
                         for chunk in gen:
@@ -12332,6 +12372,32 @@ async def _fast_pipeline_task(
                                         f"idx=0 model={model_id} ttfb_ms={_nonlocal_tts_ttfb_ms[0]}"
                                     )
                                 audio.extend(chunk)
+                        # === FIX 2026-08-14 (Fabio) — Capture request-id post-stream ===
+                        # L'httpx event hook ha già scritto il request-id nel
+                        # threading.local quando sono arrivati gli header (ben
+                        # prima della fine del body streaming). Lo leggiamo qui
+                        # e lo salviamo nel container nonlocal appropriato per
+                        # il chunk corrente. Contract:
+                        #   idx == 0 (v3 chunk aggressivo)  → nonlocal_first_request_id
+                        #   idx == 1 (body/flash)           → nonlocal_body_request_id
+                        #   idx >= 2 (overflow)             → non serve salvare
+                        try:
+                            _captured_rid = getattr(_tts_last_request_id_local, "request_id", None)
+                            if _captured_rid:
+                                if idx == 0 and not nonlocal_first_request_id[0]:
+                                    nonlocal_first_request_id[0] = _captured_rid
+                                    logger.info(
+                                        f"[fast {session_id[:8]}] request-id captured "
+                                        f"idx=0 model={model_id} rid={_captured_rid[:16]}..."
+                                    )
+                                elif idx == 1 and not nonlocal_body_request_id[0]:
+                                    nonlocal_body_request_id[0] = _captured_rid
+                                    logger.info(
+                                        f"[fast {session_id[:8]}] request-id captured "
+                                        f"idx=1 model={model_id} rid={_captured_rid[:16]}..."
+                                    )
+                        except Exception as _rid_e:
+                            logger.warning(f"[fast] request-id capture failed: {_rid_e}")
                     except Exception as e:
                         logger.error(f"[fast] tts error: {e}")
                     # === FIX 2026-06-30 — Fallback v3 → flash su empty ===
@@ -12376,10 +12442,31 @@ async def _fast_pipeline_task(
                             # Anche il fallback v3→flash passa a convert_as_stream()
                             # per coerenza: se v3 fallisce e ripieghiamo su flash,
                             # vogliamo lo stesso beneficio TTFB dell'endpoint streaming.
+                            # === FIX 2026-08-14 — Reset request-id local anche qui ===
+                            try:
+                                _tts_last_request_id_local.request_id = None
+                            except Exception:
+                                pass
                             gen2 = client_el.text_to_speech.convert_as_stream(**fallback_kwargs)
                             for chunk in gen2:
                                 if chunk:
                                     audio.extend(chunk)
+                            # Capture request-id anche per il fallback flash: se
+                            # questo è il chunk 0, il body (idx=1) può stitchare
+                            # su di lui (flash→flash, timbricamente coerente).
+                            try:
+                                _captured_rid_fb = getattr(_tts_last_request_id_local, "request_id", None)
+                                if _captured_rid_fb:
+                                    if idx == 0 and not nonlocal_first_request_id[0]:
+                                        nonlocal_first_request_id[0] = _captured_rid_fb
+                                    elif idx == 1 and not nonlocal_body_request_id[0]:
+                                        nonlocal_body_request_id[0] = _captured_rid_fb
+                                    logger.info(
+                                        f"[fast {session_id[:8]}] request-id captured "
+                                        f"(fallback flash) idx={idx} rid={_captured_rid_fb[:16]}..."
+                                    )
+                            except Exception:
+                                pass
                         except Exception as e2:
                             logger.error(f"[fast] flash fallback also failed: {e2}")
                     return bytes(audio)
@@ -12735,6 +12822,48 @@ async def _fast_pipeline_task(
         # è 800ms e il wall è 2500ms, i restanti 1700ms sono "generazione dopo
         # il primo token". Se il TTFT è 2500ms e il wall è 2600ms, è tutto TTFT.
         _claude_wall_ms_container[0] = int((time.time() - t_llm_start) * 1000)
+
+        # === FIX 2026-08-14 (Fabio) — Fallback usage tokens via tiktoken =======
+        # Il proxy Emergent (`integrations.emergentagent.com/llm`) ignora o
+        # strippa `stream_options.include_usage=True` — nessun chunk dello stream
+        # porta un oggetto `usage`, quindi `_claude_final_usage` resta vuoto
+        # (verificato in produzione da telemetria 2026-08-13).
+        # Fallback: se `prompt_tokens`/`completion_tokens` sono None/mancanti,
+        # li ricalcoliamo localmente con tiktoken (cl100k_base) — proxy accurato
+        # per Claude (~±5% vs Anthropic tokenizer reale). Zero costo, zero
+        # latenza (calcolo locale).
+        # Limite noto: `cache_creation_input_tokens` e `cache_read_input_tokens`
+        # NON sono derivabili localmente (dipendono dallo stato del cache
+        # server-side su Anthropic). Se il proxy non li espone, li lasciamo
+        # a 0 con flag `usage_source=tiktoken_fallback` per trasparenza.
+        _usage_source = "proxy" if _claude_final_usage.get("prompt_tokens") is not None else "tiktoken_fallback"
+        if _claude_final_usage.get("prompt_tokens") is None:
+            try:
+                import tiktoken as _tk_fb
+                _enc_fb = _tk_fb.get_encoding("cl100k_base")
+                # prompt_tokens ≈ system_prompt (cachato) + user_payload (fresco)
+                _sys_toks = len(_enc_fb.encode(sys_prompt))
+                _user_toks = _user_payload_tokens if _user_payload_tokens is not None else len(_enc_fb.encode(user_payload))
+                _claude_final_usage["prompt_tokens"] = _sys_toks + _user_toks
+                # completion_tokens ≈ risposta completa Claude concatenata
+                _completion_text = "".join(full_reply_chars)
+                _claude_final_usage["completion_tokens"] = len(_enc_fb.encode(_completion_text))
+                # cache_creation/cache_read: non derivabili localmente.
+                # Manteniamo 0 (già default), ma marcamo la sorgente come
+                # `tiktoken_fallback` così la telemetria non conta questi 0
+                # come "cache miss reale".
+                _claude_final_usage.setdefault("cache_creation_input_tokens", 0)
+                _claude_final_usage.setdefault("cache_read_input_tokens", 0)
+                logger.info(
+                    f"[KODA_TIMING] USAGE_FALLBACK sid={session_id[:8]} "
+                    f"source=tiktoken sys_toks={_sys_toks} user_toks={_user_toks} "
+                    f"completion_toks={_claude_final_usage['completion_tokens']} "
+                    f"note=cache_metrics_not_derivable_locally"
+                )
+            except Exception as _fb_e:
+                logger.warning(f"[KODA_TIMING] tiktoken fallback failed: {_fb_e}")
+        _claude_final_usage["usage_source"] = _usage_source
+
         logger.info(
             f"[KODA_TIMING] CLAUDE_WALL sid={session_id[:8]} "
             f"wall_ms={_claude_wall_ms_container[0]} "
@@ -12744,7 +12873,8 @@ async def _fast_pipeline_task(
             f"prompt_tokens={_claude_final_usage.get('prompt_tokens')} "
             f"completion_tokens={_claude_final_usage.get('completion_tokens')} "
             f"cache_creation={_claude_final_usage.get('cache_creation_input_tokens', 0)} "
-            f"cache_read={_claude_final_usage.get('cache_read_input_tokens', 0)}"
+            f"cache_read={_claude_final_usage.get('cache_read_input_tokens', 0)} "
+            f"usage_source={_usage_source}"
         )
 
         tail = sentence_buf.strip()
@@ -13636,6 +13766,130 @@ async def demo_sound(name: str):
     if not path.exists():
         raise HTTPException(404, "not found")
     return FileResponse(str(path), media_type="audio/wav")
+
+
+# === POC MODEL COMPARE — HTTP audio player (Fabio 2026-08-14, temporary) ===
+# Espone i 12 MP3 generati da poc_koda_model_compare.py in una pagina web
+# con player affiancati (V3 | Flash | Turbo) per confronto A/B.
+# NESSUNA modifica alla pipeline di produzione. Endpoint isolati.
+@app.get("/api/dev/model-compare/audio/{filename}")
+async def _dev_model_compare_audio(filename: str):
+    safe = filename.replace("/", "").replace("..", "")
+    if not safe.startswith("poc_koda_") or not safe.endswith(".mp3"):
+        raise HTTPException(404, "not found")
+    p = Path("/tmp") / safe
+    if not p.exists():
+        raise HTTPException(404, "not found")
+    return FileResponse(str(p), media_type="audio/mpeg")
+
+@app.get("/api/dev/model-compare/", response_class=_HTMLResponse)
+async def _dev_model_compare_index():
+    import glob
+    files = sorted(glob.glob("/tmp/poc_koda_*.mp3"))
+    # Extract sentence_id and model from filename
+    grouped: Dict[str, Dict[str, str]] = {}
+    for f in files:
+        name = Path(f).name
+        stem = name[len("poc_koda_"):-len(".mp3")]
+        # split "sentence_id_model_variant" — model has known prefixes
+        for m in ("eleven_v3", "eleven_flash_v2_5", "eleven_turbo_v2_5"):
+            if stem.endswith("_" + m):
+                sid = stem[:-(len(m)+1)]
+                grouped.setdefault(sid, {})[m] = name
+                break
+    sentence_labels = {
+        "calda_neutra": "🌿 Calda / Neutra",
+        "concerned":    "😔 Concerned (empatica)",
+        "energica":     "✨ Energica",
+        "lunga_naturale": "📖 Lunga naturale (~24s)",
+        "warmup": "(warmup — ignora)",
+    }
+    sentence_texts = {
+        "calda_neutra": "Ciao, come va oggi? Sono qui, con calma.",
+        "concerned": "Senti, ti capisco. Quello che mi racconti pesa tanto.",
+        "energica": "Che bello! Sono davvero felice per te, dimmi tutto.",
+        "lunga_naturale": "Allora, la prima cosa è capire se davvero hai perso la rotta o se è solo stanchezza…",
+    }
+    ttfa_data = {
+        ("calda_neutra", "eleven_v3"): "741ms",
+        ("calda_neutra", "eleven_flash_v2_5"): "118ms",
+        ("calda_neutra", "eleven_turbo_v2_5"): "149ms",
+        ("concerned", "eleven_v3"): "534ms",
+        ("concerned", "eleven_flash_v2_5"): "105ms",
+        ("concerned", "eleven_turbo_v2_5"): "156ms",
+        ("energica", "eleven_v3"): "507ms",
+        ("energica", "eleven_flash_v2_5"): "119ms",
+        ("energica", "eleven_turbo_v2_5"): "188ms",
+        ("lunga_naturale", "eleven_v3"): "819ms",
+        ("lunga_naturale", "eleven_flash_v2_5"): "126ms",
+        ("lunga_naturale", "eleven_turbo_v2_5"): "257ms",
+    }
+    order = ["calda_neutra", "concerned", "energica", "lunga_naturale"]
+
+    parts = ["""
+<!doctype html><html lang="it"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Koda — V3 vs Flash vs Turbo</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 900px; margin: 20px auto; padding: 0 16px; color: #222; background: #fafafa; }
+  h1 { font-size: 22px; }
+  h2 { font-size: 18px; margin-top: 32px; border-bottom: 1px solid #ddd; padding-bottom: 6px; }
+  .text-preview { font-style: italic; color: #666; margin: 4px 0 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+  .card { flex: 1; min-width: 240px; padding: 12px; background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; }
+  .card.v3    { border-left: 4px solid #444; }
+  .card.flash { border-left: 4px solid #2a7; }
+  .card.turbo { border-left: 4px solid #27a; }
+  .model { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+  .ttfa  { font-size: 12px; color: #666; margin-bottom: 8px; }
+  audio { width: 100%; }
+  .legend { background: #eef; padding: 10px 14px; border-radius: 6px; font-size: 13px; margin-bottom: 20px; }
+</style>
+</head><body>
+<h1>🎙️ Koda — Confronto V3 vs Flash v2.5 vs Turbo v2.5</h1>
+<div class="legend">
+  <b>Voce:</b> <code>ll9WG7PDTuyHwgC5MD6g</code> (Vento — voce Koda produzione)<br>
+  <b>Settings identici:</b> stability=0.55, similarity=0.75, style=0.20, speaker_boost=on<br>
+  <b>Come ascoltare:</b> per ogni frase, ascolta V3 prima (baseline Koda oggi), poi Flash, poi Turbo. Ripeti se serve. 
+  Giudica: timbro, naturalezza, prosodia, espressività, pause, emozione, artefatti.
+</div>
+"""]
+
+    for sid in order:
+        if sid not in grouped:
+            continue
+        parts.append(f"<h2>{sentence_labels.get(sid, sid)}</h2>")
+        if sid in sentence_texts:
+            parts.append(f'<div class="text-preview">"{sentence_texts[sid]}"</div>')
+        parts.append('<div class="row">')
+        for model, cls, name in [
+            ("eleven_v3", "v3", "V3 (baseline)"),
+            ("eleven_flash_v2_5", "flash", "Flash v2.5"),
+            ("eleven_turbo_v2_5", "turbo", "Turbo v2.5"),
+        ]:
+            fn = grouped[sid].get(model)
+            if not fn:
+                continue
+            ttfa = ttfa_data.get((sid, model), "?")
+            parts.append(
+                f'<div class="card {cls}">'
+                f'<div class="model">{name}</div>'
+                f'<div class="ttfa">TTFA: <b>{ttfa}</b></div>'
+                f'<audio controls preload="metadata" src="/api/dev/model-compare/audio/{fn}"></audio>'
+                f'</div>'
+            )
+        parts.append('</div>')
+
+    parts.append("""
+<h2>📊 Riepilogo TTFA</h2>
+<pre style="background:#fff;padding:12px;border-radius:6px;border:1px solid #e0e0e0;font-size:13px;">
+V3     media TTFA ≈ 650ms   (baseline attuale)
+Flash  media TTFA ≈ 117ms   ← 5.6× più veloce di V3
+Turbo  media TTFA ≈ 188ms   ← 3.5× più veloce di V3
+</pre>
+</body></html>""")
+    return "\n".join(parts)
+
 
 # === TTS A/B TEST per debug espressività voce (Fabio 2026-06-29) ===
 # Endpoint temporaneo: serve i file MP3 generati con voice_settings diverse
