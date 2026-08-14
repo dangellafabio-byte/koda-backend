@@ -62,6 +62,29 @@ except Exception:
     _ELEVENLABS_AVAILABLE = False
 
 
+# === TTS INTENSITY CLASSIFIER (Fabio 2026-08-14) — dietro feature flag ======
+# Classificatore V0 pure Python (nessuna dipendenza esterna, <1ms per turno)
+# che sceglie tra V3 (baseline espressiva) e Turbo v2.5 (candidato veloce)
+# sulla base del testo e del tone già prodotti da Claude. Zero modifica al
+# prompt. Traffic split misurato offline su 716 turni reali: 16.7% V3 /
+# 83.3% Turbo, anti-regression 100% sui casi ovvi. Approvato da Fabio dopo
+# ascolto A/B/C + verifica zona grigia (2026-08-14).
+#
+# DEFAULT OFF. Attivare con env `KODA_TTS_CLASSIFIER_ENABLED=1` per il
+# test end-to-end (user_final → first_playable). Se attivo, sostituisce
+# la scelta `model_id = "eleven_v3"` nel _do_tts del fast pipeline.
+try:
+    from tts_intensity_classifier import classify as _tts_classify
+    _TTS_CLASSIFIER_AVAILABLE = True
+except Exception as _cls_e:
+    _tts_classify = None  # type: ignore
+    _TTS_CLASSIFIER_AVAILABLE = False
+    # log DOPO che il logger è definito (setup logging più sotto)
+    _TTS_CLASSIFIER_IMPORT_ERROR: Optional[str] = str(_cls_e)
+else:
+    _TTS_CLASSIFIER_IMPORT_ERROR = None
+
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -12162,12 +12185,58 @@ async def _fast_pipeline_task(
                 # direttamente su flash per garantire coerenza timbrica
                 # tra chunk 0 e chunk 1+. Vedi commento su turn_tts_state
                 # per la motivazione dettagliata.
+                #
+                # === FIX 2026-08-14 (Fabio) — TTS INTENSITY CLASSIFIER v0 ===
+                # Se `KODA_TTS_CLASSIFIER_ENABLED=1` è attivo, il classificatore
+                # pure-Python decide V3 vs Turbo v2.5 in base al testo+tone
+                # già prodotti da Claude (traffic split atteso: 83% Turbo /
+                # 17% V3). La decisione è fissata sul chunk 0 e riusata per
+                # tutti i chunk successivi dello stesso turno via
+                # `turn_tts_state["classifier_model"]` — così NON si sente
+                # cambio timbrico intra-turno. Zero modifica al prompt.
+                # PRIORITÀ: locked_flash (safety) > classifier_model > v3
                 if turn_tts_state.get("locked_flash"):
                     model_id = "eleven_flash_v2_5"
                     logger.info(
                         f"[fast {session_id[:8]}] TTS idx={idx} model=flash "
                         f"(locked_this_turn reason={turn_tts_state.get('reason')})"
                     )
+                elif turn_tts_state.get("classifier_model"):
+                    # Turno corrente: la decisione del classifier è già stata
+                    # presa sul chunk 0 → riusa per chunk 1+ (coerenza timbrica).
+                    model_id = turn_tts_state["classifier_model"]
+                elif (
+                    _TTS_CLASSIFIER_AVAILABLE
+                    and os.environ.get("KODA_TTS_CLASSIFIER_ENABLED") == "1"
+                    and idx == 0
+                ):
+                    # Chunk 0: chiamata al classifier. Il testo qui è ancora
+                    # breve (aggressive early chunk, ~80 char) ma abbiamo già
+                    # `current_tone` estratto dal reply prefix [TONE:xxx].
+                    # Il classifier è progettato per fare safe fallback a V3
+                    # se il segnale è insufficiente (tone None o pochi words).
+                    try:
+                        _dec = _tts_classify(clean_tts, current_tone)
+                        model_id = _dec.model_id
+                        turn_tts_state["classifier_model"] = _dec.model_id
+                        turn_tts_state["classifier_mode"] = _dec.mode
+                        turn_tts_state["classifier_intensity"] = _dec.intensity
+                        turn_tts_state["classifier_reason"] = _dec.reason
+                        logger.info(
+                            f"[KODA_CLASSIFIER] sid={session_id[:8]} "
+                            f"tone={current_tone} mode={_dec.mode} "
+                            f"intensity={_dec.intensity} words={_dec.n_words} "
+                            f"reason={_dec.reason} → model={_dec.model_id}"
+                        )
+                    except Exception as _cls_err:
+                        # Fallback silente a V3 (comportamento attuale) se il
+                        # classifier per QUALSIASI motivo alza — mai rompere il
+                        # turno per un errore del layer di ottimizzazione.
+                        model_id = "eleven_v3"
+                        logger.warning(
+                            f"[KODA_CLASSIFIER] sid={session_id[:8]} "
+                            f"error={_cls_err!r} → fallback v3"
+                        )
                 else:
                     model_id = "eleven_v3"
 
@@ -12190,8 +12259,17 @@ async def _fast_pipeline_task(
                     # arriva qualcosa di strano, fallback su "it".
                     if not (isinstance(tts_lang, str) and len(tts_lang) == 2):
                         tts_lang = "it"
+                    # === FIX 2026-08-14 (Fabio) — Tag audio SOLO su v3 ===
+                    # `clean_tts_v3` include il tag audio inline (`[warmly]`,
+                    # `[gently]`, ecc.) che V3 sa interpretare per prosodia
+                    # espressiva. Turbo v2.5 e Flash v2.5 NON supportano quei
+                    # tag: se glieli mandi, o li leggono come testo ("warmly")
+                    # o li ignorano silenziosamente (comportamento non
+                    # documentato). Per sicurezza, per NON-V3 usiamo il testo
+                    # ripulito (`clean_tts` — già senza tag).
+                    _text_for_model = clean_tts_v3 if model_id == "eleven_v3" else clean_tts
                     kwargs = dict(
-                        text=clean_tts_v3,
+                        text=_text_for_model,
                         voice_id=voice_id,
                         model_id=model_id,
                         # === REVERT B (2026-08-13 Fabio) — post A/B test ===
@@ -12215,7 +12293,14 @@ async def _fast_pipeline_task(
                         # Non risolve prosodia (energia/intonazione), ma
                         # elimina drift di timbro percepito come "personaggio
                         # cambiato". Costo zero.
-                        seed=(int(session_id[:8], 16) % 2147483647) if session_id else None,
+                        #
+                        # === FIX 2026-08-14 — seed solo su V3 ===
+                        # Il beneficio "voice character stability" è stato
+                        # dimostrato su V3. Turbo v2.5 non è stato testato con
+                        # seed (POC gray zone 2026-08-14 senza seed è
+                        # funzionato). Per sicurezza passiamo seed SOLO su V3.
+                        seed=((int(session_id[:8], 16) % 2147483647)
+                              if session_id and model_id == "eleven_v3" else None),
                         # NIENTE optimize_streaming_latency: anche valore 2
                         # poteva causare artefatti "chipmunk" su Flash v2.5
                         # secondo feedback utente. Default ElevenLabs (1) OK.
