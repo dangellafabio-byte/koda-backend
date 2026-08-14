@@ -44,7 +44,9 @@ load_dotenv('/app/backend/.env')
 EMERGENT_LLM_KEY = os.environ['EMERGENT_LLM_KEY']
 ELEVENLABS_API_KEY = os.environ['ELEVENLABS_API_KEY']
 VOICE_ID = "POuqf18evoXOKIqV2Px7"  # Cielo — voce Koda produzione
-MODEL_ID = "eleven_v3"             # stesso modello produzione
+MODEL_ID = "eleven_flash_v2_5"     # POC Opzione Y (Fabio 2026-08-14): V3 non supportato da WS stream-input.
+                                   # Flash NON è voce Koda produzione — test diagnostico solo per
+                                   # isolare "endpoint vs modello" nel budget latenza.
 OUTPUT_FORMAT = "mp3_44100_128"    # stesso formato produzione (post-revert-B)
 API_BASE = 'https://integrations.emergentagent.com/llm'
 
