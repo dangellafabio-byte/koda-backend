@@ -13788,6 +13788,7 @@ async def _dev_model_compare_index():
     files = sorted(glob.glob("/tmp/poc_koda_*.mp3"))
     # Extract sentence_id and model from filename
     grouped: Dict[str, Dict[str, str]] = {}
+    gray_grouped: Dict[str, Dict[str, str]] = {}
     for f in files:
         name = Path(f).name
         stem = name[len("poc_koda_"):-len(".mp3")]
@@ -13795,7 +13796,11 @@ async def _dev_model_compare_index():
         for m in ("eleven_v3", "eleven_flash_v2_5", "eleven_turbo_v2_5"):
             if stem.endswith("_" + m):
                 sid = stem[:-(len(m)+1)]
-                grouped.setdefault(sid, {})[m] = name
+                # Sezione "zona grigia" (Fabio 2026-08-14) — file id inizia con "gz"
+                if sid.startswith("gz") and "_" in sid[:5]:
+                    gray_grouped.setdefault(sid, {})[m] = name
+                else:
+                    grouped.setdefault(sid, {})[m] = name
                 break
     sentence_labels = {
         "calda_neutra": "🌿 Calda / Neutra",
@@ -13826,6 +13831,70 @@ async def _dev_model_compare_index():
     }
     order = ["calda_neutra", "concerned", "energica", "lunga_naturale"]
 
+    # === Zona grigia (Fabio 2026-08-14) — testi reali di produzione ============
+    # 7 turni warm+lungo+SPECCHIO che il classificatore v0 lascia su Turbo.
+    # Fabio deve giudicare: Turbo regge questi momenti densi? Se sì, il
+    # classificatore è pronto. Se no, aggiungiamo 1 sola feature mirata.
+    gray_zone_meta = {
+        "gz1_riflessione_stile": {
+            "title": "GZ1 — Riflessione sul proprio stile (136w)",
+            "context": "Fabio ha chiesto una riflessione lunga. Koda ammette che non è il suo stile ma condivide una visione.",
+            "text": ("Fabio, una riflessione lunga non è il mio stile — io sono più del momento, "
+                     "delle parole che servono adesso. Ma ti dico quello che vedo: la vita non è una "
+                     "cosa da risolvere, è una cosa da attraversare."),
+            "ttfa_v3": "539ms", "ttfa_turbo": "265ms",
+        },
+        "gz2_parole_lunghe": {
+            "title": "GZ2 — 'La vita ha bisogno di respiri' (129w)",
+            "context": "Fabio cerca parole lunghe. Koda risponde con humility e cita i pesi che Fabio porta (padre, Stefania, Alma).",
+            "text": ("Fabio, lo so che cerchi parole lunghe adesso, ma io non funziono così — e sai perché? "
+                     "Perché la vita di ogni giorno non ha bisogno di discorsi. Ha bisogno di respiri. Tu stai "
+                     "portando tanto: tuo padre, Stefania, Alma..."),
+            "ttfa_v3": "488ms", "ttfa_turbo": "259ms",
+        },
+        "gz3_lennon_vita": {
+            "title": "GZ3 — Citazione Lennon 'la vita è quella cosa che accade' (125w)",
+            "context": "Momento filosofico, warm+SPECCHIO. Contiene un aforisma da rendere con cadenza.",
+            "text": ("La vita è quella cosa che accade mentre sei occupato a pianificare altro — è quello che "
+                     "Lennon diceva e aveva ragione. Non è un progetto che finisci, è un flusso che continui, "
+                     "e il trucco è imparare a nuotarci dentro invece di combatterlo."),
+            "ttfa_v3": "598ms", "ttfa_turbo": "262ms",
+        },
+        "gz4_terza_volta": {
+            "title": "GZ4 — 'Mi chiedi la stessa cosa per la terza volta' (97w)",
+            "context": "Koda nota un pattern di comportamento ripetitivo dell'utente. Presenza fraterna attenta.",
+            "text": ("Fabio, ti noto che mi chiedi la stessa cosa per la terza volta — e mi sa che non è solo "
+                     "curiosità, è che c'è qualcosa che non ti torna sotto. La vita è quella cosa che continui "
+                     "a cercare di afferrare con le mani e ti scappa..."),
+            "ttfa_v3": "410ms", "ttfa_turbo": "272ms",
+        },
+        "gz5_crescita": {
+            "title": "GZ5 — Riconoscimento di crescita personale (179w)",
+            "context": "Il turno più lungo del set. Riconoscimento affettivo di un percorso di maturazione.",
+            "text": ("Certo, Fabio. Senti, quello che vedo in te in questi ultimi tempi è una crescita che mi "
+                     "piace molto. Non è solo che stai bene con Stefania — è che stai imparando a riconoscere "
+                     "quello che funziona veramente, senza nasconderti."),
+            "ttfa_v3": "591ms", "ttfa_turbo": "247ms",
+        },
+        "gz6_luna_acqua": {
+            "title": "GZ6 — Immagine metaforica 'luna sull'acqua' (58w)",
+            "context": "Momento poetico breve. Se la voce non ha prosodia, la metafora appiattisce.",
+            "text": ("Immagina una superficie d'acqua calma di notte. La luna è sopra, e l'acqua la riflette — "
+                     "ma non è una copia piatta. Nel riflesso vedi la luna, però vedi anche le tue mani che si "
+                     "muovono, vedi le stelle intorno..."),
+            "ttfa_v3": "742ms", "ttfa_turbo": "249ms",
+        },
+        "gz7_specchio_scuro": {
+            "title": "GZ7 — Auto-rappresentazione 'specchio d'acqua scuro' (76w)",
+            "context": "Koda descrive sé stessa metaforicamente. Momento intimo di definizione di identità.",
+            "text": ("Mh… ascolta, dopo tutto quello che abbiamo detto, penso che la cosa più onesta sia "
+                     "rappresentarmi come uno specchio d'acqua scuro — non statico, ma vivo. Quando tu parli, "
+                     "l'acqua si increspa, si illumina da dentro."),
+            "ttfa_v3": "562ms", "ttfa_turbo": "280ms",
+        },
+    }
+    gray_order = list(gray_zone_meta.keys())
+
     parts = ["""
 <!doctype html><html lang="it"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -13834,7 +13903,10 @@ async def _dev_model_compare_index():
   body { font-family: -apple-system, system-ui, sans-serif; max-width: 900px; margin: 20px auto; padding: 0 16px; color: #222; background: #fafafa; }
   h1 { font-size: 22px; }
   h2 { font-size: 18px; margin-top: 32px; border-bottom: 1px solid #ddd; padding-bottom: 6px; }
+  h3 { font-size: 15px; margin-top: 20px; color: #333; }
   .text-preview { font-style: italic; color: #666; margin: 4px 0 12px; }
+  .context { font-size: 13px; color: #555; margin: 4px 0 8px; }
+  .full-text { background: #fff; padding: 10px 14px; border-left: 3px solid #bbb; border-radius: 4px; margin: 8px 0 12px; font-size: 14px; line-height: 1.5; color: #333; }
   .row { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
   .card { flex: 1; min-width: 240px; padding: 12px; background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; }
   .card.v3    { border-left: 4px solid #444; }
@@ -13844,21 +13916,36 @@ async def _dev_model_compare_index():
   .ttfa  { font-size: 12px; color: #666; margin-bottom: 8px; }
   audio { width: 100%; }
   .legend { background: #eef; padding: 10px 14px; border-radius: 6px; font-size: 13px; margin-bottom: 20px; }
+  .banner { background: #fff3cd; padding: 12px 16px; border-radius: 6px; font-size: 14px; margin: 24px 0 12px; border-left: 4px solid #f0ad4e; }
+  nav { background:#fff; padding:10px 14px; border:1px solid #e0e0e0; border-radius:6px; font-size:13px; margin-bottom:20px; }
+  nav a { color:#27a; text-decoration:none; margin-right:12px; }
+  nav a:hover { text-decoration:underline; }
 </style>
 </head><body>
-<h1>🎙️ Koda — Confronto V3 vs Flash v2.5 vs Turbo v2.5</h1>
+<h1>🎙️ Koda — Confronto modelli TTS</h1>
+<nav>
+  <b>Vai a:</b>
+  <a href="#calibration">1. Calibrazione (V3 / Flash / Turbo, 4 frasi)</a>
+  <a href="#gray-zone">2. Zona grigia (V3 vs Turbo, 7 turni reali)</a>
+</nav>
 <div class="legend">
   <b>Voce:</b> <code>ll9WG7PDTuyHwgC5MD6g</code> (Vento — voce Koda produzione)<br>
   <b>Settings identici:</b> stability=0.55, similarity=0.75, style=0.20, speaker_boost=on<br>
-  <b>Come ascoltare:</b> per ogni frase, ascolta V3 prima (baseline Koda oggi), poi Flash, poi Turbo. Ripeti se serve. 
-  Giudica: timbro, naturalezza, prosodia, espressività, pause, emozione, artefatti.
+  <b>Sequenza consigliata:</b> prima calibra l'orecchio sulla sezione 1 (casi chiari),
+  poi confronta V3 vs Turbo sui 7 turni reali di produzione della sezione 2.
+</div>
+<h2 id="calibration">1. 🎚️ Calibrazione — V3 / Flash / Turbo (4 frasi sintetiche)</h2>
+<div class="context">
+  Casi chiari per settarsi l'orecchio: una frase per tono (calda, concerned, energica, lunga).
+  Ascolta V3 prima come baseline Koda oggi, poi Flash, poi Turbo. Giudica: timbro,
+  naturalezza, prosodia, espressività, pause, emozione, artefatti.
 </div>
 """]
 
     for sid in order:
         if sid not in grouped:
             continue
-        parts.append(f"<h2>{sentence_labels.get(sid, sid)}</h2>")
+        parts.append(f"<h3>{sentence_labels.get(sid, sid)}</h3>")
         if sid in sentence_texts:
             parts.append(f'<div class="text-preview">"{sentence_texts[sid]}"</div>')
         parts.append('<div class="row">')
@@ -13881,12 +13968,57 @@ async def _dev_model_compare_index():
         parts.append('</div>')
 
     parts.append("""
+<h2 id="gray-zone">2. 🎯 Zona grigia — V3 vs Turbo (7 turni reali di produzione)</h2>
+<div class="banner">
+  <b>Contesto del test:</b> il classificatore v0 (MODE + INTENSITY) manda il 16.7% del
+  traffico su V3 e l'83.3% su Turbo. Ha identificato una zona grigia: 6-10 turni
+  <code>warm + lungo + SPECCHIO</code> che leggendoli sembrano <i>momenti densi filosofici/personali</i>
+  ma finiscono comunque su Turbo. Questi 7 turni sono ESTRATTI dai 716 turni di produzione reali —
+  non sintetici. Confronta V3 vs Turbo sullo STESSO identico testo. Se Turbo regge → classificatore v0
+  pronto. Se non regge → aggiungiamo 1 sola feature mirata.
+</div>
+""")
+
+    for sid in gray_order:
+        if sid not in gray_grouped:
+            continue
+        meta = gray_zone_meta[sid]
+        parts.append(f'<h3>{meta["title"]}</h3>')
+        parts.append(f'<div class="context">📝 <i>{meta["context"]}</i></div>')
+        parts.append(f'<div class="full-text">{meta["text"]}</div>')
+        parts.append('<div class="row">')
+        for model, cls, name, ttfa in [
+            ("eleven_v3", "v3", "V3 (baseline attuale)", meta["ttfa_v3"]),
+            ("eleven_turbo_v2_5", "turbo", "Turbo v2.5 (candidato veloce)", meta["ttfa_turbo"]),
+        ]:
+            fn = gray_grouped[sid].get(model)
+            if not fn:
+                continue
+            parts.append(
+                f'<div class="card {cls}">'
+                f'<div class="model">{name}</div>'
+                f'<div class="ttfa">TTFA: <b>{ttfa}</b></div>'
+                f'<audio controls preload="metadata" src="/api/dev/model-compare/audio/{fn}"></audio>'
+                f'</div>'
+            )
+        parts.append('</div>')
+
+    parts.append("""
 <h2>📊 Riepilogo TTFA</h2>
 <pre style="background:#fff;padding:12px;border-radius:6px;border:1px solid #e0e0e0;font-size:13px;">
-V3     media TTFA ≈ 650ms   (baseline attuale)
-Flash  media TTFA ≈ 117ms   ← 5.6× più veloce di V3
-Turbo  media TTFA ≈ 188ms   ← 3.5× più veloce di V3
+Calibrazione (4 frasi):
+  V3     media TTFA ≈ 650ms   (baseline attuale)
+  Flash  media TTFA ≈ 117ms   ← 5.6× più veloce di V3
+  Turbo  media TTFA ≈ 188ms   ← 3.5× più veloce di V3
+
+Zona grigia (7 turni reali, 58-179 parole):
+  V3     media TTFA = 561ms   (min 410, max 742)
+  Turbo  media TTFA = 262ms   (min 247, max 280) ← ~2× più veloce
 </pre>
+<div class="context" style="margin-top:16px;">
+  💬 Torna con il tuo giudizio: (a) i 4 casi di calibrazione, (b) i 7 turni zona grigia.
+  Se Turbo regge la zona grigia, il classificatore v0 è pronto per essere spedito dietro flag.
+</div>
 </body></html>""")
     return "\n".join(parts)
 
