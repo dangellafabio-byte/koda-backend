@@ -13874,6 +13874,7 @@ async def _dev_model_compare_index():
     # Extract sentence_id and model from filename
     grouped: Dict[str, Dict[str, str]] = {}
     gray_grouped: Dict[str, Dict[str, str]] = {}
+    gray_v2_grouped: Dict[str, Dict[str, str]] = {}
     for f in files:
         name = Path(f).name
         stem = name[len("poc_koda_"):-len(".mp3")]
@@ -13881,8 +13882,11 @@ async def _dev_model_compare_index():
         for m in ("eleven_v3", "eleven_flash_v2_5", "eleven_turbo_v2_5"):
             if stem.endswith("_" + m):
                 sid = stem[:-(len(m)+1)]
-                # Sezione "zona grigia" (Fabio 2026-08-14) — file id inizia con "gz"
-                if sid.startswith("gz") and "_" in sid[:5]:
+                # Sezione "pipeline-faithful v2" (Fabio 2026-08-14) — id "gz*v2_*"
+                if "v2_" in sid and sid.startswith("gz"):
+                    gray_v2_grouped.setdefault(sid, {})[m] = name
+                # Sezione "zona grigia" (v1, senza tag)
+                elif sid.startswith("gz") and "_" in sid[:5]:
                     gray_grouped.setdefault(sid, {})[m] = name
                 else:
                     grouped.setdefault(sid, {})[m] = name
@@ -14012,6 +14016,7 @@ async def _dev_model_compare_index():
   <b>Vai a:</b>
   <a href="#calibration">1. Calibrazione (V3 / Flash / Turbo, 4 frasi)</a>
   <a href="#gray-zone">2. Zona grigia (V3 vs Turbo, 7 turni reali)</a>
+  <a href="#gray-zone-v2">3. Verifica pipeline-faithful (V3 con tag vs Turbo, 3 turni)</a>
 </nav>
 <div class="legend">
   <b>Voce:</b> <code>ll9WG7PDTuyHwgC5MD6g</code> (Vento — voce Koda produzione)<br>
@@ -14077,6 +14082,71 @@ async def _dev_model_compare_index():
             ("eleven_turbo_v2_5", "turbo", "Turbo v2.5 (candidato veloce)", meta["ttfa_turbo"]),
         ]:
             fn = gray_grouped[sid].get(model)
+            if not fn:
+                continue
+            parts.append(
+                f'<div class="card {cls}">'
+                f'<div class="model">{name}</div>'
+                f'<div class="ttfa">TTFA: <b>{ttfa}</b></div>'
+                f'<audio controls preload="metadata" src="/api/dev/model-compare/audio/{fn}"></audio>'
+                f'</div>'
+            )
+        parts.append('</div>')
+
+    # === Sezione 3 — Pipeline-faithful v2 (Fabio 2026-08-14) ==================
+    # I file precedenti confrontavano V3 SENZA audio tag vs Turbo SENZA audio tag.
+    # Ma in produzione con classifier attivo, V3 riceve "[warmly] testo..." mentre
+    # Turbo riceve "testo..." (audio tag stripped per non-v3). Questa sezione
+    # riproduce ESATTAMENTE quel confronto: mele con mele.
+    gray_v2_meta = {
+        "gz1v2_riflessione_stile": {
+            "title": "GZ1v2 — Riflessione sul proprio stile (140w, warm)",
+            "v3_text": "[warmly] Fabio, una riflessione lunga non è il mio stile — io sono più del momento…",
+            "turbo_text": "Fabio, una riflessione lunga non è il mio stile — io sono più del momento…",
+            "ttfa_v3": "581ms", "ttfa_turbo": "246ms",
+        },
+        "gz3v2_lennon_vita": {
+            "title": "GZ3v2 — Citazione Lennon 'la vita è quella cosa che accade' (130w, warm)",
+            "v3_text": "[warmly] La vita è quella cosa che accade mentre sei occupato a pianificare altro…",
+            "turbo_text": "La vita è quella cosa che accade mentre sei occupato a pianificare altro…",
+            "ttfa_v3": "742ms", "ttfa_turbo": "260ms",
+        },
+        "gz5v2_crescita": {
+            "title": "GZ5v2 — Riconoscimento di crescita personale (182w, warm)",
+            "v3_text": "[warmly] Certo, Fabio. Senti, quello che vedo in te in questi ultimi tempi è una crescita…",
+            "turbo_text": "Certo, Fabio. Senti, quello che vedo in te in questi ultimi tempi è una crescita…",
+            "ttfa_v3": "799ms", "ttfa_turbo": "266ms",
+        },
+    }
+    gray_v2_order = list(gray_v2_meta.keys())
+
+    parts.append("""
+<h2 id="gray-zone-v2">3. 🧪 Verifica pipeline-faithful — V3 con audio tag vs Turbo pulito (3 turni warm)</h2>
+<div class="banner">
+  <b>Perché rigenerare:</b> i test precedenti (sezioni 1 e 2) confrontavano
+  <b>V3 SENZA audio tag vs Turbo SENZA audio tag</b> — un confronto in cui V3
+  era artificialmente svantaggiato. Il nuovo pipeline con classifier attivo passa
+  a V3 <code>[warmly] testo...</code> e a Turbo <code>testo...</code>. Questa
+  sezione riproduce quel confronto ESATTO. Se anche qui Turbo regge → verdetto
+  precedente confermato, procedi al test end-to-end su Railway. Altrimenti, il
+  classifier va rivalutato prima dell'attivazione.
+</div>
+""")
+    for sid in gray_v2_order:
+        if sid not in gray_v2_grouped:
+            continue
+        meta = gray_v2_meta[sid]
+        parts.append(f'<h3>{meta["title"]}</h3>')
+        parts.append(
+            f'<div class="context">📝 <b>V3 riceve:</b> <code>{meta["v3_text"][:120]}</code></div>'
+            f'<div class="context">📝 <b>Turbo riceve:</b> <code>{meta["turbo_text"][:120]}</code></div>'
+        )
+        parts.append('<div class="row">')
+        for model, cls, name, ttfa in [
+            ("eleven_v3", "v3", "V3 con [warmly] (baseline produzione)", meta["ttfa_v3"]),
+            ("eleven_turbo_v2_5", "turbo", "Turbo (classifier ON)", meta["ttfa_turbo"]),
+        ]:
+            fn = gray_v2_grouped[sid].get(model)
             if not fn:
                 continue
             parts.append(
