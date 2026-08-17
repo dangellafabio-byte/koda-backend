@@ -2885,11 +2885,22 @@ async def debug_download_caching_diag():
 # Se il step 2 o 3 fallisce → il compute in produzione ritorna None → il
 # server non emette speech_timeline → il client non ha timer di silenzio →
 # l'orb resta piatto. Chiamalo dal telefono via URL, ricevi JSON conciso.
+#
+# === MARKER VERSIONE (Fabio 2026-08-17) ====================================
+# Cambiare `SELFTEST_VERSION` a ogni modifica dell'endpoint per verificare
+# senza ambiguità che il codice nuovo sia arrivato in produzione dopo
+# Publish/Redeployment. Non basarsi sul messaggio di errore per capire
+# quale versione gira — questo campo è la verità oggettiva.
+SELFTEST_VERSION = "v3-2026-08-17T09:55Z-ffmpeg-subprocess-no-pydub"
+
 @api_router.get("/debug/speech-timeline-selftest")
 async def debug_speech_timeline_selftest():
     import subprocess as _sp
     import shutil as _shutil
+    import time as _time_selftest
     result = {
+        "selftest_version": SELFTEST_VERSION,
+        "server_time_iso": datetime.now(timezone.utc).isoformat(),
         "pydub_import_ok": bool(_WAVEFORM_OK),
         "ffmpeg_in_path": False,
         "ffmpeg_version": None,
@@ -2923,41 +2934,61 @@ async def debug_speech_timeline_selftest():
     except Exception as e:
         result["ffmpeg_version"] = f"check_failed: {e!r}"
 
-    # Step 3 — compute su un MP3 sintetico (genera sine wave + silenzi)
-    if _WAVEFORM_OK and _PydubAudioSegment is not None:
+    # Step 3 — compute su un MP3 sintetico generato via ffmpeg (no pydub)
+    # Filter complex: 1s sine + 0.5s silence + 1s sine + 0.5s silence + 1s sine
+    try:
+        import subprocess as _sp2
         try:
-            # Genera 4s: 1s tono, 0.5s silenzio, 1s tono, 0.5s silenzio, 1s tono
-            from pydub.generators import Sine as _Sine
-            tone = _Sine(440).to_audio_segment(duration=1000).apply_gain(-6)
-            silence = _PydubAudioSegment.silent(duration=500)
-            seg = tone + silence + tone + silence + tone
-            # Export a MP3 in-memory
-            buf = _io.BytesIO()
-            seg.export(buf, format="mp3", bitrate="128k")
-            mp3_bytes = buf.getvalue()
-            tl = _compute_speech_timeline(mp3_bytes)
-            if tl is None:
-                result["compute_ok"] = False
-                result["compute_error"] = "compute returned None (pydub/ffmpeg decode failed silently)"
+            import imageio_ffmpeg as _iioff2  # type: ignore
+            ffmpeg_bin = _iioff2.get_ffmpeg_exe()
+        except Exception:
+            ffmpeg_bin = _shutil.which("ffmpeg")
+        if not ffmpeg_bin:
+            result["compute_error"] = "no ffmpeg binary to generate test MP3"
+        else:
+            # Genera MP3: [sine 1s][silence 0.5s][sine 1s][silence 0.5s][sine 1s]
+            gen_cmd = [
+                ffmpeg_bin,
+                "-loglevel", "error", "-hide_banner", "-nostdin",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono:d=0.5",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono:d=0.5",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                "-filter_complex", "[0][1][2][3][4]concat=n=5:v=0:a=1[out]",
+                "-map", "[out]", "-ac", "1", "-ar", "16000",
+                "-f", "mp3", "-b:a", "128k", "pipe:1",
+            ]
+            gen = _sp2.run(gen_cmd, capture_output=True, timeout=10)
+            if gen.returncode != 0:
+                err = (gen.stderr or b"").decode("utf-8", errors="replace")[:200]
+                result["compute_error"] = f"ffmpeg gen rc={gen.returncode} stderr={err}"
             else:
-                result["compute_ok"] = True
-                result["compute_result"] = {
-                    "duration_ms": tl.get("duration_ms"),
-                    "silences_count": len(tl.get("silences") or []),
-                    "silences_sample": (tl.get("silences") or [])[:3],
-                    "mp3_size_bytes": len(mp3_bytes),
-                }
-        except Exception as e:
-            result["compute_ok"] = False
-            result["compute_error"] = f"exception: {type(e).__name__}: {e!r}"
+                mp3_bytes = gen.stdout or b""
+                if not mp3_bytes:
+                    result["compute_error"] = "ffmpeg produced empty MP3"
+                else:
+                    tl = _compute_speech_timeline(mp3_bytes)
+                    if tl is None:
+                        result["compute_ok"] = False
+                        result["compute_error"] = "compute returned None (see backend logs for [speech_timeline] warning)"
+                    else:
+                        result["compute_ok"] = True
+                        result["compute_result"] = {
+                            "duration_ms": tl.get("duration_ms"),
+                            "silences_count": len(tl.get("silences") or []),
+                            "silences_sample": (tl.get("silences") or [])[:3],
+                            "mp3_size_bytes": len(mp3_bytes),
+                        }
+    except Exception as e:
+        result["compute_ok"] = False
+        result["compute_error"] = f"exception: {type(e).__name__}: {e!r}"
 
     # Verdict human-readable
     if result["compute_ok"]:
         result["verdict"] = "OK — speech_timeline pipeline funziona su questo server"
-    elif not result["pydub_import_ok"]:
-        result["verdict"] = "ROTTO — pydub non installato o import fallito"
     elif not result["ffmpeg_in_path"]:
-        result["verdict"] = "ROTTO — ffmpeg non trovato (pydub non può decodificare MP3)"
+        result["verdict"] = "ROTTO — ffmpeg non trovato (impossibile decodificare MP3)"
     else:
         result["verdict"] = f"ROTTO — compute fallisce: {result['compute_error']}"
 
