@@ -2876,6 +2876,97 @@ async def debug_download_caching_diag():
     )
 
 
+# === SPEECH TIMELINE SELF-TEST (2026-08-17) ================================
+# Endpoint diagnostico per capire perché l'evento `speech_timeline` non
+# arriva al client in produzione. Fa 3 controlli in sequenza:
+#   1. pydub è importabile (già valutato all'import → _WAVEFORM_OK)
+#   2. ffmpeg risponde a subprocess (necessario a pydub per decodificare MP3)
+#   3. compute effettivo su un MP3 sintetico (32KB di sine wave)
+# Se il step 2 o 3 fallisce → il compute in produzione ritorna None → il
+# server non emette speech_timeline → il client non ha timer di silenzio →
+# l'orb resta piatto. Chiamalo dal telefono via URL, ricevi JSON conciso.
+@api_router.get("/debug/speech-timeline-selftest")
+async def debug_speech_timeline_selftest():
+    import subprocess as _sp
+    import shutil as _shutil
+    result = {
+        "pydub_import_ok": bool(_WAVEFORM_OK),
+        "ffmpeg_in_path": False,
+        "ffmpeg_version": None,
+        "compute_ok": False,
+        "compute_error": None,
+        "compute_result": None,
+    }
+    # Step 2 — ffmpeg subprocess check
+    try:
+        ffmpeg_path = _shutil.which("ffmpeg")
+        if ffmpeg_path:
+            result["ffmpeg_in_path"] = True
+            try:
+                out = _sp.run(
+                    [ffmpeg_path, "-version"],
+                    capture_output=True, text=True, timeout=3,
+                )
+                first_line = (out.stdout or "").split("\n", 1)[0][:120]
+                result["ffmpeg_version"] = first_line
+            except Exception as e:
+                result["ffmpeg_version"] = f"exec_failed: {e!r}"
+        else:
+            # Fallback: try imageio-ffmpeg static binary (used elsewhere)
+            try:
+                import imageio_ffmpeg as _iioff
+                bin_path = _iioff.get_ffmpeg_exe()
+                result["ffmpeg_in_path"] = True
+                result["ffmpeg_version"] = f"imageio_ffmpeg static: {bin_path}"
+            except Exception as e:
+                result["ffmpeg_version"] = f"not_available: {e!r}"
+    except Exception as e:
+        result["ffmpeg_version"] = f"check_failed: {e!r}"
+
+    # Step 3 — compute su un MP3 sintetico (genera sine wave + silenzi)
+    if _WAVEFORM_OK and _PydubAudioSegment is not None:
+        try:
+            # Genera 4s: 1s tono, 0.5s silenzio, 1s tono, 0.5s silenzio, 1s tono
+            from pydub.generators import Sine as _Sine
+            tone = _Sine(440).to_audio_segment(duration=1000).apply_gain(-6)
+            silence = _PydubAudioSegment.silent(duration=500)
+            seg = tone + silence + tone + silence + tone
+            # Export a MP3 in-memory
+            buf = _io.BytesIO()
+            seg.export(buf, format="mp3", bitrate="128k")
+            mp3_bytes = buf.getvalue()
+            tl = _compute_speech_timeline(mp3_bytes)
+            if tl is None:
+                result["compute_ok"] = False
+                result["compute_error"] = "compute returned None (pydub/ffmpeg decode failed silently)"
+            else:
+                result["compute_ok"] = True
+                result["compute_result"] = {
+                    "duration_ms": tl.get("duration_ms"),
+                    "silences_count": len(tl.get("silences") or []),
+                    "silences_sample": (tl.get("silences") or [])[:3],
+                    "mp3_size_bytes": len(mp3_bytes),
+                }
+        except Exception as e:
+            result["compute_ok"] = False
+            result["compute_error"] = f"exception: {type(e).__name__}: {e!r}"
+
+    # Verdict human-readable
+    if result["compute_ok"]:
+        result["verdict"] = "OK — speech_timeline pipeline funziona su questo server"
+    elif not result["pydub_import_ok"]:
+        result["verdict"] = "ROTTO — pydub non installato o import fallito"
+    elif not result["ffmpeg_in_path"]:
+        result["verdict"] = "ROTTO — ffmpeg non trovato (pydub non può decodificare MP3)"
+    else:
+        result["verdict"] = f"ROTTO — compute fallisce: {result['compute_error']}"
+
+    return result
+
+
+# === WAVEFORM (existing) — legacy blob reactivity ===
+
+
 @api_router.get("/legal/disclaimer/status")
 async def api_get_disclaimer_status():
     """Ritorna lo stato del disclaimer per l'utente corrente.
@@ -9428,6 +9519,21 @@ import io as _io
 import numpy as _np
 try:
     from pydub import AudioSegment as _PydubAudioSegment  # requires ffmpeg
+    # === FIX 2026-08-17 (pydub non usa imageio-ffmpeg by default) =============
+    # pydub cerca `ffmpeg` nel PATH di sistema via shutil.which; su ambienti
+    # come Railway/K8s non c'è ffmpeg installato e il decode MP3 fallisce
+    # silenziosamente → _compute_speech_timeline ritorna None → orb piatto.
+    # Soluzione: puntiamo esplicitamente al binary statico fornito da
+    # imageio-ffmpeg (già in requirements per voice_stream.py).
+    try:
+        import imageio_ffmpeg as _iioff  # type: ignore
+        _ffmpeg_path = _iioff.get_ffmpeg_exe()
+        _PydubAudioSegment.converter = _ffmpeg_path
+        _PydubAudioSegment.ffmpeg = _ffmpeg_path
+        # ffprobe è opzionale — pydub sa fare fallback su ffmpeg per probe
+        logger.info(f"[waveform] pydub converter bound to imageio-ffmpeg: {_ffmpeg_path}")
+    except Exception as _fe:
+        logger.warning(f"[waveform] imageio-ffmpeg fallback failed: {_fe}")
     _WAVEFORM_OK = True
 except Exception as _e:
     _PydubAudioSegment = None
@@ -9519,6 +9625,60 @@ SILENCE_HEAD_GRACE_MS = 120
 SILENCE_TAIL_GRACE_MS = 80
 
 
+def _decode_mp3_to_pcm_ffmpeg(mp3_bytes: bytes) -> Optional[Dict[str, Any]]:
+    """Decodifica MP3 → PCM mono 16kHz float32 [-1..1] usando SOLO ffmpeg
+    subprocess (nessun ffprobe). Restituisce {"samples": np.array, "frame_rate": int}
+    o None su errore.
+
+    Fix 2026-08-17: pydub richiede ffprobe che NON è disponibile su Railway
+    (imageio-ffmpeg fornisce solo ffmpeg). Questo bypass usa il binary
+    ffmpeg statico via subprocess con stream I/O — nessun file temporaneo,
+    nessun probe, nessuna dipendenza da ffprobe.
+    """
+    import subprocess as _sp
+    try:
+        import imageio_ffmpeg as _iioff  # type: ignore
+        ffmpeg_bin = _iioff.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+    if not mp3_bytes:
+        return None
+
+    # Target: PCM mono, 16kHz, s16le (32000 bytes/sec)
+    target_rate = 16000
+    cmd = [
+        ffmpeg_bin,
+        "-loglevel", "error",
+        "-hide_banner",
+        "-nostdin",
+        "-f", "mp3",         # input format (bypass probe)
+        "-i", "pipe:0",      # stdin
+        "-vn",
+        "-ac", "1",          # mono
+        "-ar", str(target_rate),
+        "-f", "s16le",       # raw signed 16-bit LE
+        "pipe:1",
+    ]
+    try:
+        proc = _sp.run(cmd, input=mp3_bytes, capture_output=True, timeout=10)
+    except Exception as e:
+        logger.warning(f"[speech_timeline] ffmpeg subprocess exception: {e!r}")
+        return None
+    if proc.returncode != 0:
+        err = (proc.stderr or b"").decode("utf-8", errors="replace")[:200]
+        logger.warning(f"[speech_timeline] ffmpeg rc={proc.returncode} stderr={err}")
+        return None
+    pcm_bytes = proc.stdout or b""
+    if not pcm_bytes:
+        return None
+    samples_i16 = _np.frombuffer(pcm_bytes, dtype=_np.int16)
+    if samples_i16.size == 0:
+        return None
+    samples = samples_i16.astype(_np.float32) / 32768.0
+    return {"samples": samples, "frame_rate": target_rate}
+
+
 def _compute_speech_timeline(mp3_bytes: bytes) -> Optional[Dict[str, Any]]:
     """Analizza l'MP3 e ritorna una timeline dei silenzi percepiti.
 
@@ -9530,29 +9690,24 @@ def _compute_speech_timeline(mp3_bytes: bytes) -> Optional[Dict[str, Any]]:
         "threshold": float,     # soglia RMS usata (per debug)
         "rms_max": float,       # picco RMS (utile per calibrare in futuro)
       }
-    o None se pydub/ffmpeg non disponibile o decode fallisce (L1/L2).
+    o None se decode fallisce (L1/L2).
 
-    NB: non tocca la funzione `_compute_waveform_rms` esistente per non
-    rompere codice legacy. Fa il proprio decode veloce.
+    Fix 2026-08-17: usa _decode_mp3_to_pcm_ffmpeg (ffmpeg subprocess) invece
+    di pydub, per evitare la dipendenza da ffprobe (non presente su Railway).
     """
-    if not _WAVEFORM_OK or not mp3_bytes:
+    if not mp3_bytes:
         return None
-    try:
-        seg = _PydubAudioSegment.from_file(_io.BytesIO(mp3_bytes), format="mp3")
-    except Exception as e:
-        logger.warning(f"[speech_timeline] MP3 decode failed: {e}")
+    decoded = _decode_mp3_to_pcm_ffmpeg(mp3_bytes)
+    if not decoded:
         return None
 
     try:
-        samples = _np.array(seg.get_array_of_samples(), dtype=_np.float32)
-        if seg.channels == 2 and len(samples) % 2 == 0:
-            samples = samples.reshape(-1, 2).mean(axis=1)
-        sample_max = float(1 << (8 * seg.sample_width - 1))
-        if sample_max <= 0:
+        samples = decoded["samples"]
+        frame_rate = decoded["frame_rate"]
+        if samples.size == 0:
             return None
-        samples = samples / sample_max
 
-        window_samples = int(seg.frame_rate * WAVEFORM_WINDOW_MS / 1000)
+        window_samples = int(frame_rate * WAVEFORM_WINDOW_MS / 1000)
         if window_samples <= 0:
             return None
         n_windows = len(samples) // window_samples
@@ -9603,7 +9758,7 @@ def _compute_speech_timeline(mp3_bytes: bytes) -> Optional[Dict[str, Any]]:
 
         return {
             "window_ms": WAVEFORM_WINDOW_MS,
-            "duration_ms": int(len(seg)),
+            "duration_ms": int(len(samples) * 1000.0 / frame_rate),
             "silences": silences,
             "threshold": round(float(effective_threshold), 4),
             "rms_max": round(rms_max, 4),
