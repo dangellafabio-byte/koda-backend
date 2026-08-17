@@ -1251,29 +1251,68 @@ async def voice_stream_handler(
         "gain_count": 0,    # quanti chunk hanno ricevuto gain (>1.0)
     }
 
+    # === FIX 2026-08-17 (Fabio "orb sync race") ===
+    # Lock per serializzare TUTTI i send su questa WebSocket. La pipeline
+    # fast produce coroutine concorrenti (sentence-idx-0, body-flush,
+    # `_emit_speech_timeline` fire-and-forget) che finiscono per chiamare
+    # `emit_to_client` in parallelo. Starlette WebSocket NON è concurrent-safe
+    # sui send: un send concorrente solleva `RuntimeError: Unexpected ASGI
+    # message ...`. Prima veniva catturato come "disconnect" e il payload
+    # perdente veniva silenziosamente scartato → sintomo osservato:
+    # `speech_timeline` non arrivava MAI (perse sempre le race contro le
+    # sentence). Il lock serializza header+binary di una sentence come
+    # unità atomica e non fa competere speech_timeline con nessuno.
+    _ws_send_lock = asyncio.Lock()
+
     async def emit_to_client(event: dict, audio_bytes: Optional[bytes] = None) -> None:
         """Emit verso il client (riusa il pattern del converse-ws esistente)."""
         nonlocal client_alive
         if not client_alive:
             return
+        _ev_type = event.get("type", "?")
         try:
-            if event.get("type") == "sentence" and audio_bytes:
-                header = {
-                    "type": "sentence",
-                    "i": event.get("i"),
-                    "text": event.get("text"),
-                    "waveform": event.get("waveform"),
-                    "window_ms": event.get("window_ms"),
-                    "audio_bytes": len(audio_bytes),
-                    "mime": "audio/mpeg",
-                }
-                await websocket.send_json(header)
-                await websocket.send_bytes(audio_bytes)
-            else:
-                await websocket.send_json(event)
-        except (WebSocketDisconnect, RuntimeError) as e:
+            async with _ws_send_lock:
+                # Ricontrollo dentro il lock: se un altro emit ha appena
+                # marcato la WS come morta, evitiamo il send che ora
+                # solleverebbe eccezione (o peggio, spedirebbe su una WS chiusa).
+                if not client_alive:
+                    return
+                if event.get("type") == "sentence" and audio_bytes:
+                    header = {
+                        "type": "sentence",
+                        "i": event.get("i"),
+                        "text": event.get("text"),
+                        "waveform": event.get("waveform"),
+                        "window_ms": event.get("window_ms"),
+                        "audio_bytes": len(audio_bytes),
+                        "mime": "audio/mpeg",
+                    }
+                    await websocket.send_json(header)
+                    await websocket.send_bytes(audio_bytes)
+                else:
+                    await websocket.send_json(event)
+        except WebSocketDisconnect as e:
             client_alive = False
-            logger.info(f"[KODA_STREAM sess={short_id}] client disconnected during emit: {e}")
+            logger.info(
+                f"[KODA_STREAM sess={short_id}] emit skipped: TRUE_DISCONNECT "
+                f"event_type={_ev_type} err={e!r}"
+            )
+        except RuntimeError as e:
+            # === FIX 2026-08-17 — Distingui concurrent-send vs vero disconnect ===
+            # Con il lock sopra, un RuntimeError qui NON dovrebbe più essere una
+            # race di concorrenza (impossibile per costruzione). Rimane possibile
+            # se lo state ASGI della WS è già "close sent" (vera disconnessione
+            # rilevata solo al send). Loghiamo con marker esplicito così se in
+            # futuro si ripresenta il pattern siamo in grado di distinguerlo
+            # dai vecchi disconnect legittimi (che erano invece WebSocketDisconnect).
+            msg = str(e)
+            is_asgi_state = ("Unexpected ASGI" in msg) or ("send" in msg.lower() and "close" in msg.lower())
+            client_alive = False
+            logger.warning(
+                f"[KODA_STREAM sess={short_id}] emit skipped: "
+                f"{'ASGI_STATE_ERROR (possibile leftover race)' if is_asgi_state else 'RUNTIME_ERROR'} "
+                f"event_type={_ev_type} err={msg[:200]!r}"
+            )
 
     try:
         # ---------------- 1) Frame iniziale ----------------
