@@ -12,6 +12,7 @@ import { loadProfileCache } from "../lib/localCache";
 import { AuthProvider, useAuth } from "../lib/auth";
 import LoginScreen from "../components/LoginScreen";
 import TrialWatcher from "../components/TrialWatcher";
+import OfflineOverlay from "../components/OfflineOverlay";
 import { installDiagLogger } from "../lib/diagLogger";
 // === PIANO B FIX 2026-07-19 — static import (era lazy require) ===
 import { KODA_BACKEND_URL } from "../lib/backendUrl";
@@ -244,6 +245,10 @@ function RootLayout() {
                   />
                 </TrialWatcher>
               </AuthGate>
+              {/* Overlay offline globale — sopra qualsiasi screen ma
+                  pointer-events="none" quindi non blocca nulla.
+                  Fabio 2026-08-14: P1 offline UX. */}
+              <OfflineOverlay />
             </ThemedShell>
           </ThemeProvider>
         </AuthProvider>

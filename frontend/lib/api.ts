@@ -484,6 +484,19 @@ export const api = {
   authorizeLasciaAndare: () =>
     jsonReq<{ allowed: boolean; reason: string }>("/lascia-andare/authorize"),
 
+  /** === LASCIA ANDARE — INTRO STATE (Fabio 2026-08-14) ===
+   * Persistenza server-side del flag "primo accesso a Lascia Andare visto".
+   * Sopravvive a reinstall/cambio device (a differenza di AsyncStorage). */
+  getLasciaAndareIntroState: () =>
+    jsonReq<{ seen: boolean; seen_at?: string | null }>(
+      "/lascia-andare/intro-state"
+    ),
+  markLasciaAndareIntroSeen: () =>
+    jsonReq<{ seen: boolean; seen_at?: string | null }>(
+      "/lascia-andare/intro-seen",
+      { method: "POST" }
+    ),
+
   /** === DEV TRIAL SEEDING (2026-08-11) — admin-only ===
    * Endpoint di test per manipolare lo stato del trial dell'utente admin
    * corrente senza consumare 7 minuti veri di TTS. Tutti restituiscono

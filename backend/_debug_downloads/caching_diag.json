@@ -1,0 +1,81 @@
+{
+  "results": [
+    {
+      "label": "T1_first_with_cache_control",
+      "wall_ms": 1753,
+      "usage": {
+        "prompt_tokens": 2425,
+        "completion_tokens": 49,
+        "total_tokens": 2474,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "body_analysis": {
+        "cache_control_in_body": true,
+        "body_size_chars": 7820,
+        "system_content_type": "list_of_blocks",
+        "system_first_block_keys": [
+          "type",
+          "text",
+          "cache_control"
+        ]
+      },
+      "captured_headers_relevant": {
+        "content-type": "application/json",
+        "user-agent": "AsyncOpenAI/Python 1.99.9",
+        "authorization": "Bearer ***"
+      },
+      "url": "https://integrations.emergentagent.com/llm/chat/completions"
+    },
+    {
+      "label": "T2_second_with_cache_control",
+      "wall_ms": 1228,
+      "usage": {
+        "prompt_tokens": 2425,
+        "completion_tokens": 36,
+        "total_tokens": 2461,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "body_analysis": {
+        "cache_control_in_body": true,
+        "body_size_chars": 7820,
+        "system_content_type": "list_of_blocks",
+        "system_first_block_keys": [
+          "type",
+          "text",
+          "cache_control"
+        ]
+      },
+      "captured_headers_relevant": {
+        "content-type": "application/json",
+        "user-agent": "AsyncOpenAI/Python 1.99.9",
+        "authorization": "Bearer ***"
+      },
+      "url": "https://integrations.emergentagent.com/llm/chat/completions"
+    },
+    {
+      "label": "T3_baseline_no_cache_control",
+      "wall_ms": 987,
+      "usage": {
+        "prompt_tokens": 2425,
+        "completion_tokens": 41,
+        "total_tokens": 2466,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "body_analysis": {
+        "cache_control_in_body": false,
+        "body_size_chars": 7752,
+        "system_content_type": "plain_string",
+        "system_length_chars": 7350
+      },
+      "captured_headers_relevant": {
+        "content-type": "application/json",
+        "user-agent": "AsyncOpenAI/Python 1.99.9",
+        "authorization": "Bearer ***"
+      },
+      "url": "https://integrations.emergentagent.com/llm/chat/completions"
+    }
+  ]
+}

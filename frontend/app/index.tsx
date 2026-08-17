@@ -28,6 +28,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { TouchableOpacity as GHTouchableOpacity } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
 import HandsFreeOrb from "../components/HandsFreeOrb";
+import LasciaAndareIntroModal from "../components/LasciaAndareIntroModal";
 import { FlashList } from "@shopify/flash-list";
 import LatencyOverlay from "../components/LatencyOverlay";
 import { traceStart, traceMark } from "../lib/latencyTracer";
@@ -480,6 +481,13 @@ export default function Taccuino() {
   // si congeda. Persistito in SecureStore con `koda_intro_seen=1`.
   // `null` = ancora da verificare; `true` = mostra; `false` = nascondi.
   const [showColorIntro, setShowColorIntro] = useState<boolean | null>(null);
+  // === LASCIA ANDARE — Intro Modal state (Fabio 2026-08-14 P1) ==============
+  // Flag persistito server-side (Mongo `lascia_andare_intro_seen_at`), quindi
+  // sopravvive a reinstall/cambio device. `pendingLasciaAndareVoice` custodisce
+  // il voice param calcolato al tap, così quando l'utente conferma "Entra"
+  // navighiamo con lo stesso voice senza doverlo ricalcolare.
+  const [showLasciaAndareIntro, setShowLasciaAndareIntro] = useState<boolean>(false);
+  const [pendingLasciaAndareVoice, setPendingLasciaAndareVoice] = useState<string | null>(null);
   // Splash screen all'apertura (4 sec) per mascherare la latenza di boot e
   // dare un'identità visiva forte: eclissi che respira colori + nome AI.
   const [showSplash, setShowSplash] = useState<boolean>(true);
@@ -5023,6 +5031,27 @@ export default function Taccuino() {
                 return;
               }
 
+              // === INTRO PROGRESSIVE DISCOVERY (Fabio 2026-08-14 P1) =====
+              // Check server-side se l'utente ha già visto l'intro. Se no,
+              // mostriamo il modal descrittivo (spiega cos'è la stanza)
+              // PRIMA di navigare. Il flag è in Mongo → sopravvive a
+              // reinstall/cambio device. In caso di errore rete/fetch,
+              // NON blocchiamo l'accesso: procediamo direttamente (l'utente
+              // vedrà l'intro al prossimo tentativo se la rete torna).
+              let introSeen = true; // default optimistico: se fetch fallisce, non blocchiamo
+              try {
+                const s = await api.getLasciaAndareIntroState();
+                introSeen = Boolean(s?.seen);
+              } catch (e) {
+                console.warn("[LasciaAndare] intro-state fetch failed, procedo:", e);
+              }
+
+              if (!introSeen) {
+                setPendingLasciaAndareVoice(kv);
+                setShowLasciaAndareIntro(true);
+                return;
+              }
+
               try {
                 router.push(`/lascia-andare?voice=${encodeURIComponent(kv)}`);
               } catch (e) {
@@ -6786,6 +6815,38 @@ export default function Taccuino() {
           </View>
         </View>
       </Modal>
+
+      {/* === LASCIA ANDARE INTRO MODAL (Fabio 2026-08-14 P1) ================
+          Presentazione al PRIMO accesso alla stanza "Lascia Andare".
+          Il flag di persistenza è server-side (Mongo), non locale, così
+          sopravvive a reinstall/cambio device. Non riappare mai dopo il
+          primo tap "Entra". */}
+      <LasciaAndareIntroModal
+        visible={showLasciaAndareIntro}
+        onCancel={() => {
+          setShowLasciaAndareIntro(false);
+          setPendingLasciaAndareVoice(null);
+        }}
+        onContinue={async () => {
+          // Marca l'intro come visto server-side (idempotente).
+          // Fire-and-forget: NON blocchiamo la navigazione se fallisce.
+          try {
+            api.markLasciaAndareIntroSeen().catch((e) => {
+              console.warn("[LasciaAndare] markIntroSeen failed:", e);
+            });
+          } catch (e) {
+            console.warn("[LasciaAndare] markIntroSeen failed:", e);
+          }
+          const voice = pendingLasciaAndareVoice || "aria";
+          setShowLasciaAndareIntro(false);
+          setPendingLasciaAndareVoice(null);
+          try {
+            router.push(`/lascia-andare?voice=${encodeURIComponent(voice)}`);
+          } catch (e) {
+            console.warn("[LasciaAndare] navigation error:", e);
+          }
+        }}
+      />
 
       {/* RadialGlow — alone radiale che parte dal blob (centro schermo)
           e si propaga verso i bordi. Coerente coi 3 colori del blob:

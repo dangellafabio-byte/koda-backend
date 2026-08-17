@@ -1598,6 +1598,14 @@ class Profile(BaseModel):
     #   - disclaimer_version:     versione del testo accettato ("v1", "v2"…)
     disclaimer_accepted_at: Optional[str] = None
     disclaimer_version: Optional[str] = None
+    # === LASCIA ANDARE — progressive discovery (Fabio 2026-08-14) ===========
+    # Flag persistito lato server (NON solo device-local) per garantire che
+    # l'intro descrittivo/spiegazione di "Lascia Andare" venga mostrato UNA
+    # sola volta all'utente, anche se reinstalla l'app o cambia dispositivo.
+    # Sopravvive a wipe locale, cambio device, logout/re-login.
+    # None ⇒ mai visto → mostra intro al prossimo accesso a Lascia Andare
+    # ISO datetime ⇒ visto una volta, non riproporlo mai più
+    lascia_andare_intro_seen_at: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -2443,7 +2451,7 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"   grammaticali che il TTS pronuncerebbe male — solo struttura.\n"
         f"\n"
         f"G) CAMBIARE IDEA (umiltà):\n"
-        f"   Se l'utente argomenta bene contro un'opinione tua, ABRRACCIA il cambio: "
+        f"   Se l'utente argomenta bene contro un'opinione tua, ABBRACCIA il cambio: "
         f"   'Sai, mi hai convinta. Avevo torto.' / 'Hai ragione, non l'avevo vista "
         f"   da quel lato.' Una persona vera ammette di cambiare idea. Non sei mai "
         f"   stata 'già di accordo a tutto' — quello è un sì-uomo.\n"
@@ -2575,7 +2583,7 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f'  • ⚠️ CAMBIO COLORE BLOB (recording/speaking/thinking/idle) → TEMPORANEAMENTE NON DISPONIBILE.\n'
         f'      Se l\'utente chiede di cambiare un colore del blob, RISPONDI ONESTAMENTE che adesso\n'
         f'      non puoi farlo. NON inventare di averlo fatto. NON emettere actions color_*.\n'
-        f'      Esempio: "Mi spiace Fabio, cambiare i colori del blob non è ancora pronto come funzione.\n'
+        f'      Esempio: "Mi spiace, cambiare i colori del blob non è ancora pronto come funzione.\n'
         f'      Te lo dirò quando potrò farlo davvero." (1 frase, niente actions JSON per il colore.)\n'
         f'  • "cambia voce" / "fammi sentire le voci"\n'
         f'      → {{ "type": "config", "key": "list_voices", "value": true }} (l\'app mostrerà le opzioni)\n'
@@ -2660,7 +2668,7 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"⚠️  ANTI-DEFAULT (CRITICO — leggi prima di ogni risposta):\n"
         f"NON usare [TONE:warm] come default automatico. Il warm vale SOLO\n"
         f"per saluti tranquilli o chiacchiere leggere. Per OGNI altra cosa\n"
-        f"FERMATI 1 secondo e chiediti: 'Cosa sente VERAMENTE Fabio ora?'\n"
+        f"FERMATI 1 secondo e chiediti: 'Cosa sente VERAMENTE l'utente ora?'\n"
         f"  • Sta sfogando rabbia/frustrazione? → [TONE:concerned] (NON warm)\n"
         f"  • Sta raccontando dolore/perdita? → [TONE:concerned] o [TONE:calm]\n"
         f"  • Sta condividendo gioia/successo? → [TONE:energetic]\n"
@@ -2849,6 +2857,23 @@ async def debug_last_turn_timing():
         "note": "Ultimi 10 turni. Ordine: dal piu' vecchio al piu' recente.",
         "turns": items,
     }
+
+
+# === DOWNLOAD TEMP (2026-08-14) — Diagnostic file per ticket Emergent =========
+# Serve /app/backend/_debug_downloads/caching_diag.json come attachment.
+# NO AUTH, endpoint temporaneo — utile per allegare all'email di supporto
+# scritta da mobile (Safari). Da RIMUOVERE dopo l'invio del ticket.
+@api_router.get("/debug/download-caching-diag")
+async def debug_download_caching_diag():
+    from fastapi.responses import FileResponse
+    _path = os.path.join(os.path.dirname(__file__), "_debug_downloads", "caching_diag.json")
+    if not os.path.exists(_path):
+        raise HTTPException(status_code=404, detail="File not found. Regenerate via scripts/diagnose_prompt_caching.py")
+    return FileResponse(
+        _path,
+        media_type="application/json",
+        filename="koda_caching_diag.json",
+    )
 
 
 @api_router.get("/legal/disclaimer/status")
@@ -3596,6 +3621,70 @@ async def api_lascia_andare_authorize():
 
     # tstate == "expired" e nessun bypass → DENY
     return LasciaAndareAuthResponse(allowed=False, reason="expired")
+
+
+# === LASCIA ANDARE — INTRO PROGRESSIVE DISCOVERY (Fabio 2026-08-14) ==========
+#
+# Endpoint per gestire la persistenza del flag "primo accesso a Lascia
+# Andare visto". Serve al frontend per decidere se mostrare un intro
+# spiegativo o navigare direttamente. Persistenza lato server → sopravvive
+# a reinstall/cambio device.
+#
+class LasciaAndareIntroState(BaseModel):
+    seen: bool
+    seen_at: Optional[str] = None
+
+
+@api_router.get("/lascia-andare/intro-state", response_model=LasciaAndareIntroState)
+async def api_lascia_andare_intro_state():
+    """Ritorna se l'utente ha già visto l'intro di Lascia Andare.
+    Il client chiama questo PRIMA di navigare a /lascia-andare:
+      - `seen=false` → mostra intro modale
+      - `seen=true`  → naviga direttamente
+
+    In caso di errore backend, ritorna `seen=false` (default-conservativo:
+    mostra l'intro invece di saltarlo, così l'utente non perde la
+    spiegazione se c'è un glitch temporaneo).
+    """
+    try:
+        p = await get_or_create_profile()
+        seen_at = getattr(p, "lascia_andare_intro_seen_at", None)
+        return LasciaAndareIntroState(
+            seen=bool(seen_at),
+            seen_at=seen_at,
+        )
+    except Exception as e:
+        logger.warning(f"[lascia-andare-intro] state fetch failed: {e}")
+        return LasciaAndareIntroState(seen=False, seen_at=None)
+
+
+@api_router.post("/lascia-andare/intro-seen", response_model=LasciaAndareIntroState)
+async def api_lascia_andare_mark_intro_seen():
+    """Marca l'intro come visto. Idempotente: se già seen, ritorna il
+    timestamp esistente (non lo sovrascrive). Chiamato dal client dopo
+    che l'utente ha completato/skippato il modal intro.
+    """
+    uid = current_user_id()
+    try:
+        p = await get_or_create_profile()
+        existing = getattr(p, "lascia_andare_intro_seen_at", None)
+        if existing:
+            # Idempotente: già marcato, ritorna il valore esistente
+            return LasciaAndareIntroState(seen=True, seen_at=existing)
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.taccuino_profile.update_one(
+            {"id": uid},
+            {"$set": {"lascia_andare_intro_seen_at": now_iso}},
+            upsert=False,
+        )
+        logger.info(f"[lascia-andare-intro] user={uid[:8]} intro marked seen at {now_iso}")
+        return LasciaAndareIntroState(seen=True, seen_at=now_iso)
+    except Exception as e:
+        logger.warning(f"[lascia-andare-intro] mark seen failed: {e}")
+        # Non alziamo eccezione: il client procederà comunque all'ingresso,
+        # e riproverà al prossimo accesso. Failure mode gentile.
+        return LasciaAndareIntroState(seen=False, seen_at=None)
 
 
 @api_router.get("/freemium/status", response_model=FreemiumStatus)
