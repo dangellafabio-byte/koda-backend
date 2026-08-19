@@ -3706,43 +3706,31 @@ class LasciaAndareAuthResponse(BaseModel):
 async def api_lascia_andare_authorize():
     """Ritorna se l'utente può accedere a Lascia Andare in questo momento.
 
-    Regole:
-      - Utente premium (subscription_tier in monthly/bimonthly/annual) → allowed
-      - Utente unlimited (whitelist) → allowed
-      - Utente con trial_state in ("active", "closing") → allowed
-      - Utente con trial_state = "expired" e nessuna delle sopra → DENY
+    === CAMBIO ARCHITETTURALE 2026-08-17 (Fabio) — LASCIA ANDARE FREE PER SEMPRE ===
+    Lascia Andare è il CUORE del prodotto: gratuito, completo, illimitato,
+    permanente. Non è una demo, non è un trial, non è un livello base. Non
+    esiste alcun caso in cui un utente debba essere bloccato fuori da Lascia
+    Andare — nemmeno se il trial è scaduto, nemmeno se non è mai stato
+    autenticato, nemmeno se il profilo non è caricabile.
 
-    In caso di errore backend (profilo non caricabile), ritorna denied per
-    non aprire varchi accidentali.
+    Koda conversazionale (voce + memoria) è l'esperienza Premium separata,
+    gestita altrove nel codice via `subscription_tier` e `_compute_trial_state`.
+    Quelle strutture NON sono state toccate — restano vive e utili per il
+    gating di Koda conversazionale.
+
+    Regole nuove (Punto 1 del piano Free/Premium 2026-08-17):
+      - SEMPRE `allowed=True, reason="free_forever"`.
+      - Nessun controllo trial/subscription/unlimited.
+      - Nessuna dipendenza da profilo caricabile (l'endpoint non fallisce mai).
+
+    Endpoint mantenuto per retrocompatibilità con i due client site
+    esistenti (`lascia-andare.tsx:mount` e `index.tsx:pre-navigate guard`)
+    che nel Punto 3 del piano verranno bonificati (rimossa la chiamata,
+    zero endpoint durante Lascia Andare come da vincolo Q7). Fino a quel
+    momento, la chiamata resta ma è un no-op semantico.
     """
-    try:
-        p = await get_or_create_profile()
-    except Exception as e:
-        logger.warning(f"[lascia-andare-auth] profile fetch failed: {e}")
-        return LasciaAndareAuthResponse(allowed=False, reason="unknown")
-
-    # Paid tier attivo → sempre ok
-    tier = getattr(p, "subscription_tier", None)
-    if tier in ("monthly", "bimonthly", "annual"):
-        return LasciaAndareAuthResponse(allowed=True, reason="paid")
-
-    # Whitelist unlimited (admin/tester) → sempre ok
-    try:
-        uid = current_user_id()
-        email = await _uid_email_from_session_or_profile(uid)
-        unlim, _ = await is_user_unlimited(email, uid)
-        if unlim:
-            return LasciaAndareAuthResponse(allowed=True, reason="unlimited")
-    except Exception:
-        pass
-
-    # Trial state — active/closing = ok, expired = deny
-    tstate = _compute_trial_state(p)
-    if tstate in ("active", "closing"):
-        return LasciaAndareAuthResponse(allowed=True, reason=tstate)
-
-    # tstate == "expired" e nessun bypass → DENY
-    return LasciaAndareAuthResponse(allowed=False, reason="expired")
+    logger.info("[lascia-andare-auth] free_forever (always allowed)")
+    return LasciaAndareAuthResponse(allowed=True, reason="free_forever")
 
 
 # === LASCIA ANDARE — INTRO PROGRESSIVE DISCOVERY (Fabio 2026-08-14) ==========
