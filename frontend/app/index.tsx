@@ -964,6 +964,67 @@ export default function Taccuino() {
     return () => { cancelled = true; };
   }, [profile?.id]);
 
+  // === ROUTER CONDIZIONALE FREE/PREMIUM (Punto 3, Fabio 2026-08-17) ==========
+  // Nuova architettura Free/Premium:
+  //   - Free (nessun abbonamento) → Lascia Andare è la landing di default,
+  //     è il CUORE del prodotto. Al primo mount della home Koda conv, se il
+  //     profilo non ha un tier paid, redirigiamo verso /lascia-andare.
+  //   - Premium (subscription_tier ∈ monthly/bimonthly/annual/unlimited) →
+  //     restano su Koda conversazionale (comportamento attuale, zero attrito).
+  //
+  // Vincoli mantenuti:
+  //   - Redirect UNA SOLA volta per app session (ref sotto) → se il Premium
+  //     naviga volontariamente a Lascia Andare via CTA e torna indietro, NON
+  //     lo riportiamo dentro. Simmetricamente per il free: se decide di
+  //     tornare alla home (via back o link) può farlo, non lo forziamo di
+  //     nuovo (l'accesso alla voce è comunque gated dai turni del trial /
+  //     paywall a livello turno-per-turno).
+  //   - Non redirigiamo finché il disclaimer legale è "blocking" o "loading"
+  //     (il disclaimer va accettato PRIMA, per requisiti legali GDPR).
+  //   - Non redirigiamo finché il profilo non è caricato (evita decisione
+  //     prematura basata su null → sarebbe letta come "non paid" → falso
+  //     positivo per Premium con rete lenta).
+  //   - Non redirigiamo se lo splash è ancora visibile (evita di scavalcare
+  //     l'animazione di boot).
+  //   - Non redirigiamo se KodaIntro è attivo (primo lancio: la presentazione
+  //     ha priorità sull'atterraggio Lascia Andare — altrimenti l'utente
+  //     nuovo non completa mai la configurazione base).
+  //
+  // NON tocchiamo il trial state / subscription_tier machinery: quelli
+  // servono per gating Koda conversazionale (punto 3 della D3 di Fabio).
+  const hasRedirectedFreeUserRef = useRef<boolean>(false);
+  useEffect(() => {
+    // Guard: aspetta le condizioni pre-routing
+    if (hasRedirectedFreeUserRef.current) return; // già rediretto in questa sessione
+    if (!profile) return; // profilo ancora null → aspetta caricamento
+    if (disclaimerState !== "accepted") return; // disclaimer non pronto → aspetta
+    if (showSplash) return; // splash ancora visibile → aspetta
+    if (showColorIntro === true) return; // KodaIntro attivo → priorità intro
+
+    const tier = ((profile as any)?.subscription_tier as string | null) || null;
+    const isPaid = tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
+
+    if (isPaid) {
+      console.log(`[KODA_ROUTER] paid user (tier=${tier}) → stay on Koda conversazionale`);
+      hasRedirectedFreeUserRef.current = true; // marca decisione presa
+      return;
+    }
+
+    // Free user: redirect a Lascia Andare (landing di default nel nuovo modello)
+    console.log(`[KODA_ROUTER] free user (tier=${tier || "none"}) → replace to /lascia-andare`);
+    hasRedirectedFreeUserRef.current = true; // marca decisione presa PRIMA del replace
+    try {
+      // Preferisco replace a push così back non riporta sulla home Koda conv
+      // (che è UI Premium — free user non deve vederla come landing).
+      // La navigazione volontaria alla home resta comunque possibile in futuro
+      // via CTA "Parla con Koda" che aprirà il paywall (Punto 5+6 del piano).
+      router.replace("/lascia-andare");
+    } catch (e) {
+      console.warn("[KODA_ROUTER] replace to /lascia-andare failed:", e);
+    }
+  }, [profile, disclaimerState, showSplash, showColorIntro, router]);
+
+
   const inputMode = (profile?.settings?.input_mode === "text"
     ? "text"
     : profile?.settings?.input_mode === "both"
@@ -5003,33 +5064,16 @@ export default function Taccuino() {
                 VID_TO_KV[(profile?.settings?.tts_voice_id as string) || ""] ||
                 "aria";
 
-              // === LIVELLO 1 GUARD (Fabio 2026-08-12) =====================
-              // Fonte di verità server-side: chiama /api/lascia-andare/authorize
-              // PRIMA di navigare. Se non allowed o rete assente/errore
-              // → DEFAULT DENY (no varchi anche gratuiti).
-              // Livello 2 (mount check dentro /lascia-andare) fa da belt-and-
-              // suspenders per race condition e deep-link.
-              let allowed = false;
-              try {
-                const res = await api.authorizeLasciaAndare();
-                allowed = Boolean(res?.allowed);
-              } catch (e) {
-                // Offline o errore → default-deny esplicito. Non aprire varchi.
-                console.warn("[LasciaAndare] authorize failed (default-deny):", e);
-                allowed = false;
-              }
-
-              if (!allowed) {
-                Alert.alert(
-                  "Lascia Andare non è disponibile",
-                  "Questa stanza è riservata a chi ha un abbonamento attivo. Scegli un piano per continuare a stare con Koda.",
-                  [
-                    { text: "Non ora", style: "cancel" },
-                    { text: "Vedi i piani", onPress: () => router.push("/paywall") },
-                  ],
-                );
-                return;
-              }
+              // === LIVELLO 1 GUARD → RIMOSSO (Punto 3, Fabio 2026-08-17) ==
+              // Ex chiamata a /api/lascia-andare/authorize prima di navigare,
+              // con Alert paywall in caso di deny. Con il Punto 1 l'endpoint
+              // ritorna sempre free_forever → il guard era un no-op che
+              // aggiungeva ~200-500ms di rete e un branch che non scattava
+              // più. Rimosso: navigazione diretta a /lascia-andare (accesso
+              // libero per tutti, sempre — è il cuore del prodotto).
+              // Nota: la logica "intro progressive discovery" (getLasciaAndare
+              // IntroState) resta perché non è un gate di autorizzazione ma
+              // un flag UX (mostra il modal di presentazione la prima volta).
 
               // === INTRO PROGRESSIVE DISCOVERY (Fabio 2026-08-14 P1) =====
               // Check server-side se l'utente ha già visto l'intro. Se no,

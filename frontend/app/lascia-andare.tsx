@@ -49,7 +49,8 @@ import {
   playClosePhrase,
   stopAll as stopVoicePhrase,
 } from "../lib/lasciaAndareVoice";
-import { api } from "../lib/api";
+// NB: rimosso `import { api } from "../lib/api"` — non più necessario dopo la
+// rimozione del guard `authorizeLasciaAndare` (Punto 3, Fabio 2026-08-17).
 
 // ==== VAD tuning (calibrato sulla stessa scala di lib/voice.ts) ====
 const SPEECH_DB = -35; // sopra questa soglia → voce presente
@@ -119,16 +120,12 @@ export default function LasciaAndareScreen() {
   const [ready, setReady] = useState(false);
   const [permError, setPermError] = useState<string | null>(null);
 
-  // === LIVELLO 2+3 GUARD (Fabio 2026-08-12) ==========================
-  // Belt-and-suspenders del guard nel pulsante home: qui ricontrolliamo
-  // al mount della schermata. Copre race condition, deep-link diretti,
-  // AsyncStorage compromessa. Default-deny se rete assente o errore.
-  //
-  // "checking" → schermata nera minima, nessun audio permission richiesta,
-  //              nessun recorder inizializzato.
-  // "allowed"  → il resto degli useEffect può procedere normalmente.
-  // "denied"   → router.replace al paywall, nessun audio setup.
-  const [authorized, setAuthorized] = useState<"checking" | "allowed" | "denied">("checking");
+  // === LIVELLO 2+3 GUARD → RIMOSSO (Punto 3, Fabio 2026-08-17) ============
+  // Ex "checking → allowed/denied" con network fetch al mount. Ora Lascia
+  // Andare è free per sempre → `authorized` parte direttamente a "allowed".
+  // Il tipo/stato è mantenuto per compat con gli useEffect a valle che
+  // filtrano su `authorized !== "allowed"` (safety net inerte).
+  const [authorized, setAuthorized] = useState<"checking" | "allowed" | "denied">("allowed");
 
   // Ref al recorder nativo (istanza AudioRecorder di expo-audio)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -220,44 +217,18 @@ export default function LasciaAndareScreen() {
   // loro moltiplicazione con orbEntryScale=0.3 le rende inizialmente
   // trascurabili, poi si integrano gradualmente man mano che entryScale
   // sale verso 1.0.
-  // === LIVELLO 2+3 AUTHORIZATION GATE (Fabio 2026-08-12) ===============
-  // Chiama /api/lascia-andare/authorize al mount. Se allowed=false o
-  // rete assente/errore → default-deny + replace verso /paywall.
-  // Fino a risposta, `authorized` resta "checking" e la schermata
-  // renderizza solo nero (nessun mic, nessun recorder, nessuna animation).
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      let allowed = false;
-      try {
-        const res = await api.authorizeLasciaAndare();
-        allowed = Boolean(res?.allowed);
-      } catch (e) {
-        // Offline / errore rete → default-deny esplicito
-        console.warn("[LasciaAndare] authorize failed at mount (default-deny):", e);
-        allowed = false;
-      }
-      if (cancelled) return;
-      if (allowed) {
-        setAuthorized("allowed");
-      } else {
-        setAuthorized("denied");
-        // Rimanda al paywall. Sostituisce la history così back non
-        // riporta dentro Lascia Andare.
-        try {
-          router.replace("/paywall");
-        } catch (e) {
-          console.warn("[LasciaAndare] replace to /paywall failed:", e);
-          // Fallback: torna a home
-          try { router.replace("/"); } catch {}
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [router]);
-
+  // === LIVELLO 2+3 AUTHORIZATION GATE — RIMOSSO (Punto 3, Fabio 2026-08-17) ==
+  // Contesto: prima qui c'era un guard che chiamava /api/lascia-andare/authorize
+  // al mount e faceva default-deny in caso di errore/rete assente. Con il
+  // Punto 1 del piano Free/Premium, l'endpoint ritorna SEMPRE
+  // `allowed=true, reason="free_forever"` — quindi il guard era diventato un
+  // no-op che aggiungeva latenza al mount e una chiamata di rete inutile
+  // durante Lascia Andare (vincolo Q7 del piano: "zero endpoint chiamati
+  // durante Lascia Andare"). Rimosso il guard, `authorized` parte già a
+  // "allowed" (vedi useState sopra) → schermata renderizza immediatamente.
+  // Il tipo `"checking" | "allowed" | "denied"` è mantenuto per non toccare
+  // gli useEffect a valle che filtrano su `authorized !== "allowed"` — quei
+  // guard restano come safety net ma non scatteranno mai in condizioni normali.
   useEffect(() => {
     // Guard: non avviare animazioni finché non autorizzato
     if (authorized !== "allowed") return;
