@@ -127,6 +127,85 @@ export default function LasciaAndareScreen() {
   // filtrano su `authorized !== "allowed"` (safety net inerte).
   const [authorized, setAuthorized] = useState<"checking" | "allowed" | "denied">("allowed");
 
+  // === PUNTO 7 — CLEANUP PREEMPTIVO ORFANI AUDIO (Fabio 2026-08-17) ========
+  // Vincolo di Fabio: "niente audio deve restare sul telefono dopo che
+  // l'utente esce da Lascia Andare". Il cleanup runtime (`stopAndCleanup`)
+  // cancella il file dell'ultima sessione, MA non copre due edge case:
+  //   1. Crash / kill-task-manager durante una sessione attiva → il
+  //      file `.m4a` resta orfano in cacheDirectory.
+  //   2. Multiple sessioni non chiuse cleanly nel passato.
+  //
+  // Al mount della schermata Lascia Andare (che è idempotente su una
+  // sessione già in corso) facciamo un cleanup best-effort dei file `.m4a`
+  // orfani nella cacheDirectory più vecchi di 5 minuti.
+  //
+  // Vincoli difensivi:
+  //   - Solo `.m4a` (i `.mp3` in cache sono TTS di Koda conv, non nostri —
+  //     vedi lib/speech.ts:1465 `koda_ws_{ts}_{idx}.mp3` — NON toccarli)
+  //   - Solo file con mtime > 5 minuti fa (se qualcuno è ancora attivo
+  //     lasciamo stare, il cleanup runtime lo prenderà a session end)
+  //   - Silenzioso: nessun blocco UI, nessun error propagato all'utente
+  //   - Fire-and-forget: non aspettiamo l'esito per renderizzare la schermata
+  //
+  // Costo runtime: ~10-50ms (una readDirectoryAsync + N getInfoAsync su
+  // pochi file). Non blocca il critical path del boot.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const dir = (FileSystem as any).cacheDirectory as string | null;
+        if (!dir) {
+          console.log("[LasciaAndare/cleanup] cacheDirectory unavailable — skip");
+          return;
+        }
+        const entries = await FileSystem.readDirectoryAsync(dir);
+        if (cancelled) return;
+        const now = Date.now();
+        const AGE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minuti
+        let deleted = 0;
+        let skipped = 0;
+        for (const name of entries) {
+          if (cancelled) return;
+          // Whitelist estensione: solo .m4a (audio recorder Lascia Andare).
+          // Escludiamo esplicitamente qualsiasi `koda_ws_*.mp3` (TTS Koda conv)
+          // e `koda_offline_*.mp3` (clip offline preload).
+          if (!name.toLowerCase().endsWith(".m4a")) {
+            skipped++;
+            continue;
+          }
+          const path = `${dir}${name}`;
+          try {
+            const info: any = await FileSystem.getInfoAsync(path);
+            if (!info?.exists) continue;
+            // modificationTime è in SECONDI (unix), non ms.
+            const mtimeMs = typeof info.modificationTime === "number"
+              ? info.modificationTime * 1000
+              : 0;
+            const ageMs = now - mtimeMs;
+            if (ageMs < AGE_THRESHOLD_MS) {
+              skipped++;
+              continue; // troppo recente → potrebbe essere in uso
+            }
+            await FileSystem.deleteAsync(path, { idempotent: true });
+            deleted++;
+          } catch (e) {
+            // Silenzioso: se un singolo file fallisce, andiamo avanti
+            console.log(`[LasciaAndare/cleanup] skip ${name}: ${e}`);
+          }
+        }
+        console.log(
+          `[LasciaAndare/cleanup] preemptive m4a orphans: deleted=${deleted} skipped=${skipped}`
+        );
+      } catch (e) {
+        // readDirectoryAsync può fallire su alcuni device — non blocchiamo
+        console.log(`[LasciaAndare/cleanup] scan failed (non-fatal): ${e}`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Ref al recorder nativo (istanza AudioRecorder di expo-audio)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recorderRef = useRef<any>(null);
