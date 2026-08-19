@@ -98,7 +98,7 @@ import {
   DEFAULT_CALIBRATION,
   type BorderCalibration,
 } from "../lib/borderCalibration";
-import { useRouter } from "expo-router";
+import { useRouter, usePathname } from "expo-router";
 import type { SafetyCheckResult, FreemiumStatus as FreemiumStatusType } from "../lib/api";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
 import { useRenderCounter, startFpsMonitor } from "../lib/perfDiag";
@@ -334,6 +334,26 @@ function detectCloseSessionClientSide(text: string | null | undefined): boolean 
   return false;
 }
 
+
+// === PUNTO 3 — DEDUPE GLOBALE DEL ROUTER FREE/PREMIUM (Fabio 2026-08-17) ===
+// Il ref locale `hasRedirectedFreeUserRef` sopravvive ai re-render ma NON al
+// re-mount del componente <Taccuino>. Se qualcosa nell'albero React (es.
+// TrialWatcher polling che cambia stato, AuthProvider refresh, ripristino
+// da background) causa un unmount+remount della Home page, il ref torna
+// a false e il router condizionale ri-scatta → loop di redirect osservato
+// da Fabio in build v64.20.
+//
+// FIX: memoria "per-profile" a livello di modulo. Sopravvive a unmount+
+// remount del componente. Auto-resettata quando l'utente logga con un
+// profileId diverso (login/logout/switch account) — questo evita il bug
+// simmetrico (Premium logout → Free login → il flag globale bloccherebbe
+// il redirect atteso). Un `null` profileId (utente non ancora loggato o
+// profilo non caricato) non conta come "già rediretto".
+//
+// NON è persistito (AsyncStorage): il redirect deve avvenire una volta
+// per sessione app. Al prossimo cold boot il modulo si ricarica → memoria
+// vuota → il redirect ri-scatta correttamente.
+let __kodaFreeUserRouter_lastDecidedProfileId: string | null = null;
 
 
 export default function Taccuino() {
@@ -972,47 +992,77 @@ export default function Taccuino() {
   //   - Premium (subscription_tier ∈ monthly/bimonthly/annual/unlimited) →
   //     restano su Koda conversazionale (comportamento attuale, zero attrito).
   //
-  // Vincoli mantenuti:
-  //   - Redirect UNA SOLA volta per app session (ref sotto) → se il Premium
-  //     naviga volontariamente a Lascia Andare via CTA e torna indietro, NON
-  //     lo riportiamo dentro. Simmetricamente per il free: se decide di
-  //     tornare alla home (via back o link) può farlo, non lo forziamo di
-  //     nuovo (l'accesso alla voce è comunque gated dai turni del trial /
-  //     paywall a livello turno-per-turno).
+  // === TRIPLA DIFESA CONTRO IL LOOP DI REDIRECT (fix 2026-08-17 v2) ==========
+  // Il primo tentativo (v64.20) usava solo un `useRef` locale. Fabio ha
+  // osservato loop: LA → Home flash → LA → ripete. Diagnosi: il ref è
+  // locale al componente <Taccuino>; se qualcosa nell'albero React fa
+  // unmount+remount della Home (TrialWatcher polling, AuthProvider refresh,
+  // resume da background), il ref torna a false → redirect ri-scatta.
+  //
+  // Tre livelli di difesa combinati:
+  //   A) usePathname() → se non siamo attualmente sulla route "/", non
+  //      redirigere. Se Home è ri-montata mentre siamo su /lascia-andare,
+  //      pathname sarà "/lascia-andare" → early return.
+  //   B) hasRedirectedFreeUserRef (useRef locale) → dedupe intra-mount se
+  //      le dependency cambiano più volte prima che pathname si aggiorni.
+  //   C) __kodaFreeUserRouter_lastDecidedProfileId (module-level) →
+  //      persiste tra unmount+remount della Home. Si resetta automaticamente
+  //      su cambio profileId (login/logout/switch account).
+  //
+  // Vincoli mantenuti dalla versione precedente:
   //   - Non redirigiamo finché il disclaimer legale è "blocking" o "loading"
-  //     (il disclaimer va accettato PRIMA, per requisiti legali GDPR).
-  //   - Non redirigiamo finché il profilo non è caricato (evita decisione
-  //     prematura basata su null → sarebbe letta come "non paid" → falso
-  //     positivo per Premium con rete lenta).
-  //   - Non redirigiamo se lo splash è ancora visibile (evita di scavalcare
-  //     l'animazione di boot).
+  //   - Non redirigiamo finché il profilo non è caricato
+  //   - Non redirigiamo se lo splash è ancora visibile
   //   - Non redirigiamo se KodaIntro è attivo (primo lancio: la presentazione
-  //     ha priorità sull'atterraggio Lascia Andare — altrimenti l'utente
-  //     nuovo non completa mai la configurazione base).
+  //     ha priorità sull'atterraggio Lascia Andare)
   //
   // NON tocchiamo il trial state / subscription_tier machinery: quelli
-  // servono per gating Koda conversazionale (punto 3 della D3 di Fabio).
+  // servono per gating Koda conversazionale.
+  const pathname = usePathname();
   const hasRedirectedFreeUserRef = useRef<boolean>(false);
   useEffect(() => {
-    // Guard: aspetta le condizioni pre-routing
-    if (hasRedirectedFreeUserRef.current) return; // già rediretto in questa sessione
+    // A) Guard pathname: se non siamo attualmente sulla route "/", non
+    //    fare nulla. Se Home è "sotto" nello stack mentre siamo su LA,
+    //    il pathname corrente è "/lascia-andare" → early return.
+    if (pathname !== "/") return;
+
+    // B) Guard intra-mount: se abbiamo già preso una decisione in questo
+    //    mount del componente, non ripetere.
+    if (hasRedirectedFreeUserRef.current) return;
+
+    // Guard di completezza dati:
     if (!profile) return; // profilo ancora null → aspetta caricamento
     if (disclaimerState !== "accepted") return; // disclaimer non pronto → aspetta
     if (showSplash) return; // splash ancora visibile → aspetta
     if (showColorIntro === true) return; // KodaIntro attivo → priorità intro
 
+    // C) Guard module-level cross-mount: se abbiamo GIÀ preso una decisione
+    //    per QUESTO profileId in un mount precedente, non ripetere. Questo
+    //    è il livello che sopravvive al re-mount del componente.
+    const currentProfileId = (profile as any)?.id || null;
+    if (
+      currentProfileId !== null &&
+      __kodaFreeUserRouter_lastDecidedProfileId === currentProfileId
+    ) {
+      hasRedirectedFreeUserRef.current = true; // riallinea anche il ref locale
+      return;
+    }
+
     const tier = ((profile as any)?.subscription_tier as string | null) || null;
     const isPaid = tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
 
+    // Marca la decisione PRIMA di eventuali navigazioni async, sia sul ref
+    // locale sia sul flag module-level (per-profile).
+    hasRedirectedFreeUserRef.current = true;
+    __kodaFreeUserRouter_lastDecidedProfileId = currentProfileId;
+
     if (isPaid) {
-      console.log(`[KODA_ROUTER] paid user (tier=${tier}) → stay on Koda conversazionale`);
-      hasRedirectedFreeUserRef.current = true; // marca decisione presa
+      console.log(`[KODA_ROUTER] paid user (tier=${tier}, pid=${currentProfileId}) → stay on Koda conversazionale`);
       return;
     }
 
     // Free user: redirect a Lascia Andare (landing di default nel nuovo modello)
-    console.log(`[KODA_ROUTER] free user (tier=${tier || "none"}) → replace to /lascia-andare`);
-    hasRedirectedFreeUserRef.current = true; // marca decisione presa PRIMA del replace
+    console.log(`[KODA_ROUTER] free user (tier=${tier || "none"}, pid=${currentProfileId}) → replace to /lascia-andare`);
     try {
       // Preferisco replace a push così back non riporta sulla home Koda conv
       // (che è UI Premium — free user non deve vederla come landing).
@@ -1022,7 +1072,7 @@ export default function Taccuino() {
     } catch (e) {
       console.warn("[KODA_ROUTER] replace to /lascia-andare failed:", e);
     }
-  }, [profile, disclaimerState, showSplash, showColorIntro, router]);
+  }, [profile, disclaimerState, showSplash, showColorIntro, router, pathname]);
 
 
   const inputMode = (profile?.settings?.input_mode === "text"
