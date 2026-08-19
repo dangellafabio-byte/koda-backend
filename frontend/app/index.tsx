@@ -99,6 +99,10 @@ import {
   type BorderCalibration,
 } from "../lib/borderCalibration";
 import { useRouter, usePathname } from "expo-router";
+import {
+  getLastDecidedProfileId,
+  markRouterDecided,
+} from "../lib/routerGlobalState";
 import type { SafetyCheckResult, FreemiumStatus as FreemiumStatusType } from "../lib/api";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
 import { useRenderCounter, startFpsMonitor } from "../lib/perfDiag";
@@ -343,17 +347,10 @@ function detectCloseSessionClientSide(text: string | null | undefined): boolean 
 // a false e il router condizionale ri-scatta → loop di redirect osservato
 // da Fabio in build v64.20.
 //
-// FIX: memoria "per-profile" a livello di modulo. Sopravvive a unmount+
-// remount del componente. Auto-resettata quando l'utente logga con un
-// profileId diverso (login/logout/switch account) — questo evita il bug
-// simmetrico (Premium logout → Free login → il flag globale bloccherebbe
-// il redirect atteso). Un `null` profileId (utente non ancora loggato o
-// profilo non caricato) non conta come "già rediretto".
-//
-// NON è persistito (AsyncStorage): il redirect deve avvenire una volta
-// per sessione app. Al prossimo cold boot il modulo si ricarica → memoria
-// vuota → il redirect ri-scatta correttamente.
-let __kodaFreeUserRouter_lastDecidedProfileId: string | null = null;
+// FIX: memoria "per-profile" a livello di modulo, ora estratta in
+// `lib/routerGlobalState.ts` per essere condivisa con `lib/auth.tsx`
+// (che la resetta esplicitamente in signOut → Opzione Y).
+// Vedi `lib/routerGlobalState.ts` per la semantica completa.
 
 
 export default function Taccuino() {
@@ -1039,10 +1036,12 @@ export default function Taccuino() {
     // C) Guard module-level cross-mount: se abbiamo GIÀ preso una decisione
     //    per QUESTO profileId in un mount precedente, non ripetere. Questo
     //    è il livello che sopravvive al re-mount del componente.
+    //    Vedi `lib/routerGlobalState.ts`. Reset esplicito su signOut
+    //    (lib/auth.tsx) → Opzione Y (2026-08-17).
     const currentProfileId = (profile as any)?.id || null;
     if (
       currentProfileId !== null &&
-      __kodaFreeUserRouter_lastDecidedProfileId === currentProfileId
+      getLastDecidedProfileId() === currentProfileId
     ) {
       hasRedirectedFreeUserRef.current = true; // riallinea anche il ref locale
       return;
@@ -1054,7 +1053,7 @@ export default function Taccuino() {
     // Marca la decisione PRIMA di eventuali navigazioni async, sia sul ref
     // locale sia sul flag module-level (per-profile).
     hasRedirectedFreeUserRef.current = true;
-    __kodaFreeUserRouter_lastDecidedProfileId = currentProfileId;
+    markRouterDecided(currentProfileId);
 
     if (isPaid) {
       console.log(`[KODA_ROUTER] paid user (tier=${tier}, pid=${currentProfileId}) → stay on Koda conversazionale`);

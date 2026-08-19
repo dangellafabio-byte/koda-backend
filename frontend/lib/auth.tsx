@@ -5,6 +5,7 @@ import * as WebBrowser from "expo-web-browser";
 import * as Linking from "expo-linking";
 import { api, API_BASE } from "./api";
 import { setAuthTokenMem } from "./authToken";
+import { resetRouterGlobalState } from "./routerGlobalState";
 
 const TOKEN_KEY = "koda_session_token";
 const EMERGENT_AUTH_URL = "https://auth.emergentagent.com/";
@@ -237,6 +238,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {}
     await persistToken(null);
     setUser(null);
+    // === PUNTO 3 — OPZIONE Y (Fabio 2026-08-17) =========================
+    // Reset dello stato globale del router condizionale Free/Premium.
+    // signOut conclude la sessione utente → tutti gli stati globali
+    // associati devono azzerarsi, altrimenti al prossimo login (anche
+    // con lo stesso account) il router potrebbe leggere una decisione
+    // "stale" della sessione precedente e non redirigere quando dovrebbe.
+    // Vedi lib/routerGlobalState.ts per la semantica completa.
+    resetRouterGlobalState();
   }, []);
 
   return (
