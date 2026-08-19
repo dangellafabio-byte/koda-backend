@@ -71,9 +71,12 @@ const BREATH_SCALE_PEAK = 1.05;
 // loop di pulsazione ampio e visibile ("respira insieme a chi parla").
 // Quando "speaking:false" torna dolcemente a 1.0 (solo il respiro base
 // del breathScale continua).
-const VOICE_PULSE_PEAK = 1.22; // Espansione ~22% quando l'utente parla
-const VOICE_PULSE_HALF_CYCLE_MS = 650; // 1.3s per un ciclo completo (in/out)
-const VOICE_RELEASE_MS = 500; // Ritorno dolce a 1.0 quando la voce cessa
+// === COSTANTI PULSAZIONE VOCE — RIMOSSE (Punto 5, Fabio 2026-08-17) =========
+// VOICE_PULSE_PEAK / VOICE_PULSE_HALF_CYCLE_MS / VOICE_RELEASE_MS erano
+// per il vecchio loop discreto 1.0↔1.22 pilotato da `status`. Sostituito
+// dal mappaggio dB→scale continuo (vedi useEffect [meterDb] più sotto).
+// Range nuovo: 1.00→1.30, attack 180ms, release 500ms (release conservato
+// come letterale nel nuovo useEffect, non più costante globale).
 
 export default function LasciaAndareScreen() {
   const router = useRouter();
@@ -377,54 +380,63 @@ export default function LasciaAndareScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // === PULSAZIONE VOCE — pilotata dal flag VAD (rev3, 2026-07-17) =====
-  // Quando il VAD passa a status="recording" (== speaking:true), l'orb
-  // entra in un loop di pulsazione ampio e visibile:
-  //   1.0 → 1.22 → 1.0 in 1.3s (mezzo ciclo ~650ms, seno).
-  // Quando status torna a "idle" (== speaking:false), fermiamo il loop
-  // e riportiamo dolcemente voiceScale a 1.0 in 500ms — l'orb torna così
-  // al solo respiro base (breathScale continua indipendentemente).
+  // === PULSAZIONE VOCE — reattiva al dB continuo (Punto 5, Fabio 2026-08-17) ===
+  // Il meterDb viene aggiornato ogni 100ms dal polling attivo (vedi il
+  // setInterval al mount ~linea 585). Qui mappiamo il dB continuo a una
+  // scala continua dell'orb, sostituendo il vecchio loop discreto 1.0↔1.22.
   //
-  // Perché così e non più il dB continuo:
-  //   Prima mappavamo dB → voiceScale in modo continuo con soglia anti-
-  //   jitter (delta 0.015). Nel bundle finale la variazione risultava
-  //   troppo timida per essere visibile sopra il breathScale (5%).
-  //   Ora usiamo direttamente il flag boolean che il VAD già emette →
-  //   pulsazione pronunciata e leggibile a colpo d'occhio.
+  // Mappaggio:
+  //   dB clamp     [-60 … -20]
+  //   normalizzato [0 … 1]
+  //   targetScale  [1.00 … 1.30]  (breathScale a parte fa 1.0↔1.05 di suo,
+  //                                quindi 1.30 è chiaramente sopra baseline)
+  //
+  // Curva temporale (isteresi sulla direzione, non sul valore):
+  //   - meterDb >= SILENCE_DB   → attack 180ms (voce sale rapidamente)
+  //   - meterDb <  SILENCE_DB   → release 500ms (silenzio, rilascio naturale)
+  //   Easing.out(Easing.quad)   → rallenta verso il target, coerente col respiro
+  //
+  // Perché sostituzione e non aggiunta:
+  //   Due useEffect che toccano lo stesso Animated.Value creerebbero race.
+  //   Il vecchio useEffect [status] pilotava un loop; ora `voiceScale` è
+  //   funzione monotona di `meterDb`. Zero timer discreti che possono
+  //   desincronizzarsi.
+  //
+  // Perché non è "teatrale":
+  //   Range 1.00→1.30 (proposta approvata da Fabio). Ampiezza sufficiente per
+  //   distinguere voce calma (~1.15) da voce intensa (~1.26) senza sconfinare
+  //   in "equalizzatore musicale". Silenzio → 1.00 esatto, breathScale
+  //   continua a fare il minimo respiro (invariato per scelta esplicita:
+  //   "il silenzio è intenzionale, non un vuoto da riempire").
+  //
+  // Nota su `status`:
+  //   Rimane pilotato dal VAD (setStatus in polling) per compatibilità con
+  //   altri useEffect a valle (es. eventuali guard futuri), ma NON è più
+  //   il pilota di `voiceScale`. In pratica in Lascia Andare `status` resta
+  //   fisso a "recording" per design (fix v64.1).
   useEffect(() => {
     if (exitingRef.current) return; // durante l'uscita non tocchiamo la voce
 
-    if (status === "recording") {
-      // Parte dal valore corrente (che dovrebbe essere ~1.0) e loopa
-      const pulseLoop = Animated.loop(
-        Animated.sequence([
-          Animated.timing(voiceScale, {
-            toValue: VOICE_PULSE_PEAK,
-            duration: VOICE_PULSE_HALF_CYCLE_MS,
-            easing: Easing.inOut(Easing.sin),
-            useNativeDriver: true,
-          }),
-          Animated.timing(voiceScale, {
-            toValue: 1.0,
-            duration: VOICE_PULSE_HALF_CYCLE_MS,
-            easing: Easing.inOut(Easing.sin),
-            useNativeDriver: true,
-          }),
-        ])
-      );
-      pulseLoop.start();
-      return () => pulseLoop.stop();
-    } else {
-      // Silenzio: ritorno morbido a 1.0. Il breathScale continua da solo.
-      Animated.timing(voiceScale, {
-        toValue: 1.0,
-        duration: VOICE_RELEASE_MS,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }).start();
-    }
+    // Clamp del dB: -60 (silenzio pieno) … -20 (voce molto forte / urlo)
+    const clampedDb = Math.max(-60, Math.min(-20, meterDb));
+    // Normalizza in [0, 1]
+    const normalized = (clampedDb - (-60)) / 40;
+    // Scala target in [1.00, 1.30]
+    const targetScale = 1.0 + normalized * 0.30;
+
+    // Isteresi sulla direzione temporale (attack veloce, release lento)
+    const duration = meterDb < SILENCE_DB
+      ? 500  // release: silenzio confermato → rilascio naturale
+      : 180; // attack: c'è segnale vocale → reattivo ma non nervoso
+
+    Animated.timing(voiceScale, {
+      toValue: targetScale,
+      duration,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
+  }, [meterDb]);
 
   // === SETUP — chiamato al mount ======================================
   useEffect(() => {
