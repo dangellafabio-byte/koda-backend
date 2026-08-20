@@ -153,12 +153,23 @@ export default function LasciaAndareScreen() {
   // Costo runtime: ~10-50ms (una readDirectoryAsync + N getInfoAsync su
   // pochi file). Non blocca il critical path del boot.
   useEffect(() => {
+    // === FIRMA DI VERSIONE (Fabio 2026-08-20) ==============================
+    // Log di mount con marcatori espliciti dei fix Punti 5+7. Prefisso
+    // KODA_ per essere catturato dal diagLogger (che filtra su [KODA_...]).
+    // Serve a distinguere in un diag se la build in uso contiene o meno
+    // il nuovo codice — evita l'ambiguità che ha causato la confusione
+    // sul buildtag il 2026-08-20.
+    console.log(
+      "[KODA_LA_MOUNT] lascia-andare screen mounted — fixes=P3v2+P5+P7 " +
+        `defaultAuthorized=allowed cleanupPrefix=KODA_LA_CLEANUP orbReactive=meterDb`
+    );
+
     let cancelled = false;
     (async () => {
       try {
         const dir = (FileSystem as any).cacheDirectory as string | null;
         if (!dir) {
-          console.log("[LasciaAndare/cleanup] cacheDirectory unavailable — skip");
+          console.log("[KODA_LA_CLEANUP] cacheDirectory unavailable — skip");
           return;
         }
         const entries = await FileSystem.readDirectoryAsync(dir);
@@ -193,15 +204,15 @@ export default function LasciaAndareScreen() {
             deleted++;
           } catch (e) {
             // Silenzioso: se un singolo file fallisce, andiamo avanti
-            console.log(`[LasciaAndare/cleanup] skip ${name}: ${e}`);
+            console.log(`[KODA_LA_CLEANUP] skip ${name}: ${e}`);
           }
         }
         console.log(
-          `[LasciaAndare/cleanup] preemptive m4a orphans: deleted=${deleted} skipped=${skipped}`
+          `[KODA_LA_CLEANUP] preemptive m4a orphans: deleted=${deleted} skipped=${skipped}`
         );
       } catch (e) {
         // readDirectoryAsync può fallire su alcuni device — non blocchiamo
-        console.log(`[LasciaAndare/cleanup] scan failed (non-fatal): ${e}`);
+        console.log(`[KODA_LA_CLEANUP] scan failed (non-fatal): ${e}`);
       }
     })();
     return () => {
@@ -435,6 +446,25 @@ export default function LasciaAndareScreen() {
       easing: Easing.out(Easing.quad),
       useNativeDriver: true,
     }).start();
+
+    // === DIAGNOSTICA ORB (Fabio 2026-08-20) ============================
+    // Log throttlato (1x/sec) del dB corrente + scala target. Serve a
+    // capire in produzione se il polling metering è vivo e se l'orb
+    // sta ricevendo segnale. Prefisso KODA_ per essere catturato dal
+    // diagLogger. Throttling: log solo se dB cambia di ≥3 dal precedente
+    // OR se sono passati > 1s dall'ultimo log (evita spam ogni 100ms).
+    if (
+      typeof (globalThis as any).__kodaLaLastLogDb === "undefined" ||
+      Math.abs(meterDb - (globalThis as any).__kodaLaLastLogDb) >= 3 ||
+      Date.now() - ((globalThis as any).__kodaLaLastLogTs || 0) > 1000
+    ) {
+      console.log(
+        `[KODA_LA_ORB] meterDb=${meterDb.toFixed(1)} target=${targetScale.toFixed(3)} ` +
+          `dur=${duration}ms silence=${meterDb < SILENCE_DB ? "Y" : "N"}`
+      );
+      (globalThis as any).__kodaLaLastLogDb = meterDb;
+      (globalThis as any).__kodaLaLastLogTs = Date.now();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meterDb]);
 
