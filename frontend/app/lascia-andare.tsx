@@ -132,9 +132,56 @@ export default function LasciaAndareScreen() {
   const [meterDb, setMeterDb] = useState<number>(-100);
   const [ready, setReady] = useState(false);
   const [permError, setPermError] = useState<string | null>(null);
+  // === GATE INTRO V3 (Fabio 2026-08-23) ==================================
+  // Se `intro_v3_completed_at` non è in SecureStore → l'utente non ha
+  // MAI visto la sequenza narrativa → non deve atterrare qui, va inviato
+  // a /intro-v3. Questo copre lo scenario in cui iOS ripristina la
+  // sessione precedente direttamente su /lascia-andare (senza passare
+  // dalla Home = pathname="/") → il router V3 in index.tsx non fire e
+  // l'utente vede "Prenditi il tuo tempo" al posto della sequenza intro.
+  //
+  // Stati:
+  //   "checking"    → sto leggendo SecureStore (blocca il render/audio)
+  //   "authorized"  → intro completata OK, LA può partire
+  //   "redirecting" → intro assente, sto reindirizzando (blocca il render/audio)
+  const [introGate, setIntroGate] = useState<"checking" | "authorized" | "redirecting">("checking");
 
-  // === LIVELLO 2+3 GUARD → RIMOSSO (Punto 3, Fabio 2026-08-17) ============
-  // Ex "checking → allowed/denied" con network fetch al mount. Ora Lascia
+  // === GATE INTRO V3 — check anticipato (Fabio 2026-08-23) =================
+  // Fire subito al mount, PRIMA che parta l'audio o qualsiasi setup mic.
+  // Se intro_v3_completed_at manca → router.replace("/intro-v3") e blocca
+  // il render (introGate="redirecting" → early return in JSX).
+  // Questo copre lo scenario post-TestFlight in cui iOS ha ripristinato la
+  // sessione direttamente su /lascia-andare senza passare dalla Home.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const flag = await SecureStore.getItemAsync("intro_v3_completed_at");
+        if (cancelled) return;
+        if (!flag) {
+          console.log(`[KODA_LA_GATE] intro_v3_completed_at ASSENTE → redirect a /intro-v3`);
+          setIntroGate("redirecting");
+          try {
+            router.replace("/intro-v3");
+          } catch (e) {
+            console.warn(`[KODA_LA_GATE] router.replace failed:`, e);
+            // Fallback: se il router fallisce, permetti comunque LA
+            setIntroGate("authorized");
+          }
+          return;
+        }
+        console.log(`[KODA_LA_GATE] intro_v3_completed_at presente → LA authorized`);
+        setIntroGate("authorized");
+      } catch (e) {
+        console.warn(`[KODA_LA_GATE] SecureStore read failed (proceed with LA):`, e);
+        if (!cancelled) setIntroGate("authorized");
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // === LIVELLO 2+3 GUARD → RIMOSSO (Punto 3, Fabio 2026-08-17) ============  // Ex "checking → allowed/denied" con network fetch al mount. Ora Lascia
   // Andare è free per sempre → `authorized` parte direttamente a "allowed".
   // Il tipo/stato è mantenuto per compat con gli useEffect a valle che
   // filtrano su `authorized !== "allowed"` (safety net inerte).
@@ -563,6 +610,13 @@ export default function LasciaAndareScreen() {
     // finché authorize non ha confermato l'accesso. Se denied, il
     // guard useEffect sopra ha già triggerato router.replace.
     if (authorized !== "allowed") return;
+    // === GATE INTRO V3 (Fabio 2026-08-23) ==============================
+    // Se non abbiamo verificato che l'utente ha completato la sequenza
+    // narrativa V3, blocca il setup audio/mic. Fenomeno visto in TestFlight:
+    // iOS ripristina la sessione direttamente su /lascia-andare senza
+    // passare dalla Home → il router V3 non fire → LA parte comunque e
+    // riproduce "Prenditi il tuo tempo" al posto della sequenza intro.
+    if (introGate !== "authorized") return;
 
     let cancelled = false;
 
@@ -767,7 +821,7 @@ export default function LasciaAndareScreen() {
       teardown();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [introGate]);
 
   // === Hardware back (Android) → uscita pulita ==========================
   useEffect(() => {
@@ -1059,6 +1113,14 @@ export default function LasciaAndareScreen() {
   // del replace verso /paywall) → schermo nero minimo, nessun contenuto
   // sensibile né interazione. Questo è il gate visivo del Livello 2+3.
   if (authorized !== "allowed") {
+    return <View style={[styles.root, { backgroundColor: "#000000" }]} />;
+  }
+  // === GATE INTRO V3 (Fabio 2026-08-23) ==================================
+  // Se stiamo ancora verificando `intro_v3_completed_at` o abbiamo appena
+  // triggerato il redirect a /intro-v3, mostra schermo nero (no audio, no
+  // orb, no "Prenditi il tuo tempo"). Il redirect avviene nel useEffect
+  // sopra, che ha già chiamato router.replace("/intro-v3").
+  if (introGate !== "authorized") {
     return <View style={[styles.root, { backgroundColor: "#000000" }]} />;
   }
 
