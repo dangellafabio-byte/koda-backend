@@ -246,6 +246,13 @@ export default function LasciaAndareScreen() {
   const orbOpacity = useRef(new Animated.Value(0)).current;
   const breathScale = useRef(new Animated.Value(1)).current;
   const voiceScale = useRef(new Animated.Value(1)).current;
+  // === PUNTO 1 D5+D6 (Fabio 2026-08-20) — MODULAZIONE OPACITY DA meterDb ===
+  // voiceGlow: 0.65 (silenzio) → 1.00 (voce forte). Stessa cadenza temporale
+  // di voiceScale (180ms attack / 500ms release) per coerenza sensoriale
+  // — le due dimensioni si muovono in sincrono e sembrano una sola presenza.
+  // Init = 0.65 così l'ingresso è dolce (già "sotto tono") e si accende
+  // naturalmente al primo parlato dell'utente.
+  const voiceGlow = useRef(new Animated.Value(0.65)).current;
   const hintOpacity = useRef(new Animated.Value(0)).current;
   // Guard uscita: se l'uscita è già iniziata NON riavviamo animazioni
   const exitingRef = useRef(false);
@@ -443,6 +450,21 @@ export default function LasciaAndareScreen() {
     Animated.timing(voiceScale, {
       toValue: targetScale,
       duration,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+
+    // === PUNTO 1 D5+D6 — voiceGlow accoppiato a voiceScale ================
+    // Stessa curva temporale (attack/release) e stesso easing → le due
+    // dimensioni si muovono in sincrono. Range: 0.65 → 1.00 (D5 confermato
+    // da Fabio: moderato, "reattività sì, teatralità no"). L'opacity finale
+    // dell'orb sarà `orbOpacity * voiceGlow` (moltiplicazione nel JSX più
+    // sotto) → durante l'ingresso `orbOpacity` domina (fade-in), a regime
+    // `voiceGlow` modula la presenza in funzione della voce.
+    const targetGlow = 0.65 + normalized * 0.35; // [0.65, 1.00]
+    Animated.timing(voiceGlow, {
+      toValue: targetGlow,
+      duration, // stesso di voiceScale (D6)
       easing: Easing.out(Easing.quad),
       useNativeDriver: true,
     }).start();
@@ -841,7 +863,13 @@ export default function LasciaAndareScreen() {
       <View style={styles.center}>
         <Animated.View
           style={{
-            opacity: orbOpacity,
+            // === PUNTO 1 D5+D6 — opacity finale = entry × voiceGlow ========
+            // orbOpacity gestisce il fade-in di ingresso e il fade-out di
+            // uscita (0→1 all'entry, 1→0 all'exit). voiceGlow modula la
+            // presenza dinamicamente in funzione del dB (0.65 silenzio →
+            // 1.00 voce forte). La moltiplicazione è coerente sia durante
+            // le transizioni sia a regime.
+            opacity: Animated.multiply(orbOpacity, voiceGlow),
             transform: [
               {
                 scale: Animated.multiply(

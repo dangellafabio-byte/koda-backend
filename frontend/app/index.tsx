@@ -102,6 +102,8 @@ import { useRouter, usePathname } from "expo-router";
 import {
   getLastDecidedProfileId,
   markRouterDecided,
+  getSessionHasShownSplash,
+  markSessionSplashShown,
 } from "../lib/routerGlobalState";
 import type { SafetyCheckResult, FreemiumStatus as FreemiumStatusType } from "../lib/api";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
@@ -507,7 +509,14 @@ export default function Taccuino() {
   const [pendingLasciaAndareVoice, setPendingLasciaAndareVoice] = useState<string | null>(null);
   // Splash screen all'apertura (4 sec) per mascherare la latenza di boot e
   // dare un'identità visiva forte: eclissi che respira colori + nome AI.
-  const [showSplash, setShowSplash] = useState<boolean>(true);
+  // === PUNTO 2 (Fabio 2026-08-20) — SKIP SPLASH ON REMOUNT ===============
+  // Il default `true` mostrava KodaSplash ad ogni mount della Home. Con il
+  // router condizionale Free→LA (Punto 3), la Home viene ri-montata quando
+  // il free user esce da Lascia Andare via X → lo splash ripartiva creando
+  // l'impressione di un secondo boot. Ora leggiamo dal modulo globale se il
+  // splash è già stato mostrato in questa sessione app: se sì, partiamo
+  // direttamente in `false`. Al cold boot il modulo è vuoto → splash normale.
+  const [showSplash, setShowSplash] = useState<boolean>(!getSessionHasShownSplash());
   const [voiceList, setVoiceList] = useState<Array<any>>([]);
   useEffect(() => {
     let cancelled = false;
@@ -527,7 +536,10 @@ export default function Taccuino() {
           try { await SecureStore.deleteItemAsync("koda_intro_completed_at"); } catch {}
           const ts = parseInt(raw, 10);
           if (!Number.isNaN(ts) && Date.now() - ts < 60_000) {
-            if (!cancelled) setShowSplash(false);
+            if (!cancelled) {
+              setShowSplash(false);
+              markSessionSplashShown(); // Punto 2: marca session-shown anche per skip-after-intro
+            }
           }
         }
       } catch {
@@ -7010,7 +7022,10 @@ export default function Taccuino() {
       <KodaSplash
         aiName={profile?.ai_name || null}
         duration={10000}
-        onComplete={() => setShowSplash(false)}
+        onComplete={() => {
+          setShowSplash(false);
+          markSessionSplashShown(); // Punto 2: al termine naturale, marca come mostrato per la sessione
+        }}
       />
     );
   }

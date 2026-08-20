@@ -41,8 +41,41 @@ export function markRouterDecided(profileId: string | null): void {
   _lastDecidedProfileId = profileId;
 }
 
+// === PUNTO 2 (Fabio 2026-08-20) — SKIP SPLASH ON REMOUNT ===================
+// Il `showSplash` in app/index.tsx parte di default a `true` → al re-mount
+// della Home (ad es. dopo che il free user esce da Lascia Andare via X)
+// il KodaSplash da 10s riparte, sembrando "l'app che boota di nuovo".
+// Con questo flag, dopo il primo splash della sessione, i mount successivi
+// della Home partono già con `showSplash=false` → transizione fluida.
+//
+// Semantica identica a `_lastDecidedProfileId`:
+//   - Vive a livello di modulo → sopravvive a unmount+remount di Home
+//   - NON è persistito → al cold boot il modulo si ricarica e lo splash
+//     si vede di nuovo (comportamento corretto: il splash appartiene
+//     all'apertura app, non alla singola visita della Home)
+//   - Resettato esplicitamente da resetRouterGlobalState() su signOut
+//     (per igiene semantica: nuovo utente → nuova prima impressione)
+let _sessionHasShownSplash = false;
+
+/** Restituisce true se il KodaSplash è già stato mostrato in questa
+ *  sessione app. La Home lo legge al mount per decidere lo stato iniziale
+ *  di `showSplash`. */
+export function getSessionHasShownSplash(): boolean {
+  return _sessionHasShownSplash;
+}
+
+/** Marca il splash come "già mostrato" per la sessione app in corso.
+ *  Chiamato quando `setShowSplash(false)` viene invocato (naturalmente al
+ *  termine del KodaSplash da 10s, o via skip-splash-after-intro). */
+export function markSessionSplashShown(): void {
+  _sessionHasShownSplash = true;
+}
+
 /** Azzera lo stato del router. Chiamato da lib/auth.tsx:signOut() così
- *  la sessione successiva ridecide fresh, senza residui della precedente. */
+ *  la sessione successiva ridecide fresh, senza residui della precedente.
+ *  Azzera anche il flag splash: un nuovo utente merita di rivedere
+ *  l'ingresso identitario dell'app (KodaSplash) al primo boot. */
 export function resetRouterGlobalState(): void {
   _lastDecidedProfileId = null;
+  _sessionHasShownSplash = false;
 }
