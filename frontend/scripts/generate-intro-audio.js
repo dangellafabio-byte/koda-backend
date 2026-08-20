@@ -84,6 +84,44 @@ const CLIPS = [
   { key: "grazie_di_essere_qui", text: "Grazie di essere qui.", voices: ["cielo"], useV3: true },
   { key: "da_dove_cominciare", text: "Da dove ti va di cominciare?", voices: ["cielo"], useV3: true },
 
+  // === INTRO V3 — Sequenza "Il Cuore" (2026-08-22, Fabio) ===
+  // Riscrittura architetturale post-pivot commerciale: Lascia Andare
+  // è il core free forever ("il cuore di Koda"), Koda vocale è Premium
+  // ("la voce"). L'intro V3 introduce solo il CUORE, mai la voce alla
+  // prima apertura. La voce arriva DOPO la prima sessione LA come
+  // "reveal" (fase C del piano).
+  // Sequenza narrativa V3 (fase A del piano):
+  //   1. "Ciao. Io sono Koda. Voglio farti conoscere il mio cuore."
+  //   2. "Come ti chiami?" [riuso clip esistente come_ti_chiami-cielo.mp3]
+  //   3. [utente parla nome — STT con VAD end-of-speech nativo]
+  //   4. "Bene. Te lo mostro." [nessuna ripetizione del nome — evita
+  //      finta comprensione, resta onesto anche se STT fallisce]
+  //   5. → handoff diretto a /lascia-andare?firstBoot=1
+  { key: "intro_v3_saluto", text: "Ciao. Io sono Koda. Voglio farti conoscere il mio cuore.", voices: ["cielo"], useV3: true },
+  { key: "intro_v3_te_lo_mostro", text: "Bene. Te lo mostro.", voices: ["cielo"], useV3: true },
+
+  // === HEART VOICE REVEAL — Fase C del piano (post prima sessione LA) ===
+  // Play automatico dopo che l'utente ha vissuto Lascia Andare per la
+  // prima volta (min 60s + silenzio 15s O tocco X). Introduce la voce
+  // come "l'altra metà" di Koda, non come feature commerciale.
+  { key: "reveal_cuore_voce", text: "Questo è il mio cuore. È tuo, sempre, gratuitamente. Ma ho anche una voce. Se vuoi, posso parlarti davvero.", voices: ["cielo"], useV3: true },
+
+  // === MICRO-DEMO KODA — Fase D del piano ===
+  // Play alla PRIMA riga della demo vocale. Pre-generata per zero
+  // latenza: nel momento più delicato ("questa è un'altra cosa") non
+  // possiamo permetterci 400-600ms di attesa runtime TTS.
+  { key: "microdemo_open", text: "Eccomi. Dimmi qualcosa, quello che vuoi.", voices: ["cielo"], useV3: true },
+  // Play alla FINE della demo (3 turni completati OR 90s scaduti).
+  // Copia coerente col principio "no pressione, no ricatto": chiude
+  // la demo con dignità, senza forzare la mano verso il paywall.
+  { key: "microdemo_close", text: "Per ora è tutto. Ma possiamo continuare, se vuoi.", voices: ["cielo"], useV3: true },
+
+  // === PAYWALL POST-DEMO — Fase E del piano ===
+  // Play prima del render del paywall UI (variant=post-demo). L'audio
+  // apre la scena, il paywall arriva dopo → percezione di continuità
+  // narrativa, non di "muro commerciale improvviso".
+  { key: "paywall_voce", text: "Questa è la mia voce. Il cuore resta sempre tuo, gratis. La voce, se vuoi che resti con te, è Premium.", voices: ["cielo"], useV3: true },
+
   // === INTRO V1 — legacy, tenute qui come riferimento storico. NON usate
   // dal codice attuale, ma i file MP3 già generati restano su disco fino
   // a cleanup manuale (non le rigeneriamo, ma non le cancelliamo automaticamente

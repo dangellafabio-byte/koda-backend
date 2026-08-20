@@ -16,7 +16,7 @@
  *
  * Bottoni acquisto → RevenueCat SDK (placeholder fino a integrazione).
  */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -26,9 +26,13 @@ import {
   Alert,
   Linking,
   Platform,
+  Animated,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
+import type { AudioPlayer } from "expo-audio";
+import * as SecureStore from "expo-secure-store";
 import { useTheme } from "../lib/theme";
 import { api } from "../lib/api";
 import { kodaBackendHttpUrl } from "../lib/backendUrl";
@@ -73,6 +77,8 @@ const TOS_URL = kodaBackendHttpUrl("/api/legal/terms");
 
 export default function PaywallScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ variant?: string }>();
+  const isPostDemo = params?.variant === "post-demo";
   const insets = useSafeAreaInsets();
   const { theme } = useTheme();
   // Default: Bimestrale (piano "centrale" della strategia commerciale,
@@ -85,6 +91,82 @@ export default function PaywallScreen() {
   // (l'enforcement bloccante è voluto).
   const [devOverride, setDevOverride] = useState<boolean>(false);
   const [trialExpired, setTrialExpired] = useState<boolean>(false);
+
+  // === POST-DEMO VARIANT (Fabio 2026-08-22) =================================
+  // Se arriviamo da /microdemo (fase E del piano), suoniamo la clip pre-registrata
+  // "Questa è la mia voce. Il cuore resta sempre tuo, gratis. La voce, se vuoi
+  // che resti con te, è Premium." PRIMA di mostrare le card dei piani. Copy
+  // del titolo cambia coerentemente.
+  //
+  // Al primo dismiss (X o purchase) salviamo anche intro_v3_completed_at se
+  // non presente + heart_reveal_dismissed_at → sequenza narrativa mai più.
+  const audioPlayerRef = useRef<AudioPlayer | null>(null);
+  const contentOpacity = useRef(new Animated.Value(isPostDemo ? 0 : 1)).current;
+
+  useEffect(() => {
+    if (!isPostDemo) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        if (Platform.OS !== "web") {
+          await setAudioModeAsync({
+            allowsRecording: false,
+            playsInSilentMode: true,
+            interruptionMode: "duckOthers",
+            shouldPlayInBackground: false,
+            shouldRouteThroughEarpiece: false,
+          });
+        }
+        await new Promise((r) => setTimeout(r, 200));
+        if (cancelled) return;
+        const player = createAudioPlayer(
+          require("../assets/sounds/intro/paywall_voce-cielo.mp3"),
+          { updateInterval: 100 }
+        );
+        audioPlayerRef.current = player;
+        const onStatus = (status: { didJustFinish?: boolean }) => {
+          if (status.didJustFinish) {
+            try { player.removeListener("playbackStatusUpdate", onStatus); } catch {}
+            if (cancelled) return;
+            Animated.timing(contentOpacity, {
+              toValue: 1,
+              duration: 700,
+              useNativeDriver: true,
+            }).start();
+          }
+        };
+        player.addListener("playbackStatusUpdate", onStatus);
+        player.play();
+      } catch (e) {
+        console.warn("[paywall post-demo] audio intro failed:", e);
+        // Fallback: mostra content dopo 500ms
+        if (!cancelled) {
+          Animated.timing(contentOpacity, {
+            toValue: 1,
+            duration: 500,
+            useNativeDriver: true,
+          }).start();
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      try { audioPlayerRef.current?.remove(); } catch {}
+    };
+  }, [isPostDemo, contentOpacity]);
+
+  // Persistenza flag onboarding V3 al primo dismiss (X o purchase)
+  const persistOnboardingComplete = async () => {
+    try {
+      const existing = await SecureStore.getItemAsync("intro_v3_completed_at");
+      if (!existing) {
+        await SecureStore.setItemAsync("intro_v3_completed_at", String(Date.now()));
+      }
+      await SecureStore.setItemAsync("heart_reveal_dismissed_at", String(Date.now()));
+    } catch (e) {
+      console.warn("[paywall] persistOnboardingComplete failed:", e);
+    }
+  };
 
   useEffect(() => {
     // Recupera lo stato trial per decidere se mostrare la X
@@ -121,6 +203,18 @@ export default function PaywallScreen() {
   };
 
   const handleClose = () => {
+    // Post-demo: persistiamo prima di uscire → sequenza narrativa mai più.
+    // Poi naviga a /lascia-andare (loop LA, senza firstBoot).
+    if (isPostDemo) {
+      persistOnboardingComplete().finally(() => {
+        try {
+          router.replace("/lascia-andare");
+        } catch {
+          router.replace("/");
+        }
+      });
+      return;
+    }
     if (router.canGoBack()) {
       router.back();
     } else {
@@ -132,7 +226,9 @@ export default function PaywallScreen() {
   // (visita il paywall volontariamente), OPPURE (b) è admin con
   // dev_override attivo che sta testando. Utenti reali con trial
   // expired NON possono chiudere — è l'enforcement voluto.
-  const showCloseButton = !trialExpired || devOverride;
+  // In modalità post-demo la X è SEMPRE visibile (l'utente non è
+  // trial-expired, sta scegliendo volontariamente dopo la demo).
+  const showCloseButton = isPostDemo || !trialExpired || devOverride;
 
   const selected = PLANS.find((p) => p.id === selectedPlan)!;
 
@@ -161,12 +257,15 @@ export default function PaywallScreen() {
           )}
         </View>
 
-        {/* Titolo + claim ufficiale */}
-        <View style={styles.titleBlock}>
-          <Text style={[styles.title, { color: theme.text }]}>
-            Il primo incontro è gratuito.{"\n"}Se vuoi continuare, Koda è qui.
-          </Text>
-        </View>
+        {/* Titolo + claim — varia se arriviamo dalla micro-demo (post-demo) */}
+        <Animated.View style={{ opacity: contentOpacity }}>
+          <View style={styles.titleBlock}>
+            <Text style={[styles.title, { color: theme.text }]}>
+              {isPostDemo
+                ? "Il cuore resta sempre tuo,\ngratis. La voce, se vuoi,\nè Premium."
+                : "Il primo incontro è gratuito.\nSe vuoi continuare, Koda è qui."}
+            </Text>
+          </View>
 
         {/* Plan cards — 3 tier, nessun badge fisso.
             Nessuna lista "Sblocchi" sopra: le uniche promesse sono ciò che
@@ -245,6 +344,7 @@ export default function PaywallScreen() {
             </>
           )}
         </View>
+        </Animated.View>
       </ScrollView>
     </View>
   );

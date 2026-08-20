@@ -7518,6 +7518,15 @@ class TTSRequest(BaseModel):
     stability: Optional[float] = None
     similarity_boost: Optional[float] = None
     tone: Optional[str] = None  # "calm" | "warm" | "neutral" | "energetic" | "concerned" | "urgent"
+    # === MICRODEMO BYPASS (Fabio 2026-08-22) ===
+    # Se True → skip trial enforcement (l'utente sta usando la micro-demo
+    # vocale gratuita post-onboarding V3, max 3 turni / 90s / 1x per 24h
+    # gestita client-side su SecureStore). Non concede accesso permanente:
+    # è un flag per-request, ogni chiamata deve reinviarlo. Il rate-limit
+    # è di responsabilità del client (device fingerprint = SecureStore,
+    # come da decisione architetturale — resettabile con reinstall app,
+    # accettato). Vedi HeartVoiceReveal → MicroDemoKoda.
+    microdemo: Optional[bool] = False
 
 
 def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], similarity: Optional[float]) -> dict:
@@ -8443,11 +8452,18 @@ async def api_tts(req: TTSRequest):
         if not _is_paid and not _is_unlim:
             _tstate = _compute_trial_state(_profile_for_trial)
             if _tstate == "expired":
-                # Nessuna generazione. Client mostrerà overlay via GET /api/trial/state.
-                raise HTTPException(
-                    status_code=402,
-                    detail={"error": "trial_expired", "trial_state": "expired"},
-                )
+                # === MICRODEMO BYPASS (Fabio 2026-08-22) ===
+                # Se il client sta usando la micro-demo vocale gratuita
+                # post-onboarding V3, bypassiamo l'enforcement per QUESTA
+                # request. Rate-limit gestito client-side (SecureStore).
+                if req.microdemo:
+                    logger.info(f"[trial] tts: MICRODEMO bypass (trial=expired, microdemo=true)")
+                else:
+                    # Nessuna generazione. Client mostrerà overlay via GET /api/trial/state.
+                    raise HTTPException(
+                        status_code=402,
+                        detail={"error": "trial_expired", "trial_state": "expired"},
+                    )
 
     client_el = _get_eleven_client()
     if client_el is None:

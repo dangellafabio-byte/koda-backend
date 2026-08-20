@@ -993,6 +993,51 @@ export default function Taccuino() {
     return () => { cancelled = true; };
   }, [profile?.id]);
 
+  // === ROUTER PRIMO BOOT V3 (Fabio 2026-08-22) ================================
+  // Al primissimo boot dell'app (nessun `intro_v3_completed_at` in SecureStore),
+  // reindirizza a `/intro-v3` PRIMA di qualsiasi altra logica routing (free/paid).
+  // Dopo il completamento della sequenza narrativa (KodaIntroV3 → doSaveAndHandoff),
+  // il flag viene scritto e questo redirect non scatta più → l'utente atterra
+  // sempre a /lascia-andare via il router free/premium sotto.
+  //
+  // Perché in un useEffect separato: `SecureStore.getItemAsync` è async, non
+  // possiamo bloccare il render. Usiamo uno stato `introV3State` che parte
+  // "checking" → "needed" | "completed" e agisce di conseguenza.
+  const [introV3State, setIntroV3State] = useState<"checking" | "needed" | "completed">("checking");
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const flag = await SecureStore.getItemAsync("intro_v3_completed_at");
+        if (cancelled) return;
+        setIntroV3State(flag ? "completed" : "needed");
+      } catch {
+        if (!cancelled) setIntroV3State("completed"); // safe fallback: no redirect
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  const hasRedirectedIntroV3Ref = useRef<boolean>(false);
+  useEffect(() => {
+    if (pathname !== "/") return;
+    if (introV3State !== "needed") return;
+    if (hasRedirectedIntroV3Ref.current) return;
+    // Aspetta che disclaimer sia accepted e profilo caricato — coerenza con
+    // il router free/premium sotto (non redirigiamo su stato incompleto)
+    if (!profile) return;
+    if (disclaimerState !== "accepted") return;
+    if (showSplash) return;
+    hasRedirectedIntroV3Ref.current = true;
+    console.log(`[KODA_ROUTER_V3] fresh install (intro_v3_completed_at=absent) → replace to /intro-v3`);
+    try {
+      // Nasconde il vecchio KodaIntro V1 modal (superato dalla nuova architettura V3)
+      setShowColorIntro(false);
+      router.replace("/intro-v3");
+    } catch (e) {
+      console.warn("[KODA_ROUTER_V3] replace to /intro-v3 failed:", e);
+    }
+  }, [introV3State, profile, disclaimerState, showSplash, pathname, router]);
+
   // === ROUTER CONDIZIONALE FREE/PREMIUM (Punto 3, Fabio 2026-08-17) ==========
   // Nuova architettura Free/Premium:
   //   - Free (nessun abbonamento) → Lascia Andare è la landing di default,
@@ -1044,6 +1089,10 @@ export default function Taccuino() {
     if (disclaimerState !== "accepted") return; // disclaimer non pronto → aspetta
     if (showSplash) return; // splash ancora visibile → aspetta
     if (showColorIntro === true) return; // KodaIntro attivo → priorità intro
+    // === GUARD V3 (Fabio 2026-08-22) ===
+    // Se stiamo ancora controllando o serve introdurre l'utente al Cuore,
+    // il router V3 sopra prende la priorità → early return qui.
+    if (introV3State !== "completed") return;
 
     // C) Guard module-level cross-mount: se abbiamo GIÀ preso una decisione
     //    per QUESTO profileId in un mount precedente, non ripetere. Questo
@@ -1083,7 +1132,7 @@ export default function Taccuino() {
     } catch (e) {
       console.warn("[KODA_ROUTER] replace to /lascia-andare failed:", e);
     }
-  }, [profile, disclaimerState, showSplash, showColorIntro, router, pathname]);
+  }, [profile, disclaimerState, showSplash, showColorIntro, router, pathname, introV3State]);
 
 
   const inputMode = (profile?.settings?.input_mode === "text"

@@ -43,6 +43,7 @@ import {
   requestRecordingPermissionsAsync,
 } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
+import * as SecureStore from "expo-secure-store";
 import EclipseOrb, { OrbStatus } from "../components/EclipseOrb";
 import {
   playOpenPhrase,
@@ -95,8 +96,16 @@ export default function LasciaAndareScreen() {
   //
   // Chiavi accettate: "aria"|"cielo" (femminile) | "echo"|"vento" (maschile).
   // Fallback Cielo se assente o non riconosciuta.
-  const params = useLocalSearchParams<{ voice?: string }>();
+  const params = useLocalSearchParams<{ voice?: string; firstBoot?: string }>();
   const voiceKey = (params?.voice as string) || "aria";
+  // === HEART REVEAL WATCHER (Fabio 2026-08-22) =============================
+  // Se arriviamo da /intro-v3 con firstBoot=1, attiviamo il watcher per il
+  // reveal della voce (fase C del piano):
+  //   • min 60s garantiti di sessione (sotto → uscita normale via X)
+  //   • dopo 60s: silenzio continuo ≥15s O tocco X → triggerReveal()
+  //   • trigger → router.replace("/heart-voice-reveal")
+  // Dalla 2ª apertura in poi (firstBoot assente) il watcher NON parte.
+  const isFirstBoot = params?.firstBoot === "1";
   // === FIX 2026-07-26 v64.1 — Orb sempre in "recording" nella stanza sfogo ===
   //
   // PROBLEMA (Fabio 26/07):
@@ -255,8 +264,63 @@ export default function LasciaAndareScreen() {
   // naturalmente al primo parlato dell'utente.
   const voiceGlow = useRef(new Animated.Value(0.65)).current;
   const hintOpacity = useRef(new Animated.Value(0)).current;
+  // === PILL "PARLA CON KODA" (Fabio 2026-08-22) — Fase F del piano V3 =====
+  // Mostrata SOLO dai boot ≥ 2 (intro_v3_completed_at presente E firstBoot
+  // assente). Fade-in a 3s dal mount. Tap → rate-limit check → /microdemo
+  // o /paywall?variant=post-demo. Semi-trasparente, non aggressiva.
+  const [showPill, setShowPill] = useState<boolean>(false);
+  const pillOpacity = useRef(new Animated.Value(0)).current;
   // Guard uscita: se l'uscita è già iniziata NON riavviamo animazioni
   const exitingRef = useRef(false);
+
+  // === HEART REVEAL WATCHER — refs & state (Fabio 2026-08-22) ==============
+  // Semantica:
+  //   sessionStartedAt = timestamp mount (per calcolare min-60s garantiti)
+  //   lastSpeechAt     = ultimo timestamp in cui meterDb > SPEECH_DB
+  //   revealTriggered  = flag one-shot, evita re-trigger su remount
+  // Watcher interval (500ms) attivo SOLO se isFirstBoot=true.
+  const sessionStartedAtRef = useRef<number>(Date.now());
+  const lastSpeechAtRef = useRef<number>(Date.now());
+  const revealTriggeredRef = useRef<boolean>(false);
+  const revealWatcherRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const MIN_SESSION_MS = 60_000;      // min 60s garantiti prima del reveal
+  const SILENCE_FOR_REVEAL_MS = 15_000; // 15s silenzio continuo → trigger
+
+  // Naviga al reveal della voce (chiamata da X o dal silence-watcher)
+  const triggerHeartReveal = useCallback(() => {
+    if (revealTriggeredRef.current) return;
+    revealTriggeredRef.current = true;
+    console.log(`[KODA_LA_REVEAL] trigger heart-voice-reveal after ${((Date.now() - sessionStartedAtRef.current) / 1000).toFixed(1)}s`);
+    if (revealWatcherRef.current) {
+      clearInterval(revealWatcherRef.current);
+      revealWatcherRef.current = null;
+    }
+    // Fade-out orb morbido → naviga
+    exitingRef.current = true;
+    Animated.parallel([
+      Animated.timing(orbOpacity, {
+        toValue: 0,
+        duration: 500,
+        useNativeDriver: true,
+      }),
+      Animated.timing(orbEntryScale, {
+        toValue: 0.3,
+        duration: 500,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      // Teardown recorder prima della navigazione (evita fuga microfono)
+      teardown().finally(() => {
+        try {
+          router.replace("/heart-voice-reveal");
+        } catch (e) {
+          console.warn("[KODA_LA_REVEAL] navigation failed:", e);
+        }
+      });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orbOpacity, orbEntryScale, router]);
 
   // === TEARDOWN — chiamato all'uscita ================================
   // 1) ferma il polling
@@ -658,6 +722,11 @@ export default function LasciaAndareScreen() {
             const now = Date.now();
             if (db > SPEECH_DB) {
               lastVoiceAtRef.current = now;
+              // === REVEAL WATCHER (Fabio 2026-08-22) ===
+              // Aggiorna il timestamp di "ultimo parlato" per il silence
+              // watcher del reveal (fase C del piano). Runs sempre, il
+              // watcher stesso è gated da isFirstBoot.
+              lastSpeechAtRef.current = now;
               // v64.1: già "recording" di default, no-op se non cambia
               setStatus((prev) => (prev === "recording" ? prev : "recording"));
             } else if (db < SILENCE_DB) {
@@ -702,7 +771,7 @@ export default function LasciaAndareScreen() {
   // === Hardware back (Android) → uscita pulita ==========================
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      handleExit();
+      handleExitOrReveal();
       return true;
     });
     return () => sub.remove();
@@ -826,6 +895,103 @@ export default function LasciaAndareScreen() {
     }
   }, [router, teardown, orbEntryScale, orbOpacity, hintOpacity, voiceScale, voiceKey]);
 
+  // === PILL "PARLA CON KODA" (Fabio 2026-08-22) ==============================
+  // Check condizioni + fade-in + tap handler
+  useEffect(() => {
+    if (isFirstBoot) return; // primo boot: no pill (l'utente sta vivendo il reveal)
+    let cancelled = false;
+    (async () => {
+      try {
+        const introDone = await SecureStore.getItemAsync("intro_v3_completed_at");
+        if (cancelled) return;
+        if (!introDone) return; // se intro v3 non è completata, non mostrare
+        // Fade-in a 3s dal mount, non aggressiva
+        setTimeout(() => {
+          if (cancelled) return;
+          setShowPill(true);
+          Animated.timing(pillOpacity, {
+            toValue: 1,
+            duration: 600,
+            useNativeDriver: true,
+          }).start();
+        }, 3000);
+      } catch {
+        // silenzioso, no pill se SecureStore fallisce
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFirstBoot]);
+
+  const onPillTap = useCallback(async () => {
+    console.log(`[KODA_LA_PILL] tap Parla con Koda`);
+    try {
+      const lastAtStr = await SecureStore.getItemAsync("microdemo_last_at");
+      const lastAt = lastAtStr ? parseInt(lastAtStr, 10) : 0;
+      const RATE_LIMIT_MS = 24 * 60 * 60 * 1000;
+      const now = Date.now();
+      if (lastAt && now - lastAt < RATE_LIMIT_MS) {
+        // Fuori rate-limit → paywall diretto
+        console.log(`[KODA_LA_PILL] rate-limited → paywall`);
+        router.push("/paywall?variant=post-demo");
+        return;
+      }
+      // Ok → naviga alla demo
+      router.push("/microdemo");
+    } catch (e) {
+      console.warn(`[KODA_LA_PILL] tap handler failed:`, e);
+    }
+  }, [router]);
+
+  // === HANDLE EXIT-OR-REVEAL (Fabio 2026-08-22) ============================  // Wrapper: nel PRIMO BOOT (firstBoot=1), se l'utente tocca X dopo
+  // ≥60s → triggerHeartReveal (fase C). Altrimenti (sessione < 60s O
+  // NON firstBoot) → handleExit normale.
+  // Motivo: non forziamo l'utente al reveal se ha appena aperto la stanza
+  // e vuole uscire subito (edge case: click accidentale).
+  const handleExitOrReveal = useCallback(() => {
+    if (isFirstBoot && !revealTriggeredRef.current) {
+      const elapsed = Date.now() - sessionStartedAtRef.current;
+      if (elapsed >= MIN_SESSION_MS) {
+        console.log(`[KODA_LA_REVEAL] X tapped after ${(elapsed / 1000).toFixed(1)}s → trigger reveal`);
+        triggerHeartReveal();
+        return;
+      }
+      console.log(`[KODA_LA_REVEAL] X tapped early (${(elapsed / 1000).toFixed(1)}s < 60s) → normal exit`);
+    }
+    handleExit();
+  }, [isFirstBoot, triggerHeartReveal, handleExit]);
+
+  // === REVEAL SILENCE WATCHER (Fabio 2026-08-22) ==========================
+  // Attivo SOLO se isFirstBoot. Ogni 500ms controlla:
+  //   Date.now() - sessionStartedAt >= 60_000 AND
+  //   Date.now() - lastSpeechAt      >= 15_000
+  // → triggerHeartReveal(). One-shot (revealTriggeredRef guard).
+  useEffect(() => {
+    if (!isFirstBoot) return;
+    // Reset baseline al mount (evita drift da eventuali remount)
+    sessionStartedAtRef.current = Date.now();
+    lastSpeechAtRef.current = Date.now();
+    revealTriggeredRef.current = false;
+    console.log(`[KODA_LA_REVEAL] watcher started (firstBoot=1, min=${MIN_SESSION_MS}ms, silence=${SILENCE_FOR_REVEAL_MS}ms)`);
+    revealWatcherRef.current = setInterval(() => {
+      if (revealTriggeredRef.current) return;
+      const now = Date.now();
+      const sessionElapsed = now - sessionStartedAtRef.current;
+      const silenceElapsed = now - lastSpeechAtRef.current;
+      if (sessionElapsed >= MIN_SESSION_MS && silenceElapsed >= SILENCE_FOR_REVEAL_MS) {
+        console.log(`[KODA_LA_REVEAL] silence trigger — session=${(sessionElapsed / 1000).toFixed(1)}s silence=${(silenceElapsed / 1000).toFixed(1)}s`);
+        triggerHeartReveal();
+      }
+    }, 500);
+    return () => {
+      if (revealWatcherRef.current) {
+        clearInterval(revealWatcherRef.current);
+        revealWatcherRef.current = null;
+      }
+    };
+  }, [isFirstBoot, triggerHeartReveal]);
+
+
   // === RENDER ==========================================================
   // Se non ancora autorizzato (in verifica) o negato (transitorio prima
   // del replace verso /paywall) → schermo nero minimo, nessun contenuto
@@ -839,7 +1005,7 @@ export default function LasciaAndareScreen() {
       {/* Uscita — pulsante discreto in alto a sinistra.
           Touch target 44×44 (linee guida iOS), icona X neutra. */}
       <TouchableOpacity
-        onPress={handleExit}
+        onPress={handleExitOrReveal}
         hitSlop={16}
         style={[
           styles.exitBtn,
@@ -923,6 +1089,40 @@ export default function LasciaAndareScreen() {
           </Text>
         )}
       </Animated.View>
+
+      {/* Pill "Parla con Koda" — visibile solo dai boot ≥ 2 (fase F piano V3).
+          Semi-trasparente, sopra il hint, fade-in a 3s. Non è aggressiva:
+          l'utente può ignorarla e restare in LA all'infinito. Tap → demo
+          se rate-limit ok, altrimenti paywall. */}
+      {showPill && (
+        <Animated.View
+          style={[
+            styles.pillBox,
+            {
+              bottom: Math.max(insets.bottom + 64, 80),
+              opacity: pillOpacity,
+            },
+          ]}
+          pointerEvents="box-none"
+        >
+          <TouchableOpacity
+            onPress={onPillTap}
+            style={styles.pillBtn}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Parla con Koda"
+            testID="la-pill-parla-con-koda"
+          >
+            <Ionicons
+              name="chatbubble-outline"
+              size={14}
+              color="rgba(255,255,255,0.7)"
+              style={{ marginRight: 8 }}
+            />
+            <Text style={styles.pillText}>Parla con Koda</Text>
+          </TouchableOpacity>
+        </Animated.View>
+      )}
     </View>
   );
 }
@@ -967,5 +1167,29 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: "center",
     letterSpacing: 0.2,
+  },
+  // === PILL "PARLA CON KODA" (Fabio 2026-08-22) ==========================
+  // Semi-trasparente, discreta. Sopra il hint. Non aggressiva.
+  pillBox: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    alignItems: "center",
+  },
+  pillBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.15)",
+  },
+  pillText: {
+    color: "rgba(255,255,255,0.7)",
+    fontSize: 13,
+    letterSpacing: 0.4,
+    fontWeight: "500",
   },
 });
