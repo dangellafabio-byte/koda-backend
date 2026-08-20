@@ -160,8 +160,9 @@ export default function LasciaAndareScreen() {
     // il nuovo codice — evita l'ambiguità che ha causato la confusione
     // sul buildtag il 2026-08-20.
     console.log(
-      "[KODA_LA_MOUNT] lascia-andare screen mounted — fixes=P3v2+P5+P7 " +
-        `defaultAuthorized=allowed cleanupPrefix=KODA_LA_CLEANUP orbReactive=meterDb`
+      "[KODA_LA_MOUNT] lascia-andare screen mounted — fixes=P3v2+P5+P7+P1b+P2 " +
+        `defaultAuthorized=allowed cleanupPrefix=KODA_LA_CLEANUP orbReactive=meterDb ` +
+        `voiceGlow=0.65-1.00@180/500ms splashSkipOnRemount=on`
     );
 
     let cancelled = false;
