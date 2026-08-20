@@ -162,7 +162,7 @@ export default function LasciaAndareScreen() {
     console.log(
       "[KODA_LA_MOUNT] lascia-andare screen mounted — fixes=P3v2+P5+P7+P1b+P2 " +
         `defaultAuthorized=allowed cleanupPrefix=KODA_LA_CLEANUP orbReactive=meterDb ` +
-        `voiceGlow=0.65-1.00@180/500ms splashSkipOnRemount=on`
+        `voiceGlow=0.65-1.00@180/500ms dbBoost→EclipseOrb(internal) splashSkipOnRemount=on`
     );
 
     let cancelled = false;
@@ -886,6 +886,22 @@ export default function LasciaAndareScreen() {
             size={260}
             meterDb={meterDb}
             meterThreshold={SPEECH_DB}
+            /* === LASCIA ANDARE GLOW (Fabio 2026-08-22) ================
+             * Boost normalizzato (0..1) derivato dal dB microfonico:
+             *   dB clamp   [-60 … -20]   → boost [0 … 1]
+             * Passa questo direttamente dentro EclipseOrb, che a sua volta
+             * modula:
+             *   - opacity dei layer aurora/rim/filamenti (0.45 → 1.0)
+             *   - estensione outward dei filamenti (aurora "esce" di più)
+             * Questo è ciò che rende visibile il glow: prima moltiplicavamo
+             * l'opacity SOLO sul wrapper esterno (voiceGlow), ma i layer
+             * interni erano fissi a 0.45 → il range percettivo era 0.29→0.45
+             * (impercettibile). Ora il boost è APPLICATO DENTRO l'orb, sui
+             * gradienti SVG reali → range percettivo 0.29→1.0 (chiaro). */
+            dbBoost={Math.max(
+              0,
+              Math.min(1, (Math.max(-60, Math.min(-20, meterDb)) + 60) / 40)
+            )}
           />
         </Animated.View>
       </View>

@@ -60,6 +60,14 @@ type Props = {
   /** Live mic dB during recording — drives gentle inward pulse */
   meterDb?: number | null;
   meterThreshold?: number | null;
+  /** === LASCIA ANDARE GLOW (Fabio 2026-08-22) ============================
+   *  Boost normalizzato (0..1) derivato dal dB microfonico locale in
+   *  Lascia Andare. Quando > 0, ILLUMINA l'orb dall'interno:
+   *    - aurora/halo/rim opacity: 0.45 (recording base) → 1.0 (loud voice)
+   *    - filamenti: estensione outward aggiuntiva (l'aurora "esce" dai bordi)
+   *  Passato solo da lascia-andare.tsx; nel main flow resta undefined
+   *  → nessun impatto sulla logica esistente (backward compatible). */
+  dbBoost?: number | null;
   /** Override della palette durante "speaking" — legata alla voce scelta.
    *  Acqua=viola (default), Vento=cobalto. Se passato, sostituisce
    *  TONE_PALETTES.warm/concerned/etc durante lo speaking. */
@@ -134,6 +142,7 @@ export default function EclipseOrb({
   size = 280,
   meterDb,
   meterThreshold,
+  dbBoost,
   speakingPaletteOverride,
   forceVoiceIdentity = false,
   speechActive = true,
@@ -199,6 +208,53 @@ export default function EclipseOrb({
   useEffect(() => {
     speechActiveRef.current = speechActive;
   }, [speechActive]);
+
+  // === LASCIA ANDARE GLOW (Fabio 2026-08-22) ===========================
+  // `dbBoostAnim` è la versione animata (0..1) del prop `dbBoost`. Segue
+  // il target con attack rapido (180ms) e release naturale (500ms) — stessa
+  // isteresi di `voiceScale` in lascia-andare.tsx, così scale e glow si
+  // muovono in perfetto sincrono e sembrano una sola presenza.
+  // Init = 0 così se il parent non passa dbBoost, l'orb resta identico
+  // al comportamento pre-esistente (backward compatible).
+  const dbBoostAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (dbBoost == null) {
+      dbBoostAnim.stopAnimation();
+      Animated.timing(dbBoostAnim, {
+        toValue: 0,
+        duration: 300,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }).start();
+      return;
+    }
+    const clamped = Math.max(0, Math.min(1, dbBoost));
+    // Attack rapido, release più lento — coerente con voiceScale in LA
+    // (segue la stessa isteresi 180ms/500ms del dB→scale).
+    Animated.timing(dbBoostAnim, {
+      toValue: clamped,
+      duration: clamped > 0.2 ? 180 : 500,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  }, [dbBoost, dbBoostAnim]);
+
+  // Effettiva intensità aurora "sentita" dai layer luminosi:
+  // = auroraIntensity + dbBoostAnim * 0.55
+  // In recording base (auroraIntensity=0.45) e boost=1 → effettivo=1.00
+  // (opacity satura al massimo dei gradienti SVG → orb chiaramente "acceso").
+  // In silenzio (boost=0) → resta 0.45, comportamento invariato.
+  const effectiveAurora = useMemo(
+    () => Animated.add(auroraIntensity, Animated.multiply(dbBoostAnim, 0.55)),
+    [auroraIntensity, dbBoostAnim]
+  );
+  // Boost per l'estensione dei filamenti: quando la voce è forte,
+  // l'aurora "esce" più dai bordi del disco (feel: le sillabe forti
+  // proiettano luce all'esterno). Additivo su filamentExtend base 0.25.
+  const filamentBoostAdd = useMemo(
+    () => Animated.multiply(dbBoostAnim, -size * 0.05),
+    [dbBoostAnim, size]
+  );
 
   // === Continuous breath cycle (always running, regardless of status)
   useEffect(() => {
@@ -504,7 +560,7 @@ export default function EclipseOrb({
       <Animated.View
         style={[
           StyleSheet.absoluteFill,
-          { opacity: Animated.multiply(auroraIntensity, flicker) },
+          { opacity: Animated.multiply(effectiveAurora, flicker) },
         ]}
       >
         <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
@@ -533,7 +589,7 @@ export default function EclipseOrb({
           {
             transform: [{ rotate: rotateDeg }],
             opacity: Animated.add(
-              Animated.multiply(auroraIntensity, flicker),
+              Animated.multiply(effectiveAurora, flicker),
               speakOpacityBoost
             ),
           },
@@ -558,13 +614,16 @@ export default function EclipseOrb({
                   {
                     translateY: Animated.add(
                       Animated.add(
-                        Animated.multiply(
-                          filamentExtend,
-                          new Animated.Value(-size * 0.08)
+                        Animated.add(
+                          Animated.multiply(
+                            filamentExtend,
+                            new Animated.Value(-size * 0.08)
+                          ),
+                          listenInwardPx
                         ),
-                        listenInwardPx
+                        speakFilamentBoost
                       ),
-                      speakFilamentBoost
+                      filamentBoostAdd
                     ),
                   },
                 ],
@@ -598,7 +657,7 @@ export default function EclipseOrb({
       <Animated.View
         style={[
           StyleSheet.absoluteFill,
-          { opacity: Animated.multiply(auroraIntensity, flicker) },
+          { opacity: Animated.multiply(effectiveAurora, flicker) },
         ]}
       >
         <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
