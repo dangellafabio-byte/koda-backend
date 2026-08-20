@@ -31,6 +31,7 @@ import {
   BackHandler,
   Animated,
   Easing,
+  Alert,
 } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -943,7 +944,8 @@ export default function LasciaAndareScreen() {
     }
   }, [router]);
 
-  // === HANDLE EXIT-OR-REVEAL (Fabio 2026-08-22) ============================  // Wrapper: nel PRIMO BOOT (firstBoot=1), se l'utente tocca X dopo
+  // === HANDLE EXIT-OR-REVEAL (Fabio 2026-08-22) ============================
+  // Wrapper: nel PRIMO BOOT (firstBoot=1), se l'utente tocca X dopo
   // ≥60s → triggerHeartReveal (fase C). Altrimenti (sessione < 60s O
   // NON firstBoot) → handleExit normale.
   // Motivo: non forziamo l'utente al reveal se ha appena aperto la stanza
@@ -960,6 +962,66 @@ export default function LasciaAndareScreen() {
     }
     handleExit();
   }, [isFirstBoot, triggerHeartReveal, handleExit]);
+
+  // === RIAVVIA SEQUENZA INTRO (Fabio 2026-08-22) ===========================
+  // Gesture di reset: long-press di 1.5s sulla X in Lascia Andare
+  // (poco frequente per errore, facile per test volontario).
+  // Mostra un Alert di conferma; se confermato:
+  //   1. Cancella tutti i flag SecureStore correlati all'onboarding V3
+  //   2. Cancella lo splash-shown per uniformità di visualizzazione
+  //   3. Fade-out + router.replace("/intro-v3") → parte tutta la sequenza
+  //
+  // Motivo del gesture nascosto: l'utente di test vuole poter ripetere
+  // la sequenza narrativa più volte per valutarla, senza reinstallare
+  // l'app. Non lo mettiamo come bottone visibile perché non è una
+  // feature per l'end-user finale — è uno strumento di valutazione.
+  const onLongPressExit = useCallback(() => {
+    Alert.alert(
+      "Rivedere l'introduzione?",
+      "Riavvia dall'inizio la sequenza narrativa (saluto, nome, Lascia Andare, reveal della voce, demo). Serve per rivedere tutto come al primo boot.",
+      [
+        { text: "Annulla", style: "cancel" },
+        {
+          text: "Sì, riavvia",
+          style: "destructive",
+          onPress: async () => {
+            console.log(`[KODA_LA_RESET] intro V3 reset triggered by user`);
+            try {
+              await Promise.all([
+                SecureStore.deleteItemAsync("intro_v3_completed_at"),
+                SecureStore.deleteItemAsync("heart_reveal_dismissed_at"),
+                SecureStore.deleteItemAsync("microdemo_last_at"),
+                SecureStore.deleteItemAsync("user_display_name"),
+                // Anche il flag V1 (superato) per completezza
+                SecureStore.deleteItemAsync("koda_intro_seen"),
+                SecureStore.deleteItemAsync("koda_intro_completed_at"),
+              ]);
+              console.log(`[KODA_LA_RESET] flags cleared, navigating to /intro-v3`);
+            } catch (e) {
+              console.warn(`[KODA_LA_RESET] SecureStore clear failed (procedo comunque):`, e);
+            }
+            // Fade-out morbido → naviga
+            exitingRef.current = true;
+            Animated.timing(orbOpacity, {
+              toValue: 0,
+              duration: 400,
+              useNativeDriver: true,
+            }).start();
+            // Teardown recorder + naviga
+            teardown().finally(() => {
+              try {
+                router.replace("/intro-v3");
+              } catch (e) {
+                console.warn(`[KODA_LA_RESET] router.replace failed:`, e);
+              }
+            });
+          },
+        },
+      ],
+      { cancelable: true }
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router, orbOpacity]);
 
   // === REVEAL SILENCE WATCHER (Fabio 2026-08-22) ==========================
   // Attivo SOLO se isFirstBoot. Ogni 500ms controlla:
@@ -1006,6 +1068,8 @@ export default function LasciaAndareScreen() {
           Touch target 44×44 (linee guida iOS), icona X neutra. */}
       <TouchableOpacity
         onPress={handleExitOrReveal}
+        onLongPress={onLongPressExit}
+        delayLongPress={1500}
         hitSlop={16}
         style={[
           styles.exitBtn,
