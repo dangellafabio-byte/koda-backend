@@ -6008,6 +6008,42 @@ export default function Taccuino() {
               </View>
             </View>
 
+            {/* === SITUATION TRACKING V3.1 (agosto 2026, Fabio) =============
+                Opt-in ESPLICITO, default OFF. Copy scelto dall'utente:
+                deve essere fattuale, senza dark pattern, senza pressione
+                a lasciarlo attivo. Niente "profila la tua persona": SOLO
+                "ricorda le cose che tu le racconti, quando torni a
+                parlarne tu". Il viewer per vedere/cancellare cosa Koda
+                ricorda verrà aggiunto in un secondo momento — per ora,
+                se l'utente vuole ripulire tutto, c'è comunque il reset
+                completo nella sezione admin. */}
+            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8, marginTop: 14 }]}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingLabel}>🧭 Cosa Koda ricorda</Text>
+                  <Text style={styles.settingHint}>
+                    Se lo attivi, Koda può ricordare le cose che le hai
+                    raccontato — persone, argomenti, situazioni. Le ricorda
+                    quando torni a parlarne tu. Se lo lasci spento, Koda
+                    non conserva questo tipo di contesto.
+                  </Text>
+                </View>
+                <Switch
+                  value={(profile?.settings as any)?.situation_tracking_enabled === true}
+                  onValueChange={async (on) => {
+                    if (!profile) return;
+                    const nextSettings = { ...profile.settings, situation_tracking_enabled: on } as any;
+                    setProfile({ ...profile, settings: nextSettings });
+                    try {
+                      await api.updateProfile({ settings: nextSettings });
+                    } catch {}
+                  }}
+                  trackColor={{ false: theme.muted + "55", true: bubbleAccent.color }}
+                  thumbColor="#fff"
+                />
+              </View>
+            </View>
+
             <View style={styles.divider} />
 
             {/* === TEMA RIMOSSO 2026-08-04 (Fabio, dati alla mano) ===
