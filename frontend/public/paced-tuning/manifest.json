@@ -1,0 +1,146 @@
+{
+  "generated_at": "2026-08-21T09:40:36.851Z",
+  "speed_base": 0.74,
+  "samples": [
+    {
+      "key": "P1_breve_base",
+      "label": "P1 — BREVE base (stab 0.55, style 0.35, [pause])",
+      "text": "[softly] Aspetta. [pause] Piano. [pause] Ci sono.",
+      "settings": {
+        "stability": 0.55,
+        "style": 0.35,
+        "similarity_boost": 0.82,
+        "speed": 0.74,
+        "use_speaker_boost": true
+      },
+      "filename": "P1_breve_base.mp3",
+      "bytes": 97010
+    },
+    {
+      "key": "P2_breve_caldo",
+      "label": "P2 — BREVE caldo (stab 0.45, style 0.50, [pause])",
+      "text": "[softly] Aspetta. [pause] Piano. [pause] Ci sono.",
+      "settings": {
+        "stability": 0.45,
+        "style": 0.5,
+        "similarity_boost": 0.82,
+        "speed": 0.74,
+        "use_speaker_boost": true
+      },
+      "filename": "P2_breve_caldo.mp3",
+      "bytes": 113728
+    },
+    {
+      "key": "P3_breve_composto",
+      "label": "P3 — BREVE composto (stab 0.70, style 0.22, [pause])",
+      "text": "[softly] Aspetta. [pause] Piano. [pause] Ci sono.",
+      "settings": {
+        "stability": 0.7,
+        "style": 0.22,
+        "similarity_boost": 0.82,
+        "speed": 0.74,
+        "use_speaker_boost": true
+      },
+      "filename": "P3_breve_composto.mp3",
+      "bytes": 98264
+    },
+    {
+      "key": "P4_breve_breath_singolo",
+      "label": "P4 — BREVE con [breath] iniziale singolo (stab 0.55, style 0.35)",
+      "text": "[breath] Aspetta. [pause] Piano. [pause] Ci sono.",
+      "settings": {
+        "stability": 0.55,
+        "style": 0.35,
+        "similarity_boost": 0.82,
+        "speed": 0.74,
+        "use_speaker_boost": true
+      },
+      "filename": "P4_breve_breath_singolo.mp3",
+      "bytes": 122506
+    },
+    {
+      "key": "P5_breve_no_breath",
+      "label": "P5 — BREVE senza breath, solo ellissi (stab 0.55, style 0.35)",
+      "text": "[softly] Aspetta... Piano... Ci sono.",
+      "settings": {
+        "stability": 0.55,
+        "style": 0.35,
+        "similarity_boost": 0.82,
+        "speed": 0.74,
+        "use_speaker_boost": true
+      },
+      "filename": "P5_breve_no_breath.mp3",
+      "bytes": 65245
+    },
+    {
+      "key": "P6_articolato_base",
+      "label": "P6 — ARTICOLATO base (stab 0.55, style 0.35, [pause])",
+      "text": "[softly] Aspetta un momento. [pause] Non serve andare veloci ora. [pause] Sono qui con te.",
+      "settings": {
+        "stability": 0.55,
+        "style": 0.35,
+        "similarity_boost": 0.82,
+        "speed": 0.74,
+        "use_speaker_boost": true
+      },
+      "filename": "P6_articolato_base.mp3",
+      "bytes": 108713
+    },
+    {
+      "key": "P7_articolato_caldo",
+      "label": "P7 — ARTICOLATO caldo (stab 0.45, style 0.50, [pause])",
+      "text": "[softly] Aspetta un momento. [pause] Non serve andare veloci ora. [pause] Sono qui con te.",
+      "settings": {
+        "stability": 0.45,
+        "style": 0.5,
+        "similarity_boost": 0.82,
+        "speed": 0.74,
+        "use_speaker_boost": true
+      },
+      "filename": "P7_articolato_caldo.mp3",
+      "bytes": 121252
+    },
+    {
+      "key": "P8_articolato_breath",
+      "label": "P8 — ARTICOLATO con [breath] iniziale (stab 0.55, style 0.35)",
+      "text": "[breath] Aspetta un momento. [pause] Non serve andare veloci ora. Sono qui con te.",
+      "settings": {
+        "stability": 0.55,
+        "style": 0.35,
+        "similarity_boost": 0.82,
+        "speed": 0.74,
+        "use_speaker_boost": true
+      },
+      "filename": "P8_articolato_breath.mp3",
+      "bytes": 119998
+    },
+    {
+      "key": "P9_similarity_alta",
+      "label": "P9 — BREVE similarity=0.90 (voce Cielo pura, stab 0.55, style 0.35)",
+      "text": "[softly] Aspetta. [pause] Piano. [pause] Ci sono.",
+      "settings": {
+        "stability": 0.55,
+        "style": 0.35,
+        "similarity_boost": 0.9,
+        "speed": 0.74,
+        "use_speaker_boost": true
+      },
+      "filename": "P9_similarity_alta.mp3",
+      "bytes": 84471
+    },
+    {
+      "key": "P10_similarity_bassa",
+      "label": "P10 — BREVE similarity=0.72 (più libera, stab 0.55, style 0.35)",
+      "text": "[softly] Aspetta. [pause] Piano. [pause] Ci sono.",
+      "settings": {
+        "stability": 0.55,
+        "style": 0.35,
+        "similarity_boost": 0.72,
+        "speed": 0.74,
+        "use_speaker_boost": true
+      },
+      "filename": "P10_similarity_bassa.mp3",
+      "bytes": 113728
+    }
+  ]
+}

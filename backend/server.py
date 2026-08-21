@@ -12406,6 +12406,28 @@ async def _fast_pipeline_task(
         BODY_EARLY_FLUSH_MIN_SENTENCES = 2
         BODY_EARLY_FLUSH_MIN_CHARS = 90
 
+        # === FIX SPEECH_TIMELINE WS LIFECYCLE (Fabio 2026-06) ==================
+        # I task che calcolano `speech_timeline` (ffmpeg/pydub decode + silences)
+        # venivano schedulati con `asyncio.create_task(...)` fire-and-forget dentro
+        # `_gen_and_publish_sentence`. Il `sentence_tasks` gather aspetta solo il
+        # completamento della PUBBLICAZIONE della sentence, NON dei sub-task che
+        # calcolano la timeline. Risultato: il server emette `meta` + `done` e
+        # chiude il WS PRIMA che ffmpeg finisca → il client non riceve mai
+        # `speech_timeline` per l'ultima frase (a volte anche per la prima
+        # se il calcolo è lento).
+        #
+        # Fix: raccogliamo tutti i task `_emit_speech_timeline` in questa lista
+        # e li gathiamo esplicitamente dopo `sentence_tasks` e prima di emettere
+        # `meta` → così il client li riceve sempre, indipendentemente dal
+        # timing di ffmpeg.
+        #
+        # Nota: NON blocchiamo la PUBBLICAZIONE della prima audio sentence (già
+        # inviata prima che questi task partano), quindi TTFA rimane invariato.
+        # L'unico impatto: il `meta`/`done` può ritardare di ~50-200ms se
+        # ffmpeg è lento sull'ultima frase. Trade-off accettabile per eliminare
+        # il bug del silence-sync mancante.
+        speech_timeline_tasks: List[asyncio.Task] = []
+
         async def _gen_and_publish_sentence(idx: int, sentence: str, previous_text: Optional[str] = None):
             nonlocal first_audio_logged, timing_first_tts_ms, timing_first_audio_total_ms, current_tone
             try:
@@ -13039,7 +13061,17 @@ async def _fast_pipeline_task(
                                 f"[SPEECH_TIMELINE] sid={session_id[:8]} idx={_idx} "
                                 f"emit=FAIL error={_e}"
                             )
-                    asyncio.create_task(_emit_speech_timeline(idx, token, bytes(audio_bytes)))
+                    # === FIX SPEECH_TIMELINE WS LIFECYCLE (Fabio 2026-06) ===
+                    # Prima era `asyncio.create_task(...)` fire-and-forget, ma il
+                    # `sentence_tasks` gather NON aspettava questi sub-task →
+                    # il server chiudeva il WS prima che ffmpeg finisse.
+                    # Ora tracciamo il task in `speech_timeline_tasks` (scope
+                    # outer di `_fast_pipeline_task`) e lo gathiamo prima di
+                    # emettere `meta`/`done`. TTFA invariato: il primo audio è
+                    # già stato pubblicato PRIMA di questa riga.
+                    speech_timeline_tasks.append(
+                        asyncio.create_task(_emit_speech_timeline(idx, token, bytes(audio_bytes)))
+                    )
                 except Exception as e:
                     logger.warning(f"[SPEECH_TIMELINE] schedule failed: {e}")
             except Exception as e:
@@ -13304,6 +13336,36 @@ async def _fast_pipeline_task(
                 await asyncio.gather(*sentence_tasks, return_exceptions=True)
             except Exception:
                 pass
+
+        # === FIX SPEECH_TIMELINE WS LIFECYCLE (Fabio 2026-06) ==================
+        # Aspetta esplicitamente tutti i task che calcolano `speech_timeline`
+        # PRIMA di procedere con `meta`/`done` e chiusura WS. Timeout duro a 3s
+        # per evitare che un ffmpeg patologicamente lento blocchi la chiusura
+        # della sessione: in quel caso `speech_timeline` per quella frase non
+        # arriverà (fallback client: orb con animazione default).
+        if speech_timeline_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*speech_timeline_tasks, return_exceptions=True),
+                    timeout=3.0,
+                )
+                logger.info(
+                    f"[SPEECH_TIMELINE] sid={session_id[:8]} "
+                    f"gather=OK n_tasks={len(speech_timeline_tasks)}"
+                )
+            except asyncio.TimeoutError:
+                # Cancella i task ancora in corso per non lasciarli orfani.
+                _pending = [t for t in speech_timeline_tasks if not t.done()]
+                for t in _pending:
+                    t.cancel()
+                logger.warning(
+                    f"[SPEECH_TIMELINE] sid={session_id[:8]} "
+                    f"gather=TIMEOUT pending={len(_pending)}/{len(speech_timeline_tasks)}"
+                )
+            except Exception as _e:
+                logger.warning(
+                    f"[SPEECH_TIMELINE] sid={session_id[:8]} gather=FAIL error={_e}"
+                )
 
         # === CLAUDE TTFT INVESTIGATION (2026-08-13 Fabio) — patch retroattivo ==
         # A questo punto:
