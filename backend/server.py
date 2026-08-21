@@ -779,6 +779,118 @@ class Memory(BaseModel):
     ref_count: int = 0
 
 
+# ============================================================
+# SITUATION TRACKING V3.1 (agosto 2026) — opt-in, ledger flat, ZERO profiling
+# ============================================================
+# Modello dati entity-first per ricordare persone/argomenti/situazioni
+# che l'utente ha menzionato — SENZA mai interpretarli o valutarli.
+#
+# Principi ferri (contratto architetturale):
+#   - ZERO psychological profiling: no emotion, no importance, no salience,
+#     no severity, no trajectory, no resolved-state
+#   - Osservativo puro: `evidence_count` è append-only, mai decrementato
+#   - `contains_resolution_claim` è una NOTA sul turno (regex deterministica),
+#     NON altera lo stato della situation
+#   - Opt-in default OFF (settings.situation_tracking_enabled)
+#   - Separato PER COSTRUZIONE dal Safety: nessun turno con
+#     `_detect_safety_category != None` scrive mai una situation/evidence
+#   - Separato dalla memoria semantica: al retrieval prompt injection,
+#     situations hanno precedenza; le memorie che overlapano coi loro
+#     token vengono filtrate via (dedup deterministico)
+# ============================================================
+_SITUATIONS_COLL = "situations"
+_SITUATION_EVIDENCES_COLL = "situation_evidences"
+
+_VALID_ENTITY_TYPES = {"person", "topic", "situation", "place", "activity", "other"}
+
+
+class Situation(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    profile_id: str = Field(default_factory=lambda: current_user_id())
+    entity: str  # nome normalizzato lowercase (matching key)
+    entity_type: str = "other"  # person | topic | situation | place | activity | other
+    title: str  # label leggibile per la UI
+    tags: List[str] = Field(default_factory=list)  # SOLO fattuali, MAI emotivi
+    first_seen_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    last_evidence_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    evidence_count: int = 0
+    user_muted: bool = False
+    archived_at: Optional[str] = None
+
+
+class SituationEvidence(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    profile_id: str = Field(default_factory=lambda: current_user_id())
+    situation_id: str
+    observed_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    turn_snippet: str  # testo utente grezzo, max 200 char
+    contains_resolution_claim: bool = False
+
+
+# Regex deterministica per `contains_resolution_claim` (D2 opzione B).
+# Solo osservativo: NON altera stato della situation. Le keyword sono state
+# scelte per essere conservative — solo espressioni chiaramente di chiusura,
+# no falsi positivi tipo "abbiamo iniziato a risolvere" (che è ongoing).
+_RESOLUTION_CLAIM_PATTERNS = [
+    r"\babbiamo (risolto|chiuso|superato|sistemato)\b",
+    r"\b(ho|abbiamo) (risolto|chiuso|superato|sistemato) (tutto|la cosa|la situazione)\b",
+    r"\bnon è più un problema\b",
+    r"\bnon mi pesa più\b",
+    r"\bè passata?\b",
+    r"\bsi è (sistemato|aggiustato|risolto)\b",
+    r"\babbiamo fatto pace\b",
+    r"\bci siamo chiariti\b",
+    r"\bl'ho superat[oa]\b",
+    r"\bl'ho chius[oa]\b",
+]
+_RESOLUTION_CLAIM_RE = re.compile("|".join(_RESOLUTION_CLAIM_PATTERNS), re.IGNORECASE)
+
+
+def _detect_resolution_claim(text: str) -> bool:
+    """Rileva linguaggio di risoluzione nel turno. Puro, deterministico.
+    NON impatta lo stato della situation: è solo una nota osservativa
+    che finisce in situation_evidences.contains_resolution_claim.
+    """
+    if not text:
+        return False
+    return bool(_RESOLUTION_CLAIM_RE.search(text))
+
+
+def _situation_filter(extra: Optional[dict] = None) -> dict:
+    """User-scoped filter per collection situations/situation_evidences.
+    Stesso pattern di _memory_filter().
+    """
+    uid = current_user_id()
+    if uid == "me":
+        f = {"$or": [{"profile_id": "me"}, {"profile_id": {"$exists": False}}, {"profile_id": None}]}
+    else:
+        f = {"profile_id": uid}
+    if extra:
+        return {"$and": [f, extra]}
+    return f
+
+
+def _normalize_entity(name: str) -> str:
+    """Normalizza il nome entity per matching robusto:
+    lowercase + strip accenti + rimuovi articoli iniziali."""
+    if not name:
+        return ""
+    n = name.lower().strip()
+    _accent_map = {
+        "à": "a", "á": "a", "â": "a", "ä": "a", "ã": "a",
+        "è": "e", "é": "e", "ê": "e", "ë": "e",
+        "ì": "i", "í": "i", "î": "i", "ï": "i",
+        "ò": "o", "ó": "o", "ô": "o", "ö": "o", "õ": "o",
+        "ù": "u", "ú": "u", "û": "u", "ü": "u",
+        "ñ": "n", "ç": "c",
+    }
+    for src, dst in _accent_map.items():
+        n = n.replace(src, dst)
+    # Rimuovi articoli/preposizioni iniziali
+    n = re.sub(r"^(il |la |lo |i |gli |le |un |una |uno |del |della |dello |l')", "", n)
+    return n.strip()
+
+
 # ---- Tokenization & normalizzazione (italiano) ----
 
 # Stopwords italiane minimali — non serve essere completi, basta filtrare
@@ -855,8 +967,14 @@ async def _save_memory(
     importance: int,
     source: str = "chat",
 ) -> Optional[Memory]:
-    """Salva un ricordo nel DB. Soglia: importance >= MEMORY_IMPORTANCE_THRESHOLD (=4).
-    Restituisce il doc creato (o None se sotto soglia / invalido)."""
+    """Salva un ricordo nel DB.
+
+    D1 (2026-08) — DEPRECAZIONE SOFT: `importance` NON è più un gate obbligatorio
+    (accettiamo qualsiasi ricordo valido con concept >= 8 char). `emotion` viene
+    normalizzata a None per i nuovi ricordi (backward-compat sul campo, ma il
+    canale di scoring psicologico è chiuso). I doc vecchi con emotion/importance
+    non-null restano leggibili nel DB.
+    """
     concept = (concept or "").strip()
     if not concept or len(concept) < 8:
         return None
@@ -866,14 +984,19 @@ async def _save_memory(
         except Exception:
             importance = 5
     importance = max(1, min(10, importance))
-    if importance < MEMORY_IMPORTANCE_THRESHOLD:
-        return None
+    # === D1 (2026-08) — Soglia importance RIMOSSA come gate obbligatorio ===
+    # Vecchio comportamento: importance < 4 → scartato.
+    # Nuovo: qualsiasi ricordo valido viene salvato. Il campo resta accettato
+    # per backward-compat dei doc storici ma NON è più un fattore.
     norm_tags = _normalize_tags(tags)
     # Se Claude non ha dato tag, deriviamoli dal concept stesso.
     if not norm_tags:
         derived = list(_tokenize_text(concept))[:6]
         norm_tags = derived
-    em = (emotion or "").lower().strip() or None
+    # === D1 — emotion normalizzata a None sui NUOVI ricordi =================
+    # Chiude il canale di leak safety→memoria descritto nell'audit architetturale.
+    # I doc vecchi con emotion="paura" ecc. restano nel DB per continuità storica.
+    em = None
     mem = Memory(
         concept=concept[:500],  # safety cap
         tags=norm_tags,
@@ -946,9 +1069,13 @@ async def _load_relevant_memories(
             # Includi anche overlap token concept (peso minore)
             concept_tokens = _tokenize_text(d.get("concept") or "")
             concept_overlap = len(concept_tokens & user_tokens)
-            importance = int(d.get("importance") or 5)
-            # Recency: time-decay esponenziale continuo (~21gg half-life).
-            # Sostituisce il vecchio bonus a gradini: ora ogni giorno conta.
+            # === D1 (2026-08) — DEPRECAZIONE SOFT emotion/importance ===========
+            # `importance` NON entra più nel ranking. La formula ora usa solo
+            # segnali osservativi (token overlap + recency temporale). I doc
+            # vecchi con importance=8 vengono trattati identici ai nuovi con
+            # importance=null. Questo chiude il canale di scoring psicologico
+            # nell'accesso alla memoria.
+            # Recency: time-decay esponenziale continuo (~30gg tau).
             recency = 0.0
             try:
                 created = datetime.fromisoformat(d["created_at"].replace("Z", "+00:00"))
@@ -956,13 +1083,13 @@ async def _load_relevant_memories(
                 recency = 2.0 * math.exp(-age_days / 30.0)
             except Exception:
                 pass
-            # Score finale
-            score = 3.0 * overlap + 1.0 * concept_overlap + 0.4 * importance + recency
-            # Floor: se nessun overlap, dai score = 0.4*importance (così i
-            # ricordi "fondamentali" possono comunque emergere quando
-            # l'utente ne parla in modo tangenziale).
+            # Score finale — SOLO tag/concept overlap + recency
+            score = 3.0 * overlap + 1.0 * concept_overlap + recency
+            # Floor: se nessun overlap, tieni comunque un minimo di recency
+            # così i ricordi molto recenti possono emergere anche senza match
+            # letterale (tangenzialità). NIENTE più floor da importance.
             if overlap == 0 and concept_overlap == 0:
-                score = 0.3 * importance + recency
+                score = recency
             scored.append((score, d))
         except Exception:
             continue
@@ -981,7 +1108,13 @@ def _format_memories_for_prompt(mems: List[Memory]) -> str:
     """Renderizza i ricordi come blocco per il system prompt di Koda.
     Distinguiamo visivamente i ricordi del Confessionale (•⚫) dai
     ricordi normali (•) così Claude sa di NON tirare fuori i primi se
-    non è l'utente a riaprire l'argomento."""
+    non è l'utente a riaprire l'argomento.
+
+    D1 (2026-08): l'etichetta [emotion] NON viene più renderizzata nel prompt.
+    I doc vecchi con emotion='ansia' ecc. restano nel DB (leggibili via
+    /api/memories per audit/export), ma Claude non li vede più come
+    metadata categoriale. Chiude il canale di leak safety→memoria.
+    """
     if not mems:
         return "(nessun ricordo significativo ancora)"
     lines: List[str] = []
@@ -989,12 +1122,10 @@ def _format_memories_for_prompt(mems: List[Memory]) -> str:
         if m.source == "confessional_abstract":
             # Marker bordeaux: ricordo che esiste ma da non sbandierare
             prefix = "•⚫"
-            emo = f" [{m.emotion}]" if m.emotion else ""
-            lines.append(f"  {prefix} {m.concept}{emo}  (dalla Stanza dello Sfogo — NON menzionare di iniziativa propria)")
+            lines.append(f"  {prefix} {m.concept}  (dalla Stanza dello Sfogo — NON menzionare di iniziativa propria)")
         else:
             prefix = "•"
-            emo = f" [{m.emotion}]" if m.emotion else ""
-            lines.append(f"  {prefix} {m.concept}{emo}")
+            lines.append(f"  {prefix} {m.concept}")
     return "\n".join(lines)
 
 
@@ -1005,6 +1136,231 @@ async def _ensure_memories_index():
         await db.taccuino_memories.create_index("tags")
     except Exception as e:
         logger.warning(f"[startup] memories index: {e}")
+
+
+# ============================================================
+# SITUATION TRACKING — retrieval + write helpers
+# ============================================================
+
+async def _ensure_situations_index():
+    """Crea index su situations/situation_evidences. Idempotente."""
+    try:
+        await db[_SITUATIONS_COLL].create_index(
+            [("profile_id", 1), ("entity", 1)], unique=True
+        )
+        await db[_SITUATIONS_COLL].create_index(
+            [("profile_id", 1), ("last_evidence_at", -1)]
+        )
+        await db[_SITUATION_EVIDENCES_COLL].create_index(
+            [("profile_id", 1), ("situation_id", 1), ("observed_at", -1)]
+        )
+    except Exception as e:
+        logger.warning(f"[startup] situations index: {e}")
+
+
+async def _load_relevant_situations(user_text: str, recent_texts: Optional[List[str]] = None) -> List[Situation]:
+    """Carica le situations attive dell'utente che matchano token del turno.
+
+    Filtri:
+      - profile_id corrente
+      - archived_at IS NULL
+      - user_muted = false
+      - entity o title compare come token nel user_text (o nei recent_texts
+        forniti — per catturare co-riferimenti tipo "lui/lei/lì")
+
+    Ritorna [] se Situation Tracking è OFF (verifica caller-side).
+    """
+    if not user_text:
+        return []
+    try:
+        docs = await db[_SITUATIONS_COLL].find(
+            _situation_filter({"archived_at": None, "user_muted": False}),
+            {"_id": 0},
+        ).sort("last_evidence_at", -1).to_list(200)
+    except Exception as e:
+        logger.warning(f"[situation] load failed: {e}")
+        return []
+    if not docs:
+        return []
+    # Tokenizza user_text + recent context
+    context_tokens = _tokenize_text(user_text)
+    if recent_texts:
+        for rt in recent_texts[-3:]:  # ultimi 3 turni conservativo
+            context_tokens |= _tokenize_text(rt or "")
+    out: List[Situation] = []
+    for d in docs:
+        try:
+            entity_tokens = _tokenize_text(d.get("entity") or "")
+            title_tokens = _tokenize_text(d.get("title") or "")
+            if (entity_tokens & context_tokens) or (title_tokens & context_tokens):
+                out.append(Situation(**d))
+        except Exception:
+            continue
+    return out
+
+
+def _situation_reserved_tokens(sits: List[Situation]) -> set:
+    """Costruisce il set di token 'prenotati' dalle situations attive.
+    Usato per filtrare via memorie che overlapano.
+    """
+    reserved: set = set()
+    for s in sits:
+        reserved |= _tokenize_text(s.entity)
+        reserved |= _tokenize_text(s.title)
+        for t in (s.tags or []):
+            tn = _normalize_token(t)
+            if tn:
+                reserved.add(tn)
+    return reserved
+
+
+def _dedup_memories_against_situations(
+    mems: List[Memory], reserved: set
+) -> List[Memory]:
+    """Filtra le memorie che overlapano coi token prenotati dalle situations.
+    Deduplica DETERMINISTICA — nessun LLM decide.
+    """
+    if not reserved or not mems:
+        return mems
+    out: List[Memory] = []
+    filtered_count = 0
+    for m in mems:
+        try:
+            concept_toks = _tokenize_text(m.concept or "")
+            mem_tags = set(m.tags or [])
+            if (concept_toks & reserved) or (mem_tags & reserved):
+                filtered_count += 1
+                continue
+            out.append(m)
+        except Exception:
+            out.append(m)
+    if filtered_count > 0:
+        logger.info(
+            f"[situation_dedup] filtered_memories={filtered_count} "
+            f"reserved_size={len(reserved)}"
+        )
+    return out
+
+
+def _format_situations_for_prompt(sits: List[Situation]) -> str:
+    """Renderizza le situations come blocco per il system prompt.
+    Formato minimo: solo title + entity_type. NIENTE emotion, NIENTE severity.
+    """
+    if not sits:
+        return ""
+    lines: List[str] = ["COSE CHE MI HAI RACCONTATO (osservazioni fattuali — NON riaprirle di iniziativa propria):"]
+    for s in sits:
+        tag_str = f" · {', '.join(s.tags[:3])}" if s.tags else ""
+        lines.append(f"  • {s.title} ({s.entity_type}){tag_str}")
+    return "\n".join(lines)
+
+
+async def _save_situation_evidence(
+    situation_evidence: Any,
+    user_text: str,
+    safety_cat: Optional[str],
+    tracking_enabled: bool,
+) -> Optional[str]:
+    """Persiste un situation_evidence emesso da Claude nel JSON di /converse.
+
+    GUARDIE (in ordine, tutte devono passare):
+      1. tracking_enabled — se opt-in OFF, skip silente
+      2. safety_cat is None — MAI scrivere durante turni safety (§7 hardening)
+      3. situation_evidence è un dict non vuoto
+      4. entity_type ∈ _VALID_ENTITY_TYPES
+      5. entity token compare in user_text (evita che Claude inventi entità)
+
+    Ritorna situation_id se scritto, None altrimenti.
+    """
+    # G1: opt-in
+    if not tracking_enabled:
+        return None
+    # G2: safety separation
+    if safety_cat is not None:
+        logger.info(f"[situation] SKIP: safety trigger active (cat={safety_cat})")
+        return None
+    # G3: shape check
+    if not isinstance(situation_evidence, dict):
+        return None
+    entity_raw = (situation_evidence.get("entity") or "").strip()
+    title = (situation_evidence.get("title") or entity_raw).strip()
+    entity_type = (situation_evidence.get("entity_type") or "other").lower().strip()
+    raw_tags = situation_evidence.get("tags") or []
+    if not entity_raw or len(entity_raw) < 2 or len(entity_raw) > 80:
+        return None
+    # G4: entity_type whitelist
+    if entity_type not in _VALID_ENTITY_TYPES:
+        entity_type = "other"
+    # G5: entity token deve comparire nel user_text
+    entity_norm = _normalize_entity(entity_raw)
+    if not entity_norm:
+        return None
+    user_tokens = _tokenize_text(user_text or "")
+    entity_tokens = _tokenize_text(entity_norm)
+    if not (entity_tokens & user_tokens):
+        logger.info(f"[situation] SKIP: entity not in user_text (entity={entity_norm!r})")
+        return None
+    # Normalizza tags (rimuovi eventuali termini emotivi come safety extra)
+    _EMOTION_TAG_BLACKLIST = {
+        "ansia", "tristezza", "gioia", "rabbia", "paura", "serenita",
+        "confusione", "tenerezza", "vergogna", "sollievo", "depressione",
+        "panico", "stress", "angoscia",
+    }
+    norm_tags = []
+    for t in raw_tags:
+        if not isinstance(t, str):
+            continue
+        tn = _normalize_token(t)
+        if len(tn) < 3 or tn in _IT_STOPWORDS or tn in _EMOTION_TAG_BLACKLIST:
+            continue
+        if tn not in norm_tags:
+            norm_tags.append(tn)
+        if len(norm_tags) >= 4:
+            break
+    # UPSERT su situations
+    now_iso = datetime.now(timezone.utc).isoformat()
+    uid = current_user_id()
+    try:
+        existing = await db[_SITUATIONS_COLL].find_one(
+            {"profile_id": uid, "entity": entity_norm}
+        )
+        if existing:
+            situation_id = existing["id"]
+            await db[_SITUATIONS_COLL].update_one(
+                {"id": situation_id},
+                {
+                    "$set": {"last_evidence_at": now_iso},
+                    "$inc": {"evidence_count": 1},
+                },
+            )
+        else:
+            new_sit = Situation(
+                profile_id=uid,
+                entity=entity_norm,
+                entity_type=entity_type,
+                title=title[:80],
+                tags=norm_tags,
+                evidence_count=1,
+            )
+            await db[_SITUATIONS_COLL].insert_one(new_sit.model_dump())
+            situation_id = new_sit.id
+        # Append evidence
+        ev = SituationEvidence(
+            profile_id=uid,
+            situation_id=situation_id,
+            turn_snippet=(user_text or "")[:200],
+            contains_resolution_claim=_detect_resolution_claim(user_text),
+        )
+        await db[_SITUATION_EVIDENCES_COLL].insert_one(ev.model_dump())
+        logger.info(
+            f"[situation] upsert entity={entity_norm!r} type={entity_type} "
+            f"count={(existing or {}).get('evidence_count', 0) + 1} "
+            f"resolution_claim={ev.contains_resolution_claim}"
+        )
+        return situation_id
+    except Exception as e:
+        logger.warning(f"[situation] save failed: {e}")
+        return None
 
 
 # ---------- Routes ----------
@@ -1478,6 +1834,15 @@ class TaccuinoSettings(BaseModel):
     # L'utente può disattivarlo dalle Impostazioni se preferisce zero
     # comunicazioni esterne.
     web_search_enabled: bool = True
+    # === SITUATION TRACKING V3.1 (agosto 2026) ==============================
+    # Opt-in esplicito, DEFAULT OFF. Se True, Koda può ricordare persone/
+    # argomenti/situazioni che l'utente le ha raccontato (entity-first, zero
+    # profiling psicologico). Guarda `situations` + `situation_evidences`.
+    # Copy Settings: "Se lo attivi, Koda può ricordare le cose che le hai
+    # raccontato — persone, argomenti, situazioni. Le ricorda quando torni
+    # a parlarne tu. Puoi vedere cosa ricorda e cancellare quello che vuoi.
+    # Se lo lasci spento, Koda non conserva questo tipo di contesto."
+    situation_tracking_enabled: bool = False
 
 
 class Profile(BaseModel):
@@ -2039,7 +2404,7 @@ def _build_temporal_context(recent: List[TimelineEntry]) -> str:
     return "\n".join(parts) + "\n"
 
 
-def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEntry], memories: Optional[List["Memory"]] = None, trial_state: Optional[str] = None) -> str:
+def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEntry], memories: Optional[List["Memory"]] = None, trial_state: Optional[str] = None, situations: Optional[List["Situation"]] = None) -> str:
     lang = profile.language or "it"
     lang_name = {
         "it": "italiano",
@@ -2496,6 +2861,12 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"MEMORIA DI LUNGO PERIODO sull'utente (NON ripeterla apertamente, è il TUO sapere su di lui/lei):\n"
         f"{memory}\n"
         f"\n"
+        # === SITUATION TRACKING V3.1 (agosto 2026) — opt-in ==================
+        # Il blocco appare SOLO se l'utente ha attivato opt-in E se almeno una
+        # situation è stata triggerata dai token del turno corrente. Se il
+        # blocco è vuoto, il prompt è byte-identico a prima (backward compat).
+        + ((_format_situations_for_prompt(situations or []) + "\n\n") if situations else "")
+        +
         f"RICORDI SEMANTICI — momenti specifici che hai vissuto con questa persona\n"
         f"(usali con naturalezza, MAI come elenco a tappeto. Marker '⚫' = ricordo dal\n"
         f"Stanza dello Sfogo: lo SAI ma NON ne parli mai di tua iniziativa, solo se è\n"
@@ -2611,16 +2982,48 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f'  "extracted": {{ "domain": "...", "intent": "...", "amount": 12.5, "currency": "EUR", "item": "...", "when": "...", "flags": ["..."] }} or null,\n'
         f'  "actions": [{{ "type": "schedule_notification", "when_iso": "...", "title": "...", "body": "...", "label": "..." }}],\n'
         f'  "memory_update": "una breve frase da aggiungere alla memoria di lungo periodo, oppure null se nulla di rilevante",\n'
-        f'  "new_memory": {{ "concept": "frase astratta in TERZA persona su un momento/sentimento/fatto importante di questa conversazione (es: \'oggi è preoccupato per il lavoro\', \'gli piace la pizza di sua madre\', \'ha paura di non essere abbastanza per il padre\')", "tags": ["lavoro","preoccupazione"], "emotion": "ansia|tristezza|gioia|rabbia|paura|serenità|confusione|tenerezza|vergogna|sollievo|null", "importance": 6 }} oppure null,\n'
+        f'  "new_memory": {{ "concept": "frase astratta in TERZA persona su un momento/sentimento/fatto importante di questa conversazione (es: \'oggi è preoccupato per il lavoro\', \'gli piace la pizza di sua madre\', \'ha paura di non essere abbastanza per il padre\')", "tags": ["lavoro","preoccupazione"], "importance": 6 }} oppure null,\n'
+        f'  "situation_evidence": {{ "entity": "nome breve normalizzato (es: \'carlo\', \'il capo\', \'esame di storia\')", "entity_type": "person|topic|situation|place|activity|other", "title": "label leggibile", "tags": ["fratello","lavoro"] }} oppure null,\n'
         f'  "close_session": false\n'
         f"}}\n"
         f"\n"
         f"REGOLE PER 'new_memory':\n"
         f"  • Crea un ricordo SOLO se in questo scambio è emerso qualcosa di personalmente significativo (un fatto sull'utente, una preoccupazione ricorrente, una persona cara, un valore, una preferenza forte, un evento doloroso o gioioso).\n"
-        f"  • Importance 1-10: 1-4 = chiacchiera, 5-6 = degno di nota, 7-8 = momento importante, 9-10 = pilastro identitario. Salviamo solo da 5 in su.\n"
         f"  • concept: frase BREVE in terza persona (es. 'preferisce la pasta al pomodoro', 'sta uscendo da una relazione difficile'). MAI in seconda persona.\n"
-        f"  • tags: 3-6 keyword italiane lowercase senza accenti (es. 'famiglia', 'lavoro', 'ansia', 'figlia', 'paura').\n"
+        f"  • tags: 3-6 keyword italiane lowercase senza accenti (es. 'famiglia', 'lavoro', 'figlia').\n"
         f"  • Se nulla di rilevante è emerso → new_memory: null.\n"
+        f"  • NOTA (D1 2026-08): il campo 'emotion' è stato deprecato. Non usarlo più.\n"
+        f"    Il campo 'importance' resta accettato per backward-compat ma non entra\n"
+        f"    più nel ranking del retrieval — puoi ometterlo.\n"
+        f"\n"
+        f"━━━ REGOLE PER 'situation_evidence' (Situation Tracking V3.1) ━━━━━━\n"
+        f"Popola questo campo SOLO se in questo turno l'utente ha menzionato UNA\n"
+        f"persona / argomento / situazione con un nome o riferimento identificabile.\n"
+        f"È osservazione FATTUALE, non psicologica.\n"
+        f"\n"
+        f"  ✓ Esempi validi:\n"
+        f"    - Utente: \"Carlo mi ha scritto stamattina\"\n"
+        f"      → {{\"entity\": \"carlo\", \"entity_type\": \"person\", \"title\": \"Carlo\", \"tags\": [\"messaggio\"]}}\n"
+        f"    - Utente: \"Domani ho l'esame di storia\"\n"
+        f"      → {{\"entity\": \"esame di storia\", \"entity_type\": \"topic\", \"title\": \"Esame di storia\", \"tags\": [\"esame\",\"studio\"]}}\n"
+        f"    - Utente: \"Il mio capo mi ha chiesto di restare oltre\"\n"
+        f"      → {{\"entity\": \"il capo\", \"entity_type\": \"person\", \"title\": \"Il capo\", \"tags\": [\"lavoro\"]}}\n"
+        f"\n"
+        f"  ❌ NON popolare per:\n"
+        f"    - Contenuti emotivi generici (\"mi sento triste\", \"sono stanco\") — nessuna entità\n"
+        f"    - Riferimenti generici senza nome (\"la gente\", \"tutti\") — non identificabile\n"
+        f"    - Situazioni safety-related (auto/etero-lesionismo, violenza) — il server\n"
+        f"      te lo scarterebbe comunque, non provarci\n"
+        f"    - Persone/argomenti che NON sono stati menzionati in QUESTO turno\n"
+        f"      dall'utente. Non ripescare dal contesto passato.\n"
+        f"\n"
+        f"  Regole di forma:\n"
+        f"    - entity: nome breve, lowercase, senza accenti, max 80 char\n"
+        f"    - entity_type: SOLO uno tra person|topic|situation|place|activity|other\n"
+        f"    - tags: max 4, SOLO fattuali/descrittivi (es. \"fratello\", \"lavoro\", \"esame\")\n"
+        f"      MAI emotivi (❌ \"ansia\", \"paura\", \"tristezza\")\n"
+        f"    - Se nulla di identificabile → situation_evidence: null.\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"\n"
         f"━━━ CHIUSURA NATURALE CONVERSAZIONE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"Se l'utente ti SALUTA per chiudere la conversazione, imposta\n"
@@ -4814,6 +5217,17 @@ async def api_reset_profile():
     except Exception as e:
         logger.warning(f"[reset] memories delete failed: {e}")
 
+    # === Cancella Situation Tracking (agosto 2026) — GDPR completo ===========
+    try:
+        r_sit = await db[_SITUATIONS_COLL].delete_many(_situation_filter())
+        r_ev = await db[_SITUATION_EVIDENCES_COLL].delete_many(_situation_filter())
+        logger.info(
+            f"[reset] situations wiped: situations={r_sit.deleted_count} "
+            f"evidences={r_ev.deleted_count}"
+        )
+    except Exception as e:
+        logger.warning(f"[reset] situations delete failed: {e}")
+
     return {
         "ok": True,
         "message": "Memoria cancellata.",
@@ -5044,6 +5458,124 @@ async def api_delete_memory(memory_id: str):
     if r.deleted_count == 0:
         raise HTTPException(status_code=404, detail="memory not found")
     return {"ok": True}
+
+
+# ============================================================
+# SITUATION TRACKING V3.1 — endpoint API (agosto 2026)
+# ============================================================
+# Opt-in only. Lista + dettaglio + PATCH (mute/archive) + DELETE + wipe.
+# Coerenti con lo stile GDPR del resto dell'app (cancellazione utente-first).
+# ============================================================
+
+@api_router.get("/situations/status")
+async def api_situations_status():
+    """Stato Situation Tracking per la UI Settings.
+    Funziona anche con opt-in OFF (per mostrare il toggle spento).
+    """
+    profile = await get_or_create_profile()
+    enabled = bool((profile.settings or TaccuinoSettings()).situation_tracking_enabled)
+    if enabled:
+        try:
+            count = await db[_SITUATIONS_COLL].count_documents(
+                _situation_filter({"archived_at": None})
+            )
+        except Exception:
+            count = 0
+    else:
+        count = 0
+    return {"enabled": enabled, "count": count}
+
+
+@api_router.get("/situations")
+async def api_list_situations(limit: int = 100, include_archived: bool = False):
+    """Lista situations dell'utente (default: solo attive, non archiviate).
+    Richiede opt-in ON.
+    """
+    profile = await get_or_create_profile()
+    if not (profile.settings or TaccuinoSettings()).situation_tracking_enabled:
+        return {"situations": [], "count": 0, "enabled": False}
+    extra: Dict[str, Any] = {}
+    if not include_archived:
+        extra["archived_at"] = None
+    limit = max(1, min(500, limit))
+    docs = await db[_SITUATIONS_COLL].find(
+        _situation_filter(extra), {"_id": 0}
+    ).sort("last_evidence_at", -1).to_list(limit)
+    return {"situations": docs, "count": len(docs), "enabled": True}
+
+
+@api_router.get("/situations/{situation_id}")
+async def api_get_situation(situation_id: str, evidence_limit: int = 20):
+    """Dettaglio situation + ultime N evidence."""
+    profile = await get_or_create_profile()
+    if not (profile.settings or TaccuinoSettings()).situation_tracking_enabled:
+        raise HTTPException(status_code=403, detail="situation tracking disabled")
+    q = _situation_filter({"id": situation_id})
+    doc = await db[_SITUATIONS_COLL].find_one(q, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="situation not found")
+    evidence_limit = max(1, min(100, evidence_limit))
+    evidences = await db[_SITUATION_EVIDENCES_COLL].find(
+        _situation_filter({"situation_id": situation_id}), {"_id": 0}
+    ).sort("observed_at", -1).to_list(evidence_limit)
+    return {"situation": doc, "evidences": evidences}
+
+
+class SituationPatch(BaseModel):
+    user_muted: Optional[bool] = None
+    archived: Optional[bool] = None  # true → set archived_at now, false → clear
+
+
+@api_router.patch("/situations/{situation_id}")
+async def api_patch_situation(situation_id: str, req: SituationPatch):
+    """Silenzia/archivia una situation. Silent no-op se già in quello stato."""
+    profile = await get_or_create_profile()
+    if not (profile.settings or TaccuinoSettings()).situation_tracking_enabled:
+        raise HTTPException(status_code=403, detail="situation tracking disabled")
+    updates: Dict[str, Any] = {}
+    if req.user_muted is not None:
+        updates["user_muted"] = bool(req.user_muted)
+    if req.archived is not None:
+        updates["archived_at"] = datetime.now(timezone.utc).isoformat() if req.archived else None
+    if not updates:
+        return {"ok": True, "updated": False}
+    q = _situation_filter({"id": situation_id})
+    r = await db[_SITUATIONS_COLL].update_one(q, {"$set": updates})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="situation not found")
+    return {"ok": True, "updated": True, "changes": updates}
+
+
+@api_router.delete("/situations/{situation_id}")
+async def api_delete_situation(situation_id: str):
+    """Cancella una situation + tutte le sue evidence (hard delete, GDPR)."""
+    profile = await get_or_create_profile()
+    if not (profile.settings or TaccuinoSettings()).situation_tracking_enabled:
+        raise HTTPException(status_code=403, detail="situation tracking disabled")
+    q = _situation_filter({"id": situation_id})
+    r = await db[_SITUATIONS_COLL].delete_one(q)
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="situation not found")
+    ev = await db[_SITUATION_EVIDENCES_COLL].delete_many(
+        _situation_filter({"situation_id": situation_id})
+    )
+    return {"ok": True, "evidences_deleted": ev.deleted_count}
+
+
+@api_router.post("/situations/wipe")
+async def api_wipe_situations():
+    """Cancella TUTTO il Situation Tracking dell'utente (situations + evidences).
+    Funziona anche con opt-in OFF (permette di ripulire se l'utente disattiva).
+    Idempotente.
+    """
+    r1 = await db[_SITUATIONS_COLL].delete_many(_situation_filter())
+    r2 = await db[_SITUATION_EVIDENCES_COLL].delete_many(_situation_filter())
+    logger.info(f"[situation] wipe: situations={r1.deleted_count} evidences={r2.deleted_count}")
+    return {
+        "ok": True,
+        "situations_deleted": r1.deleted_count,
+        "evidences_deleted": r2.deleted_count,
+    }
 
 
 # ============================================================
@@ -5300,15 +5832,36 @@ async def api_converse(req: ConverseRequest):
     # ogni volta — Koda lì ricorda solo lo storico della sessione corrente
     # (passato dal client cifrato), niente di esterno.
     memories: List[Memory] = []
+    # === SITUATION TRACKING V3.1 — retrieval + dedup (agosto 2026) ==========
+    # Se l'utente ha attivato opt-in, carichiamo le situations che matchano
+    # i token del turno. Poi filtriamo via le memorie che overlapano coi loro
+    # token → nessuna doppia menzione della stessa entità nel prompt.
+    # Se opt-in OFF, comportamento invariato (byte-identico) rispetto a prima.
+    situations_for_prompt: List[Situation] = []
     if not req.ephemeral:
         try:
             memories = await _load_relevant_memories(text, limit=6)
         except Exception as e:
             logger.warning(f"[converse] memory load failed: {e}")
             memories = []
+        try:
+            _tracking_on = bool(
+                (profile.settings or TaccuinoSettings()).situation_tracking_enabled
+            )
+            if _tracking_on:
+                recent_texts = [
+                    e.user_message or "" for e in (recent or [])[-3:] if e.user_message
+                ]
+                situations_for_prompt = await _load_relevant_situations(text, recent_texts)
+                if situations_for_prompt:
+                    reserved = _situation_reserved_tokens(situations_for_prompt)
+                    memories = _dedup_memories_against_situations(memories, reserved)
+        except Exception as e:
+            logger.warning(f"[converse] situations load failed: {e}")
+            situations_for_prompt = []
 
     trial_state_for_prompt = _compute_trial_state(profile)
-    system_prompt = _build_conversation_system_prompt(profile, recent, memories=memories, trial_state=trial_state_for_prompt)
+    system_prompt = _build_conversation_system_prompt(profile, recent, memories=memories, trial_state=trial_state_for_prompt, situations=situations_for_prompt)
     history_str = _format_history_for_llm(recent)
 
     # === WEB SEARCH (opt-in via heuristic OR explicit override) ===
@@ -5534,11 +6087,29 @@ async def api_converse(req: ConverseRequest):
 
         # === RICORDI SEMANTICI (giugno 2026) ===
         # Claude ha eventualmente prodotto `new_memory` nella risposta JSON.
-        # Se importance >= 5, lo persistiamo in `taccuino_memories`.
-        # Non blocchiamo la response per questo (fire-and-forget ok perché
-        # la query è veloce e già nel thread async).
+        # D1 (2026-08): la soglia importance non è più un gate obbligatorio.
+        #
+        # === §7 HARDENING (agosto 2026) — SAFETY→MEMORY GUARD ===============
+        # Se il turno matcha una categoria safety, NON scrivere il ricordo.
+        # Simmetria con la stessa guardia nel fast pipeline. Chiude il canale
+        # "memoria che eredita rischio" (audit Situation Tracking V3.1).
+        _user_text_for_guards = ""
+        try:
+            _user_text_for_guards = (req.user_message or "").strip()
+        except Exception:
+            pass
+        try:
+            safety_cat_now = _detect_safety_category(_user_text_for_guards)
+        except Exception:
+            safety_cat_now = None
+
         nm = data.get("new_memory")
-        if isinstance(nm, dict) and nm.get("concept"):
+        if safety_cat_now is not None:
+            logger.info(
+                f"[memory] SKIP: safety trigger active "
+                f"(cat={safety_cat_now}) — new_memory not persisted"
+            )
+        elif isinstance(nm, dict) and nm.get("concept"):
             try:
                 await _save_memory(
                     concept=str(nm.get("concept") or ""),
@@ -5549,6 +6120,22 @@ async def api_converse(req: ConverseRequest):
                 )
             except Exception as e:
                 logger.warning(f"[converse] new_memory save failed: {e}")
+
+        # === SITUATION TRACKING V3.1 (agosto 2026) — piggy-back D3=A =========
+        try:
+            sit_ev = data.get("situation_evidence")
+            if sit_ev:
+                _tracking_on = bool(
+                    (profile.settings or TaccuinoSettings()).situation_tracking_enabled
+                )
+                await _save_situation_evidence(
+                    situation_evidence=sit_ev,
+                    user_text=_user_text_for_guards,
+                    safety_cat=safety_cat_now,
+                    tracking_enabled=_tracking_on,
+                )
+        except Exception as e:
+            logger.warning(f"[converse] situation_evidence save failed: {e}")
 
     return ConverseResponse(user_entry=user_entry, ai_entry=ai_entry, profile=profile)
 
@@ -10545,15 +11132,34 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
     # Stesso pattern di /converse: scoring tag+importance+time-decay.
     # In modalità ephemeral nessun ricordo (Stanza dello Sfogo).
     memories_for_prompt: List[Memory] = []
+    situations_for_prompt: List[Situation] = []
     if not req.ephemeral:
         try:
             memories_for_prompt = await _load_relevant_memories(text, limit=6)
         except Exception as e:
             logger.warning(f"[converse-stream-audio] memory load failed: {e}")
             memories_for_prompt = []
+        # === SITUATION TRACKING V3.1 (agosto 2026) — retrieval + dedup ==========
+        try:
+            _tracking_on = bool(
+                (profile.settings or TaccuinoSettings()).situation_tracking_enabled
+            )
+            if _tracking_on:
+                recent_texts = [
+                    e.user_message or "" for e in (recent or [])[-3:] if e.user_message
+                ]
+                situations_for_prompt = await _load_relevant_situations(text, recent_texts)
+                if situations_for_prompt:
+                    reserved = _situation_reserved_tokens(situations_for_prompt)
+                    memories_for_prompt = _dedup_memories_against_situations(
+                        memories_for_prompt, reserved
+                    )
+        except Exception as e:
+            logger.warning(f"[converse-stream-audio] situations load failed: {e}")
+            situations_for_prompt = []
 
     trial_state_for_prompt = _compute_trial_state(profile)
-    system_prompt = _build_conversation_system_prompt(profile, recent, memories=memories_for_prompt, trial_state=trial_state_for_prompt)
+    system_prompt = _build_conversation_system_prompt(profile, recent, memories=memories_for_prompt, trial_state=trial_state_for_prompt, situations=situations_for_prompt)
     history_str = _format_history_for_llm(recent)
 
     # === WEB SEARCH OPZIONALE (Tavily) ===
@@ -13746,9 +14352,27 @@ async def _fast_pipeline_task(
             # parlando solo a voce Koda non accumulava ricordi specifici
             # ricuperabili nei turni successivi. SOLO in non-ephemeral
             # (zero-knowledge in Stanza dello Sfogo).
+            #
+            # === §7 HARDENING (agosto 2026) — SAFETY→MEMORY GUARD =============
+            # Se il turno matcha una categoria safety, NON scrivere il ricordo.
+            # Chiude il canale "memoria che eredita rischio" descritto
+            # nell'audit architetturale di Situation Tracking V3.1: senza
+            # questa guardia un turno safety potrebbe generare un ricordo
+            # con concept sensibile che poi verrebbe rialla-out in turni
+            # futuri come "contesto" — anti-pattern rispetto alla
+            # separazione per costruzione tra i due sistemi.
+            try:
+                safety_cat_for_memory = _detect_safety_category(text or "")
+            except Exception:
+                safety_cat_for_memory = None
             try:
                 nm = data.get("new_memory")
-                if isinstance(nm, dict) and (nm.get("concept") or "").strip():
+                if safety_cat_for_memory is not None:
+                    logger.info(
+                        f"[memory] SKIP: safety trigger active "
+                        f"(cat={safety_cat_for_memory}) — new_memory not persisted"
+                    )
+                elif isinstance(nm, dict) and (nm.get("concept") or "").strip():
                     await _save_memory(
                         concept=str(nm.get("concept") or "").strip(),
                         tags=nm.get("tags"),
@@ -13758,6 +14382,32 @@ async def _fast_pipeline_task(
                     )
             except Exception as e:
                 logger.warning(f"[fast] new_memory save failed: {e}")
+
+            # === SITUATION TRACKING V3.1 (agosto 2026) — piggy-back D3=A ======
+            # Se opt-in ON e safety non attivo, persisti l'evidence emesso
+            # da Claude nel campo `situation_evidence` del JSON. Tutte le
+            # guardie (opt-in, safety, entity in user_text) sono in
+            # `_save_situation_evidence`.
+            try:
+                sit_ev = data.get("situation_evidence")
+                if sit_ev:
+                    # Recupera opt-in dal profilo (fresh — potrebbe essere
+                    # cambiato da PATCH /settings tra un turno e l'altro)
+                    try:
+                        _prof_now = await get_or_create_profile()
+                        _tracking_on = bool(
+                            (_prof_now.settings or TaccuinoSettings()).situation_tracking_enabled
+                        )
+                    except Exception:
+                        _tracking_on = False
+                    await _save_situation_evidence(
+                        situation_evidence=sit_ev,
+                        user_text=text or "",
+                        safety_cat=safety_cat_for_memory,
+                        tracking_enabled=_tracking_on,
+                    )
+            except Exception as e:
+                logger.warning(f"[fast] situation_evidence save failed: {e}")
 
         total_ms = int((time.time() - t0) * 1000)
         logger.info(f"[fast {session_id[:8]}] DONE in {total_ms}ms ({sentence_idx} sentences)")
@@ -14663,6 +15313,9 @@ async def startup_db_client():
     # Ricordi semantici (giugno 2026)
     try:
         await _ensure_memories_index()
+        logger.info("[startup] memories index ok")
+        await _ensure_situations_index()
+        logger.info("[startup] situations index ok")
         logger.info("[startup] taccuino_memories indexes ready")
     except Exception as e:
         logger.warning(f"[startup] memories index init failed: {e}")
