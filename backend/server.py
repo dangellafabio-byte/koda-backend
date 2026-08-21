@@ -11454,6 +11454,51 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
             except Exception as e:
                 logger.warning(f"[converse-stream-audio] profile update failed: {e}")
 
+            # === MEMORIA SEMANTICA + SITUATION TRACKING (agosto 2026) ==========
+            # Questo endpoint SSE è quello effettivamente usato dal client
+            # iPhone (né /api/converse classico né WS voice-stream). Fino a
+            # oggi NON salvava né new_memory né situation_evidence: le
+            # modifiche architetturali della memoria semantica e del
+            # Situation Tracking non passavano da qui. Fix definitivo:
+            # aggiungiamo entrambi i canali con le stesse guardie del
+            # fast pipeline (§7 hardening safety + opt-in Situation Tracking).
+            try:
+                safety_cat_sse = _detect_safety_category(text or "")
+            except Exception:
+                safety_cat_sse = None
+            try:
+                nm = data.get("new_memory")
+                if safety_cat_sse is not None:
+                    logger.info(
+                        f"[memory] SKIP: safety trigger active "
+                        f"(cat={safety_cat_sse}) — new_memory not persisted"
+                    )
+                elif isinstance(nm, dict) and (nm.get("concept") or "").strip():
+                    await _save_memory(
+                        concept=str(nm.get("concept") or "").strip(),
+                        tags=nm.get("tags"),
+                        emotion=nm.get("emotion"),
+                        importance=int(nm.get("importance") or 5),
+                        source="chat",
+                    )
+            except Exception as e:
+                logger.warning(f"[converse-stream-audio] new_memory save failed: {e}")
+
+            try:
+                sit_ev = data.get("situation_evidence")
+                if sit_ev:
+                    _tracking_on = bool(
+                        (profile.settings or TaccuinoSettings()).situation_tracking_enabled
+                    )
+                    await _save_situation_evidence(
+                        situation_evidence=sit_ev,
+                        user_text=text or "",
+                        safety_cat=safety_cat_sse,
+                        tracking_enabled=_tracking_on,
+                    )
+            except Exception as e:
+                logger.warning(f"[converse-stream-audio] situation_evidence save failed: {e}")
+
         # === Waveform extraction + result cache (Step 3 — Fase 4) ===
         # Per-sentence waveform tasks have been firing concurrently as each
         # sentence streamed. Here we just finalize: compute the FULL
