@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Koda — Paced · Rifinitura respiro</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #14181d;
+    --panel-2: #1a1f26;
+    --border: #2a323c;
+    --text: #e8eaed;
+    --muted: #9aa4b2;
+    --accent: #7fb3ff;
+    --accent-warm: #ffb87f;
+    --ref: #6c7280;
+    --h4: #a6da95;
+    --h5: #f5bde6;
+    --h6: #f5a97f;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; padding: 24px 16px 80px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; line-height: 1.5; }
+  .sub code { background: var(--panel-2); padding: 1px 6px; border-radius: 4px; font-size: 12px; color: var(--accent); }
+  h2 {
+    font-size: 13px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--accent-warm);
+    margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+  }
+  .formula {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; margin: 12px 0 10px;
+    font-size: 13px; line-height: 1.6; color: var(--muted);
+  }
+  .formula strong { color: var(--accent-warm); }
+  .formula code { color: var(--text); font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; }
+  .criteria {
+    background: var(--panel); border-left: 3px solid var(--accent-warm);
+    padding: 12px 14px; border-radius: 6px; margin: 8px 0 20px;
+    font-size: 13px; line-height: 1.6; color: var(--muted);
+  }
+  .criteria strong { color: var(--text); }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 12px; padding: 16px; margin-bottom: 14px;
+  }
+  .card.ref { border-left-color: var(--ref); opacity: 0.85; }
+  .card.h4 { border-left-color: var(--h4); }
+  .card.h5 { border-left-color: var(--h5); }
+  .card.h6 { border-left-color: var(--h6); }
+  .row-top {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 10px; margin-bottom: 6px; flex-wrap: wrap;
+  }
+  .card-title { font-weight: 700; font-size: 17px; letter-spacing: -0.005em; }
+  .card.ref .card-title { color: var(--ref); }
+  .card.h4 .card-title { color: var(--h4); }
+  .card.h5 .card-title { color: var(--h5); }
+  .card.h6 .card-title { color: var(--h6); }
+  .card-sub {
+    font-size: 12px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .params { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 10px; }
+  .chip {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 3px 10px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 11px; color: var(--muted);
+  }
+  .chip b { color: var(--text); }
+  .text {
+    font-size: 14px; color: var(--text);
+    background: var(--panel-2); padding: 10px 12px;
+    border-radius: 6px; margin-bottom: 12px;
+    font-style: italic; line-height: 1.5;
+  }
+  .text .tag {
+    color: var(--accent); font-style: normal;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 11px; background: rgba(127,179,255,0.10);
+    padding: 1px 5px; border-radius: 3px;
+  }
+  audio { width: 100%; display: block; height: 40px; }
+  .hypothesis {
+    color: var(--muted); font-size: 12px; margin-top: 10px;
+    line-height: 1.5; padding-top: 8px; border-top: 1px dashed var(--border);
+  }
+  .hypothesis strong { color: var(--accent-warm); font-weight: 600; }
+  .footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 28px; line-height: 1.7; }
+  .footer a { color: var(--accent); text-decoration: none; margin: 0 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Paced · Rifinitura respiro</h1>
+  <div class="sub">
+    Fase 4 · carattere della voce validato · varia solo il trattamento del <code>[breath]</code>.
+  </div>
+
+  <div class="formula">
+    <strong>Parametri fissi</strong> (identici in tutti i sample):<br/>
+    <code>stability 0.45</code> · <code>style 0.50</code> · <code>similarity_boost 0.90</code> · <code>speed 0.74</code><br/>
+    Cambia solo il testo (dove/se compare il respiro).
+  </div>
+
+  <div class="criteria">
+    <strong>Domanda:</strong> quale trattamento del respiro mantiene meglio la sensazione di <em>«rallentiamo insieme»</em> senza far percepire una tecnica?<br/>
+    <strong>Ricorda:</strong> paced modifica il ritmo della presenza, non la lunghezza della risposta.
+  </div>
+
+  <!-- H1 reference -->
+  <h2>Reference — respiro troppo pronunciato</h2>
+  <div class="card ref">
+    <div class="row-top">
+      <span class="card-title">H1 · [breath] iniziale (già valutato)</span>
+      <span class="card-sub">Reference</span>
+    </div>
+    <div class="params">
+      <span class="chip">tag <b>[breath]</b> + [pause]</span>
+    </div>
+    <div class="text"><span class="tag">[breath]</span> Aspetta. <span class="tag">[pause]</span> Piano. <span class="tag">[pause]</span> Ci sono.</div>
+    <audio controls preload="none" src="H1_short_breath.mp3"></audio>
+    <div class="hypothesis">
+      <strong>Nota:</strong> validato come carattere ma il respiro suona troppo pronunciato/lungo. Serve da termine di paragone per le varianti sotto.
+    </div>
+  </div>
+
+  <h2>Varianti · trattamento respiro</h2>
+
+  <!-- H4 -->
+  <div class="card h4">
+    <div class="row-top">
+      <span class="card-title">H4 · [softly] senza [breath]</span>
+      <span class="card-sub">Solo morbidezza prosodica</span>
+    </div>
+    <div class="params">
+      <span class="chip">tag <b>[softly]</b> + [pause]</span>
+    </div>
+    <div class="text"><span class="tag">[softly]</span> Aspetta. <span class="tag">[pause]</span> Piano. <span class="tag">[pause]</span> Ci sono.</div>
+    <audio controls preload="none" src="H4_softly_no_breath.mp3"></audio>
+    <div class="hypothesis">
+      <strong>Verifica:</strong> la warmth prosodica basta a creare presenza, senza bisogno del respiro udibile?
+    </div>
+  </div>
+
+  <!-- H5 -->
+  <div class="card h5">
+    <div class="row-top">
+      <span class="card-title">H5 · [breath] all'interno</span>
+      <span class="card-sub">Respiro come pausa fisica interna</span>
+    </div>
+    <div class="params">
+      <span class="chip">tag <b>[breath]</b> centrale + [pause]</span>
+    </div>
+    <div class="text">Aspetta. <span class="tag">[breath]</span> Piano. <span class="tag">[pause]</span> Ci sono.</div>
+    <audio controls preload="none" src="H5_breath_interno.mp3"></audio>
+    <div class="hypothesis">
+      <strong>Ipotesi:</strong> spostare il respiro tra le frasi, non in apertura. Meno "annunciato", più organico?
+    </div>
+  </div>
+
+  <!-- H6 -->
+  <div class="card h6">
+    <div class="row-top">
+      <span class="card-title">H6 · minimale</span>
+      <span class="card-sub">Limite — solo prosodia lenta</span>
+    </div>
+    <div class="params">
+      <span class="chip">tag <b>[softly]</b> · nessuna [pause] esplicita</span>
+    </div>
+    <div class="text"><span class="tag">[softly]</span> Aspetta. Piano. Ci sono.</div>
+    <audio controls preload="none" src="H6_softly_minimale.mp3"></audio>
+    <div class="hypothesis">
+      <strong>Limite:</strong> a speed 0.74 la prosodia da sola crea il ritmo, o le pause esplicite sono necessarie?
+    </div>
+  </div>
+
+  <div class="footer">
+    <a href="./ibridi.html">← Ibridi H1/H2/H3</a> ·
+    <a href="./finalisti.html">← Finalisti P2/P4/P7/P9</a> ·
+    <a href="./">← 10 sample iniziali</a>
+  </div>
+</div>
+</body>
+</html>

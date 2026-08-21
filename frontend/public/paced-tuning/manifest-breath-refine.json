@@ -1,0 +1,54 @@
+{
+  "generated_at": "2026-08-21T10:32:12.046Z",
+  "base_settings": {
+    "stability": 0.45,
+    "style": 0.5,
+    "similarity_boost": 0.9,
+    "speed": 0.74,
+    "use_speaker_boost": true
+  },
+  "samples": [
+    {
+      "key": "H4_softly_no_breath",
+      "label": "H4 — [softly] senza [breath]",
+      "text": "[softly] Aspetta. [pause] Piano. [pause] Ci sono.",
+      "settings": {
+        "stability": 0.45,
+        "style": 0.5,
+        "similarity_boost": 0.9,
+        "speed": 0.74,
+        "use_speaker_boost": true
+      },
+      "filename": "H4_softly_no_breath.mp3",
+      "bytes": 86979
+    },
+    {
+      "key": "H5_breath_interno",
+      "label": "H5 — [breath] spostato all'interno",
+      "text": "Aspetta. [breath] Piano. [pause] Ci sono.",
+      "settings": {
+        "stability": 0.45,
+        "style": 0.5,
+        "similarity_boost": 0.9,
+        "speed": 0.74,
+        "use_speaker_boost": true
+      },
+      "filename": "H5_breath_interno.mp3",
+      "bytes": 100772
+    },
+    {
+      "key": "H6_softly_minimale",
+      "label": "H6 — [softly] Aspetta. minimale (no breath, no pause)",
+      "text": "[softly] Aspetta. Piano. Ci sono.",
+      "settings": {
+        "stability": 0.45,
+        "style": 0.5,
+        "similarity_boost": 0.9,
+        "speed": 0.74,
+        "use_speaker_boost": true
+      },
+      "filename": "H6_softly_minimale.mp3",
+      "bytes": 53542
+    }
+  ]
+}
