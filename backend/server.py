@@ -11872,7 +11872,7 @@ def _infer_user_gender(profile: "Profile") -> str:
     return "n"
 
 
-def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], memories: Optional[List["Memory"]] = None, trial_state: Optional[str] = None) -> str:
+def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], memories: Optional[List["Memory"]] = None, trial_state: Optional[str] = None, situations: Optional[List["Situation"]] = None) -> str:
     """Prompt CONDENSATO per il fast path — mantiene l'identità essenziale
     di Koda ma rimuove tutte le sezioni ridondanti (umanità calibrata G/F/E/D/C/B/A,
     dinamicità emotiva 4-modi, registro linguistico, ecc.) che fanno
@@ -12327,7 +12327,21 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"o 'Milano' — max 60 char. Solo se l'utente lo dichiara ESPLICITAMENTE in "
         f"questo turno, altrimenti null.\n"
         f"\n"
-        f'{{"reply":"[TONE:warm] ...","tone":"warm|calm|energetic|concerned|urgent|neutral","actions":[],"memory_update":null,"trait_update":null,"new_memory":null,"close_session":false,"home_update":null}}'
+        # === SITUATION TRACKING V3.1 (agosto 2026) — regole condensate ==========
+        # Fast prompt vuole brevità: qui la versione minima ma esplicita per
+        # ottenere adherence del modello. Le regole ESTESE sono nel full prompt.
+        + (
+            (_format_situations_for_prompt(situations or []) + "\n\n")
+            if situations else ""
+        )
+        + f"\"situation_evidence\": SE in questo turno l'utente menziona UNA persona/"
+        f"argomento/situazione con nome identificabile (es. 'Carlo', 'l'esame di storia', "
+        f"'il capo'), POPOLA con {{\"entity\":\"nome lowercase\",\"entity_type\":\"person|topic|situation|place|activity|other\",\"title\":\"Label leggibile\",\"tags\":[\"2-4 tag fattuali\"]}}. "
+        f"SEMPRE null se: (a) niente entità nel turno, (b) contenuti generici emotivi ('mi sento triste'), "
+        f"(c) tema safety (autolesionismo/violenza). Tag SOLO fattuali (\"fratello\",\"lavoro\") MAI emotivi (\"ansia\",\"paura\").\n"
+        f"\n"
+        # Esempio JSON con situation_evidence POPOLATO (adherence via one-shot):
+        f'{{"reply":"[TONE:warm] ...","tone":"warm|calm|energetic|concerned|urgent|paced|neutral","actions":[],"memory_update":null,"trait_update":null,"new_memory":null,"situation_evidence":{{"entity":"carlo","entity_type":"person","title":"Carlo","tags":["fratello"]}},"close_session":false,"home_update":null}}'
     )
 
     # === FIX 2026-06-26 v17 (P1 — anti-allucinazione temporale) ===
@@ -12705,8 +12719,30 @@ async def _fast_pipeline_task(
                 pass
         _t_after_memories = time.time()
 
+        # === SITUATION TRACKING V3.1 (agosto 2026) — retrieval + dedup ==========
+        # Se opt-in ON, carico le situations che matchano il turno + filtro le
+        # memorie che overlapano coi loro token. Se opt-in OFF → skip completo,
+        # comportamento byte-identico al pre-D3.
+        situations_for_prompt: List[Situation] = []
+        if not ephemeral:
+            try:
+                _tracking_on = bool(
+                    (profile.settings or TaccuinoSettings()).situation_tracking_enabled
+                )
+                if _tracking_on:
+                    recent_texts = [
+                        e.user_message or "" for e in (recent or [])[-3:] if e.user_message
+                    ]
+                    situations_for_prompt = await _load_relevant_situations(text, recent_texts)
+                    if situations_for_prompt:
+                        reserved = _situation_reserved_tokens(situations_for_prompt)
+                        memories = _dedup_memories_against_situations(memories, reserved)
+            except Exception as e:
+                logger.warning(f"[fast] situations load failed: {e}")
+                situations_for_prompt = []
+
         _trial_state_for_prompt = _compute_trial_state(profile)
-        sys_prompt = _build_fast_system_prompt(profile, recent, memories=memories, trial_state=_trial_state_for_prompt)
+        sys_prompt = _build_fast_system_prompt(profile, recent, memories=memories, trial_state=_trial_state_for_prompt, situations=situations_for_prompt)
         _t_after_prompt_build = time.time()
 
         # === AUDIO HONESTY (Fabio 2026-06-23) ============================
@@ -13034,7 +13070,18 @@ async def _fast_pipeline_task(
             # budget. Riduzione stimata: ~25-30% del costo TTS per turno.
             # Se la qualità delle risposte cala (troncate a metà), rialzare
             # a 240 come compromesso.
-            max_tokens=200,
+            # === D3=A (2026-08-21) — max_tokens alzato per situation_evidence ==
+            # Prima 200. Non bastano più: con il nuovo campo `situation_evidence`
+            # (piggy-back Situation Tracking) il JSON di output può richiedere
+            # +40-50 token extra. In produzione questo causava JSON troncato in
+            # mezzo a `new_memory`/`situation_evidence` → parsing fallito →
+            # NIENTE ricordo/situation salvati (bug scoperto durante l'E2E).
+            # Nuovo cap: 320 token (headroom ~15% sopra worst-case teorico).
+            # Impatto costo: la reply reale non si allunga (Claude non riempie
+            # per riempire), solo il JSON viene sempre completato. Costo LLM
+            # marginale (Haiku 4.5 output ~$0.5/1M tok → +0.006 c€/turno).
+            # Costo TTS ZERO change (dipende dalla reply, non dal JSON).
+            max_tokens=320,
             timeout=18,
             # === CLAUDE TTFT INVESTIGATION (2026-08-13 Fabio) ================
             # `include_usage: True` fa arrivare l'oggetto `usage` nell'ULTIMO
@@ -13942,8 +13989,20 @@ async def _fast_pipeline_task(
                                         body_buffer = []
                             else:
                                 overflow_buffer.append(sent)
-            if extractor.reply_finished:
-                break
+            # === FIX 2026-08-21 (Fabio) — NO break dopo reply_finished =========
+            # Prima qui c'era `if extractor.reply_finished: break` che chiudeva
+            # lo stream Claude appena la reply era completa → il resto del JSON
+            # (new_memory, situation_evidence, close_session, home_update) NON
+            # veniva mai letto → parsing JSON tornava dict vuoto → NIENTE ricordo
+            # e nessuna situation salvati durante le sessioni voice.
+            # Bug latente da mesi: il piggy-back memoria era attivo nel codice
+            # ma non ha mai avuto effetto nel fast pipeline.
+            # Ora continuiamo a `extractor.feed(piece)` (l'extractor aggiunge al
+            # buffer indipendentemente dalla modalità, vedi `self.buf += chunk`)
+            # ma non spawnamo più TTS perché `new_chars` sarà vuoto in mode 'done'.
+            # Latenza: +200-500ms sulla chiusura DONE event (audio è già emesso).
+            # if extractor.reply_finished:
+            #     break
 
         # === CLAUDE TTFT INVESTIGATION (2026-08-13 Fabio) — wall time ==========
         # Registra il wall-time completo dello stream Claude (da acompletion
