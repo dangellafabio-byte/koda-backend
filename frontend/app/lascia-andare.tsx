@@ -49,6 +49,7 @@ import EclipseOrb, { OrbStatus } from "../components/EclipseOrb";
 import {
   playOpenPhrase,
   playClosePhrase,
+  playFirstBootIntroSequence,
   stopAll as stopVoicePhrase,
 } from "../lib/lasciaAndareVoice";
 // NB: rimosso `import { api } from "../lib/api"` — non più necessario dopo la
@@ -320,6 +321,22 @@ export default function LasciaAndareScreen() {
   const pillOpacity = useRef(new Animated.Value(0)).current;
   // Guard uscita: se l'uscita è già iniziata NON riavviamo animazioni
   const exitingRef = useRef(false);
+
+  // === SPEC 2026-08-21 (Fabio) — FIRSTBOOT NARRATIVE GATE ===================
+  // Nel primo boot (params.firstBoot === "1") l'ingresso in LA riproduce
+  // in successione le due clip narrative "Questo è il mio cuore…" +
+  // "Provalo." (vedi lib/lasciaAndareVoice.ts::playFirstBootIntroSequence).
+  // Durante queste 2 clip:
+  //   • Il pulsante X è NASCOSTO (non visibile, non toccabile)
+  //   • Il mic NON è attivo (recorder non ancora inizializzato)
+  //   • L'orb è visibile ma in stato calmo (speaking → warm palette)
+  // Solo a fine 2ª clip il gate si apre: X appare, recorder parte, watcher
+  // di silenzio per il reveal parte. Nei boot ≥ 2, il gate parte già "open"
+  // e il comportamento è quello classico (playOpenPhrase → recorder).
+  const [firstBootGate, setFirstBootGate] = useState<"playing" | "open">(
+    isFirstBoot ? "playing" : "open"
+  );
+  const firstBootGateOpenRef = useRef<boolean>(!isFirstBoot);
 
   // === HEART REVEAL WATCHER — refs & state (Fabio 2026-08-22) ==============
   // Semantica:
@@ -674,13 +691,35 @@ export default function LasciaAndareScreen() {
         // session è ancora in modalità playback → speaker principale.
         // Fire-and-forget su errore (non vogliamo bloccare l'utente se
         // il file audio non parte per qualche motivo).
+        //
+        // === SPEC 2026-08-21 (Fabio) — SEQUENZA NARRATIVA FIRSTBOOT ===
+        // Se params.firstBoot === "1", riproduciamo le due clip narrative
+        // "Questo è il mio cuore…" + "Provalo." (BLOCCANTE, ~11s totali)
+        // e SOSTITUIAMO la classica "Prenditi il tuo tempo". Durante
+        // queste clip l'X è nascosto e il mic non è ancora attivo.
+        // A fine sequenza si apre il gate → X visibile, recorder attivo.
         try {
-          await playOpenPhrase(voiceKey);
+          if (isFirstBoot) {
+            console.log("[LasciaAndare] firstBoot=1 → play narrative sequence (cuore + provalo)");
+            await playFirstBootIntroSequence();
+          } else {
+            await playOpenPhrase(voiceKey);
+          }
         } catch (e) {
           console.warn("[LasciaAndare] open phrase failed:", e);
         }
 
         if (cancelled) return;
+
+        // Apri il gate (X visibile + rende il mic pronto ad essere attivato)
+        if (isFirstBoot && !firstBootGateOpenRef.current) {
+          firstBootGateOpenRef.current = true;
+          setFirstBootGate("open");
+          // Reset baseline del watcher a POST-clip così i 60s di sessione
+          // minima si contano dal momento in cui l'utente può realmente parlare
+          sessionStartedAtRef.current = Date.now();
+          lastSpeechAtRef.current = Date.now();
+        }
 
         // FASE 2: Audio mode = RECORDING (mic attivo per il VAD)
         try {
@@ -1127,22 +1166,29 @@ export default function LasciaAndareScreen() {
   return (
     <View style={styles.root}>
       {/* Uscita — pulsante discreto in alto a sinistra.
-          Touch target 44×44 (linee guida iOS), icona X neutra. */}
-      <TouchableOpacity
-        onPress={handleExitOrReveal}
-        onLongPress={onLongPressExit}
-        delayLongPress={1500}
-        hitSlop={16}
-        style={[
-          styles.exitBtn,
-          { top: Math.max(insets.top + 8, 20) },
-        ]}
-        accessibilityRole="button"
-        accessibilityLabel="Esci da Lascia andare"
-        testID="lascia-andare-exit"
-      >
-        <Ionicons name="close" size={22} color="rgba(255,255,255,0.55)" />
-      </TouchableOpacity>
+          Touch target 44×44 (linee guida iOS), icona X neutra.
+          === SPEC 2026-08-21 (Fabio) — FIRSTBOOT GATE ===
+          Nel primo boot la X è NASCOSTA finché non finisce la sequenza
+          narrativa (clip cuore + provalo). Il flag `firstBootGate` diventa
+          "open" a fine sequenza e la X appare (senza animazione: la comparsa
+          coincide con "Provalo." → naturale). Nei boot ≥ 2 parte già "open". */}
+      {firstBootGate === "open" && (
+        <TouchableOpacity
+          onPress={handleExitOrReveal}
+          onLongPress={onLongPressExit}
+          delayLongPress={1500}
+          hitSlop={16}
+          style={[
+            styles.exitBtn,
+            { top: Math.max(insets.top + 8, 20) },
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Esci da Lascia andare"
+          testID="lascia-andare-exit"
+        >
+          <Ionicons name="close" size={22} color="rgba(255,255,255,0.55)" />
+        </TouchableOpacity>
+      )}
 
       {/* Orb centrale.
           - "idle" → respiro lento, palette calda

@@ -58,10 +58,16 @@ import { useTheme } from "../lib/theme";
 const TAG = "KODA_INTRO_V3";
 
 // ==================== AUDIO CLIP REGISTRY (V3) ====================
+// === SPEC 2026-08-21 (Fabio) — SEQUENZA DEFINITIVA V3 =============
+// Rimosse dal registry (e dal disco) le clip obsolete della vecchia
+// sequenza "Come ti chiami?": come_ti_chiami-cielo.mp3, intro_v3_te_lo_mostro-cielo.mp3.
+// Aggiunta intro_v3_parte_di_me-cielo.mp3 come clip di transizione verso LA.
+// La clip intro_v3_saluto-cielo.mp3 è stata rigenerata con il nuovo testo:
+//   "Ciao, piacere di conoscerti… io sono Koda, e tu?"
+// (rispetto al vecchio testo "Ciao. Io sono Koda. Voglio farti conoscere il mio cuore.")
 const CIELO_CLIPS = {
   intro_v3_saluto: require("../assets/sounds/intro/intro_v3_saluto-cielo.mp3"),
-  come_ti_chiami: require("../assets/sounds/intro/come_ti_chiami-cielo.mp3"),
-  intro_v3_te_lo_mostro: require("../assets/sounds/intro/intro_v3_te_lo_mostro-cielo.mp3"),
+  intro_v3_parte_di_me: require("../assets/sounds/intro/intro_v3_parte_di_me-cielo.mp3"),
 };
 
 // ==================== STATE MACHINE TYPES ====================
@@ -70,28 +76,41 @@ type OrbState = "idle" | "speaking" | "listening" | "thinking";
 type Turn =
   | { kind: "silence"; ms: number; label?: string; orbState?: OrbState }
   | { kind: "speak"; clipKey: keyof typeof CIELO_CLIPS }
-  | { kind: "listen"; maxMs?: number; showLabel?: boolean }
+  | { kind: "listen"; maxMs?: number; showLabel?: boolean; noTranscript?: boolean }
   | { kind: "save_and_handoff" };
 
 // La sequenza — ogni pausa ha un'intenzione narrativa.
 // REGOLA IDLE (ereditata da V2): orb NON torna idle tra frase e frase —
 // solo all'apertura assoluta.
+//
+// === SPEC 2026-08-21 (Fabio) — SEQUENZA DEFINITIVA V3 ==================
+// Prima apertura, obbligatoria, una sola volta. Nessuna X disponibile
+// durante questa sequenza — l'utente non può uscire finché non arriva
+// in Lascia Andare (dove sarà LA a gestire la sua fase iniziale).
+//
+//   #0 silence 1200ms      orb=idle       (apertura calma)
+//   #1 speak  saluto       orb=speaking   "Ciao, piacere di conoscerti… io sono Koda, e tu?"
+//   #2 listen VAD-only     orb=listening  Utente risponde. STT usato SOLO come proxy VAD
+//                                          per rilevare l'end-of-speech. Il transcript è
+//                                          COMPLETAMENTE SCARTATO: niente updateProfile,
+//                                          niente user_display_name, niente gender lookup,
+//                                          niente uso del contenuto. Timeout hardware 45s
+//                                          (safety-net esistente): se l'utente non parla,
+//                                          si procede comunque alla clip successiva SENZA
+//                                          reprompt e senza forzatura.
+//   #3 speak  parte_di_me  orb=speaking   "Voglio farti conoscere una parte di me."
+//   #4 save_and_handoff                    Set intro_v3_completed_at + onboarded=true,
+//                                          fade-out, router.replace("/lascia-andare?firstBoot=1")
 const CONVERSATION_V3: Turn[] = [
   // #0 — apertura silenziosa: UNICO idle di tutto il flusso
   { kind: "silence", ms: 1200, label: "apertura", orbState: "idle" },
-  // #1 — saluto unificato (~5.5s): "Ciao. Io sono Koda. Voglio farti conoscere il mio cuore."
+  // #1 — saluto + domanda finale: "Ciao, piacere di conoscerti… io sono Koda, e tu?"
   { kind: "speak", clipKey: "intro_v3_saluto" },
-  // #2 — respiro: Koda prende fiato, non si spegne
-  { kind: "silence", ms: 900, label: "respiro", orbState: "speaking" },
-  // #3 — domanda nome (~1.2s)
-  { kind: "speak", clipKey: "come_ti_chiami" },
-  // #4 — utente parla il nome, VAD end-of-speech nativo, maxMs=45s
-  { kind: "listen", maxMs: 45000, showLabel: true },
-  // #5 — accoglienza: Koda "elabora" (thinking), NIENTE ripetizione nome
-  { kind: "silence", ms: 900, label: "accoglienza", orbState: "thinking" },
-  // #6 — "Bene. Te lo mostro." (~2s)
-  { kind: "speak", clipKey: "intro_v3_te_lo_mostro" },
-  // #7 — save profilo + handoff a Lascia Andare con firstBoot=1
+  // #2 — VAD-only: transcript SCARTATO. Non usiamo il contenuto della risposta.
+  { kind: "listen", maxMs: 45000, noTranscript: true },
+  // #3 — clip di transizione: "Voglio farti conoscere una parte di me."
+  { kind: "speak", clipKey: "intro_v3_parte_di_me" },
+  // #4 — flag intro V3 completata + handoff verso Lascia Andare
   { kind: "save_and_handoff" },
 ];
 
@@ -287,9 +306,16 @@ export default function KodaIntroV3() {
     [advance]
   );
 
-  // ==================== START LISTEN (STT con retry su silenzio) ====================
+  // ==================== START LISTEN (STT come proxy VAD; con retry su silenzio) ====================
+  // === SPEC 2026-08-21 (Fabio) — VAD-ONLY MODE =========================
+  // Se `noTranscript=true`, questa funzione usa la stessa pipeline
+  // ExpoSpeechRecognitionModule ma il testo prodotto viene ESPLICITAMENTE
+  // SCARTATO in `finalize()`. Nessun handleNameCaptured, nessuna
+  // api.updateProfile, nessuna interpretazione: l'unico segnale
+  // significativo è "l'utente ha finito di parlare" (result final,
+  // safety-net timeout, o restart-give-up dopo N silenzi).
   const startListen = useCallback(
-    async (maxMs: number, withLabel: boolean) => {
+    async (maxMs: number, withLabel: boolean, noTranscript: boolean = false) => {
       if (listenActiveRef.current) return;
       listenActiveRef.current = true;
 
@@ -355,6 +381,17 @@ export default function KodaIntroV3() {
         if (!listenActiveRef.current) return;
         capturedFinal = true;
         stopSTT();
+        if (noTranscript) {
+          // === SPEC 2026-08-21 (Fabio) — TRANSCRIPT DISCARDED ===
+          // Lo STT è servito solo come proxy VAD: rilevata la fine del
+          // parlato, buttiamo via il contenuto e avanziamo. Nessun
+          // salvataggio, nessuna profilazione, nessun uso del testo.
+          try {
+            console.log(`[${TAG}] listen(noTranscript) end-of-speech → advance (raw len=${text.length} DISCARDED)`);
+          } catch {}
+          advance();
+          return;
+        }
         handleNameCaptured(text);
       };
 
@@ -497,16 +534,16 @@ export default function KodaIntroV3() {
   // intro_v3, e naviga a /lascia-andare?firstBoot=1 con fade morbido.
   const doSaveAndHandoff = useCallback(async () => {
     setOrbState("thinking");
+    // === SPEC 2026-08-21 (Fabio) — NO USER-RESPONSE PERSISTENCE ===
+    // La nuova sequenza intro V3 NON acquisisce alcuna informazione
+    // dall'utente. Il turn "listen" era solo un VAD proxy: il transcript
+    // è stato scartato. Qui manteniamo SOLO:
+    //   - onboarded=true (segna che l'utente è passato dall'intro)
+    //   - flag SecureStore.intro_v3_completed_at (router condizionale)
+    // Rimosso: name, koda_voice, ai_gender, user_gender, user_display_name.
     try {
-      const user_gender = userGenderRef.current;
-      await api.updateProfile({
-        name: userName || undefined,
-        koda_voice: "aria", // default Cielo
-        ai_gender: "f",
-        ...(user_gender === "m" || user_gender === "f" ? { user_gender } : {}),
-        onboarded: true,
-      });
-      console.log(`[${TAG}] profile saved: name=${userName || "(none)"} user_gender=${user_gender}`);
+      await api.updateProfile({ onboarded: true });
+      console.log(`[${TAG}] profile marked onboarded (no name/gender capture — VAD-only intro)`);
     } catch (e) {
       console.warn(`[${TAG}] profile save failed (procedo comunque):`, e);
     }
@@ -517,12 +554,6 @@ export default function KodaIntroV3() {
       await SecureStore.setItemAsync("intro_v3_completed_at", String(Date.now()));
     } catch (e) {
       console.warn(`[${TAG}] set intro_v3_completed_at failed:`, e);
-    }
-    // Salva anche il nome localmente (fallback se backend non riesce)
-    if (userName) {
-      try {
-        await SecureStore.setItemAsync("user_display_name", userName);
-      } catch {}
     }
     setOrbState("idle");
     console.log(`[${TAG}] intro V3 complete → fade + handoff to /lascia-andare?firstBoot=1`);
@@ -538,7 +569,7 @@ export default function KodaIntroV3() {
         console.warn(`[${TAG}] router.replace failed:`, e);
       }
     });
-  }, [userName, router, screenOpacity]);
+  }, [router, screenOpacity]);
 
   // ==================== TURN EXECUTOR ====================
   useEffect(() => {
@@ -575,11 +606,11 @@ export default function KodaIntroV3() {
       case "listen": {
         setOrbState("listening");
         try {
-          console.log(`[${TAG} DIAG] listen maxMs=${currentTurn.maxMs ?? 45000} showLabel=${!!currentTurn.showLabel}`);
+          console.log(`[${TAG} DIAG] listen maxMs=${currentTurn.maxMs ?? 45000} showLabel=${!!currentTurn.showLabel} noTranscript=${!!currentTurn.noTranscript}`);
         } catch {}
         configureAudioForRecording();
         timerRef.current = setTimeout(() => {
-          startListen(currentTurn.maxMs ?? 45000, !!currentTurn.showLabel);
+          startListen(currentTurn.maxMs ?? 45000, !!currentTurn.showLabel, !!currentTurn.noTranscript);
         }, 250);
         break;
       }
@@ -659,29 +690,14 @@ export default function KodaIntroV3() {
         thickness={neonStatus === "idle" ? 2 : 3}
       />
 
-      {/* Skip (×) discreto in alto a destra */}
-      <TouchableOpacity
-        onPress={() => {
-          cleanupCurrent();
-          // Se l'utente skippa: salva completamento intro V3 e vai a LA senza firstBoot
-          // (non gli mostriamo la sequenza narrativa di nuovo, e non gli forziamo la
-          //  reveal della voce visto che ha esplicitamente skippato)
-          SecureStore.setItemAsync("intro_v3_completed_at", String(Date.now())).catch(() => {});
-          SecureStore.setItemAsync("heart_reveal_dismissed_at", String(Date.now())).catch(() => {});
-          Animated.timing(screenOpacity, {
-            toValue: 0,
-            duration: 400,
-            useNativeDriver: true,
-          }).start(() => {
-            try { router.replace("/lascia-andare"); } catch {}
-          });
-        }}
-        style={[styles.skipBtn, { top: insets.top + 12 }]}
-        hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
-        testID="intro-v3-skip"
-      >
-        <Ionicons name="close" size={20} color="rgba(226,232,240,0.5)" />
-      </TouchableOpacity>
+      {/* === SPEC 2026-08-21 (Fabio) — NESSUNA X NELL'INTRO ===================
+          La prima apertura è obbligatoria e non skippabile. Il pulsante X
+          precedente (testID "intro-v3-skip") è stato RIMOSSO in linea con
+          la spec definitiva V3: "Nessuna via d'uscita qui — è fisso e
+          obbligatorio, nessuna X disponibile in questo blocco".
+          La X torna disponibile solo dopo che la sequenza narrativa
+          arriva in Lascia Andare (fase B), controllata dal gate
+          `firstBootGate` in app/lascia-andare.tsx. */}
 
       {/* Orb centrale */}
       <View style={styles.centerContainer}>

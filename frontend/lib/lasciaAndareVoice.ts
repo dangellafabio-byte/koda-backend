@@ -40,6 +40,16 @@ const closeCielo = require("../assets/sounds/lascia-andare/close-cielo.mp3");
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const closeVento = require("../assets/sounds/lascia-andare/close-vento.mp3");
 
+// === SPEC 2026-08-21 (Fabio) — Clip narrative firstBoot V3 =================
+// Riprodotte una sola volta all'ingresso di LA se params.firstBoot === "1".
+// Non hanno varianti Cielo/Vento: la sequenza narrativa V3 usa sempre
+// la voce di default (Cielo). Le due clip vengono generate/mantenute
+// dallo script /app/backend/scripts/gen_intro_clips.py.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const firstBootCuoreClip = require("../assets/sounds/intro/la_cuore-cielo.mp3");
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const firstBootProvaloClip = require("../assets/sounds/intro/la_provalo-cielo.mp3");
+
 // ============================================================================
 // Mapping voice → asset
 // ============================================================================
@@ -90,7 +100,7 @@ function releaseCurrent() {
  * Promise che si risolve quando il playback termina (o timeout 5s).
  * Sostituisce eventuale player in corso.
  */
-function playAndWait(source: number): Promise<void> {
+function playAndWait(source: number, timeoutMs: number = 5000): Promise<void> {
   return new Promise((resolve) => {
     // Ferma eventuale playback precedente (raro: apertura+chiusura non
     // si sovrappongono mai, ma difensivo)
@@ -104,8 +114,9 @@ function playAndWait(source: number): Promise<void> {
       resolve();
     };
 
-    // Timeout hard di sicurezza (le frasi durano ~1-1.5s; 5s è abbondante)
-    const safetyTimer = setTimeout(finish, 5000);
+    // Timeout hard di sicurezza (default 5s; alcune clip narrative firstBoot
+    // durano ~10s quindi il chiamante può passare un valore più alto)
+    const safetyTimer = setTimeout(finish, timeoutMs);
 
     try {
       const player = createAudioPlayer(source, { updateInterval: 100 });
@@ -169,4 +180,37 @@ export function playClosePhrase(voice: LasciaAndareVoice): Promise<void> {
  */
 export function stopAll(): void {
   releaseCurrent();
+}
+
+/**
+ * === SPEC 2026-08-21 (Fabio) — SEQUENZA NARRATIVA FIRSTBOOT V3 ===
+ * Riproduce in successione BLOCCANTE le due clip narrative
+ * dell'ingresso in Lascia Andare al PRIMO boot:
+ *   1. la_cuore-cielo.mp3
+ *      "Questo è il mio cuore, è tuo… qui puoi dire tutto quello che
+ *       vuoi senza usare i freni né limiti, qui sei adesso nel tuo
+ *       spazio dove nessuno ti può sentire."
+ *   2. la_provalo-cielo.mp3
+ *      "Provalo."
+ *
+ * La Promise si risolve solo quando la seconda clip termina naturalmente
+ * (o hitta il timeout di sicurezza). Il chiamante (app/lascia-andare.tsx)
+ * usa questo per gating: X invisibile e mic disattivato finché non
+ * risolve.
+ *
+ * Timeout di sicurezza per clip:
+ *   - la_cuore: 15s (clip più lunga ~10-12s, margine ampio)
+ *   - la_provalo: 5s (clip brevissima ~0.7s)
+ *
+ * Nessun fallback silenzioso: se la clip fallisce, la Promise si risolve
+ * comunque via safety timeout (non blocca l'utente in eterno), ma il
+ * fallimento viene loggato → visibile in Sentry.
+ */
+export async function playFirstBootIntroSequence(): Promise<void> {
+  try {
+    await playAndWait(firstBootCuoreClip, 15000);
+    await playAndWait(firstBootProvaloClip, 5000);
+  } catch (e) {
+    console.warn("[lasciaAndareVoice] firstBoot intro sequence failed:", e);
+  }
 }
