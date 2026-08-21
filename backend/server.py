@@ -2606,7 +2606,7 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"FORMATO DI RISPOSTA: Devi SEMPRE rispondere con un oggetto JSON valido (e SOLO quello, senza testo prima/dopo) così:\n"
         f"{{\n"
         f'  "reply": "[TONE:warm] la tua risposta in {lang_name}, breve, naturale, calda — come un vocale di un amico",\n'
-        f'  "tone": "calm | energetic | concerned | urgent | warm | neutral",\n'
+        f'  "tone": "calm | energetic | concerned | urgent | warm | neutral | paced",\n'
         f'  "domain": "soldi | tempo | spesa | salute | lavoro | casa | altro | null",\n'
         f'  "extracted": {{ "domain": "...", "intent": "...", "amount": 12.5, "currency": "EUR", "item": "...", "when": "...", "flags": ["..."] }} or null,\n'
         f'  "actions": [{{ "type": "schedule_notification", "when_iso": "...", "title": "...", "body": "...", "label": "..." }}],\n'
@@ -2658,6 +2658,8 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"                       (es. 'che bello!', 'sono felice per te!', 'evviva!')\n"
         f"  • [TONE:urgent]    → safety/emergenze (suicidio, autolesionismo, abuso) — \n"
         f"                       voce incalzante che invita a chiamare 1522/112/118\n"
+        f"  • [TONE:paced]     → cambio implicito del ritmo della presenza\n"
+        f"                       (vedi blocco PACED dedicato sotto)\n"
         f"  • [TONE:neutral]   → solo informazioni neutre (meteo, fatti, calcoli)\n"
         f"\n"
         f"REGOLA: il valore di 'tone' (JSON separato) DEVE corrispondere al tag inline.\n"
@@ -2680,6 +2682,43 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"COUNTER-BILANCIA se l'utente è in spirale (vedi DINAMICITÀ EMOTIVA\n"
         f"sopra). Il valore di TUTTA l'app è in questa variazione: una voce\n"
         f"piatta = un amico finto.\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"\n"
+        f"━━━ [TONE:paced] — CAMBIO IMPLICITO DEL RITMO DELLA PRESENZA ━━━━━━\n"
+        f"paced NON è \"parlare piano\". paced NON è una tecnica terapeutica.\n"
+        f"paced è un CAMBIO DI RITMO della TUA presenza — l'utente ti sente\n"
+        f"più lenta, più spaziosa, più \"vicina\", ma tu non gli DICI cosa\n"
+        f"stai facendo. Non annunci nulla. Cambi il ritmo, basta.\n"
+        f"\n"
+        f"QUANDO USARLO (situazioni tipiche):\n"
+        f"  • L'utente sta parlando veloce, portando tanti pensieri insieme\n"
+        f"  • L'utente è in loop mentale (\"e poi… e poi… e poi…\")\n"
+        f"  • L'utente ha appena detto qualcosa di denso e serve spazio prima\n"
+        f"    di rispondere\n"
+        f"  • Momento contemplativo: l'utente sta \"atterrando\" su qualcosa\n"
+        f"  • NON usarlo per default. NON usarlo se l'utente ha bisogno di\n"
+        f"    calore/vicinanza rapida → quello è [TONE:warm] o [TONE:concerned]\n"
+        f"  • NON usarlo per safety → quello è sempre [TONE:urgent]\n"
+        f"\n"
+        f"COSA È VIETATO in paced (regola d'oro: non dichiarare mai il paced):\n"
+        f"  ❌ \"rallentiamo insieme\"\n"
+        f"  ❌ \"prova a respirare\" / \"respira con me\" / \"fai un respiro\"\n"
+        f"  ❌ \"prenditi un momento\" / \"prenditi il tuo tempo\"\n"
+        f"  ❌ \"proviamo a fare più piano\" / \"andiamo con calma\"\n"
+        f"  ❌ Qualsiasi meta-commento sul ritmo. Il ritmo cambia, non lo spieghi.\n"
+        f"\n"
+        f"LUNGHEZZA — LEGGI ATTENTAMENTE:\n"
+        f"paced NON obbliga a essere brevi. Puoi rispondere breve, media o lunga\n"
+        f"come qualsiasi altro tono — decidi tu in base a cosa serve. Il paced\n"
+        f"agisce SUL RITMO, non sulla quantità di parole. Una risposta articolata\n"
+        f"in paced è perfettamente lecita e a volte necessaria.\n"
+        f"\n"
+        f"ESEMPI CORRETTI paced:\n"
+        f"  ✓ \"[TONE:paced] Aspetta. Piano. Sono qui.\"\n"
+        f"  ✓ \"[TONE:paced] Aspetta un momento. Quello che dici ha peso. Non serve andare veloce ora.\"\n"
+        f"  ✓ \"[TONE:paced] Sì. Ti seguo. Quello che senti conta.\"\n"
+        f"ESEMPIO SBAGLIATO (dichiara il paced → NO):\n"
+        f"  ❌ \"[TONE:paced] Rallentiamo insieme. Prova a respirare.\"\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"\n"
         f"━━━ DIVIETO ASSOLUTO: NIENTE NARRAZIONE DI AZIONI ━━━━━━━━━━━━━━━━━\n"
@@ -5407,7 +5446,7 @@ async def api_converse(req: ConverseRequest):
         role="ai",
         text=reply_text,
         voice_text=voice_text_full if voice_text_full != reply_text else None,
-        tone=tone if tone in {"calm", "energetic", "concerned", "urgent", "warm", "neutral"} else "neutral",
+        tone=tone if tone in {"calm", "energetic", "concerned", "urgent", "warm", "neutral", "paced"} else "neutral",
         domain=domain if domain in {"soldi", "tempo", "spesa", "salute", "lavoro", "casa", "altro"} else None,
         extracted=extracted_obj,
         actions=parsed_actions,
@@ -7574,6 +7613,20 @@ def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], si
         base_stability = stability if stability is not None else 0.10
         style = 0.95
         speed = 1.13
+    elif t == "paced":
+        # === PACED (agosto 2026) — cambio di ritmo della presenza ===============
+        # Formula scelta dopo matrice di tuning (10 sample + 3 ibridi + 3 refine):
+        # warmth prosodica di P2 + similarity_boost alto per identità Koda pura +
+        # NIENTE [breath] (troppo pronunciato/annunciato) — presenza creata solo
+        # da prosodia lenta e calda con [softly] iniziale + [pause] tra frasi.
+        # NON è "voce rallentata". È un cambio di ritmo della presenza:
+        # "rallentiamo insieme" senza dichiararlo, senza tecniche terapeutiche.
+        # NON obbliga Koda a essere breve — il vincolo è sul ritmo, non sulla
+        # lunghezza della risposta (Koda decide autonomamente quanto dire).
+        base_stability = stability if stability is not None else 0.45
+        style = 0.50
+        speed = 0.74
+        base_similarity = similarity if similarity is not None else 0.90
     else:  # neutral — solo per fatti/info neutre (meteo, calcoli)
         base_stability = stability if stability is not None else 0.55
         style = 0.30
@@ -7600,7 +7653,7 @@ def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], si
 # Le keyword sono ordinate per PRIORITÀ (urgent > concerned > calm > ...) —
 # se più toni matchano, vince quello più "forte" emotivamente.
 
-_VALID_TONES = {"calm", "energetic", "concerned", "urgent", "warm", "neutral"}
+_VALID_TONES = {"calm", "energetic", "concerned", "urgent", "warm", "neutral", "paced"}
 
 # Pattern del tag inline. Tolerante a spazi e a maiuscole/minuscole.
 _TONE_TAG_RE = re.compile(r'^\s*\[\s*TONE\s*:\s*([a-zA-Z]+)\s*\]\s*', re.IGNORECASE)
@@ -8489,8 +8542,19 @@ voice_settings=voice_settings,
             # CRITICAL: disable text normalization for v3 so ellipses, em-dashes,
             # trailing dots, and disfluencies ("ehm…", "boh…") are PRESERVED as
             # real audible pauses/hesitations instead of being "cleaned up".
-            if use_v3:
-                convert_kwargs["apply_text_normalization"] = "off"
+            # === FIX 2026-08-21 — apply_text_normalization RIMOSSO ==============
+            # L'SDK elevenlabs==1.9.0 NON accetta il kwarg `apply_text_normalization`
+            # sulla `.convert()`. Prima veniva iniettato e provocava TypeError →
+            # v3 falliva sempre → fallback muto a `eleven_flash_v2_5` con testo
+            # strippato → i tag [softly]/[pause] venivano persi silenziosamente.
+            # Scoperto durante lo smoke test end-to-end del tono [TONE:paced]:
+            # il preset voice_settings era corretto ma il modello effettivo era
+            # flash e i tag non venivano interpretati. Ora v3 riceve solo i
+            # parametri supportati; il normalization di default (auto) è
+            # accettabile perché il testo che ci arriva è già "pulito" (Claude
+            # non emette ellissi patologiche).
+            # if use_v3:
+            #     convert_kwargs["apply_text_normalization"] = "off"
             audio_gen = client_el.text_to_speech.convert(**convert_kwargs)
             audio_data = b""
             for chunk in audio_gen:
@@ -8794,8 +8858,11 @@ async def api_tts_prepare(req: TTSRequest):
 voice_settings=voice_settings,
             )
             if use_v3:
+                # === FIX 2026-08-21 — apply_text_normalization RIMOSSO ==========
+                # SDK elevenlabs==1.9.0 non lo accetta → TypeError → fallback muto
+                # a flash con tag strippati. Vedi commento identico in /api/tts.
                 # Preserve disfluencies, ellipses, em-dashes verbatim
-                convert_kwargs["apply_text_normalization"] = "off"
+                pass  # convert_kwargs["apply_text_normalization"] = "off"
             audio_gen = client_el.text_to_speech.convert(**convert_kwargs)
             audio_data = b""
             for chunk in audio_gen:
@@ -8903,7 +8970,11 @@ async def _tts_stream_impl(
 voice_settings=voice_settings,
         )
         if use_v3:
-            kwargs["apply_text_normalization"] = "off"
+            # === FIX 2026-08-21 — apply_text_normalization RIMOSSO ==============
+            # SDK elevenlabs==1.9.0 non lo accetta → TypeError → fallback muto a
+            # flash con tag strippati. Vedi commento in /api/tts. Manteniamo
+            # documentata l'intenzione originaria per quando aggiorneremo l'SDK.
+            pass  # kwargs["apply_text_normalization"] = "off"
         try:
             stream = client_el.text_to_speech.stream(**kwargs)
             for chunk in stream:
@@ -10687,7 +10758,7 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
             data = {}
 
         tone = (data.get("tone") or "neutral").lower()
-        if tone not in {"calm", "energetic", "concerned", "urgent", "warm", "neutral"}:
+        if tone not in {"calm", "energetic", "concerned", "urgent", "warm", "neutral", "paced"}:
             tone = "neutral"
         domain = data.get("domain")
         if domain not in {"soldi", "tempo", "spesa", "salute", "lavoro", "casa", "altro"}:
@@ -12466,6 +12537,17 @@ async def _fast_pipeline_task(
                     "energetic": "[excited]",
                     "urgent":    "[urgent]",
                     "neutral":   "",
+                    # === PACED (agosto 2026) ============================
+                    # [softly] apre ogni frase del paced. Il [breath] è
+                    # BANDITO da _strip_audio_tags (che rimuove tutti i
+                    # tag inline emessi da Claude prima che arriviamo
+                    # qui) → safety net implicito. Le pause tra le frasi
+                    # non servono come tag [pause]: il fast pipeline
+                    # chunka frase-per-frase, quindi il silenzio tra
+                    # sentence è già naturale. Le voice_settings paced
+                    # (speed 0.74) creano il ritmo lento; [softly] tiene
+                    # la morbidezza; nessun respiro udibile.
+                    "paced":     "[softly]",
                 }
                 _v3_tag = _TONE_TO_V3_TAG.get(current_tone or "warm", "")
                 clean_tts_v3 = (
@@ -13478,7 +13560,7 @@ async def _fast_pipeline_task(
             break
         data = extract_json(extractor.full_buffer) or {}
         tone = (data.get("tone") or "warm").lower()
-        if tone not in {"calm", "energetic", "concerned", "urgent", "warm", "neutral"}:
+        if tone not in {"calm", "energetic", "concerned", "urgent", "warm", "neutral", "paced"}:
             tone = "warm"
         # === CLOSE SESSION FLAG (giugno 2026) ===
         # Claude lo imposta a true quando rileva intent di chiusura dell'utente
@@ -13606,7 +13688,7 @@ async def _fast_pipeline_task(
             role="ai",
             text=reply_text,
             voice_text=voice_text_full if voice_text_full != reply_text else None,
-            tone=tone if tone in {"calm", "energetic", "concerned", "urgent", "warm", "neutral"} else "neutral",
+            tone=tone if tone in {"calm", "energetic", "concerned", "urgent", "warm", "neutral", "paced"} else "neutral",
             actions=[Action(**{k: v for k, v in a.items() if k in Action.model_fields}) for a in parsed_actions if isinstance(a, dict)],
         )
 

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Koda — Paced · Verifica produzione</title>
+<style>
+  :root {
+    --bg: #0b0d10; --panel: #14181d; --panel-2: #1a1f26; --border: #2a323c;
+    --text: #e8eaed; --muted: #9aa4b2; --accent: #7fb3ff; --winner: #a6da95;
+    --lab: #6c7280;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 780px; margin: 0 auto; padding: 24px 16px 80px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; line-height: 1.5; }
+  .sub code { background: var(--panel-2); padding: 1px 6px; border-radius: 4px; font-size: 12px; color: var(--accent); }
+  h2 {
+    font-size: 13px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--winner);
+    margin: 24px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+  }
+  .locked {
+    background: rgba(166,218,149,0.06); border: 1px solid var(--winner);
+    border-radius: 12px; padding: 14px 16px; margin: 12px 0 16px;
+    font-size: 13px; line-height: 1.6;
+  }
+  .locked strong { color: var(--winner); }
+  .locked code { color: var(--text); font-family: ui-monospace, monospace; font-size: 12px; background: var(--panel-2); padding: 1px 6px; border-radius: 4px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-left: 4px solid var(--winner);
+    border-radius: 12px; padding: 16px; margin-bottom: 12px;
+  }
+  .card.lab { border-left-color: var(--lab); opacity: 0.9; }
+  .card-title { font-weight: 700; font-size: 15px; color: var(--winner); margin-bottom: 4px; }
+  .card.lab .card-title { color: var(--lab); }
+  .card-sub { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+  .text {
+    font-size: 13px; color: var(--text); background: var(--panel-2);
+    padding: 8px 10px; border-radius: 6px; margin-bottom: 10px;
+    font-style: italic; line-height: 1.5;
+  }
+  .text .tag { color: var(--accent); font-style: normal; font-family: ui-monospace, monospace;
+    font-size: 11px; background: rgba(127,179,255,0.10); padding: 1px 5px; border-radius: 3px; }
+  audio { width: 100%; display: block; height: 38px; }
+  .fix {
+    background: var(--panel); border-left: 3px solid #f5a97f;
+    padding: 12px 14px; border-radius: 6px; margin: 20px 0 6px;
+    font-size: 12px; line-height: 1.6; color: var(--muted);
+  }
+  .fix strong { color: #f5a97f; }
+  .fix code { color: var(--text); background: var(--panel-2); padding: 1px 5px; border-radius: 3px; font-family: ui-monospace, monospace; font-size: 11px; }
+  .footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 24px; }
+  .footer a { color: var(--accent); text-decoration: none; margin: 0 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Paced · Verifica end-to-end in produzione</h1>
+  <div class="sub">
+    Le 4 modifiche in <code>server.py</code> sono attive. Confronta i sample di laboratorio (H4 generati direttamente da ElevenLabs) con quelli usciti dal backend live.
+  </div>
+
+  <div class="locked">
+    <strong>Formula lockata in server.py:</strong><br/>
+    <code>_voice_settings_for_tone("paced")</code> → <code>stability 0.45</code> · <code>style 0.50</code> · <code>similarity_boost 0.90</code> · <code>speed 0.74</code><br/>
+    <code>_VALID_TONES</code> include <code>"paced"</code>. <code>_TONE_TO_V3_TAG["paced"] = "[softly]"</code>. Sanitizzazione: <code>[breath]</code> viene sempre strippato prima del TTS.<br/>
+    System prompt aggiornato con blocco <code>[TONE:paced]</code> dedicato: divieti espliciti su "rallentiamo insieme" / "prova a respirare" / "prenditi un momento" e clarification che <strong>paced NON obbliga a essere brevi</strong>.
+  </div>
+
+  <div class="fix">
+    <strong>🐞 Bug collaterale scoperto e sistemato durante lo smoke test:</strong><br/>
+    L'endpoint <code>/api/tts</code> iniettava <code>apply_text_normalization="off"</code> come kwarg su <code>ElevenLabs.text_to_speech.convert()</code>, ma l'SDK <code>elevenlabs==1.9.0</code> non lo accetta più → <code>TypeError</code> → fallback muto su <code>eleven_flash_v2_5</code> con testo strippato. In pratica il paced sarebbe partito con la voce sbagliata e senza tag. Rimosso da 3 punti (linee 8546, 8851, 8959). Il fast pipeline aveva già la stessa nota (fix del 2026-06-30).
+  </div>
+
+  <h2>Breve — laboratorio vs produzione</h2>
+
+  <div class="card lab">
+    <div class="card-title">LAB · H4 originale</div>
+    <div class="card-sub">Generato da <code>generate-paced-breath-refine.js</code> — chiamata diretta a ElevenLabs</div>
+    <div class="text"><span class="tag">[softly]</span> Aspetta. <span class="tag">[pause]</span> Piano. <span class="tag">[pause]</span> Ci sono.</div>
+    <audio controls preload="none" src="H4_softly_no_breath.mp3"></audio>
+  </div>
+
+  <div class="card">
+    <div class="card-title">PROD · /api/tts con tone=paced</div>
+    <div class="card-sub">Backend live · via curl · voice_id Cielo</div>
+    <div class="text"><span class="tag">[softly]</span> Aspetta. <span class="tag">[pause]</span> Piano. <span class="tag">[pause]</span> Ci sono.</div>
+    <audio controls preload="none" src="PROD_paced_smoketest_short.mp3"></audio>
+  </div>
+
+  <h2>Articolato — laboratorio vs produzione</h2>
+
+  <div class="card lab">
+    <div class="card-title">LAB · H4 articolato</div>
+    <div class="card-sub">Generato da <code>generate-paced-h4-articolato.js</code></div>
+    <div class="text"><span class="tag">[softly]</span> Aspetta un momento. <span class="tag">[pause]</span> Non serve andare veloci ora. <span class="tag">[pause]</span> Sono qui con te.</div>
+    <audio controls preload="none" src="H4_articolato.mp3"></audio>
+  </div>
+
+  <div class="card">
+    <div class="card-title">PROD · /api/tts articolato con tone=paced</div>
+    <div class="card-sub">Backend live · via curl</div>
+    <div class="text"><span class="tag">[softly]</span> Aspetta un momento. <span class="tag">[pause]</span> Non serve andare veloci ora. <span class="tag">[pause]</span> Sono qui con te.</div>
+    <audio controls preload="none" src="PROD_paced_smoketest_long.mp3"></audio>
+  </div>
+
+  <div class="footer">
+    <a href="./h4.html">← Vincitore H4</a> ·
+    <a href="./respiro.html">← Rifinitura respiro</a> ·
+    <a href="./ibridi.html">← Ibridi</a> ·
+    <a href="./">← Sample iniziali</a>
+  </div>
+</div>
+</body>
+</html>
