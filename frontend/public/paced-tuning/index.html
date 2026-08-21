@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Koda — Paced Tuning</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #14181d;
+    --panel-2: #1a1f26;
+    --border: #2a323c;
+    --text: #e8eaed;
+    --muted: #9aa4b2;
+    --accent: #7fb3ff;
+    --accent-warm: #ffb87f;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 24px 16px 80px;
+  }
+  h1 {
+    font-size: 22px;
+    font-weight: 600;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  .sub {
+    color: var(--muted);
+    font-size: 13px;
+    margin-bottom: 24px;
+    line-height: 1.5;
+  }
+  .sub code {
+    background: var(--panel-2);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--accent);
+  }
+  h2 {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent-warm);
+    margin: 28px 0 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+  }
+  .card-title {
+    font-weight: 600;
+    font-size: 15px;
+    margin-bottom: 4px;
+  }
+  .params {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 6px;
+    line-height: 1.5;
+    word-break: break-all;
+  }
+  .text {
+    font-size: 13px;
+    color: var(--text);
+    background: var(--panel-2);
+    padding: 8px 10px;
+    border-radius: 6px;
+    margin-bottom: 10px;
+    font-style: italic;
+    line-height: 1.4;
+  }
+  .text .tag {
+    color: var(--accent);
+    font-style: normal;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 11px;
+  }
+  audio {
+    width: 100%;
+    display: block;
+    height: 38px;
+  }
+  .criteria {
+    background: var(--panel);
+    border-left: 3px solid var(--accent-warm);
+    padding: 12px 14px;
+    border-radius: 6px;
+    margin: 16px 0 4px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--muted);
+  }
+  .criteria strong { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Koda — Paced Tuning</h1>
+  <div class="sub">
+    Matrice 10 sample · voce Cielo · <code>eleven_v3</code> · speed base <code>0.74</code>.
+  </div>
+
+  <div class="criteria">
+    <strong>Criterio d'ascolto:</strong> «Questa voce mi fa spontaneamente rallentare insieme a Koda?»<br/>
+    Non: "è la più lenta?" · Non: "è la più calma?"<br/>
+    <em>Koda non dice di rallentare. Koda rallenta. Koda non spiega. Cambia il ritmo della presenza.</em>
+  </div>
+
+  <h2>A · Brevi con [pause] — variazione stability × style</h2>
+
+  <div class="card">
+    <div class="card-title">P1 — base</div>
+    <div class="params">stability 0.55 · style 0.35 · similarity 0.82 · speed 0.74</div>
+    <div class="text">[softly] Aspetta. <span class="tag">[pause]</span> Piano. <span class="tag">[pause]</span> Ci sono.</div>
+    <audio controls preload="none" src="P1_breve_base.mp3"></audio>
+  </div>
+
+  <div class="card">
+    <div class="card-title">P2 — più caldo</div>
+    <div class="params">stability <b>0.45</b> · style <b>0.50</b> · similarity 0.82 · speed 0.74</div>
+    <div class="text">[softly] Aspetta. <span class="tag">[pause]</span> Piano. <span class="tag">[pause]</span> Ci sono.</div>
+    <audio controls preload="none" src="P2_breve_caldo.mp3"></audio>
+  </div>
+
+  <div class="card">
+    <div class="card-title">P3 — più composto</div>
+    <div class="params">stability <b>0.70</b> · style <b>0.22</b> · similarity 0.82 · speed 0.74</div>
+    <div class="text">[softly] Aspetta. <span class="tag">[pause]</span> Piano. <span class="tag">[pause]</span> Ci sono.</div>
+    <audio controls preload="none" src="P3_breve_composto.mp3"></audio>
+  </div>
+
+  <h2>B · Breath naturale vs nessun breath</h2>
+
+  <div class="card">
+    <div class="card-title">P4 — con [breath] iniziale singolo</div>
+    <div class="params">stability 0.55 · style 0.35 · similarity 0.82 · speed 0.74</div>
+    <div class="text"><span class="tag">[breath]</span> Aspetta. <span class="tag">[pause]</span> Piano. <span class="tag">[pause]</span> Ci sono.</div>
+    <audio controls preload="none" src="P4_breve_breath_singolo.mp3"></audio>
+  </div>
+
+  <div class="card">
+    <div class="card-title">P5 — senza breath, solo ellissi</div>
+    <div class="params">stability 0.55 · style 0.35 · similarity 0.82 · speed 0.74</div>
+    <div class="text">[softly] Aspetta… Piano… Ci sono.</div>
+    <audio controls preload="none" src="P5_breve_no_breath.mp3"></audio>
+  </div>
+
+  <h2>C · Articolati — il ritmo regge con più parole?</h2>
+
+  <div class="card">
+    <div class="card-title">P6 — articolato base</div>
+    <div class="params">stability 0.55 · style 0.35 · similarity 0.82 · speed 0.74</div>
+    <div class="text">[softly] Aspetta un momento. <span class="tag">[pause]</span> Non serve andare veloci ora. <span class="tag">[pause]</span> Sono qui con te.</div>
+    <audio controls preload="none" src="P6_articolato_base.mp3"></audio>
+  </div>
+
+  <div class="card">
+    <div class="card-title">P7 — articolato caldo</div>
+    <div class="params">stability <b>0.45</b> · style <b>0.50</b> · similarity 0.82 · speed 0.74</div>
+    <div class="text">[softly] Aspetta un momento. <span class="tag">[pause]</span> Non serve andare veloci ora. <span class="tag">[pause]</span> Sono qui con te.</div>
+    <audio controls preload="none" src="P7_articolato_caldo.mp3"></audio>
+  </div>
+
+  <div class="card">
+    <div class="card-title">P8 — articolato con [breath] iniziale</div>
+    <div class="params">stability 0.55 · style 0.35 · similarity 0.82 · speed 0.74</div>
+    <div class="text"><span class="tag">[breath]</span> Aspetta un momento. <span class="tag">[pause]</span> Non serve andare veloci ora. Sono qui con te.</div>
+    <audio controls preload="none" src="P8_articolato_breath.mp3"></audio>
+  </div>
+
+  <h2>D · Similarity — sanity check identità voce</h2>
+
+  <div class="card">
+    <div class="card-title">P9 — similarity 0.90 (voce Cielo pura)</div>
+    <div class="params">stability 0.55 · style 0.35 · similarity <b>0.90</b> · speed 0.74</div>
+    <div class="text">[softly] Aspetta. <span class="tag">[pause]</span> Piano. <span class="tag">[pause]</span> Ci sono.</div>
+    <audio controls preload="none" src="P9_similarity_alta.mp3"></audio>
+  </div>
+
+  <div class="card">
+    <div class="card-title">P10 — similarity 0.72 (più libera)</div>
+    <div class="params">stability 0.55 · style 0.35 · similarity <b>0.72</b> · speed 0.74</div>
+    <div class="text">[softly] Aspetta. <span class="tag">[pause]</span> Piano. <span class="tag">[pause]</span> Ci sono.</div>
+    <audio controls preload="none" src="P10_similarity_bassa.mp3"></audio>
+  </div>
+
+</div>
+</body>
+</html>
