@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Koda — Paced · Ibridi finali</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #14181d;
+    --panel-2: #1a1f26;
+    --border: #2a323c;
+    --text: #e8eaed;
+    --muted: #9aa4b2;
+    --accent: #7fb3ff;
+    --accent-warm: #ffb87f;
+    --h1: #f5a97f;
+    --h2: #a6da95;
+    --h3: #f5bde6;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; padding: 24px 16px 80px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; line-height: 1.5; }
+  .sub code { background: var(--panel-2); padding: 1px 6px; border-radius: 4px; font-size: 12px; color: var(--accent); }
+  .formula {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin: 12px 0 20px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--muted);
+  }
+  .formula strong { color: var(--accent-warm); }
+  .formula code { color: var(--text); font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; }
+  .criteria {
+    background: var(--panel);
+    border-left: 3px solid var(--accent-warm);
+    padding: 12px 14px;
+    border-radius: 6px;
+    margin: 8px 0 24px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--muted);
+  }
+  .criteria strong { color: var(--text); }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  .card.h1 { border-left-color: var(--h1); }
+  .card.h2 { border-left-color: var(--h2); }
+  .card.h3 { border-left-color: var(--h3); }
+  .row-top {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 10px; margin-bottom: 6px; flex-wrap: wrap;
+  }
+  .card-title { font-weight: 700; font-size: 17px; letter-spacing: -0.005em; }
+  .card.h1 .card-title { color: var(--h1); }
+  .card.h2 .card-title { color: var(--h2); }
+  .card.h3 .card-title { color: var(--h3); }
+  .card-sub {
+    font-size: 12px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .params { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 10px; }
+  .chip {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 3px 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 11px; color: var(--muted);
+  }
+  .chip b { color: var(--text); }
+  .text {
+    font-size: 14px; color: var(--text);
+    background: var(--panel-2); padding: 10px 12px;
+    border-radius: 6px; margin-bottom: 12px;
+    font-style: italic; line-height: 1.5;
+  }
+  .text .tag {
+    color: var(--accent); font-style: normal;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 11px; background: rgba(127,179,255,0.10);
+    padding: 1px 5px; border-radius: 3px;
+  }
+  audio { width: 100%; display: block; height: 40px; }
+  .hypothesis {
+    color: var(--muted); font-size: 12px; margin-top: 10px;
+    line-height: 1.5; padding-top: 8px; border-top: 1px dashed var(--border);
+  }
+  .hypothesis strong { color: var(--accent-warm); font-weight: 600; }
+  .footer {
+    text-align: center; color: var(--muted); font-size: 12px;
+    margin-top: 28px; line-height: 1.7;
+  }
+  .footer a { color: var(--accent); text-decoration: none; margin: 0 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Paced · Ibridi finali</h1>
+  <div class="sub">
+    Fase 3 · formula unita <code>P2 + P4</code> con voce più riconoscibilmente Koda.
+  </div>
+
+  <div class="formula">
+    <strong>Formula scelta:</strong><br/>
+    <code>stability 0.45</code> (P2 · warmth) · <code>style 0.50</code> (P2 · prosodia calda) · <code>similarity_boost 0.90</code> (P9 · voce Koda pura) · <code>speed 0.74</code> · apertura con <code>[breath]</code> (P4)<br/>
+    <br/>
+    Varia solo la <strong>struttura testuale</strong>: breve puro, breve con <code>[softly]</code> in aggiunta, articolato.
+  </div>
+
+  <div class="criteria">
+    <strong>Criterio:</strong> «Questa voce mi fa spontaneamente rallentare insieme a Koda, senza che Koda dichiari cosa sta facendo?»<br/>
+    Koda non dice di rallentare. Koda rallenta. Crea spazio, non spiega.
+  </div>
+
+  <!-- H1 -->
+  <div class="card h1">
+    <div class="row-top">
+      <span class="card-title">H1 · SHORT — [breath] puro</span>
+      <span class="card-sub">Apertura fisica</span>
+    </div>
+    <div class="params">
+      <span class="chip">stability <b>0.45</b></span>
+      <span class="chip">style <b>0.50</b></span>
+      <span class="chip">similarity <b>0.90</b></span>
+      <span class="chip">speed 0.74</span>
+      <span class="chip">tag <b>[breath]</b> + [pause]</span>
+    </div>
+    <div class="text"><span class="tag">[breath]</span> Aspetta. <span class="tag">[pause]</span> Piano. <span class="tag">[pause]</span> Ci sono.</div>
+    <audio controls preload="none" src="H1_short_breath.mp3"></audio>
+    <div class="hypothesis">
+      <strong>Il candidato principale.</strong> Il respiro apre la presenza, la prosodia calda di P2 tiene il calore, la similarity alta mantiene l'identità Koda.
+    </div>
+  </div>
+
+  <!-- H2 -->
+  <div class="card h2">
+    <div class="row-top">
+      <span class="card-title">H2 · SHORT — [softly] + [breath]</span>
+      <span class="card-sub">Combo massima</span>
+    </div>
+    <div class="params">
+      <span class="chip">stability <b>0.45</b></span>
+      <span class="chip">style <b>0.50</b></span>
+      <span class="chip">similarity <b>0.90</b></span>
+      <span class="chip">speed 0.74</span>
+      <span class="chip">tag <b>[softly] + [breath]</b> + [pause]</span>
+    </div>
+    <div class="text"><span class="tag">[softly]</span> <span class="tag">[breath]</span> Aspetta. <span class="tag">[pause]</span> Piano. <span class="tag">[pause]</span> Ci sono.</div>
+    <audio controls preload="none" src="H2_short_softly_breath.mp3"></audio>
+    <div class="hypothesis">
+      <strong>Verifica sinergia tag:</strong> il <code>[softly]</code> aggiunge morbidezza oltre alla warmth prosodica, o è ridondante e si "mangia" col <code>[breath]</code>?
+    </div>
+  </div>
+
+  <!-- H3 -->
+  <div class="card h3">
+    <div class="row-top">
+      <span class="card-title">H3 · ARTICOLATO — [breath] iniziale</span>
+      <span class="card-sub">Il ritmo regge con più parole</span>
+    </div>
+    <div class="params">
+      <span class="chip">stability <b>0.45</b></span>
+      <span class="chip">style <b>0.50</b></span>
+      <span class="chip">similarity <b>0.90</b></span>
+      <span class="chip">speed 0.74</span>
+      <span class="chip">tag <b>[breath]</b> + [pause]</span>
+    </div>
+    <div class="text"><span class="tag">[breath]</span> Aspetta un momento. <span class="tag">[pause]</span> Non serve andare veloci ora. <span class="tag">[pause]</span> Sono qui con te.</div>
+    <audio controls preload="none" src="H3_articolato_breath.mp3"></audio>
+    <div class="hypothesis">
+      <strong>Vincolo architetturale critico:</strong> paced non deve costringere Koda a essere breve. Se H3 regge → possiamo lockare i parametri unici.
+    </div>
+  </div>
+
+  <div class="footer">
+    <a href="./finalisti.html">← Finalisti P2/P4/P7/P9</a> ·
+    <a href="./">← 10 sample iniziali</a>
+  </div>
+</div>
+</body>
+</html>

@@ -39,10 +39,10 @@ const MODEL_V3 = "eleven_v3";
 const OUTPUT_FORMAT = "mp3_44100_128";
 
 const BASE_SETTINGS = {
-  stability: 0.45,
-  style: 0.50,
-  similarity_boost: 0.82,
-  speed: 0.74,
+  stability: 0.45,        // ← da P2 (warmth espressiva)
+  style: 0.50,            // ← da P2 (calore prosodico)
+  similarity_boost: 0.90, // ← da P9 (voce più riconoscibilmente Koda)
+  speed: 0.74,            // ← baseline "molto lento" scelta dall'utente
   use_speaker_boost: true,
 };
 

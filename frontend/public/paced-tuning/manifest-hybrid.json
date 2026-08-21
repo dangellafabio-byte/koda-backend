@@ -1,0 +1,54 @@
+{
+  "generated_at": "2026-08-21T10:22:19.015Z",
+  "base_settings": {
+    "stability": 0.45,
+    "style": 0.5,
+    "similarity_boost": 0.9,
+    "speed": 0.74,
+    "use_speaker_boost": true
+  },
+  "samples": [
+    {
+      "key": "H1_short_breath",
+      "label": "H1 — SHORT · [breath] puro",
+      "text": "[breath] Aspetta. [pause] Piano. [pause] Ci sono.",
+      "settings": {
+        "stability": 0.45,
+        "style": 0.5,
+        "similarity_boost": 0.9,
+        "speed": 0.74,
+        "use_speaker_boost": true
+      },
+      "filename": "H1_short_breath.mp3",
+      "bytes": 134208
+    },
+    {
+      "key": "H2_short_softly_breath",
+      "label": "H2 — SHORT · [softly] + [breath]",
+      "text": "[softly] [breath] Aspetta. [pause] Piano. [pause] Ci sono.",
+      "settings": {
+        "stability": 0.45,
+        "style": 0.5,
+        "similarity_boost": 0.9,
+        "speed": 0.74,
+        "use_speaker_boost": true
+      },
+      "filename": "H2_short_softly_breath.mp3",
+      "bytes": 106205
+    },
+    {
+      "key": "H3_articolato_breath",
+      "label": "H3 — ARTICOLATO · [breath] iniziale",
+      "text": "[breath] Aspetta un momento. [pause] Non serve andare veloci ora. [pause] Sono qui con te.",
+      "settings": {
+        "stability": 0.45,
+        "style": 0.5,
+        "similarity_boost": 0.9,
+        "speed": 0.74,
+        "use_speaker_boost": true
+      },
+      "filename": "H3_articolato_breath.mp3",
+      "bytes": 140478
+    }
+  ]
+}
