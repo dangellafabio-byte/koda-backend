@@ -10,7 +10,8 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../lib/auth";
-import { api, persistToken } from "../lib/api";
+import { api } from "../lib/api";
+import { persistToken } from "../lib/auth";
 
 export default function LoginScreen() {
   const { signInGoogle, signInApple, refresh } = useAuth() as any;

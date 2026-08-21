@@ -1017,6 +1017,17 @@ export default function Taccuino() {
     })();
     return () => { cancelled = true; };
   }, []);
+  // === FIX 2026-08-21 (Fabio, TDZ crash "Cannot access 'bottomBarHeight' before initialization") ===
+  // Questa useState era dichiarata a metà del componente (~riga 4912) ma
+  // veniva referenziata da un useEffect molto più in alto (deps array).
+  // Spostata qui in cima con le altre state per evitare il crash TDZ.
+  const [bottomBarHeight, setBottomBarHeight] = useState(140);
+  // === FIX 2026-08-21 (Fabio, TDZ crash "Cannot access 'pathname' before initialization") ===
+  // `pathname` era dichiarato molto più in basso (accanto al router free/premium),
+  // ma questo useEffect KODA_ROUTER_V3 lo referenzia già qui → TDZ error al primo render
+  // → l'app crashava immediatamente per gli utenti autenticati (LoginScreen mascherava
+  // il bug quando non c'era ancora un token). Spostato in cima al primo utilizzo.
+  const pathname = usePathname();
   const hasRedirectedIntroV3Ref = useRef<boolean>(false);
   useEffect(() => {
     if (pathname !== "/") return;
@@ -1072,7 +1083,8 @@ export default function Taccuino() {
   //
   // NON tocchiamo il trial state / subscription_tier machinery: quelli
   // servono per gating Koda conversazionale.
-  const pathname = usePathname();
+  // === Nota 2026-08-21 (Fabio) ===
+  // `pathname` è già dichiarato sopra (fix TDZ) — qui non lo ridichiariamo.
   const hasRedirectedFreeUserRef = useRef<boolean>(false);
   useEffect(() => {
     // A) Guard pathname: se non siamo attualmente sulla route "/", non
@@ -4897,12 +4909,9 @@ export default function Taccuino() {
     }
   }, []);
   // === MISURAZIONE BOTTOM BAR (Fix 2026-06-22 v3) ===
-  // Misuriamo l'altezza REALE della bottom bar tramite onLayout invece di
-  // indovinarla. Così l'ultimo messaggio in fondo finisce ESATTAMENTE
-  // sopra la barra di scrittura (niente più bolle tagliate dietro
-  // l'input, come negli screen dell'utente). Default 140 = stima sicura
-  // per il primo render, prima che onLayout si sia fired.
-  const [bottomBarHeight, setBottomBarHeight] = useState(140);
+  // Nota 2026-08-21: la dichiarazione di `bottomBarHeight` è stata spostata
+  // in cima al componente per risolvere un TDZ crash. Qui resta solo il
+  // commento originale a scopo di contesto.
   const onTimelineScroll = useCallback((e: any) => {
     const y = e?.nativeEvent?.contentOffset?.y ?? 0;
     const layoutH = e?.nativeEvent?.layoutMeasurement?.height ?? 0;

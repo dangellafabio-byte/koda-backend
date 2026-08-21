@@ -10,7 +10,13 @@ import { resetRouterGlobalState } from "./routerGlobalState";
 const TOKEN_KEY = "koda_session_token";
 const EMERGENT_AUTH_URL = "https://auth.emergentagent.com/";
 
-async function persistToken(tok: string | null) {
+// === FIX 2026-08-21 (Fabio, dev-login broken) ===
+// `persistToken` era importata da `LoginScreen.tsx` come `import { persistToken } from "../lib/api"`,
+// ma non è mai stata esportata da `api.ts` — era solo interna a questo file.
+// A runtime => `persistToken` undefined => TypeError silenziato dal try/catch
+// del dev-login => l'utente vedeva "Dev login non riuscito." pur avendo il backend che rispondeva 200 OK.
+// Fix: la esportiamo qui e correggiamo l'import nel LoginScreen a `../lib/auth`.
+export async function persistToken(tok: string | null) {
   setAuthTokenMem(tok);
   try {
     if (Platform.OS === "web") {
