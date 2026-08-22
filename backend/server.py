@@ -4680,6 +4680,47 @@ async def api_dev_trial_inspect():
 
 
 # ============================================================
+# DEV — PROMOZIONE A PREMIUM (per testing Intro Premium) — 2026-08-22
+# ============================================================
+class DevSetTierRequest(BaseModel):
+    tier: Optional[str] = None  # "monthly" | "bimonthly" | "annual" | "unlimited" | None
+
+
+@api_router.post("/dev/set-tier")
+async def api_dev_set_tier(req: DevSetTierRequest):
+    """DEV admin-only: forza subscription_tier per testare flussi Premium
+    (es. Intro Premium) senza dover attivare RevenueCat. Tier valido:
+    monthly | bimonthly | annual | unlimited | null (torna Free).
+    """
+    uid = _require_admin()
+    valid = {"monthly", "bimonthly", "annual", "unlimited", None}
+    if req.tier not in valid:
+        raise HTTPException(status_code=400, detail=f"tier deve essere uno di {sorted(v for v in valid if v)} o null")
+    await db.taccuino_profile.update_one(
+        {"id": uid},
+        {"$set": {"subscription_tier": req.tier}},
+        upsert=False,
+    )
+    logger.info(f"[dev/set-tier] user={uid[:8]} → tier={req.tier}")
+    return {"ok": True, "profile_id": uid, "subscription_tier": req.tier}
+
+
+@api_router.post("/dev/intro-premium/reset")
+async def api_dev_intro_premium_reset():
+    """DEV admin-only: cancella intro_premium_seen_at per re-triggerare
+    l'Intro Premium al prossimo boot sulla home Koda conv."""
+    uid = _require_admin()
+    await db.taccuino_profile.update_one(
+        {"id": uid},
+        {"$unset": {"intro_premium_seen_at": ""}},
+        upsert=False,
+    )
+    logger.info(f"[dev/intro-premium/reset] user={uid[:8]} → intro_premium_seen_at reset")
+    return {"ok": True, "profile_id": uid, "reset": "intro_premium_seen_at"}
+
+
+
+# ============================================================
 # FINE dev endpoints trial
 # ============================================================
 
