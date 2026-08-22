@@ -91,6 +91,8 @@ export default function PaywallScreen() {
   // (l'enforcement bloccante è voluto).
   const [devOverride, setDevOverride] = useState<boolean>(false);
   const [trialExpired, setTrialExpired] = useState<boolean>(false);
+  // Fix E: admin-only dev bypass button
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
 
   // === POST-DEMO VARIANT (Fabio 2026-08-22) =================================
   // Se arriviamo da /microdemo (fase E del piano), suoniamo la clip pre-registrata
@@ -176,7 +178,38 @@ export default function PaywallScreen() {
         setTrialExpired(s?.trial_state === "expired");
       })
       .catch(() => {});
+    // === DEV admin-only (Fabio 2026-08-22) — Fix E ============================
+    // Verifica se l'utente è admin server-side; se sì, mostra il bottone
+    // "Simula pagamento" per testare end-to-end paywall → Intro Premium
+    // senza RevenueCat attivo.
+    api.getProfile()
+      .then((p: any) => {
+        setIsAdmin(Boolean(p?.is_admin));
+      })
+      .catch(() => {});
   }, []);
+
+  const handleDevBypass = async () => {
+    // === DEV admin-only (Fabio 2026-08-22) — Fix E ============================
+    // Simula un pagamento riuscito: setta il tier server-side e naviga
+    // a /intro-premium (il router condizionale in index.tsx la lancia).
+    if (loading) return;
+    setLoading(true);
+    try {
+      // Backend accetta "annual", il paywall usa "yearly" come label UI.
+      const tierForBackend = selectedPlan === "yearly" ? "annual" : selectedPlan;
+      await api.devSetTier(tierForBackend as "monthly" | "bimonthly" | "annual");
+      // Reset del flag intro-premium in modo che parta la sequenza
+      try { await api.devIntroPremiumReset(); } catch {}
+      try { await SecureStore.deleteItemAsync("intro_premium_seen_at"); } catch {}
+      // Persist V3 done (paid user salta V3 comunque, ma per idempotenza)
+      await persistOnboardingComplete();
+      router.replace("/intro-premium");
+    } catch (e: any) {
+      Alert.alert("Errore dev", e?.message || "Simulazione fallita");
+      setLoading(false);
+    }
+  };
 
   const handlePurchase = async () => {
     if (loading) return;
@@ -325,6 +358,35 @@ export default function PaywallScreen() {
         <Pressable onPress={handleRestore} style={styles.restore}>
           <Text style={[styles.restoreText, { color: theme.text }]}>Ripristina acquisti</Text>
         </Pressable>
+
+        {/* === FIX E (Fabio 2026-08-22) — DEV admin-only bypass =============
+            Bottone visibile SOLO se l'utente è admin. Simula un pagamento
+            riuscito settando subscription_tier lato server + resetta il
+            flag intro-premium + naviga a /intro-premium. Serve per testare
+            end-to-end il flusso paywall → Premium → Intro Premium senza
+            RevenueCat. Zero rischio per gli utenti veri (nascosto). */}
+        {isAdmin && (
+          <Pressable
+            onPress={handleDevBypass}
+            disabled={loading}
+            style={{
+              marginTop: 16,
+              paddingVertical: 12,
+              paddingHorizontal: 20,
+              backgroundColor: "rgba(0, 245, 212, 0.10)",
+              borderRadius: 12,
+              borderWidth: 1,
+              borderColor: "rgba(0, 245, 212, 0.3)",
+              alignItems: "center",
+              opacity: loading ? 0.5 : 1,
+            }}
+            testID="paywall-dev-bypass"
+          >
+            <Text style={{ color: "#00F5D4", fontWeight: "600", fontSize: 13, letterSpacing: 0.3 }}>
+              [DEV] Simula pagamento riuscito
+            </Text>
+          </Pressable>
+        )}
 
         {/* Legal */}
         <View style={styles.legalRow}>

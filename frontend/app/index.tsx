@@ -103,9 +103,10 @@ import {
   DEFAULT_CALIBRATION,
   type BorderCalibration,
 } from "../lib/borderCalibration";
-import { useRouter, usePathname } from "expo-router";
+import { useRouter, usePathname, useLocalSearchParams } from "expo-router";
+import IntroPremiumFinalStep from "../components/IntroPremiumFinalStep";
 import {
-  getLastDecidedProfileId,
+  getLastDecidedKey,
   markRouterDecided,
   getSessionHasShownSplash,
   markSessionSplashShown,
@@ -984,6 +985,24 @@ export default function Taccuino() {
     if (!profile) return;
     if (disclaimerState !== "accepted") return;
     if (showSplash) return;
+    // === FIX A2 (Fabio 2026-08-22) — Premium salta V3 ==========================
+    // V3 è la sequenza narrativa di ingresso per utenti Free (primissimo
+    // utilizzo, prima di sottoscrivere). Un utente che boota già Premium
+    // NON deve mai vedere V3 → salta direttamente all'Intro Premium.
+    const tierV3 = ((profile as any)?.subscription_tier as string | null) || null;
+    const isPaidV3 = tierV3 === "monthly" || tierV3 === "bimonthly" || tierV3 === "annual" || tierV3 === "unlimited";
+    if (isPaidV3) {
+      hasRedirectedIntroV3Ref.current = true;
+      setIntroV3State("completed"); // sblocca i guard downstream (Intro Premium)
+      try {
+        // Persistiamo per idempotenza cross-boot: se paid al primo boot,
+        // marca V3 come "vista" così anche se un domani torna Free non
+        // rivedrà V3 (design intenzionale: paga → salta rituale ingresso).
+        SecureStore.setItemAsync("intro_v3_completed_at", String(Date.now())).catch(() => {});
+      } catch {}
+      console.log(`[KODA_ROUTER_V3] paid user (tier=${tierV3}) → skip V3, mark completed`);
+      return;
+    }
     hasRedirectedIntroV3Ref.current = true;
     console.log(`[KODA_ROUTER_V3] fresh install (intro_v3_completed_at=absent) → replace to /intro-v3`);
     try {
@@ -1052,27 +1071,23 @@ export default function Taccuino() {
     // il router V3 sopra prende la priorità → early return qui.
     if (introV3State !== "completed") return;
 
-    // C) Guard module-level cross-mount: se abbiamo GIÀ preso una decisione
-    //    per QUESTO profileId in un mount precedente, non ripetere. Questo
-    //    è il livello che sopravvive al re-mount del componente.
-    //    Vedi `lib/routerGlobalState.ts`. Reset esplicito su signOut
-    //    (lib/auth.tsx) → Opzione Y (2026-08-17).
+    // C) Guard module-level cross-mount con TIER incluso (Fabio 2026-08-22).
+    //    PRIMA la cache memorizzava solo profileId → cambio tier non
+    //    invalidava → utente Premium "Torna Free" restava sulla home.
+    //    ADESSO la chiave è profileId:tier → ogni cambio tier ridecide.
     const currentProfileId = (profile as any)?.id || null;
-    if (
-      currentProfileId !== null &&
-      getLastDecidedProfileId() === currentProfileId
-    ) {
-      hasRedirectedFreeUserRef.current = true; // riallinea anche il ref locale
+    const tier = ((profile as any)?.subscription_tier as string | null) || null;
+    const isPaid = tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
+    const currentKey = currentProfileId === null ? null : `${currentProfileId}:${tier ?? "free"}`;
+    if (currentKey !== null && getLastDecidedKey() === currentKey) {
+      hasRedirectedFreeUserRef.current = true;
       return;
     }
 
-    const tier = ((profile as any)?.subscription_tier as string | null) || null;
-    const isPaid = tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
-
     // Marca la decisione PRIMA di eventuali navigazioni async, sia sul ref
-    // locale sia sul flag module-level (per-profile).
+    // locale sia sul flag module-level (per-profile:tier).
     hasRedirectedFreeUserRef.current = true;
-    markRouterDecided(currentProfileId);
+    markRouterDecided(currentProfileId, tier);
 
     if (isPaid) {
       console.log(`[KODA_ROUTER] paid user (tier=${tier}, pid=${currentProfileId}) → stay on Koda conversazionale`);
@@ -1401,6 +1416,41 @@ export default function Taccuino() {
   const orbBtnRef = useRef<any>(null);
   const scrollHintRef = useRef<any>(null);
   const [viewMode, setViewMode] = useState<"voice" | "reading">("voice");
+  // === INTRO PREMIUM — FASE FINALE (handoff da /intro-premium) =============
+  // Quando l'utente arriva sulla home Koda conv con query param
+  // ?intro=writing_final, montiamo l'overlay <IntroPremiumFinalStep>
+  // sopra la Page 1 (reading) e chiudiamo la sequenza con la clip audio
+  // di chiusura Cielo + doppio mark-seen.
+  const introParams = useLocalSearchParams<{ intro?: string }>();
+  const [showIntroFinal, setShowIntroFinal] = useState(false);
+  useEffect(() => {
+    if (introParams?.intro === "writing_final" && !showIntroFinal) {
+      setShowIntroFinal(true);
+      // Forza viewMode a "reading" e scrolla a Page 1 con animazione (simula lo swipe)
+      setViewMode("reading");
+      // pagerRef potrebbe non essere ancora montato al primissimo tick — retry
+      const doScroll = (attemptsLeft: number) => {
+        if (pagerRef.current) {
+          const w = dimensions?.width || 390;
+          try { pagerRef.current.scrollTo({ x: w, y: 0, animated: true }); } catch {}
+        } else if (attemptsLeft > 0) {
+          setTimeout(() => doScroll(attemptsLeft - 1), 80);
+        }
+      };
+      doScroll(6);
+    }
+  }, [introParams?.intro, showIntroFinal, dimensions?.width]);
+  const dismissIntroFinal = useCallback(() => {
+    setShowIntroFinal(false);
+    // Pulisce il query param senza rimontare la home
+    try {
+      // router.replace("/") toglie il query param mantenendo la home.
+      // A questo punto pagerRef è su Page 1 (l'utente è libero di scorrere).
+      router.replace("/");
+    } catch (e) {
+      console.warn("[intro-premium-final] cleanup replace failed:", e);
+    }
+  }, [router]);
   const dimensions = useWindowDimensions();
   // Use window width with sensible fallback (Dimensions.get) for first render
   const windowWidth = dimensions.width || Dimensions.get("window").width || 390;
@@ -6918,6 +6968,15 @@ export default function Taccuino() {
           }
         }}
       />
+
+      {/* === INTRO PREMIUM — FASE FINALE (Fabio 2026-08-22) ===================
+          Overlay che disegna il coach-mark sulla barra scrittura VERA
+          della Page 1 + suona la clip di chiusura Cielo. Montato SOLO
+          quando l'IntroPremium ha fatto handoff via ?intro=writing_final.
+          Al termine: dismissIntroFinal pulisce il query param, la home
+          resta libera su Page 1 (l'utente può iniziare a scrivere subito
+          o swipare a destra per tornare all'orb). */}
+      {showIntroFinal && <IntroPremiumFinalStep onComplete={dismissIntroFinal} />}
 
       {/* RadialGlow — alone radiale che parte dal blob (centro schermo)
           e si propaga verso i bordi. Coerente coi 3 colori del blob:
