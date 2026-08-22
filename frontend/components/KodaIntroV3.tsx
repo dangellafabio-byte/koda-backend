@@ -46,6 +46,7 @@ import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import type { AudioPlayer } from "expo-audio";
 import * as SecureStore from "expo-secure-store";
 import { ExpoSpeechRecognitionModule } from "expo-speech-recognition";
+import { ensureSpeechPermission } from "../lib/speechPermission";
 import type {
   ExpoSpeechRecognitionResultEvent,
   ExpoSpeechRecognitionErrorEvent,
@@ -319,17 +320,19 @@ export default function KodaIntroV3() {
       if (listenActiveRef.current) return;
       listenActiveRef.current = true;
 
-      // 1. Permission
+      // 1. Permission — ora via helper condiviso (Fabio 2026-08-22).
+      //    Coerenza rituale: stesso pre-prompt in tutta l'app (Intro Premium,
+      //    Home Koda conv, KodaIntroV3). Vedi lib/speechPermission.ts.
       try {
-        const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+        const perm = await ensureSpeechPermission();
         if (!perm.granted) {
           listenActiveRef.current = false;
-          console.warn(`[${TAG}] mic/speech permission NOT granted`);
+          console.warn(`[${TAG}] mic/speech permission NOT granted (path=${perm.path})`);
           setMicBlocked(true);
           return;
         }
       } catch (e) {
-        console.warn(`[${TAG}] permission request threw:`, e);
+        console.warn(`[${TAG}] ensureSpeechPermission threw:`, e);
         listenActiveRef.current = false;
         timerRef.current = setTimeout(() => advance(), 800);
         return;

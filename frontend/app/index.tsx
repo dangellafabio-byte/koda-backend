@@ -48,6 +48,7 @@ import {
   VoiceOption,
   Tone,
 } from "../lib/api";
+import { ensureSpeechPermission } from "../lib/speechPermission";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { checkHasSpeech, logGateDecision } from "../lib/silenceGate";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId, preloadFillerPool } from "../lib/speech";
@@ -72,7 +73,14 @@ import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
 import EclipseOrb from "../components/EclipseOrb";
 import MirrorPool from "../components/MirrorPool";
-import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
+// V1 KodaIntro import RIMOSSO (Fabio 2026-08-22): la V1 non ha più path
+// di ingresso — il file KodaIntro.tsx resta in vita come dead code, non
+// va toccato ma nessuno lo importa più.
+// import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
+// Type alias per KodaIntroResult mantenuto perché ancora referenziato da
+// dismissColorIntro(result?: KodaIntroResult) — non più chiamato, ma
+// tipo utile per non spezzare la firma legacy.
+type KodaIntroResult = { launch_tour?: boolean };
 import KodaSplash from "../components/KodaSplash";
 import TrialTestPanel from "../components/TrialTestPanel";import KodaTour, { TourStep } from "../components/KodaTour";
 import DisclaimerScreen from "../components/DisclaimerScreen";
@@ -821,11 +829,23 @@ export default function Taccuino() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buildTourSteps]);
   /** Riapri la presentazione di Koda (back-door: tap sull'icona ⋯ in alto a destra). */
-  const reopenKodaIntro = useCallback(async () => {
+  /** V1 reopenKodaIntro RIMOSSO (Fabio 2026-08-22).
+   *  La V1 non è più raggiungibile da alcun path. Il pulsante nelle
+   *  Impostazioni è stato sostituito con "Rivedi Intro Premium" (admin-only). */
+  const reopenIntroPremium = useCallback(async () => {
     try {
-      await SecureStore.deleteItemAsync("koda_intro_seen");
+      await api.devIntroPremiumReset();
+    } catch (e) {
+      console.warn("[reopen-intro-premium] backend reset failed:", e);
+    }
+    try {
+      await SecureStore.deleteItemAsync("intro_premium_seen_at");
     } catch {}
-    setShowColorIntro(true);
+    try {
+      router.replace("/intro-premium");
+    } catch (e) {
+      console.warn("[reopen-intro-premium] router replace failed:", e);
+    }
   }, []);
   // Banner "Configurazione salvata ✓" — mostrato per ~4 secondi quando
   // l'utente completa (o ri-completa) KodaIntro. Conferma visiva che le
@@ -1241,6 +1261,24 @@ export default function Taccuino() {
   useEffect(() => { closeSessionPauseRef.current = closeSessionPause; }, [closeSessionPause]);
   const setHandsFreeMode = useCallback(async (on: boolean) => {
     if (!profile) return;
+    // === PERMESSO SPEECH RECOGNITION (Fabio 2026-08-22) =====================
+    // Se stiamo ATTIVANDO il mani libere, verifichiamo il permesso: senza,
+    // l'STT non parte mai e l'utente vede solo un toggle che si accende
+    // ma non fa nulla. Se nega, non attiviamo (silenzioso, il pre-prompt
+    // ha già spiegato). Se stiamo disattivando (on=false), niente check —
+    // spegnere è sempre lecito.
+    if (on) {
+      try {
+        const perm = await ensureSpeechPermission();
+        if (!perm.granted) {
+          console.log(`[HF_TOGGLE_PERM] blocked: path=${perm.path}`);
+          return;
+        }
+      } catch (e) {
+        console.warn("[HF_TOGGLE_PERM] ensureSpeechPermission threw:", e);
+        // Fail-open
+      }
+    }
     const next = {
       ...profile,
       settings: { ...profile.settings, hands_free: on } as any,
@@ -3196,6 +3234,24 @@ export default function Taccuino() {
 
   // Push-to-talk (or hands-free)
   const startTalkInternal = async (autoStopOnSilence: boolean) => {
+    // === PERMESSO SPEECH RECOGNITION (Fabio 2026-08-22) =====================
+    // Chiamato PRIMA di qualunque debounce/mutex. Se il permesso non c'è
+    // (o è stato negato durante l'Intro Premium), mostra il pre-prompt
+    // rituale coerente con tutta l'app. Se l'utente concede → prosegue
+    // normalmente. Se nega → return silenzioso (nessun errore visibile),
+    // il flow resta invariato e ripartirà al prossimo tap.
+    // Idempotente quando già granted → zero attrito.
+    try {
+      const perm = await ensureSpeechPermission();
+      if (!perm.granted) {
+        console.log(`[KODA_STT_PERM] startTalk blocked: path=${perm.path}`);
+        return;
+      }
+    } catch (e) {
+      console.warn("[KODA_STT_PERM] ensureSpeechPermission threw:", e);
+      // Fail-open: se l'helper esplode non blocchiamo l'utente
+    }
+
     // === MUTEX 2026-06-28 — P0 race condition fix ===
     // KODA_HF_LOOP (useEffect+timeout 450ms) e KODA_HF_EXPLICIT (timeout 500ms
     // dentro voiceStream finally) firavano in parallelo entro ~50-100ms,
@@ -6252,26 +6308,29 @@ export default function Taccuino() {
                 gesto distruttivo non è mai immediato durante la lettura
                 normale delle impostazioni. */}
 
-            {/* === RIVEDI PRESENTAZIONE DI KODA ===========================
-                Spostato qui dal bottone tre-puntini header (che ora apre
-                queste impostazioni). Resta raggiungibile per chi vuole
-                rifare il setup iniziale (nome, voce, palette, ecc.). */}
-            <TouchableOpacity
-              style={[styles.settingRow, { paddingVertical: 14 }]}
-              onPress={() => {
-                setShowSettings(false);
-                setTimeout(() => { reopenKodaIntro(); }, 220);
-              }}
-              testID="reopen-koda-intro"
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>👋 Rivedi presentazione di Koda</Text>
-                <Text style={styles.settingHint}>
-                  Riapre il setup iniziale: nome, voce, palette colori.
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
-            </TouchableOpacity>
+            {/* === RIVEDI INTRO PREMIUM (admin-only, Fabio 2026-08-22) ===
+                Sostituisce il vecchio "Rivedi presentazione di Koda" che
+                puntava alla V1 (ora deprecata, nessun path di ingresso).
+                Visibile SOLO all'admin: rischio di alterare il flag
+                "vista una sola volta" se un utente normale lo tocca. */}
+            {isAdmin ? (
+              <TouchableOpacity
+                style={[styles.settingRow, { paddingVertical: 14 }]}
+                onPress={() => {
+                  setShowSettings(false);
+                  setTimeout(() => { reopenIntroPremium(); }, 220);
+                }}
+                testID="reopen-intro-premium"
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingLabel}>💎 Rivedi Intro Premium (admin)</Text>
+                  <Text style={styles.settingHint}>
+                    Reset flag + replay della sequenza voce + 5 coach-mark.
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+              </TouchableOpacity>
+            ) : null}
 
             {/* === RIVEDI IL TOUR (2026-07-24 pre-lancio, punto 1) ===
                 Il tour visivo 9-step NON parte più automaticamente al primo
@@ -6916,28 +6975,13 @@ export default function Taccuino() {
       />
     );
   }
-  // === KODA INTRO ===
-  // Al primo avvio, e on-demand tramite l'icona ⋯ in alto a destra,
-  // mostra la presentazione conversazionale di Koda PRIMA di qualsiasi
-  // altra schermata. Quando l'utente la termina (o la salta), viene
-  // persistito il flag `koda_intro_seen=1` in SecureStore.
-  if (showColorIntro === true) {
-    return (
-      <KodaIntro
-        voices={voiceList}
-        currentVoiceId={profile?.settings?.tts_voice_id || null}
-        onDone={dismissColorIntro}
-        onCancel={cancelKodaIntro}
-        // === FIX 2026-06-30 — Lock "Avanti" alla prima esecuzione (Fabio) ===
-        // Se l'utente NON è ancora onboarded, è la PRIMA volta che vede
-        // la presentazione → blocchiamo i tap "Avanti" mentre Koda parla
-        // (deve guardarla dall'inizio alla fine). Se invece è entrato da
-        // "Rivedi la Intro" nelle impostazioni (onboarded=true), libertà
-        // totale di scorrimento — l'ha già vista, sa di cosa parla.
-        isFirstRun={!profile?.onboarded}
-      />
-    );
-  }
+  // === V1 KodaIntro RIMOSSA (Fabio 2026-08-22) ==============================
+  // Il return early che renderizzava V1 quando showColorIntro=true è stato
+  // rimosso. La V1 non ha più path di ingresso — vedi Level B della spec
+  // Intro Premium v2. Il file components/KodaIntro.tsx resta in vita come
+  // dead code (non toccato per policy "V1 non si tocca") ma nessuno lo
+  // importa più.
+  //   if (showColorIntro === true) return <KodaIntro ... />;   ← RIMOSSO
   // Overlay bordeaux globale quando il confessionale è ATTIVO.
   // Tinge fortemente tutto lo sfondo (~40% di alpha) così l'utente capisce
   // a colpo d'occhio di trovarsi in modalità confessionale, anche durante
