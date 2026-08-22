@@ -3953,14 +3953,29 @@ export default function Taccuino() {
         // (categoria E: obsoleta). L'app è "solo italiano ora"; multi-lingua
         // rimane come direzione futura ma NON è nella prima esperienza V3.
         // Rimosso: `if (!p.onboarded) setShowOnboarding(true);`
-        // Chiudo Impostazioni e forzo un reset del router V3 tramite hard
-        // reload della route "/" — così il router legge di nuovo
-        // intro_v3_completed_at (ora null) e redirige a /intro-v3.
+        //
+        // === FIX RACE CONDITION V1 ↔ V3 (Fabio 2026-08-22) =====================
+        // BUG PRECEDENTE: dopo `router.replace("/")` (no-op se già su /),
+        // il componente <Taccuino> NON si rimontava → gli useEffect([]) di
+        // `showColorIntro` (riga 508) e `introV3State` (riga 933) non
+        // ri-leggevano SecureStore. Al cold restart successivo invece SÌ,
+        // ma con race condition: `showColorIntro` legge `koda_intro_seen=null`
+        // → setta `true` PRIMA che il router V3 abbia passato tutte le sue
+        // 3 guard asincrone (profile, disclaimer, splash). Il return early
+        // di riga 6655 `if (showColorIntro === true) return <KodaIntro/>`
+        // scatta → l'utente vede V1 al posto di V3.
+        //
+        // SOLUZIONE: forziamo lo stato locale ATOMICAMENTE prima di
+        // navigare e andiamo DIRETTAMENTE a /intro-v3, bypassando il
+        // router V3 (che resta come fallback per il cold restart).
+        setShowColorIntro(false);            // ← blocca return early V1 (riga 6655)
+        setIntroV3State("needed");           // ← allinea lo stato V3
+        hasRedirectedIntroV3Ref.current = false; // ← permetti nuovo redirect V3
         setShowSettings(false);
         try {
-          router.replace("/");
+          router.replace("/intro-v3");
         } catch (e) {
-          console.warn("[resetEverything] router reload failed:", e);
+          console.warn("[resetEverything] router push failed:", e);
         }
       } catch (e) {
         console.warn("[resetEverything] failed:", e);
