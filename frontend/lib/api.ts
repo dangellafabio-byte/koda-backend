@@ -442,6 +442,16 @@ export const api = {
       { method: "POST" }
     ),
 
+  /** === INTRO PREMIUM — one-shot al primo boot home Koda conv (2026-08-22) ===
+   * Persistenza server-side, sopravvive a reinstall/cambio device. */
+  getIntroPremiumState: () =>
+    jsonReq<{ seen: boolean; seen_at?: string | null }>("/intro-premium/state"),
+  markIntroPremiumSeen: () =>
+    jsonReq<{ seen: boolean; seen_at?: string | null }>(
+      "/intro-premium/mark-seen",
+      { method: "POST" }
+    ),
+
   /** === DEV TRIAL SEEDING (2026-08-11) — admin-only ===
    * Endpoint di test per manipolare lo stato del trial dell'utente admin
    * corrente senza consumare 7 minuti veri di TTS. Tutti restituiscono

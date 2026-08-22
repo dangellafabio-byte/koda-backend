@@ -1073,6 +1073,111 @@ export default function Taccuino() {
   }, [profile, disclaimerState, showSplash, showColorIntro, router, pathname, introV3State]);
 
 
+  // === ROUTER INTRO PREMIUM (Fabio 2026-08-22) ==============================
+  // Al PRIMO boot di un utente Premium sulla home Koda conv "/", reindirizza
+  // a /intro-premium (nuova esperienza: voce + 3 coach-mark). Persistenza
+  // ibrida: SecureStore (istantaneo) + backend (sopravvive a reinstall).
+  //
+  // Ordine di verifica (priorità cache → rete):
+  //   1) SecureStore.intro_premium_seen_at != null → SKIP (già vista)
+  //   2) altrimenti chiama /api/intro-premium/state → se seen=true, scrivi
+  //      il mirror in SecureStore e SKIP (l'utente ha reinstallato)
+  //   3) altrimenti → introPremiumState = "needed" → redirect a /intro-premium
+  //
+  // NON tocca V3: se V3 non è ancora completata, il router V3 sopra ha
+  // priorità (guard `introV3State === "completed"` qui sotto).
+  const [introPremiumState, setIntroPremiumState] = useState<
+    "checking" | "needed" | "completed"
+  >("checking");
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        // 1) SecureStore first — fast path senza rete
+        const local = await SecureStore.getItemAsync("intro_premium_seen_at");
+        if (cancelled) return;
+        if (local) {
+          setIntroPremiumState("completed");
+          return;
+        }
+        // 2) Backend veto (reinstall / cambio device / cross-device)
+        try {
+          const st = await api.getIntroPremiumState();
+          if (cancelled) return;
+          if (st?.seen) {
+            // Scrivi il mirror locale per non richiedere di nuovo la rete
+            try {
+              await SecureStore.setItemAsync(
+                "intro_premium_seen_at",
+                st.seen_at || String(Date.now())
+              );
+            } catch {}
+            setIntroPremiumState("completed");
+            return;
+          }
+        } catch (e) {
+          console.warn("[KODA_ROUTER_INTRO_PREMIUM] state fetch failed:", e);
+          // Fail-closed: se il backend non risponde al boot, NON forziamo
+          // l'intro (rischio di riproporla a chi l'ha già vista). L'utente
+          // la vedrà al prossimo boot con backend raggiungibile.
+          setIntroPremiumState("completed");
+          return;
+        }
+        // 3) Mai vista, né locale né server → needed
+        if (!cancelled) setIntroPremiumState("needed");
+      } catch {
+        if (!cancelled) setIntroPremiumState("completed"); // safe default
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const hasRedirectedIntroPremiumRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (pathname !== "/") return;
+    if (introPremiumState !== "needed") return;
+    if (hasRedirectedIntroPremiumRef.current) return;
+    // Guard di completezza dati — stessi guard degli altri router
+    if (!profile) return;
+    if (disclaimerState !== "accepted") return;
+    if (showSplash) return;
+    // V3 deve essere completata (altrimenti V3 ha priorità)
+    if (introV3State !== "completed") return;
+    // Solo Premium: se free, il router free/premium sopra ha già redirettuto
+    // a /lascia-andare, ma questa guard è "belt & suspenders".
+    const tier = ((profile as any)?.subscription_tier as string | null) || null;
+    const isPaid =
+      tier === "monthly" ||
+      tier === "bimonthly" ||
+      tier === "annual" ||
+      tier === "unlimited";
+    if (!isPaid) return;
+    // Non redirigere se KodaIntro V1 è visibile (edge case)
+    if (showColorIntro === true) return;
+
+    hasRedirectedIntroPremiumRef.current = true;
+    console.log(
+      `[KODA_ROUTER_INTRO_PREMIUM] first paid boot → replace to /intro-premium`
+    );
+    try {
+      router.replace("/intro-premium");
+    } catch (e) {
+      console.warn("[KODA_ROUTER_INTRO_PREMIUM] replace failed:", e);
+    }
+  }, [
+    introPremiumState,
+    profile,
+    disclaimerState,
+    showSplash,
+    introV3State,
+    showColorIntro,
+    pathname,
+    router,
+  ]);
+
+
   const inputMode = (profile?.settings?.input_mode === "text"
     ? "text"
     : profile?.settings?.input_mode === "both"
@@ -3941,6 +4046,7 @@ export default function Taccuino() {
         // Silenzia errori: se un flag non esiste, deleteItemAsync è no-op.
         await Promise.all([
           SecureStore.deleteItemAsync("intro_v3_completed_at").catch(() => {}),
+          SecureStore.deleteItemAsync("intro_premium_seen_at").catch(() => {}),
           SecureStore.deleteItemAsync("heart_reveal_dismissed_at").catch(() => {}),
           SecureStore.deleteItemAsync("microdemo_last_at").catch(() => {}),
           SecureStore.deleteItemAsync("koda_intro_seen").catch(() => {}),

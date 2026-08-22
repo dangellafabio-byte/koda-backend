@@ -1961,6 +1961,12 @@ class Profile(BaseModel):
     # None ⇒ mai visto → mostra intro al prossimo accesso a Lascia Andare
     # ISO datetime ⇒ visto una volta, non riproporlo mai più
     lascia_andare_intro_seen_at: Optional[str] = None
+    # === INTRO PREMIUM — one-shot al primo accesso home Koda conv (Fabio 2026-08-22) ==
+    # Analogo a lascia_andare_intro_seen_at ma per l'onboarding della home
+    # Koda conversazionale (Premium). Sopravvive a wipe locale, reinstall,
+    # cambio device. None ⇒ mai visto → mostra Intro Premium al primo boot
+    # sulla home "/". ISO datetime ⇒ già vista, non riproporre mai più.
+    intro_premium_seen_at: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -4223,6 +4229,67 @@ async def api_lascia_andare_mark_intro_seen():
         # Non alziamo eccezione: il client procederà comunque all'ingresso,
         # e riproverà al prossimo accesso. Failure mode gentile.
         return LasciaAndareIntroState(seen=False, seen_at=None)
+
+
+# ============================================================
+# INTRO PREMIUM — one-shot al primo accesso home Koda conv (Fabio 2026-08-22)
+# ============================================================
+# Pattern identico a /lascia-andare/intro-{state,seen}, riusato per la
+# nuova Intro Premium (rotta /intro-premium) che parte SOLO al primo boot
+# di un utente Premium sulla home Koda conversazionale.
+#
+# Persistenza server-side (non solo SecureStore) così sopravvive a wipe
+# locale, reinstall, cambio device — richiesta esplicita Fabio.
+class IntroPremiumState(BaseModel):
+    seen: bool
+    seen_at: Optional[str] = None
+
+
+@api_router.get("/intro-premium/state", response_model=IntroPremiumState)
+async def api_intro_premium_state():
+    """Ritorna se l'utente ha già visto l'Intro Premium.
+    Il client chiama questo al boot (dopo aver verificato che è Premium)
+    per decidere se redirigere a /intro-premium.
+
+    In caso di errore backend, ritorna `seen=true` (default-conservativo
+    OPPOSTO a lascia-andare: qui NON vogliamo interrompere l'esperienza
+    Premium con un'intro se il backend è lento/offline al boot).
+    """
+    try:
+        p = await get_or_create_profile()
+        seen_at = getattr(p, "intro_premium_seen_at", None)
+        return IntroPremiumState(
+            seen=bool(seen_at),
+            seen_at=seen_at,
+        )
+    except Exception as e:
+        logger.warning(f"[intro-premium] state fetch failed: {e}")
+        # Fail-closed: se non riusciamo a leggere, assumiamo "già vista"
+        # per non forzare l'intro su utenti che l'hanno già completata.
+        return IntroPremiumState(seen=True, seen_at=None)
+
+
+@api_router.post("/intro-premium/mark-seen", response_model=IntroPremiumState)
+async def api_intro_premium_mark_seen():
+    """Marca l'Intro Premium come vista. Idempotente."""
+    uid = current_user_id()
+    try:
+        p = await get_or_create_profile()
+        existing = getattr(p, "intro_premium_seen_at", None)
+        if existing:
+            return IntroPremiumState(seen=True, seen_at=existing)
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.taccuino_profile.update_one(
+            {"id": uid},
+            {"$set": {"intro_premium_seen_at": now_iso}},
+            upsert=False,
+        )
+        logger.info(f"[intro-premium] user={uid[:8]} marked seen at {now_iso}")
+        return IntroPremiumState(seen=True, seen_at=now_iso)
+    except Exception as e:
+        logger.warning(f"[intro-premium] mark seen failed: {e}")
+        return IntroPremiumState(seen=False, seen_at=None)
 
 
 @api_router.get("/freemium/status", response_model=FreemiumStatus)
