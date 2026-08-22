@@ -377,7 +377,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       setOrbStatus("speaking");
       // Step 7 = "modalità sigillata" → eclissi BORDEAUX (colore Confessionale)
       // mentre Koda spiega il sigillo. Resto degli step: rosa caldo (warm).
-      setOrbTone(step === 7 ? "confessional" : "warm");
+      setOrbTone(step === 7 ? "warm" : "warm"); // ex confessional (Blocco B: feature Confessionale rimossa)
       return;
     }
     // Step indices: 0=greet, 1=name, 2=ugender, 3=aigender, 4=ainame,
@@ -390,7 +390,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       // Modalità sigillata in attesa di scelta: orb pulsante BORDEAUX
       // (richiama visivamente il colore del Confessionale).
       setOrbStatus("idle");
-      setOrbTone("confessional");
+      setOrbTone("warm"); // ex confessional (Blocco B)
     } else {
       // Default neutro per gli step "domanda" (1-4, 6, 7, 9) quando
       // Koda è in silenzio: idle viola che respira.
@@ -525,7 +525,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       (async () => {
         if (cancelled) return;
         const tone: OrbTone =
-          step === 5 ? "calm" : step === 7 ? "confessional" : step === 9 ? "warm" : "warm";
+          step === 5 ? "calm" : step === 7 ? "warm" : step === 9 ? "warm" : "warm"; // ex confessional (Blocco B)
         await speakKoda(finalLine, tone);
       })();
     }
@@ -649,15 +649,9 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       } catch (e) {
         console.warn("[koda-intro] profile update failed:", e);
       }
-      // 2. Save secret word if set
-      if (secretWordChoice === "now" && secretWordValue.trim().length >= 3) {
-        try {
-          const { setSecretWord } = await import("../lib/sealedCrypto");
-          await setSecretWord(secretWordValue.trim());
-        } catch (e) {
-          console.warn("[koda-intro] seal setup failed:", e);
-        }
-      }
+      // 2. Save secret word if set — RIMOSSO (Blocco B, Confessionale cancellato)
+      // Il vecchio codice importava setSecretWord da sealedCrypto per
+      // impostare la Parola Segreta del Confessionale. Feature deprecata.
       // 3. Done
       onDone({
         user_name: userName.trim() || "Amico",

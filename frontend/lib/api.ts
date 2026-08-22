@@ -47,21 +47,6 @@ export type TimelineEntry = {
   actions?: Action[] | null;
   audio_duration_ms?: number | null;
   timestamp: string;
-  /** True se questa entry è stata creata DURANTE il Confessionale.
-   *  Lato client viene usato per:
-   *    - nascondere il messaggio dalla timeline visibile quando il
-   *      confessionale è OFF (privacy: se qualcuno apre l'app non
-   *      può leggerli)
-   *    - colorarlo in violetto/oscuro quando il confessionale è ON
-   *      così l'utente capisce a colpo d'occhio quali sono.
-   *  Non viene mai inviato/salvato sul backend (lì già non si scrive
-   *  nulla in DB per ephemeral/sealed flow). */
-  confessional?: boolean | null;
-  // CONFESSIONALE FORTEZZA: voce LOCAL ONLY, mai inviata al server.
-  // Distinguibile dalle voci sealed normali (che invece arrivano al server
-  // cifrate). Le voci fortezza vengono CANCELLATE definitivamente quando
-  // l'utente esce dal confessionale (effetto fiamma).
-  fortezza?: boolean | null;
 };
 
 export type ProfileSettings = {
@@ -253,33 +238,9 @@ export const api = {
       body: JSON.stringify({ slot, local_hour }),
     }),
 
-  /** Confessionale Zero-Knowledge: invia messaggio cifrato + chiave volatile in header.
-   * Server decifra in RAM, chiama Claude, ricifra. Niente è loggato/persistito.
-   * `history_*` opzionali: turni precedenti della stessa sessione confessionale,
-   * cifrati con la stessa chiave. Server li decifra in RAM e li passa a Claude
-   * per dare continuità intra-confessionale. */
-  /** Confessionale Zero-Knowledge: invia messaggio cifrato + chiave volatile in header.
-   * Server decifra in RAM, chiama Claude, ricifra. Niente è loggato/persistito.
-   * `history_*` opzionali: turni precedenti della stessa sessione confessionale,
-   * cifrati con la stessa chiave. Server li decifra in RAM e li passa a Claude
-   * per dare continuità intra-confessionale. */
-  confessionalHistory: (limit: number = 200) =>
-    jsonReq<{
-      entries: Array<{ id: string; role: "user" | "ai"; nonce: string; ciphertext: string; ts: string }>;
-      count: number;
-    }>(`/confessional/history?limit=${limit}`),
-
-  /** Numero di entries presenti nel vault (senza esporre contenuti).
-   *  Usato fuori-Confessionale per dare a Koda awareness che "esiste un vault". */
-  confessionalCount: () => jsonReq<{ count: number }>("/confessional/count"),
-
-  /** Reset volontario della stanza Confessionale: cancella il buffer di
-   *  sessione sul server (oltre al TTL 24h). Manifesto V1. */
-  confessionalReset: (session_token: string) =>
-    jsonReq<{ ok: boolean; deleted: number }>("/confessional/reset", {
-      method: "POST",
-      body: JSON.stringify({ session_token }),
-    }),
+  /** Confessionale API — RIMOSSO (Blocco B, feature deprecata).
+   *  Gli endpoint /confessional/history, /confessional/count e
+   *  /confessional/reset non esistono più nel backend. */
 
   // === Auth (Block C) ===
   authMe: () => jsonReq<{ email: string; provider?: string }>("/auth/me"),
@@ -412,85 +373,7 @@ export const api = {
       body: JSON.stringify({ action, outcome }),
     }),
 
-  converseSealed: async (
-    payload: {
-      nonce: string;
-      ciphertext: string;
-      language?: string;
-      ai_name?: string;
-      ai_gender?: string;
-      user_gender?: string;
-      history_nonce?: string;
-      history_ciphertext?: string;
-    },
-    keyB64: string,
-    timeoutMs: number = 25000
-  ): Promise<{ nonce: string; ciphertext: string; tone: string }> => {
-    // Hard timeout via AbortController — iOS killa l'app se un fetch
-    // HTTPS resta in attesa troppo a lungo (osservato: app crash dopo
-    // sealed-10-about-to-post). Meglio fallire pulito con errore visibile.
-    const ac = new AbortController();
-    const timer = setTimeout(() => {
-      try { ac.abort(); } catch {}
-    }, timeoutMs);
-    // === FIX CRASH FINALE 2026-06-28 SERA ===
-    // r.json() su iOS RN può crashare nativamente quando la response
-    // arriva con caratteri UTF-8 strani o headers Cloudflare anomali.
-    // SOLUZIONE: leggi come testo grezzo, poi JSON.parse in pure JS.
-    // Il parsing JS è catchable, quello nativo no.
-    // Traccio anche ogni step interno per pinpointare il crash.
-    // FIX CRASH SEALED 2026-06-28 NOTTE: in produzione le trace sono
-    // NO-OP. Vedi commento in index.tsx — le fetch fire-and-forget
-    // saturavano il pool NSURLSession e iOS crashava nel cookie handler
-    // alla ricezione della risposta principale.
-    const dbgTrace = (step: string, extra?: string) => {
-      if (!__DEV__) return;
-      try {
-        fetch(`${API_BASE}/dbg-trace`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ step, extra: extra || "" }),
-        }).catch(() => {});
-      } catch {}
-    };
-    try {
-      dbgTrace("apiSealed-A-pre-fetch");
-      const r = await fetch(`${API_BASE}/converse/sealed`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Sealed-Key": keyB64,
-        },
-        body: JSON.stringify(payload),
-        signal: ac.signal,
-      });
-      clearTimeout(timer);
-      dbgTrace("apiSealed-B-headers-recv", `status=${r.status}`);
-      if (!r.ok) {
-        const t = await r.text().catch(() => "");
-        throw new Error(`HTTP ${r.status}: ${t.slice(0, 200)}`);
-      }
-      // ATTENZIONE: NON usare r.json() — crash nativo iOS osservato.
-      // Usa r.text() + JSON.parse JS (catchable).
-      const bodyText = await r.text();
-      dbgTrace("apiSealed-C-text-read", `bytes=${bodyText.length}`);
-      let parsed: any;
-      try {
-        parsed = JSON.parse(bodyText);
-      } catch (pe: any) {
-        dbgTrace("apiSealed-D-json-err", String(pe).slice(0, 80));
-        throw new Error("Risposta server non valida");
-      }
-      dbgTrace("apiSealed-E-parsed-ok");
-      return parsed;
-    } catch (e: any) {
-      clearTimeout(timer);
-      if (e?.name === "AbortError") {
-        throw new Error(`sealed timeout after ${timeoutMs}ms`);
-      }
-      throw e;
-    }
-  },
+  /** converseSealed — RIMOSSO (Blocco B, endpoint /converse/sealed cancellato). */
 
   /** Ricerca web pubblica (DuckDuckGo, no API key). */
   search: (query: string, max_results = 4) =>
@@ -503,8 +386,8 @@ export const api = {
     ),
 
   /** Ricordi semantici (long-term memory, giugno 2026).
-   *  source filter: "chat" | "confessional_abstract" | omesso (= entrambi). */
-  listMemories: (limit = 50, source?: "chat" | "confessional_abstract") => {
+   *  source ora è sempre "chat" (Confessionale rimosso in Blocco B). */
+  listMemories: (limit = 50, source?: "chat") => {
     const q = source ? `?limit=${limit}&source=${source}` : `?limit=${limit}`;
     return jsonReq<{
       memories: Array<{
@@ -513,7 +396,7 @@ export const api = {
         tags: string[];
         emotion?: string | null;
         importance: number;
-        source: "chat" | "confessional_abstract";
+        source: "chat";
         created_at: string;
       }>;
       count: number;
@@ -610,56 +493,12 @@ export const api = {
       { method: "POST", body: JSON.stringify(payload) }
     ),
 
-  clearMemories: (source?: "chat" | "confessional_abstract") => {
+  clearMemories: (source?: "chat") => {
     const q = source ? `?source=${source}` : "";
     return jsonReq<{ ok: boolean; deleted: number }>(`/memories${q}`, { method: "DELETE" });
   },
 
-  /** Distillazione astratta del Confessionale alla CHIUSURA della sessione.
-   *  Il frontend cifra la sessione confessionale (stessa chiave usata per
-   *  i singoli messaggi sealed) e la manda qui. Il server decifra in RAM,
-   *  estrae UN concetto psicologico astratto, lo salva come ricordo
-   *  con source="confessional_abstract", e brucia il plaintext.
-   *
-   *  Il frontend chiama questo PRIMA del wipe locale e PRIMA di chiamare
-   *  forgetSessionKey(). È un fire-and-forget: se fallisce, non blocchiamo
-   *  l'animazione di uscita (la sessione locale viene comunque bruciata). */
-  confessionalDistill: async (
-    payload: { history_nonce: string; history_ciphertext: string; language?: string },
-    keyB64: string,
-    timeoutMs: number = 20000
-  ): Promise<{ saved: boolean; memory_id?: string; reason?: string }> => {
-    const ac = new AbortController();
-    const timer = setTimeout(() => { try { ac.abort(); } catch {} }, timeoutMs);
-    try {
-      const r = await fetch(`${API_BASE}/confessional/distill`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Sealed-Key": keyB64,
-        },
-        body: JSON.stringify(payload),
-        signal: ac.signal,
-      });
-      clearTimeout(timer);
-      if (!r.ok) {
-        const t = await r.text().catch(() => "");
-        throw new Error(`HTTP ${r.status}: ${t.slice(0, 200)}`);
-      }
-      const txt = await r.text();
-      try {
-        return JSON.parse(txt);
-      } catch {
-        return { saved: false, reason: "parse_error" };
-      }
-    } catch (e: any) {
-      clearTimeout(timer);
-      if (e?.name === "AbortError") {
-        throw new Error(`distill timeout after ${timeoutMs}ms`);
-      }
-      throw e;
-    }
-  },
+  /** confessionalDistill — RIMOSSO (Blocco B, endpoint /confessional/distill cancellato). */
 
   // === DISCLAIMER "Koda non è terapia" (Fabio 2026-07-28) ==================
   // Wrapper per l'overlay onboarding che chiarisce che Koda non sostituisce

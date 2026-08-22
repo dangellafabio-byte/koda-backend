@@ -36,7 +36,7 @@ export type BorderCalibration = {
 /** Colore idle alternativo quando l'utente lo attiva.
  *  Pastel-cyan chiaro: si vede benissimo su qualunque wallpaper, non
  *  confondibile con nessuno degli altri stati (recording tiffany, thinking
- *  ciclamino, speaking viola, confessional scarlatto). */
+ *  ciclamino, speaking viola). */
 export const ALT_IDLE_COLOR = "#7DD3FC";
 
 /** Default assoluto: nessuna calibrazione, il componente usa la sua

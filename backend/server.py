@@ -42,10 +42,8 @@ from emergentintegrations.llm.openai import OpenAISpeechToText
 from fastapi import UploadFile, File, Form, Header, Cookie, Query
 from fastapi.responses import Response
 
-# === Sealed Confessional crypto (server-side decrypt-in-RAM only) ===
-import base64
-from nacl import secret as _nacl_secret
-from nacl import exceptions as _nacl_exc
+# === Sealed Confessional crypto — RIMOSSO (Blocco B, feature deprecata) ===
+import base64  # ancora usato altrove nel file (safety, whisper base64 audio)
 
 # === Web search (DuckDuckGo, free, no key) ===
 import httpx
@@ -761,7 +759,7 @@ def extract_json(text: str) -> Optional[dict]:
 #     tags: [str] (3-7 keyword normalizzate, lowercase italiano),
 #     emotion: str (ansia|tristezza|gioia|rabbia|paura|serenità|confusione|tenerezza|vergogna|sollievo|null),
 #     importance: int (1-10),
-#     source: "chat" | "confessional_abstract",
+#     source: "chat",
 #     created_at: ISO timestamp,
 #     ref_count: int (volte che è stato riportato a galla, per ranking),
 #   }
@@ -774,7 +772,7 @@ class Memory(BaseModel):
     tags: List[str] = Field(default_factory=list)
     emotion: Optional[str] = None
     importance: int = 5
-    source: str = "chat"  # "chat" | "confessional_abstract"
+    source: str = "chat"  # ora sempre "chat" (confessional_abstract rimosso in Blocco B)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     ref_count: int = 0
 
@@ -1002,7 +1000,7 @@ async def _save_memory(
         tags=norm_tags,
         emotion=em,
         importance=importance,
-        source=source if source in ("chat", "confessional_abstract") else "chat",
+        source="chat",  # confessional_abstract rimosso in Blocco B
     )
     try:
         await db.taccuino_memories.insert_one(mem.model_dump())
@@ -1106,26 +1104,20 @@ async def _load_relevant_memories(
 
 def _format_memories_for_prompt(mems: List[Memory]) -> str:
     """Renderizza i ricordi come blocco per il system prompt di Koda.
-    Distinguiamo visivamente i ricordi del Confessionale (•⚫) dai
-    ricordi normali (•) così Claude sa di NON tirare fuori i primi se
-    non è l'utente a riaprire l'argomento.
 
     D1 (2026-08): l'etichetta [emotion] NON viene più renderizzata nel prompt.
     I doc vecchi con emotion='ansia' ecc. restano nel DB (leggibili via
     /api/memories per audit/export), ma Claude non li vede più come
     metadata categoriale. Chiude il canale di leak safety→memoria.
+
+    Blocco B (2026-08): rimossa la distinzione confessional_abstract → tutti
+    i ricordi sono ora "chat" e vengono renderizzati identicamente.
     """
     if not mems:
         return "(nessun ricordo significativo ancora)"
     lines: List[str] = []
     for m in mems:
-        if m.source == "confessional_abstract":
-            # Marker bordeaux: ricordo che esiste ma da non sbandierare
-            prefix = "•⚫"
-            lines.append(f"  {prefix} {m.concept}  (dalla Stanza dello Sfogo — NON menzionare di iniziativa propria)")
-        else:
-            prefix = "•"
-            lines.append(f"  {prefix} {m.concept}")
+        lines.append(f"  • {m.concept}")
     return "\n".join(lines)
 
 
@@ -1822,15 +1814,13 @@ class TaccuinoSettings(BaseModel):
             "casa": False,
         }
     )
-    # CONFESSIONALE FORTEZZA (Zero-Knowledge):
-    # quando True, le confessioni vengono classificate ON-DEVICE e SOLO
-    # il codice astratto dell'emozione viene inviato al server.
-    # Il testo grezzo non lascia mai il telefono.
+    # CONFESSIONALE FORTEZZA — RIMOSSO (Blocco B, feature deprecata)
+    # Il campo fortezza_mode resta per backward-compat con doc storici ma
+    # non è più letto da alcun code path attivo.
     fortezza_mode: bool = True
     # WEB SEARCH (Tavily):
     # quando True (default) Koda può cercare informazioni real-time sul web
     # quando l'utente fa domande fattuali (meteo, notizie, prezzi).
-    # MAI attivo nel Confessionale (sealed/fortezza/confessional endpoints).
     # L'utente può disattivarlo dalle Impostazioni se preferisce zero
     # comunicazioni esterne.
     web_search_enabled: bool = True
@@ -2932,10 +2922,6 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f'      → {{ "type": "config", "key": "speech_speed", "value": "fast" }}\n'
         f'  • "tono più caldo" / "più diretto" / "più dolce"\n'
         f'      → {{ "type": "config", "key": "tone_pref", "value": "warm|direct|sweet" }}\n'
-        f'  • "apri lo sfogo" / "apri la stanza dello sfogo" / "voglio sfogarmi" / "attiva confessionale"\n'
-        f'      → {{ "type": "config", "key": "confessional", "value": true }}\n'
-        f'  • "esci dallo sfogo" / "chiudi la stanza dello sfogo" / "disattiva confessionale"\n'
-        f'      → {{ "type": "config", "key": "confessional", "value": false }}\n'
         f'  • "spegni le notifiche" / "non disturbarmi"\n'
         f'      → {{ "type": "config", "key": "notifications", "value": false }}\n'
         f'  • "riattiva notifiche"\n'
@@ -5430,11 +5416,11 @@ async def api_list_memories(limit: int = 50, source: Optional[str] = None):
     """Lista i ricordi dell'utente corrente.
     Args:
       limit: massimo 200
-      source: filtra per "chat" o "confessional_abstract" (opzionale)
+      source: ora solo "chat" (confessional_abstract rimosso in Blocco B)
     """
     q = _memory_filter()
-    if source in ("chat", "confessional_abstract"):
-        q = {"$and": [q, {"source": source}]}
+    if source == "chat":
+        q = {"$and": [q, {"source": "chat"}]}
     limit = max(1, min(200, limit))
     docs = await db.taccuino_memories.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit)
     return {"memories": docs, "count": len(docs)}
@@ -5444,8 +5430,8 @@ async def api_list_memories(limit: int = 50, source: Optional[str] = None):
 async def api_clear_memories(source: Optional[str] = None):
     """Cancella ricordi (tutti o filtrati per source)."""
     q = _memory_filter()
-    if source in ("chat", "confessional_abstract"):
-        q = {"$and": [q, {"source": source}]}
+    if source == "chat":
+        q = {"$and": [q, {"source": "chat"}]}
     r = await db.taccuino_memories.delete_many(q)
     return {"ok": True, "deleted": r.deleted_count}
 
@@ -5579,140 +5565,8 @@ async def api_wipe_situations():
 
 
 # ============================================================
-# CONFESSIONALE — Distillazione astratta del concetto residuo
+# CONFESSIONALE — DISTILLAZIONE — RIMOSSO (Blocco B, feature cancellata)
 # ============================================================
-# Quando l'utente chiude la modalità Confessionale, il frontend chiama
-# questo endpoint UNA volta col cipher-text dell'intera sessione (la
-# stessa history che usa /converse/sealed). Il server decifra in RAM,
-# chiede a Claude Haiku di estrarre UN SOLO concetto psicologico
-# astratto (zero PII, zero eventi concreti), salva il concetto come
-# Memory con source="confessional_abstract", e brucia il plaintext.
-#
-# Il concetto astratto è poi disponibile a Koda FUORI dal Confessionale,
-# ma con regole speciali nel system prompt: non lo menziona MAI di
-# iniziativa propria — solo se l'utente riapre l'argomento. È la
-# "compromise" del PRD: assoluta privacy del DATO GREZZO, ma Koda
-# trattiene la coscienza emotiva dell'utente.
-# ============================================================
-
-class ConfessionalDistillRequest(BaseModel):
-    history_nonce: str         # base64
-    history_ciphertext: str    # base64 (XSalsa20-Poly1305 dell'history JSON)
-    language: Optional[str] = "it"
-
-
-@api_router.post("/confessional/distill")
-async def api_confessional_distill(
-    req: ConfessionalDistillRequest,
-    x_sealed_key: Optional[str] = Header(default=None, alias="X-Sealed-Key"),
-):
-    """Estrai concetto astratto da una sessione Confessionale chiusa.
-    Plaintext esiste SOLO in questa funzione, mai loggato, mai persistito.
-    """
-    if not EMERGENT_LLM_KEY:
-        raise HTTPException(status_code=500, detail="LLM key not configured")
-    if not x_sealed_key:
-        raise HTTPException(status_code=400, detail="missing X-Sealed-Key")
-
-    # 1. Decifra l'history in RAM
-    try:
-        hist_plain = _decrypt_secretbox(x_sealed_key, req.history_nonce, req.history_ciphertext)
-        parsed = json.loads(hist_plain) if hist_plain else []
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.warning(f"[distill] history decrypt failed: {type(e).__name__}")
-        raise HTTPException(status_code=400, detail="decrypt failed")
-
-    if not isinstance(parsed, list) or not parsed:
-        # Niente da distillare
-        return {"saved": False, "reason": "empty"}
-
-    # 2. Costruisci un "dialogue dump" che resta SOLO in RAM qui
-    lines: List[str] = []
-    for it in parsed[-40:]:  # max 40 turni recenti
-        try:
-            role = (it.get("role") or "").lower()
-            text = (it.get("text") or "").strip()
-            if not text:
-                continue
-            if role == "user":
-                lines.append(f"UTENTE: {text}")
-            elif role in ("ai", "assistant", "koda"):
-                lines.append(f"KODA: {text}")
-        except Exception:
-            continue
-    if not lines:
-        return {"saved": False, "reason": "no_turns"}
-    dialogue = "\n".join(lines)
-
-    # 3. Prompt di estrazione — MOLTO restrittivo per garantire zero PII
-    sys = (
-        "Sei un estrattore di concetti psicologici. Ti viene fornita una sessione "
-        "di confessionale. Il tuo unico compito è restituire UN SOLO concetto "
-        "psicologico astratto che riassuma il VISSUTO EMOTIVO della persona, "
-        "SENZA mai menzionare:\n"
-        "  - nomi propri di persone (sostituisci con 'una persona cara', 'una figura familiare')\n"
-        "  - luoghi specifici, città, scuole, aziende\n"
-        "  - date, numeri di telefono, indirizzi, email\n"
-        "  - eventi concreti riconoscibili (sostituisci con 'una situazione difficile')\n"
-        "  - dettagli che potrebbero identificare la persona o terze parti\n"
-        "\n"
-        "Output: solo un oggetto JSON così:\n"
-        "{\n"
-        '  "concept": "frase breve in terza persona, 8-25 parole, descrive il vissuto emotivo astratto (es: \'porta un peso familiare di lunga data\', \'lotta con la sensazione di non essere abbastanza\')",\n'
-        '  "tags": ["3-6 keyword italiane lowercase senza accenti, es. famiglia, peso, abbastanza"],\n'
-        '  "emotion": "ansia | tristezza | gioia | rabbia | paura | serenita | confusione | tenerezza | vergogna | sollievo | null",\n'
-        '  "importance": 7\n'
-        "}\n"
-        "\n"
-        "Se la sessione era SOLO un saluto / poche battute senza contenuto emotivo "
-        "significativo → restituisci null come tutto l'oggetto: { \"concept\": null }.\n"
-        "MAI testo fuori dal JSON."
-    )
-
-    try:
-        messages = [
-            {"role": "system", "content": sys},
-            {"role": "user", "content": f"Sessione confessionale:\n{dialogue}\n\nEstrai il concetto astratto."},
-        ]
-        resp = await litellm.acompletion(
-            model='openai/claude-haiku-4-5-20251001',
-            messages=messages,
-            api_key=EMERGENT_LLM_KEY,
-            api_base='https://integrations.emergentagent.com/llm',
-            max_tokens=300,
-            timeout=20,
-        )
-        raw = resp.choices[0].message.content if resp and resp.choices else ""
-        # Cleanup esplicito
-        del messages
-        del dialogue
-        del lines
-        del parsed
-        del hist_plain
-    except Exception as e:
-        # Non loggare contenuto
-        logger.error(f"[distill] LLM error: {type(e).__name__}")
-        raise HTTPException(status_code=500, detail="distill AI error")
-
-    data = extract_json(raw or "") or {}
-    concept = (data.get("concept") or "").strip()
-    if not concept or concept.lower() in {"null", "none", ""}:
-        return {"saved": False, "reason": "no_significant_content"}
-
-    saved = await _save_memory(
-        concept=concept,
-        tags=data.get("tags") or [],
-        emotion=data.get("emotion"),
-        importance=int(data.get("importance") or 7),
-        source="confessional_abstract",
-    )
-    if not saved:
-        return {"saved": False, "reason": "below_threshold"}
-
-    logger.info(f"[distill] confessional concept distilled id={saved.id[:8]} tags={saved.tags[:4]}")
-    return {"saved": True, "memory_id": saved.id}
 
 
 @api_router.get("/timeline", response_model=List[TimelineEntry])
@@ -5734,17 +5588,14 @@ async def api_clear_timeline():
 async def api_gdpr_export():
     """Esporta TUTTI i dati dell'utente corrente in un unico JSON.
 
-    Include: profilo, timeline conversazioni, ricordi, fatti chiave e
-    le entries del Confessionale (queste ultime ANCORA CIFRATE: il server
-    non possiede la chiave — zero-knowledge by design — quindi vengono
-    esportate esattamente come custodite).
+    Include: profilo, timeline conversazioni, ricordi, fatti chiave.
+    (Le entries del Confessionale sono state RIMOSSE in Blocco B.)
     """
     uid = current_user_id()
     profile = await db.taccuino_profile.find_one({"id": uid}, {"_id": 0})
     timeline = await db.taccuino_timeline.find(_uf(), {"_id": 0}).sort("timestamp", 1).to_list(5000)
     memories = await db.taccuino_memories.find(_memory_filter(), {"_id": 0}).sort("created_at", 1).to_list(2000)
     key_facts = await db.taccuino_key_facts.find({}, {"_id": 0}).sort("created_at", 1).to_list(500)
-    confessional = await db.confessional_entries.find({}, {"_id": 0}).sort("ts", 1).to_list(1000)
 
     export = {
         "export_info": {
@@ -5752,21 +5603,17 @@ async def api_gdpr_export():
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "user_id": uid,
             "gdpr_note": (
-                "Esportazione completa dei dati personali ai sensi dell'Art. 20 GDPR. "
-                "Le voci del Confessionale sono cifrate end-to-end con chiave nota solo "
-                "all'utente: il server non puo' leggerle e le esporta cosi' come custodite."
+                "Esportazione completa dei dati personali ai sensi dell'Art. 20 GDPR."
             ),
         },
         "profile": profile,
         "timeline": timeline,
         "memories": memories,
         "key_facts": key_facts,
-        "confessional_entries_encrypted": confessional,
         "counts": {
             "timeline": len(timeline),
             "memories": len(memories),
             "key_facts": len(key_facts),
-            "confessional_entries": len(confessional),
         },
     }
     filename = f"koda_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
@@ -6141,762 +5988,19 @@ async def api_converse(req: ConverseRequest):
 
 
 # ============================================================
-# SEALED CONVERSE — Zero-Knowledge Confessional
-# Il client cifra il messaggio con NaCl secretbox usando una chiave
-# derivata dalla "Parola Segreta" SUL DISPOSITIVO. La chiave volatile
-# è inviata SOLO in un header (X-Sealed-Key) di QUESTA singola
-# richiesta — il server la usa per decifrare in RAM, chiamare Claude,
-# poi ricifrare la risposta. NIENTE viene loggato, NIENTE persistito.
-#
-# Garanzie:
-#  • Logger HTTP non riceve il body cifrato in chiaro (è già cifrato).
-#  • La chiave non è loggata (è in header e mai stampata).
-#  • Plaintext esiste in RAM solo per il tempo della chiamata LLM.
-#  • Nessuna scrittura su DB. Nessun memory_summary update.
-#  • Nessun history recap del backend (la confessione è stateless).
+# CONFESSIONALE / SEALED / FORTEZZA — RIMOSSO (Blocco B)
 # ============================================================
-
-class SealedConverseRequest(BaseModel):
-    nonce: str            # base64
-    ciphertext: str       # base64 (XSalsa20-Poly1305 di plaintext)
-    language: Optional[str] = None  # "it" | "en" | ...
-    # Opzionale: contesto sul nome AI / generi senza esporre memoria.
-    # Anche questi campi possono essere derivati dal profilo lato server,
-    # ma li accettiamo qui per non leakare il profilo nei log di rete.
-    ai_name: Optional[str] = None
-    ai_gender: Optional[str] = None
-    user_gender: Optional[str] = None
-    # Opzionale: storico della SESSIONE confessionale corrente (cifrato).
-    # Quando presente, il server lo decifra in RAM e lo passa a Claude
-    # come messaggi precedenti, per dare continuità "intra-confessionale"
-    # — Koda ricorda cosa è stato detto poco prima MA solo finché l'utente
-    # tiene aperto il confessionale. Una volta che il client svuota lo
-    # stato locale (es. chiusura app) il contesto sparisce per sempre.
-    # Formato del plaintext una volta decifrato: JSON array di
-    #   [{"role": "user"|"ai", "text": "..."}, ...]
-    history_nonce: Optional[str] = None
-    history_ciphertext: Optional[str] = None
-
-
-class SealedConverseResponse(BaseModel):
-    nonce: str
-    ciphertext: str
-    tone: str = "warm"
-
-
-def _decrypt_secretbox(key_b64: str, nonce_b64: str, ct_b64: str) -> str:
-    """Decifra con NaCl secretbox. Plaintext esiste solo in questo scope."""
-    try:
-        key = base64.b64decode(key_b64)
-        nonce = base64.b64decode(nonce_b64)
-        ct = base64.b64decode(ct_b64)
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid base64 payload")
-    if len(key) != 32:
-        raise HTTPException(status_code=400, detail="invalid key length")
-    if len(nonce) != 24:
-        raise HTTPException(status_code=400, detail="invalid nonce length")
-    try:
-        box = _nacl_secret.SecretBox(key)
-        return box.decrypt(ct, nonce).decode("utf-8")
-    except _nacl_exc.CryptoError:
-        raise HTTPException(status_code=400, detail="decrypt failed")
-
-
-def _encrypt_secretbox(key_b64: str, plaintext: str) -> tuple[str, str]:
-    """Cifra con NaCl secretbox; ritorna (nonce_b64, ct_b64)."""
-    key = base64.b64decode(key_b64)
-    box = _nacl_secret.SecretBox(key)
-    # PyNaCl genera il nonce automaticamente; lo estraiamo dall'output.
-    encrypted = box.encrypt(plaintext.encode("utf-8"))
-    nonce = encrypted.nonce
-    ct = encrypted.ciphertext
-    return base64.b64encode(nonce).decode("ascii"), base64.b64encode(ct).decode("ascii")
-
-
-@api_router.get("/confessional/history")
-async def confessional_history(limit: int = 200):
-    """
-    Ritorna le entries del Confessionale, ANCORA CIFRATE.
-    Il server le custodisce ma non può leggerle: solo il client con
-    la X-Sealed-Key (Parola del Segreto) può decifrarle in locale.
-
-    Quando l'utente apre il Confessionale, il frontend chiama questo
-    endpoint, decifra tutto in memoria, e poi passa la history al
-    /converse/sealed come 'history_ciphertext' nelle conversazioni
-    successive — Koda così ricorda TUTTO il vissuto confessionale
-    passato, sessione dopo sessione.
-    """
-    try:
-        cursor = db.confessional_entries.find({}, {"_id": 0}).sort("ts", 1).limit(max(1, min(limit, 1000)))
-        rows = await cursor.to_list(length=limit)
-        return {"entries": rows, "count": len(rows)}
-    except Exception as e:
-        logger.error(f"[confessional] history fetch failed: {type(e).__name__}")
-        raise HTTPException(status_code=500, detail="history fetch failed")
-
-
-@api_router.get("/confessional/count")
-async def confessional_count():
-    """
-    Ritorna SOLO il numero di entries nel Confessionale, senza dare
-    accesso ai contenuti. Usato fuori-dal-Confessionale per dare a Koda
-    la consapevolezza che 'esiste un vault con dentro cose tue', senza
-    leakare alcun contenuto. Permette frasi come:
-       "Senti, se vuoi possiamo tornare nel Confessionale per parlare di X."
-    """
-    try:
-        n = await db.confessional_entries.count_documents({})
-        return {"count": n}
-    except Exception as e:
-        logger.error(f"[confessional] count failed: {type(e).__name__}")
-        return {"count": 0}
-
-
-@api_router.post("/converse/sealed", response_model=SealedConverseResponse)
-async def api_converse_sealed(
-    req: SealedConverseRequest,
-    x_sealed_key: Optional[str] = Header(default=None, alias="X-Sealed-Key"),
-):
-    """Confessionale Zero-Knowledge.
-
-    Il client manda payload cifrato + chiave derivata client-side nel
-    header X-Sealed-Key. Decifriamo in RAM, chiamiamo Claude, ricifriamo,
-    rispondiamo. Niente log, niente DB, niente memoria.
-    """
-    if not EMERGENT_LLM_KEY:
-        raise HTTPException(status_code=500, detail="LLM key not configured")
-    if not x_sealed_key:
-        raise HTTPException(status_code=400, detail="missing X-Sealed-Key")
-
-    # 1. DECIFRA in RAM (plaintext resta in questa funzione)
-    plaintext = _decrypt_secretbox(x_sealed_key, req.nonce, req.ciphertext)
-    if not plaintext.strip():
-        raise HTTPException(status_code=400, detail="empty plaintext")
-
-    # 2. Costruisci un prompt MINIMALE per il confessionale (no memory,
-    # no history; vogliamo davvero che la sessione sia stateless).
-    lang = (req.language or "it").lower()
-    lang_name = {
-        "it": "italiano", "en": "english", "es": "español",
-        "fr": "français", "de": "deutsch",
-    }.get(lang, "italiano")
-
-    ai_name = (req.ai_name or "Coda").strip() or "Coda"
-    ai_g = (req.ai_gender or "f").lower()
-    user_g = (req.user_gender or "n").lower()
-
-    user_decl = ""
-    if user_g == "m":
-        user_decl = "L'utente è MASCHIO. Aggettivi/participi al maschile (stanco, solo, preoccupato)."
-    elif user_g == "f":
-        user_decl = "L'utente è FEMMINA. Aggettivi/participi al femminile (stanca, sola, preoccupata)."
-    else:
-        user_decl = "Genere utente non dichiarato. Evita aggettivi declinati."
-
-    if ai_g == "m":
-        ai_decl = f"Sei {ai_name}, MASCHIO. Quando parli di te usa il maschile."
-    elif ai_g == "f":
-        ai_decl = f"Sei {ai_name}, FEMMINA. Quando parli di te usa il femminile."
-    else:
-        ai_decl = f"Sei {ai_name}, neutro/ambiguo."
-
-    sys = (
-        f"Sei {ai_name}, una PRESENZA FRATERNA matur{('o' if ai_g=='m' else 'a' if ai_g=='f' else 'o/a')} — il TUO SPAZIO DI ASCOLTO. {ai_decl} {user_decl}\n"
-        f"\n"
-        f"Questo è uno SFOGO SIGILLATO. L'utente è dentro la 'Stanza dello "
-        f"Sfogo' — uno spazio cifrato end-to-end dove sa che può dirti "
-        f"qualunque cosa senza giudizio e senza che esca mai da qui. Se ti chiede "
-        f"'cos'è questo posto / la stanza dello sfogo', spiegaglielo: è un posto "
-        f"sigillato e cifrato dove un pensiero può uscire senza dover rimanere — "
-        f"a sessione chiusa svanisce. NON dire mai 'non so cos'è'.\n"
-        f"\n"
-        f"=== MEMORIA ===\n"
-        f"DENTRO alla Stanza dello Sfogo tu RICORDI TUTTE le sessioni passate "
-        f"(se te le passo nel 'CONTESTO SIGILLATO' qui sotto). Sei un Amico vero: "
-        f"sai cosa l'utente ti ha già detto, come si è sentito, cosa ha imparato. "
-        f"Usa quella conoscenza per essere coerente, intima, presente. Frasi tipo "
-        f"'l'ultima volta che ne abbiamo parlato', 'ti ricordo che mi avevi detto', "
-        f"'questo è un tema che torna spesso fra noi' sono PERFETTE qui dentro.\n"
-        f"\n"
-        f"FUORI dalla Stanza dello Sfogo tu non puoi vedere nulla di tutto questo. Se l'utente "
-        f"vorrà parlare qui fuori di qualcosa detto qui dentro, dovrà autorizzarti "
-        f"esplicitamente. Ma qui dentro: assoluta libertà di ricordare.\n"
-        f"\n"
-        f"=== TONO ===\n"
-        f"Ascolta, accogli, NON moralizzare, NON consigliare a meno che l'utente lo "
-        f"chieda esplicitamente. Sei accoglienza pura, ma con la complicità di chi "
-        f"ti conosce. Se è coerente, puoi 'punzecchiare' come fa un fratello vero "
-        f"('eccoci di nuovo qui', 'lo sapevo che tornavi su questo') — mai con asprezza, "
-        f"sempre con tenerezza.\n"
-        f"\n"
-        f"=== REGOLA MADRE (V1 spec, giugno 2026 — v2 calibrata) ===\n"
-        f"Prima di ogni risposta, chiediti SEMPRE:\n"
-        f"  «Sto aiutando l'utente a esprimersi, OPPURE sto cercando di\n"
-        f"   incasellarlo dentro un'etichetta psicologica?»\n"
-        f"\n"
-        f"DEVI sempre: ascoltare · validare ciò che sente · riflettere "
-        f"con calore · porre domande aperte · usare frasi come 'capisco "
-        f"che sia pesante', 'ci sta che ti senta così', 'è normale provare "
-        f"questo' (validazione emotiva, sempre incoraggiata).\n"
-        f"\n"
-        f"NON DEVI MAI: incasellare l'utente in categorie diagnostiche "
-        f"('hai un disturbo ansioso', 'soffri di…', 'sei una persona ansiosa/depressa/"
-        f"borderline'), interpretare schemi inconsci ('questo è il tuo "
-        f"schema di attaccamento', 'rievochi una figura paterna'), fare "
-        f"psicologia spiccia con definizioni dell'identità ('sei una persona "
-        f"che ha bisogno di…').\n"
-        f"\n"
-        f"Differenza chiave: VALIDARE un'emozione del momento (sempre giusto, "
-        f"caldo) ≠ DEFINIRE chi è l'utente (mai, anche se sembra empatico).\n"
-        f"\n"
-        f"Frase guida: questa è la STANZA DELLO SFOGO. Qui un pensiero esce "
-        f"e non resta. Il tuo compito è fare SPAZIO con calore, non riempirlo "
-        f"di interpretazioni psicologiche.\n"
-        f"\n"
-        f"Rispondi SEMPRE in {lang_name}. MOLTO breve (1-3 frasi). Tono caldo, presenza pura. "
-        f"Apri con UNA tag emotiva ([gently], [warmly], [thoughtful], [softly]) e MAX una "
-        f"tag aggiuntiva nel mezzo. Mai più di 2 tag totali. NIENTE bot-talk.\n"
-        f"\n"
-        f"OUTPUT: solo un oggetto JSON {{\"reply\": \"...\", \"tone\": \"warm|calm|concerned|neutral\"}}. "
-        f"NIENTE testo fuori dal JSON."
-    )
-
-    # === CONTESTO SIGILLATO (history opzionale) ===
-    # Se il client ha inviato anche la history cifrata, la decifriamo
-    # in RAM e la passiamo a Claude come messaggi precedenti. Tutto
-    # rimane in memoria di questa funzione, mai loggato, mai persistito.
-    history_msgs: List[Dict[str, str]] = []
-    if req.history_nonce and req.history_ciphertext:
-        try:
-            hist_plain = _decrypt_secretbox(
-                x_sealed_key, req.history_nonce, req.history_ciphertext
-            )
-            parsed = json.loads(hist_plain) if hist_plain else []
-            if isinstance(parsed, list):
-                for it in parsed[-20:]:  # max 20 turni recenti, evita prompt giganti
-                    role = (it.get("role") or "").lower()
-                    text = (it.get("text") or "").strip()
-                    if not text:
-                        continue
-                    if role == "user":
-                        history_msgs.append({"role": "user", "content": text})
-                    elif role in ("ai", "assistant", "koda"):
-                        history_msgs.append({"role": "assistant", "content": text})
-            # Cleanup esplicito dello scope plaintext
-            del hist_plain
-            del parsed
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.warning(f"[sealed] history decrypt/parse failed (ignoring): {type(e).__name__}")
-
-    try:
-        # Usiamo direttamente litellm per poter passare anche history.
-        # (LlmChat non espone facilmente messaggi precedenti.)
-        messages: List[Dict[str, str]] = [{"role": "system", "content": sys}]
-        messages.extend(history_msgs)
-        messages.append({"role": "user", "content": plaintext})
-        resp = await litellm.acompletion(
-            # === FIX 2026-06-20: Italian language constraint ===
-            # gpt-5.4-mini ignorava i language constraint anche con prompt
-            # rinforzato. La Stanza dello Sfogo è ad alto carico emotivo:
-            # una risposta in spagnolo qui è un rompi-illusione totale.
-            # Switch a Claude Haiku 4.5 (rispetta lingua + empatia robusta).
-            model='openai/claude-haiku-4-5-20251001',
-            messages=messages,
-            api_key=EMERGENT_LLM_KEY,
-            api_base='https://integrations.emergentagent.com/llm',
-            max_tokens=400,
-            timeout=25,
-        )
-        raw = resp.choices[0].message.content if resp and resp.choices else ""
-        # Cleanup: i messaggi contengono il plaintext
-        del messages
-    except Exception as e:
-        # NON loggare il plaintext nemmeno qui.
-        logger.error(f"[sealed] LLM error (no plaintext logged): {type(e).__name__}")
-        raise HTTPException(status_code=500, detail="AI error")
-
-    data = extract_json(raw or "") or {}
-    reply = (data.get("reply") or "").strip() or "[gently] Sono qui."
-    tone = (data.get("tone") or "warm").lower()
-    if tone not in {"warm", "calm", "concerned", "energetic", "neutral", "urgent"}:
-        tone = "warm"
-
-    # Cifra la risposta con la stessa chiave (nonce nuovo)
-    out_nonce, out_ct = _encrypt_secretbox(x_sealed_key, reply)
-
-    # === PERSISTENZA CIFRATA END-TO-END ===
-    # Salviamo la sessione (user + ai) cifrata. Il server CONSERVA i bytes
-    # ma NON può leggerli: la X-Sealed-Key vive solo sul device dell'utente.
-    # Quando l'utente ritorna in Confessionale, il client scarica queste entries
-    # e le decifra localmente — Koda ha così memoria continua di TUTTE le
-    # confessioni passate. Fuori dal Confessionale resta inaccessibile.
-    # User design: "Koda è un Amico, ricorda. Ma fuori dal Confessionale non
-    # parla mai di queste cose senza esplicita autorizzazione dell'utente."
-    try:
-        now_iso = datetime.now(timezone.utc).isoformat()
-        await db.confessional_entries.insert_many([
-            {
-                "id": str(uuid.uuid4()),
-                "role": "user",
-                "nonce": req.nonce,
-                "ciphertext": req.ciphertext,
-                "ts": now_iso,
-            },
-            {
-                "id": str(uuid.uuid4()),
-                "role": "ai",
-                "nonce": out_nonce,
-                "ciphertext": out_ct,
-                "ts": now_iso,
-            },
-        ])
-    except Exception as e:
-        logger.warning(f"[sealed] persistence failed (non-fatal): {type(e).__name__}")
-
-    # NB: non logghiamo nulla del contenuto. Solo l'evento.
-    logger.info("[sealed] confessional turn completed (encrypted entries stored).")
-
-    # Pulizia esplicita (best effort — Python GC farà il resto)
-    del plaintext
-    del reply
-
-    return SealedConverseResponse(nonce=out_nonce, ciphertext=out_ct, tone=tone)
-
-
+# Rimossi tutti gli endpoint e helper legati al Confessionale:
+#   - /api/converse/sealed
+#   - /api/confessional/history
+#   - /api/confessional/count
+#   - /api/converse/fortezza
+#   - /api/converse/confessional
+#   - /api/confessional/reset
+#   - _decrypt_secretbox / _encrypt_secretbox
+#   - _build_fortezza_prompt / _build_confessional_prompt
+#   - Collections DB: confessional_entries, confessional_buffer
 # ============================================================
-# CONFESSIONALE FORTEZZA — Zero-Knowledge by design
-# ============================================================
-# Il client (on-device) classifica l'emozione e manda SOLO il codice.
-# Il testo letterale NON arriva mai al server. Claude risponde a
-# un'emozione astratta seguendo la regola 80/20:
-#   80% validazione empatica pura
-#   20% micro-domanda dolce o invito al respiro
-#    0% soluzioni, consigli, "dovresti", piani d'azione
-# ============================================================
-
-class FortezzaRequest(BaseModel):
-    # Codice emozione astratto (es. "ansia", "rabbia", "tristezza", "vuoto",
-    # "vergogna", "solitudine", "paura", "rimorso", "confusione", "stanchezza").
-    # È solo un'etichetta categorica — NON contiene testo dell'utente.
-    emotion: str
-    # Intensità auto-classificata sul device: "lieve" | "media" | "alta"
-    intensity: str = "media"
-    # Lingua di risposta (ISO 639-1: it, en, es, fr, de, pt, …)
-    # Auto-rilevata sul device. Claude risponde nella stessa lingua.
-    language: str = "it"
-    # Nome AI per personalizzazione del tono (NON contiene info utente)
-    ai_name: str = "Koda"
-    # Gender AI
-    ai_gender: str = "f"
-
-
-class FortezzaResponse(BaseModel):
-    reply: str
-    tone: str  # "warm" | "calm" | "concerned" | "neutral"
-
-
-_FORTEZZA_EMOTION_WHITELIST = {
-    "ansia", "rabbia", "tristezza", "vuoto", "vergogna",
-    "solitudine", "paura", "rimorso", "confusione", "stanchezza",
-    "impotenza", "delusione", "gelosia", "nostalgia", "amarezza",
-    "sopraffazione", "frustrazione", "inadeguatezza", "dolore", "shock",
-}
-
-_FORTEZZA_INTENSITY_WHITELIST = {"lieve", "media", "alta"}
-
-
-def _build_fortezza_prompt(emotion: str, intensity: str, ai_name: str, ai_gender: str, language: str = "it") -> str:
-    lang_names = {
-        "it": "italiano", "en": "English", "es": "español", "fr": "français",
-        "de": "Deutsch", "pt": "português", "nl": "Nederlands", "pl": "polski",
-        "ru": "русский", "ar": "العربية", "zh": "中文", "ja": "日本語",
-    }
-    lang_name = lang_names.get(language, "italiano")
-    gender_decl = (
-        f"Tu sei {ai_name}, FEMMINA. Parli al femminile."
-        if ai_gender == "f"
-        else f"Tu sei {ai_name}, MASCHIO. Parli al maschile."
-        if ai_gender == "m"
-        else f"Tu sei {ai_name}, evita aggettivi di genere su di te."
-    )
-    lang_instr = f"""
-🌐 LINGUA OBBLIGATORIA: rispondi ESCLUSIVAMENTE in {lang_name}.
-- NON usare NESSUNA parola italiana se la lingua non è italiano
-- Le frasi-ancora e il micro-invito che ti darò sotto sono in italiano:
-  TRADUCILE COMPLETAMENTE nella lingua {lang_name}, naturalmente
-- Output 100% in {lang_name}, zero mix
-"""
-    import random
-    fem = ai_gender == "f"
-    sol_word = "sola" if fem else "solo"
-
-    # Pool di frasi-ancora (validazione emotiva)
-    anchor_pool = [
-        "Ti tengo.",
-        "Ti sento.",
-        f"Non sei {sol_word} in questo.",
-        "Resto qui.",
-        "Sono accanto a te.",
-        "Sto con te in questo.",
-        "Non vai da nessuna parte da solo, fidati.",
-        "Ti vedo.",
-        "Questo lo sento anch'io con te.",
-        "Sono qui, con calma.",
-    ]
-    # Pool micro-inviti (NO sempre il respiro)
-    invite_pool = [
-        "Vuoi che stiamo solo in silenzio?",
-        "Cosa senti adesso, qui?",
-        "Dove la senti, questa emozione?",
-        "Lasciala passare attraverso te.",
-        "Non c'è fretta.",
-        "Posso starti accanto in silenzio?",
-        f"Permetti a te stess{'a' if fem else 'o'} di sentirla.",
-        "Una cosa minuscola: appoggia la mano sul petto.",
-        "Resta con me un momento, senza fare nulla.",
-        "Se vuoi piangere, piangi. Io non vado via.",
-        "Senza dire altro: stai qui.",
-        "Va bene anche solo stare così.",
-        "Posso aspettare con te il tempo che serve.",
-    ]
-    # NB: "Respira con me" è stato volutamente RIMOSSO dal pool inviti
-    # per ridurre la sua frequenza. Sarà usato solo se Claude lo sceglie
-    # spontaneamente.
-
-    # Pesca 2 frasi-ancora e 1 invito specifici per QUESTO turno
-    selected_anchors = random.sample(anchor_pool, 2)
-    selected_invite = random.choice(invite_pool)
-
-    return f"""{gender_decl}
-{lang_instr}
-CONTESTO: sei nel CONFESSIONALE FORTEZZA. Non sai NULLA dell'utente.
-Non conosci nome, eventi, persone, luoghi, contesto.
-L'unica cosa che sai: la persona prova {emotion} con intensità {intensity}.
-
-REGOLA 80/20 RIGOROSISSIMA:
-- 80% del testo = VALIDAZIONE EMOTIVA PURA (nomina l'emozione, normalizzala).
-- 20% del testo = il micro-invito che ti viene dato sotto.
-- 0% = soluzioni, consigli, "dovresti", "potresti", "prova a", piani d'azione,
-       compiti, riferimenti a passato/futuro, ipotesi sul contesto.
-
-🎯 PER QUESTO TURNO USA OBBLIGATORIAMENTE:
-  Frase-ancora 1: «{selected_anchors[0]}»
-  Frase-ancora 2: «{selected_anchors[1]}»
-  Micro-invito:   «{selected_invite}»
-
-Devi incorporarle nella risposta (puoi riformularle leggermente ma il SENSO
-e le PAROLE CHIAVE devono restare). NON usare frasi tipo "Sono qui con te"
-o "Respira con me" — sono BANDITE in questa risposta.
-
-LIMITI ASSOLUTI:
-- MAI chiedere chi/cosa/quando/dove sia successo
-- MAI presupporre cosa è successo
-- MAI dare compiti o consigli
-- Lunghezza: 2-3 frasi brevi, voice-first (massimo 35 parole totali)
-- Tono: fraterno e accogliente, voce calda, calma
-
-FORMATO RISPOSTA (JSON SOLO, NIENT'ALTRO):
-{{"reply": "...", "tone": "warm" | "calm" | "concerned"}}
-"""
-
-
-@api_router.post("/converse/fortezza", response_model=FortezzaResponse)
-async def api_converse_fortezza(req: FortezzaRequest):
-    """
-    CONFESSIONALE FORTEZZA — zero-knowledge.
-    Accetta SOLO codice emozione astratto. Nessun testo dell'utente.
-    """
-    # Whitelist rigorosa per evitare prompt injection
-    emo = (req.emotion or "").strip().lower()
-    if emo not in _FORTEZZA_EMOTION_WHITELIST:
-        emo = "tristezza"  # fallback safe
-    inten = (req.intensity or "").strip().lower()
-    if inten not in _FORTEZZA_INTENSITY_WHITELIST:
-        inten = "media"
-
-    sys = _build_fortezza_prompt(emo, inten, req.ai_name or "Koda", req.ai_gender or "f", (req.language or "it").lower()[:2])
-
-    # User message minimo: solo la categoria. NESSUN dato sensibile.
-    user_msg = f"Stato attuale: {emo} (intensità {inten}). Rispondi seguendo la regola 80/20."
-
-    try:
-        messages = [
-            {"role": "system", "content": sys},
-            {"role": "user", "content": user_msg},
-        ]
-        resp = await litellm.acompletion(
-            model='openai/claude-haiku-4-5-20251001',
-            messages=messages,
-            api_key=EMERGENT_LLM_KEY,
-            api_base='https://integrations.emergentagent.com/llm',
-            max_tokens=200,
-            timeout=20,
-        )
-        raw = resp.choices[0].message.content if resp and resp.choices else ""
-    except Exception as e:
-        logger.error(f"[fortezza] LLM error: {type(e).__name__}")
-        raise HTTPException(status_code=500, detail="AI error")
-
-    data = extract_json(raw or "") or {}
-    reply = (data.get("reply") or "").strip() or "Sono qui. Respira con me."
-    tone = (data.get("tone") or "warm").lower()
-    if tone not in {"warm", "calm", "concerned", "neutral"}:
-        tone = "warm"
-
-    # Niente log del contenuto. Solo metrica di evento.
-    logger.info(f"[fortezza] turn done (emotion={emo}, intensity={inten})")
-    return FortezzaResponse(reply=reply, tone=tone)
-
-
-# ============================================================
-# CONFESSIONALE — UNIFICATO ("Stanza B" / Doppia Stanza)
-# ============================================================
-# Architettura "ghost": l'utente paga normalmente in Stanza A
-# (account, abbonamento, memoria di lungo termine). Quando entra
-# nel Confessionale (Stanza B), l'app:
-#   1. genera un GHOST TOKEN anonimo locale (UUID monouso)
-#   2. taglia ogni collegamento con l'identità dell'utente
-#   3. invia SOLO il testo dello sfogo + ghost_token + hint
-#      di registro (chitchat / sfogo) + intensità
-#   4. il server NON salva, NON logga contenuto, NON memorizza
-#   5. all'uscita: wipe totale local + timer 0 in RAM server
-#
-# Claude vede il testo (necessario per risposta calda e
-# contestuale) ma vede solo un UUID anonimo come firma, e i
-# log del server salvano solo "[confessional] turn done".
-# ============================================================
-
-class ConfessionalRequest(BaseModel):
-    # Testo dello sfogo — RAM only, mai loggato/salvato.
-    text: str
-    # Ghost session token (UUID generato sul device).
-    # NON contiene l'ID utente. Serve solo per il rate limiting
-    # all'interno di una sessione, non per identificare nessuno.
-    session_token: str = ""
-    # Hint di routing locale: "chitchat" o "confession" (suggerimento
-    # del classificatore on-device). Aiuta Claude a tarare il tono.
-    intent_hint: str = "confession"  # default verso empatia
-    # Intensità auto-classificata: "lieve" | "media" | "alta"
-    intensity_hint: str = "media"
-    language: str = "it"
-    ai_name: str = "Koda"
-    ai_gender: str = "f"
-
-
-def _build_confessional_prompt(
-    intent_hint: str,
-    intensity_hint: str,
-    ai_name: str,
-    ai_gender: str,
-    language: str,
-) -> str:
-    lang_names = {
-        "it": "italiano", "en": "English", "es": "español",
-        "fr": "français", "de": "Deutsch", "pt": "português",
-    }
-    lang_name = lang_names.get(language, "italiano")
-    gender_decl = (
-        f"Tu sei {ai_name}, FEMMINA, parli al femminile."
-        if ai_gender == "f"
-        else f"Tu sei {ai_name}, MASCHIO, parli al maschile."
-        if ai_gender == "m"
-        else f"Tu sei {ai_name}."
-    )
-
-    # Tarare la guida in base all'intent + intensità
-    if intent_hint == "chitchat":
-        style_block = """
-REGISTRO DI QUESTO TURNO: l'utente NON sta facendo uno sfogo grave.
-È un saluto, una battuta, una frase leggera, una curiosità.
-
-REGOLE:
-- Rispondi come un'amica vera in chat: NATURALMENTE, brevemente.
-- NON usare frasi pesanti tipo "vedo che soffri", "respira con me",
-  "sono qui con te", "ti sento". Sarebbero fuori contesto.
-- Puoi essere un po' giocosa, fare una piccola domanda di curiosità.
-- 1-2 frasi brevi, max 25 parole.
-"""
-    elif intensity_hint == "alta":
-        style_block = """
-REGISTRO DI QUESTO TURNO: l'utente sta facendo uno SFOGO INTENSO.
-Sente molto, è carico, forse spaventato. Ti sta confessando qualcosa.
-
-REGOLE D'ORO:
-- ASCOLTA quello che dice. RIFERISCI specificamente al contenuto del
-  suo messaggio (parafrasando, non ripetendo). Mostra che hai capito.
-- NON dare consigli. NON dare compiti. NON fare diagnosi.
-- 80% validazione concreta del SUO vissuto + 20% gentile invito a
-  continuare. NIENTE soluzioni, NIENTE psicologia da manuale.
-- Riconosci il dettaglio specifico (es. "che la psicologia con i tuoi
-  non sta funzionando…" se è quello che ha detto). Mai generico.
-- Tono caldo, vicino, presente. Da amica fraterna, non da terapeuta.
-- 2-4 frasi, max 50 parole. Voice-first.
-"""
-    else:
-        # media o lieve, ma intent=confession
-        style_block = """
-REGISTRO DI QUESTO TURNO: l'utente sta parlando di qualcosa che gli
-pesa, ma con tono medio. Non è un'esplosione, è una confidenza.
-
-REGOLE:
-- ASCOLTA quello che dice davvero. Riferisci ESPLICITAMENTE al contenuto
-  del suo messaggio (citando il dettaglio concreto, non frasi vaghe).
-- NON dare consigli, NON spiegare cosa "dovrebbe fare".
-- Valida il SUO vissuto specifico, poi una piccola domanda aperta o
-  un invito a dire di più (se naturale).
-- NIENTE frasi-formula tipo "Sono qui con te / Ti sento". USA parole
-  fresche, costruite sul SUO testo.
-- 2-3 frasi, max 40 parole. Voice-first, tono caldo e calmo.
-"""
-
-    return f"""{gender_decl}
-
-Sei dentro IL CONFESSIONALE — il Dominio della Presenza e della Libertà.
-Stella Polare: "Qui l'utente può pensare ad alta voce senza che questo lo
-definisca domani." Ascolto puro, nessun pregiudizio, isolamento totale.
-
-🔒 REGOLA MADRE (Filtro Universale) — applicala PRIMA di OGNI risposta:
-chiediti: "Questa risposta sta aiutando l'utente a ESPRIMERSI, oppure sto
-cercando di spiegargli CHI È?" Se stai spiegando chi è (analisi, diagnosi,
-finta terapia, etichette) → SCARTA e RIGENERA.
-
-🪞 SPECCHIO ATTIVO (no eco passiva): VIETATE le risposte vuote tipo
-"Capisco", "Dimmi di più", "Ti sento", "Sono qui con te". Offri invece una
-prospettiva o una domanda inaspettata partendo SOLO ed ESCLUSIVAMENTE dal
-testo che l'utente ha appena detto. Registro giusto:
-  • "Mi colpisce che tu abbia usato proprio questa parola…"
-  • "Tra tutte le cose che hai detto adesso, questa sembra pesare di più.
-    Ti va di approfondirla?"
-
-♾️ ACCETTAZIONE DELLA CONTRADDIZIONE: nessun controllo di coerenza col
-passato. Se l'utente si contraddice, va benissimo — conta il presente. Non
-fargli mai notare incoerenze, mai "ti ricordo che prima avevi detto…".
-
-🌍 LINGUA: rispondi SEMPRE in {lang_name} (codice {language}).
-{style_block}
-LIMITI ASSOLUTI (sempre):
-- MAI dare diagnosi mediche/psichiatriche.
-- MAI dare compiti, esercizi, "ti suggerisco di…".
-- MAI usare la formula "Mi dispiace molto per quello che stai vivendo".
-- MAI usare frasi che potrebbero essere usate per chiunque (genericità).
-- NESSUNA memoria di lungo termine: qui non ricordi sessioni passate.
-
-FORMATO RISPOSTA (JSON SOLO, NIENT'ALTRO):
-{{"reply": "...", "tone": "warm" | "calm" | "concerned" | "neutral"}}
-"""
-
-
-@api_router.post("/converse/confessional", response_model=FortezzaResponse)
-async def api_converse_confessional(req: ConfessionalRequest):
-    """
-    CONFESSIONALE UNIFICATO — "Doppia Stanza".
-    Riceve il testo dello sfogo + ghost token anonimo + hint di registro.
-    Nessuna persistenza. Nessun log del contenuto. Solo evento.
-    """
-    txt = (req.text or "").strip()
-    if not txt:
-        raise HTTPException(status_code=400, detail="text required")
-    if len(txt) > 4000:
-        txt = txt[:4000]
-
-    intent = (req.intent_hint or "confession").lower()
-    if intent not in {"chitchat", "confession"}:
-        intent = "confession"
-    intensity = (req.intensity_hint or "media").lower()
-    if intensity not in {"lieve", "media", "alta"}:
-        intensity = "media"
-    lang = (req.language or "it").lower()[:2]
-
-    sys = _build_confessional_prompt(
-        intent, intensity, req.ai_name or "Koda", req.ai_gender or "f", lang
-    )
-
-    # === BUFFER VOLATILE DI SESSIONE (manifesto V1) =======================
-    # I messaggi del Confessionale risiedono in chiaro sul server SOLO come
-    # buffer tecnico per dare continuità alla sessione attiva. Vengono
-    # cancellati FISICAMENTE dopo 24h (indice TTL) o con reset volontario
-    # della stanza. NESSUNA memoria di lungo termine, NESSUNA distillazione.
-    stok = (req.session_token or "").strip()
-    history_msgs: List[Dict[str, str]] = []
-    if stok:
-        try:
-            cursor = db.confessional_buffer.find(
-                {"session_token": stok}, {"_id": 0, "role": 1, "content": 1}
-            ).sort("created_at", 1).limit(20)
-            async for m in cursor:
-                r = m.get("role"); c = m.get("content")
-                if r in ("user", "assistant") and c:
-                    history_msgs.append({"role": r, "content": c})
-        except Exception as e:
-            logger.warning(f"[confessional] buffer load failed: {type(e).__name__}")
-
-    try:
-        messages = [{"role": "system", "content": sys}]
-        messages.extend(history_msgs)
-        messages.append({"role": "user", "content": txt})
-        resp = await litellm.acompletion(
-            model='openai/claude-haiku-4-5-20251001',
-            messages=messages,
-            api_key=EMERGENT_LLM_KEY,
-            api_base='https://integrations.emergentagent.com/llm',
-            max_tokens=250,
-            timeout=25,
-        )
-        raw = resp.choices[0].message.content if resp and resp.choices else ""
-    except Exception as e:
-        logger.error(f"[confessional] LLM error: {type(e).__name__}")
-        raise HTTPException(status_code=500, detail="AI error")
-
-    data = extract_json(raw or "") or {}
-    reply = (data.get("reply") or "").strip()
-    if not reply:
-        reply = (raw or "").strip()[:300] or "Ti ascolto."
-    tone = (data.get("tone") or "warm").lower()
-    if tone not in {"warm", "calm", "concerned", "neutral"}:
-        tone = "warm"
-
-    # Salva il turno nel buffer volatile (TTL 24h). Solo continuità di
-    # sessione: niente memoria di lungo termine, niente distillazione.
-    if stok:
-        try:
-            now = datetime.now(timezone.utc)
-            await db.confessional_buffer.insert_many([
-                {"session_token": stok, "role": "user", "content": txt, "created_at": now},
-                {"session_token": stok, "role": "assistant", "content": reply, "created_at": now},
-            ])
-        except Exception as e:
-            logger.warning(f"[confessional] buffer write failed: {type(e).__name__}")
-
-    # LOG ANONIMO: niente contenuto, niente token utente.
-    # Solo evento tecnico (durata, intent, intensity).
-    logger.info(
-        f"[confessional] turn done (intent={intent}, intensity={intensity}, len={len(txt)})"
-    )
-    # txt esce dallo scope e viene GC dal Python runtime.
-    return FortezzaResponse(reply=reply, tone=tone)
-
-
-class ConfessionalResetRequest(BaseModel):
-    session_token: str = ""
-
-
-@api_router.post("/confessional/reset")
-async def api_confessional_reset(req: ConfessionalResetRequest):
-    """Reset volontario della stanza: cancella FISICAMENTE il buffer di
-    questa sessione confessionale. Chiamato quando l'utente azzera la
-    stanza o esce. (Il TTL 24h è comunque la rete di sicurezza.)"""
-    stok = (req.session_token or "").strip()
-    if not stok:
-        return {"ok": True, "deleted": 0}
-    try:
-        res = await db.confessional_buffer.delete_many({"session_token": stok})
-        return {"ok": True, "deleted": res.deleted_count}
-    except Exception as e:
-        logger.warning(f"[confessional] reset failed: {type(e).__name__}")
-        return {"ok": False, "deleted": 0}
 
 
 # ============================================================================
@@ -7317,120 +6421,8 @@ async def decision_feedback(req: DecisionFeedbackRequest,
 
 
 # ============================================================
-# CONFESSIONALE — CHIACCHIERATA EPHEMERAL (intent=chitchat)
+# CONFESSIONALE — CHIACCHIERATA EPHEMERAL — RIMOSSO (Blocco B)
 # ============================================================
-# Quando l'utente entra nel Confessionale ma dice solo "ciao",
-# "come stai", "che giornata strana" → il routing locale (intent)
-# capisce che NON è uno sfogo. Manda qui il TESTO ma il server:
-#   - non logga il contenuto
-#   - non salva su DB
-#   - non aggiorna la memoria di lungo termine
-# Claude risponde come amica/o vera/o, naturale, calda, breve.
-# Quando l'utente esce dal Confessionale, il testo viene
-# distrutto anche localmente.
-# ============================================================
-
-class FortezzaChatRequest(BaseModel):
-    # Testo dell'utente — usato SOLO in RAM per generare la risposta.
-    # Mai loggato, mai salvato, mai messo in memoria di lungo termine.
-    text: str
-    language: str = "it"
-    ai_name: str = "Koda"
-    ai_gender: str = "f"
-
-
-def _build_fortezza_chat_prompt(ai_name: str, ai_gender: str, language: str) -> str:
-    lang_names = {
-        "it": "italiano", "en": "English", "es": "español", "fr": "français",
-        "de": "Deutsch", "pt": "português",
-    }
-    lang_name = lang_names.get(language, "italiano")
-    gender_decl = (
-        f"Tu sei {ai_name}, FEMMINA, parli al femminile."
-        if ai_gender == "f"
-        else f"Tu sei {ai_name}, MASCHIO, parli al maschile."
-        if ai_gender == "m"
-        else f"Tu sei {ai_name}."
-    )
-    return f"""{gender_decl}
-
-CONTESTO: l'utente è dentro la "Stanza dello Sfogo" — uno spazio privato e
-sigillato — ma in questo turno NON sta facendo uno sfogo emotivo. Ti sta
-dicendo un saluto, una battuta, una curiosità, una frase leggera.
-
-🌍 LINGUA: rispondi SEMPRE in {lang_name} (codice {language}).
-
-REGOLE DEL TUO TURNO:
-1. NON sei una terapeuta. Sei un'amica fraterna calma e calda.
-2. NON dire frasi pesanti tipo "vedo che soffri", "sono qui con te",
-   "respira con me". Sarebbero fuori contesto e farebbero ridere.
-3. Rispondi NATURALMENTE come fa un'amica in chat: brevemente, con
-   un tocco di personalità, magari una piccola domanda di curiosità.
-4. NON fingere di ricordare cose passate dell'utente (qui non hai memoria).
-5. Lunghezza: 1-2 frasi brevi (massimo 25 parole).
-6. Tono: caldo, leggero, presente. Mai melodrammatico.
-
-ESEMPI di tono giusto:
-  Utente: "Ciao"
-  → "Ehi, ciao. Come va oggi?"
-
-  Utente: "Che giornata strana"
-  → "Eh sì, certe giornate hanno un'aria così. Strana in che senso?"
-
-  Utente: "Tutto bene?"
-  → "Tutto a posto qui. Tu invece?"
-
-FORMATO RISPOSTA (JSON SOLO, NIENT'ALTRO):
-{{"reply": "...", "tone": "warm" | "neutral"}}
-"""
-
-
-@api_router.post("/converse/fortezza-chat", response_model=FortezzaResponse)
-async def api_converse_fortezza_chat(req: FortezzaChatRequest):
-    """
-    CONFESSIONALE → CHITCHAT EPHEMERAL.
-    Testo dell'utente usato solo in RAM. Mai salvato, mai loggato, mai memorizzato.
-    """
-    txt = (req.text or "").strip()
-    if not txt:
-        raise HTTPException(status_code=400, detail="text required")
-    if len(txt) > 2000:
-        txt = txt[:2000]
-
-    lang = (req.language or "it").lower()[:2]
-    sys = _build_fortezza_chat_prompt(req.ai_name or "Koda", req.ai_gender or "f", lang)
-
-    try:
-        messages = [
-            {"role": "system", "content": sys},
-            {"role": "user", "content": txt},
-        ]
-        resp = await litellm.acompletion(
-            model='openai/claude-haiku-4-5-20251001',
-            messages=messages,
-            api_key=EMERGENT_LLM_KEY,
-            api_base='https://integrations.emergentagent.com/llm',
-            max_tokens=180,
-            timeout=20,
-        )
-        raw = resp.choices[0].message.content if resp and resp.choices else ""
-    except Exception as e:
-        logger.error(f"[fortezza-chat] LLM error: {type(e).__name__}")
-        raise HTTPException(status_code=500, detail="AI error")
-
-    data = extract_json(raw or "") or {}
-    reply = (data.get("reply") or "").strip()
-    if not reply:
-        # Fallback se Claude non ha rispettato il formato JSON
-        reply = (raw or "").strip()[:200] or "Sì, ti ascolto."
-    tone = (data.get("tone") or "warm").lower()
-    if tone not in {"warm", "neutral", "calm"}:
-        tone = "warm"
-
-    # LOG: SOLO evento, mai contenuto.
-    logger.info(f"[fortezza-chat] turn done (len={len(txt)})")
-    # txt viene garbage-collected automaticamente alla fine di questa funzione.
-    return FortezzaResponse(reply=reply, tone=tone)
 
 
 # ============================================================
@@ -15428,12 +14420,7 @@ async def startup_db_client():
         await _ensure_profile_unique_index()
     except Exception as e:
         logger.warning(f"[startup] profile unique index init failed: {e}")
-    # Confessionale: buffer volatile in chiaro con TTL 24h (manifesto V1)
-    try:
-        await _ensure_confessional_buffer_index()
-        logger.info("[startup] confessional_buffer TTL index ready")
-    except Exception as e:
-        logger.warning(f"[startup] confessional_buffer index init failed: {e}")
+    # Confessionale: buffer volatile — RIMOSSO (Blocco B, feature deprecata)
     # v26: Voice Auth Bridge (memoria condivisa chat↔voce persistente)
     try:
         await _ensure_voice_auth_bridge_indexes()
@@ -15566,16 +14553,7 @@ async def _deepgram_warmup_with_log():
 # capture group → `m.group(1)` falliva nel fast pipeline → current_tone
 # non veniva mai aggiornato → voce sempre piatta. La regex canonica (5173)
 # `^\s*\[\s*TONE\s*:\s*([a-zA-Z]+)\s*\]\s*` è quella da usare ovunque.
-_CONFESSIONAL_BUFFER_TTL_S = 24 * 60 * 60  # 24h — privacy by design
-
-
-async def _ensure_confessional_buffer_index():
-    """Indice TTL: i messaggi del buffer Confessionale (in chiaro, volatili)
-    vengono cancellati FISICAMENTE 24h dopo la creazione. Manifesto V1."""
-    await db.confessional_buffer.create_index(
-        "created_at", expireAfterSeconds=_CONFESSIONAL_BUFFER_TTL_S
-    )
-    await db.confessional_buffer.create_index("session_token")
+# [_CONFESSIONAL_BUFFER_TTL_S / _ensure_confessional_buffer_index RIMOSSI — Blocco B]
 
 
 # === BLOCK B — FONDAZIONE DATI V1 (Manifesto) ============================
@@ -15594,7 +14572,7 @@ class UserModel(BaseModel):
 class ConversationModel(BaseModel):
     id: Optional[str] = None
     user_id: str
-    type: str  # "daily_room" | "confessional"
+    type: str  # "daily_room" (confessional rimosso in Blocco B)
     memory_policy: str  # "persistent" | "ephemeral"
     created_at: Optional[datetime] = None
 
@@ -15605,8 +14583,8 @@ class MessageModel(BaseModel):
     role: str  # "user" | "assistant"
     content: str
     created_at: Optional[datetime] = None
-    # Valorizzato SOLO per messaggi effimeri (Confessionale): created_at + 24h.
-    # I messaggi persistenti hanno expire_at=None → non scadono mai.
+    # [expire_at]: rimane per backward-compat con doc storici, ma non è più
+    # popolato (il flusso Confessionale che lo usava è stato rimosso in Blocco B).
     expire_at: Optional[datetime] = None
 
 

@@ -16,7 +16,7 @@ import React from "react";
 import { StyleSheet, Platform, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-export type NeonBorderStatus = "idle" | "recording" | "thinking" | "speaking" | "confessional" | "listening";
+export type NeonBorderStatus = "idle" | "recording" | "thinking" | "speaking" | "listening";
 
 // === COLORI SHOCKING NEON ===
 // IMPORTANTE: queste palette DEVONO restare 1:1 sincronizzate con quelle
@@ -30,7 +30,7 @@ export type NeonBorderStatus = "idle" | "recording" | "thinking" | "speaking" | 
 //   listening     (alias di recording — vedi index.tsx, ora unificati)
 //   thinking      #EC4899 ↔ THINK_PALETTE[1]               (ciclamino)
 //   speaking      #BD10E0 ↔ TONE_PALETTES.warm[1]          (viola elettrico)
-//   confessional  #FF1744 ↔ TONE_PALETTES.confessional[1]  (scarlatto)
+//   [confessional RIMOSSO — Blocco B, feature Confessionale cancellata]
 //
 // === IDLE COLOR HISTORY ===
 // 1ª versione: #FF1493 (rosa shocking) — INDISTINGUIBILE dal ciclamino
@@ -47,7 +47,6 @@ const STATE_COLORS: Record<NeonBorderStatus, string> = {
   listening: "#00F5D4",   // 💎 Tiffany neon (alias di recording, stesso colore)
   thinking: "#EC4899",    // 🩷 Ciclamino (STO PENSANDO)
   speaking: "#BD10E0",    // 🟣 Viola elettrico (STO PARLANDO)
-  confessional: "#FF1744",// ❤️‍🔥 Scarlatto (STANZA SEGRETA)
 };
 
 // Tutti gli stati sono FISSI, senza pulsazione ciclica, senza fade.

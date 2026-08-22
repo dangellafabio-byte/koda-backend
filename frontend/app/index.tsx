@@ -54,7 +54,6 @@ import { SpeechMod, unlockSpeech, setDefaultVoiceId, preloadFillerPool } from ".
 // Rimosso import kodaAudioOutput (Modalità Telefono rollback 2026-07-13)
 import { preloadOfflineClips, isOfflineNow, playRandomOfflineClip } from "../lib/offlineClips";
 import { startThinkingSound, stopThinkingSound } from "../lib/thinkingSound";
-import { classifyEmotion, classifyIntent, secureWipeStrings } from "../lib/emotionClassifier";
 import {
   loadProfileCache,
   saveProfileCache,
@@ -67,7 +66,6 @@ import * as Updates from "expo-updates";
 // ↑ Rimosso dall'UI Impostazioni pre-lancio (2026-07-24): il changelog
 //   tecnico non deve trapelare in produzione. buildInfo.ts resta come
 //   file di riferimento interno per debug/log, ma non è più renderizzato.
-import FortezzaCloseEffect from "../components/FortezzaCloseEffect";
 import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
@@ -85,7 +83,6 @@ import * as Sharing from "expo-sharing";
 import NeonBorder, { NeonBorderStatus } from "../components/NeonBorder";
 import ActivationPulse from "../components/ActivationPulse";
 import RadialGlow from "../components/RadialGlow";
-import SealSetupModal from "../components/SealSetupModal";
 import InfoModal from "../components/InfoModal";
 import SafetyAlert from "../components/SafetyAlert";
 import FreemiumCounter from "../components/FreemiumCounter";
@@ -113,18 +110,8 @@ import { useFonts } from "expo-font";
 // .ttf locali in assets/fonts/. Sostituisce @expo-google-fonts/caveat che
 // era vietato dal sistema Emergent (build pipeline lo blocca). Stesso
 // risultato visivo, zero dipendenza da package esterno.
-// === Zero-Knowledge Confessional crypto ===
-import {
-  hasSecretWord,
-  getSessionKey,
-  forgetSessionKey,
-  setSecretWord,
-  clearSecretWord,
-  sealText,
-  unsealText,
-  keyToBase64,
-  biometricAvailable,
-} from "../lib/sealedCrypto";
+// === Zero-Knowledge Confessional crypto === RIMOSSO (Blocco B — Confessionale cancellato)
+
 
 type Status = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 
@@ -901,73 +888,12 @@ export default function Taccuino() {
   // /app/summary/refund_documentation.md per il razionale tecnico.
   const [showInfo, setShowInfo] = useState(false);
   const [showVoicePicker, setShowVoicePicker] = useState(false);
-  // === MODALITÀ CONFESSIONALE ===
-  // Quando true, /converse viene chiamato con ephemeral=true: il messaggio
-  // dell'utente E la risposta dell'AI NON vengono salvati su MongoDB, NON
-  // entrano nel memory_summary di lungo periodo, e a fine sessione (chiusura
-  // app o toggle off) spariscono dalla RAM.
-  const [confessionalMode, setConfessionalMode] = useState(false);
-  // === EFFETTO USCITA CONFESSIONALE (giugno 2026, suggerimento ChatGPT) ===
-  // driftOut: translateY -12, opacity 1→0 in 220ms. Quando il toggle Confessional
-  // passa da ON a OFF, i messaggi confessional NON spariscono di colpo: prima
-  // vengono animati per 220ms (con confessionalExiting=true), poi sparire.
-  const [confessionalExiting, setConfessionalExiting] = useState(false);
-  const confessionalDriftAnim = useRef(new Animated.Value(0)).current;
-  const prevConfessionalRef = useRef(false);
-  useEffect(() => {
-    // Trigger driftOut SOLO sulla transizione true → false (uscita).
-    if (prevConfessionalRef.current && !confessionalMode) {
-      setConfessionalExiting(true);
-      confessionalDriftAnim.setValue(0);
-      Animated.timing(confessionalDriftAnim, {
-        toValue: 1,
-        duration: 220,
-        easing: Easing.in(Easing.ease),
-        useNativeDriver: true,
-      }).start(() => {
-        setConfessionalExiting(false);
-      });
-    }
-    prevConfessionalRef.current = confessionalMode;
-  }, [confessionalMode, confessionalDriftAnim]);
-  // FORTEZZA: stato dell'animazione di chiusura (fiamma + sigillo).
-  // Si attiva quando l'utente esce dal confessionale dopo aver scambiato
-  // almeno un messaggio in modalità Fortezza. Al termine, wipe locale.
-  const [showFortezzaWipe, setShowFortezzaWipe] = useState(false);
-  // FIX 2026-06: tracciamo l'uso della Fortezza tramite un ref invece che
-  // controllare la timeline. La timeline viene periodicamente ri-fetchata
-  // dal backend, e i messaggi Fortezza (che NON vengono salvati su DB per
-  // design zero-knowledge) sparivano dalla timeline → l'animazione di
-  // chiusura non partiva mai. Il ref è indipendente dal refetch.
-  // Viene messo a true al primo messaggio Fortezza inviato/ricevuto, e
-  // resettato al termine dell'animazione di wipe.
-  const fortezzaUsedThisSessionRef = useRef<boolean>(false);
-  // GHOST SESSION TOKEN — "Doppia Stanza" 2026-06.
-  // UUID anonimo generato all'entrata del Confessionale, distrutto
-  // all'uscita. NON contiene/non è collegato all'ID utente.
-  // Serve solo come firma anonima della sessione lato server.
-  const confessionalGhostTokenRef = useRef<string | null>(null);
-  // === Zero-Knowledge: Parola Segreta (Sigillo) ===
-  // Se l'utente ha impostato una Parola Segreta, in modalità Confessionale
-  // il messaggio viene cifrato sul dispositivo e inviato a /converse/sealed.
-  // Senza Parola Segreta, fallback a ephemeral (no DB ma backend vede testo).
-  const [hasSeal, setHasSeal] = useState<boolean>(false);
-  const [showSealSetup, setShowSealSetup] = useState(false);
-  const [showConfessionalIntro, setShowConfessionalIntro] = useState(false);
-  const [sealUnlocking, setSealUnlocking] = useState(false);
-  // Re-check seal availability on mount + after any setup/clear.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const has = await hasSecretWord();
-        if (!cancelled) setHasSeal(has);
-      } catch {}
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // === MODALITÀ CONFESSIONALE — RIMOSSA (Blocco B, feature deprecata) ===
+  // Tutta la logica confessionale/fortezza/sealed è stata cancellata.
+  // Manteniamo stub `confessionalMode = false` per far collassare i vecchi
+  // rami di codice inerti che saranno rimossi progressivamente.
+  const confessionalMode = false as const;
+  const confessionalExiting = false as const;
   const [error, setError] = useState<string | null>(null);
   const [recapText, setRecapText] = useState<string | null>(null);
   const [showRecap, setShowRecap] = useState(false);
@@ -1176,9 +1102,6 @@ export default function Taccuino() {
   // rimossi completamente per pulizia.
   const [voicePreviewLoading, setVoicePreviewLoading] = useState<string | null>(null);
   const convActiveRef = useRef(false);
-  // Flag: scaricato la cronologia confessionale (cifrata) dal backend in
-  // questa sessione app. Evita fetch ripetuti.
-  const confessionalHistoryLoadedRef = useRef(false);
   useEffect(() => {
     convActiveRef.current = convActive;
   }, [convActive]);
@@ -1660,18 +1583,7 @@ export default function Taccuino() {
           try {
             const tl = await api.getTimeline(200);
             if (Array.isArray(tl) && tl.length > 0) {
-              setTimeline((prev) => {
-                // Preserva eventuali entry confessionali locali (ephemeral)
-                const localConfessional = prev.filter((e) => e.confessional);
-                if (localConfessional.length === 0) return tl;
-                const merged = [...tl, ...localConfessional];
-                merged.sort(
-                  (a, b) =>
-                    new Date(a.timestamp).getTime() -
-                    new Date(b.timestamp).getTime()
-                );
-                return merged;
-              });
+              setTimeline(tl);
             }
           } catch (e) {
             console.warn("[resume] timeline refresh failed:", e);
@@ -2214,12 +2126,9 @@ export default function Taccuino() {
           } else if (key === "tone_pref" && typeof value === "string") {
             patch.style_preferences = { ...(profile?.style_preferences || {}), tone_pref: value };
           } else if (key === "confessional" && typeof value === "boolean") {
-            // Manifesto V1: nessuna Parola Segreta, ingresso libero.
-            if (!value && confessionalGhostTokenRef.current) {
-              api.confessionalReset(confessionalGhostTokenRef.current).catch(() => {});
-              confessionalGhostTokenRef.current = null;
-            }
-            setConfessionalMode(value);
+            // Feature Confessionale RIMOSSA (Blocco B). Il comando vocale
+            // viene ignorato silenziosamente per backward-compat con
+            // eventuali risposte cached di Claude.
           } else if (key === "notifications" && typeof value === "boolean") {
             patch.settings = { ...(profile?.settings || {}), notifications_enabled: value };
             if (!value) {
@@ -2289,7 +2198,7 @@ export default function Taccuino() {
         console.warn("action exec error", e);
       }
     }
-  }, [profile, hasSeal, timeline]);
+  }, [profile, timeline]);
 
   // === HANDS-FREE AUTO-LISTEN LOOP ===
   // Quando hands-free è attivo e siamo in idle (Coda ha finito di parlare
@@ -2355,14 +2264,6 @@ export default function Taccuino() {
     }
     if (tourActive) {
       console.log("[KODA_HF_GUARD] blocked: tourActive=true");
-      return;
-    }
-    if (showSealSetup) {
-      console.log("[KODA_HF_GUARD] blocked: showSealSetup=true");
-      return;
-    }
-    if (sealUnlocking) {
-      console.log("[KODA_HF_GUARD] blocked: sealUnlocking=true");
       return;
     }
     if (showSettings) {
@@ -2441,7 +2342,7 @@ export default function Taccuino() {
     }, scheduleDelayMs);
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, handsFree, profile?.id, showOnboarding, showColorIntro, showSealSetup, sealUnlocking, showSettings, tourActive]);
+  }, [status, handsFree, profile?.id, showOnboarding, showColorIntro, showSettings, tourActive]);
 
   // === ANDROID BACK BUTTON HANDLER (2026-06-27 v18) ===
   // Su Android l'utente può premere il tasto/gesto "back" hardware. Senza
@@ -2469,14 +2370,6 @@ export default function Taccuino() {
         setShowSettings(false);
         return true;
       }
-      if (showConfessionalIntro) {
-        setShowConfessionalIntro(false);
-        return true;
-      }
-      if (showSealSetup) {
-        setShowSealSetup(false);
-        return true;
-      }
       if (tourActive) {
         // Tour visivo: chiude il tour, non l'app
         try { setTourActive(false); } catch {}
@@ -2485,38 +2378,6 @@ export default function Taccuino() {
       // Onboarding e ColorIntro: NON permettiamo di scappare via back
       // (l'utente deve completare il flow), quindi semplicemente ignoriamo.
       if (showOnboarding || showColorIntro === true) {
-        return true;
-      }
-
-      // --- Tier 2: Stanza dello Sfogo attiva ---
-      // Conferma esplicita prima di uscire. Se Koda sta parlando o sta
-      // registrando dentro la Stanza, il back deve comunque chiedere.
-      if (confessionalMode) {
-        Alert.alert(
-          "Uscire dalla Stanza dello Sfogo?",
-          "Quello che hai detto qui non verrà salvato. Sei sicuro di voler uscire?",
-          [
-            { text: "Resta qui", style: "cancel" },
-            {
-              text: "Esci",
-              style: "destructive",
-              onPress: () => {
-                // Ferma TTS se sta parlando
-                try { SpeechMod.stop(); } catch {}
-                // Aborta sessione streaming se attiva
-                try {
-                  if (streamingSessionRef.current) {
-                    const s = streamingSessionRef.current as any;
-                    streamingSessionRef.current = null;
-                    try { s.abort?.().catch?.(() => {}); } catch {}
-                  }
-                } catch {}
-                setConfessionalMode(false);
-              },
-            },
-          ],
-          { cancelable: true }
-        );
         return true;
       }
 
@@ -2554,8 +2415,8 @@ export default function Taccuino() {
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    showSettings, showConfessionalIntro, showSealSetup, tourActive,
-    showOnboarding, showColorIntro, confessionalMode, status,
+    showSettings, tourActive,
+    showOnboarding, showColorIntro, status,
   ]);
 
   const sendText = useCallback(
@@ -2578,7 +2439,7 @@ export default function Taccuino() {
       // paywall lo bloccherebbe impedendogli di provare l'app. Il gate è
       // disattivato: il counter "messaggi di prova" resta visibile, ma non
       // blocca mai. Riattivare quando RevenueCat sarà integrato.
-      const isFortezzaTurn = !!confessionalMode;
+      const isFortezzaTurn = false;
       // (gate al paywall volutamente rimosso)
 
       // === OPTIMISTIC UI FIRST (Fix #10 — 2026-06-22 v8) ===
@@ -2587,14 +2448,11 @@ export default function Taccuino() {
       // safety blocca, rimuoviamo la bolla con animazione + alert.
       // Vecchio comportamento: await safety PRIMA di setTimeline → ritardo
       // visivo di 200-500ms tra il tap e l'apparizione del messaggio.
-      const isFortezza = !!confessionalMode;
       const optimistic: TimelineEntry = {
         id: `local-${Date.now()}`,
         role: "user",
         text: txt,
         timestamp: new Date().toISOString(),
-        confessional: confessionalMode || undefined,
-        fortezza: isFortezza || undefined,
       };
       // === FIX #4 (2026-06-22 v6) ===
       // Marca l'inizio di una "force scroll window": il messaggio utente
@@ -2635,98 +2493,7 @@ export default function Taccuino() {
       // NB: la creazione di optimistic + setTimeline è già avvenuta sopra.
       // Da qui in poi si procede col flusso di invio vero e proprio.
       try {
-        // === CONFESSIONALE FORTEZZA (Zero-Knowledge) ===
-        // Se attivo: classifica emozione ON-DEVICE, manda solo il codice
-        // astratto al server. Il testo grezzo non lascia mai il telefono.
-        if (isFortezza) {
-          try {
-            // === ARCHITETTURA "DOPPIA STANZA" (2026-06) ===
-            // Stanza B = Confessionale Ghost:
-            //  - genera un GHOST TOKEN anonimo per la sessione (UUID locale,
-            //    NON contiene l'ID utente)
-            //  - manda al server il TESTO + intent_hint + intensity_hint +
-            //    ghost_token (firma anonima)
-            //  - il server NON salva, NON logga il contenuto, NON memorizza
-            //  - Claude vede il testo per dare risposta calda e contestuale
-            //    ma vede solo l'UUID anonimo (zero linkage all'identità)
-            //  - all'uscita: wipe locale + token distrutto
-            const intent = classifyIntent(txt);
-            const { intensity } = classifyEmotion(txt);
-            // Genera ghost token al primo turno della sessione (poi riusalo)
-            if (!confessionalGhostTokenRef.current) {
-              confessionalGhostTokenRef.current =
-                `ghost-${Date.now().toString(36)}-${Math.random()
-                  .toString(36)
-                  .slice(2, 10)}`;
-            }
-            const ghostToken = confessionalGhostTokenRef.current;
-            // FIX 2026-06: marca che la sessione è stata usata (per animazione)
-            fortezzaUsedThisSessionRef.current = true;
-
-            const resp = await fetch(`${API_BASE}/converse/confessional`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                text: txt,
-                session_token: ghostToken,
-                intent_hint: intent,
-                intensity_hint: intensity,
-                language: profile?.language || "it",
-                ai_name: profile?.ai_name || "Koda",
-                ai_gender: profile?.ai_gender || "f",
-              }),
-            });
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const data = await resp.json();
-            const reply = (data.reply || "Sono qui.").trim();
-            const tone = (data.tone === "calm" ? "neutral" : "warm") as TimelineEntry["tone"];
-            const aiEntry: TimelineEntry = {
-              id: `local-fortezza-${Date.now()}`,
-              role: "ai",
-              text: reply,
-              timestamp: new Date().toISOString(),
-              confessional: true,
-              fortezza: true,
-              tone,
-            };
-            setTimeline((prev) => [...prev, aiEntry]);
-            setStatus("idle");
-            // TTS solo se non sta scrivendo.
-            // FIX 2026-06: TTS isolato in proprio try/catch così se la
-            // sintesi vocale fallisce (rete, ElevenLabs flaky, audio
-            // session iOS) NON facciamo apparire "Confessionale
-            // temporaneamente non disponibile" all'utente. Il messaggio
-            // è già in timeline, la conversazione è andata bene.
-            if (!fromText) {
-              try {
-                await speakIfEnabled(reply, tone, { fromText });
-              } catch (ttsErr) {
-                // log silenzioso, non bloccare la UX
-                console.warn("[fortezza] TTS error (non-fatal):", ttsErr);
-              }
-            }
-          } catch (fErr: any) {
-            console.warn("[fortezza] error:", fErr);
-            setStatus("idle");
-            // Rimuovi user optimistic — l'utente decida se riprovare
-            setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
-            setError("Stanza dello Sfogo temporaneamente non disponibile.");
-            setTimeout(() => setError(null), 4000);
-          }
-          return; // skip vecchi flow
-        }
-
-        // DEBUG TRACE (rimuovibile): manda step al backend così possiamo
-        // capire dove si rompe il flow nel build standalone (no console.log).
-        // === FIX CRASH SEALED 2026-06-28 NOTTE ===
-        // Le chiamate fire-and-forget a /api/dbg-trace creavano
-        // contesa nel pool di connessioni iOS NSURLSession (limite ~4-6
-        // connessioni per host). Quando la risposta di /converse/sealed
-        // arrivava da Cloudflare con Set-Cookie HTTP/2, iOS crashava
-        // NATIVAMENTE nel cookie handler PRIMA di bridgare la risposta
-        // a JavaScript (per questo i catch JS non scattavano).
-        // SOLUZIONE: in produzione le trace sono NO-OP. In dev restano
-        // per diagnostica futura.
+        // === DEBUG TRACE (dev only) ===
         const _trace = (step: string, extra?: string) => {
           if (!__DEV__) return;
           try {
@@ -2737,156 +2504,6 @@ export default function Taccuino() {
             }).catch(() => {});
           } catch {}
         };
-        // === SEALED FLOW (Zero-Knowledge Confessionale) ===
-        // Se siamo in confessionale e l'utente ha impostato la Parola Segreta,
-        // cifriamo il messaggio CLIENT-SIDE e chiamiamo /converse/sealed.
-        if (confessionalMode && hasSeal) {
-          _trace("sealed-1-start", `txt_len=${txt.length}`);
-          const key = await getSessionKey({ biometric: true });
-          _trace("sealed-2-key", key ? "ok" : "null");
-          if (!key) {
-            throw new Error("Parola Segreta non sbloccata");
-          }
-          const sealed = await sealText(txt, key);
-          _trace("sealed-3-seal-msg", `ct_len=${sealed.ciphertext.length}`);
-
-          // === MEMORIA CONFESSIONALE DISABILITATA TEMPORANEAMENTE ===
-          // FIX CRASH TURN 2 — 2026-06-28 NOTTE:
-          // Sul secondo turn del confessionale l'app crashava in fase
-          // "pensa" PRIMA del POST. Cause concrete:
-          //  - 14+ entry decrittate in timeline (BG task da turn 1)
-          //  - audio TTS buffers ancora in RAM
-          //  - audio recording buffer del turn 2
-          //  - JSON.stringify priorConfessional + sealText (5-10KB)
-          // Tutto insieme → iOS killa per memory pressure.
-          //
-          // Decisione condivisa con l'utente: "lascia perdere la memoria
-          // pregressa, basta che funzioni da adesso in poi".
-          // Quindi: NON carichiamo la history dal vault, NON inviamo
-          // priorConfessional al backend. Ogni turn è isolato.
-          // Pro: zero accumulo di stato, niente crash memory-pressure.
-          // Contro: Koda non ricorda i confessional precedenti.
-          //
-          // In futuro: rifare lazy + paginato + senza setTimeline gigante.
-          if (!confessionalHistoryLoadedRef.current) {
-            confessionalHistoryLoadedRef.current = true;
-            _trace("sealed-4-hist-disabled");
-          }
-
-          // Raccogli i turni confessionali precedenti (ora include anche
-          // quelli appena scaricati dal backend) — Koda li riceve come
-          // 'CONTESTO SIGILLATO' cifrato.
-          const priorConfessional = timeline
-            .filter((e) => e.confessional && e.id !== optimistic.id && e.text)
-            .map((e) => ({ role: e.role, text: e.text }));
-          _trace("sealed-7-prior-collected", `n=${priorConfessional.length}`);
-          let history_nonce: string | undefined;
-          let history_ciphertext: string | undefined;
-          if (priorConfessional.length > 0) {
-            try {
-              const histJson = JSON.stringify(priorConfessional.slice(-20));
-              _trace("sealed-8-hist-stringified", `bytes=${histJson.length}`);
-              const sealedHist = await sealText(histJson, key);
-              _trace("sealed-9-hist-sealed", `ct=${sealedHist.ciphertext.length}`);
-              history_nonce = sealedHist.nonce;
-              history_ciphertext = sealedHist.ciphertext;
-            } catch (e) {
-              _trace("sealed-9-hist-seal-error", String(e).slice(0, 100));
-              // Se la cifratura della history fallisce, andiamo avanti
-              // senza — meglio un confessionale senza memoria che un
-              // errore bloccante.
-              console.warn("[sealed] history encrypt failed:", e);
-            }
-          }
-          _trace("sealed-10-about-to-post");
-          let resp: { nonce: string; ciphertext: string; tone: string };
-          let keyB64: string;
-          try {
-            keyB64 = keyToBase64(key);
-            _trace("sealed-10a-key-b64-ok", `len=${keyB64.length}`);
-          } catch (kbErr: any) {
-            _trace("sealed-10a-key-b64-err", String(kbErr).slice(0, 100));
-            setStatus("idle");
-            setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
-            return;
-          }
-          try {
-            _trace("sealed-10b-pre-fetch");
-            resp = await api.converseSealed(
-              {
-                nonce: sealed.nonce,
-                ciphertext: sealed.ciphertext,
-                language: profile?.language || "it",
-                ai_name: profile?.ai_name || "Coda",
-                ai_gender: profile?.ai_gender || "f",
-                user_gender: profile?.user_gender || "n",
-                history_nonce,
-                history_ciphertext,
-              },
-              keyB64
-            );
-            _trace("sealed-11-resp-ok", `nonce_len=${resp.nonce?.length || 0}`);
-          } catch (postErr: any) {
-            _trace("sealed-11-post-error", String(postErr).slice(0, 150));
-            console.warn("[sealed] POST failed:", postErr);
-            setStatus("idle");
-            setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
-            setError("Stanza dello Sfogo: rete bloccata. Riprova tra un attimo.");
-            setTimeout(() => setError(null), 5000);
-            return;
-          }
-          // Decifra la risposta lato client
-          const reply = unsealText({ nonce: resp.nonce, ciphertext: resp.ciphertext }, key) || "";
-          // Strip audio tags per chat display (regex rapido)
-          const clean = reply.replace(/\[[a-zA-Zàèéìòùç '_,/-]{1,40}\]/g, "").replace(/  +/g, " ").trim();
-          const aiEntry: TimelineEntry = {
-            id: `sealed-${Date.now()}`,
-            role: "ai",
-            text: clean || "(silenzio sigillato)",
-            voice_text: reply,
-            tone: (resp.tone as Tone) || "warm",
-            timestamp: new Date().toISOString(),
-            confessional: true,
-          };
-          const userEntry: TimelineEntry = {
-            ...optimistic,
-            id: `sealed-u-${Date.now()}`,
-            confessional: true,
-          };
-          setTimeline((prev) => {
-            const filtered = prev.filter((e) => e.id !== optimistic.id);
-            return [...filtered, userEntry, aiEntry];
-          });
-          // FIX CRASH CONFESSIONALE 2026-06-28: il crash nativo iOS
-          // avveniva ESATTAMENTE QUI — dopo il setTimeline, durante o
-          // subito prima di speakIfEnabled. Probabile causa: AVAudioSession
-          // ancora in modalità "recording" dal turn appena finito, e il
-          // tentativo di playback TTS senza reset esplicito causava un
-          // exception nativa non catchabile in JS.
-          // Mitigazioni:
-          //  (1) piccolo delay (150ms) per lasciar settle iOS
-          //  (2) reset esplicito a modalità playback
-          //  (3) wrap totale in try/catch così se TTS fallisce, l'app
-          //      NON crasha — al massimo non senti la risposta vocale,
-          //      ma il testo è già in timeline.
-          try {
-            await new Promise<void>((r) => setTimeout(r, 150));
-            try {
-              const { setAudioModeAsync } = await import("expo-audio");
-              await setAudioModeAsync({
-                allowsRecording: false,
-                playsInSilentMode: true,
-                shouldPlayInBackground: false,
-              } as any);
-            } catch {}
-            await speakIfEnabled(reply, aiEntry.tone || "warm", { fromText });
-          } catch (speakErr) {
-            _trace("sealed-speak-error", String(speakErr).slice(0, 100));
-            console.warn("[sealed] speak failed (non-fatal):", speakErr);
-            setStatus("idle");
-          }
-          return;
-        }
         // === FAST PATH (sub-2s latency) — 2026-06 ===
         // POST /api/converse-fast/start + long-poll → token MP3 statici
         // riprodotti in sequenza. iOS AVPlayer è happy (Content-Length +
@@ -2955,7 +2572,6 @@ export default function Taccuino() {
                         const userFinal: TimelineEntry = {
                           ...optimistic,
                           id: `fast-u-${Date.now()}`,
-                          confessional: confessionalMode || undefined,
                         };
                         const aiEntry: TimelineEntry = {
                           id: `fast-ai-${Date.now()}`,
@@ -2965,7 +2581,6 @@ export default function Taccuino() {
                           tone: (meta.tone as Tone) || "warm",
                           timestamp: new Date().toISOString(),
                           actions: meta.actions || undefined,
-                          confessional: confessionalMode || undefined,
                         };
                         setTimeline((prev) => {
                           const filtered = prev.filter((e) => e.id !== optimistic.id);
@@ -3008,7 +2623,6 @@ export default function Taccuino() {
                     const userFinal: TimelineEntry = {
                       ...optimistic,
                       id: `fast-u-${Date.now()}`,
-                      confessional: confessionalMode || undefined,
                     };
                     const aiEntry: TimelineEntry = {
                       id: `fast-ai-${Date.now()}`,
@@ -3018,7 +2632,6 @@ export default function Taccuino() {
                       tone: (meta.tone as Tone) || "warm",
                       timestamp: new Date().toISOString(),
                       actions: meta.actions || undefined,
-                      confessional: confessionalMode || undefined,
                     };
                     setTimeline((prev) => {
                       const filtered = prev.filter((e) => e.id !== optimistic.id);
@@ -3081,26 +2694,17 @@ export default function Taccuino() {
           }
         }
         // === STANDARD FLOW (fallback) ===
-        // === STANDARD FLOW (con o senza ephemeral) ===
-        const res = await api.converse(txt, undefined, { ephemeral: confessionalMode });
+        const res = await api.converse(txt, undefined, { ephemeral: false });
         traceMark("converse:response");
         // Replace optimistic with real, then add AI entry.
-        // Se siamo in confessionale, marca le entry come `confessional`
-        // così la timeline le filtra/colora correttamente.
-        const taggedUser = confessionalMode
-          ? { ...res.user_entry, confessional: true }
-          : res.user_entry;
-        const taggedAi = confessionalMode
-          ? { ...res.ai_entry, confessional: true }
-          : res.ai_entry;
         setTimeline((prev) => {
           const filtered = prev.filter((e) => e.id !== optimistic.id);
-          return [...filtered, taggedUser, taggedAi];
+          return [...filtered, res.user_entry, res.ai_entry];
         });
         setProfile(res.profile);
         // Execute any actions (notifications, etc.) requested by the AI
-        runActions(taggedAi.actions || []);
-        await speakIfEnabled(taggedAi.voice_text || taggedAi.text, taggedAi.tone || "neutral", { fromText });
+        runActions(res.ai_entry.actions || []);
+        await speakIfEnabled(res.ai_entry.voice_text || res.ai_entry.text, res.ai_entry.tone || "neutral", { fromText });
         // === FREEMIUM COUNTER (standard flow) ===
         if (!isFortezzaTurn) {
           api.freemiumIncrement()
@@ -3119,7 +2723,7 @@ export default function Taccuino() {
         setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
       }
     },
-    [speakIfEnabled, runActions, confessionalMode, hasSeal, profile]
+    [speakIfEnabled, runActions, profile]
   );
 
   // === CODA CONSAPEVOLE ===
@@ -3288,7 +2892,6 @@ export default function Taccuino() {
       role: "user",
       text: "…",
       timestamp: new Date().toISOString(),
-      confessional: confessionalMode || undefined,
     };
     requestForceScroll();
     setTimeline((prev) => [...prev, optimistic]);
@@ -3415,7 +3018,6 @@ export default function Taccuino() {
               tone: (meta.tone as Tone) || "warm",
               timestamp: new Date().toISOString(),
               actions: meta.actions || undefined,
-              confessional: confessionalMode || undefined,
             };
             setTimeline((prev) => [...prev, aiEntry]);
             if (Array.isArray(meta.actions) && meta.actions.length > 0) {
@@ -5022,10 +4624,7 @@ export default function Taccuino() {
     const out: Array<{ kind: "sep"; key: string; label: string } | { kind: "msg"; entry: TimelineEntry } | { kind: "msg-mock"; entry: TimelineEntry; held?: boolean }> = [];
     let lastDay = "";
     for (const e of timeline) {
-      // Privacy filter: nascondi le entry confessional quando il toggle è OFF.
-      // === DRIFTOUT: durante l'animazione di uscita (220ms) tieni visibili
-      // le entry confessional in modo che possano essere animate fuori. ===
-      if (e.confessional && !confessionalMode && !confessionalExiting) continue;
+      // (filtro entry confessional rimosso — Blocco B)
       const d = new Date(e.timestamp);
       const dayKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
       if (dayKey !== lastDay) {
@@ -5172,24 +4771,17 @@ export default function Taccuino() {
         </View>
       </View>
 
-      {/* === RIGA 2: TOGGLE CONFESSIONALE (centrato, più in basso) === */}
+      {/* === RIGA 2: TOGGLE "LASCIA ANDARE" (centrato, più in basso) === */}
       <View
         style={[styles.confessionaleRow, { top: Math.max(insets.top + 100, 150) }]}
         pointerEvents="box-none"
       >
         <View style={styles.headerCenter} pointerEvents="box-none">
-          {/* === Lucchetto Confessionale ===
-              Toggle one-tap nel cuore dell'header. Quando attivo:
-                - blob si scurisce (forma nucleica dark)
-                - i messaggi NON vengono salvati su DB
-                - la memoria di lungo periodo NON viene aggiornata
-                - a sessione chiusa tutto svanisce dalla RAM */}
+          {/* === Pill "Lascia andare" ===
+              Entry point one-tap alla stanza silenziosa. */}
           <TouchableOpacity
             ref={confessionaleBtnRef}
-            style={[
-              styles.confessionalToggle,
-              confessionalMode && styles.confessionalToggleOn,
-            ]}
+            style={styles.confessionalToggle}
             onPress={async () => {
               // === LASCIA ANDARE (2026-07-17) ============================
               // Prima: apriva il flusso "Stanza dello Sfogo" (Confessionale
@@ -5548,28 +5140,16 @@ export default function Taccuino() {
               </View>
             </View>
           ) : (
-            // === Wrappa con Animated.View per il driftOut su entry confessional ===
-            (() => {
-              const isConfExiting = confessionalExiting && (it.entry as any).confessional;
-              const translateY = confessionalDriftAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -12] });
-              const opacity = confessionalDriftAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0] });
-              return (
-                <Animated.View
-                  style={isConfExiting ? { transform: [{ translateY }], opacity } : undefined}
-                >
-                  <Bubble
-                    entry={it.entry}
-                    onReplay={replayMessage}
-                    onGhost={ghostMessage}
-                    bubbleAccent={bubbleAccent}
-                    bubbleStyle={bubbleStyle}
-                    textOnBubble={textOnBubble}
-                    textSize={textSize}
-                    aiFontFamily={aiFontFamily}
-                  />
-                </Animated.View>
-              );
-            })()
+            <Bubble
+              entry={it.entry}
+              onReplay={replayMessage}
+              onGhost={ghostMessage}
+              bubbleAccent={bubbleAccent}
+              bubbleStyle={bubbleStyle}
+              textOnBubble={textOnBubble}
+              textSize={textSize}
+              aiFontFamily={aiFontFamily}
+            />
           )
         }
         getItemType={(it) =>
@@ -6975,62 +6555,9 @@ export default function Taccuino() {
         theme={theme}
       />
 
-      {/* Seal Setup Modal — Parola Segreta per Confessionale Zero-Knowledge */}
-      <SealSetupModal
-        visible={showSealSetup}
-        hasSeal={hasSeal}
-        confessionalActive={confessionalMode}
-        onClose={() => setShowSealSetup(false)}
-        onSaved={() => {
-          setHasSeal(true);
-          setShowSealSetup(false);
-          // Una volta impostata la parola, attiva subito il confessionale.
-          setConfessionalMode(true);
-        }}
-        onCleared={() => {
-          setHasSeal(false);
-          forgetSessionKey();
-          setShowSealSetup(false);
-          // Se era attivo il confessionale, lascia attivo (fallback a ephemeral).
-        }}
-        styles={styles}
-        theme={theme}
-      />
+      {/* Seal Setup Modal — RIMOSSO (Blocco B, Confessionale cancellato) */}
 
-      {/* Confessionale — Schermata d'ingresso (Manifesto V1).
-          Niente Parola Segreta: si entra liberamente. Questa schermata fissa
-          il "patto" della stanza prima di entrare. */}
-      <Modal
-        visible={showConfessionalIntro}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowConfessionalIntro(false)}
-      >
-        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.88)", justifyContent: "center", alignItems: "center", padding: 28 }}>
-          <View style={{ width: "100%", maxWidth: 420, backgroundColor: "#160C12", borderRadius: 24, borderWidth: 1, borderColor: "rgba(255,107,107,0.35)", padding: 28, alignItems: "center" }}>
-            <Text style={{ fontSize: 40, marginBottom: 6 }}>🕯️</Text>
-            <Text style={{ fontSize: 22, fontWeight: "700", color: "#FFE8E8", marginBottom: 16, letterSpacing: 0.3 }}>La Stanza dello Sfogo</Text>
-            <Text style={{ fontSize: 15.5, lineHeight: 24, color: "rgba(255,255,255,0.82)", textAlign: "center" }}>
-              Qui non devi essere coerente con ciò che hai detto ieri.{"\n"}
-              Non devi difendere una posizione.{"\n"}
-              Non devi dimostrare nulla.{"\n"}
-              Non devi essere la versione migliore di te stesso.{"\n"}{"\n"}
-              Puoi semplicemente essere presente a ciò che senti oggi.{"\n"}
-              Quello che condividi qui non verrà usato per definirti nelle conversazioni future.
-            </Text>
-            <TouchableOpacity
-              onPress={() => { setShowConfessionalIntro(false); setConfessionalMode(true); }}
-              style={{ marginTop: 24, backgroundColor: "#FF6B6B", paddingVertical: 14, paddingHorizontal: 48, borderRadius: 999 }}
-              testID="confessional-enter"
-            >
-              <Text style={{ color: "#1A0A0F", fontWeight: "800", fontSize: 16 }}>Entra</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowConfessionalIntro(false)} style={{ marginTop: 12, paddingVertical: 8, paddingHorizontal: 16 }}>
-              <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 14 }}>Non ora</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      {/* Confessionale Intro Modal — RIMOSSO (Blocco B) */}
 
       {/* === LASCIA ANDARE INTRO MODAL (Fabio 2026-08-14 P1) ================
           Presentazione al PRIMO accesso alla stanza "Lascia Andare".
@@ -7086,27 +6613,7 @@ export default function Taccuino() {
           piattaforme → parità visiva iOS = Android. */}
       <RadialGlow status={status as any} />
 
-      {/* CONFESSIONALE — animazione di CHIUSURA (release / closure 2026-06 v4).
-          Si attiva SEMPRE quando l'utente esce dal confessionale, sia dalla
-          Home (solo Eclissi) sia dalla chat. Non è "distruzione", è "rilascio":
-          respiro dell'eclissi → dissolvenza dell'ambiente → ritorno al
-          presente. Durata ~1.7s. */}
-      <FortezzaCloseEffect
-        visible={showFortezzaWipe}
-        scrimColor={theme.bg}
-        orbColor="#7FE0C4"
-        onComplete={() => {
-          // WIPE: rimuovi tutte le voci marcate fortezza dalla timeline
-          // (se non ce ne sono, è no-op — l'animazione gira comunque).
-          setTimeline((prev) => prev.filter((e) => !e.fortezza));
-          setShowFortezzaWipe(false);
-          setConfessionalMode(false);
-          // FIX 2026-06: reset del ref per la prossima sessione Fortezza
-          fortezzaUsedThisSessionRef.current = false;
-          // GHOST TOKEN: distruggi al wipe (Doppia Stanza 2026-06)
-          confessionalGhostTokenRef.current = null;
-        }}
-      />
+      {/* CONFESSIONALE / FortezzaCloseEffect — RIMOSSO (Blocco B) */}
 
       {/* === SAFETY ALERT (giugno 2026) ====================================
           Si apre quando /api/safety/check rileva risk_detected=true.
@@ -7176,10 +6683,8 @@ export default function Taccuino() {
   //   - transcribing  → ciclamino (#EC4899)     [come thinking, l'orb usa THINK_PALETTE]
   //   - thinking      → ciclamino (#EC4899)
   //   - speaking      → viola elettrico (#BD10E0)
-  //   - confessional  → scarlatto (#FF1744)
-  // Priorità: confessional > stati di interazione > idle.
+  // Priorità: stati di interazione > idle.
   const neonStatus: NeonBorderStatus = (() => {
-    if (confessionalMode) return "confessional";
     if (status === "recording") return "recording";
     // Transcribing è visivamente equivalente a thinking (l'orb mostra
     // THINK_PALETTE in entrambi i casi) — il bordo lo segue.
@@ -7192,7 +6697,6 @@ export default function Taccuino() {
   // Se l'utente ha calibrato un thickness custom (Impostazioni → Bordo),
   // quello ha priorità assoluta sui default per-stato.
   const neonThickness = borderCal.thickness ?? (
-    neonStatus === "confessional" ? 4 :
     neonStatus === "idle" ? 2 :
     3
   );
@@ -7222,15 +6726,7 @@ export default function Taccuino() {
   //   <ActivationPulse color="#8B5CF6" duration={1500} thickness={3} onComplete={() => setActivationPulseDone(true)} />
   // ) : null;
 
-  const confessionalTint = confessionalMode ? (
-    <View
-      pointerEvents="none"
-      style={[
-        StyleSheet.absoluteFillObject,
-        { backgroundColor: "rgba(139,58,74,0.40)" },
-      ]}
-    />
-  ) : null;
+  const confessionalTint: React.ReactNode = null;
 
   // === TOUR OVERLAY ===
   // Stesso pattern del confessionalTint: variabile JSX da renderizzare in
@@ -7504,24 +7000,17 @@ function BubbleImpl({
   // default per non confondere ambra-utente e viola-AI quando entrambe sono
   // semi-trasparenti.
   //
-  // Confessionale:
-  //   - utente → stesso colore familiare (theme.userBubble)
-  //   - Koda   → bordeaux ceralacca (sigillo / risposta protetta)
   // Normale:
   //   - utente → theme.userBubble (colore "tuo" definito dal tema)
   //   - Koda   → bubbleAccent.color (colore impostato in Impostazioni)
-  const isConfessional = !!entry.confessional;
-  const confessionalColor = "#8B3A4A"; // sealing-wax burgundy
-  const confessionalSoft = "#8B3A4A66"; // 40% alpha glass — più visibile
+  const isConfessional = false; // feature Confessionale rimossa (Blocco B)
   // AI:
-  const aiBg = isConfessional
-    ? (bubbleStyle === "solid" ? confessionalColor : confessionalSoft)
-    : (bubbleStyle === "solid" ? bubbleAccent.color : bubbleAccent.color + "66");
-  // User (sempre col colore del tema, dentro e fuori confessionale):
+  const aiBg = bubbleStyle === "solid" ? bubbleAccent.color : bubbleAccent.color + "66";
+  // User:
   const userBg = bubbleStyle === "solid"
     ? theme.userBubble
     : theme.userBubble + "77"; // più saturo del precedente "55"
-  const aiBorder = isConfessional ? confessionalColor : bubbleAccent.color;
+  const aiBorder = bubbleAccent.color;
   const userBorder = bubbleStyle === "solid" ? "transparent" : theme.userBubble;
 
   // === Diary aesthetic: each bubble is rotated by a tiny, deterministic
