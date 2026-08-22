@@ -300,6 +300,68 @@ export const api = {
     }),
   authLogout: () => jsonReq<{ ok: boolean }>("/auth/logout", { method: "POST" }),
 
+  // === SITUATION TRACKING (V3.1 — Fabio 2026-08-22) ==================
+  // Flat semantic ledger (no psychological profiling). Ogni chiamata
+  // richiede opt-in ON lato server (except getStatus e wipe).
+  situationsStatus: () =>
+    jsonReq<{ enabled: boolean; count: number }>("/situations/status"),
+  situationsList: (opts?: { limit?: number; includeArchived?: boolean }) => {
+    const params = new URLSearchParams();
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.includeArchived) params.set("include_archived", "true");
+    const qs = params.toString();
+    return jsonReq<{
+      situations: Array<{
+        id: string;
+        entity_type: "person" | "topic" | "situation" | string;
+        title: string;
+        tags: string[];
+        evidence_count: number;
+        first_evidence_at: string;
+        last_evidence_at: string;
+        user_muted?: boolean;
+        archived_at?: string | null;
+      }>;
+      count: number;
+      enabled: boolean;
+    }>(`/situations${qs ? "?" + qs : ""}`);
+  },
+  situationGet: (id: string, evidenceLimit = 20) =>
+    jsonReq<{
+      situation: {
+        id: string;
+        entity_type: string;
+        title: string;
+        tags: string[];
+        evidence_count: number;
+        first_evidence_at: string;
+        last_evidence_at: string;
+        user_muted?: boolean;
+        archived_at?: string | null;
+      };
+      evidences: Array<{
+        id: string;
+        situation_id: string;
+        observed_at: string;
+        excerpt?: string | null;
+        source: string;
+      }>;
+    }>(`/situations/${id}?evidence_limit=${evidenceLimit}`),
+  situationPatch: (id: string, patch: { user_muted?: boolean; archived?: boolean }) =>
+    jsonReq<{ ok: boolean; updated: boolean; changes?: unknown }>(`/situations/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  situationDelete: (id: string) =>
+    jsonReq<{ ok: boolean; evidences_deleted: number }>(`/situations/${id}`, {
+      method: "DELETE",
+    }),
+  situationsWipe: () =>
+    jsonReq<{ ok: boolean; situations_deleted: number; evidences_deleted: number }>(
+      "/situations/wipe",
+      { method: "POST" }
+    ),
+
   // === ADMIN — Whitelist unlimited (2026-07-24) ===
   // Endpoint accessibili SOLO all'owner (Fabio). Il frontend chiama
   // adminWhoAmI() al boot per capire se mostrare il mini-panel in
