@@ -1431,8 +1431,13 @@ export default function Taccuino() {
               preloadOfflineClips(p.settings.tts_voice_id).catch(() => {});
             } catch {}
           }
-          if (!p.onboarded) setShowOnboarding(true);
-          else if (p.settings?.input_mode !== "text") {
+          // === SPEC 2026-08-22 (Fabio) — NIENTE MODAL "BENVENUTO" LINGUA ===
+          // Rimosso: `if (!p.onboarded) setShowOnboarding(true);`
+          // Il vecchio Modal è obsoleto (categoria E). Se `!p.onboarded`, il
+          // router V3 (useEffect qui sotto) redirige a /intro-v3 dove parte
+          // la nuova sequenza narrativa. Se `p.onboarded=true` (post-intro V3)
+          // e la voce è in modalità voce (non text), pre-scaldiamo il mic.
+          if (p.onboarded && p.settings?.input_mode !== "text") {
             prewarmMic().catch(() => {});
           }
           // === GEOLOCATION ONE-SHOT (P2 Fabio 2026-06-20) ===
@@ -4318,14 +4323,47 @@ export default function Taccuino() {
     // Solo dopo entrambi gli OK procediamo con resetEverything().
     // Cancel di entrambi gli Alert = nessun reset, nessun side effect.
     const doWipe = async () => {
+      // === SPEC 2026-08-22 (Fabio) — RESET COMPLETO INCLUDE FLAG SECURESTORE ==
+      // Il DELETE /api/profile azzera solo Mongo. Ma la nuova architettura V3
+      // usa flag SecureStore LOCALI ("intro_v3_completed_at",
+      // "heart_reveal_dismissed_at", "microdemo_last_at", "koda_intro_seen",
+      // "user_display_name") per gating della prima esperienza. Se non li
+      // azzeriamo qui, dopo "Cancella tutta la memoria" l'utente NON rivede
+      // la sequenza di primo utilizzo (Koda che si presenta, cuore, provalo,
+      // reveal). Cancelliamo TUTTI i flag della prima esperienza prima di
+      // ricaricare il profilo, così il router V3 riparte da zero.
       try {
         await api.resetEverything();
         setTimeline([]);
+        // Azzeramento flag "prima volta" locali (SecureStore) — fire-and-forget.
+        // Silenzia errori: se un flag non esiste, deleteItemAsync è no-op.
+        await Promise.all([
+          SecureStore.deleteItemAsync("intro_v3_completed_at").catch(() => {}),
+          SecureStore.deleteItemAsync("heart_reveal_dismissed_at").catch(() => {}),
+          SecureStore.deleteItemAsync("microdemo_last_at").catch(() => {}),
+          SecureStore.deleteItemAsync("koda_intro_seen").catch(() => {}),
+          SecureStore.deleteItemAsync("user_display_name").catch(() => {}),
+        ]);
         const p = await api.getProfile();
         setProfile(p);
-        if (!p.onboarded) setShowOnboarding(true);
-      } catch {}
-      setShowSettings(false);
+        // === SPEC 2026-08-22 (Fabio) — NIENTE PIÙ MODAL "BENVENUTO" LINGUA ===
+        // Il vecchio Modal onboarding con selezione lingua è stato rimosso
+        // (categoria E: obsoleta). L'app è "solo italiano ora"; multi-lingua
+        // rimane come direzione futura ma NON è nella prima esperienza V3.
+        // Rimosso: `if (!p.onboarded) setShowOnboarding(true);`
+        // Chiudo Impostazioni e forzo un reset del router V3 tramite hard
+        // reload della route "/" — così il router legge di nuovo
+        // intro_v3_completed_at (ora null) e redirige a /intro-v3.
+        setShowSettings(false);
+        try {
+          router.replace("/");
+        } catch (e) {
+          console.warn("[resetEverything] router reload failed:", e);
+        }
+      } catch (e) {
+        console.warn("[resetEverything] failed:", e);
+        setShowSettings(false);
+      }
     };
 
     Alert.alert(
@@ -5781,39 +5819,18 @@ export default function Taccuino() {
         </View>
       </ScrollView>
 
-      {/* Onboarding modal */}
+      {/* === SPEC 2026-08-22 (Fabio) — MODAL "BENVENUTO" LINGUA RIMOSSO ===
+          Il vecchio Modal onboarding con selezione lingua (categoria E dell'audit
+          narrativo) è stato rimosso fisicamente. Motivi:
+            (1) Sovrapposto graficamente ad altri modal in condizione di reset;
+            (2) Non coerente con la spec V3: "solo italiano ora,
+                multi-lingua è direzione futura ma non nella prima esperienza";
+            (3) Il flag `showOnboarding` non viene più settato a `true` in
+                nessuna parte del codice (rimossi i due `setShowOnboarding(true)`
+                — vedi note nei due punti sopra). La useState viene tenuta come
+                dead-flag inerte per non rompere le altre guard che la
+                referenziano (hands-free block, back-button intercept). */}
       {/* OLED DIM OVERLAY rimosso (richiesta utente giugno 2026). */}
-
-      <Modal visible={showOnboarding} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.onboardCard}>
-            <View style={{ marginBottom: 8 }}>
-              <AppIcon size={80} />
-            </View>
-            <Text style={styles.onboardTitle}>Benvenuto</Text>
-            <Text style={styles.onboardText}>
-              Sono il tuo Taccuino. Vivo nelle tue parole.{"\n"}
-              In quale lingua preferisci parlarmi?
-            </Text>
-            <View style={styles.langGrid}>
-              {LANGUAGES.map((l) => (
-                <TouchableOpacity
-                  key={l.code}
-                  style={styles.langBtn}
-                  onPress={() => finishOnboarding(l.code)}
-                  testID={`lang-${l.code}`}
-                >
-                  <Text style={styles.langEmoji}>{l.emoji}</Text>
-                  <Text style={styles.langLabel}>{l.label}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <Text style={styles.onboardFoot}>
-              Potrai cambiare lingua e impostazioni quando vuoi
-            </Text>
-          </View>
-        </View>
-      </Modal>
 
       {/* Settings modal */}
       <Modal
