@@ -452,6 +452,18 @@ export const api = {
       { method: "POST" }
     ),
 
+  /** === DEV admin-only — testing Premium/Intro Premium senza terminale (2026-08-22) === */
+  devSetTier: (tier: "monthly" | "bimonthly" | "annual" | "unlimited" | null) =>
+    jsonReq<{ ok: boolean; profile_id: string; subscription_tier: string | null }>(
+      "/dev/set-tier",
+      { method: "POST", body: JSON.stringify({ tier }) }
+    ),
+  devIntroPremiumReset: () =>
+    jsonReq<{ ok: boolean; profile_id: string; reset: string }>(
+      "/dev/intro-premium/reset",
+      { method: "POST" }
+    ),
+
   /** === DEV TRIAL SEEDING (2026-08-11) — admin-only ===
    * Endpoint di test per manipolare lo stato del trial dell'utente admin
    * corrente senza consumare 7 minuti veri di TTS. Tutti restituiscono
