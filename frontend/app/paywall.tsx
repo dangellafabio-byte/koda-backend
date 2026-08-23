@@ -182,11 +182,21 @@ export default function PaywallScreen() {
     // Verifica se l'utente è admin server-side; se sì, mostra il bottone
     // "Simula pagamento" per testare end-to-end paywall → Intro Premium
     // senza RevenueCat attivo.
-    api.getProfile()
-      .then((p: any) => {
-        setIsAdmin(Boolean(p?.is_admin));
+    //
+    // === FIX Bug 2 (Fabio 2026-08-23) =========================================
+    // PRIMA usavamo `api.getProfile()` per leggere `p?.is_admin` — ma il
+    // Pydantic model `Profile` nel backend NON contiene `is_admin`, quindi
+    // il campo era SEMPRE undefined → bottone MAI renderizzato. L'endpoint
+    // corretto è `/api/admin/whoami` (non solleva 403 per utenti normali,
+    // ritorna is_admin=false).
+    api.adminWhoAmI()
+      .then((w: any) => {
+        setIsAdmin(Boolean(w?.is_admin));
       })
-      .catch(() => {});
+      .catch(() => {
+        // fail-closed: se whoami fallisce, tratta come non-admin
+        setIsAdmin(false);
+      });
   }, []);
 
   const handleDevBypass = async () => {

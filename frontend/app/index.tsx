@@ -362,6 +362,19 @@ export default function Taccuino() {
   const { theme, themeName, setThemeName, setHours, dayStart, nightStart } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [profile, setProfile] = useState<Profile | null>(null);
+  // === FIX Bug 1 A2 (Fabio 2026-08-23) — hydration source flag ==============
+  // La cache locale (fastPathHydrate) popola `profile` in modo istantaneo
+  // ma con dati potenzialmente STALE (es. subscription_tier vecchio pre-
+  // Premium). I router condizionali sotto NON devono decidere finché
+  // `profileHydrated !== "network"` — altrimenti un utente Premium vede
+  // Intro V3 perché la cache non riflette ancora il tier corrente.
+  // Semantica:
+  //   "empty"   → nessun profile disponibile (cold start, nemmeno cache)
+  //   "cache"   → profile letto da cache locale (POTENZIALMENTE stale)
+  //   "network" → profile fresco dal backend, tier affidabile
+  const [profileHydrated, setProfileHydrated] = useState<
+    "empty" | "cache" | "network"
+  >("empty");
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
 
   // === ORB MEASURE 2026-08 (debug parity home ↔ intro) ===
@@ -976,13 +989,24 @@ export default function Taccuino() {
   // il bug quando non c'era ancora un token). Spostato in cima al primo utilizzo.
   const pathname = usePathname();
   const hasRedirectedIntroV3Ref = useRef<boolean>(false);
+  // === FIX Bug 1 A2 (Fabio 2026-08-23) — keyed invalidation ref =============
+  // Memorizza la chiave `${profileId}:${tier}` per cui il router V3 ha già
+  // deciso. Se il tier cambia in-session (es. dev panel "Simula Premium",
+  // o RevenueCat purchase), la chiave cambia → invalidiamo il ref booleano
+  // per permettere una nuova decisione coerente col tier corrente.
+  const lastV3DecidedKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (pathname !== "/") return;
     if (introV3State !== "needed") return;
-    if (hasRedirectedIntroV3Ref.current) return;
     // Aspetta che disclaimer sia accepted e profilo caricato — coerenza con
     // il router free/premium sotto (non redirigiamo su stato incompleto)
     if (!profile) return;
+    // FIX Bug 1 A2 (2026-08-23): il profile cached può essere STALE (tier
+    // vecchio). Aspettiamo che la rete abbia sincronizzato → altrimenti
+    // un utente Premium vede Intro V3 perché la cache non riflette ancora
+    // il tier corrente. Con questo guard, il router V3 decide SOLO su
+    // dati network-fresh.
+    if (profileHydrated !== "network") return;
     if (disclaimerState !== "accepted") return;
     if (showSplash) return;
     // === FIX A2 (Fabio 2026-08-22) — Premium salta V3 ==========================
@@ -991,8 +1015,21 @@ export default function Taccuino() {
     // NON deve mai vedere V3 → salta direttamente all'Intro Premium.
     const tierV3 = ((profile as any)?.subscription_tier as string | null) || null;
     const isPaidV3 = tierV3 === "monthly" || tierV3 === "bimonthly" || tierV3 === "annual" || tierV3 === "unlimited";
+    // Keyed invalidation: se la key è cambiata (cambio tier in-session),
+    // permetti nuova decisione.
+    const currentKey = `${(profile as any)?.id || "none"}:${tierV3 ?? "free"}`;
+    if (
+      lastV3DecidedKeyRef.current !== null &&
+      lastV3DecidedKeyRef.current !== currentKey
+    ) {
+      hasRedirectedIntroV3Ref.current = false;
+      lastV3DecidedKeyRef.current = null;
+      console.log(`[KODA_ROUTER_V3] tier changed in-session → re-evaluate`);
+    }
+    if (hasRedirectedIntroV3Ref.current) return;
     if (isPaidV3) {
       hasRedirectedIntroV3Ref.current = true;
+      lastV3DecidedKeyRef.current = currentKey;
       setIntroV3State("completed"); // sblocca i guard downstream (Intro Premium)
       try {
         // Persistiamo per idempotenza cross-boot: se paid al primo boot,
@@ -1004,6 +1041,7 @@ export default function Taccuino() {
       return;
     }
     hasRedirectedIntroV3Ref.current = true;
+    lastV3DecidedKeyRef.current = currentKey;
     console.log(`[KODA_ROUTER_V3] fresh install (intro_v3_completed_at=absent) → replace to /intro-v3`);
     try {
       // Nasconde il vecchio KodaIntro V1 modal (superato dalla nuova architettura V3)
@@ -1012,7 +1050,7 @@ export default function Taccuino() {
     } catch (e) {
       console.warn("[KODA_ROUTER_V3] replace to /intro-v3 failed:", e);
     }
-  }, [introV3State, profile, disclaimerState, showSplash, pathname, router]);
+  }, [introV3State, profile, profileHydrated, disclaimerState, showSplash, pathname, router]);
 
   // === ROUTER CONDIZIONALE FREE/PREMIUM (Punto 3, Fabio 2026-08-17) ==========
   // Nuova architettura Free/Premium:
@@ -1063,6 +1101,10 @@ export default function Taccuino() {
 
     // Guard di completezza dati:
     if (!profile) return; // profilo ancora null → aspetta caricamento
+    // FIX Bug 1 A2 (2026-08-23): aspetta profile network-fresh prima di
+    // qualunque decisione — la cache può servire tier stale e causare
+    // redirect errati (Premium → /lascia-andare invece di stay).
+    if (profileHydrated !== "network") return;
     if (disclaimerState !== "accepted") return; // disclaimer non pronto → aspetta
     if (showSplash) return; // splash ancora visibile → aspetta
     if (showColorIntro === true) return; // KodaIntro attivo → priorità intro
@@ -1105,7 +1147,7 @@ export default function Taccuino() {
     } catch (e) {
       console.warn("[KODA_ROUTER] replace to /lascia-andare failed:", e);
     }
-  }, [profile, disclaimerState, showSplash, showColorIntro, router, pathname, introV3State]);
+  }, [profile, profileHydrated, disclaimerState, showSplash, showColorIntro, router, pathname, introV3State]);
 
 
   // === ROUTER INTRO PREMIUM (Fabio 2026-08-22) ==============================
@@ -1170,12 +1212,16 @@ export default function Taccuino() {
   }, []);
 
   const hasRedirectedIntroPremiumRef = useRef<boolean>(false);
+  // FIX Bug 1 A2 (Fabio 2026-08-23) — keyed invalidation ref (stesso pattern
+  // del router V3): permette ri-decisione se il tier cambia in-session.
+  const lastIntroPremiumDecidedKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (pathname !== "/") return;
     if (introPremiumState !== "needed") return;
-    if (hasRedirectedIntroPremiumRef.current) return;
     // Guard di completezza dati — stessi guard degli altri router
     if (!profile) return;
+    // FIX Bug 1 A2 (2026-08-23): aspetta profile network-fresh
+    if (profileHydrated !== "network") return;
     if (disclaimerState !== "accepted") return;
     if (showSplash) return;
     // V3 deve essere completata (altrimenti V3 ha priorità)
@@ -1192,7 +1238,20 @@ export default function Taccuino() {
     // Non redirigere se KodaIntro V1 è visibile (edge case)
     if (showColorIntro === true) return;
 
+    // Keyed invalidation coerente con router V3.
+    const currentKey = `${(profile as any)?.id || "none"}:${tier ?? "free"}`;
+    if (
+      lastIntroPremiumDecidedKeyRef.current !== null &&
+      lastIntroPremiumDecidedKeyRef.current !== currentKey
+    ) {
+      hasRedirectedIntroPremiumRef.current = false;
+      lastIntroPremiumDecidedKeyRef.current = null;
+      console.log(`[KODA_ROUTER_INTRO_PREMIUM] tier changed in-session → re-evaluate`);
+    }
+    if (hasRedirectedIntroPremiumRef.current) return;
+
     hasRedirectedIntroPremiumRef.current = true;
+    lastIntroPremiumDecidedKeyRef.current = currentKey;
     console.log(
       `[KODA_ROUTER_INTRO_PREMIUM] first paid boot → replace to /intro-premium`
     );
@@ -1204,6 +1263,7 @@ export default function Taccuino() {
   }, [
     introPremiumState,
     profile,
+    profileHydrated,
     disclaimerState,
     showSplash,
     introV3State,
@@ -1506,6 +1566,9 @@ export default function Taccuino() {
           const p = await withTimeout(api.getProfile(), 4000);
           if (cancelled) return;
           setProfile(p);
+          // FIX Bug 1 A2: marca profile come network-hydrated → sblocca i
+          // router condizionali che aspettano dati freschi (non cached).
+          setProfileHydrated("network");
           // CACHE: salva il profile aggiornato sul filesystem locale
           // (cold start prossimo = UI istantanea)
           saveProfileCache(p).catch(() => {});
@@ -1630,6 +1693,9 @@ export default function Taccuino() {
         // Hydrate SOLO se non abbiamo già dati freschi dal network
         if (cachedProfile) {
           setProfile((current) => (current ? current : cachedProfile));
+          // FIX Bug 1 A2: marca come "cache" SOLO se non è già arrivata
+          // la rete (che scrive "network" e ha precedenza per il routing).
+          setProfileHydrated((cur) => (cur === "empty" ? "cache" : cur));
           const tName = (cachedProfile.settings?.theme as ThemeName) || "notte";
           setThemeName((cur) => (cur === tName ? cur : tName));
         }
@@ -4160,6 +4226,8 @@ export default function Taccuino() {
         ]);
         const p = await api.getProfile();
         setProfile(p);
+        // FIX Bug 1 A2 (2026-08-23): mark network-hydrated after resetEverything
+        setProfileHydrated("network");
         // === SPEC 2026-08-22 (Fabio) — NIENTE PIÙ MODAL "BENVENUTO" LINGUA ===
         // Il vecchio Modal onboarding con selezione lingua è stato rimosso
         // (categoria E: obsoleta). L'app è "solo italiano ora"; multi-lingua
@@ -4183,6 +4251,9 @@ export default function Taccuino() {
         setShowColorIntro(false);            // ← blocca return early V1 (riga 6655)
         setIntroV3State("needed");           // ← allinea lo stato V3
         hasRedirectedIntroV3Ref.current = false; // ← permetti nuovo redirect V3
+        lastV3DecidedKeyRef.current = null;  // ← FIX 2026-08-23: reset keyed ref V3
+        hasRedirectedIntroPremiumRef.current = false; // ← reset anche IntroPremium
+        lastIntroPremiumDecidedKeyRef.current = null; // ← reset keyed ref IntroPremium
         setShowSettings(false);
         try {
           router.replace("/intro-v3");
