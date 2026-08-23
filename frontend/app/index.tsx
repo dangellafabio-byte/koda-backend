@@ -6435,6 +6435,45 @@ export default function Taccuino() {
                 Visibile SOLO all'admin: rischio di alterare il flag
                 "vista una sola volta" se un utente normale lo tocca. */}
             {isAdmin ? (
+              <>
+                {/* === TEST SUITE BUILD 19 (Fabio 2026-08-23) ==================
+                    UN SOLO bottone di ingresso per validare i 5 test P0.
+                    Tutto il resto è nella schermata /dev-router-demo.
+                    Non toccare i bottoni sotto: usa SOLO questo. */}
+                <TouchableOpacity
+                  style={[
+                    styles.settingRow,
+                    {
+                      paddingVertical: 16,
+                      backgroundColor: "rgba(0, 245, 212, 0.10)",
+                      borderWidth: 1.5,
+                      borderColor: "rgba(0, 245, 212, 0.5)",
+                      borderRadius: 12,
+                      marginBottom: 8,
+                    },
+                  ]}
+                  onPress={() => {
+                    setShowSettings(false);
+                    setTimeout(() => router.push("/dev-router-demo"), 220);
+                  }}
+                  testID="open-dev-router-demo"
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.settingLabel, { color: "#00F5D4", fontWeight: "700" }]}>
+                      🧪 Test Suite Build 19 — USA SOLO QUESTO
+                    </Text>
+                    <Text style={styles.settingHint}>
+                      5 test router in un'unica schermata. Setup automatico, tu
+                      guardi solo il risultato. Ignora tutti gli altri bottoni
+                      admin qui sotto.
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#00F5D4" />
+                </TouchableOpacity>
+              </>
+            ) : null}
+
+            {isAdmin ? (
               <TouchableOpacity
                 style={[styles.settingRow, { paddingVertical: 14 }]}
                 onPress={() => {

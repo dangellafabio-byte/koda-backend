@@ -344,3 +344,32 @@ Build 18 aveva due bug P0 rilevati da Fabio dopo il test manuale:
 3. Regressione Free: user Free fresh → Intro V3 normalmente.
 4. Regressione cambio tier in-session: Premium → dev panel "Torna Free" → redirect a `/lascia-andare`.
 5. Rete lenta: no flash di V3 prima di correggersi.
+
+---
+
+## 2026-08-23 — Build 20: Test Suite unificata (fix "troppi bottoni sparsi")
+
+### Contesto
+Dopo Build 19 Fabio ha riportato: "ho visto il paywall una sola volta per sbaglio, poi mai più; troppi bottoni nelle Impostazioni, forse sono loro a rompere". Richiesta esplicita: **una demo automatica** dove l'utente interagisce solo con paywall/Intro V3/Intro Premium, zero setup manuale.
+
+### Implementazione
+1. **`app/dev-router-demo.tsx`** (NEW) — schermata unica con 5 bottoni test. Ogni bottone fa tutto il setup (`devSetTier`, `devIntroPremiumReset`, `devTrialSeedExpired`, clear SecureStore) e naviga automaticamente allo scenario. I test 1, 3, 5 usano `Updates.reloadAsync()` per simulare cold boot. Il test 4 è totalmente automatico (setta Premium → home → dopo 3s setta Free → osserva redirect).
+2. **`components/DemoFloatingBar.tsx`** (NEW) — barra flottante persistente su tutte le schermate. Polla `SecureStore.koda_demo_mode` ogni 1.5s, mostra ID test + risultato atteso + route corrente + bottoni "✓ PASS · torna alla suite" e "✗ FAIL".
+3. **`app/_layout.tsx`** — DemoFloatingBar montato sopra ogni schermata (zIndex 9999).
+4. **`app/index.tsx`** — bottone unico prominente in cima alla sezione admin di Impostazioni: "🧪 Test Suite Build 19 — USA SOLO QUESTO" (bordo turchese, colore #00F5D4). Testo esplicito: "Ignora tutti gli altri bottoni admin qui sotto".
+5. **Bump**: version 1.0.121, buildNumber 20, versionCode 20.
+
+### Flusso utente
+1. Impostazioni → tap "🧪 Test Suite Build 19" (unico bottone da toccare).
+2. Sulla schermata demo, tap "Test N" (senza pensare a nulla).
+3. L'app si arrangia da sola (setup + navigate o reloadAsync).
+4. Utente vede la schermata target (Intro Premium / paywall / Intro V3 / lascia-andare).
+5. Barra flottante in basso mostra risultato atteso.
+6. Tap "✓ PASS" o "✗ FAIL" per tornare alla suite e fare il test successivo.
+
+### Test coperti (i 5 P0)
+1. Premium boot fresh → Intro Premium (MAI V3)
+2. Paywall dev bypass button visibile + funzionante
+3. Free boot fresh (regressione) → Intro V3
+4. Cambio tier in-session (Premium → Free) → /lascia-andare (automatico, 8s totali)
+5. Rete lenta (modalità aereo manuale) → no flash V3

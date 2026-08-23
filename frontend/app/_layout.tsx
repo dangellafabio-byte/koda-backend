@@ -13,6 +13,7 @@ import { AuthProvider, useAuth } from "../lib/auth";
 import LoginScreen from "../components/LoginScreen";
 import TrialWatcher from "../components/TrialWatcher";
 import OfflineOverlay from "../components/OfflineOverlay";
+import DemoFloatingBar from "../components/DemoFloatingBar";
 import { installDiagLogger } from "../lib/diagLogger";
 // === PIANO B FIX 2026-07-19 — static import (era lazy require) ===
 import { KODA_BACKEND_URL } from "../lib/backendUrl";
@@ -249,6 +250,9 @@ function RootLayout() {
                   pointer-events="none" quindi non blocca nulla.
                   Fabio 2026-08-14: P1 offline UX. */}
               <OfflineOverlay />
+              {/* Barra flottante Test Suite Build 19 — visibile solo se
+                  SecureStore.koda_demo_mode="1". Fabio 2026-08-23. */}
+              <DemoFloatingBar />
             </ThemedShell>
           </ThemeProvider>
         </AuthProvider>
