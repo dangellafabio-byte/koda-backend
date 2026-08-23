@@ -302,3 +302,45 @@ Koda **NON** offre una rosa di voci tra cui scegliere. L'utente sceglie **solo i
 - Backend test automatico passato: `/api/voices` → Acqua + Vento; `/api/voice/preview/aria` e `/voice/preview/theo` generano audio dai nuovi voice_id (verificato da log ElevenLabs).
 - Deploy production effettuato (`app-finder-408.emergent.host`).
 - Confermato funzionante in app reale dell'utente dopo publish.
+---
+
+## 2026-08-23 — Build 19: Fix P0 Router Premium/V3 + Paywall Dev Bypass
+
+### Contesto
+Build 18 aveva due bug P0 rilevati da Fabio dopo il test manuale:
+1. **Bug 1**: User Premium continuava a vedere Intro V3 invece di skippare a Intro Premium (Fix A2 aveva fallito).
+2. **Bug 2**: Il bottone `[DEV] Simula pagamento riuscito` nel paywall era invisibile per admin.
+
+### Root cause identificate (audit temporale)
+- **Bug 1 — race condition cache/network**: `fastPathHydrate()` legge il profilo da cache locale (SecureStore) e triggera il router V3 con `subscription_tier` STALE prima che arrivi la fetch di rete. Il ref booleano `hasRedirectedIntroV3Ref` si marca `true` al primo passaggio → quando poi arriva il network con tier=Premium, il useEffect ri-lancia MA il ref blocca l'update E siamo già stati redirected a `/intro-v3`.
+- **Bug 2 — schema mismatch**: il paywall chiamava `api.getProfile()` per leggere `p?.is_admin`, ma il Pydantic `Profile` backend NON include `is_admin`. Endpoint corretto: `/api/admin/whoami` (già disponibile come `api.adminWhoAmI()`).
+
+### Fix applicati
+- **`frontend/app/index.tsx`**:
+  - Nuovo state `profileHydrated: "empty" | "cache" | "network"`.
+  - `fastPathHydrate` scrive `"cache"` (solo se ancora `empty`).
+  - `loadProfile` scrive `"network"` dopo `setProfile(p)`.
+  - `resetEverything` scrive `"network"` dopo il refetch del profilo.
+  - I 3 router condizionali (KODA_ROUTER_V3, router Free/Premium, KODA_ROUTER_INTRO_PREMIUM) ora hanno guard `if (profileHydrated !== "network") return;` — decidono SOLO su dati network-fresh.
+  - Router V3 e Intro Premium: nuovi ref keyed (`lastV3DecidedKeyRef`, `lastIntroPremiumDecidedKeyRef`) per gestire cambi tier in-session (coerente col router Free/Premium che già aveva questa invalidazione).
+
+- **`frontend/app.json`**:
+  - `version`: 1.0.119 → 1.0.120
+  - `ios.buildNumber`: "18" → "19"
+  - `android.versionCode`: 18 → 19
+
+- **`frontend/app/paywall.tsx`**:
+  - `api.getProfile()` → `api.adminWhoAmI()` per stabilire `isAdmin`.
+  - Fail-closed su errore: `setIsAdmin(false)`.
+
+### Verifica pre-build
+- **Testing agent iteration 20**: 10/10 test backend contract PASS (whoami, profile senza is_admin, dev/set-tier, dev/intro-premium/reset). Code review frontend statica: fix corretto.
+- **Test browser preview**: non riproducibile — `lib/backendUrl.ts` hardcoded a Railway produzione (non un problema device iOS che ignora CORS).
+- **Failure mode noto per fix futuro (NON blocker)**: se il backend è irraggiungibile per >30s al boot, `profileHydrated` non diventa mai "network" e l'utente Premium resta bloccato con schermo bianco. Il retry loop di `loadProfile` prova ogni 3s → si sblocca eventualmente.
+
+### 5 test manuali on-device pending (Fabio)
+1. Premium boot fresh → deve vedere Intro Premium, MAI Intro V3.
+2. Admin `/paywall` → bottone `[DEV] Simula pagamento riuscito` visibile → click → naviga a `/intro-premium` senza alert.
+3. Regressione Free: user Free fresh → Intro V3 normalmente.
+4. Regressione cambio tier in-session: Premium → dev panel "Torna Free" → redirect a `/lascia-andare`.
+5. Rete lenta: no flash di V3 prima di correggersi.
