@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import { Stack } from "expo-router";
+import { Stack, usePathname } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -66,6 +66,13 @@ function ThemedShell({ children }: { children: React.ReactNode }) {
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
+  // BYPASS route pubbliche (Fabio 2026-08-23) — /orb-check è un tool di
+  // debug visivo che confronta la posizione dell'orb in tutti gli screen.
+  // Non richiede autenticazione perché rende solo layout statici.
+  const pathname = usePathname();
+  if (pathname === "/orb-check") {
+    return <>{children}</>;
+  }
   if (loading) {
     return <View style={[styles.root, { backgroundColor: "#000000" }]} />;
   }
