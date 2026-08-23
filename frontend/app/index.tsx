@@ -6664,11 +6664,122 @@ export default function Taccuino() {
                   </Text>
                 ) : null}
 
-                {/* === (2026-08-23) Rimossi su richiesta utente:
-                    - "Test — Setup + Intro conversazionale" (bottone /setup-v2)
-                    - "Test — Simula Premium" (3 bottoni: Simula Premium, Torna Free, Ripeti Intro Premium)
-                    - TrialTestPanel (5 bottoni di simulazione trial)
-                    Motivo: troppi bottoni "verifiche" in Impostazioni, confusi con l'esperienza normale. */}
+                {/* === TIER SWITCHER (Fabio 2026-08-23) =====================
+                    3 bottoni MINIMI per alternare Free/Premium e resettare
+                    Intro Premium senza terminale. Serve per testare i
+                    flussi Free (V3) e Premium (Intro Premium) end-to-end. */}
+                <View style={styles.divider} />
+                <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>
+                  Tier switcher
+                </Text>
+                <Text style={[styles.settingHint, { marginBottom: 10, paddingHorizontal: 4 }]}>
+                  Tier corrente: <Text style={{ fontWeight: "700", color: theme.text }}>{((profile as any)?.subscription_tier as string | null) || "free"}</Text>
+                </Text>
+
+                <TouchableOpacity
+                  style={{
+                    paddingVertical: 12,
+                    paddingHorizontal: 14,
+                    backgroundColor: "rgba(0, 245, 212, 0.10)",
+                    borderRadius: 10,
+                    borderWidth: 1,
+                    borderColor: "rgba(0, 245, 212, 0.3)",
+                    flexDirection: "row",
+                    alignItems: "center",
+                    marginBottom: 8,
+                    opacity: adminBusy ? 0.5 : 1,
+                  }}
+                  disabled={adminBusy}
+                  onPress={async () => {
+                    setAdminBusy(true);
+                    setAdminError(null);
+                    try {
+                      await api.devSetTier("monthly");
+                      const p = await api.getProfile();
+                      setProfile(p);
+                      Alert.alert("✓ Premium attivo", "Ora sei simulato Premium (monthly).");
+                    } catch (e: any) {
+                      setAdminError(`Errore: ${e?.message || e}`);
+                    } finally {
+                      setAdminBusy(false);
+                    }
+                  }}
+                  testID="dev-simulate-premium-btn"
+                >
+                  <Ionicons name="diamond-outline" size={18} color="#00F5D4" />
+                  <Text style={{ color: "#00F5D4", fontSize: 14, fontWeight: "600", marginLeft: 10 }}>
+                    Simula Premium (monthly)
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={{
+                    paddingVertical: 12,
+                    paddingHorizontal: 14,
+                    backgroundColor: theme.text + "0c",
+                    borderRadius: 10,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    marginBottom: 8,
+                    opacity: adminBusy ? 0.5 : 1,
+                  }}
+                  disabled={adminBusy}
+                  onPress={async () => {
+                    setAdminBusy(true);
+                    setAdminError(null);
+                    try {
+                      await api.devSetTier(null);
+                      const p = await api.getProfile();
+                      setProfile(p);
+                      Alert.alert("✓ Free", "Tornato utente Free.");
+                    } catch (e: any) {
+                      setAdminError(`Errore: ${e?.message || e}`);
+                    } finally {
+                      setAdminBusy(false);
+                    }
+                  }}
+                  testID="dev-simulate-free-btn"
+                >
+                  <Ionicons name="arrow-undo-outline" size={18} color={theme.text + "99"} />
+                  <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500", marginLeft: 10 }}>
+                    Torna Free
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={{
+                    paddingVertical: 12,
+                    paddingHorizontal: 14,
+                    backgroundColor: theme.text + "0c",
+                    borderRadius: 10,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    opacity: adminBusy ? 0.5 : 1,
+                  }}
+                  disabled={adminBusy}
+                  onPress={async () => {
+                    setAdminBusy(true);
+                    setAdminError(null);
+                    try {
+                      await api.devIntroPremiumReset();
+                      try { await SecureStore.deleteItemAsync("intro_premium_seen_at"); } catch {}
+                      Alert.alert(
+                        "✓ Reset fatto",
+                        "L'Intro Premium ripartirà al prossimo ingresso alla home Koda conv da Premium."
+                      );
+                    } catch (e: any) {
+                      setAdminError(`Errore: ${e?.message || e}`);
+                    } finally {
+                      setAdminBusy(false);
+                    }
+                  }}
+                  testID="dev-reset-intro-premium-btn"
+                >
+                  <Ionicons name="refresh-outline" size={18} color={theme.text + "99"} />
+                  <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500", marginLeft: 10 }}>
+                    Ripeti Intro Premium
+                  </Text>
+                </TouchableOpacity>
               </>
             ) : null}
 

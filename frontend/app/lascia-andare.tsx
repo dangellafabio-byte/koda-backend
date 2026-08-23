@@ -1241,6 +1241,9 @@ export default function LasciaAndareScreen() {
               Math.min(1, (Math.max(-60, Math.min(-20, meterDb)) + 60) / 40)
             )}
           />
+          {/* Spacer 34px per allineare l'orb alla stessa posizione della
+              home (gap:18 + statusLabel 16px). Fabio 2026-08-23. */}
+          <View style={{ height: 34 }} pointerEvents="none" />
         </Animated.View>
       </View>
 

@@ -66,15 +66,15 @@ export default function IntroPremium() {
   const mountedRef = useRef(true);
 
   // ==================== RECTS (coerenti con home reale) ====================
-  // orbCY IDENTICO alla home Page 0 (Fabio 2026-08-23):
-  //   Home wrapper: <View style={{flex:1, alignItems:"center",
-  //   justifyContent:"center", paddingTop:90}}> → centro Y = paddingTop/2 + H/2
-  //   = 45 + H/2. Se qui usi H*0.46 (=~388 su H=844) l'orb finisce ~79px
-  //   più in alto della home (~467) → percepito come "orb che salta" tra
-  //   intro e home. FIX: allineamento pixel-perfect.
+  // orbCY IDENTICO alla home Page 0 (Fabio 2026-08-23 fix v2):
+  //   Home: wrapper flex-center con paddingTop 90 + un View interno
+  //   flex-center con gap:18 che contiene: [Orb, statusLabel 16px].
+  //   Il flex-center centra il gruppo (Orb + gap 18 + label 16) → l'orb
+  //   è ~17px più in alto del centro geometrico.
+  //   Formula: paddingTop/2 + H/2 - 17 = 45 + H/2 - 17 = H/2 + 28
   const headerCY = Math.max(insets.top + 28, 70) + 22;
   const orbSize = Math.min(W * 0.78, 360);
-  const orbCY = H / 2 + 45;
+  const orbCY = H / 2 + 28;
 
   const RECTS: Record<"orb" | "hf" | "la" | "settings", Rect> = {
     orb: { x: W / 2 - orbSize / 2, y: orbCY - orbSize / 2, w: orbSize, h: orbSize },

@@ -649,6 +649,9 @@ export default function MicroDemoKoda() {
             tone={orbProps.tone}
             size={ORB_SIZE}
           />
+          {/* Spacer per replicare layout home (Fabio 2026-08-23):
+              gap:18 + statusLabel 16px sotto orb = 34px totali. */}
+          <View style={{ height: 34 }} pointerEvents="none" />
         </Animated.View>
       </View>
 

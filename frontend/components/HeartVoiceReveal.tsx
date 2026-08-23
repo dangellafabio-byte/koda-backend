@@ -244,6 +244,10 @@ export default function HeartVoiceReveal() {
           }}
         >
           <EclipseOrb status="speaking" tone="warm" size={ORB_SIZE} />
+          {/* Spacer per replicare layout home (Fabio 2026-08-23):
+              home ha gap:18 + statusLabel 16px sotto orb → 34px totali.
+              Con questo spacer l'orb è nella STESSA posizione della home. */}
+          <View style={{ height: 34 }} pointerEvents="none" />
         </Animated.View>
       </View>
 

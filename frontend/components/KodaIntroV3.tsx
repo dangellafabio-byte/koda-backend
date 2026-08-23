@@ -719,6 +719,11 @@ export default function KodaIntroV3() {
             tone={orbProps.tone}
             size={ORB_SIZE}
           />
+          {/* Spacer per replicare il layout home (Fabio 2026-08-23):
+              nella home Page 0 sotto l'orb c'è gap:18 + statusLabel 16px.
+              Il flex-center centra il gruppo [orb + spacer] → orb 17px più
+              in alto del centro. Con questo spacer orb=STESSA posizione. */}
+          <View style={{ height: 34 }} pointerEvents="none" />
         </Animated.View>
 
         {/* Micro-label sotto l'orb (position:absolute per non spostare l'orb).
