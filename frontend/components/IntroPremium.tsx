@@ -358,17 +358,16 @@ export default function IntroPremium() {
       </Animated.View>
 
       {/* Coach-mark cards (fuori dallo swipe wrapper).
-          Ring/glow disabilitato per HF/LA/Settings come da spec Fabio
-          2026-08-23 (PARTE 4: "Nessun ring, nessun glow, nessun evidenziatore
-          attorno a un elemento — appare solo fade-in"). */}
+          Ring/evidenziature RIMESSE (Fabio 2026-08-23): l'utente le vuole
+          per marcare visivamente quale elemento la card sta indicando. */}
       {phase === "coach_orb" &&
-        renderCard(RECTS.orb, "Toccami", "Il secondo tocco è per fermarmi.", true, false)}
+        renderCard(RECTS.orb, "Toccami", "Il secondo tocco è per fermarmi.", true, true)}
       {phase === "coach_hf" &&
-        renderCard(RECTS.hf, "Mani libere", "Se lo attivi ti ascolto in continuo. Non serve toccarmi.", true, false)}
+        renderCard(RECTS.hf, "Mani libere", "Se lo attivi ti ascolto in continuo. Non serve toccarmi.", true, true)}
       {phase === "coach_la" &&
-        renderCard(RECTS.la, "Lascia andare", "Tocca per tornare al mio cuore.", false, false)}
+        renderCard(RECTS.la, "Lascia andare", "Tocca per tornare al mio cuore.", false, true)}
       {phase === "coach_settings" &&
-        renderCard(RECTS.settings, "Impostazioni", "Da qui cambi voce, tema, memoria.", true, false)}
+        renderCard(RECTS.settings, "Impostazioni", "Da qui cambi voce, tema, memoria.", true, true)}
       {phase === "coach_swipe" &&
         renderCard(null, "Scrittura", "Scorri verso sinistra per scrivermi.", false, false)}
     </Animated.View>
