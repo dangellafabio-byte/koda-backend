@@ -690,7 +690,10 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingTop: 0,
+    // Allineamento pixel-perfect con home Page 0 (Fabio 2026-08-23):
+    // stesso paddingTop del wrapper home (index.tsx riga ~5247) →
+    // orb sempre nella stessa posizione, senza salti tra sessioni.
+    paddingTop: 90,
   },
   counterBox: {
     position: "absolute",

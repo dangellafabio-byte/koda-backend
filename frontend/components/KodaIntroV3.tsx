@@ -721,7 +721,11 @@ export default function KodaIntroV3() {
           />
         </Animated.View>
 
-        {/* Micro-label sotto l'orb (position:absolute per non spostare l'orb) */}
+        {/* Micro-label sotto l'orb (position:absolute per non spostare l'orb).
+            Con centerContainer.paddingTop=90 (allineamento home), l'orb è
+            a centro Y = H/2 + 45. Il label deve compensare quel +45 rispetto
+            al top:"50%" del container. Formula: ORB_SIZE/2 + 27 (spaziatura
+            classica) + 45 (compensazione paddingTop) = ORB_SIZE/2 + 72. */}
         <View
           pointerEvents="none"
           style={{
@@ -729,7 +733,7 @@ export default function KodaIntroV3() {
             top: "50%",
             left: 0,
             right: 0,
-            marginTop: ORB_SIZE / 2 + 27,
+            marginTop: ORB_SIZE / 2 + 72,
             alignItems: "center",
           }}
         >
@@ -786,12 +790,17 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingTop: 0,
+    // Allineamento pixel-perfect con la home Page 0 (Fabio 2026-08-23):
+    // stesso paddingTop del wrapper della home (index.tsx riga ~5247)
+    // così l'orb è ESATTAMENTE nello stesso punto tra V3 e home vera.
+    paddingTop: 90,
   },
   orbWrap: {
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 10,
+    // marginBottom: 0 (Fabio 2026-08-23) — coerenza con home (nessun offset
+    // che sposta l'orb rispetto al centro geometrico del wrapper).
+    marginBottom: 0,
   },
   microLabel: {
     marginTop: 32,

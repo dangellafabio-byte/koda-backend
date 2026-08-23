@@ -373,3 +373,59 @@ Dopo Build 19 Fabio ha riportato: "ho visto il paywall una sola volta per sbagli
 3. Free boot fresh (regressione) → Intro V3
 4. Cambio tier in-session (Premium → Free) → /lascia-andare (automatico, 8s totali)
 5. Rete lenta (modalità aereo manuale) → no flash V3
+
+---
+
+## 2026-08-23 — Build 22: Cleanup verifiche + spec V3/Intro Premium + orb pixel-perfect
+
+### Cleanup (rimosso su richiesta esplicita utente)
+- `/app/frontend/app/dev-router-demo.tsx` (Test Suite)
+- `/app/frontend/components/DemoFloatingBar.tsx` (barra flottante che copriva paywall)
+- `/app/frontend/components/TrialTestPanel.tsx` (test trial)
+- In `_layout.tsx`: rimosso import + montaggio `<DemoFloatingBar />`
+- In `app/index.tsx` Impostazioni: rimosso bottone "🧪 Test Suite Build 19",
+  intera sezione "💎 Test — Simula Premium" (Simula Premium / Torna Free /
+  Ripeti Intro Premium), bottone "Prova nuovo Setup + Intro (beta)",
+  montaggio `<TrialTestPanel visible={true} />`
+- In `app/paywall.tsx`: rimosso state isAdmin + handleDevBypass +
+  api.adminWhoAmI() + bottone "[DEV] Simula pagamento riuscito"
+
+### NON toccato (utente non ha detto esplicitamente)
+- diagnostics, persona-test, "Rivedi il tour", "Rivedi Intro Premium (admin)",
+  whitelist admin unlimited, "Cancella tutta la memoria", endpoint backend
+  /api/dev/* e /api/admin/*
+
+### Modifiche flusso (allineamento a spec definitiva Fabio 2026-08-23)
+- **PARTE 4 (nessun ring/glow su elementi che appaiono)**: rimosso ring
+  pulsante attorno a HF/LA/Settings in `IntroPremium.tsx` e attorno alla
+  barra scrittura in `IntroPremiumFinalStep.tsx`. Gli elementi ora
+  compaiono solo con fade-in senza evidenziatore.
+- **Orb pixel-perfect (posizione identica alla home in TUTTE le
+  schermate)**: allineamento a wrapper home Page 0
+  (`paddingTop: 90` + flex-center → centro Y = H/2 + 45):
+    - `IntroPremium.tsx`: `orbCY = H * 0.46` → `orbCY = H / 2 + 45`
+    - `KodaIntroV3.tsx`: `centerContainer.paddingTop 0 → 90`,
+      `orbWrap.marginBottom 10 → 0`, label offset
+      `ORB_SIZE/2 + 27 → ORB_SIZE/2 + 72`
+    - `HeartVoiceReveal.tsx`: `centerContainer.paddingTop 0 → 90`
+    - `MicroDemoKoda.tsx`: `centerContainer.paddingTop 0 → 90`
+    - `lascia-andare.tsx`: `styles.center.paddingTop → 90`
+
+### Bump
+- version 1.0.123, buildNumber 22, versionCode 22
+
+### Verifica spec definitiva (già presente prima di questa build)
+- 1.1 Disclaimer ✓, 1.2 "Ciao, piacere di conoscerti..." ✓, 1.3 "Voglio
+  farti conoscere una parte di me." ✓, 1.4 transizione a
+  /lascia-andare?firstBoot=1 ✓, 1.5 "Questo è il mio cuore..." ✓,
+  1.6 "Provalo." ✓, 1.7 X e timer stessa destinazione ✓, 1.8
+  HeartVoiceReveal "Ma ho anche una voce..." ✓, 1.9a microdemo ✓,
+  1.10 "Parla con Koda" rate-limit 24h ✓
+- 2.1 innesco su tier valorizzato ✓, 2.2 clip "Eccomi..." + solo orb ✓,
+  2.3 alert "Un attimo" / "Per parlarti serve..." ✓, 2.4 hint 5s "Toccami" ✓,
+  2.5-2.9 5 coach-mark ✓, 2.6 HandsFreeOrb VERO ✓, 2.9 auto-swipe -40px ✓,
+  2.10 handoff `/?intro=writing_final` ✓, 2.11 "Rispondo qui in silenzio."
+  + "Adesso ci siamo. Cominciamo." ✓, 2.12 flag persist doppio ✓
+- PARTE 3 router con `profileHydrated === "network"` ✓,
+  skip V3 per paid ✓, keyed invalidation su cambio tier ✓
+- PARTE 4 pre-prompt riutilizzabile (`ensureSpeechPermission`) ✓

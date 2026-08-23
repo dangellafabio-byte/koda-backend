@@ -1320,6 +1320,11 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
+    // Allineamento pixel-perfect con home Page 0 (Fabio 2026-08-23):
+    // stesso paddingTop del wrapper home (index.tsx riga ~5247) → l'orb
+    // è ESATTAMENTE nella stessa posizione tra LA e home vera. NON
+    // tocchiamo la size (260) — solo la posizione del centro.
+    paddingTop: 90,
   },
   hintBox: {
     position: "absolute",

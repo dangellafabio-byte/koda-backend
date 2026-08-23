@@ -140,9 +140,9 @@ export default function IntroPremiumFinalStep({ onComplete }: Props) {
     }, 2400);
   }, [closing, backdropOpacity, cardOpacity, onComplete, playClosingClip]);
 
-  // === Ring pulsante attorno alla barra scrittura vera ====================
-  const ringScale = ringPulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.03] });
-  const ringOpacityAnim = ringPulse.interpolate({ inputRange: [0, 1], outputRange: [0.75, 0.25] });
+  // === Ring pulsante rimosso (spec Fabio 2026-08-23) ============================
+  // Vecchie variabili ringScale/ringOpacityAnim eliminate dopo la rimozione
+  // del ring pulsante sulla barra scrittura vera (regola PARTE 4).
 
   return (
     <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
@@ -162,24 +162,12 @@ export default function IntroPremiumFinalStep({ onComplete }: Props) {
           style={StyleSheet.absoluteFillObject}
         />
       )}
-      {/* Ring pulsante attorno alla barra scrittura VERA */}
-      {showCard && (
-        <Animated.View
-          style={{
-            position: "absolute",
-            left: textBarRect.x - 6,
-            top: textBarRect.y - 6,
-            width: textBarRect.w + 12,
-            height: textBarRect.h + 12,
-            borderRadius: 20,
-            borderWidth: 2,
-            borderColor: "#00F5D4",
-            opacity: ringOpacityAnim,
-            transform: [{ scale: ringScale }],
-          }}
-          pointerEvents="none"
-        />
-      )}
+      {/* Ring pulsante RIMOSSO (Fabio 2026-08-23, PARTE 4 spec):
+          "Mai un elemento evidenziato se già presente: ogni elemento che
+          compare durante un coach-mark deve apparire dal nulla (fade-in),
+          mai essere illuminato da uno stato preesistente con ring/glow/torcia."
+          La barra scrittura È preesistente sulla home reale → niente ring.
+          La card sopra è già sufficiente ancoraggio visivo. */}
       {/* Card testo — sopra la barra */}
       {showCard && (
         <Animated.View

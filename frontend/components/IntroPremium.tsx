@@ -66,9 +66,15 @@ export default function IntroPremium() {
   const mountedRef = useRef(true);
 
   // ==================== RECTS (coerenti con home reale) ====================
+  // orbCY IDENTICO alla home Page 0 (Fabio 2026-08-23):
+  //   Home wrapper: <View style={{flex:1, alignItems:"center",
+  //   justifyContent:"center", paddingTop:90}}> → centro Y = paddingTop/2 + H/2
+  //   = 45 + H/2. Se qui usi H*0.46 (=~388 su H=844) l'orb finisce ~79px
+  //   più in alto della home (~467) → percepito come "orb che salta" tra
+  //   intro e home. FIX: allineamento pixel-perfect.
   const headerCY = Math.max(insets.top + 28, 70) + 22;
   const orbSize = Math.min(W * 0.78, 360);
-  const orbCY = H * 0.46;
+  const orbCY = H / 2 + 45;
 
   const RECTS: Record<"orb" | "hf" | "la" | "settings", Rect> = {
     orb: { x: W / 2 - orbSize / 2, y: orbCY - orbSize / 2, w: orbSize, h: orbSize },
@@ -351,15 +357,18 @@ export default function IntroPremium() {
           phase === "handoff") && renderFakeSettings()}
       </Animated.View>
 
-      {/* Coach-mark cards (fuori dallo swipe wrapper) */}
+      {/* Coach-mark cards (fuori dallo swipe wrapper).
+          Ring/glow disabilitato per HF/LA/Settings come da spec Fabio
+          2026-08-23 (PARTE 4: "Nessun ring, nessun glow, nessun evidenziatore
+          attorno a un elemento — appare solo fade-in"). */}
       {phase === "coach_orb" &&
         renderCard(RECTS.orb, "Toccami", "Il secondo tocco è per fermarmi.", true, false)}
       {phase === "coach_hf" &&
-        renderCard(RECTS.hf, "Mani libere", "Se lo attivi ti ascolto in continuo. Non serve toccarmi.", true)}
+        renderCard(RECTS.hf, "Mani libere", "Se lo attivi ti ascolto in continuo. Non serve toccarmi.", true, false)}
       {phase === "coach_la" &&
-        renderCard(RECTS.la, "Lascia andare", "Tocca per tornare al mio cuore.", false)}
+        renderCard(RECTS.la, "Lascia andare", "Tocca per tornare al mio cuore.", false, false)}
       {phase === "coach_settings" &&
-        renderCard(RECTS.settings, "Impostazioni", "Da qui cambi voce, tema, memoria.", true)}
+        renderCard(RECTS.settings, "Impostazioni", "Da qui cambi voce, tema, memoria.", true, false)}
       {phase === "coach_swipe" &&
         renderCard(null, "Scrittura", "Scorri verso sinistra per scrivermi.", false, false)}
     </Animated.View>

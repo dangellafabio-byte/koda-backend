@@ -82,7 +82,7 @@ import MirrorPool from "../components/MirrorPool";
 // tipo utile per non spezzare la firma legacy.
 type KodaIntroResult = { launch_tour?: boolean };
 import KodaSplash from "../components/KodaSplash";
-import TrialTestPanel from "../components/TrialTestPanel";import KodaTour, { TourStep } from "../components/KodaTour";
+import KodaTour, { TourStep } from "../components/KodaTour";
 import DisclaimerScreen from "../components/DisclaimerScreen";
 import * as ScreenDimmer from "../lib/screenDimmer";
 import * as SecureStore from "expo-secure-store";
@@ -6435,45 +6435,6 @@ export default function Taccuino() {
                 Visibile SOLO all'admin: rischio di alterare il flag
                 "vista una sola volta" se un utente normale lo tocca. */}
             {isAdmin ? (
-              <>
-                {/* === TEST SUITE BUILD 19 (Fabio 2026-08-23) ==================
-                    UN SOLO bottone di ingresso per validare i 5 test P0.
-                    Tutto il resto è nella schermata /dev-router-demo.
-                    Non toccare i bottoni sotto: usa SOLO questo. */}
-                <TouchableOpacity
-                  style={[
-                    styles.settingRow,
-                    {
-                      paddingVertical: 16,
-                      backgroundColor: "rgba(0, 245, 212, 0.10)",
-                      borderWidth: 1.5,
-                      borderColor: "rgba(0, 245, 212, 0.5)",
-                      borderRadius: 12,
-                      marginBottom: 8,
-                    },
-                  ]}
-                  onPress={() => {
-                    setShowSettings(false);
-                    setTimeout(() => router.push("/dev-router-demo"), 220);
-                  }}
-                  testID="open-dev-router-demo"
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.settingLabel, { color: "#00F5D4", fontWeight: "700" }]}>
-                      🧪 Test Suite Build 19 — USA SOLO QUESTO
-                    </Text>
-                    <Text style={styles.settingHint}>
-                      5 test router in un'unica schermata. Setup automatico, tu
-                      guardi solo il risultato. Ignora tutti gli altri bottoni
-                      admin qui sotto.
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color="#00F5D4" />
-                </TouchableOpacity>
-              </>
-            ) : null}
-
-            {isAdmin ? (
               <TouchableOpacity
                 style={[styles.settingRow, { paddingVertical: 14 }]}
                 onPress={() => {
@@ -6703,203 +6664,11 @@ export default function Taccuino() {
                   </Text>
                 ) : null}
 
-                {/* === INTRO-V2 BETA (2026-08-06, admin only) ===
-                    Nuovo onboarding conversazionale in fase di validazione
-                    su TestFlight. Non ancora attivo per gli utenti finali:
-                    l'accesso è riservato all'owner per QA end-to-end.
-                    Rimuovere dopo GA. */}
-                <View style={styles.divider} />
-                <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>
-                  🧪 Test — Setup + Intro conversazionale
-                </Text>
-                <Text style={[styles.settingHint, { marginBottom: 10, paddingHorizontal: 4 }]}>
-                  Prima di iniziare → Email → Microfono → dissolvenza → Intro V2.
-                  Ripetibile (non scrive stato persistente durante il setup);
-                  al termine dell'Intro sovrascrive nome/voce/genere come prima.
-                </Text>
-                <TouchableOpacity
-                  style={{
-                    paddingVertical: 12,
-                    paddingHorizontal: 14,
-                    backgroundColor: theme.text + "0c",
-                    borderRadius: 10,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                  }}
-                  onPress={() => {
-                    closeSettings();
-                    setTimeout(() => router.push("/setup-v2"), 200);
-                  }}
-                  testID="admin-open-intro-v2-btn"
-                >
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
-                    <Ionicons name="sparkles-outline" size={18} color={theme.text + "99"} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500" }}>
-                        Prova nuovo Setup + Intro (beta)
-                      </Text>
-                      <Text style={{ color: theme.text + "66", fontSize: 11, marginTop: 2 }}>
-                        Disclaimer + email + mic, poi dissolvenza in /intro-v2. Non tocca la produzione.
-                      </Text>
-                    </View>
-                  </View>
-                  <Ionicons name="chevron-forward" size={16} color={theme.text + "66"} />
-                </TouchableOpacity>
-
-                {/* === PREMIUM SIMULATOR (2026-08-22, Fabio) — admin only ===
-                    Permette di promuovere/degradare l'account corrente
-                    per testare flussi Premium (Intro Premium, home Koda
-                    conv, ecc.) senza attivare RevenueCat. Solo admin.
-                    Backend: /api/dev/set-tier + /api/dev/intro-premium/reset. */}
-                <View style={styles.divider} />
-                <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>
-                  💎 Test — Simula Premium
-                </Text>
-                <Text style={[styles.settingHint, { marginBottom: 10, paddingHorizontal: 4 }]}>
-                  Promuove/degrada il tuo account per testare Intro Premium e home Koda conv senza terminale. Tier attuale: <Text style={{ fontWeight: "700", color: theme.text }}>{((profile as any)?.subscription_tier as string | null) || "free"}</Text>.
-                </Text>
-
-                {/* Simula Premium (monthly) */}
-                <TouchableOpacity
-                  style={{
-                    paddingVertical: 12,
-                    paddingHorizontal: 14,
-                    backgroundColor: "rgba(0, 245, 212, 0.10)",
-                    borderRadius: 10,
-                    borderWidth: 1,
-                    borderColor: "rgba(0, 245, 212, 0.3)",
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    marginBottom: 8,
-                    opacity: adminBusy ? 0.5 : 1,
-                  }}
-                  disabled={adminBusy}
-                  onPress={async () => {
-                    setAdminBusy(true);
-                    setAdminError(null);
-                    try {
-                      await api.devSetTier("monthly");
-                      const p = await api.getProfile();
-                      setProfile(p);
-                      Alert.alert("✓ Premium attivo", "Ora sei simulato come utente Premium (monthly). Chiudi Impostazioni per vedere l'effetto.");
-                    } catch (e: any) {
-                      setAdminError(`Errore: ${e?.message || e}`);
-                    } finally {
-                      setAdminBusy(false);
-                    }
-                  }}
-                  testID="dev-simulate-premium-btn"
-                >
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
-                    <Ionicons name="diamond-outline" size={18} color="#00F5D4" />
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: "#00F5D4", fontSize: 14, fontWeight: "600" }}>
-                        Simula Premium (monthly)
-                      </Text>
-                      <Text style={{ color: theme.text + "66", fontSize: 11, marginTop: 2 }}>
-                        Attiva subscription_tier = "monthly" per test.
-                      </Text>
-                    </View>
-                  </View>
-                </TouchableOpacity>
-
-                {/* Torna Free */}
-                <TouchableOpacity
-                  style={{
-                    paddingVertical: 12,
-                    paddingHorizontal: 14,
-                    backgroundColor: theme.text + "0c",
-                    borderRadius: 10,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    marginBottom: 8,
-                    opacity: adminBusy ? 0.5 : 1,
-                  }}
-                  disabled={adminBusy}
-                  onPress={async () => {
-                    setAdminBusy(true);
-                    setAdminError(null);
-                    try {
-                      await api.devSetTier(null);
-                      const p = await api.getProfile();
-                      setProfile(p);
-                      Alert.alert("✓ Free", "Ora sei tornato utente Free.");
-                    } catch (e: any) {
-                      setAdminError(`Errore: ${e?.message || e}`);
-                    } finally {
-                      setAdminBusy(false);
-                    }
-                  }}
-                  testID="dev-simulate-free-btn"
-                >
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
-                    <Ionicons name="arrow-undo-outline" size={18} color={theme.text + "99"} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500" }}>
-                        Torna Free
-                      </Text>
-                      <Text style={{ color: theme.text + "66", fontSize: 11, marginTop: 2 }}>
-                        Reimposta subscription_tier a null.
-                      </Text>
-                    </View>
-                  </View>
-                </TouchableOpacity>
-
-                {/* Ripeti Intro Premium */}
-                <TouchableOpacity
-                  style={{
-                    paddingVertical: 12,
-                    paddingHorizontal: 14,
-                    backgroundColor: theme.text + "0c",
-                    borderRadius: 10,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    opacity: adminBusy ? 0.5 : 1,
-                  }}
-                  disabled={adminBusy}
-                  onPress={async () => {
-                    setAdminBusy(true);
-                    setAdminError(null);
-                    try {
-                      // Reset sia backend sia SecureStore mirror
-                      await api.devIntroPremiumReset();
-                      try {
-                        await SecureStore.deleteItemAsync("intro_premium_seen_at");
-                      } catch {}
-                      Alert.alert(
-                        "✓ Reset fatto",
-                        "L'Intro Premium ripartirà al prossimo boot sulla home Koda conv. Chiudi e riapri l'app (o esci e rientra dalle Impostazioni)."
-                      );
-                    } catch (e: any) {
-                      setAdminError(`Errore: ${e?.message || e}`);
-                    } finally {
-                      setAdminBusy(false);
-                    }
-                  }}
-                  testID="dev-reset-intro-premium-btn"
-                >
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
-                    <Ionicons name="refresh-outline" size={18} color={theme.text + "99"} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500" }}>
-                        Ripeti Intro Premium
-                      </Text>
-                      <Text style={{ color: theme.text + "66", fontSize: 11, marginTop: 2 }}>
-                        Cancella intro_premium_seen_at (backend + locale).
-                      </Text>
-                    </View>
-                  </View>
-                </TouchableOpacity>
-
-                {/* === TRIAL TEST PANEL (2026-08-11, Fabio) ===
-                    5 pulsanti per simulare stati del trial senza consumare
-                    7 minuti veri di TTS. Solo admin, gated dallo stesso
-                    isAdmin qui sopra. Componente separato in ../components/. */}
-                <TrialTestPanel visible={true} />
+                {/* === (2026-08-23) Rimossi su richiesta utente:
+                    - "Test — Setup + Intro conversazionale" (bottone /setup-v2)
+                    - "Test — Simula Premium" (3 bottoni: Simula Premium, Torna Free, Ripeti Intro Premium)
+                    - TrialTestPanel (5 bottoni di simulazione trial)
+                    Motivo: troppi bottoni "verifiche" in Impostazioni, confusi con l'esperienza normale. */}
               </>
             ) : null}
 
