@@ -2779,3 +2779,158 @@ agent_communication:
       LiteLLM info logs). Both /api/search and converse-with-web are
       now WORKING and have been marked needs_retesting=false in
       test_result.md.
+
+
+---
+
+## SESSIONE 2026-08-23 — FIX P0 ROUTER PREMIUM/V3 + PAYWALL DEV BYPASS
+
+### Contesto
+Build 18 aveva due bug P0 rilevati dall'utente Fabio:
+1. **Bug 1**: Premium user vede ancora Intro V3 (Fix A2 fallito).
+   Root cause: race condition fastPathHydrate cache vs loadProfile network.
+   Il router V3 in `app/index.tsx` decideva sul profile letto dalla cache
+   locale (subscription_tier stale) prima che arrivasse il network fetch.
+2. **Bug 2**: Bottone `[DEV] Simula pagamento riuscito` nel paywall
+   MAI renderizzato. Root cause: `paywall.tsx` chiamava `api.getProfile()`
+   per leggere `p?.is_admin` ma il Pydantic model backend NON include
+   `is_admin`. L'endpoint corretto è `/api/admin/whoami` (`adminWhoAmI()`).
+
+### Fix applicati (2026-08-23)
+- **frontend/app/index.tsx**:
+  - Nuovo state `profileHydrated: "empty" | "cache" | "network"`
+  - `fastPathHydrate` scrive `"cache"` (solo se ancora `empty`)
+  - `loadProfile` scrive `"network"` dopo `setProfile(p)`
+  - `resetEverything` scrive `"network"` dopo `setProfile(p)`
+  - Router V3, Free/Premium, Intro Premium: nuovo guard
+    `if (profileHydrated !== "network") return;`
+  - Router V3 e Intro Premium: keyed invalidation ref
+    (`lastV3DecidedKeyRef`, `lastIntroPremiumDecidedKeyRef`)
+    per gestire cambi tier in-session
+- **frontend/app/paywall.tsx**:
+  - `api.getProfile()` → `api.adminWhoAmI()` per leggere `is_admin`
+  - Fail-closed su errore: `setIsAdmin(false)`
+
+frontend:
+  - task: "Router V3/Free-Premium/Intro-Premium — fix race cache/network"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Fix Bug 1 P0 (race condition fastPathHydrate cache vs loadProfile
+          network). Introdotto `profileHydrated` flag; tutti i 3 router
+          ("KODA_ROUTER_V3", free/premium redirect, "KODA_ROUTER_INTRO_PREMIUM")
+          ora aspettano `profileHydrated === "network"` prima di decidere.
+          Aggiunta keyed invalidation ref sui router V3 e IntroPremium
+          per gestire cambio tier in-session (coerente col router
+          Free/Premium che già la aveva).
+          Backend endpoint /api/profile invariato — non richiesta modifica
+          server-side.
+
+  - task: "Paywall dev-bypass bottone admin — fix visibilità"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/paywall.tsx"
+    stuck_count: 0
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Fix Bug 2 P0. Il bottone `[DEV] Simula pagamento riuscito` era
+          nascosto per SEMPRE perché usava `api.getProfile().is_admin`
+          (campo che il response model Pydantic `Profile` NON contiene).
+          Sostituito con `api.adminWhoAmI()` che è l'endpoint dedicato
+          `/api/admin/whoami` (ritorna `{is_admin, uid_short}` senza
+          sollevare 403 per non-admin). Fail-closed su errore.
+
+test_plan:
+  current_focus:
+    - "Router V3/Free-Premium/Intro-Premium — fix race cache/network"
+    - "Paywall dev-bypass bottone admin — fix visibilità"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Ai testing_agent: eseguire test browser-based sul preview Metro web
+      per validare il flusso router premium end-to-end sui due P0 fixati.
+
+      **Ambiente**: preview URL `http://localhost:3000` (frontend Metro),
+      backend `http://localhost:8001/api`. Il preview web usa lo stesso
+      codice del device (React Native Web via expo-router).
+
+      **Autenticazione**:
+      - Chiamare `POST /api/auth/dev-login` (no body) per ottenere session
+        cookie. Il default user "dev@koda.local" è admin.
+      - In alternativa header `X-User-Id: ee4e7261-e1b5-485c-8a68-778cac455e39`
+        per simulare admin Fabio Google.
+
+      **Test da eseguire (in ordine, non parallelo)**:
+
+      TEST 1 — Verifica endpoint backend (contract):
+      - `GET /api/admin/whoami` con auth admin → 200 con
+        `{is_admin: true, uid_short: "..."}`
+      - `GET /api/profile` con auth admin → 200 con Profile che
+        NON contiene `is_admin` (dimostra il bug originale)
+      - `POST /api/dev/set-tier {"tier": "bimonthly"}` con auth admin
+        → 200 con `{ok: true, subscription_tier: "bimonthly"}`
+      - `POST /api/dev/set-tier {"tier": null}` per reset → 200
+      - `POST /api/dev/intro-premium/reset` con auth admin → 200
+
+      TEST 2 — Test browser flow router V3 skip Premium:
+      Non è possibile testare completamente la race timing dal web
+      perché le cache SecureStore usano localStorage nel browser, ma
+      possiamo verificare:
+      - Aprire `http://localhost:3000` come admin con tier="bimonthly"
+        (settato via `/api/dev/set-tier` prima del test).
+      - Reset intro flags: `POST /api/dev/intro-premium/reset` +
+        clear localStorage `intro_v3_completed_at` e
+        `intro_premium_seen_at`.
+      - Ricaricare la pagina.
+      - Aspettarsi: l'URL finisce su `/intro-premium` (non su
+        `/intro-v3`), oppure l'utente resta sulla home Koda conv.
+        NON deve mai apparire lo screen Intro V3.
+      - Verifica console.log: cercare
+        "[KODA_ROUTER_V3] paid user (tier=bimonthly) → skip V3"
+        e "[KODA_ROUTER_INTRO_PREMIUM] first paid boot → replace to /intro-premium"
+
+      TEST 3 — Test browser flow paywall dev bypass:
+      - Andare a `http://localhost:3000/paywall` come admin.
+      - Verificare che sia visibile il bottone verde
+        `[DEV] Simula pagamento riuscito` con testID `paywall-dev-bypass`.
+      - Cliccarlo.
+      - Aspettarsi: navigazione a `/intro-premium` (URL finale).
+      - Verificare console: nessun `Alert.alert("Errore dev", ...)`.
+      - Verifica endpoint chiamati: POST `/api/dev/set-tier`,
+        POST `/api/dev/intro-premium/reset`.
+
+      TEST 4 — Regressione Free user:
+      - Reset a Free: `POST /api/dev/set-tier {"tier": null}`.
+      - Aprire `http://localhost:3000`.
+      - Aspettarsi: redirect verso `/lascia-andare` (non stay su Koda conv).
+
+      **Non testare**:
+      - Il flusso audio ElevenLabs / TTS
+      - Il flusso Lascia Andare (LA) core
+      - Confessionale (feature deprecata)
+      - Timing race condition esatto (non riproducibile via web, il device
+        iOS ha timing di cache diversi)
+
+      **Files di riferimento**:
+      - /app/frontend/app/index.tsx (righe 364-378, 979-1080,
+        1140-1170, 1180-1245)
+      - /app/frontend/app/paywall.tsx (righe 173-215)
+      - /app/frontend/lib/api.ts (righe 330-331, 456-465)
+      - /app/backend/server.py (righe 3166, 4443-4452, 4689-4719)
+
+      **Credenziali**: vedi /app/memory/test_credentials.md

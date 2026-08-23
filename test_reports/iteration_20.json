@@ -1,0 +1,46 @@
+{
+  "summary": "Sanity check pre-build su fix P0 Build 18 (Koda paywall dev bypass). BACKEND CONTRACT: 10/10 pytest PASS. GET /api/admin/whoami risponde 200 con {is_admin:true, uid_short} per admin (X-User-Id Fabio) e {is_admin:false, uid_short} per anon — coerente col contract usato dal frontend. GET /api/profile con admin conferma il bug originale: la response NON contiene 'is_admin' (dimostrato via assert 'is_admin' not in data — passa). POST /api/dev/set-tier accetta tier='bimonthly'|'annual'|null, ritorna {ok:true, subscription_tier:<tier>}, e blocca non-admin con 403. POST /api/dev/intro-premium/reset ritorna {ok:true, reset:'intro_premium_seen_at'} per admin e 403 per anon. La sequenza completa del handleDevBypass (whoami → set-tier bimonthly → intro-premium/reset → cleanup) fila senza errori.\n\nCODE REVIEW frontend (statica): /app/frontend/app/paywall.tsx:192 chiama correttamente `api.adminWhoAmI()` invece del vecchio `api.getProfile()` (fix applicato). /app/frontend/lib/api.ts:330-331 espone `adminWhoAmI: () => jsonReq<{is_admin,uid_short}>('/admin/whoami')`. Il bottone testID='paywall-dev-bypass' (righe 378-399) è renderizzato SOLO se `isAdmin === true`. handleDevBypass (righe 202-222) chiama devSetTier(tier) + devIntroPremiumReset() + SecureStore.deleteItemAsync('intro_premium_seen_at') + persistOnboardingComplete() + router.replace('/intro-premium') — flow corretto e coerente col backend.\n\nFRONTEND UI TEST (web preview) — NON RIPRODUCIBILE per limiti ambientali (già anticipato dall'utente): la Expo web preview costruita dal branch corrente ha `KODA_BACKEND_URL` HARDCODED verso 'https://koda-backend-production-4a34.up.railway.app' (vedi lib/backendUrl.ts:30, commento 'PIANO B 2026-07-19'), mentre EXPO_PUBLIC_BACKEND_URL punta a 'https://app-finder-408.preview.emergentagent.com'. Conseguenze: (a) il dev-login fatto contro il preview backend NON popola la sessione lato Railway; (b) il paywall tenta di chiamare Railway con credentials:'include' ma Railway risponde Access-Control-Allow-Origin:* → browser blocca (CORS violation) e la Promise adminWhoAmI() è rejected → setIsAdmin(false) → bottone non renderizzato. Il test T3 (regression: bottone non visibile per non-admin) risulta comunque PASS in modo indiretto (nessun admin è riconoscibile via web preview → default-deny corretto). L'utente ha esplicitamente detto che farà 5 test manuali sul device dopo il build TestFlight — è la strada giusta perché su device il frontend punta a Railway e il dev-login (se ancora accettato in build 1.0.115) o Google/Apple OAuth reali popolano la sessione Railway coerentemente.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Web preview paywall admin check",
+        "issue": "Non-blocking limit di ambiente: EXPO_PUBLIC_BACKEND_URL (preview) ≠ KODA_BACKEND_URL hardcoded (Railway). Il paywall.tsx via api.ts chiama SEMPRE Railway (vedi api.ts:11 detectBackend), quindi qualsiasi test di paywall/admin sulla web preview richiede una sessione valida sul Railway backend, non sul preview. Inoltre Railway CORS ritorna 'Access-Control-Allow-Origin: *' che è incompatibile con credentials:'include' → il browser blocca fetch/response su preview.emergentagent.com. Impatta SOLO test in web preview; su device (React Native fetch) CORS non si applica. Nessuna azione richiesta per il fix corrente — E1 lo sa. Se in futuro serve testare via web, va allineato KODA_BACKEND_URL a EXPO_PUBLIC_BACKEND_URL, oppure Railway va configurato con Access-Control-Allow-Origin dinamico per l'origin preview.",
+        "affected_testIDs": ["paywall-dev-bypass"]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter20_paywall_dev_bypass_jan2026.py",
+    "/app/test_reports/pytest/iter20_paywall.xml"
+  ],
+  "action_items": [
+    "PROCEDERE CON BUILD DEVICE. Backend contract è 100% allineato al codice frontend fissato (api.adminWhoAmI + devSetTier + devIntroPremiumReset). Il fix del main agent è corretto lato codice e verificato lato backend.",
+    "Su device (TestFlight), verificare manualmente: (1) admin dev@koda.local login → /paywall → bottone [DEV] Simula pagamento riuscito VISIBILE; (2) tap sul bottone → naviga a /intro-premium senza alert; (3) utente Premium ri-apertura app → skip Intro V3 e va direttamente su Intro Premium (la race condition tra SecureStore locale e /profile network fetch è la parte che rimane da verificare on-device — non testabile via web preview per intrinseca differenza SecureStore vs localStorage).",
+    "OPZIONALE (post-build): allineare Railway CORS a origin dinamica (echo dell'Origin richiesta invece di wildcard *) per abilitare i sanity test via web preview in futuro. Attualmente ogni test frontend paywall è dev-only su device."
+  ],
+  "critical_code_review_comments": [
+    "server.py:4443-4452 /api/admin/whoami — corretto pattern: NON solleva 403, ritorna is_admin=false per anon. Questo è essenziale per il frontend che chiama al boot senza gestire eccezioni (paywall.tsx:196 .catch(()=>setIsAdmin(false)) è fail-closed comunque robusto).",
+    "server.py:4689-4719 /api/dev/set-tier + /api/dev/intro-premium/reset — entrambi gated da _require_admin() (403 per non-admin). Coerente col principio least-privilege.",
+    "paywall.tsx:173-200 useEffect — chiama api.adminWhoAmI() con fail-closed (.catch setIsAdmin(false)). Non c'è race tra getTrialState e adminWhoAmI perché sono due useState indipendenti e il render usa && isAdmin. LGTM.",
+    "paywall.tsx:202-222 handleDevBypass — l'ordine delle op è: devSetTier → devIntroPremiumReset (try/catch inner) → SecureStore.deleteItemAsync(intro_premium_seen_at) (try/catch inner) → persistOnboardingComplete() → router.replace('/intro-premium'). La try/catch esterna cattura solo il devSetTier fail, il che è corretto (il tier è la sola op critica per abilitare Premium).",
+    "api.ts:456-465 devSetTier + devIntroPremiumReset — payload e response types allineati col backend. Nota: il tipo TS di devSetTier accetta 'monthly'|'bimonthly'|'annual'|'unlimited'|null, coerente con l'enum server-side (verificato tramite test_set_tier_bimonthly/annual/null tutti PASS).",
+    "lib/backendUrl.ts:30 — KODA_BACKEND_URL hardcoded è un pattern ereditato del piano B luglio 2026. Va bene per la build device (che è la production reference), ma andrà valutato se il preview.emergentagent.com deve poter puntare al proprio backend per QA/testing rapido."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter20_paywall_dev_bypass_jan2026.py (nuovo — 10 test cases sul contract paywall dev bypass)",
+    "/app/test_reports/pytest/iter20_paywall.xml (junit report — 10/10 PASS in 1.67s)"
+  ],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "N/A — non riproducibile in web preview per split backend hardcode; validato via code review statica"},
+  "seed_data_creation": "Nessun seed persistente. I test setter/reset del tier vengono ripuliti in coda (test_full_bypass_sequence chiude con set-tier tier=null per lasciare l'admin Fabio in stato Free). Nessun'altra collection MongoDB toccata.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Se in futuro E1 chiede regression sul contract paywall admin bypass: riusare /app/backend/tests/test_iter20_paywall_dev_bypass_jan2026.py (10 test, ~2s). Autenticazione admin via header X-User-Id=ee4e7261-e1b5-485c-8a68-778cac455e39 (Fabio Google, vedi /app/memory/test_credentials.md). Il preview backend risponde a app-finder-408.preview.emergentagent.com; il frontend web preview invece va a Railway (hardcoded in lib/backendUrl.ts:30) → per test UI end-to-end serve device build o allineamento URL.",
+  "rca_of_issue": "Non c'è bug attivo da RCA in questa iterazione — è un sanity check post-fix. Il bug originale era: paywall.tsx usava api.getProfile()?.is_admin ma il Pydantic model Profile lato server (server.py:3166) non ha campo is_admin → undefined → il bottone {isAdmin && (...)} non veniva mai renderizzato. Il fix (spostare la chiamata a api.adminWhoAmI() → /api/admin/whoami che espone is_admin correttamente) è verificato lato backend contract 100% (10/10 test). L'end-to-end UI test in web preview è bloccato da un limite ambientale (frontend punta a Railway, dev-login fatto su preview backend + CORS wildcard incompatibile con credentials:include) — è un limite già noto, non un bug del fix. Test finale del flusso rimane su device come pianificato dall'utente."
+}
