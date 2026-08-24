@@ -1504,6 +1504,12 @@ export default function Taccuino() {
   const orbBtnRef = useRef<any>(null);
   const scrollHintRef = useRef<any>(null);
   const [viewMode, setViewMode] = useState<"voice" | "reading">("voice");
+  // === FIX TDZ (Fabio 2026-08-24) — dimensions dichiarato PRIMA dell'useEffect
+  // che lo referenzia in `dimensions?.width` (dep array + body). Prima era
+  // dichiarato ~15 righe più sotto → TDZ ReferenceError al primo render.
+  const dimensions = useWindowDimensions();
+  // Use window width with sensible fallback (Dimensions.get) for first render
+  const windowWidth = dimensions.width || Dimensions.get("window").width || 390;
   // === INTRO PREMIUM — FASE FINALE (handoff da /intro-premium) =============
   // Quando l'utente arriva sulla home Koda conv con query param
   // ?intro=writing_final, montiamo l'overlay <IntroPremiumFinalStep>
@@ -1539,9 +1545,6 @@ export default function Taccuino() {
       console.warn("[intro-premium-final] cleanup replace failed:", e);
     }
   }, [router]);
-  const dimensions = useWindowDimensions();
-  // Use window width with sensible fallback (Dimensions.get) for first render
-  const windowWidth = dimensions.width || Dimensions.get("window").width || 390;
   // === Keyboard height tracking (richiesta utente 2026-06) ===
   // Su iOS, anche con KeyboardAvoidingView, una `bottomBar` con
   // position:"absolute" non si solleva automaticamente quando la tastiera

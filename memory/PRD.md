@@ -495,3 +495,32 @@ Non ci si affida più alla catena useEffect.
 
 L'useEffect router resta come fallback per altri path (RevenueCat purchase, boot),
 ma i dev button ora hanno navigazione garantita.
+
+## Iterazione 21c (2026-08-24 sera) — VERIFICA E2E BROWSER REALE
+
+### Prova concreta ottenuta (non solo dichiarata)
+Setup temporaneo per test Playwright end-to-end:
+- Backend locale con `dev@koda.local` aggiunto come admin
+- Frontend puntato a `localhost:8001` via env `EXPO_PUBLIC_KODA_LOCAL_TEST=1`
+- CORS `allow_origins=["http://localhost:3000"]` per credentials mode
+- Tutte le patch temporanee REVERTED al termine (backend a produzione,
+  frontend a Railway hardcoded, env pulita)
+
+### Sequenza verificata via Playwright
+1. Boot in Home come Premium (tier=monthly) — URL `/`
+2. Tap `settings-toggle` → apre modal Impostazioni
+3. Scroll fino a `dev-simulate-free-btn` (visibile)
+4. Click "Torna Free" → API `/dev/set-tier {tier:null}` OK
+5. `router.replace("/lascia-andare")` eseguito direttamente
+6. **URL DOPO click = `http://localhost:3000/lascia-andare` ✅**
+7. Screen effettivamente cambia a Lascia Andare (orb eclissi + label)
+
+Console log confermano la sequenza:
+- `[KODA_ROUTER] paid user (tier=monthly) → stay` (boot iniziale)
+- `[DEV_SIMULATE_FREE] → /lascia-andare` (mio log del v2 fix)
+
+### Bonus fix collaterale
+Trovato e sistemato un TDZ error pre-esistente in `app/index.tsx`:
+`Cannot access 'dimensions' before initialization` — `dimensions` era
+dichiarato dopo un `useEffect` che lo referenziava nel deps array.
+Spostato la dichiarazione prima → red-screen risolto.
