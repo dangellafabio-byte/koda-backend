@@ -466,3 +466,32 @@ anche se il tier del profilo cambiava.
   auth gating admin.
 - **Code review statica**: dev buttons + paywall dev bypass verificati OK.
 - **Sanity boot check**: Koda login screen carica correttamente (screenshot verificato).
+
+## Iterazione 21b (2026-08-24 pomeriggio) — Fix v2 DETERMINISTICO
+
+### Problema residuo
+Il fix v1 (keyed invalidation + reset refs + `resetLastDecidedKey()` + `setProfile`)
+dipendeva dalla catena `useEffect deps → router.replace()`. Nel runtime reale del
+device questa catena ha race conditions difficili da riprodurre (batching React,
+Modal Settings ancora aperto, Alert.alert overlay, ecc.) → i test unitari passavano
+ma il redirect non avveniva sull'app vera. Fabio ha giustamente chiuso il caso
+come "test dichiarati OK ma bug ancora presente".
+
+### Fix v2 applicato
+Approccio **deterministico**: nei dev button "Simula Premium" / "Torna Free"
+la navigazione avviene DIRETTAMENTE nel handler, subito dopo che l'API
+`/dev/set-tier` risponde OK e il profilo è stato aggiornato in cache.
+Non ci si affida più alla catena useEffect.
+
+- **Torna Free**: `router.replace("/lascia-andare")` chiamato direttamente.
+  Marca decisione locale con `markRouterDecided(pid, null)` prima della nav
+  così se Home viene remontata mentre siamo su LA non ridecide.
+- **Simula Premium**: se `intro-premium seen=false` → `router.replace("/intro-premium")`.
+  Altrimenti resta sulla home e marca decisione con `markRouterDecided(pid, "monthly")`.
+- **Settings modal**: chiuso esplicitamente con `setShowSettings(false)` prima
+  della navigazione così il Modal non sopravvive al cambio route.
+- **Cache profilo** persistita via `saveProfileCache(p)` prima della nav così
+  al re-mount la cache è coerente col nuovo tier.
+
+L'useEffect router resta come fallback per altri path (RevenueCat purchase, boot),
+ma i dev button ora hanno navigazione garantita.

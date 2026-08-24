@@ -1100,29 +1100,24 @@ export default function Taccuino() {
   // → il router ridecide con dati freschi.
   const lastFreePremiumDecidedKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    // === DIAG 2026-08-24 (Fabio bug ripetuto) — trace ogni run del router
-    // per capire perché il cambio tier in-session non ridirige.
-    const _pid = (profile as any)?.id?.slice?.(0, 8) || "none";
-    const _tier = (profile as any)?.subscription_tier || null;
-    console.log(`[KODA_ROUTER_FP_TICK] pathname=${pathname} pid=${_pid} tier=${_tier} hydrated=${profileHydrated} disclaimer=${disclaimerState} splash=${showSplash} intro=${showColorIntro} v3=${introV3State} refRedirected=${hasRedirectedFreeUserRef.current} localKey=${lastFreePremiumDecidedKeyRef.current}`);
     // A) Guard pathname: se non siamo attualmente sulla route "/", non
     //    fare nulla. Se Home è "sotto" nello stack mentre siamo su LA,
     //    il pathname corrente è "/lascia-andare" → early return.
-    if (pathname !== "/") { console.log("[KODA_ROUTER_FP_TICK] WAIT: pathname"); return; }
+    if (pathname !== "/") return;
 
     // Guard di completezza dati:
-    if (!profile) { console.log("[KODA_ROUTER_FP_TICK] WAIT: no profile"); return; }
+    if (!profile) return; // profilo ancora null → aspetta caricamento
     // FIX Bug 1 A2 (2026-08-23): aspetta profile network-fresh prima di
     // qualunque decisione — la cache può servire tier stale e causare
     // redirect errati (Premium → /lascia-andare invece di stay).
-    if (profileHydrated !== "network") { console.log("[KODA_ROUTER_FP_TICK] WAIT: hydrated"); return; }
-    if (disclaimerState !== "accepted") { console.log("[KODA_ROUTER_FP_TICK] WAIT: disclaimer"); return; }
-    if (showSplash) { console.log("[KODA_ROUTER_FP_TICK] WAIT: splash"); return; }
-    if (showColorIntro === true) { console.log("[KODA_ROUTER_FP_TICK] WAIT: colorIntro"); return; }
+    if (profileHydrated !== "network") return;
+    if (disclaimerState !== "accepted") return;
+    if (showSplash) return;
+    if (showColorIntro === true) return;
     // === GUARD V3 (Fabio 2026-08-22) ===
     // Se stiamo ancora controllando o serve introdurre l'utente al Cuore,
     // il router V3 sopra prende la priorità → early return qui.
-    if (introV3State !== "completed") { console.log("[KODA_ROUTER_FP_TICK] WAIT: v3State"); return; }
+    if (introV3State !== "completed") return;
 
     const currentProfileId = (profile as any)?.id || null;
     const tier = ((profile as any)?.subscription_tier as string | null) || null;
@@ -6802,9 +6797,12 @@ export default function Taccuino() {
                     try {
                       await api.devSetTier(null);
                       const p = await api.getProfile();
-                      // === FIX BUG CACHE TIER IN-SESSIONE (Fabio 2026-08-24) ===
-                      // Vedi commento identico su "Simula Premium": stessa
-                      // invalidazione completa per ridecisione immediata.
+                      // === FIX BUG CACHE TIER IN-SESSIONE v2 (Fabio 2026-08-24) ===
+                      // Approccio DETERMINISTICO come su "Simula Premium":
+                      // aggiorniamo state + refs per coerenza al re-mount,
+                      // MA la navigazione a /lascia-andare avviene DIRETTAMENTE
+                      // qui, senza affidarci alla catena useEffect + deps che
+                      // ha race conditions difficili da diagnosticare.
                       hasRedirectedIntroV3Ref.current = false;
                       lastV3DecidedKeyRef.current = null;
                       hasRedirectedFreeUserRef.current = false;
@@ -6812,19 +6810,24 @@ export default function Taccuino() {
                       hasRedirectedIntroPremiumRef.current = false;
                       lastIntroPremiumDecidedKeyRef.current = null;
                       resetLastDecidedKey();
-                      // Downgrade Premium→Free: l'intro premium resta "seen"
-                      // se già vista in passato, altrimenti la stato torna
-                      // coerente al backend.
+                      // Downgrade: allinea intro premium state al backend
+                      let introSeen = true;
                       try {
                         const st = await api.getIntroPremiumState();
-                        setIntroPremiumState(st?.seen ? "completed" : "needed");
-                      } catch {
-                        setIntroPremiumState("completed");
-                      }
+                        introSeen = !!st?.seen;
+                      } catch {}
+                      setIntroPremiumState(introSeen ? "completed" : "needed");
                       saveProfileCache(p).catch(() => {});
                       setProfile(p);
                       setProfileHydrated("network");
-                      Alert.alert("✓ Free", "Tornato utente Free.");
+                      // Chiudi Settings prima della nav
+                      setShowSettings(false);
+                      // Marca decisione locale così Home router non ridecide
+                      // se dovesse re-mountare mentre siamo su /lascia-andare
+                      markRouterDecided((p as any)?.id || null, null);
+                      // Navigazione DIRETTA: Free → Lascia Andare (landing)
+                      console.log("[DEV_SIMULATE_FREE] → /lascia-andare");
+                      router.replace("/lascia-andare");
                     } catch (e: any) {
                       setAdminError(`Errore: ${e?.message || e}`);
                     } finally {
