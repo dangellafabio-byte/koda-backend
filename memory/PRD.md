@@ -604,3 +604,36 @@ per user vergine). Adesso è:
 - `/app/frontend/components/KodaIntroV3.tsx`
 - `/app/frontend/components/HeartVoiceReveal.tsx`
 - `/app/frontend/components/IntroPremium.tsx`
+
+## Iterazione 24 (2026-08-24 sera) — Pulsante "Ripeti primo boot completo"
+
+### Motivazione
+Fabio ha chiesto "come rivedo tutto il flusso primo boot?". Non esisteva un
+modo one-tap per resettare COMPLETAMENTE l'onboarding e ripartire da zero
+(Splash → Disclaimer → V3 → HeartVoiceReveal → LA firstBoot → Home).
+
+### Backend nuovo endpoint
+`POST /api/dev/first-boot/reset` (admin-only): unset di TUTTI i flag onboarding
+server-side sul profilo dell'admin corrente:
+- `subscription_tier` (→ torna Free)
+- `onboarded`
+- `intro_premium_seen_at`
+- `la_intro_seen`
+- `disclaimer_accepted_at` + `disclaimer_accepted_version`
+- `intro_v3_completed_at`
+- `heart_voice_reveal_seen`
+
+### Frontend nuovo pulsante
+Sezione Dev Panel in Impostazioni, sotto "Ripeti Intro Premium":
+**"🚀 Ripeti primo boot completo · v2"** (colore ambra per distinguerlo)
+
+Al tap:
+1. `api.devFirstBootReset()` (server)
+2. Cancella SecureStore per 8 chiavi (intro V3, LA, disclaimer, ecc.)
+3. `clearProfileCache()` (nuova funzione in localCache.ts, cancella file JSON)
+4. `resetRouterGlobalState()` (module-level, azzera anche session splash flag)
+5. Reset tutti i router refs locali
+6. Alert "✓ Reset primo boot completo — Riparti ora" → `Updates.reloadAsync()`
+7. Fallback in caso `reloadAsync` fallisca (web): reset state React + replace("/")
+
+Post-reload l'app parte come cold-boot logico → rivedi TUTTO il flusso primo boot.

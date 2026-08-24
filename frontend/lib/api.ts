@@ -463,6 +463,13 @@ export const api = {
       "/dev/intro-premium/reset",
       { method: "POST" }
     ),
+  /** DEV admin-only: reset COMPLETO onboarding server-side per rivedere
+   *  l'intero flusso primo-boot (Fabio 2026-08-24). */
+  devFirstBootReset: () =>
+    jsonReq<{ ok: boolean; profile_id: string; reset: string[] }>(
+      "/dev/first-boot/reset",
+      { method: "POST" }
+    ),
 
   /** === DEV TRIAL SEEDING (2026-08-11) — admin-only ===
    * Endpoint di test per manipolare lo stato del trial dell'utente admin

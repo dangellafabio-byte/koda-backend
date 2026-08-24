@@ -58,6 +58,7 @@ import { startThinkingSound, stopThinkingSound } from "../lib/thinkingSound";
 import {
   loadProfileCache,
   saveProfileCache,
+  clearProfileCache,
   loadTimelineCache,
   saveTimelineCache,
 } from "../lib/localCache";
@@ -111,6 +112,7 @@ import {
   getSessionHasShownSplash,
   markSessionSplashShown,
   resetLastDecidedKey,
+  resetRouterGlobalState,
 } from "../lib/routerGlobalState";
 import type { SafetyCheckResult, FreemiumStatus as FreemiumStatusType } from "../lib/api";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
@@ -6898,6 +6900,100 @@ export default function Taccuino() {
                   <Ionicons name="refresh-outline" size={18} color={theme.text + "99"} />
                   <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500", marginLeft: 10 }}>
                     Ripeti Intro Premium
+                  </Text>
+                </TouchableOpacity>
+
+                {/* === RIPETI PRIMO BOOT COMPLETO (Fabio 2026-08-24) ===
+                    Reset TOTALE dell'onboarding: server-side (tier→Free,
+                    intro-premium/V3/LA/disclaimer flag unset) + client-side
+                    (SecureStore + cache profilo + router state). Al termine
+                    l'app viene ricaricata via Updates.reloadAsync() così il
+                    boot flow riparte da capo: Splash → Disclaimer → V3 →
+                    HeartVoiceReveal → LA firstBoot → Home. */}
+                <TouchableOpacity
+                  style={{
+                    paddingVertical: 12,
+                    paddingHorizontal: 14,
+                    backgroundColor: "#F59E0B22",
+                    borderRadius: 10,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    opacity: adminBusy ? 0.5 : 1,
+                    borderWidth: 1,
+                    borderColor: "#F59E0B44",
+                  }}
+                  disabled={adminBusy}
+                  onPress={async () => {
+                    setAdminBusy(true);
+                    setAdminError(null);
+                    try {
+                      // 1) Reset server-side: tutti i flag onboarding
+                      await api.devFirstBootReset();
+                      // 2) Reset SecureStore locale (device-specific)
+                      const secureKeys = [
+                        "intro_v3_completed_at",
+                        "intro_premium_seen_at",
+                        "koda_disclaimer_seen_v2",
+                        "koda_intro_seen",
+                        "la_intro_seen",
+                        "heart_voice_reveal_seen",
+                        "hint_first_scroll_seen",
+                        "hint_write_seen",
+                      ];
+                      await Promise.all(
+                        secureKeys.map((k) =>
+                          SecureStore.deleteItemAsync(k).catch(() => {})
+                        )
+                      );
+                      // 3) Reset cache profilo su filesystem
+                      await clearProfileCache();
+                      // 4) Reset router state module-level (incluso session splash flag)
+                      resetRouterGlobalState();
+                      // 5) Reset refs locali (defensivo, prima del reload)
+                      hasRedirectedIntroV3Ref.current = false;
+                      lastV3DecidedKeyRef.current = null;
+                      hasRedirectedFreeUserRef.current = false;
+                      lastFreePremiumDecidedKeyRef.current = null;
+                      hasRedirectedIntroPremiumRef.current = false;
+                      lastIntroPremiumDecidedKeyRef.current = null;
+                      // 6) Chiudi Settings modal
+                      setShowSettings(false);
+                      // 7) Reload dell'app — Updates.reloadAsync() ricarica
+                      // il bundle JS. Su native rifà mount da zero (=cold boot
+                      // logico). Su web fa un window.location.reload().
+                      Alert.alert(
+                        "✓ Reset primo boot completo",
+                        "L'app riparte da zero: rivedrai Splash → Disclaimer → V3 → HeartVoiceReveal → LA firstBoot.",
+                        [
+                          {
+                            text: "Riparti ora",
+                            onPress: async () => {
+                              try {
+                                await Updates.reloadAsync();
+                              } catch (e) {
+                                // Fallback: naviga a "/" e forza reset stati React
+                                setProfile(null);
+                                setProfileHydrated("boot");
+                                setShowSplash(true);
+                                setIntroV3State("checking");
+                                setIntroPremiumState("checking");
+                                try { router.replace("/"); } catch {}
+                              }
+                            },
+                          },
+                        ]
+                      );
+                    } catch (e: any) {
+                      setAdminError(`Errore: ${e?.message || e}`);
+                    } finally {
+                      setAdminBusy(false);
+                    }
+                  }}
+                  testID="dev-first-boot-reset-btn"
+                >
+                  <Ionicons name="rocket-outline" size={18} color="#F59E0B" />
+                  <Text style={{ color: "#F59E0B", fontSize: 14, fontWeight: "600", marginLeft: 10 }}>
+                    Ripeti primo boot completo · v2
                   </Text>
                 </TouchableOpacity>
               </>

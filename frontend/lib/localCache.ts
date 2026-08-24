@@ -71,6 +71,17 @@ export async function saveProfileCache(profile: unknown): Promise<void> {
   return writeJson(PROFILE_FILE, profile);
 }
 
+/** DEV admin-only: cancella cache profilo locale (Fabio 2026-08-24).
+ *  Usato dal pulsante "Ripeti primo boot" per far ripartire l'app
+ *  come se fosse stata appena installata. */
+export async function clearProfileCache(): Promise<void> {
+  try {
+    await FileSystem.deleteAsync(PROFILE_FILE, { idempotent: true });
+  } catch {
+    // ignore
+  }
+}
+
 // =====================================================
 // TIMELINE
 // =====================================================

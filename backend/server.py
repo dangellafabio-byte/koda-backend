@@ -4719,6 +4719,44 @@ async def api_dev_intro_premium_reset():
     return {"ok": True, "profile_id": uid, "reset": "intro_premium_seen_at"}
 
 
+@api_router.post("/dev/first-boot/reset")
+async def api_dev_first_boot_reset():
+    """DEV admin-only: reset COMPLETO dello stato onboarding lato server.
+    Consente all'admin di ri-vivere l'intero flusso primo-boot per verifica
+    visiva (Splash → Disclaimer → V3 → HeartVoiceReveal → LA firstBoot → Home).
+
+    Unset di:
+      - subscription_tier         (torna Free)
+      - onboarded                 (False)
+      - intro_premium_seen_at     (Intro Premium ri-trigger su Premium)
+      - la_intro_seen             (modal presentazione LA ri-appare)
+      - disclaimer_accepted_at    (disclaimer ri-appare)
+      - intro_v3_completed_at     (V3 ri-parte)
+      - heart_voice_reveal_seen   (reveal voce ri-parte)
+
+    NOTA: SecureStore lato client va pulito separatamente dal frontend
+    (contiene stessi flag ma su device). Il pulsante UI fa entrambe le cose.
+    """
+    uid = _require_admin()
+    unset_fields = {
+        "subscription_tier": "",
+        "onboarded": "",
+        "intro_premium_seen_at": "",
+        "la_intro_seen": "",
+        "disclaimer_accepted_at": "",
+        "disclaimer_accepted_version": "",
+        "intro_v3_completed_at": "",
+        "heart_voice_reveal_seen": "",
+    }
+    await db.taccuino_profile.update_one(
+        {"id": uid},
+        {"$unset": unset_fields},
+        upsert=False,
+    )
+    logger.info(f"[dev/first-boot/reset] user={uid[:8]} → tutti i flag onboarding server-side azzerati")
+    return {"ok": True, "profile_id": uid, "reset": list(unset_fields.keys())}
+
+
 
 # ============================================================
 # FINE dev endpoints trial
