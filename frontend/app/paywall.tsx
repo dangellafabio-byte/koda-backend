@@ -36,6 +36,8 @@ import * as SecureStore from "expo-secure-store";
 import { useTheme } from "../lib/theme";
 import { api } from "../lib/api";
 import { kodaBackendHttpUrl } from "../lib/backendUrl";
+import { resetLastDecidedKey } from "../lib/routerGlobalState";
+import { saveProfileCache } from "../lib/localCache";
 
 type PlanId = "monthly" | "bimonthly" | "yearly";
 
@@ -201,6 +203,17 @@ export default function PaywallScreen() {
       await api.devSetTier(tierForBackend as "monthly" | "bimonthly" | "annual");
       try { await api.devIntroPremiumReset(); } catch {}
       try { await SecureStore.deleteItemAsync("intro_premium_seen_at"); } catch {}
+      // === FIX BUG CACHE TIER IN-SESSIONE (Fabio 2026-08-24) ===
+      // Invalida router key + persisti profile fresco in cache così, se
+      // l'utente torna alla Home dopo l'Intro Premium, i router condizionali
+      // rileggono il nuovo tier senza richiedere restart.
+      resetLastDecidedKey();
+      try {
+        const p = await api.getProfile();
+        saveProfileCache(p).catch(() => {});
+      } catch {
+        // best-effort
+      }
       // Persist V3 done (paid user salta V3, per idempotenza cross-boot)
       await persistOnboardingComplete();
       router.replace("/intro-premium");

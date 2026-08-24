@@ -429,3 +429,40 @@ Dopo Build 19 Fabio ha riportato: "ho visto il paywall una sola volta per sbagli
 - PARTE 3 router con `profileHydrated === "network"` ✓,
   skip V3 per paid ✓, keyed invalidation su cambio tier ✓
 - PARTE 4 pre-prompt riutilizzabile (`ensureSpeechPermission`) ✓
+
+## Iterazione 21 (2026-08-24) — Fix Bug Cache Tier IN-SESSIONE
+
+### Problema
+Cambio tier via dev button ("Simula Premium" / "Torna Free" / DEV Bypass Paywall)
+richiedeva **restart dell'app** per prendere effetto. Il router Free/Premium
+usava un `useRef` (`hasRedirectedFreeUserRef`) che, una volta settato a `true`,
+non veniva mai resettato → dopo il primo redirect il router restava bloccato,
+anche se il tier del profilo cambiava.
+
+### Fix implementato
+1. **Keyed invalidation locale** al router Free/Premium in `app/index.tsx`:
+   nuovo ref `lastFreePremiumDecidedKeyRef` che memorizza la key `${profileId}:${tier}`.
+   Se la key differisce dall'ultima decisione, `hasRedirectedFreeUserRef.current`
+   viene resettato a `false` → il router ridecide con dati freschi.
+2. **Dev button "Simula Premium" / "Torna Free"** ora invalidano ESPLICITAMENTE:
+   - tutti e 3 i ref locali (V3, Free/Premium, Intro Premium) + rispettive keys locali
+   - la key module-level via nuova funzione `resetLastDecidedKey()` in
+     `lib/routerGlobalState.ts` (che NON tocca il flag splash a differenza di
+     `resetRouterGlobalState()`)
+   - ri-fetchano `introPremiumState` dal backend
+   - persistono la cache profilo con `saveProfileCache(p)`
+   - chiamano `setProfile(p)` + `setProfileHydrated("network")`
+3. **DEV Bypass Paywall** (`app/paywall.tsx`) chiama `resetLastDecidedKey()`
+   + `saveProfileCache(profileFresh)` così, se l'utente torna alla Home dopo
+   l'Intro Premium, i router condizionali rileggono il nuovo tier.
+
+### Test verificati (autonomi, no manual QA)
+- **43/43 Jest unit router PASS** (`tests/routerDecision.test.js`), incluso
+  nuovo **Scenario 8b** che riproduce esattamente il bug: `hasRedirectedFreeUser=true`
+  stale + tier changed → deve redirigere grazie a keyed local invalidation.
+  Scenario 8c: same key → wait (no infinite loop).
+- **15/15 pytest backend PASS** (`test_iter21_tier_switch_router_jan2026.py`)
+  su sequenza `/dev/set-tier` null→monthly→bimonthly→null, reset intro-premium,
+  auth gating admin.
+- **Code review statica**: dev buttons + paywall dev bypass verificati OK.
+- **Sanity boot check**: Koda login screen carica correttamente (screenshot verificato).

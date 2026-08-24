@@ -96,3 +96,14 @@ export function resetRouterGlobalState(): void {
   _lastDecidedKey = null;
   _sessionHasShownSplash = false;
 }
+
+/** === FIX BUG CACHE TIER IN-SESSIONE (Fabio 2026-08-24) ===================
+ *  Reset SOLO della chiave ultima-decisione, senza toccare lo splash flag.
+ *  Chiamato dai dev button "Simula Premium" / "Torna Free" quando cambia
+ *  il tier a runtime: forza il router Free/Premium a ridecidere con la
+ *  nuova chiave, senza far ripartire lo splash da 10s (che vive a sessione,
+ *  non a decisione routing).
+ */
+export function resetLastDecidedKey(): void {
+  _lastDecidedKey = null;
+}

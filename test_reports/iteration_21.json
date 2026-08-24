@@ -1,0 +1,49 @@
+{
+  "summary": "P0 Bug FIX verificato — cambio tier IN-SESSIONE senza restart. BACKEND (TEST 1 + TEST 4): 15/15 pytest PASS in 0.16s (/app/backend/tests/test_iter21_tier_switch_router_jan2026.py). Coperta l'intera sequenza richiesta: POST /api/dev/set-tier con tier=null|monthly|bimonthly → GET /api/profile riflette il nuovo tier ogni volta; POST /api/dev/intro-premium/reset resetta correttamente e GET /api/intro-premium/state ritorna seen=false; validation tier invalido → 400; auth gating verificato (/dev/set-tier e /dev/intro-premium/reset → 403 anon, /admin/whoami → is_admin:true per Fabio UID e is_admin:false per anon). JEST UNIT ROUTER (TEST 3): 43/43 PASS incluso il critico Scenario 8b che riproduce esattamente il bug del fix (hasRedirectedFreeUser=true stale + tier cambiato → redirect grazie a keyed LOCAL invalidation su input.lastFreePremiumLocalKey !== currentKey in routerDecision.js:117-122), e Scenario 8c (stessa key → wait, no infinite loop). CODE REVIEW statica: resetLastDecidedKey() in lib/routerGlobalState.ts:107 azzera _lastDecidedKey module-level; entrambi i dev button in app/index.tsx (righe 6734-6752 Simula Premium, 6790-6810 Torna Free) resettano correttamente hasRedirectedFreeUserRef, lastFreePremiumDecidedKeyRef, hasRedirectedIntroV3Ref, lastV3DecidedKeyRef, hasRedirectedIntroPremiumRef, lastIntroPremiumDecidedKeyRef, chiamano resetLastDecidedKey(), rifetchano introPremiumState, persistono saveProfileCache(p), setProfile(p) e setProfileHydrated('network') per triggerare i router useEffect; app/paywall.tsx:203-219 (DEV bypass paywall) chiama devSetTier → devIntroPremiumReset → deleteItemAsync intro_premium_seen_at → resetLastDecidedKey() → saveProfileCache(await getProfile()) → persistOnboardingComplete() → router.replace('/intro-premium'). FIX APPLICATO E FUNZIONANTE. TEST 2 (Playwright browser E2E) non riproducibile per stesso limite ambientale documentato in iter20: lib/backendUrl.ts:30 punta hardcoded a Railway (koda-backend-production-4a34.up.railway.app) mentre web preview è su localhost:3000, e Railway risponde con Access-Border-Allow-Origin:* incompatibile con credentials:'include' → sessione admin non instaurabile via web. Sanity boot check: la login screen Koda si carica correttamente senza red-screen (screenshot /tmp/koda_boot.png), console mostra il CORS error atteso ma nessun crash RN.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Web preview browser E2E tier-switch UI test",
+        "issue": "Limite ambientale ereditato (già documentato in iter20): lib/backendUrl.ts:30 hardcoda KODA_BACKEND_URL a Railway, quindi il web preview su localhost:3000 non può stabilire sessione admin coerente per test Playwright UI del flusso cambio-tier. Il fix è verificato via unit test router (43/43 PASS, include lo scenario esatto del bug 8b) + backend contract (15/15 PASS) + code review statica. Nessuna azione richiesta dal main agent.",
+        "affected_testIDs": ["dev-simulate-premium-btn", "paywall-dev-bypass"]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter21_tier_switch_router_jan2026.py",
+    "/app/test_reports/pytest/iter21_tier_switch.xml",
+    "/app/frontend/tests/routerDecision.test.js"
+  ],
+  "action_items": [
+    "NESSUN'AZIONE — Il fix del bug cambio tier in-sessione è verificato e funzionante. Backend contract 100% coerente col frontend (15/15 PASS). Unit test router 100% (43/43 PASS) incluso il caso specifico del fix (8b: keyed LOCAL invalidation quando hasRedirectedFreeUser stale + tier cambiato). Code review statica di index.tsx (Simula Premium + Torna Free) e paywall.tsx (DEV bypass) conferma pattern corretto: resetta refs → resetLastDecidedKey() → refetch state → saveProfileCache → setProfile → triggera useEffect router.",
+    "OPZIONALE (verifica finale on-device, come iter20): sul TestFlight build Fabio dovrebbe (a) admin login → Impostazioni → 'Simula Premium (monthly)' → verificare che la home ridecida SENZA restart e mostri Intro Premium se non ancora vista; (b) 'Torna Free' → verificare redirect immediato a /lascia-andare; (c) DEV bypass paywall → dopo Intro Premium, tornare alla home → verificare che il router rilegga il nuovo tier senza restart."
+  ],
+  "critical_code_review_comments": [
+    "lib/routerGlobalState.ts:107 resetLastDecidedKey() — implementazione minima corretta: azzera SOLO _lastDecidedKey senza toccare lo splash flag. Coerente col commento (splash vive a sessione, non a decisione routing).",
+    "lib/routerDecision.js:113-131 keyed local invalidation — logica robusta: se lastFreePremiumLocalKey è definito e diverso da currentKey, il ref hasRedirectedFreeUser si considera reset (effectiveHasRedirected=false) → il router ridecide. Poi guard module-level: se currentKey === lastFreePremiumDecidedKey, wait (evita cross-mount re-decide). Questa doppia guard è corretta: locale intercetta l'in-session change; module-level previene infinite loop cross-remount.",
+    "app/index.tsx:1120-1160 useEffect Free/Premium router — pattern reactive corretto: watch [profile.subscription_tier + profile.id], compute currentKey, se diverso da lastFreePremiumDecidedKeyRef.current → reset ref + null la lastKey → prossimo run decide con dati freschi. LGTM.",
+    "app/index.tsx:6720-6810 dev button Simula Premium + Torna Free — invalidazione COMPLETA di tutti i router refs (V3, Free/Premium, Intro Premium) + resetLastDecidedKey() + re-fetch introPremiumState + saveProfileCache + setProfile + setProfileHydrated('network'). Ordine corretto per triggerare useEffect router con dati coerenti.",
+    "app/paywall.tsx:200-219 handleDevBypass — pattern corretto ora include resetLastDecidedKey() + saveProfileCache(await getProfile()) prima del router.replace. Se l'utente torna alla home dopo Intro Premium, il router condizionale legge il nuovo tier senza restart.",
+    "backend/server.py:4689-4719 /api/dev/set-tier + /api/dev/intro-premium/reset — entrambi gated da _require_admin() (403 non-admin, verificato). Validation tier con set('monthly','bimonthly','annual','unlimited',None) e 400 per valori invalidi. Response contract {ok, subscription_tier} coerente con TS type api.devSetTier."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter21_tier_switch_router_jan2026.py (nuovo — 15 test coverage TEST 1 + TEST 4)",
+    "/app/test_reports/pytest/iter21_tier_switch.xml (junit — 15/15 PASS in 0.16s)"
+  ],
+  "success_rate": {
+    "backend": "100% (15/15 pytest + all 4 admin auth gating checks)",
+    "frontend": "100% unit router (43/43 Jest incluso 8b scenario esatto del bug) + boot sanity check (no red-screen, componenti RN render OK); browser E2E full flow N/A per limite ambientale doc iter20"
+  },
+  "seed_data_creation": "Nessun seed persistente. Il test_z_cleanup_restore_free riporta l'admin Fabio a tier=null (Free) a fine sequenza. Nessuna altra collection MongoDB toccata.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Fix P0 Bug 'cambio tier in-sessione senza restart' completo e verificato. Se necessitasse regression sul contract cambio tier: /app/backend/tests/test_iter21_tier_switch_router_jan2026.py (15 test, ~0.2s). Per regression unit router: cd /app/frontend && node tests/routerDecision.test.js (43 test, <1s). Admin UID Fabio Google: ee4e7261-e1b5-485c-8a68-778cac455e39 (vedi /app/memory/test_credentials.md). Il fix live è in 3 punti: (1) lib/routerGlobalState.ts:107 resetLastDecidedKey(), (2) lib/routerDecision.js:113-122 keyed local invalidation, (3) app/index.tsx:6720-6810 dev button dedicato + app/paywall.tsx:200-219 DEV bypass. Limite ambientale ricorrente: KODA_BACKEND_URL hardcoded su Railway in lib/backendUrl.ts:30 → test Playwright UI end-to-end via web preview NON è possibile finché non si allinea URL o si configura CORS dinamico su Railway.",
+  "rca_of_issue": "BUG ORIGINALE: quando l'utente cambiava tier in-sessione via dev button 'Simula Premium'/'Torna Free' (Impostazioni) o via DEV bypass paywall, hasRedirectedFreeUserRef restava true (settato al primo redirect Free→lascia-andare) e il router Free/Premium non ridecideva → l'utente restava bloccato sulla pagina precedente finché non riavviava l'app. RIPRODUZIONE (unit test 8b, riproduce esattamente il bug): {profile:{tier:null}, hasRedirectedFreeUser:true (stale), lastFreePremiumLocalKey:'pid-1:monthly' (old), lastFreePremiumDecidedKey:null (già invalidato da resetLastDecidedKey ma il ref locale del useRef sopravvive)} — PRIMA del fix ritornava 'wait' (utente bloccato); DOPO il fix ritorna redirect /lascia-andare grazie a effectiveHasRedirected=false quando lastFreePremiumLocalKey !== currentKey. MITIGAZIONE APPLICATA (verificata funzionante):\n(1) Nuova funzione lib/routerGlobalState.ts:107 resetLastDecidedKey() → azzera _lastDecidedKey module-level;\n(2) Keyed LOCAL invalidation in lib/routerDecision.js:113-122 → il router usa effectiveHasRedirected=false quando la key locale è diversa dalla current, ridecidendo anche se il caller non ha resettato il ref;\n(3) Dev button in app/index.tsx e paywall.tsx resettano ESPLICITAMENTE tutti i refs router + resetLastDecidedKey() + refetch introPremiumState + saveProfileCache + setProfile → gli useEffect router girano di nuovo con dati freschi. VERIFICA: 43/43 unit test router PASS + 15/15 backend contract PASS."
+}

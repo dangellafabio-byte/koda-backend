@@ -249,6 +249,42 @@ test("Scenario 8: Premium → Free in-session (keyed invalidation)", () => {
 });
 
 // ============================================================================
+// TEST 8b: FIX BUG CACHE TIER IN-SESSIONE (Fabio 2026-08-24)
+// Scenario: hasRedirectedFreeUser=true (NON resettato dal caller) + lastLocalKey
+// stale → il router deve comunque ridecidere grazie alla keyed invalidation
+// LOCALE aggiunta. Prima del fix questo caso restava "wait" → utente bloccato.
+// ============================================================================
+test("Scenario 8b: hasRedirectedFreeUser=true stale + tier changed → redirect (keyed local invalidation)", () => {
+  const s = baseInput({
+    profile: { id: "pid-1", subscription_tier: null }, // now free
+    introV3State: "completed",
+    profileHydrated: "network",
+    hasRedirectedFreeUser: true, // stale, non ancora resettato dal caller
+    lastFreePremiumLocalKey: "pid-1:monthly", // old local key
+    lastFreePremiumDecidedKey: null, // module-level già invalidata dal dev button
+  });
+  const dec = decideRouterFreePremium(s);
+  assertEq(dec.kind, "redirect", "kind (local key differs → redecide)");
+  assertEq(dec.target, "/lascia-andare", "target");
+});
+
+// ============================================================================
+// TEST 8c: FIX BUG — same key: local key match → still wait (no infinite loop)
+// ============================================================================
+test("Scenario 8c: hasRedirectedFreeUser=true + local key MATCHES current → wait", () => {
+  const s = baseInput({
+    profile: { id: "pid-1", subscription_tier: "monthly" },
+    introV3State: "completed",
+    profileHydrated: "network",
+    hasRedirectedFreeUser: true,
+    lastFreePremiumLocalKey: "pid-1:monthly",
+    lastFreePremiumDecidedKey: "pid-1:monthly",
+  });
+  const dec = decideRouterFreePremium(s);
+  assertEq(dec.kind, "wait", "same key → wait");
+});
+
+// ============================================================================
 // TEST 9: profileHydrated=cache stale non decide su nessun router
 // ============================================================================
 test("Scenario 9: profileHydrated=cache → tutti i router WAIT", () => {

@@ -110,6 +110,7 @@ import {
   markRouterDecided,
   getSessionHasShownSplash,
   markSessionSplashShown,
+  resetLastDecidedKey,
 } from "../lib/routerGlobalState";
 import type { SafetyCheckResult, FreemiumStatus as FreemiumStatusType } from "../lib/api";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
@@ -1089,15 +1090,20 @@ export default function Taccuino() {
   // === Nota 2026-08-21 (Fabio) ===
   // `pathname` è già dichiarato sopra (fix TDZ) — qui non lo ridichiariamo.
   const hasRedirectedFreeUserRef = useRef<boolean>(false);
+  // === FIX BUG CACHE TIER IN-SESSIONE (Fabio 2026-08-24) ===================
+  // Keyed invalidation locale, coerente con V3 e Intro Premium router.
+  // PRIMA: `hasRedirectedFreeUserRef` non veniva mai resettato → cambio tier
+  // in-session (dev panel, RevenueCat) non ridecideva → utente Free bloccato
+  // sulla Home invece di essere rediretto a /lascia-andare.
+  // ADESSO: se la chiave `${profileId}:${tier}` cambia rispetto all'ultima
+  // decisione locale, reset del ref + del key locale + del key module-level
+  // → il router ridecide con dati freschi.
+  const lastFreePremiumDecidedKeyRef = useRef<string | null>(null);
   useEffect(() => {
     // A) Guard pathname: se non siamo attualmente sulla route "/", non
     //    fare nulla. Se Home è "sotto" nello stack mentre siamo su LA,
     //    il pathname corrente è "/lascia-andare" → early return.
     if (pathname !== "/") return;
-
-    // B) Guard intra-mount: se abbiamo già preso una decisione in questo
-    //    mount del componente, non ripetere.
-    if (hasRedirectedFreeUserRef.current) return;
 
     // Guard di completezza dati:
     if (!profile) return; // profilo ancora null → aspetta caricamento
@@ -1113,22 +1119,44 @@ export default function Taccuino() {
     // il router V3 sopra prende la priorità → early return qui.
     if (introV3State !== "completed") return;
 
-    // C) Guard module-level cross-mount con TIER incluso (Fabio 2026-08-22).
-    //    PRIMA la cache memorizzava solo profileId → cambio tier non
-    //    invalidava → utente Premium "Torna Free" restava sulla home.
-    //    ADESSO la chiave è profileId:tier → ogni cambio tier ridecide.
     const currentProfileId = (profile as any)?.id || null;
     const tier = ((profile as any)?.subscription_tier as string | null) || null;
     const isPaid = tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
     const currentKey = currentProfileId === null ? null : `${currentProfileId}:${tier ?? "free"}`;
+
+    // === FIX BUG CACHE TIER IN-SESSIONE — Keyed invalidation locale =========
+    // Se il tier è cambiato dall'ultima decisione locale, RESETTA il ref
+    // così il router può ridecidere per la nuova chiave (anche se avevamo
+    // già rediretto). Questo fixa: "cambio tier via dev panel richiede
+    // restart dell'app per prendere effetto".
+    if (
+      lastFreePremiumDecidedKeyRef.current !== null &&
+      lastFreePremiumDecidedKeyRef.current !== currentKey
+    ) {
+      const prevKey = lastFreePremiumDecidedKeyRef.current;
+      hasRedirectedFreeUserRef.current = false;
+      lastFreePremiumDecidedKeyRef.current = null;
+      console.log(`[KODA_ROUTER] tier changed in-session → re-evaluate (was ${prevKey}, now ${currentKey})`);
+    }
+
+    // B) Guard intra-mount: se abbiamo già preso una decisione in questo
+    //    mount del componente (per la stessa chiave), non ripetere.
+    if (hasRedirectedFreeUserRef.current) return;
+
+    // C) Guard module-level cross-mount con TIER incluso (Fabio 2026-08-22).
+    //    PRIMA la cache memorizzava solo profileId → cambio tier non
+    //    invalidava → utente Premium "Torna Free" restava sulla home.
+    //    ADESSO la chiave è profileId:tier → ogni cambio tier ridecide.
     if (currentKey !== null && getLastDecidedKey() === currentKey) {
       hasRedirectedFreeUserRef.current = true;
+      lastFreePremiumDecidedKeyRef.current = currentKey;
       return;
     }
 
     // Marca la decisione PRIMA di eventuali navigazioni async, sia sul ref
     // locale sia sul flag module-level (per-profile:tier).
     hasRedirectedFreeUserRef.current = true;
+    lastFreePremiumDecidedKeyRef.current = currentKey;
     markRouterDecided(currentProfileId, tier);
 
     if (isPaid) {
@@ -6696,7 +6724,33 @@ export default function Taccuino() {
                     try {
                       await api.devSetTier("monthly");
                       const p = await api.getProfile();
+                      // === FIX BUG CACHE TIER IN-SESSIONE (Fabio 2026-08-24) ===
+                      // Invalida ogni traccia della decisione routing precedente
+                      // così i router condizionali (V3, Free/Premium, Intro Premium)
+                      // ridecidono con il nuovo tier senza richiedere restart.
+                      // Ordine: (1) reset refs, (2) reset key module-level,
+                      // (3) re-check intro premium state, (4) persisti cache,
+                      // (5) setProfile → triggera re-run degli useEffect router.
+                      hasRedirectedIntroV3Ref.current = false;
+                      lastV3DecidedKeyRef.current = null;
+                      hasRedirectedFreeUserRef.current = false;
+                      lastFreePremiumDecidedKeyRef.current = null;
+                      hasRedirectedIntroPremiumRef.current = false;
+                      lastIntroPremiumDecidedKeyRef.current = null;
+                      resetLastDecidedKey();
+                      // Re-fetch intro premium state dal backend: se l'utente
+                      // non l'ha ancora vista (nuovo Premium), il router la
+                      // triggererà; se seen=true, resta "completed".
+                      try {
+                        const st = await api.getIntroPremiumState();
+                        setIntroPremiumState(st?.seen ? "completed" : "needed");
+                      } catch {
+                        // Fail-closed: se backend down, non forzare intro
+                        setIntroPremiumState("completed");
+                      }
+                      saveProfileCache(p).catch(() => {});
                       setProfile(p);
+                      setProfileHydrated("network");
                       Alert.alert("✓ Premium attivo", "Ora sei simulato Premium (monthly).");
                     } catch (e: any) {
                       setAdminError(`Errore: ${e?.message || e}`);
@@ -6730,7 +6784,28 @@ export default function Taccuino() {
                     try {
                       await api.devSetTier(null);
                       const p = await api.getProfile();
+                      // === FIX BUG CACHE TIER IN-SESSIONE (Fabio 2026-08-24) ===
+                      // Vedi commento identico su "Simula Premium": stessa
+                      // invalidazione completa per ridecisione immediata.
+                      hasRedirectedIntroV3Ref.current = false;
+                      lastV3DecidedKeyRef.current = null;
+                      hasRedirectedFreeUserRef.current = false;
+                      lastFreePremiumDecidedKeyRef.current = null;
+                      hasRedirectedIntroPremiumRef.current = false;
+                      lastIntroPremiumDecidedKeyRef.current = null;
+                      resetLastDecidedKey();
+                      // Downgrade Premium→Free: l'intro premium resta "seen"
+                      // se già vista in passato, altrimenti la stato torna
+                      // coerente al backend.
+                      try {
+                        const st = await api.getIntroPremiumState();
+                        setIntroPremiumState(st?.seen ? "completed" : "needed");
+                      } catch {
+                        setIntroPremiumState("completed");
+                      }
+                      saveProfileCache(p).catch(() => {});
                       setProfile(p);
+                      setProfileHydrated("network");
                       Alert.alert("✓ Free", "Tornato utente Free.");
                     } catch (e: any) {
                       setAdminError(`Errore: ${e?.message || e}`);

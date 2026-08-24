@@ -93,8 +93,6 @@ function decideRouterV3(input) {
 function decideRouterFreePremium(input) {
   if (input.pathname !== "/")
     return { kind: "wait", reason: "not on / pathname" };
-  if (input.hasRedirectedFreeUser)
-    return { kind: "wait", reason: "already redirected (intra-mount)" };
   if (!input.profile)
     return { kind: "wait", reason: "profile null" };
   if (input.profileHydrated !== "network")
@@ -111,6 +109,20 @@ function decideRouterFreePremium(input) {
   const tier = input.profile.subscription_tier || null;
   const isPaid = isPaidTier(tier);
   const currentKey = computeKey(input.profile);
+
+  // === FIX BUG CACHE TIER IN-SESSIONE (Fabio 2026-08-24) — Keyed invalidation
+  // Se il tier è cambiato rispetto all'ultima decisione locale, il ref
+  // `hasRedirectedFreeUser` si considera resettato → nuova decisione.
+  // Il chiamante deve resettare il ref effettivo prima del prossimo run.
+  const effectiveHasRedirected =
+    input.lastFreePremiumLocalKey !== undefined &&
+    input.lastFreePremiumLocalKey !== null &&
+    input.lastFreePremiumLocalKey !== currentKey
+      ? false
+      : input.hasRedirectedFreeUser;
+
+  if (effectiveHasRedirected)
+    return { kind: "wait", reason: "already redirected (intra-mount, same key)" };
 
   // Guard module-level cross-mount con TIER: se la stessa key ha già
   // deciso, marca il ref locale e wait (non ridecide).
