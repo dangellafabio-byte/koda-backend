@@ -719,18 +719,17 @@ export default function KodaIntroV3() {
             tone={orbProps.tone}
             size={ORB_SIZE}
           />
-          {/* Spacer per replicare il layout home (Fabio 2026-08-23):
-              nella home Page 0 sotto l'orb c'è gap:18 + statusLabel 16px.
-              Il flex-center centra il gruppo [orb + spacer] → orb 17px più
-              in alto del centro. Con questo spacer orb=STESSA posizione. */}
-          <View style={{ height: 34 }} pointerEvents="none" />
+          {/* === FIX ECLISSI CENTRATA (Fabio 2026-08-24) ==================
+              Spacer 34px RIMOSSO. L'orb è ora il singolo figlio del
+              flex-center container → orb ESATTAMENTE al centro geometrico
+              dello schermo (H/2). */}
         </Animated.View>
 
         {/* Micro-label sotto l'orb (position:absolute per non spostare l'orb).
-            Con centerContainer.paddingTop=90 (allineamento home), l'orb è
-            a centro Y = H/2 + 45. Il label deve compensare quel +45 rispetto
-            al top:"50%" del container. Formula: ORB_SIZE/2 + 27 (spaziatura
-            classica) + 45 (compensazione paddingTop) = ORB_SIZE/2 + 72. */}
+            === FIX ECLISSI CENTRATA (Fabio 2026-08-24) ===
+            Prima aveva `marginTop: ORB_SIZE/2 + 72` per compensare paddingTop:90
+            del container. Ora paddingTop=0 → label torna al valore classico
+            `ORB_SIZE/2 + 27` (27px sotto il bordo inferiore dell'orb). */}
         <View
           pointerEvents="none"
           style={{
@@ -738,7 +737,7 @@ export default function KodaIntroV3() {
             top: "50%",
             left: 0,
             right: 0,
-            marginTop: ORB_SIZE / 2 + 72,
+            marginTop: ORB_SIZE / 2 + 27,
             alignItems: "center",
           }}
         >
@@ -795,10 +794,10 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    // Allineamento pixel-perfect con la home Page 0 (Fabio 2026-08-23):
-    // stesso paddingTop del wrapper della home (index.tsx riga ~5247)
-    // così l'orb è ESATTAMENTE nello stesso punto tra V3 e home vera.
-    paddingTop: 90,
+    // === FIX ECLISSI CENTRATA (Fabio 2026-08-24) =========================
+    // paddingTop RIMOSSO. Vedi commento identico su lascia-andare.tsx:
+    // orb ora esatto H/2 grazie al flex-center puro, nessun offset.
+    paddingTop: 0,
   },
   orbWrap: {
     alignItems: "center",

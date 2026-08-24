@@ -1277,9 +1277,12 @@ export default function LasciaAndareScreen() {
               Math.min(1, (Math.max(-60, Math.min(-20, meterDb)) + 60) / 40)
             )}
           />
-          {/* Spacer 34px per allineare l'orb alla stessa posizione della
-              home (gap:18 + statusLabel 16px). Fabio 2026-08-23. */}
-          <View style={{ height: 34 }} pointerEvents="none" />
+          {/* === FIX ECLISSI CENTRATA (Fabio 2026-08-24) =========================
+              Spacer 34px RIMOSSO. Prima l'orb era shiftato verso l'alto di ~17px
+              (mezzo spacer) rispetto al centro del flex-container per compensare
+              il layout home. Adesso Fabio vuole orb ESATTAMENTE al centro dello
+              schermo → l'unico figlio del flex-center è l'Animated.View con
+              l'orb → orb al centro geometrico H/2. */}
         </Animated.View>
       </View>
 
@@ -1359,11 +1362,13 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    // Allineamento pixel-perfect con home Page 0 (Fabio 2026-08-23):
-    // stesso paddingTop del wrapper home (index.tsx riga ~5247) → l'orb
-    // è ESATTAMENTE nella stessa posizione tra LA e home vera. NON
-    // tocchiamo la size (260) — solo la posizione del centro.
-    paddingTop: 90,
+    // === FIX ECLISSI CENTRATA (Fabio 2026-08-24) =========================
+    // paddingTop RIMOSSO. Prima 90px per allineare visivamente con la Home
+    // Page 0, ma Fabio ha giustamente richiesto orb PIXEL-CENTRATO in tutte
+    // le modalità → il flex-center basta e avanza per centrare al centro
+    // esatto dello schermo (H/2). L'omologa modifica è applicata anche a
+    // Home Page 0, KodaIntroV3, HeartVoiceReveal, IntroPremium.
+    paddingTop: 0,
   },
   hintBox: {
     position: "absolute",

@@ -563,3 +563,44 @@ simile (nessun salto evidente a occhio). L'allineamento matematico
 `H/2 + 28` è già in place dai fix precedenti. Non c'è /orb-check page
 attualmente — se emerge un salto misurabile, la creerò come pagina
 di debug pixel-precisa.
+
+## Iterazione 23 (2026-08-24 sera) — Eclissi PIXEL-CENTRATA in tutte le modalità
+
+### Problema
+Fabio ha giustamente osservato che l'eclissi era decentrata: in alcune schermate
+sopra il centro, in altre sotto, mai al centro esatto H/2. Precedenti tentativi
+di "allineamento matematico H/2 + 28" avevano introdotto offset volontari per
+matchare il layout della Home Page 0 (che era shiftata giù per il paddingTop:90),
+ma la Home era essa stessa decentrata → si propagava l'errore.
+
+### Fix applicato
+Eclissi PIXEL-CENTRATA a H/2 in TUTTE le 6 schermate:
+
+1. **lascia-andare.tsx**: rimosso `paddingTop: 90` + rimosso spacer 34px sotto l'orb → il flex-center puro centra l'orb (unico figlio) a H/2 esatto
+2. **KodaIntroV3.tsx**: rimosso `paddingTop: 90` + spacer + micro-label `marginTop` compensato da `ORB_SIZE/2+72` → `ORB_SIZE/2+27` (rimossa la compensazione dei 45px)
+3. **HeartVoiceReveal.tsx**: rimosso `paddingTop: 90`
+4. **IntroPremium.tsx**: `orbCY = H/2 + 28` → `H/2` (coach-mark labels ora allineati al nuovo centro)
+5. **index.tsx (Home Page 0)**: rimosso `paddingTop: 90` dal wrapper + rimosso `gap: 18` dal gruppo interno + spostato orb a essere l'unico figlio del gruppo → orb centrato per flex
+6. **index.tsx (Coach-mark fallback)**: `orbCY = H * 0.46` → `H / 2` per coerenza col nuovo layout reale
+
+### Ripristino "Scorri per scrivere"
+La hint "scorri per leggere" era condizionata a `timeline.length > 0` (invisibile
+per user vergine). Adesso è:
+- Testo cambiato in **"scorri per scrivere"** (per esplicito richiesta Fabio)
+- SEMPRE visibile (rimosso condizionale)
+- Position `absolute`, `bottom: Math.max(insets.bottom + 100, 150)` → simmetrico
+  rispetto al pill "Lascia andare" (che è a `top: Math.max(insets.top + 100, 150)`)
+- Same offset from insets.top/insets.bottom → distanza specchio dal centro H/2
+
+### Cosa NON è stato toccato (per esplicita priorità Fabio)
+- **Evidenziatore (KodaTour teal outline circle)**: Fabio ha detto di rifarlo
+  DOPO che l'eclissi sia centrata. Prossimo step.
+- **Altro coach-mark**: allineamento generico ok, ma se serve ri-tuning verrà
+  fatto dopo la validazione visiva.
+
+### File modificati (per il prossimo Publish)
+- `/app/frontend/app/lascia-andare.tsx`
+- `/app/frontend/app/index.tsx` (Home Page 0 + coach-mark fallback)
+- `/app/frontend/components/KodaIntroV3.tsx`
+- `/app/frontend/components/HeartVoiceReveal.tsx`
+- `/app/frontend/components/IntroPremium.tsx`

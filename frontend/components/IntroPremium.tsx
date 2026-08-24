@@ -66,15 +66,14 @@ export default function IntroPremium() {
   const mountedRef = useRef(true);
 
   // ==================== RECTS (coerenti con home reale) ====================
-  // orbCY IDENTICO alla home Page 0 (Fabio 2026-08-23 fix v2):
-  //   Home: wrapper flex-center con paddingTop 90 + un View interno
-  //   flex-center con gap:18 che contiene: [Orb, statusLabel 16px].
-  //   Il flex-center centra il gruppo (Orb + gap 18 + label 16) → l'orb
-  //   è ~17px più in alto del centro geometrico.
-  //   Formula: paddingTop/2 + H/2 - 17 = 45 + H/2 - 17 = H/2 + 28
+  // === FIX ECLISSI CENTRATA (Fabio 2026-08-24) ==========================
+  // Prima: orbCY = H/2 + 28 per matchare l'offset home Page 0 (paddingTop:90
+  // + gap:18 + label 16 → shift ~28px in basso). Adesso la home è stata
+  // ricentrata a H/2 → l'orb virtuale per posizionare i coach-mark labels
+  // ora è ANCHE lui a H/2 esatto.
   const headerCY = Math.max(insets.top + 28, 70) + 22;
   const orbSize = Math.min(W * 0.78, 360);
-  const orbCY = H / 2 + 28;
+  const orbCY = H / 2;
 
   const RECTS: Record<"orb" | "hf" | "la" | "settings", Rect> = {
     orb: { x: W / 2 - orbSize / 2, y: orbCY - orbSize / 2, w: orbSize, h: orbSize },

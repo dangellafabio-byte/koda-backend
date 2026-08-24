@@ -299,10 +299,9 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    // Allineamento pixel-perfect con home Page 0 (Fabio 2026-08-23):
-    // stesso paddingTop del wrapper home (index.tsx riga ~5247) → l'orb
-    // è ESATTAMENTE nella stessa posizione tra reveal e home vera.
-    paddingTop: 90,
+    // === FIX ECLISSI CENTRATA (Fabio 2026-08-24) =========================
+    // paddingTop RIMOSSO. Orb ora al centro esatto H/2 dello schermo.
+    paddingTop: 0,
   },
   ctaBlock: {
     position: "absolute",

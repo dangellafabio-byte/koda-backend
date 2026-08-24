@@ -688,7 +688,11 @@ export default function Taccuino() {
     const userName = userNameRaw || "";
     const nameVocative = userNameRaw ? `, ${userNameRaw}` : "";
     const orbSize = Math.min(W * 0.78, 360);
-    const orbCY = H * 0.46;
+    // === FIX ECLISSI CENTRATA (Fabio 2026-08-24) =========================
+    // Prima: H * 0.46 (46% dall'alto) → fallback per il coach-mark quando
+    // measureRef fallisce. Ora l'orb reale è centrato a H/2 esatto → il
+    // fallback deve rispecchiarlo per non spostare il KodaTour label.
+    const orbCY = H / 2;
     const [hf, conf, menu, orb, hint] = await Promise.all([
       measureRef(handsFreeBtnRef),
       measureRef(confessionaleBtnRef),
@@ -5271,12 +5275,15 @@ export default function Taccuino() {
         decelerationRate="fast"
       >
         {/* === PAGE 0: VOICE ZEN MODE ============================ */}
-        {/* CORREZIONE 2026-06: rimosso il paddingTop/Bottom — la pagina
-            è ora un semplice flex-center, e l'orb è davvero al centro
-            geometrico dello schermo. La "scorri per leggere" è
-            posizionata absolute al simmetrico dello slot Confessionale. */}
-        <View style={{ width: windowWidth, flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 90 }}>
-          <View style={{ alignItems: "center", justifyContent: "center", flex: 1, gap: 18, paddingHorizontal: 24 }}>
+        {/* === FIX ECLISSI CENTRATA (Fabio 2026-08-24) =============
+            paddingTop:90 RIMOSSO → il flex-center puro centra l'orb
+            esattamente a H/2. Lo statusLabel "AI in pausa" e l'hint
+            "scorri per scrivere" sono figli del gruppo interno con
+            gap:18, ma il gruppo è centrato → orb sempre al centro.
+            L'hint "scorri per scrivere" torna VISIBILE SEMPRE
+            (prima era conditional su timeline.length>0). */}
+        <View style={{ width: windowWidth, flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <View style={{ alignItems: "center", justifyContent: "center", flex: 1, paddingHorizontal: 24 }}>
             {/* === ECLISSI NASCOSTA IN TEXT MODE (richiesta utente 2026-06) ===
                 In modalità scrittura (inputMode === "text") l'utente NON
                 vuole più vedere l'eclissi/orb da nessuna parte: né nella
@@ -5347,9 +5354,6 @@ export default function Taccuino() {
                   </View>
                 )}
               </Pressable>
-                <Text style={[styles.statusLabel, styles.statusLabelOnBg, { fontSize: 16, marginTop: 8 }]}>
-                  {aiPaused ? "AI in pausa" : ""}
-                </Text>
               </>
             ) : (
               <>
@@ -5361,15 +5365,32 @@ export default function Taccuino() {
                 </Text>
               </>
             )}
-            {/* Hint swipe — solo se ci sono messaggi (altrimenti non ha senso
-                far promettere "scorri per leggere" se non c'è nulla da leggere) */}
-            {timeline.length > 0 && inputMode !== "text" ? (
-              <View ref={scrollHintRef} style={{ flexDirection: "row", alignItems: "center", gap: 6, opacity: 0.55, marginTop: 6 }}>
-                <Ionicons name="chevron-back" size={14} color={theme.text} />
-                <Text style={{ color: theme.text, fontSize: 12 }}>scorri per leggere</Text>
-              </View>
-            ) : null}
           </View>
+          {/* === FIX ECLISSI CENTRATA (Fabio 2026-08-24) — HINT "scorri per scrivere" ===
+              Position ABSOLUTE al mirror del pill "Lascia andare" (top:
+              Math.max(insets.top+100,150)) rispetto al centro H/2.
+              Distanza dal bordo bottom = stessa del bordo top del pill LA.
+              SEMPRE visibile (non più condizionato a timeline.length). */}
+          {inputMode !== "text" ? (
+            <View
+              ref={scrollHintRef}
+              pointerEvents="none"
+              style={{
+                position: "absolute",
+                bottom: Math.max(insets.bottom + 100, 150),
+                left: 0,
+                right: 0,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                opacity: 0.55,
+              }}
+            >
+              <Ionicons name="chevron-back" size={14} color={theme.text} />
+              <Text style={{ color: theme.text, fontSize: 12 }}>scorri per scrivere</Text>
+            </View>
+          ) : null}
         </View>
 
         {/* === PAGE 1: READING MODE (timeline) =================== */}
