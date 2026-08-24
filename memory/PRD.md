@@ -524,3 +524,42 @@ Trovato e sistemato un TDZ error pre-esistente in `app/index.tsx`:
 `Cannot access 'dimensions' before initialization` — `dimensions` era
 dichiarato dopo un `useEffect` che lo referenziava nel deps array.
 Spostato la dichiarazione prima → red-screen risolto.
+
+## Iterazione 22 (2026-08-24 sera) — Bug P0: Free user reach Home via LA X
+
+### Problema
+Dopo il fix routing Free → Lascia Andare (v2 verificato), Fabio ha trovato
+un bug distinto: **al tap X su Lascia Andare, l'utente Free viene portato
+alla Home Koda conv (Premium)** invece che al Paywall. Viola la regola
+fondamentale: **un utente Free non deve MAI raggiungere la Home completa,
+in nessuna circostanza. Solo Premium ci arriva.**
+
+### Root cause
+`handleExit()` in `/app/frontend/app/lascia-andare.tsx` faceva:
+```
+if (router.canGoBack()) router.back();
+else router.replace("/");
+```
+In entrambi i rami il Free finiva alla Home:
+- `router.back()` → il back stack ha `/` (Home) come precedente → Home
+- `router.replace("/")` → Home diretta
+
+### Fix applicato
+`handleExit()` ora legge il tier dalla cache profilo locale
+(`loadProfileCache` — ZERO network, ZERO violazione della zero-persistenza
+di LA che riguarda registrazioni vocali, NON metadati profilo) e:
+- **Free** (nessun `subscription_tier` valido) → `router.replace("/paywall?variant=post-demo")` (spec)
+- **Premium** (`monthly`/`bimonthly`/`annual`/`unlimited`) → `router.back()` come prima
+- **Safe default**: se cache fallisce, `goToPaywall=true` — meglio paywall a un Premium in transient error che Home a un Free (violazione spec)
+
+### Loop LA ↔ Paywall (by design)
+Free user: tap X su LA → paywall (post-demo, mostra X) → tap X paywall
+→ `router.replace("/lascia-andare")` (già esistente in paywall.tsx per isPostDemo)
+→ loop volontario. Free non può uscire dal "trial ecosystem" senza pagare.
+
+### Nota sull'orb positioning (osservazione Fabio)
+Fabio ha visualmente stimato che l'orb tra LA e Home appare in posizione
+simile (nessun salto evidente a occhio). L'allineamento matematico
+`H/2 + 28` è già in place dai fix precedenti. Non c'è /orb-check page
+attualmente — se emerge un salto misurabile, la creerò come pagina
+di debug pixel-precisa.

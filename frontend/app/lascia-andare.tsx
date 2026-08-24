@@ -54,6 +54,15 @@ import {
 } from "../lib/lasciaAndareVoice";
 // NB: rimosso `import { api } from "../lib/api"` — non più necessario dopo la
 // rimozione del guard `authorizeLasciaAndare` (Punto 3, Fabio 2026-08-17).
+// === FIX BUG "X porta a Home per utenti Free" (Fabio 2026-08-24) ===========
+// Su uscita LA (X o timer), dobbiamo sapere se l'utente è Free o Premium
+// per decidere se andare a /paywall (Free — spec: mai Home per Free) o
+// tornare indietro (Premium — comportamento originale). loadProfileCache
+// legge SOLO cache locale, ZERO network → non viola la garanzia di
+// zero-persistenza di Lascia Andare (che riguarda le REGISTRAZIONI vocali,
+// non i metadati del profilo).
+import { loadProfileCache } from "../lib/localCache";
+import type { Profile } from "../lib/api";
 
 // ==== VAD tuning (calibrato sulla stessa scala di lib/voice.ts) ====
 const SPEECH_DB = -35; // sopra questa soglia → voce presente
@@ -974,18 +983,45 @@ export default function LasciaAndareScreen() {
     // è finita. Il recorder è già stato fermato/rilasciato sopra.
     await teardown();
 
-    // router.back() se possibile, altrimenti torna alla home.
-    // Il layout di expo-router applica il fade tra route (screenOptions
-    // { animation: "fade" } in _layout.tsx) → il ritorno alla schermata
-    // principale è quindi già fluido di suo.
+    // === FIX BUG "Free reach Home" (Fabio 2026-08-24) =========================
+    // Spec: un utente Free non deve MAI raggiungere la Home (Koda conv).
+    // PRIMA: `router.canGoBack() ? back() : replace("/")` — in entrambi i
+    // rami il Free finiva alla Home Premium (via back stack o replace).
+    // ADESSO: leggiamo il tier dalla cache profilo locale (zero network,
+    // no violazione zero-persistenza) e:
+    //   - Free (nessun subscription_tier valido) → /paywall (spec)
+    //   - Premium → back/home come prima (safe, gated dai router V3)
+    // La cache può essere stale ma è "safe default": in dubbio, meglio
+    // paywall che Home per un Free.
+    let goToPaywall = true; // default: Free (safe fallback se cache assente)
     try {
-      if (router.canGoBack()) {
+      const cached = await loadProfileCache<Profile>();
+      const tier = (cached as any)?.subscription_tier || null;
+      const isPaid =
+        tier === "monthly" ||
+        tier === "bimonthly" ||
+        tier === "annual" ||
+        tier === "unlimited";
+      goToPaywall = !isPaid;
+    } catch (e) {
+      console.warn("[LA_EXIT] profile cache read failed, defaulting to paywall:", e);
+    }
+
+    try {
+      if (goToPaywall) {
+        console.log(`[LA_EXIT] Free user → /paywall (spec: mai Home)`);
+        router.replace("/paywall?variant=post-demo");
+      } else if (router.canGoBack()) {
+        console.log(`[LA_EXIT] Premium user → router.back()`);
         router.back();
       } else {
+        console.log(`[LA_EXIT] Premium user, no history → router.replace("/")`);
         router.replace("/");
       }
     } catch {
-      router.replace("/");
+      // Fallback difensivo: se qualcosa esplode nel routing, in dubbio
+      // preferiamo mandare a paywall (mai Home per Free)
+      router.replace(goToPaywall ? "/paywall?variant=post-demo" : "/");
     }
   }, [router, teardown, orbEntryScale, orbOpacity, hintOpacity, voiceScale, voiceKey]);
 

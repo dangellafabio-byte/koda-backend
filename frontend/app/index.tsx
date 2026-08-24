@@ -6778,7 +6778,7 @@ export default function Taccuino() {
                 >
                   <Ionicons name="diamond-outline" size={18} color="#00F5D4" />
                   <Text style={{ color: "#00F5D4", fontSize: 14, fontWeight: "600", marginLeft: 10 }}>
-                    Simula Premium (monthly)
+                    Simula Premium (monthly) · v2
                   </Text>
                 </TouchableOpacity>
 
@@ -6841,7 +6841,7 @@ export default function Taccuino() {
                 >
                   <Ionicons name="arrow-undo-outline" size={18} color={theme.text + "99"} />
                   <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500", marginLeft: 10 }}>
-                    Torna Free
+                    Torna Free · v2
                   </Text>
                 </TouchableOpacity>
 
