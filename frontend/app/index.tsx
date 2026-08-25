@@ -68,7 +68,11 @@ import * as Updates from "expo-updates";
 // ↑ Rimosso dall'UI Impostazioni pre-lancio (2026-07-24): il changelog
 //   tecnico non deve trapelare in produzione. buildInfo.ts resta come
 //   file di riferimento interno per debug/log, ma non è più renderizzato.
-import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
+// === BLOCCO A (2026-08-25) — notifications & ProactiveOffer RIMOSSI =====
+// I moduli `lib/notifications` e `components/ProactiveOffer` sono stati
+// eliminati per rispettare il manifesto "no needy Koda". Non riabilitare
+// senza riscrivere UX contract nel PRD.
+// import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
 import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
@@ -95,7 +99,7 @@ import RadialGlow from "../components/RadialGlow";
 import InfoModal from "../components/InfoModal";
 import SafetyAlert from "../components/SafetyAlert";
 import FreemiumCounter from "../components/FreemiumCounter";
-import ProactiveOffer from "../components/ProactiveOffer";
+// import ProactiveOffer from "../components/ProactiveOffer";  // Blocco A: rimosso
 import {
   loadBorderCalibration,
   saveBorderCalibration,
@@ -2144,18 +2148,12 @@ export default function Taccuino() {
   // separato in blob storage.
 
   const sendTestNotification = async () => {
-    const when = new Date(Date.now() + 10000);
-    const id = await scheduleAt({
-      when,
-      title: "🔔 Taccuino — test",
-      body: "Se senti questa, le notifiche funzionano!",
-    });
-    if (id) {
-      setError("Notifica di prova fra 10 secondi 🔔");
-    } else {
-      setError("Permesso notifiche negato. Abilitalo nelle impostazioni del telefono.");
-    }
-    setTimeout(() => setError(null), 5000);
+    // === BLOCCO A (2026-08-25) — notifiche RIMOSSE ===
+    // Koda non manda più notifiche di prova. Se qualcuno preme un bottone
+    // ancora aggrappato a questa fn (non dovrebbe esistere), mostriamo un
+    // messaggio soft senza fallire.
+    setError("Notifiche disabilitate — Koda non ti scrive mai per primo.");
+    setTimeout(() => setError(null), 4000);
   };
 
   // Gentle continuous breathing — always active, feels alive
@@ -2383,20 +2381,11 @@ export default function Taccuino() {
     for (const a of actions) {
       try {
         if (a.type === "schedule_notification" && a.when_iso) {
-          const when = new Date(a.when_iso);
-          if (isNaN(when.getTime())) continue;
-          const id = await scheduleAt({
-            when,
-            title: a.title || "Promemoria",
-            body: a.body || "Hai una cosa da fare",
-            id: a.identifier || undefined,
-          });
-          if (!id) {
-            setError(
-              "Non riesco a impostare la notifica: serve il permesso 🔔. Aprila dalle impostazioni del telefono."
-            );
-            setTimeout(() => setError(null), 6000);
-          }
+          // === BLOCCO A (2026-08-25) — schedule_notification IGNORATO ===
+          // Koda non schedula più notifiche. Se Claude genera ancora una
+          // action di questo tipo (residuo di prompt), la ignoriamo
+          // silenziosamente. Non facciamo error UI: non è un fallimento.
+          continue;
         }
         // === CONFIG ACTION (Coda configura se stessa via voce) ===
         else if ((a as any).type === "config") {
@@ -2426,10 +2415,10 @@ export default function Taccuino() {
             // viene ignorato silenziosamente per backward-compat con
             // eventuali risposte cached di Claude.
           } else if (key === "notifications" && typeof value === "boolean") {
-            patch.settings = { ...(profile?.settings || {}), notifications_enabled: value };
-            if (!value) {
-              try { await cancelAllCheckins(); } catch {}
-            }
+            // === BLOCCO A (2026-08-25) — comando vocale "notifiche" IGNORATO ===
+            // Koda non ha più notifiche schedulate. Il comando vocale
+            // viene ignorato silenziosamente per backward-compat.
+            continue;
           } else if (key === "checkin_morning" && typeof value === "string") {
             patch.settings = { ...(profile?.settings || {}), checkin_morning: value };
           } else if (key === "checkin_evening" && typeof value === "string") {
@@ -4459,122 +4448,15 @@ export default function Taccuino() {
   }, []);
 
   // === Proactive Check-in scheduling ===========================
-  // When profile loads (or its checkin settings change), reconcile the
-  // scheduled local notifications:
-  //   - "off"     → cancel any pending check-in
-  //   - any non-off value → Koda decide AUTONOMAMENTE: schedula mattina E sera
-  //     con orari RANDOMIZZATI ogni giorno (mattina 8:00-10:30, sera 20:00-22:30).
-  //
-  // Il "libero arbitrio" di Koda è simulato randomizzando l'orario all'interno
-  // di finestre umane plausibili → non sembra una sveglia, sembra un gesto suo.
-  // The actual content is generated server-side via /checkin/generate so
-  // each notification feels personal (uses memory + last messages).
-  const lastCheckinSyncRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!profile) return;
-    const mode = (profile.settings as any)?.checkin_mode || "off";
-    // Sig basata SOLO su mode + giorno corrente — così randomizziamo gli
-    // orari ogni nuovo giorno (e non a ogni cambio settings).
-    const todayKey = new Date().toISOString().slice(0, 10);
-    const sig = `${mode}|${todayKey}`;
-    if (lastCheckinSyncRef.current === sig) return;
-    lastCheckinSyncRef.current = sig;
-
-    // Picker di orario randomico in una finestra plausibile.
-    const randomTime = (minH: number, maxH: number): string => {
-      const h = minH + Math.floor(Math.random() * (maxH - minH + 1));
-      const m = Math.floor(Math.random() * 60);
-      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-    };
-
-    (async () => {
-      if (mode === "off") {
-        await cancelAllCheckins();
-        return;
-      }
-      const localHour = new Date().getHours();
-      // ON → Koda decide entrambi i momenti, mattina e sera, con orario random.
-      const morningTime = randomTime(8, 10);   // tra 08:00 e 10:59
-      const eveningTime = randomTime(20, 22);  // tra 20:00 e 22:59
-
-      const slots: Array<["morning" | "evening", string]> = [
-        ["morning", morningTime],
-        ["evening", eveningTime],
-      ];
-      for (const [slot, hhmm] of slots) {
-        try {
-          const c = await api.generateCheckin(slot, localHour);
-          await scheduleCheckin({
-            slot,
-            hhmm,
-            title: c.title,
-            body: c.body,
-            voiceText: c.voice_text,
-            tone: c.tone,
-          });
-        } catch (e) {
-          // Don't break the app if the LLM hiccups — silently skip; it'll
-          // retry next time the user opens the app or changes a setting.
-        }
-      }
-    })();
-  }, [profile?.settings?.checkin_mode, profile?.id]);
+  // BLOCCO A (2026-08-25): RIMOSSO. Koda non schedula più check-in
+  // proattivi. Il vecchio useEffect chiamava cancelAllCheckins / scheduleCheckin
+  // dal modulo `lib/notifications` (ora rimosso) e generava messaggi via
+  // /api/checkin/generate (endpoint rimosso). Nessun sostituto.
 
   // === Tap-on-checkin-notification handler =====================
-  // When the user taps a check-in notification, the app foregrounds; we
-  // pick up the payload (voice_text, tone) and have Coda speak it
-  // immediately as if she's greeting the user upon entering.
-  useEffect(() => {
-    let mounted = true;
-    const handlePayload = (payload: any) => {
-      try {
-        if (!mounted || !payload) return;
-        if (payload.type !== "checkin") return;
-        const voiceText: string = String(payload.voice_text || "").trim();
-        if (!voiceText) return;
-        // Slight delay so the unlock + UI are ready before TTS fires
-        setTimeout(() => {
-          unlockSpeech();
-          SpeechMod.speak(voiceText, {
-            language: profile?.language || "it-IT",
-            tone: (payload.tone as Tone) || "warm",
-          });
-        }, 500);
-      } catch {}
-    };
-
-    // Cold-start case: the app was killed and the user tapped the notif
-    let cancelled = false;
-    (async () => {
-      try {
-        // @ts-ignore — getLastNotificationResponseAsync may not exist on web
-        const NotifMod = require("expo-notifications");
-        const last = await NotifMod.getLastNotificationResponseAsync?.();
-        if (cancelled) return;
-        const data = last?.notification?.request?.content?.data;
-        if (data) handlePayload(data);
-      } catch {}
-    })();
-
-    // Hot case: user taps notification while app is in background
-    let sub: any = null;
-    try {
-      // @ts-ignore
-      const NotifMod = require("expo-notifications");
-      sub = NotifMod.addNotificationResponseReceivedListener?.((resp: any) => {
-        const data = resp?.notification?.request?.content?.data;
-        if (data) handlePayload(data);
-      });
-    } catch {}
-
-    return () => {
-      mounted = false;
-      cancelled = true;
-      try {
-        sub?.remove?.();
-      } catch {}
-    };
-  }, [profile?.language]);
+  // BLOCCO A (2026-08-25): RIMOSSO. Nessuna notifica di check-in esiste
+  // più, quindi nessun tap da gestire. `expo-notifications` non è più
+  // referenziato da nessuna parte in questa vista.
 
   const setVoice = async (voiceId: string) => {
     if (!profile) return;
@@ -7460,7 +7342,7 @@ export default function Taccuino() {
       {neonBorderEl}
       {activationPulseEl}
       {tourOverlay}
-      {!tourActive && !confessionalMode ? <ProactiveOffer theme={theme} /> : null}
+      {!tourActive && !confessionalMode ? null : null /* Blocco A: ProactiveOffer RIMOSSO */}
       {/* === DISCLAIMER blocking overlay (Fabio 2026-07-28) ==================
           Uso il componente Modal nativo di React Native (non un semplice
           View absoluteFill) per garantire:

@@ -4,7 +4,10 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { View, StyleSheet, Platform, AppState, AppStateStatus } from "react-native";
-import { scheduleWeeklyAppNotification } from "../lib/notifications";
+// === BLOCCO A (2026-08-25) — `lib/notifications` RIMOSSO ==================
+// Koda non manda più notifiche schedulate né settimanali. Il modulo stub è
+// stato eliminato per rendere esplicito nel codice l'impegno "no needy Koda".
+// Se serve reintrodurre notifiche in futuro, ripristinare da git v64.x.
 import { ThemeProvider, useTheme, ThemeName } from "../lib/theme";
 import { api } from "../lib/api";
 import { prewarmAudio } from "../lib/speech";
@@ -110,10 +113,8 @@ function RootLayout() {
     prewarmAudio().catch(() => {});
 
     if (Platform.OS !== "web") {
-      setTimeout(() => {
-        scheduleWeeklyAppNotification().catch(() => {});
-      }, 1500);
-      // not blocking init
+      // === BLOCCO A (2026-08-25) — scheduleWeeklyAppNotification RIMOSSO ==
+      // Nessun promemoria settimanale automatico.
     }
     (async () => {
       // === FAST-PATH CACHE (2026-06) ===

@@ -79,13 +79,8 @@ export type ProfileSettings = {
   checkin_evening_time?: string;    // local "HH:MM" e.g. "21:30"
 };
 
-export type CheckinResponse = {
-  title: string;
-  body: string;
-  voice_text: string;
-  tone: Tone;
-  slot: "morning" | "evening";
-};
+// === BLOCCO A (2026-08-25) — CheckinResponse RIMOSSO ===================
+// Nessun check-in proattivo generato dal backend.
 
 export type VoiceOption = {
   voice_id: string;
@@ -232,11 +227,8 @@ export const api = {
   listVoices: () =>
     jsonReq<{ voices: VoiceOption[]; enabled: boolean }>("/voices"),
 
-  generateCheckin: (slot: "morning" | "evening", local_hour: number) =>
-    jsonReq<CheckinResponse>("/checkin/generate", {
-      method: "POST",
-      body: JSON.stringify({ slot, local_hour }),
-    }),
+  /** generateCheckin — RIMOSSO (Blocco A, no needy Koda). L'endpoint
+   *  /checkin/generate non esiste più nel backend. */
 
   /** Confessionale API — RIMOSSO (Blocco B, feature deprecata).
    *  Gli endpoint /confessional/history, /confessional/count e
@@ -362,16 +354,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ event, props }),
     }),
-  decisionHeartbeat: (reflection_hint?: string) =>
-    jsonReq<{ action: string; user_reason?: string; internal_reason?: any }>(
-      "/decision/heartbeat",
-      { method: "POST", body: JSON.stringify({ reflection_hint }) }
-    ),
-  decisionFeedback: (action: string, outcome: "ACCEPTED" | "DISMISSED" | "NEGATIVE_FEEDBACK") =>
-    jsonReq<{ ok: boolean }>("/decision/feedback", {
-      method: "POST",
-      body: JSON.stringify({ action, outcome }),
-    }),
+  // === BLOCCO A (2026-08-25) — decisionHeartbeat / decisionFeedback RIMOSSI ==
+  // Endpoint /decision/heartbeat e /decision/feedback rimossi dal backend
+  // insieme al Decision Engine proattivo. Nessun re-engagement automatico.
 
   /** converseSealed — RIMOSSO (Blocco B, endpoint /converse/sealed cancellato). */
 
