@@ -6470,146 +6470,15 @@ async def analytics_track(req: AnalyticsEvent):
     return {"ok": True}
 
 
-class DecisionHeartbeatRequest(BaseModel):
-    client_key: Optional[str] = None
-    reflection_hint: Optional[str] = None
-
-
-class DecisionFeedbackRequest(BaseModel):
-    client_key: Optional[str] = None
-    action: str
-    outcome: str  # ACCEPTED | DISMISSED | NEGATIVE_FEEDBACK
-
-
-async def _decision_key(authorization: Optional[str], cookie_tok: Optional[str],
-                        client_key: Optional[str]):
-    user = await _session_user(authorization, cookie_tok)
-    if user and user.get("email"):
-        return f"u:{user['email']}", user
-    if client_key:
-        return f"c:{client_key}", None
-    return None, None
-
-
-@api_router.post("/decision/heartbeat")
-async def decision_heartbeat(req: DecisionHeartbeatRequest,
-                             authorization: Optional[str] = Header(None),
-                             session_token: Optional[str] = Cookie(None)):
-    """Decision Engine (Manifesto V1). Su apertura app calcola un UserContext
-    volatile e decide UN'azione proattiva (mai prescrittiva). Separa
-    internal_reason (telemetria) da user_reason (testo umano)."""
-    key, user = await _decision_key(authorization, session_token, req.client_key)
-    if not key:
-        return {"action": "DO_NOTHING"}
-    now = datetime.now(timezone.utc)
-    st = await db.decision_state.find_one({"key": key}) or {"key": key}
-    prev_seen = _as_utc(st.get("last_seen_at"))
-    inter = []
-    for t in st.get("interactions", []):
-        tt = _as_utc(t)
-        if tt and (now - tt).total_seconds() < 86400:
-            inter.append(tt)
-    inter.append(now)
-    inter = inter[-50:]
-    silence_days = (now - prev_seen).days if prev_seen else 0
-    detox_until = _as_utc((user or {}).get("detox_until") or st.get("detox_until"))
-    suppressed = st.get("suppressed", {})
-    last_offer_at = _as_utc(st.get("last_offer_at"))
-
-    def is_suppressed(a):
-        u = _as_utc(suppressed.get(a))
-        return bool(u and u > now)
-
-    throttled = bool(last_offer_at and (now - last_offer_at).total_seconds() < 20 * 3600)
-    update = {"last_seen_at": now, "interactions": inter}
-    decision = {"action": "DO_NOTHING"}
-
-    if detox_until and detox_until > now:
-        decision = {"action": "DO_NOTHING"}  # rispetta lo spazio
-    elif not throttled:
-        sc24 = len(inter)
-        # === FIX 2026-06-27 v23 — consapevolezza temporale OFFER_SPACE ===
-        # Prima la logica scattava se sc24 >= 5 (interazioni nelle ultime
-        # 24h). Ma sc24 conta ANCHE messaggi di ieri sera, e poteva
-        # triggerare "abbiamo fatto sessioni intense" anche dopo 12h di
-        # pausa al primo "ciao" mattutino → assurdo.
-        # Ora controlliamo che almeno l'ULTIMA interazione precedente sia
-        # davvero recente (< 3h): solo allora è onesto chiamare la fase
-        # "sessioni intense di recente". Se l'ultimo scambio era ieri
-        # sera, la giornata si è interrotta, non è una raffica continua.
-        last_session_gap_s = 86400  # default = troppo distante
-        if len(inter) >= 2:
-            sorted_inter = sorted(inter)
-            try:
-                last_session_gap_s = (now - sorted_inter[-2]).total_seconds()
-            except Exception:
-                last_session_gap_s = 86400
-        recent_burst = last_session_gap_s < 3 * 3600  # < 3 ore = davvero recente
-
-        if sc24 >= 5 and recent_burst and not is_suppressed("OFFER_SPACE"):
-            decision = {
-                "action": "OFFER_SPACE",
-                "internal_reason": {
-                    "interaction_velocity_peak": True,
-                    "session_count_24h": sc24,
-                    "last_gap_s": int(last_session_gap_s),
-                },
-                "user_reason": "Abbiamo fatto diverse sessioni intense di recente. Volevo solo ricordarti che, se ne senti il bisogno, puoi staccare dallo schermo in qualsiasi momento.",
-            }
-        elif silence_days >= 6 and not is_suppressed("OFFER_CHECKIN"):
-            last_checkin = _as_utc(st.get("last_checkin_at"))
-            lcd = (now - last_checkin).days if last_checkin else 999
-            decision = {
-                "action": "OFFER_CHECKIN",
-                "internal_reason": {"silence_days": silence_days, "last_checkin_days": lcd},
-                "user_reason": "È da qualche giorno che non ci sentiamo e volevo lasciarti un saluto.",
-            }
-        elif req.reflection_hint and not is_suppressed("OFFER_REFLECTION"):
-            decision = {
-                "action": "OFFER_REFLECTION",
-                "internal_reason": {"memory_trigger_matched": req.reflection_hint},
-                "user_reason": "Nelle scorse settimane accennavi a qualcosa che avevi a cuore; se ti va di riprenderlo per fare il punto, io sono qui.",
-            }
-
-    if decision["action"] != "DO_NOTHING":
-        update["last_offer_at"] = now
-        if decision["action"] == "OFFER_CHECKIN":
-            update["last_checkin_at"] = now
-    await db.decision_state.update_one({"key": key}, {"$set": update}, upsert=True)
-    return decision
-
-
-@api_router.post("/decision/feedback")
-async def decision_feedback(req: DecisionFeedbackRequest,
-                            authorization: Optional[str] = Header(None),
-                            session_token: Optional[str] = Cookie(None)):
-    """Feedback loop: 3 DISMISSED/NEGATIVE consecutivi su un'azione → la
-    sopprimo per 30 giorni (cool-down). Graceful Failure by design."""
-    key, _u = await _decision_key(authorization, session_token, req.client_key)
-    if not key:
-        return {"ok": True}
-    st = await db.decision_state.find_one({"key": key}) or {}
-    streaks = st.get("dismiss_streak", {})
-    suppressed = st.get("suppressed", {})
-    a = req.action
-    if req.outcome in ("DISMISSED", "NEGATIVE_FEEDBACK"):
-        streaks[a] = int(streaks.get(a, 0)) + 1
-        if streaks[a] >= 3:
-            suppressed[a] = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
-            streaks[a] = 0
-    else:
-        streaks[a] = 0
-    await db.decision_state.update_one(
-        {"key": key}, {"$set": {"dismiss_streak": streaks, "suppressed": suppressed}}, upsert=True)
-    try:
-        await db.analytics_events.insert_one({
-            "event": "decision_feedback", "props": {"action": a, "outcome": req.outcome},
-            "ts": datetime.now(timezone.utc),
-        })
-    except Exception:
-        pass
-    return {"ok": True}
-
+# =============================================================================
+# BLOCCO A (Fabio 2026-08-25) — DECISION ENGINE PROATTIVO RIMOSSO
+# =============================================================================
+# Rimossi: DecisionHeartbeatRequest, DecisionFeedbackRequest, _decision_key,
+# endpoint POST /decision/heartbeat + POST /decision/feedback, e la card frontend
+# <ProactiveOffer/>. Motivazione: manifesto di prodotto "Koda non deve mai
+# diventare insistente / needy". Nessun re-engagement proattivo, nessuna offerta
+# automatica all'apertura app.
+# =============================================================================
 
 # ============================================================
 # CONFESSIONALE — CHIACCHIERATA EPHEMERAL — RIMOSSO (Blocco B)
@@ -6992,124 +6861,8 @@ async def api_recap(period: str = "today"):
 
 
 # ============================================================
-# PROACTIVE CHECK-IN — Coda reaches out without being asked.
-# Generates a short personal message based on the user's memory
-# and recent timeline. Frontend schedules a local notification
-# at the user-chosen morning/evening slot.
+# PROACTIVE CHECK-IN — RIMOSSO (Blocco A, no needy Koda)
 # ============================================================
-
-class CheckinRequest(BaseModel):
-    slot: str = "morning"  # "morning" | "evening"
-    local_hour: int = 9     # user's local hour (0..23) at the moment of generation
-    # Optional override: user can request a different language/tone hint
-    language: Optional[str] = None
-
-
-class CheckinResponse(BaseModel):
-    title: str            # short, shown as notification title
-    body: str             # 1-2 sentence preview shown in the notification body
-    voice_text: str       # full message Coda will speak when the user opens the app
-    tone: str = "warm"    # used for Orb tinting on tap
-    slot: str = "morning"
-
-
-@api_router.post("/checkin/generate", response_model=CheckinResponse)
-async def api_checkin_generate(req: CheckinRequest):
-    """Ask Claude to compose a personalised check-in for the user.
-    The frontend will schedule a LOCAL notification for the chosen slot, so
-    no remote push is needed and nothing personal leaves the device beyond
-    this one short LLM call.
-    """
-    if not EMERGENT_LLM_KEY:
-        raise HTTPException(status_code=500, detail="LLM key not configured")
-
-    profile = await get_or_create_profile()
-    lang = (req.language or profile.language or "it").lower()
-    lang_name = {
-        "it": "italiano", "en": "english", "es": "español",
-        "fr": "français", "de": "deutsch",
-    }.get(lang, "italiano")
-
-    # Pull the most recent N timeline entries to give Claude fresh context.
-    docs = await db.taccuino_timeline.find(_uf(), {"_id": 0}).sort("timestamp", -1).to_list(8)
-    docs.reverse()
-    recent = [TimelineEntry(**d) for d in docs]
-    last_lines = "\n".join(
-        f"- {'Utente' if e.role == 'user' else 'Coda'}: {e.text[:140]}"
-        for e in recent
-    ) or "(nessun messaggio recente)"
-
-    name = profile.name or ""
-    memory = (profile.memory_summary or "").strip()
-    confidence = _confidence_phase(profile.confidence_level)
-
-    slot_hint = {
-        "morning": "È mattina. Coda si rivolge all'utente per primo, come farebbe un amico vicino — un saluto caldo, un riferimento concreto a qualcosa che l'utente ha detto di recente o a un impegno della giornata, e una domanda aperta breve.",
-        "evening": "È sera. Coda chiude la giornata insieme all'utente — riprende qualcosa di concreto della giornata, chiede com'è andata, oppure offre una piccola parola di conforto se l'umore degli ultimi messaggi era basso.",
-    }.get(req.slot, "Coda si fa sentire spontaneamente con un messaggio breve.")
-
-    sys = (
-        f"Sei \"Coda\", un'assistente di vita molto empatica che si rivolge all'utente "
-        f"di sua iniziativa. {slot_hint} "
-        f"L'utente si chiama \"{name or 'amico'}\". Scrivi in {lang_name} naturale, "
-        "come parlerebbe un'amica/o stretto: caldo, breve, MAI plasticoso. NON elenchi puntati, "
-        "NON 'Spero stia bene', NON formule da bot. "
-        f"Fase relazionale corrente: {confidence} (regola tono di confidenza di conseguenza). "
-        "Se la memoria indica un momento difficile recente, sii delicat*. "
-        "Se invece la memoria parla di cose belle, sii leggera e curiosa. "
-        "Riferisci a UN dettaglio concreto della memoria o dei messaggi (es. una persona, un impegno, "
-        "un appuntamento, una spesa) se ce n'è uno utile. Altrimenti tienila generica ma personale.\n\n"
-        "Output JSON puro con questa forma esatta:\n"
-        "{\n"
-        '  "title": "max 32 caratteri, titolo della notifica (es. \\"Buongiorno\\" o \\"Allora?\\")",\n'
-        '  "body": "1-2 frasi anteprima della notifica, max 90 caratteri",\n'
-        '  "voice_text": "il messaggio completo che Coda dirà ad alta voce quando l\'utente apre l\'app — '
-        'puoi usare audio tags ElevenLabs v3 come [warmly], [softly], [sighs], [whispers] dove emotivamente '
-        'sensato. Resta intorno alle 1-3 frasi.",\n'
-        '  "tone": "warm | calm | concerned | energetic"\n'
-        "}\n"
-        "NIENTE testo fuori dal JSON, NIENTE markdown."
-    )
-
-    user_payload = (
-        f"Memoria su di me che hai costruito finora:\n{memory or '(ancora vuota)'}\n\n"
-        f"Ultimi messaggi nostri:\n{last_lines}\n\n"
-        f"Ora locale dell'utente: {req.local_hour:02d}:00\n"
-        f"Slot richiesto: {req.slot}"
-    )
-
-    try:
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=str(uuid.uuid4()),
-            system_message=sys,
-        ).with_model("anthropic", "claude-haiku-4-5-20251001")
-        raw = await chat.send_message(UserMessage(text=user_payload))
-    except Exception as e:
-        logger.error(f"checkin LLM error: {e}")
-        raise HTTPException(status_code=500, detail="Check-in generation failed")
-
-    data = extract_json(raw or "") or {}
-    title = (data.get("title") or "").strip() or ("Buongiorno" if req.slot == "morning" else "Sono qui")
-    body = (data.get("body") or "").strip() or "Allora, come va?"
-    voice_text = (data.get("voice_text") or "").strip() or body
-    tone = (data.get("tone") or "warm").strip().lower()
-    if tone not in {"warm", "calm", "concerned", "energetic", "neutral", "urgent"}:
-        tone = "warm"
-
-    # Light safety: trim runaways
-    title = title[:48]
-    body = body[:160]
-    voice_text = voice_text[:600]
-
-    return CheckinResponse(
-        title=title,
-        body=body,
-        voice_text=voice_text,
-        tone=tone,
-        slot=req.slot,
-    )
-
 
 # ---------- ElevenLabs TTS ----------
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
@@ -14840,7 +14593,8 @@ async def _ensure_v1_foundation_indexes():
     await db.sessions.create_index("session_token", unique=True)
     await db.sessions.create_index("expires_at", expireAfterSeconds=0)
     # Decision Engine (Block E)
-    await db.decision_state.create_index("key", unique=True)
+    # Decision Engine (Block E) — RIMOSSO (Blocco A, motto "no needy Koda").
+    # await db.decision_state.create_index("key", unique=True)
 
 
 async def _cleanup_tone_tags() -> int:
