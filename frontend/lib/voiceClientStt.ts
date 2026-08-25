@@ -69,6 +69,7 @@ import {
   type AudioRouteInfo,
 } from "./voiceStream";
 import { kodaBackendWsUrl } from "./backendUrl";
+import { getAuthToken } from "./authToken";
 
 const TAG = "KODA_CLIENT_STT";
 
@@ -78,7 +79,21 @@ const TAG = "KODA_CLIENT_STT";
 // (koda-backend-production-4a34.up.railway.app). Usiamo lo stesso helper
 // hardcoded di voiceStream.ts (kodaBackendWsUrl) per garantire coerenza.
 function buildWsUrl(): string {
-  return kodaBackendWsUrl("/api/voice/stream");
+  let base = kodaBackendWsUrl("/api/voice/stream");
+  // === FIX AUTH WS (Fabio 2026-08-25) — stessa logica di voiceStream.ts:
+  // accoda ?token=<session_token> così il backend risolve l'uid autenticato
+  // invece di fallback su "me" via fingerprint. Prima le conversazioni voce
+  // finivano su profilo LEGACY, staccate dalla timeline utente.
+  try {
+    const tok = getAuthToken();
+    if (tok) {
+      const sep = base.includes("?") ? "&" : "?";
+      base = `${base}${sep}token=${encodeURIComponent(tok)}`;
+    }
+  } catch {
+    // no-op
+  }
+  return base;
 }
 
 /**

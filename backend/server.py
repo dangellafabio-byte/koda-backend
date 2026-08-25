@@ -14060,33 +14060,60 @@ async def _run_pipeline_for_streamed_text(
 async def api_voice_stream(websocket: WebSocket):
     """Voice streaming endpoint — Fase 1 Deepgram Live.
 
-    === v25 WS AUTH BRIDGE (2026-07-13) ===
-    Setta `_current_user_id` leggendolo dalla cache _HTTP_TO_UID_CACHE
-    popolata dal middleware HTTP recente. Necessario per condivisione
-    memoria chat↔voce (senza questo, la pipeline voce operava con
-    uid="me" e salvava una timeline separata dall'utente autenticato).
-    Reset del ContextVar in finally per sicurezza (anche se le WS non
-    condividono context con altre richieste).
+    === v27 WS AUTH FIX (Fabio 2026-08-25) ===
+    Prima: risolvevamo uid SOLO da _HTTP_TO_UID_CACHE (fingerprint IP+UA).
+    Su iOS TestFlight cellulare l'IP cambia e il fingerprint miss → uid="me"
+    → tutte le conversazioni voce di Fabio finivano su un profilo LEGACY
+    condiviso, staccate dalla sua timeline autenticata. Situation Tracking
+    (opt-in per-profile) restava a 0 perché il profilo "me" ha default OFF.
+
+    Adesso: PRIMA proviamo `?token=<session_token>` come query param (il
+    client aggiunge questo esplicitamente da voiceStream.ts). Se assente,
+    fallback sul vecchio meccanismo fingerprint. Fallback finale "me".
     """
-    fp = _client_fingerprint_from_headers(
-        xff_header=websocket.headers.get("x-forwarded-for", "") or "",
-        ua_header=websocket.headers.get("user-agent", "") or "",
-        fallback_host=(websocket.client.host if websocket.client else None),
-    )
-    # v26: lookup async con fallback DB → memoria condivisa MAI persa
-    # anche dopo restart backend o TTL in-mem scaduto.
-    uid = await _recall_uid_for_client_async(fp) or "me"
+    # === STEP 1: token dai query params (nuovo, priorità massima) ===
+    uid: Optional[str] = None
+    try:
+        qtok = websocket.query_params.get("token") if hasattr(websocket, "query_params") else None
+    except Exception:
+        qtok = None
+    if qtok:
+        try:
+            sess = await db.sessions.find_one({"session_token": qtok})
+            if sess:
+                exp = sess.get("expires_at")
+                if exp is not None and getattr(exp, "tzinfo", None) is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if exp is None or exp >= datetime.now(timezone.utc):
+                    email = (sess.get("email") or "").strip().lower()
+                    if email:
+                        uid = _email_to_uid(email)
+                        logger.info(
+                            f"[voice/ws] auth via ?token= query → uid={uid[:8]}... (email={email})"
+                        )
+        except Exception as e:
+            logger.warning(f"[voice/ws] token query lookup failed: {e}")
+
+    # === STEP 2: fallback fingerprint (v26 pre-esistente) ===
+    if not uid:
+        fp = _client_fingerprint_from_headers(
+            xff_header=websocket.headers.get("x-forwarded-for", "") or "",
+            ua_header=websocket.headers.get("user-agent", "") or "",
+            fallback_host=(websocket.client.host if websocket.client else None),
+        )
+        uid = await _recall_uid_for_client_async(fp) or "me"
+        if uid != "me":
+            logger.info(
+                f"[voice/ws] auth-bridge fingerprint={fp} → uid={uid[:8]}... "
+                f"(fallback query-token assente)"
+            )
+        else:
+            logger.warning(
+                f"[voice/ws] auth-bridge fingerprint={fp} → uid='me' "
+                f"(NO query token + cache miss + DB miss — memoria SEPARATA da profilo)"
+            )
+
     tok = _current_user_id.set(uid)
-    if uid != "me":
-        logger.info(
-            f"[voice/ws] auth-bridge: fingerprint={fp} → uid={uid[:8]}... "
-            f"(memoria condivisa con chat scritta OK)"
-        )
-    else:
-        logger.warning(
-            f"[voice/ws] auth-bridge: fingerprint={fp} → uid='me' "
-            f"(cache miss + DB miss, utente non ha mai fatto HTTP auth — memoria SEPARATA)"
-        )
     try:
         await voice_stream_handler(
             websocket,
@@ -14100,9 +14127,30 @@ async def api_voice_stream(websocket: WebSocket):
 @app.websocket("/voice/stream")
 async def voice_stream_root(websocket: WebSocket):
     """Backup WS endpoint per test locali (senza prefix /api).
-    Applica lo stesso auth-bridge v26 dell'endpoint principale.
+    Applica lo stesso auth-fix v27 dell'endpoint principale.
     """
-    fp = _client_fingerprint_from_headers(
+    # STEP 1: query token
+    uid: Optional[str] = None
+    try:
+        qtok = websocket.query_params.get("token") if hasattr(websocket, "query_params") else None
+    except Exception:
+        qtok = None
+    if qtok:
+        try:
+            sess = await db.sessions.find_one({"session_token": qtok})
+            if sess:
+                exp = sess.get("expires_at")
+                if exp is not None and getattr(exp, "tzinfo", None) is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if exp is None or exp >= datetime.now(timezone.utc):
+                    email = (sess.get("email") or "").strip().lower()
+                    if email:
+                        uid = _email_to_uid(email)
+        except Exception:
+            pass
+    # STEP 2: fingerprint fallback
+    if not uid:
+        fp = _client_fingerprint_from_headers(
         xff_header=websocket.headers.get("x-forwarded-for", "") or "",
         ua_header=websocket.headers.get("user-agent", "") or "",
         fallback_host=(websocket.client.host if websocket.client else None),

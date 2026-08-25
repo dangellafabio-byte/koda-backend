@@ -40,6 +40,7 @@ import {
 import * as FileSystem from "expo-file-system/legacy";
 // === PIANO B 2026-07-19 — hardcoded Railway URL (bypasses .env reset) ===
 import { KODA_BACKEND_URL } from "./backendUrl";
+import { getAuthToken } from "./authToken";
 
 // =============================================================
 // CONFIG
@@ -107,16 +108,34 @@ const BACKEND_URL = KODA_BACKEND_URL;
 function buildWsUrl(): string {
   // BACKEND_URL è https://… → converti a wss://…
   // Se manca, fallback su origin corrente (web).
+  let base: string;
   if (BACKEND_URL) {
     const u = BACKEND_URL.replace(/^http/i, "ws");
-    return `${u.replace(/\/$/, "")}/api/voice/stream`;
-  }
-  if (typeof window !== "undefined" && (window as any).location) {
+    base = `${u.replace(/\/$/, "")}/api/voice/stream`;
+  } else if (typeof window !== "undefined" && (window as any).location) {
     const loc = (window as any).location;
     const proto = loc.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${loc.host}/api/voice/stream`;
+    base = `${proto}//${loc.host}/api/voice/stream`;
+  } else {
+    base = "ws://localhost:8001/api/voice/stream";
   }
-  return "ws://localhost:8001/api/voice/stream";
+  // === FIX AUTH WS (Fabio 2026-08-25) =====================================
+  // Prima: WS aperta senza credenziali → backend fallback su uid="me" →
+  // conversazioni voce salvate su profilo LEGACY invece che sull'utente
+  // autenticato. Situation Tracking (opt-in per-profile) restava a 0.
+  // Adesso: accodiamo `?token=<session_token>` così il backend risolve
+  // l'uid via `db.sessions.find_one({session_token: qtok})` esattamente
+  // come fa per le richieste HTTP.
+  try {
+    const tok = getAuthToken();
+    if (tok) {
+      const sep = base.includes("?") ? "&" : "?";
+      base = `${base}${sep}token=${encodeURIComponent(tok)}`;
+    }
+  } catch {
+    // no-op — se non c'è token restiamo col vecchio comportamento (uid="me")
+  }
+  return base;
 }
 
 // =============================================================

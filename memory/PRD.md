@@ -637,3 +637,47 @@ Al tap:
 7. Fallback in caso `reloadAsync` fallisca (web): reset state React + replace("/")
 
 Post-reload l'app parte come cold-boot logico → rivedi TUTTO il flusso primo boot.
+
+## Iterazione 25 (2026-08-25) — Fix WS Auth (bug situations=0 dopo test vocale)
+
+### Root cause trovato
+Il test vocale delle 7 frasi di Fabio ha rilevato: **timeline profilo Fabio = 0
+entries, situations = 0**, ma memories su `profile_id="me"` = 17.
+
+Investigazione:
+- Il profilo `dangella.fabio@gmail.com` (uid=ee4e7261...) risulta `situation_tracking_enabled=true` ✅
+- Le conversazioni voce sono avvenute (Fabio conferma "mi ha risposto ad ogni frase")
+- Ma tutti i turni sono stati salvati su `profile_id="me"` (profilo legacy) che ha
+  `situation_tracking_enabled=false` (default)
+
+**Causa**: il WebSocket `/api/voice/stream` NON riceve il session token. Il handler
+provava a risolvere l'uid via fingerprint (IP+UA) memorizzato dal middleware HTTP
+recente, ma su iOS TestFlight cellulare l'IP cambia → fingerprint miss → fallback
+uid="me". Situation Tracking (opt-in per-profile) resta a 0 perché è disabilitato
+sul profilo "me".
+
+### Fix backend (`server.py` @app.websocket("/api/voice/stream"))
+Nuovo step di auth PRIMA del fingerprint:
+1. Legge `websocket.query_params["token"]`
+2. Se presente: lookup `db.sessions.find_one({session_token: qtok})` + verifica expires_at
+3. Estrae email → `_email_to_uid()` → set `_current_user_id`
+4. Se assente/invalido: fallback su fingerprint (v26)
+5. Fallback finale: uid="me"
+
+Applicato ANCHE all'endpoint backup `/voice/stream` per coerenza.
+
+### Fix frontend
+- `lib/voiceStream.ts` `buildWsUrl()`: accoda `?token=<session_token>` da `getAuthToken()`
+- `lib/voiceClientStt.ts` stessa modifica
+
+### Cosa succederà al prossimo Publish + kill×2
+Le conversazioni voce di Fabio verranno correttamente attribuite al suo profilo
+(uid=ee4e7261...). Situation Tracking pipeline vedrà `enabled=true` → scriverà
+`situations` e `situation_evidences` in modo reale. Il test delle 7 frasi va
+ripetuto per popolare la memoria autenticata.
+
+### Note per audit post-Publish
+Dopo che Fabio ripubblica e rifà le 7 frasi:
+- Verificare `/api/situations` sul profilo Fabio → dovrebbe avere entries
+- Verificare `/api/memories` sul profilo Fabio → dovrebbero comparire ricordi
+- Auditare se `[TONE:paced]` è stato emesso da Claude nelle risposte
