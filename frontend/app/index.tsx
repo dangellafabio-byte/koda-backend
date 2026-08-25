@@ -6996,6 +6996,97 @@ export default function Taccuino() {
                     Ripeti primo boot completo · v2
                   </Text>
                 </TouchableOpacity>
+
+                {/* === SITUATION TRACKING TOGGLE (Fabio 2026-08-24) ===
+                    Attiva/disattiva la memoria situazionale per il test
+                    vocale delle 7 frasi. Legge lo stato attuale dal profile
+                    corrente, e al tap invia PUT /profile con il valore
+                    invertito. Il visual state si aggiorna dopo la risposta. */}
+                <TouchableOpacity
+                  style={{
+                    paddingVertical: 12,
+                    paddingHorizontal: 14,
+                    backgroundColor: (profile?.settings as any)?.situation_tracking_enabled
+                      ? "#00F5D422"
+                      : "#64748B22",
+                    borderRadius: 10,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    opacity: adminBusy ? 0.5 : 1,
+                    borderWidth: 1,
+                    borderColor: (profile?.settings as any)?.situation_tracking_enabled
+                      ? "#00F5D466"
+                      : "#64748B44",
+                  }}
+                  disabled={adminBusy}
+                  onPress={async () => {
+                    setAdminBusy(true);
+                    setAdminError(null);
+                    try {
+                      const current = !!(profile?.settings as any)?.situation_tracking_enabled;
+                      const next = !current;
+                      const updated = await api.updateProfile({
+                        settings: {
+                          ...(profile?.settings || {}),
+                          situation_tracking_enabled: next,
+                        } as any,
+                      });
+                      saveProfileCache(updated).catch(() => {});
+                      setProfile(updated);
+                      Alert.alert(
+                        next ? "✓ Situation Tracking ATTIVO" : "○ Situation Tracking disattivo",
+                        next
+                          ? "Ora Koda memorizzerà persone/situazioni durante le prossime conversazioni. Vai in home e dì le 7 frasi del test."
+                          : "Situation Tracking disabilitato. Le nuove conversazioni non popoleranno la collezione situations."
+                      );
+                    } catch (e: any) {
+                      setAdminError(`Errore: ${e?.message || e}`);
+                    } finally {
+                      setAdminBusy(false);
+                    }
+                  }}
+                  testID="dev-situation-tracking-toggle"
+                >
+                  <View style={{ flexDirection: "row", alignItems: "center" }}>
+                    <Ionicons
+                      name={
+                        (profile?.settings as any)?.situation_tracking_enabled
+                          ? "sparkles"
+                          : "sparkles-outline"
+                      }
+                      size={18}
+                      color={
+                        (profile?.settings as any)?.situation_tracking_enabled
+                          ? "#00F5D4"
+                          : "#94A3B8"
+                      }
+                    />
+                    <Text
+                      style={{
+                        color: (profile?.settings as any)?.situation_tracking_enabled
+                          ? "#00F5D4"
+                          : "#94A3B8",
+                        fontSize: 14,
+                        fontWeight: "600",
+                        marginLeft: 10,
+                      }}
+                    >
+                      Situation Tracking · v2
+                    </Text>
+                  </View>
+                  <Text
+                    style={{
+                      color: (profile?.settings as any)?.situation_tracking_enabled
+                        ? "#00F5D4"
+                        : "#94A3B8",
+                      fontSize: 13,
+                      fontWeight: "700",
+                    }}
+                  >
+                    {(profile?.settings as any)?.situation_tracking_enabled ? "ON" : "OFF"}
+                  </Text>
+                </TouchableOpacity>
               </>
             ) : null}
 
