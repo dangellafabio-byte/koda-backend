@@ -109,7 +109,7 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v27-voice-cielo"
+_KODA_BACKEND_VERSION = "v27-voice-cielo+ws-auth-fix-Fabio-20260825"
 _KODA_BACKEND_BUILD_TS = "2026-07-13T16:00:00Z"
 
 
@@ -3308,6 +3308,51 @@ async def debug_download_caching_diag():
         media_type="application/json",
         filename="koda_caching_diag.json",
     )
+
+
+@api_router.get("/debug/ws-auth-fix-check")
+async def debug_ws_auth_fix_check(token: Optional[str] = None):
+    """Diagnostica introdotta 2026-08-25 (Fabio) — verifica se il deploy
+    contiene il fix WS AUTH (query-token) e ne prova la logica end-to-end
+    con un session_token reale (opzionale).
+
+    Se `token` è passato:
+      - Fa il lookup su db.sessions con la STESSA logica del WS handler
+      - Ritorna l'uid risolto (o null se token invalido/expired)
+    Se `token` NON è passato:
+      - Ritorna solo il flag `has_fix=True` (indica che questo endpoint esiste)
+    """
+    result: Dict[str, Any] = {
+        "has_fix": True,
+        "version": _KODA_BACKEND_VERSION,
+    }
+    if not token:
+        return result
+    try:
+        sess = await db.sessions.find_one({"session_token": token})
+        if not sess:
+            result["resolved_uid"] = None
+            result["reason"] = "token_not_in_sessions"
+            return result
+        exp = sess.get("expires_at")
+        if exp is not None and getattr(exp, "tzinfo", None) is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp is not None and exp < datetime.now(timezone.utc):
+            result["resolved_uid"] = None
+            result["reason"] = "token_expired"
+            return result
+        email = (sess.get("email") or "").strip().lower()
+        if not email:
+            result["resolved_uid"] = None
+            result["reason"] = "session_no_email"
+            return result
+        result["resolved_uid"] = _email_to_uid(email)
+        result["email"] = email
+        return result
+    except Exception as e:
+        result["resolved_uid"] = None
+        result["error"] = f"{type(e).__name__}: {e}"
+        return result
 
 
 # === SPEECH TIMELINE SELF-TEST (2026-08-17) ================================
