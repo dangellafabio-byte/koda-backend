@@ -346,13 +346,13 @@ export default function KodaIntroConversational() {
   // measureInWindow ci dà le coordinate assolute dell'orb rispetto alla
   // viewport. Utente le legge sull'overlay in basso a sinistra insieme al
   // valore della home per calcolare l'offset esatto. NON stimare, MISURARE.
+  // === CLEANUP 2026-08-26 (Fabio) — state orbMeasure rimosso, resta solo il
+  // log console per debug futuro; l'overlay visibile è stato tolto.
   const orbMeasureRef = useRef<any>(null);
-  const [orbMeasure, setOrbMeasure] = useState<{ y: number; h: number } | null>(null);
   const measureOrb = useCallback(() => {
     try {
       orbMeasureRef.current?.measureInWindow?.((_x: number, y: number, _w: number, h: number) => {
         if (typeof y === "number" && typeof h === "number") {
-          setOrbMeasure({ y, h });
           console.log(`[ORB_MEASURE:INTRO] y=${y.toFixed(2)} h=${h.toFixed(2)} centerY=${(y + h / 2).toFixed(2)}`);
         }
       });
@@ -1213,31 +1213,10 @@ export default function KodaIntroConversational() {
         </View>
       )}
 
-      {/* === ORB MEASURE DEBUG OVERLAY 2026-08 ===
-          Mostra le coordinate assolute dell'orb (misurate con
-          measureInWindow) in basso a sinistra. Serve a confrontare
-          numericamente la posizione dell'orb con quella della home.
-          Position absolute → zero impatto sul layout. Da rimuovere
-          dopo la validazione. */}
-      {orbMeasure ? (
-        <View
-          pointerEvents="none"
-          style={{
-            position: "absolute",
-            left: 8,
-            bottom: Math.max(insets.bottom + 4, 8),
-            backgroundColor: "rgba(0,0,0,0.65)",
-            paddingHorizontal: 8,
-            paddingVertical: 4,
-            borderRadius: 6,
-            zIndex: 9999,
-          }}
-        >
-          <Text style={{ color: "#FFFFFF", fontSize: 11, fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }) }}>
-            {`INTRO orb y=${orbMeasure.y.toFixed(1)} h=${orbMeasure.h.toFixed(1)} cY=${(orbMeasure.y + orbMeasure.h / 2).toFixed(1)}`}
-          </Text>
-        </View>
-      ) : null}
+      {/* === ORB MEASURE DEBUG OVERLAY — RIMOSSO (Fabio 2026-08-26) ===
+          Era un box "INTRO orb y=... h=... cY=..." in basso a sinistra usato
+          per calibrare la posizione dell'orb rispetto alla home. Layout
+          stabile → non deve essere visibile agli utenti reali. */}
     </Animated.View>
   );
 }
