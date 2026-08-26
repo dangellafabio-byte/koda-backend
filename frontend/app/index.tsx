@@ -476,7 +476,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v65.0-blocco-a-memory-manager-android-parity";
+  const KODA_BUILD_SHORT_TAG = "build-v65.1-runtime-bumped-1.0.126";
   const KODA_BUILD_DATE = "2026-08-26";
   useEffect(() => {
     console.log(
@@ -7063,6 +7063,15 @@ export default function Taccuino() {
               </Text>
               <Text style={{ color: theme.text + "33", fontSize: 9, marginTop: 3, letterSpacing: 0.5 }}>
                 {KODA_BUILD_SHORT_TAG}
+              </Text>
+              {/* === DIAGNOSTICA runtimeVersion (2026-08-26, Fabio) =============
+                  Se il footer sotto mostra "rt:1.0.113" invece di "rt:1.0.126",
+                  significa che questo APK è stato costruito da uno snapshot
+                  container ANTECEDENTE al bump — prova che la pipeline di
+                  build serve uno snapshot stale. Utile per il ticket Emergent
+                  Support. Testo minuscolo per non disturbare l'UI. */}
+              <Text style={{ color: theme.text + "22", fontSize: 8, marginTop: 2, letterSpacing: 0.3 }}>
+                rt:{Constants.expoConfig?.runtimeVersion || "?"} · vc:{Constants.expoConfig?.android?.versionCode ?? Constants.expoConfig?.ios?.buildNumber ?? "?"}
               </Text>
             </View>
 </>)}
