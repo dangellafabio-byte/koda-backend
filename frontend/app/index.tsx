@@ -476,8 +476,8 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v64.22-punti-3-5-7-cumulative";
-  const KODA_BUILD_DATE = "2026-08-01";
+  const KODA_BUILD_SHORT_TAG = "build-v65.0-blocco-a-memory-manager-android-parity";
+  const KODA_BUILD_DATE = "2026-08-26";
   useEffect(() => {
     console.log(
       `[KODA_BUILDTAG] ${KODA_BUILD_SHORT_TAG} v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=${KODA_BUILD_DATE} ` +
@@ -6364,6 +6364,27 @@ export default function Taccuino() {
                 subito sopra il footer con bundle info. In questo modo il
                 gesto distruttivo non è mai immediato durante la lettura
                 normale delle impostazioni. */}
+
+            {/* === I MIEI RICORDI (Blocco C/D/E, Fabio 2026-08-25) ===
+                UI unificata GDPR-compliant per vedere, esportare (JSON) e
+                cancellare i ricordi che Koda ha estratto dagli scambi.
+                Sempre visibile — è un DIRITTO dell'utente, non feature admin. */}
+            <TouchableOpacity
+              style={[styles.settingRow, { paddingVertical: 14 }]}
+              onPress={() => {
+                setShowSettings(false);
+                setTimeout(() => { router.push("/memories"); }, 220);
+              }}
+              testID="open-memories"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>🤍 I miei ricordi</Text>
+                <Text style={styles.settingHint}>
+                  Vedi, esporta o cancella quello che Koda ha memorizzato di te.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+            </TouchableOpacity>
 
             {/* === RIVEDI INTRO PREMIUM (admin-only, Fabio 2026-08-22) ===
                 Sostituisce il vecchio "Rivedi presentazione di Koda" che
