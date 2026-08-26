@@ -344,6 +344,15 @@ def _client_fingerprint_from_headers(
     """Fingerprint stabile client per la cache IP→UID.
     IP presa da X-Forwarded-For (Kubernetes ingress) o fallback host WS.
     UA hash a 16 bit per differenziare device diversi dietro NAT.
+
+    === FIX 2026-08-26 (Fabio) — deterministic ua_hash ===
+    Prima usavamo `hash(ua_header)` builtin di Python che è randomizzato
+    tra restart del processo (PYTHONHASHSEED default random in 3.3+).
+    Ogni deploy Railway rigenerava hash diversi → tutte le entries in
+    `voice_auth_bridge` diventavano inutili al primo restart → tutti gli
+    WS voce cadevano su uid="me". Bug scoperto stanotte auditando le
+    7 frasi di Fabio: erano tutte su "me" invece che sul suo uid.
+    Ora usiamo md5 (deterministico) → le entries esistenti sopravvivono.
     """
     try:
         if xff_header:
@@ -352,7 +361,9 @@ def _client_fingerprint_from_headers(
             ip = fallback_host
         else:
             ip = "unknown"
-        ua_hash = hash(ua_header or "") & 0xFFFF
+        ua_hash = int(
+            _hashlib.md5((ua_header or "").encode("utf-8")).hexdigest()[:4], 16
+        )
         return f"{ip}|{ua_hash:04x}"
     except Exception:
         return "unknown|0000"
@@ -419,31 +430,62 @@ async def _recall_uid_for_client_async(fingerprint: str) -> Optional[str]:
 
     Ordine di lookup:
       1) hot cache in-mem (fast path, ~10min TTL)
-      2) MongoDB voice_auth_bridge (TTL 30 giorni)
+      2) MongoDB voice_auth_bridge (TTL 30 giorni) — exact fingerprint match
+      3) IP-ONLY fallback (Fabio 2026-08-26): se lo stesso IP appare nel
+         bridge con UN SOLO uid distinto (≠ "me"), lo useremo. Utile perché
+         l'UA hash cambia tra deploy prima del fix md5, mentre l'IP rimane
+         stabile in una sessione cellulare.
     Se trovato in DB, ripopola la hot cache.
     """
     hot = _recall_uid_for_client(fingerprint)
     if hot:
         return hot
-    # DB lookup fallback
+    # DB lookup fallback — exact match
     try:
         doc = await db[_VOICE_AUTH_BRIDGE_COLL].find_one(
             {"fingerprint": fingerprint},
             {"_id": 0, "uid": 1, "updated_at": 1},
         )
-        if not doc:
-            return None
-        uid = doc.get("uid")
-        if not uid or uid == "me":
-            return None
-        # Ripopola hot cache
-        import time as _time
-        _HTTP_TO_UID_CACHE[fingerprint] = (uid, _time.time() + _HTTP_TO_UID_CACHE_TTL)
-        logger.info(f"[voice_auth_bridge] DB hit fp={fingerprint} → uid={uid[:8]}...")
-        return uid
+        if doc:
+            uid = doc.get("uid")
+            if uid and uid != "me":
+                import time as _time
+                _HTTP_TO_UID_CACHE[fingerprint] = (uid, _time.time() + _HTTP_TO_UID_CACHE_TTL)
+                logger.info(f"[voice_auth_bridge] DB exact hit fp={fingerprint} → uid={uid[:8]}...")
+                return uid
     except Exception as e:
-        logger.warning(f"[voice_auth_bridge] DB lookup failed fp={fingerprint} err={e}")
-        return None
+        logger.warning(f"[voice_auth_bridge] DB exact lookup failed fp={fingerprint} err={e}")
+
+    # IP-ONLY fallback
+    try:
+        ip_part = fingerprint.split("|")[0] if "|" in fingerprint else fingerprint
+        if not ip_part or ip_part == "unknown":
+            return None
+        import re as _re
+        pattern = f"^{_re.escape(ip_part)}\\|"
+        cursor = db[_VOICE_AUTH_BRIDGE_COLL].find(
+            {"fingerprint": {"$regex": pattern}, "uid": {"$ne": "me"}},
+            {"_id": 0, "uid": 1},
+        ).limit(20)
+        seen_uids = set()
+        async for d in cursor:
+            u = d.get("uid")
+            if u and u != "me":
+                seen_uids.add(u)
+        if len(seen_uids) == 1:
+            uid = seen_uids.pop()
+            import time as _time
+            _HTTP_TO_UID_CACHE[fingerprint] = (uid, _time.time() + _HTTP_TO_UID_CACHE_TTL)
+            logger.info(f"[voice_auth_bridge] IP-only hit ip={ip_part} → uid={uid[:8]}... (single uid for IP)")
+            return uid
+        elif len(seen_uids) > 1:
+            logger.warning(
+                f"[voice_auth_bridge] IP-only ambiguous ip={ip_part}: multiple uids "
+                f"({[u[:8] for u in seen_uids]}) — falling back to 'me'"
+            )
+    except Exception as e:
+        logger.warning(f"[voice_auth_bridge] IP-only lookup failed fp={fingerprint} err={e}")
+    return None
 
 
 async def _ensure_voice_auth_bridge_indexes() -> None:
@@ -3589,6 +3631,90 @@ async def debug_audit_recent(secret: Optional[str] = None, minutes: int = 60):
         "timeline_by_profile_last_7d": timeline_by_profile_7d,
         "voice_bridge_recent_top10": voice_bridge_recent,
     }
+
+
+# === MIGRATION ENDPOINT — profile_id="me" → real uid (Fabio 2026-08-26) =====
+# One-shot, IDEMPOTENTE, protetto dallo stesso secret dell'audit.
+# Sposta tutti i doc con profile_id="me" (o senza profile_id) al target_uid.
+# Riesecuzione: safe. Se non c'è più nulla su "me", ritorna 0.
+
+class _MigrateMeToRequest(BaseModel):
+    secret: str
+    target_uid: str
+    dry_run: bool = False
+
+
+@api_router.post("/debug/migrate-me-to")
+async def debug_migrate_me_to(req: _MigrateMeToRequest):
+    """Migra dati da profile_id='me' al target_uid. Idempotente."""
+    if req.secret != _AUDIT_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    target = req.target_uid.strip()
+    if not target or target == "me":
+        raise HTTPException(status_code=400, detail="target_uid must be a real uid")
+    target_profile = await db.taccuino_profile.find_one({"id": target})
+    if not target_profile:
+        raise HTTPException(status_code=404, detail=f"target profile not found: {target}")
+
+    filter_me = {"$or": [
+        {"profile_id": "me"},
+        {"profile_id": {"$exists": False}},
+        {"profile_id": None},
+    ]}
+    update_to_target = {"$set": {"profile_id": target}}
+
+    report: Dict[str, Any] = {"target_uid": target, "dry_run": req.dry_run, "collections": {}}
+    coll_map = [
+        "taccuino_timeline",
+        "taccuino_memories",
+        _SITUATIONS_COLL,
+        _SITUATION_EVIDENCES_COLL,
+        "taccuino_key_facts",
+    ]
+    for coll_name in coll_map:
+        try:
+            if coll_name not in await db.list_collection_names():
+                report["collections"][coll_name] = {"n_would_move": 0, "n_moved": 0, "skipped": "not_exists"}
+                continue
+            n_would_move = await db[coll_name].count_documents(filter_me)
+            if req.dry_run or n_would_move == 0:
+                report["collections"][coll_name] = {"n_would_move": n_would_move, "n_moved": 0}
+                continue
+            r = await db[coll_name].update_many(filter_me, update_to_target)
+            report["collections"][coll_name] = {
+                "n_would_move": n_would_move,
+                "n_moved": r.modified_count,
+            }
+        except Exception as e:
+            report["collections"][coll_name] = {"__error__": f"{type(e).__name__}: {e}"}
+
+    # Bonus: se target profile è ancora vergine (total_messages=0), copia
+    # il memory_summary dal profile "me" così Koda non "dimentica" chi sei.
+    try:
+        me_prof = await db.taccuino_profile.find_one({"id": "me"})
+        tgt_prof = await db.taccuino_profile.find_one({"id": target})
+        if me_prof and tgt_prof and (tgt_prof.get("total_messages") or 0) == 0:
+            copyable_fields = {
+                "memory_summary": me_prof.get("memory_summary"),
+                "home_city": me_prof.get("home_city") or tgt_prof.get("home_city"),
+                "total_messages": me_prof.get("total_messages") or 0,
+                "confidence_level": me_prof.get("confidence_level") or tgt_prof.get("confidence_level"),
+                "updated_at": datetime.now(timezone.utc),
+            }
+            if req.dry_run:
+                report["profile_copy"] = {"would_update": True, "fields": list(copyable_fields.keys())}
+            else:
+                await db.taccuino_profile.update_one(
+                    {"id": target}, {"$set": copyable_fields}
+                )
+                report["profile_copy"] = {"updated": True, "fields": list(copyable_fields.keys())}
+        else:
+            report["profile_copy"] = {"skipped": "target not empty or me profile missing"}
+    except Exception as e:
+        report["profile_copy"] = {"__error__": f"{type(e).__name__}: {e}"}
+
+    return report
 
 
 # === SPEECH TIMELINE SELF-TEST (2026-08-17) ================================
