@@ -3769,6 +3769,79 @@ async def debug_set_profile_flag(req: _SetFlagRequest):
     }
 
 
+# === PROBE CLAUDE ENDPOINT — testa adherence prompt (Fabio 2026-08-26) =====
+# Chiama Claude con lo stesso prompt fast usato nel voice pipeline e restituisce
+# il JSON raw parsato. Nessun side-effect DB. Solo per verificare che il modello
+# emetta correttamente new_memory / situation_evidence dopo il fix del prompt.
+class _ProbeClaudeRequest(BaseModel):
+    secret: str
+    user_text: str
+
+
+@api_router.post("/debug/probe-claude")
+async def debug_probe_claude(req: _ProbeClaudeRequest):
+    if req.secret != _AUDIT_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if not req.user_text or len(req.user_text) > 500:
+        raise HTTPException(status_code=400, detail="user_text 1-500 chars")
+
+    # Prompt condensato che replica le REGOLE FERREE del fast prompt
+    sys_prompt = (
+        "Sei Koda, un amico caldo. Rispondi in italiano.\n"
+        "FORMATO: SOLO JSON valido. Devi emettere questi campi:\n"
+        '  "reply": "[TONE:warm] frase breve",\n'
+        '  "tone": "warm|calm|concerned|energetic|urgent|neutral|paced",\n'
+        '  "new_memory": {"concept":"...","tags":[...],"importance":6} oppure null,\n'
+        '  "situation_evidence": {"entity":"nome lowercase","entity_type":"person|topic|situation|place|activity|other","title":"Label","tags":[...]} oppure null\n\n'
+        "REGOLA FERREA — situation_evidence:\n"
+        "Se in user_text c'è UN nome proprio (Carlo, Anna, ecc) o un evento "
+        "identificabile (esame, riunione, colloquio) → POPOLA situation_evidence. "
+        "Emettere null in questo caso è ERRORE.\n\n"
+        "ESEMPI:\n"
+        "  User: 'Ieri Carlo mi ha scritto un messaggio strano'\n"
+        "    → situation_evidence: {\"entity\":\"carlo\",\"entity_type\":\"person\",\"title\":\"Carlo\",\"tags\":[\"messaggio\"]}\n"
+        "  User: 'Ho l'esame di storia lunedì'\n"
+        "    → situation_evidence: {\"entity\":\"esame di storia\",\"entity_type\":\"situation\",\"title\":\"Esame di storia\",\"tags\":[\"scuola\"]}\n"
+        "  User: 'Sono stanco oggi'\n"
+        "    → situation_evidence: null (nessun nome/evento)\n\n"
+        "REGOLA new_memory: crea ricordo se emerge una persona cara/luogo/evento/valore/preoccupazione. Altrimenti null.\n"
+    )
+    import litellm as _litellm
+    try:
+        resp = await _litellm.acompletion(
+            model="openai/claude-haiku-4-5-20251001",
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": req.user_text},
+            ],
+            max_tokens=400,
+            temperature=0.3,
+            api_key=os.environ.get("EMERGENT_LLM_KEY"),
+            api_base="https://integrations.emergentagent.com/llm",
+        )
+        raw = resp["choices"][0]["message"]["content"]
+        # Parse JSON tolerant to trailing text
+        import re as _re
+        m = _re.search(r"\{.*\}", raw, _re.DOTALL)
+        parsed: Any
+        if m:
+            try:
+                parsed = json.loads(m.group(0))
+            except Exception:
+                parsed = {"__parse_error__": True, "raw_snippet": m.group(0)[:400]}
+        else:
+            parsed = {"__no_json_found__": True}
+        return {
+            "user_text": req.user_text,
+            "raw_response": raw[:1500],
+            "parsed": parsed,
+            "populated_new_memory": bool(isinstance(parsed, dict) and parsed.get("new_memory")),
+            "populated_situation_evidence": bool(isinstance(parsed, dict) and parsed.get("situation_evidence")),
+        }
+    except Exception as e:
+        return {"__error__": f"{type(e).__name__}: {e}"}
+
+
 # === SPEECH TIMELINE SELF-TEST (2026-08-17) ================================
 # Endpoint diagnostico per capire perché l'evento `speech_timeline` non
 # arriva al client in produzione. Fa 3 controlli in sequenza:
@@ -11689,7 +11762,24 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"'il capo'), POPOLA con {{\"entity\":\"nome lowercase\",\"entity_type\":\"person|topic|situation|place|activity|other\",\"title\":\"Label leggibile\",\"tags\":[\"2-4 tag fattuali\"]}}. "
         f"SEMPRE null se: (a) niente entità nel turno, (b) contenuti generici emotivi ('mi sento triste'), "
         f"(c) tema safety (autolesionismo/violenza). Tag SOLO fattuali (\"fratello\",\"lavoro\") MAI emotivi (\"ansia\",\"paura\").\n"
-        f"\n"
+        # === FIX ADHERENCE (Fabio 2026-08-26) — regola ferrea contro null-drop ===
+        # Claude Haiku 4.5 tende a droppare `situation_evidence` a null anche
+        # quando ci sono nomi propri chiari nel turno. Aggiungiamo una regola
+        # meccanica e due esempi one-shot POSITIVI per forzare adherence.
+        f"\n⚡ REGOLA FERREA — NON DROPPARE situation_evidence:\n"
+        f"Se in user_text c'è ANCHE UN SOLO nome proprio di persona (maiuscolo, "
+        f"es. 'Carlo', 'Anna', 'papà se preceduto da nome'), oppure un evento "
+        f"identificabile (es. 'l'esame di storia', 'la riunione di lunedì', 'il "
+        f"colloquio', 'il matrimonio di X') → DEVI popolare situation_evidence "
+        f"nel JSON. Emettere null in questo caso è ERRORE. Chit-chat generico "
+        f"senza nomi ('sono stanco', 'che tempo fa') → null è OK.\n"
+        f"\nESEMPI OBBLIGATORI:\n"
+        f"  User: 'Ieri Carlo mi ha scritto un messaggio strano'\n"
+        f"    → situation_evidence: {{\"entity\":\"carlo\",\"entity_type\":\"person\",\"title\":\"Carlo\",\"tags\":[\"messaggio\"]}}\n"
+        f"  User: 'Ho l'esame di storia lunedì mattina'\n"
+        f"    → situation_evidence: {{\"entity\":\"esame di storia\",\"entity_type\":\"situation\",\"title\":\"Esame di storia\",\"tags\":[\"scuola\",\"lunedi\"]}}\n"
+        f"  User: 'Sono stanco oggi'\n"
+        f"    → situation_evidence: null (contenuto emotivo generico, nessun nome/evento)\n\n"
         # Esempio JSON con situation_evidence POPOLATO (adherence via one-shot):
         f'{{"reply":"[TONE:warm] ...","tone":"warm|calm|energetic|concerned|urgent|paced|neutral","actions":[],"memory_update":null,"trait_update":null,"new_memory":null,"situation_evidence":{{"entity":"carlo","entity_type":"person","title":"Carlo","tags":["fratello"]}},"close_session":false,"home_update":null}}'
     )
