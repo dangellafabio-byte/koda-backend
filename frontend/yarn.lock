@@ -1666,6 +1666,11 @@
   resolved "https://registry.yarnpkg.com/@radix-ui/react-use-layout-effect/-/react-use-layout-effect-1.1.2.tgz#c882e66497174d061f250e65251974b699c65b65"
   integrity sha512-jrBWOxZITuGcnjRCM2t2U5ZPkCLxD+Ym6DjfssS5haTj2iiak/DOb64JeN6OdLfLgptb6/e2kKR+ZuTrGoZTPA==
 
+"@react-native-community/netinfo@11.4.1":
+  version "11.4.1"
+  resolved "https://registry.yarnpkg.com/@react-native-community/netinfo/-/netinfo-11.4.1.tgz#a3c247aceab35f75dd0aa4bfa85d2be5a4508688"
+  integrity sha512-B0BYAkghz3Q2V09BF88RA601XursIEA111tnc2JOaN7axJWmNefmfjZqw/KdSxKZp7CZUuPpjBmz/WCR9uaHYg==
+
 "@react-native/assets-registry@0.81.5":
   version "0.81.5"
   resolved "https://registry.yarnpkg.com/@react-native/assets-registry/-/assets-registry-0.81.5.tgz#d22c924fa6f6d4a463c5af34ce91f38756c0fa7d"
@@ -3788,6 +3793,11 @@ expo-blur@~15.0.8:
   version "15.0.8"
   resolved "https://registry.yarnpkg.com/expo-blur/-/expo-blur-15.0.8.tgz#846cea275a6644639c5c338987b4cca54cf93eca"
   integrity sha512-rWyE1NBRZEu9WD+X+5l7gyPRszw7n12cW3IRNAb5i6KFzaBp8cxqT5oeaphJapqURvcqhkOZn2k5EtBSbsuU7w==
+
+expo-brightness@~14.0.8:
+  version "14.0.8"
+  resolved "https://registry.yarnpkg.com/expo-brightness/-/expo-brightness-14.0.8.tgz#040ba3e06646f918218fd8dca43d7c237c3ba07f"
+  integrity sha512-WOg3UxzkHFTKBW3XvROlrVRmnJmZLhGBGd1RdzTfrtt2/MdSzvVmCevqWh4bohkeLABh0Yc9YRo1vFgfT73DWw==
 
 expo-clipboard@~8.0.8:
   version "8.0.8"
