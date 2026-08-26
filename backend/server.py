@@ -3525,13 +3525,14 @@ async def debug_audit_recent(secret: Optional[str] = None, minutes: int = 60):
     try:
         cursor = db.taccuino_profile.find(
             {},
-            {"_id": 0, "id": 1, "name": 1, "updated_at": 1, "created_at": 1, "total_messages": 1},
+            {"_id": 0, "id": 1, "name": 1, "updated_at": 1, "created_at": 1, "total_messages": 1, "settings": 1},
         ).sort("updated_at", -1).limit(20)
         async for d in cursor:
             all_profiles.append({
                 "id": d.get("id"),
                 "name": d.get("name"),
                 "total_messages": d.get("total_messages"),
+                "settings": d.get("settings"),
                 "created_at": (d.get("created_at").isoformat() if hasattr(d.get("created_at"), "isoformat") else d.get("created_at")),
                 "updated_at": (d.get("updated_at").isoformat() if hasattr(d.get("updated_at"), "isoformat") else d.get("updated_at")),
             })
@@ -3715,6 +3716,53 @@ async def debug_migrate_me_to(req: _MigrateMeToRequest):
         report["profile_copy"] = {"__error__": f"{type(e).__name__}: {e}"}
 
     return report
+
+
+# === SET-FLAG ENDPOINT — force set a settings flag (Fabio 2026-08-26) ========
+# Protetto da secret. Idempotente. Setta un flag boolean sul settings.<key>
+# di un profilo. Usato per attivare Situation Tracking senza dover fare la
+# PUT /api/profile con session token.
+
+class _SetFlagRequest(BaseModel):
+    secret: str
+    target_uid: str
+    flag: str  # "situation_tracking_enabled"
+    value: bool
+
+
+@api_router.post("/debug/set-profile-flag")
+async def debug_set_profile_flag(req: _SetFlagRequest):
+    if req.secret != _AUDIT_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    ALLOWED = {"situation_tracking_enabled", "voiceprint_enabled"}
+    if req.flag not in ALLOWED:
+        raise HTTPException(status_code=400, detail=f"flag must be one of {ALLOWED}")
+
+    target = req.target_uid.strip()
+    if not target or target == "me":
+        raise HTTPException(status_code=400, detail="target_uid required")
+
+    prof = await db.taccuino_profile.find_one({"id": target})
+    if not prof:
+        raise HTTPException(status_code=404, detail=f"profile not found: {target}")
+
+    settings = dict(prof.get("settings") or {})
+    old_value = settings.get(req.flag)
+    settings[req.flag] = bool(req.value)
+    settings["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    await db.taccuino_profile.update_one(
+        {"id": target},
+        {"$set": {"settings": settings, "updated_at": datetime.now(timezone.utc)}}
+    )
+    return {
+        "target_uid": target,
+        "flag": req.flag,
+        "old_value": old_value,
+        "new_value": bool(req.value),
+        "settings_now": settings,
+    }
 
 
 # === SPEECH TIMELINE SELF-TEST (2026-08-17) ================================
