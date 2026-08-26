@@ -681,3 +681,37 @@ Dopo che Fabio ripubblica e rifà le 7 frasi:
 - Verificare `/api/situations` sul profilo Fabio → dovrebbe avere entries
 - Verificare `/api/memories` sul profilo Fabio → dovrebbero comparire ricordi
 - Auditare se `[TONE:paced]` è stato emesso da Claude nelle risposte
+
+---
+
+## 2026-08-26 — EAS STALE APK DIAGNOSIS + WORKAROUND (v65.1)
+
+### Sintomo
+Dopo commit 45a40a6c ("v65.0 Memory Manager + BUILDTAG"), Fabio ha generato 4 APK
+Android consecutive dal pulsante Publish di Emergent — TUTTE mostravano ancora
+il codice del 28 luglio (BUILDTAG residuo tipo v64.17). Local fs e koda/main HEAD
+verificati aggiornati.
+
+### Causa provata (interrogazione diretta u.expo.dev)
+Ultimo OTA sul channel `preview` per runtimeVersion=1.0.113 + android:
+- createdAt: 2026-07-28T11:15:38.438Z (29 giorni fa)
+- version: 1.0.119, versionCode: 13
+- updateId: 019fa86f-f946-7476-b307-892fe3486646
+
+Da allora zero OTA nuovi pubblicati nonostante 15+ push su main.
+Workflow `.github/workflows/eas-update.yml` non ha funzionato per 29 giorni.
+Sospetto: EXPO_TOKEN scaduto o mancante nei GitHub Secrets.
+
+### Fix applicato (commit 4380afe2)
+1. `app.json`: `runtimeVersion` bumped `1.0.113` → `1.0.126` (allineato a version).
+   Invalida OTA lookup: nuovo APK userà ESCLUSIVAMENTE il bundle embedded.
+2. `app/index.tsx`: `KODA_BUILD_SHORT_TAG` = `build-v65.1-runtime-bumped-1.0.126`.
+3. Footer Impostazioni: aggiunto display `rt:{runtimeVersion} · vc:{versionCode}`
+   per diagnostica immediata al primo boot APK.
+
+### Prossimo passo (utente)
+Generare un nuovo APK dal pulsante Publish. Al primo avvio, in Impostazioni:
+- Se footer mostra `rt:1.0.126` → problema era OTA stale → workaround riuscito.
+- Se footer mostra `rt:1.0.113` → container serve snapshot vecchio → prova per Emergent Support.
+
+Ticket completo pronto in: `/app/EMERGENT_SUPPORT_TICKET_EAS_STALE_v65.md`
