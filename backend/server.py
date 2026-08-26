@@ -3544,15 +3544,19 @@ async def debug_audit_recent(secret: Optional[str] = None, minutes: int = 60):
     try:
         cursor = db.taccuino_timeline.find(
             {},
-            {"_id": 0, "profile_id": 1, "role": 1, "text": 1, "timestamp": 1},
+            # Proiezione RIMOSSA — restituiamo tutti i campi per debug
         ).sort("timestamp", -1).limit(20)
         async for d in cursor:
-            absolute_recent_timeline.append({
-                "profile_id": d.get("profile_id"),
-                "role": d.get("role"),
-                "text": (d.get("text") or "")[:100],
-                "ts": (d.get("timestamp").isoformat() if hasattr(d.get("timestamp"), "isoformat") else d.get("timestamp")),
-            })
+            d.pop("_id", None)
+            # Serializza datetime → isoformat
+            if hasattr(d.get("timestamp"), "isoformat"):
+                d["timestamp"] = d["timestamp"].isoformat()
+            if hasattr(d.get("created_at"), "isoformat"):
+                d["created_at"] = d["created_at"].isoformat()
+            # tronca text lunghi
+            if isinstance(d.get("text"), str) and len(d["text"]) > 300:
+                d["text"] = d["text"][:300]
+            absolute_recent_timeline.append(d)
     except Exception as e:
         absolute_recent_timeline = [{"__error__": f"{type(e).__name__}: {e}"}]
 
