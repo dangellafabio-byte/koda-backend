@@ -3355,6 +3355,140 @@ async def debug_ws_auth_fix_check(token: Optional[str] = None):
         return result
 
 
+# === AUDIT VOICE TEST — TEMPORANEO (Fabio 2026-08-25) =====================
+# Endpoint di sola LETTURA per verificare che le 7 frasi voce siano finite
+# sul profilo di Fabio (uid autenticato) e non su "me". Protetto da secret
+# hardcoded: da rimuovere dopo l'audit.
+_AUDIT_SECRET = "koda-audit-2026-08-25-fabio-voice-7phrases"
+
+
+@api_router.get("/debug/audit-recent")
+async def debug_audit_recent(secret: Optional[str] = None, minutes: int = 60):
+    """Report riassuntivo delle ultime interazioni voce. RIMUOVERE dopo audit."""
+    if secret != _AUDIT_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    from datetime import timedelta as _td
+    cutoff = datetime.now(timezone.utc) - _td(minutes=max(5, min(1440, minutes)))
+
+    async def _by_profile(coll_name: str, ts_field: str) -> Dict[str, int]:
+        try:
+            pipeline = [
+                {"$match": {ts_field: {"$gte": cutoff}}},
+                {"$group": {"_id": "$profile_id", "n": {"$sum": 1}}},
+                {"$sort": {"n": -1}},
+                {"$limit": 10},
+            ]
+            out: Dict[str, int] = {}
+            async for doc in db[coll_name].aggregate(pipeline):
+                out[str(doc.get("_id") or "(null)")] = int(doc.get("n") or 0)
+            return out
+        except Exception as e:
+            return {"__error__": f"{type(e).__name__}: {e}"}
+
+    timeline_by_profile = await _by_profile("taccuino_timeline", "timestamp")
+    memories_by_profile = await _by_profile("taccuino_memories", "created_at")
+    situations_by_profile = await _by_profile(_SITUATIONS_COLL, "last_evidence_at")
+    evidences_by_profile = await _by_profile(_SITUATION_EVIDENCES_COLL, "observed_at")
+
+    recent_user_turns: List[Dict[str, Any]] = []
+    try:
+        cursor = db.taccuino_timeline.find(
+            {"timestamp": {"$gte": cutoff}, "role": "user"},
+            {"_id": 0, "profile_id": 1, "text": 1, "timestamp": 1},
+        ).sort("timestamp", -1).limit(12)
+        async for d in cursor:
+            recent_user_turns.append({
+                "profile_id": d.get("profile_id"),
+                "text": (d.get("text") or "")[:140],
+                "ts": (d.get("timestamp").isoformat() if d.get("timestamp") else None),
+            })
+    except Exception as e:
+        recent_user_turns = [{"__error__": f"{type(e).__name__}: {e}"}]
+
+    recent_ai_turns: List[Dict[str, Any]] = []
+    try:
+        cursor = db.taccuino_timeline.find(
+            {"timestamp": {"$gte": cutoff}, "role": "ai"},
+            {"_id": 0, "profile_id": 1, "text": 1, "tone": 1, "timestamp": 1},
+        ).sort("timestamp", -1).limit(5)
+        async for d in cursor:
+            recent_ai_turns.append({
+                "profile_id": d.get("profile_id"),
+                "tone": d.get("tone"),
+                "text": (d.get("text") or "")[:200],
+                "ts": (d.get("timestamp").isoformat() if d.get("timestamp") else None),
+            })
+    except Exception as e:
+        recent_ai_turns = [{"__error__": f"{type(e).__name__}: {e}"}]
+
+    recent_memories: List[Dict[str, Any]] = []
+    try:
+        cursor = db.taccuino_memories.find(
+            {"created_at": {"$gte": cutoff}},
+            {"_id": 0, "profile_id": 1, "concept": 1, "tags": 1, "emotion": 1, "importance": 1, "created_at": 1},
+        ).sort("created_at", -1).limit(10)
+        async for d in cursor:
+            recent_memories.append({
+                "profile_id": d.get("profile_id"),
+                "concept": (d.get("concept") or "")[:180],
+                "tags": d.get("tags"),
+                "emotion": d.get("emotion"),
+                "importance": d.get("importance"),
+                "created_at": (d.get("created_at").isoformat() if d.get("created_at") else None),
+            })
+    except Exception as e:
+        recent_memories = [{"__error__": f"{type(e).__name__}: {e}"}]
+
+    recent_situations: List[Dict[str, Any]] = []
+    try:
+        cursor = db[_SITUATIONS_COLL].find(
+            {"last_evidence_at": {"$gte": cutoff}},
+            {"_id": 0, "profile_id": 1, "id": 1, "title": 1, "entity_type": 1, "last_evidence_at": 1},
+        ).sort("last_evidence_at", -1).limit(10)
+        async for d in cursor:
+            recent_situations.append({
+                "profile_id": d.get("profile_id"),
+                "id": d.get("id"),
+                "title": d.get("title"),
+                "entity_type": d.get("entity_type"),
+                "last_evidence_at": (d.get("last_evidence_at").isoformat() if d.get("last_evidence_at") else None),
+            })
+    except Exception as e:
+        recent_situations = [{"__error__": f"{type(e).__name__}: {e}"}]
+
+    active_sessions: List[Dict[str, Any]] = []
+    try:
+        cursor = db.sessions.find(
+            {},
+            {"_id": 0, "email": 1, "created_at": 1, "expires_at": 1},
+        ).sort("created_at", -1).limit(5)
+        async for d in cursor:
+            active_sessions.append({
+                "email": d.get("email"),
+                "created_at": (d.get("created_at").isoformat() if d.get("created_at") else None),
+                "expires_at": (d.get("expires_at").isoformat() if d.get("expires_at") else None),
+            })
+    except Exception as e:
+        active_sessions = [{"__error__": f"{type(e).__name__}: {e}"}]
+
+    return {
+        "cutoff": cutoff.isoformat(),
+        "window_minutes": minutes,
+        "counts_by_profile": {
+            "timeline": timeline_by_profile,
+            "memories": memories_by_profile,
+            "situations": situations_by_profile,
+            "evidences": evidences_by_profile,
+        },
+        "recent_user_turns": recent_user_turns,
+        "recent_ai_turns": recent_ai_turns,
+        "recent_memories": recent_memories,
+        "recent_situations": recent_situations,
+        "active_sessions": active_sessions,
+    }
+
+
 # === SPEECH TIMELINE SELF-TEST (2026-08-17) ================================
 # Endpoint diagnostico per capire perché l'evento `speech_timeline` non
 # arriva al client in produzione. Fa 3 controlli in sequenza:
