@@ -3461,16 +3461,112 @@ async def debug_audit_recent(secret: Optional[str] = None, minutes: int = 60):
     try:
         cursor = db.sessions.find(
             {},
-            {"_id": 0, "email": 1, "created_at": 1, "expires_at": 1},
-        ).sort("created_at", -1).limit(5)
+            {"_id": 0, "email": 1, "created_at": 1, "expires_at": 1, "session_token": 1},
+        ).sort("created_at", -1).limit(30)
         async for d in cursor:
+            tok = d.get("session_token") or ""
             active_sessions.append({
                 "email": d.get("email"),
                 "created_at": (d.get("created_at").isoformat() if d.get("created_at") else None),
                 "expires_at": (d.get("expires_at").isoformat() if d.get("expires_at") else None),
+                "token_prefix": tok[:8] if tok else None,
             })
     except Exception as e:
         active_sessions = [{"__error__": f"{type(e).__name__}: {e}"}]
+
+    # === EXPANDED AUDIT (Fabio 2026-08-26) ===================================
+    # Aggiungo verifiche allargate perché la finestra 24h non ha trovato nulla:
+    # forse i dati sono su un profile_id specifico o su collezioni diverse.
+
+    # 1. Tutti i profili in `taccuino_profile` con contatore recente
+    all_profiles: List[Dict[str, Any]] = []
+    try:
+        cursor = db.taccuino_profile.find(
+            {},
+            {"_id": 0, "id": 1, "name": 1, "updated_at": 1, "created_at": 1, "total_messages": 1},
+        ).sort("updated_at", -1).limit(20)
+        async for d in cursor:
+            all_profiles.append({
+                "id": d.get("id"),
+                "name": d.get("name"),
+                "total_messages": d.get("total_messages"),
+                "created_at": (d.get("created_at").isoformat() if hasattr(d.get("created_at"), "isoformat") else d.get("created_at")),
+                "updated_at": (d.get("updated_at").isoformat() if hasattr(d.get("updated_at"), "isoformat") else d.get("updated_at")),
+            })
+    except Exception as e:
+        all_profiles = [{"__error__": f"{type(e).__name__}: {e}"}]
+
+    # 2. Timeline: ULTIME 20 entries in ASSOLUTO (nessuna finestra), qualunque profile
+    absolute_recent_timeline: List[Dict[str, Any]] = []
+    try:
+        cursor = db.taccuino_timeline.find(
+            {},
+            {"_id": 0, "profile_id": 1, "role": 1, "text": 1, "timestamp": 1},
+        ).sort("timestamp", -1).limit(20)
+        async for d in cursor:
+            absolute_recent_timeline.append({
+                "profile_id": d.get("profile_id"),
+                "role": d.get("role"),
+                "text": (d.get("text") or "")[:100],
+                "ts": (d.get("timestamp").isoformat() if hasattr(d.get("timestamp"), "isoformat") else d.get("timestamp")),
+            })
+    except Exception as e:
+        absolute_recent_timeline = [{"__error__": f"{type(e).__name__}: {e}"}]
+
+    # 3. Count docs in TUTTE le collezioni chiave nella finestra 7 giorni
+    from datetime import timedelta as _td7
+    cutoff_7d = datetime.now(timezone.utc) - _td7(days=7)
+    coll_counts_7d: Dict[str, Any] = {}
+    for coll_name, ts_field in [
+        ("taccuino_timeline", "timestamp"),
+        ("taccuino_memories", "created_at"),
+        (_SITUATIONS_COLL, "last_evidence_at"),
+        (_SITUATION_EVIDENCES_COLL, "observed_at"),
+        ("fast_sessions", "created_at"),
+        ("messages", "timestamp"),
+        ("conversations", "created_at"),
+        ("history", "timestamp"),
+        ("analytics_events", "ts"),
+        ("voice_auth_bridge", "created_at"),
+    ]:
+        try:
+            if coll_name in await db.list_collection_names():
+                n = await db[coll_name].count_documents({ts_field: {"$gte": cutoff_7d}})
+                coll_counts_7d[coll_name] = n
+        except Exception as e:
+            coll_counts_7d[coll_name] = f"__error__:{type(e).__name__}"
+
+    # 4. Timeline count PER profile_id in 7 giorni (per capire su chi va)
+    timeline_by_profile_7d: Dict[str, int] = {}
+    try:
+        pipeline = [
+            {"$match": {"timestamp": {"$gte": cutoff_7d}}},
+            {"$group": {"_id": "$profile_id", "n": {"$sum": 1}}},
+            {"$sort": {"n": -1}},
+            {"$limit": 20},
+        ]
+        async for doc in db.taccuino_timeline.aggregate(pipeline):
+            timeline_by_profile_7d[str(doc.get("_id") or "(null)")] = int(doc.get("n") or 0)
+    except Exception as e:
+        timeline_by_profile_7d = {"__error__": f"{type(e).__name__}: {e}"}
+
+    # 5. Voice auth bridge (fallback fingerprint→uid) — chi ha aperto WS di recente
+    voice_bridge_recent: List[Dict[str, Any]] = []
+    try:
+        if "voice_auth_bridge" in await db.list_collection_names():
+            cursor = db.voice_auth_bridge.find(
+                {},
+                {"_id": 0, "fingerprint": 1, "uid": 1, "email": 1, "created_at": 1, "last_seen_at": 1},
+            ).sort("last_seen_at", -1).limit(10)
+            async for d in cursor:
+                voice_bridge_recent.append({
+                    "fingerprint": (d.get("fingerprint") or "")[:16],
+                    "uid": (d.get("uid") or "")[:12],
+                    "email": d.get("email"),
+                    "last_seen_at": (d.get("last_seen_at").isoformat() if hasattr(d.get("last_seen_at"), "isoformat") else d.get("last_seen_at")),
+                })
+    except Exception as e:
+        voice_bridge_recent = [{"__error__": f"{type(e).__name__}: {e}"}]
 
     return {
         "cutoff": cutoff.isoformat(),
@@ -3486,6 +3582,12 @@ async def debug_audit_recent(secret: Optional[str] = None, minutes: int = 60):
         "recent_memories": recent_memories,
         "recent_situations": recent_situations,
         "active_sessions": active_sessions,
+        # --- expanded ---
+        "all_profiles_top20": all_profiles,
+        "absolute_recent_timeline_top20": absolute_recent_timeline,
+        "coll_counts_last_7d": coll_counts_7d,
+        "timeline_by_profile_last_7d": timeline_by_profile_7d,
+        "voice_bridge_recent_top10": voice_bridge_recent,
     }
 
 
