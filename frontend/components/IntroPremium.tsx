@@ -29,6 +29,7 @@ import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import EclipseOrb from "./EclipseOrb";
 import HandsFreeOrb from "./HandsFreeOrb";
 import { ensureSpeechPermission } from "../lib/speechPermission";
+import { api } from "../lib/api";
 
 const TAG = "[intro-premium]";
 const CLIP_ECCOMI = require("../assets/sounds/intro/intro_premium_eccomi-cielo.mp3");
@@ -64,6 +65,13 @@ export default function IntroPremium() {
   const safetyTimerRef = useRef<any>(null);
   const tapHintTimerRef = useRef<any>(null);
   const mountedRef = useRef(true);
+  // === FIX 2026-08-27 v65.4 — Ref-based orb measurement (Fabio) ============
+  // Prima: rect calcolato come (W/2 - orbSize/2, H/2 - orbSize/2). Su Android
+  // il rettangolo era off rispetto al visual dell'orb → l'evidenziatura non
+  // era centrata. Ora misuriamo l'orb VERO col ref e usiamo quelle
+  // coordinate. Fallback al calcolo se la misura fallisce.
+  const orbRefEl = useRef<any>(null);
+  const [measuredOrbRect, setMeasuredOrbRect] = useState<Rect | null>(null);
 
   // ==================== RECTS (coerenti con home reale) ====================
   // === FIX ECLISSI CENTRATA (Fabio 2026-08-24) ==========================
@@ -76,21 +84,61 @@ export default function IntroPremium() {
   const orbCY = H / 2;
 
   const RECTS: Record<"orb" | "hf" | "la" | "settings", Rect> = {
-    orb: { x: W / 2 - orbSize / 2, y: orbCY - orbSize / 2, w: orbSize, h: orbSize },
+    orb: measuredOrbRect || { x: W / 2 - orbSize / 2, y: orbCY - orbSize / 2, w: orbSize, h: orbSize },
     hf: { x: 14, y: headerCY - 22, w: 44, h: 44 },
     la: { x: W / 2 - 95, y: Math.max(insets.top + 100, 150), w: 190, h: 44 },
     settings: { x: W - 58, y: headerCY - 22, w: 44, h: 44 },
   };
 
+  // === FIX 2026-08-27 v65.4 — Misura orb reale prima di mostrare ring ======
+  // measureInWindow è affidabile su iOS+Android e restituisce coordinate
+  // absolute rispetto alla root window (che è la stessa base del ring).
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        orbRefEl.current?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+          if (!mountedRef.current) return;
+          if (w > 0 && h > 0) {
+            console.log(`${TAG} orb measured: x=${x.toFixed(1)} y=${y.toFixed(1)} w=${w.toFixed(1)} h=${h.toFixed(1)}`);
+            setMeasuredOrbRect({ x, y, w, h });
+          }
+        });
+      } catch (e) { console.warn(`${TAG} measure failed:`, e); }
+    }, 400); // aspetta che il layout sia stabilizzato
+    return () => clearTimeout(t);
+  }, []);
+
   // ==================== AUDIO ====================
   const configureAudio = useCallback(async () => {
     try {
+      // === FIX 2026-08-27 v65.4 — Audio Android fix (Fabio) =================
+      // Prima: solo playsInSilentMode:true. Su Android alcuni build ignorano
+      // la clip se allowsRecording è residuo di una sessione mic precedente
+      // (Stefania viene dopo il paywall/router, non da un fresh boot puro).
+      // Aggiungiamo interruptionMode + interruptionModeAndroid espliciti.
       await setAudioModeAsync({
         allowsRecording: false,
         playsInSilentMode: true,
         shouldPlayInBackground: false,
+        interruptionMode: "duckOthers",
+        interruptionModeAndroid: "duckOthers",
+        shouldRouteThroughEarpiece: false,
       } as any);
     } catch (e) { console.warn(`${TAG} audio mode:`, e); }
+  }, []);
+
+  // ==================== SKIP (Fabio 2026-08-27 v65.4) ===================
+  // Escape hatch di emergenza: qualunque cosa fallisca (audio muto, permessi
+  // negati, coach-mark bug, layout Android), l'utente Premium DEVE poter
+  // uscire dall'intro. Segna intro_premium_seen sia locale sia backend e
+  // fa router.replace("/") — così al prossimo boot non riappare l'intro.
+  const skipIntro = useCallback(async () => {
+    console.log(`${TAG} skip pressed — marking seen and going home`);
+    try { currentPlayerRef.current?.pause?.(); currentPlayerRef.current?.remove?.(); } catch {}
+    try { await SecureStore.setItemAsync("intro_premium_seen_at", String(Date.now())); } catch {}
+    api.markIntroPremiumSeen().catch(() => {});
+    api.markLasciaAndareIntroSeen().catch(() => {});
+    try { router.replace("/"); } catch (e) { console.warn(`${TAG} skip nav failed:`, e); }
   }, []);
 
   const playIntroClip = useCallback(async () => {
@@ -327,6 +375,7 @@ export default function IntroPremium() {
         {/* Orb centrale */}
         <View style={styles.orbWrap} {...orbAreaTappable}>
           <TouchableOpacity
+            ref={orbRefEl}
             activeOpacity={0.9}
             onPress={onOrbTap}
             disabled={phase !== "waiting_tap"}
@@ -369,6 +418,23 @@ export default function IntroPremium() {
         renderCard(RECTS.settings, "Impostazioni", "Da qui cambi voce, tema, memoria.", true, true)}
       {phase === "coach_swipe" &&
         renderCard(null, "Scrittura", "Scorri verso sinistra per scrivermi.", false, false)}
+
+      {/* === Pulsante SALTA — sempre visibile (Fabio 2026-08-27 v65.4) =====
+          Escape hatch: se qualcosa non funziona (audio, layout, permessi),
+          l'utente può SEMPRE uscire dall'intro con un tap. Marca seen sia
+          in SecureStore sia nel backend, poi va alla home. Posizionato in
+          top-right per non collidere con card / orb / coach-mark. */}
+      {phase !== "handoff" && (
+        <TouchableOpacity
+          onPress={skipIntro}
+          style={[styles.skipBtn, { top: Math.max(insets.top + 8, 20) }]}
+          hitSlop={12}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.skipText}>Salta</Text>
+          <Ionicons name="chevron-forward" size={14} color="rgba(240,240,245,0.75)" />
+        </TouchableOpacity>
+      )}
     </Animated.View>
   );
 }
@@ -419,4 +485,26 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   fakeLAText: { color: "#F0F0F5", fontSize: 13.5, fontWeight: "600", letterSpacing: 0.4 },
+  // === Skip button (Fabio 2026-08-27 v65.4) ==================================
+  skipBtn: {
+    position: "absolute",
+    right: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.14)",
+    zIndex: 999,
+  },
+  skipText: {
+    color: "rgba(240,240,245,0.85)",
+    fontSize: 13,
+    fontWeight: "600",
+    letterSpacing: 0.4,
+    marginRight: 2,
+  },
 });
