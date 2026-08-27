@@ -3294,6 +3294,38 @@ async def api_get_profile(request: Request):
             )
     except Exception as e:
         logger.warning(f"[profile/migrate] voice sync failed: {e}")
+    # === FIX 2026-08-27 v65.4 — WHITELIST UNLIMITED PATCH (Fabio) ==========
+    # Utenti whitelisted (owner, Stefania, e chi aggiunto via /api/admin/
+    # unlimited-users) NON devono vedere paywall. Il router frontend
+    # (app/index.tsx riga ~1148) fa `isPaid = tier === "unlimited" | "monthly" ...`
+    # leggendo da `profile.subscription_tier`. Prima del fix, quel campo
+    # restava `null` per gli whitelisted → frontend li considerava Free
+    # → redirect a /lascia-andare → paywall al primo tap Premium.
+    # 
+    # Iniettiamo qui, SOLO NELLA RISPOSTA (NON in DB), i valori corretti.
+    # In caso di rimozione dalla whitelist, non c'è pulizia da fare sul
+    # profilo (nessun dato persistito). Il campo `subscription_tier="unlimited"`
+    # è già gestito ovunque nel codice (frontend + paywall + trial state).
+    try:
+        uid = current_user_id()
+        email_for_check = None
+        for _k in ("email", "auth_email", "user_email"):
+            _v = getattr(p, _k, None)
+            if _v and isinstance(_v, str) and "@" in _v:
+                email_for_check = _v.strip().lower()
+                break
+        if email_for_check is None:
+            email_for_check = await _uid_email_from_session_or_profile(uid)
+        unlimited_flag, unlim_reason = await is_user_unlimited(email_for_check, uid)
+        if unlimited_flag:
+            logger.info(
+                f"[PAYWALL_BYPASS user={email_for_check or uid[:8]} reason={unlim_reason}] "
+                f"api/profile → injecting subscription_tier=unlimited"
+            )
+            p.subscription_active = True
+            p.subscription_tier = "unlimited"
+    except Exception as _e:
+        logger.warning(f"[profile/whitelist-patch] failed: {_e}")
     # === FIX 2026-07-02 (Fabio) — Rimossa enrichment "background" ===
     # La feature "sfondo custom" è stata rimossa dall'UI. Non generiamo più
     # URL /api/profile/background nel payload di risposta. Il codice
