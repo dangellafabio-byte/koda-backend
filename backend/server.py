@@ -11721,7 +11721,7 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"  • Cercare info sul web quando serve (meteo, notizie, prezzi, sport, ricette)\n"
         f"  • Ricordare fatti della persona (persone care, lavoro, preoccupazioni, gioie)\n"
         f"  • Cambiare tema visivo dell'app (giorno/notte/auto-orario/cielo/bosco/ciliegia)\n"
-        f"  • Chiudere una sessione quando saluta ('ciao Koda')\n"
+        f"  • Chiudere una sessione quando saluta con commiato esplicito ('a dopo', 'buonanotte', 'ci sentiamo')\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"\n"
         f"AZIONI (solo se richiesto): tema {{config theme: notte/giorno/auto-orario/cielo/bosco/ciliegia}}, "
@@ -11742,7 +11742,8 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"è ciò che rende Koda un amico che ti conosce, non un chatbot smemorato.\n"
         f"⚠️ NON usare mai nomi già presenti in memoria come 'Marco', 'Mario', 'Luna', 'Luca' se "
         f"non sono stati pronunciati dall'utente IN QUESTO turno — quelli sono artefatti di test. "
-        f"\"close_session\": true SOLO su saluto chiusura ('ciao Koda', 'a dopo', 'buonanotte', 'vado'); "
+        f"\"close_session\": true SOLO su saluto chiusura ESPLICITO ('a dopo', 'buonanotte', 'ci sentiamo dopo', 'vado', 'grazie chiudo'); "
+        f"MAI su 'ciao Koda' da solo — quello è saluto di apertura. "
         f"se true reply breve calda max 12 parole, no domande. "
         f"\"home_update\": città/paese di RESIDENZA dell'utente se in questo turno ha "
         f"dichiarato dove abita (es. 'abito a X', 'vivo a Y', 'casa mia è a Z', 'sto di "
@@ -13755,7 +13756,13 @@ async def _fast_pipeline_task(
                 r"\b(ok|va bene|vabbè) (dai )?ci sentiamo\b",
                 # === FIX 2026-07-02 v43 (Fabio "mancano i saluti naturali") ===
                 # Saluti diretti a Koda per nome: chiaro segnale di chiusura.
-                r"\bciao (koda|coda)\b",
+                # === FIX 2026-08-27 v65.3 (Fabio) — "ciao koda/coda" RIMOSSO ==
+                # È saluto di APERTURA nel 99% dei casi. Log iOS del 2026-08-27
+                # confermano che "Ciao, coda" (STT storpia "koda") triggerava
+                # close_session=true al PRIMO turno → HF loop bloccato subito.
+                # Se qualcuno vuole chiudere dice pattern espliciti: "a dopo",
+                # "buonanotte", "ci sentiamo dopo", ecc. — tutti già presenti.
+                # r"\bciao (koda|coda)\b",   ← RIMOSSO
                 r"\bnotte (koda|coda)\b",
                 r"\barrivederci (koda|coda)?\b",
                 r"\bgrazie (koda|coda)$",  # "grazie Koda" a fine frase

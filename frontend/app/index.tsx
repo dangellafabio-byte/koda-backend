@@ -326,7 +326,13 @@ function detectCloseSessionClientSide(text: string | null | undefined): boolean 
   // Pattern AMBIGUI — solo se short utterance (evita false positive tipo
   // "ciao coda come stai" o "grazie coda mi hai aiutato tanto")
   const ambiguousPatterns: RegExp[] = [
-    /\bciao (koda|coda)\b/,
+    // === FIX 2026-08-27 v65.3 — "ciao koda/coda" NON è più commiato (Fabio) ==
+    // "Ciao Koda" è un SALUTO DI APERTURA nel 99% dei casi. Prima del fix,
+    // dire "Ciao, coda" (STT storpia "koda") triggerava close_session=true
+    // → HF loop bloccato al primo turno. Rimosso dal set commiato: se
+    // qualcuno vuole davvero chiudere dice "buonanotte" / "ci sentiamo dopo"
+    // / "a dopo" / ecc. — tutti pattern non-ambigui già presenti.
+    // /\bciao (koda|coda)\b/,   ← RIMOSSO
     /\bnotte (koda|coda)\b/,
     /\barrivederci (koda|coda)?\b/,
     /\bgrazie (koda|coda)$/,
@@ -476,7 +482,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v65.2-handsfree-restart-fix";
+  const KODA_BUILD_SHORT_TAG = "build-v65.3-hf-showcolorintro-guard-removed-plus-ciao-koda-fix";
   const KODA_BUILD_DATE = "2026-08-26";
   useEffect(() => {
     console.log(
@@ -2539,12 +2545,20 @@ export default function Taccuino() {
       console.log("[KODA_HF_GUARD] blocked: showOnboarding=true");
       return;
     }
-    // CRITICAL: showColorIntro può essere `null` (in fase di caricamento da
-    // SecureStore). Se attivassimo il mic in quei millisecondi, l'audio
-    // session iOS andrebbe in "recording" e poi quando KodaIntro vuole
-    // parlare il TTS resta muto. Aspettiamo esplicitamente `false`.
-    if (showColorIntro !== false) {
-      console.log(`[KODA_HF_GUARD] blocked: showColorIntro=${showColorIntro}`);
+    // === FIX 2026-08-27 v65.3 — showColorIntro guard REMOVED (Fabio) ========
+    // La V1 di KodaIntro è stata rimossa mesi fa (vedi commento riga ~7258),
+    // ma questa guardia HF_LOOP era rimasta e bloccava il loop se
+    // `koda_intro_seen` non era "1" in SecureStore. Dopo un reinstall APK o
+    // un reset totale, la chiave non veniva più settata → showColorIntro
+    // restava `true` per sempre → hands-free non riprendeva MAI dopo il
+    // primo turno. Confermato dai log iOS di Fabio (2026-08-27):
+    //   [KODA_HF_GUARD] blocked: showColorIntro=true
+    // ripetuto ad ogni giro dell'useEffect. Rimuoviamo la guardia: se un
+    // giorno reintroduciamo un intro modale, il suo componente gestirà il
+    // proprio audio focus senza bisogno di bloccare l'HF loop qui.
+    // Blocchiamo solo se esplicitamente true (fallback difensivo).
+    if (showColorIntro === true) {
+      console.log(`[KODA_HF_GUARD] blocked: showColorIntro=true (should not happen after V1 removal)`);
       return;
     }
     if (tourActive) {
