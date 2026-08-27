@@ -23,13 +23,11 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import * as SecureStore from "expo-secure-store";
 import { router } from "expo-router";
 import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import EclipseOrb from "./EclipseOrb";
 import HandsFreeOrb from "./HandsFreeOrb";
 import { ensureSpeechPermission } from "../lib/speechPermission";
-import { api } from "../lib/api";
 
 const TAG = "[intro-premium]";
 const CLIP_ECCOMI = require("../assets/sounds/intro/intro_premium_eccomi-cielo.mp3");
@@ -111,11 +109,13 @@ export default function IntroPremium() {
   // ==================== AUDIO ====================
   const configureAudio = useCallback(async () => {
     try {
-      // === FIX 2026-08-27 v65.4 — Audio Android fix (Fabio) =================
+      // === FIX 2026-08-27 v65.5 — Audio Android fix (Fabio) =================
       // Prima: solo playsInSilentMode:true. Su Android alcuni build ignorano
       // la clip se allowsRecording è residuo di una sessione mic precedente
       // (Stefania viene dopo il paywall/router, non da un fresh boot puro).
       // Aggiungiamo interruptionMode + interruptionModeAndroid espliciti.
+      // Su iOS il comportamento resta invariato (interruptionMode:duckOthers
+      // è già il default effettivo su iOS).
       await setAudioModeAsync({
         allowsRecording: false,
         playsInSilentMode: true,
@@ -125,20 +125,6 @@ export default function IntroPremium() {
         shouldRouteThroughEarpiece: false,
       } as any);
     } catch (e) { console.warn(`${TAG} audio mode:`, e); }
-  }, []);
-
-  // ==================== SKIP (Fabio 2026-08-27 v65.4) ===================
-  // Escape hatch di emergenza: qualunque cosa fallisca (audio muto, permessi
-  // negati, coach-mark bug, layout Android), l'utente Premium DEVE poter
-  // uscire dall'intro. Segna intro_premium_seen sia locale sia backend e
-  // fa router.replace("/") — così al prossimo boot non riappare l'intro.
-  const skipIntro = useCallback(async () => {
-    console.log(`${TAG} skip pressed — marking seen and going home`);
-    try { currentPlayerRef.current?.pause?.(); currentPlayerRef.current?.remove?.(); } catch {}
-    try { await SecureStore.setItemAsync("intro_premium_seen_at", String(Date.now())); } catch {}
-    api.markIntroPremiumSeen().catch(() => {});
-    api.markLasciaAndareIntroSeen().catch(() => {});
-    try { router.replace("/"); } catch (e) { console.warn(`${TAG} skip nav failed:`, e); }
   }, []);
 
   const playIntroClip = useCallback(async () => {
@@ -418,23 +404,6 @@ export default function IntroPremium() {
         renderCard(RECTS.settings, "Impostazioni", "Da qui cambi voce, tema, memoria.", true, true)}
       {phase === "coach_swipe" &&
         renderCard(null, "Scrittura", "Scorri verso sinistra per scrivermi.", false, false)}
-
-      {/* === Pulsante SALTA — sempre visibile (Fabio 2026-08-27 v65.4) =====
-          Escape hatch: se qualcosa non funziona (audio, layout, permessi),
-          l'utente può SEMPRE uscire dall'intro con un tap. Marca seen sia
-          in SecureStore sia nel backend, poi va alla home. Posizionato in
-          top-right per non collidere con card / orb / coach-mark. */}
-      {phase !== "handoff" && (
-        <TouchableOpacity
-          onPress={skipIntro}
-          style={[styles.skipBtn, { top: Math.max(insets.top + 8, 20) }]}
-          hitSlop={12}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.skipText}>Salta</Text>
-          <Ionicons name="chevron-forward" size={14} color="rgba(240,240,245,0.75)" />
-        </TouchableOpacity>
-      )}
     </Animated.View>
   );
 }
@@ -485,26 +454,4 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   fakeLAText: { color: "#F0F0F5", fontSize: 13.5, fontWeight: "600", letterSpacing: 0.4 },
-  // === Skip button (Fabio 2026-08-27 v65.4) ==================================
-  skipBtn: {
-    position: "absolute",
-    right: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 2,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: "rgba(255, 255, 255, 0.08)",
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.14)",
-    zIndex: 999,
-  },
-  skipText: {
-    color: "rgba(240,240,245,0.85)",
-    fontSize: 13,
-    fontWeight: "600",
-    letterSpacing: 0.4,
-    marginRight: 2,
-  },
 });
