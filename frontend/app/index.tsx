@@ -476,7 +476,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v65.1-runtime-bumped-1.0.126";
+  const KODA_BUILD_SHORT_TAG = "build-v65.2-handsfree-restart-fix";
   const KODA_BUILD_DATE = "2026-08-26";
   useEffect(() => {
     console.log(
@@ -3351,6 +3351,17 @@ export default function Taccuino() {
       setTimeout(() => setError(null), 4000);
     } finally {
       setStatus("idle");
+      // === FIX 2026-08-26 v65.2 — HF LOOP RESTART FIX (Fabio) ================
+      // Azzeriamo esplicitamente streamingSessionRef.current. Prima veniva
+      // pulito SOLO su tap-reset (riga ~4042) o back-button (~2676), MAI
+      // sulla chiusura naturale del turno. Risultato: dopo la risposta di
+      // Koda, il ref restava puntato alla sessione WS morta e la guardia
+      // dell'HF_LOOP (`if (streamingSessionRef.current) return`) bloccava
+      // il restart automatico → l'utente doveva tappare l'orb ogni volta,
+      // vanificando l'hands-free. La sessione a questo punto è già chiusa
+      // (la promise di voiceStreamConverse ha risolto) quindi il ref è
+      // stantio: azzerarlo è idempotente e sicuro.
+      streamingSessionRef.current = null;
       // === FIX 2026-07-24 v63.5 (Fix B) — reset mic-active gate ===
       // Sessione terminata: il mic non è più attivo. Prossima sessione
       // dovrà re-triggerare onRecognitionActive per riautorizzare i tap.
