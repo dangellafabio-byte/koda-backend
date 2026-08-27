@@ -482,8 +482,8 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v65.3-hf-showcolorintro-guard-removed-plus-ciao-koda-fix";
-  const KODA_BUILD_DATE = "2026-08-26";
+  const KODA_BUILD_SHORT_TAG = "build-v65.4-hf-showcolorintro-force-false-fix";
+  const KODA_BUILD_DATE = "2026-08-27";
   useEffect(() => {
     console.log(
       `[KODA_BUILDTAG] ${KODA_BUILD_SHORT_TAG} v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=${KODA_BUILD_DATE} ` +
@@ -567,12 +567,20 @@ export default function Taccuino() {
       } catch {
         // safe fallback: splash normale
       }
+      // === FIX 2026-08-27 v65.4 — V1 KodaIntro DEAD, force showColorIntro=false ===
+      // La V1 è stata rimossa dal render (riga 7271). Nessuno setta più
+      // `koda_intro_seen=1`, quindi al boot su fresh install/reinstall/reset
+      // `showColorIntro` restava `true` per sempre → la guardia HF_LOOP
+      // (riga ~2560) bloccava l'hands-free ad ogni turno su iOS. Confermato
+      // dai log iOS di Fabio (2026-08-27):
+      //   [KODA_HF_GUARD] blocked: showColorIntro=true
+      // Forziamo sempre `false` e scriviamo "1" in SecureStore per pulizia
+      // idempotente (così anche gli altri check che leggono la chiave
+      // — se ne restano — non falliscono).
       try {
-        const seen = await SecureStore.getItemAsync("koda_intro_seen");
-        if (!cancelled) setShowColorIntro(seen !== "1");
-      } catch {
-        if (!cancelled) setShowColorIntro(false);
-      }
+        await SecureStore.setItemAsync("koda_intro_seen", "1");
+      } catch {}
+      if (!cancelled) setShowColorIntro(false);
       // Carica le voci ElevenLabs disponibili per la scelta automatica
       try {
         const r = await fetch(`${API_BASE}/voices`);
@@ -2545,22 +2553,15 @@ export default function Taccuino() {
       console.log("[KODA_HF_GUARD] blocked: showOnboarding=true");
       return;
     }
-    // === FIX 2026-08-27 v65.3 — showColorIntro guard REMOVED (Fabio) ========
-    // La V1 di KodaIntro è stata rimossa mesi fa (vedi commento riga ~7258),
-    // ma questa guardia HF_LOOP era rimasta e bloccava il loop se
-    // `koda_intro_seen` non era "1" in SecureStore. Dopo un reinstall APK o
-    // un reset totale, la chiave non veniva più settata → showColorIntro
-    // restava `true` per sempre → hands-free non riprendeva MAI dopo il
-    // primo turno. Confermato dai log iOS di Fabio (2026-08-27):
-    //   [KODA_HF_GUARD] blocked: showColorIntro=true
-    // ripetuto ad ogni giro dell'useEffect. Rimuoviamo la guardia: se un
-    // giorno reintroduciamo un intro modale, il suo componente gestirà il
-    // proprio audio focus senza bisogno di bloccare l'HF loop qui.
-    // Blocchiamo solo se esplicitamente true (fallback difensivo).
-    if (showColorIntro === true) {
-      console.log(`[KODA_HF_GUARD] blocked: showColorIntro=true (should not happen after V1 removal)`);
-      return;
-    }
+    // === FIX 2026-08-27 v65.4 — showColorIntro guard TRULY REMOVED (Fabio) ==
+    // Precedente v65.3 aveva "rimosso" solo il commento ma lasciato la
+    // guardia attiva → HF_LOOP continuava a fallire su iOS perché
+    // showColorIntro restava `true` in memoria (koda_intro_seen mai
+    // scritto dopo la rimozione della V1). Ora la guardia è VERAMENTE
+    // eliminata: la V1 non renderizza più (vedi riga 7271), quindi non
+    // può esserci un intruso visivo da schermo. L'audio focus di
+    // eventuali intro futuri verrà gestito dal loro componente.
+    // (Nessuna guardia showColorIntro qui.)
     if (tourActive) {
       console.log("[KODA_HF_GUARD] blocked: tourActive=true");
       return;
