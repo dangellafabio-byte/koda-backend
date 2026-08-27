@@ -109,7 +109,7 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v27-voice-cielo+ws-auth-fix-Fabio-20260825"
+_KODA_BACKEND_VERSION = "v28-hf-fix-v65.3-ciao-koda-not-close-20260827"
 _KODA_BACKEND_BUILD_TS = "2026-07-13T16:00:00Z"
 
 
