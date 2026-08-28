@@ -23,6 +23,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import * as SecureStore from "expo-secure-store";
 import { router } from "expo-router";
 import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import EclipseOrb from "./EclipseOrb";
@@ -242,6 +243,25 @@ export default function IntroPremium() {
   // ==================== AUTO-SWIPE + HANDOFF (Fase 6/Passo Swipe) ==========
   const doAutoSwipeAndHandoff = useCallback(() => {
     setPhase("handoff");
+    // === FIX 2026-08-27 v65.7 — Loop /intro-premium (Fabio/Stefania) =========
+    // Prima: SecureStore.intro_premium_seen_at veniva scritto SOLO dentro
+    // IntroPremiumFinalStep.finish() (tap "Ho capito"). Ma la home router
+    // intro-premium (index.tsx ~1226) legge SecureStore al mount: se vuoto,
+    // considera l'intro "needed" e RIDIRIGE a /intro-premium PRIMA che
+    // l'overlay finale possa mostrare il tap → LOOP infinito osservato
+    // su Android in produzione da Stefania (2026-08-27).
+    // Ora scriviamo il mirror SecureStore GIÀ ORA (fine coach_swipe), così
+    // il router locale trova "seen" e non ridirige. Il backend viene
+    // marcato al tap "Ho capito" dell'overlay finale (invariato).
+    // Fallback safety: se l'utente killa l'app durante l'overlay finale,
+    // al prossimo boot il mirror locale dirà seen → nessun re-loop.
+    // Trade-off accettato: perde la clip di chiusura Cielo in caso di kill,
+    // ma non resta bloccata nell'intro.
+    (async () => {
+      try {
+        await SecureStore.setItemAsync("intro_premium_seen_at", String(Date.now()));
+      } catch (e) { console.warn(`${TAG} early SecureStore mark failed:`, e); }
+    })();
     // Fade-out card (opacity già gestita da phase change)
     // Auto-swipe: -40px sinistra, poi torna (280ms + 220ms), poi handoff
     Animated.sequence([

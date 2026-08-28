@@ -482,7 +482,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v65.6-intropremium-parity-ios-android";
+  const KODA_BUILD_SHORT_TAG = "build-v65.7-intropremium-loop-fix-android";
   const KODA_BUILD_DATE = "2026-08-27";
   useEffect(() => {
     console.log(
@@ -1215,6 +1215,13 @@ export default function Taccuino() {
   //
   // NON tocca V3: se V3 non è ancora completata, il router V3 sopra ha
   // priorità (guard `introV3State === "completed"` qui sotto).
+
+  // === FIX 2026-08-27 v65.7 — dichiarati QUI per uso in intro-premium router
+  // (guard "sto mostrando il final overlay" al ~riga 1278). Prima erano più
+  // in basso al ~riga 1548, ma il router li referenzia in closure → TDZ.
+  const introParams = useLocalSearchParams<{ intro?: string }>();
+  const [showIntroFinal, setShowIntroFinal] = useState(false);
+
   const [introPremiumState, setIntroPremiumState] = useState<
     "checking" | "needed" | "completed"
   >("checking");
@@ -1270,6 +1277,12 @@ export default function Taccuino() {
   useEffect(() => {
     if (pathname !== "/") return;
     if (introPremiumState !== "needed") return;
+    // === FIX 2026-08-27 v65.7 — Guard finale step (Fabio/Stefania) =========
+    // Se stiamo mostrando l'overlay finale (arrivato via ?intro=writing_final)
+    // NON redirigere: significa che l'utente ha appena finito l'intro e sta
+    // per vedere l'ultima card. Redirigere qui causa il loop osservato
+    // su Android in produzione (2026-08-27).
+    if (showIntroFinal || introParams?.intro === "writing_final") return;
     // Guard di completezza dati — stessi guard degli altri router
     if (!profile) return;
     // FIX Bug 1 A2 (2026-08-23): aspetta profile network-fresh
@@ -1322,6 +1335,9 @@ export default function Taccuino() {
     showColorIntro,
     pathname,
     router,
+    // v65.7: aggiunti per evitare stale closure durante handoff
+    showIntroFinal,
+    introParams?.intro,
   ]);
 
 
@@ -1539,8 +1555,8 @@ export default function Taccuino() {
   // ?intro=writing_final, montiamo l'overlay <IntroPremiumFinalStep>
   // sopra la Page 1 (reading) e chiudiamo la sequenza con la clip audio
   // di chiusura Cielo + doppio mark-seen.
-  const introParams = useLocalSearchParams<{ intro?: string }>();
-  const [showIntroFinal, setShowIntroFinal] = useState(false);
+  // v65.7: introParams + showIntroFinal state ora dichiarati più in alto
+  // (~riga 1225) per essere usabili nel router intro-premium senza TDZ.
   useEffect(() => {
     if (introParams?.intro === "writing_final" && !showIntroFinal) {
       setShowIntroFinal(true);
