@@ -109,15 +109,34 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v28-hf-fix-v65.3-ciao-koda-not-close-20260827"
+_KODA_BACKEND_VERSION = "v65.10-parroting-fix-20260827"
 _KODA_BACKEND_BUILD_TS = "2026-07-13T16:00:00Z"
 
 
 @api_router.get("/_version")
 async def _kodabuildversion():
+    # Diagnostica presenza fix parroting v65.10 (2026-08-27):
+    # verifichiamo che il prompt attivo contenga i 3 marker inseriti nel
+    # fix. Se restano False su Railway, il deploy non è ancora agganciato.
+    _has_parroting_fix = None
+    _has_new_ascolto = None
+    _has_mirroring_prosodic = None
+    try:
+        _p = await get_or_create_profile()
+        _sample = _build_conversation_system_prompt(_p, [], memories=None, trial_state="active")
+        _has_parroting_fix = "VIETATO IL PARROTING" in _sample
+        _has_new_ascolto = "L'ascolto attivo si dimostra" in _sample
+        _has_mirroring_prosodic = "MIRRORING PROSODICO" in _sample
+    except Exception as _e:
+        logger.warning(f"[_version] prompt inspection failed: {_e}")
     return {
         "version": _KODA_BACKEND_VERSION,
         "build_ts": _KODA_BACKEND_BUILD_TS,
+        "parroting_fix_v65_10": {
+            "has_parroting_ban": _has_parroting_fix,
+            "has_new_ascolto_attivo": _has_new_ascolto,
+            "has_mirroring_prosodic": _has_mirroring_prosodic,
+        },
         "features": [
             "auth_bound_freemium",
             "whisper1_stt_fallback",
