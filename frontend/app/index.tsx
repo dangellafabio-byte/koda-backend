@@ -483,7 +483,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v65.8-settings-slim-legal-account";
+  const KODA_BUILD_SHORT_TAG = "build-v65.9-showcolorintro-guards-cleanup";
   const KODA_BUILD_DATE = "2026-08-27";
   useEffect(() => {
     console.log(
@@ -820,7 +820,11 @@ export default function Taccuino() {
   // questo, l'AVAudioSession resta in "recording" e blocca il TTS di Koda
   // (la voce non parte durante l'intro).
   useEffect(() => {
-    const intruderActive = showColorIntro === true || tourActive || showOnboarding;
+    // === CLEANUP 2026-08-27 v65.9 (Fabio) ===
+    // showColorIntro rimosso dal check: la V1 KodaIntro è dead code (vedi
+    // riga 7288+), showColorIntro non può più diventare true (tutti i
+    // setter puntano a false). Guardia residua tolta.
+    const intruderActive = tourActive || showOnboarding;
     if (intruderActive && recRef.current) {
       // Mic spento brutalmente — non vogliamo né silenzio rilevato né invio.
       // Chiamiamo cancel() (fire-and-forget): voice.ts dentro safeStop()
@@ -1139,7 +1143,9 @@ export default function Taccuino() {
     if (profileHydrated !== "network") return;
     if (disclaimerState !== "accepted") return;
     if (showSplash) return;
-    if (showColorIntro === true) return;
+    // === CLEANUP 2026-08-27 v65.9 — guardia showColorIntro rimossa =========
+    // V1 KodaIntro dead code (~riga 7288). showColorIntro non diventa mai
+    // true, guardia inutile.
     // === GUARD V3 (Fabio 2026-08-22) ===
     // Se stiamo ancora controllando o serve introdurre l'utente al Cuore,
     // il router V3 sopra prende la priorità → early return qui.
@@ -1302,8 +1308,8 @@ export default function Taccuino() {
       tier === "annual" ||
       tier === "unlimited";
     if (!isPaid) return;
-    // Non redirigere se KodaIntro V1 è visibile (edge case)
-    if (showColorIntro === true) return;
+    // === CLEANUP 2026-08-27 v65.9 — guardia showColorIntro rimossa =========
+    // V1 KodaIntro dead code; showColorIntro non diventa mai true.
 
     // Keyed invalidation coerente con router V3.
     const currentKey = `${(profile as any)?.id || "none"}:${tier ?? "free"}`;
@@ -2693,9 +2699,10 @@ export default function Taccuino() {
         try { setTourActive(false); } catch {}
         return true;
       }
-      // Onboarding e ColorIntro: NON permettiamo di scappare via back
-      // (l'utente deve completare il flow), quindi semplicemente ignoriamo.
-      if (showOnboarding || showColorIntro === true) {
+      // Onboarding: NON permettiamo di scappare via back (l'utente deve
+      // completare il flow), quindi semplicemente ignoriamo.
+      // v65.9: rimossa condizione showColorIntro (V1 dead code).
+      if (showOnboarding) {
         return true;
       }
 
