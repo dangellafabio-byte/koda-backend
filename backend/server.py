@@ -5931,6 +5931,173 @@ async def api_reset_profile():
     }
 
 
+# ============================================================================
+# DELETE ACCOUNT — Apple App Store Guideline 5.1.1(v) compliance
+# (Fabio 2026-08-27 v65.8 — richiesto pre-lancio pubblico)
+# ============================================================================
+# Differenza rispetto a DELETE /profile:
+#   - /profile → azzera SOLO i dati del profilo corrente (memoria, timeline,
+#     situations, voiceprint). L'utente resta loggato (nuova sessione può
+#     ricreare il profilo al prossimo boot).
+#   - /account → cancellazione DEFINITIVA dell'utente:
+#       1. tutti i dati profilo (come sopra)
+#       2. TUTTE le sessioni attive/passate per questa email (logout globale)
+#       3. rimozione da whitelist unlimited_users (uid + email)
+#       4. rimozione da collezione users (se esiste)
+#   Dopo questo endpoint il client DEVE forzare signOut() e riportare al
+#   login screen. Un secondo login con la stessa email ricrea un profilo
+#   NUOVO da zero (nessun recovery dei vecchi dati).
+# ============================================================================
+@api_router.delete("/account")
+async def api_delete_account():
+    """Cancellazione DEFINITIVA dell'account utente (Apple 5.1.1(v)).
+
+    Sequenza:
+      1. Cancella tutti i dati profilo (delega a api_reset_profile via
+         codice condiviso — voiceprint, timeline, memories, situations,
+         key_facts, profile doc).
+      2. Trova email di questa uid consultando le sessions attive.
+      3. Cancella TUTTE le sessions con quella email → logout globale.
+      4. Rimuove da unlimited_users (per uid E per email).
+      5. Rimuove da collezione users se presente (auth legacy).
+      6. Log audit con conteggi.
+
+    Idempotente: se l'utente non ha dati, ritorna comunque ok:true.
+    """
+    import os as _os
+    import shutil as _shutil
+
+    try:
+        pid = current_user_id()
+    except Exception:
+        pid = "me"
+
+    # === Step 1: cancella voiceprint dir (blocking come in api_reset_profile) ===
+    voiceprint_dir = _os.path.join("/app/backend/voiceprint_data", pid)
+    vp_removed_files: list[str] = []
+    try:
+        if _os.path.isdir(voiceprint_dir):
+            for _root, _dirs, _files in _os.walk(voiceprint_dir):
+                for _fn in _files:
+                    vp_removed_files.append(_fn)
+            _shutil.rmtree(voiceprint_dir)
+    except Exception as _e:
+        logger.error(f"[delete_account] voiceprint dir removal FAILED: pid={pid} err={_e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Cancellazione registrazioni vocali fallita. Riprova.",
+        )
+
+    counts: Dict[str, int] = {"voiceprint_files": len(vp_removed_files)}
+
+    # === Step 2: cancella dati DB user-scoped ==================================
+    # Profile: SOLO il proprio (id=pid). Il legacy api_reset_profile fa
+    # delete_many({}) che è un bug (cancella tutti i profili) — qui rispettiamo
+    # multi-tenancy.
+    try:
+        r = await db.taccuino_profile.delete_many({"id": pid})
+        counts["profile_docs"] = r.deleted_count
+    except Exception as e:
+        logger.warning(f"[delete_account] profile delete failed: {e}")
+        counts["profile_docs"] = 0
+
+    # Timeline (già user-scoped via _uf)
+    try:
+        r = await db.taccuino_timeline.delete_many(_uf())
+        counts["timeline_docs"] = r.deleted_count
+    except Exception as e:
+        logger.warning(f"[delete_account] timeline delete failed: {e}")
+        counts["timeline_docs"] = 0
+
+    # Memories
+    try:
+        r = await db.taccuino_memories.delete_many(_memory_filter())
+        counts["memories_docs"] = r.deleted_count
+    except Exception as e:
+        logger.warning(f"[delete_account] memories delete failed: {e}")
+        counts["memories_docs"] = 0
+
+    # Key facts
+    try:
+        r = await db.taccuino_key_facts.delete_many(_uf())
+        counts["key_facts_docs"] = r.deleted_count
+    except Exception as e:
+        logger.warning(f"[delete_account] key_facts delete failed: {e}")
+        counts["key_facts_docs"] = 0
+
+    # Situations + evidences (GDPR)
+    try:
+        r_sit = await db[_SITUATIONS_COLL].delete_many(_situation_filter())
+        r_ev = await db[_SITUATION_EVIDENCES_COLL].delete_many(_situation_filter())
+        counts["situations_docs"] = r_sit.deleted_count
+        counts["evidences_docs"] = r_ev.deleted_count
+    except Exception as e:
+        logger.warning(f"[delete_account] situations delete failed: {e}")
+        counts["situations_docs"] = 0
+        counts["evidences_docs"] = 0
+
+    # === Step 3: trova email associata a questa uid ============================
+    # Consultiamo le sessions per trovare almeno un record con la stessa uid.
+    # (sessions.email → _email_to_uid(email) == pid)
+    email_for_this_uid: Optional[str] = None
+    try:
+        # Prima prova: prendi email dalla sessione più recente (le più vecchie
+        # potrebbero già essere scadute e cancellate dal TTL index).
+        cursor = db.sessions.find({}, {"email": 1}).sort("_id", -1).limit(500)
+        async for doc in cursor:
+            e = doc.get("email")
+            if not e or not isinstance(e, str) or "@" not in e:
+                continue
+            if _email_to_uid(e.strip().lower()) == pid:
+                email_for_this_uid = e.strip().lower()
+                break
+    except Exception as e:
+        logger.warning(f"[delete_account] email lookup failed: {e}")
+
+    # === Step 4: cancella TUTTE le sessioni per questa email ===================
+    if email_for_this_uid:
+        try:
+            r = await db.sessions.delete_many({"email": email_for_this_uid})
+            counts["sessions_deleted"] = r.deleted_count
+        except Exception as e:
+            logger.warning(f"[delete_account] sessions delete failed: {e}")
+            counts["sessions_deleted"] = 0
+    else:
+        counts["sessions_deleted"] = 0
+
+    # === Step 5: rimuovi da whitelist unlimited (per uid E per email) ==========
+    try:
+        r = await db.unlimited_users.delete_many({"uid": pid})
+        deleted = r.deleted_count
+        if email_for_this_uid:
+            r2 = await db.unlimited_users.delete_many({"email": email_for_this_uid})
+            deleted += r2.deleted_count
+        counts["unlimited_removed"] = deleted
+    except Exception as e:
+        logger.warning(f"[delete_account] unlimited delete failed: {e}")
+        counts["unlimited_removed"] = 0
+
+    # === Step 6: rimuovi da collezione users se presente =======================
+    try:
+        r = await db.users.delete_many({"id": pid})
+        counts["users_docs"] = r.deleted_count
+    except Exception as e:
+        logger.warning(f"[delete_account] users delete failed: {e}")
+        counts["users_docs"] = 0
+
+    logger.info(
+        f"[delete_account] pid={pid} email={email_for_this_uid or '(unknown)'} "
+        f"counts={counts}"
+    )
+
+    return {
+        "ok": True,
+        "message": "Account cancellato.",
+        "email": email_for_this_uid,
+        "counts": counts,
+    }
+
+
 # ============================================================
 # LOCATION CONTEXT — geolocation one-shot al boot dell'app
 # (fix Fabio 2026-06-20 — P2 toggle geolocation in Impostazioni)

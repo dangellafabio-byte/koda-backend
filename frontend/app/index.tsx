@@ -74,6 +74,7 @@ import * as Updates from "expo-updates";
 // senza riscrivere UX contract nel PRD.
 // import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
+import { useAuth } from "../lib/auth";
 import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
 import EclipseOrb from "../components/EclipseOrb";
@@ -482,7 +483,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v65.7-intropremium-loop-fix-android";
+  const KODA_BUILD_SHORT_TAG = "build-v65.8-settings-slim-legal-account";
   const KODA_BUILD_DATE = "2026-08-27";
   useEffect(() => {
     console.log(
@@ -965,6 +966,7 @@ export default function Taccuino() {
 
   // === FREEMIUM 3 MESSAGGI (giugno 2026) =====================================
   const router = useRouter();
+  const auth = useAuth();
   const [freemium, setFreemium] = useState<FreemiumStatusType | null>(null);
   const freemiumRef = useRef<FreemiumStatusType | null>(null);
   useEffect(() => { freemiumRef.current = freemium; }, [freemium]);
@@ -5718,77 +5720,13 @@ export default function Taccuino() {
             {/* === IDENTITÀ — L'Amico Fraterno =======================
                 L'unica variabile di identità modificabile è il NOME dell'amico.
                 Sesso utente + sesso AI servono per declinare aggettivi e
-                participi (es. "sei stanco/a") in modo corretto. */}
-            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>Identità</Text>
-
-            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8 }]}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>Come chiami la presenza</Text>
-                <Text style={styles.settingHint}>
-                  Il nome con cui ti rivolgi a me. Default: Coda.
-                </Text>
-              </View>
-              <TextInput
-                value={profile?.ai_name || "Coda"}
-                onChangeText={(txt) => {
-                  if (!profile) return;
-                  setProfile({ ...profile, ai_name: txt });
-                }}
-                onBlur={async () => {
-                  if (!profile) return;
-                  const v = (profile.ai_name || "").trim();
-                  const final = v.length > 0 ? v.slice(0, 24) : "Coda";
-                  setProfile({ ...profile, ai_name: final });
-                  try {
-                    await api.updateProfile({ ai_name: final });
-                  } catch {}
-                }}
-                placeholder="Coda"
-                placeholderTextColor={theme.muted}
-                style={[styles.input, { paddingVertical: 8, fontSize: 15 }]}
-                maxLength={24}
-                autoCapitalize="words"
-              />
-            </View>
-
-            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8 }]}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>Tu sei…</Text>
-                <Text style={styles.settingHint}>
-                  Mi serve per parlarti correttamente (es. &quot;sei stanco&quot; / &quot;sei stanca&quot;).
-                </Text>
-              </View>
-              <View style={{ flexDirection: "row", gap: 8 }}>
-                {([
-                  { id: "m", label: "Uomo" },
-                  { id: "f", label: "Donna" },
-                  { id: "n", label: "Neutro" },
-                ] as const).map((opt) => {
-                  const active = (profile?.user_gender || "n") === opt.id;
-                  return (
-                    <TouchableOpacity
-                      key={opt.id}
-                      onPress={async () => {
-                        if (!profile) return;
-                        setProfile({ ...profile, user_gender: opt.id });
-                        try {
-                          await api.updateProfile({ user_gender: opt.id });
-                        } catch {}
-                      }}
-                      style={[
-                        styles.modeBtn,
-                        active && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
-                      ]}
-                    >
-                      <Text style={[styles.modeBtnText, active && { color: bubbleAccent.color, fontWeight: "700" }]}>
-                        {opt.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
-
+                participi (es. "sei stanco/a") in modo corretto.
+                === RIMOSSO 2026-08-27 v65.8 (Fabio) ===
+                Sezione "Identità" spostata dentro "Rivedi Intro". Non più
+                una sezione separata in Impostazioni — le impostazioni
+                ai_name, user_gender restano modificabili SOLO rieseguendo
+                l'intro V3. Riduce clutter e mantiene coerenza con
+                l'onboarding come unico punto di configurazione identità. */}
             {/* === "Koda è…" (ai_gender) — RIMOSSO 2026-07-24 pre-lancio ===
                 Prima qui c'era un selettore esplicito Femmina/Maschio/Neutro
                 per il genere grammaticale di Koda. Ridondante: durante
@@ -5801,8 +5739,7 @@ export default function Taccuino() {
                 (Un'eventuale opzione "Neutro" avanzata sarà aggiunta come
                 impostazione nascosta se richiesto — non ora.) */}
 
-            <View style={styles.divider} />
-            <Text style={styles.settingsSubtitle}>Comportamento</Text>
+            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>💬 Comportamento</Text>
 
             {/* === TOGGLE RIMOSSI (richiesta utente 2026-05-25) ===
                 Prima qui c'erano 3 toggle: "AI attiva", "Risposta vocale",
@@ -5820,41 +5757,11 @@ export default function Taccuino() {
                 Il selettore voce è stato rimosso dall'UI. Resta la
                 voce di default impostata dal backend. */}
 
-            {/* === Proactive Check-in opt-in (giugno 2026 — libero arbitrio) =
-                Toggle binario: quando ON, Koda decide AUTONOMAMENTE quando
-                scriverti (mattina / sera / nessuna delle due, secondo il
-                contesto e il bisogno). Niente orari impostabili dall'utente:
-                è una scelta di Koda, non una sveglia. */}
-            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 10 }]}>
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.settingLabel}>💌 Koda mi scrive quando attivo</Text>
-                  <Text style={styles.settingHint}>
-                    Se abilitato, Koda ti scrive di sua iniziativa, quando sente
-                    che sia il momento giusto. Non è una sveglia — è un gesto suo.
-                  </Text>
-                </View>
-                <Switch
-                  value={((profile?.settings as any)?.checkin_mode || "off") !== "off"}
-                  onValueChange={async (on) => {
-                    if (!profile) return;
-                    // ON → "both" (Koda decide mattina o sera secondo necessità).
-                    // OFF → "off" (nessun check-in proattivo).
-                    const nextMode = on ? "both" : "off";
-                    const nextSettings = { ...profile.settings, checkin_mode: nextMode } as any;
-                    setProfile({ ...profile, settings: nextSettings });
-                    try {
-                      await api.updateProfile({ settings: nextSettings });
-                    } catch {}
-                  }}
-                  trackColor={{ false: theme.muted + "55", true: bubbleAccent.color }}
-                  thumbColor="#fff"
-                />
-              </View>
-              <Text style={[styles.settingHint, { fontSize: 13, marginTop: 2, fontStyle: "italic" }]}>
-                Notifiche locali, niente esce dal telefono se non al momento di generare la frase.
-              </Text>
-            </View>
+            {/* === Proactive Check-in RIMOSSO 2026-08-27 v65.8 (Fabio) =====
+                Il toggle "💌 Koda mi scrive quando attivo" faceva parte del
+                Blocco A (proactive engagement / notifiche proattive) che è
+                stato rimosso questa notte. Coerenza: niente notifiche
+                proattive, niente toggle proattivo. */}
 
             {/* === RICERCA WEB (Tavily) — toggle privacy ====================
                 Quando attivo: se l'utente fa domande fattuali (meteo, notizie,
@@ -5924,6 +5831,41 @@ export default function Taccuino() {
                   thumbColor="#fff"
                 />
               </View>
+              {/* === Vedi cosa Koda ricorda — link viewer (v65.8 Fabio) =======
+                  Il viewer /situations esisteva già ma non era accessibile
+                  dall'UI. Ora c'è un CTA chiaro sotto il toggle: se attivo
+                  → naviga; se disattivato → messaggio "Attiva prima il
+                  toggle sopra per vedere". */}
+              <TouchableOpacity
+                onPress={() => {
+                  const enabled = (profile?.settings as any)?.situation_tracking_enabled === true;
+                  if (!enabled) {
+                    Alert.alert(
+                      "Memoria disattivata",
+                      "Attiva prima il toggle qui sopra per vedere cosa Koda ricorda.",
+                    );
+                    return;
+                  }
+                  setShowSettings(false);
+                  setTimeout(() => { try { router.push("/situations"); } catch {} }, 100);
+                }}
+                style={{
+                  marginTop: 12,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  backgroundColor: "rgba(255,255,255,0.06)",
+                  borderWidth: 1,
+                  borderColor: "rgba(255,255,255,0.14)",
+                  borderRadius: 10,
+                  paddingHorizontal: 14,
+                  paddingVertical: 12,
+                }}
+                testID="see-memory-btn"
+              >
+                <Text style={[styles.settingLabel, { fontSize: 14 }]}>📖 Vedi cosa Koda ricorda</Text>
+                <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+              </TouchableOpacity>
             </View>
 
             <View style={styles.divider} />
@@ -5936,58 +5878,12 @@ export default function Taccuino() {
 
             <View style={styles.divider} />
 
-            <Text style={styles.settingsSubtitle}>Aspetto chat</Text>
-            <Text style={styles.settingsHint}>
-              Scegli la dimensione del testo.
-            </Text>
-
-            {/* Personalizzazioni rimosse (richiesta utente 2026-06 #10):
-                niente più colori bolle, stili glass/solid o sfondi. */}
-
-            {/* Text size selector — 4 levels for accessibility */}
-            <Text style={[styles.settingsHint, { marginTop: 14 }]}>Dimensione testo</Text>
-            <View style={styles.modeRow}>
-              {[
-                { v: 0.85, label: "A", name: "Piccolo" },
-                { v: 1.0,  label: "A", name: "Normale" },
-                { v: 1.15, label: "A", name: "Grande" },
-                { v: 1.35, label: "A", name: "XL" },
-              ].map(({ v, label, name }) => {
-                const active = Math.abs(textSize - v) < 0.02;
-                return (
-                  <TouchableOpacity
-                    key={v}
-                    onPress={() => setTextSize(v)}
-                    style={[
-                      styles.modeBtn,
-                      { flex: 1, flexDirection: "column", paddingHorizontal: 4, minHeight: 56 },
-                      active && { borderColor: bubbleAccent.color, backgroundColor: bubbleAccent.color + "30" },
-                    ]}
-                    testID={`text-size-${v}`}
-                  >
-                    <Text
-                      style={{
-                        color: active ? bubbleAccent.color : theme.text,
-                        fontSize: 12 * v,
-                        fontWeight: "800",
-                        lineHeight: 14 * v,
-                      }}
-                    >
-                      {label}
-                    </Text>
-                    <Text
-                      numberOfLines={1}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.7}
-                      style={[styles.modeBtnText, { fontSize: 10, marginTop: 4, fontWeight: "600", textAlign: "center" }, active && { color: bubbleAccent.color }]}
-                    >
-                      {name}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
+            {/* === ASPETTO CHAT RIMOSSO 2026-08-27 v65.8 (Fabio) ===============
+                Dimensione testo fissa a 1.0 (Normale). Rimosso il selettore
+                4-livelli. Il valore text_size resta nel profilo per
+                retrocompatibilità (utenti che avevano scelto XL/Piccolo)
+                ma non è più regolabile. Vedi useEffect "normalizzazione
+                impostazioni v65.8" più sotto per il reset one-shot. */}
             {/* === STILE/COLORE BOLLE + SFONDO RIMOSSI (richiesta 2026-06 #10) ===
                 L'utente vuole minimalismo Zen: niente customizzazione
                 colori bolle, niente stili vetro/solido, niente upload foto
@@ -6004,10 +5900,10 @@ export default function Taccuino() {
                 radius/spessore/colore idle a occhio, valori persistiti
                 per-device in SecureStore locale. */}
             <View style={styles.divider} />
-            <Text style={styles.settingsSubtitle}>Bordo dello schermo</Text>
+            <Text style={styles.settingsSubtitle}>📱 Bordo dello schermo</Text>
             <Text style={styles.settingsHint}>
               Se il bordo colorato di Koda si vede poco agli angoli del tuo
-              telefono, usa questi controlli per calibrarlo.
+              telefono, regola qui il raggio degli angoli.
             </Text>
 
             {/* Slider raggio angoli */}
@@ -6054,83 +5950,12 @@ export default function Taccuino() {
               </View>
             </View>
 
-            {/* Slider spessore */}
-            <View style={{ marginTop: 12 }}>
-              <Text style={styles.settingsHint}>
-                Spessore: {borderCal.thickness ?? "auto"}
-                {borderCal.thickness !== null ? " px" : ` (auto: ${Platform.OS === "android" ? 4 : 3} px)`}
-              </Text>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
-                <TouchableOpacity
-                  onPress={async () => {
-                    const cur = borderCal.thickness ?? (Platform.OS === "android" ? 4 : 3);
-                    const next: BorderCalibration = { ...borderCal, thickness: Math.max(2, cur - 1) };
-                    setBorderCal(next);
-                    await saveBorderCalibration(next);
-                  }}
-                  style={[styles.modeBtn, { paddingHorizontal: 14, minHeight: 40 }]}
-                  accessibilityLabel="Riduci spessore bordo"
-                >
-                  <Text style={{ color: theme.text, fontSize: 18, fontWeight: "600" }}>−</Text>
-                </TouchableOpacity>
-                <View style={{ flex: 1, height: 6, backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 3 }}>
-                  <View
-                    style={{
-                      height: "100%",
-                      width: `${Math.min(100, ((borderCal.thickness ?? (Platform.OS === "android" ? 4 : 3)) / 6) * 100)}%`,
-                      backgroundColor: bubbleAccent.color,
-                      borderRadius: 3,
-                    }}
-                  />
-                </View>
-                <TouchableOpacity
-                  onPress={async () => {
-                    const cur = borderCal.thickness ?? (Platform.OS === "android" ? 4 : 3);
-                    const next: BorderCalibration = { ...borderCal, thickness: Math.min(6, cur + 1) };
-                    setBorderCal(next);
-                    await saveBorderCalibration(next);
-                  }}
-                  style={[styles.modeBtn, { paddingHorizontal: 14, minHeight: 40 }]}
-                  accessibilityLabel="Aumenta spessore bordo"
-                >
-                  <Text style={{ color: theme.text, fontSize: 18, fontWeight: "600" }}>+</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Toggle colore idle alternativo */}
-            <View style={[styles.settingRow, { marginTop: 12 }]}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>Colore idle più visibile</Text>
-                <Text style={styles.settingHint}>
-                  Sostituisce il champagne con un azzurro chiaro. Utile su
-                  schermi curvi dove il champagne si vede poco.
-                </Text>
-              </View>
-              <Switch
-                value={borderCal.useAltIdleColor}
-                onValueChange={async (v) => {
-                  const next: BorderCalibration = { ...borderCal, useAltIdleColor: v };
-                  setBorderCal(next);
-                  await saveBorderCalibration(next);
-                }}
-                trackColor={{ false: "#555", true: bubbleAccent.color }}
-              />
-            </View>
-
-            {/* Reset a default */}
-            <TouchableOpacity
-              onPress={async () => {
-                await resetBorderCalibration();
-                setBorderCal(DEFAULT_CALIBRATION);
-              }}
-              style={{ marginTop: 12, alignSelf: "flex-start", paddingVertical: 8, paddingHorizontal: 12 }}
-              accessibilityLabel="Ripristina calibrazione bordo predefinita"
-            >
-              <Text style={[styles.settingsHint, { textDecorationLine: "underline" }]}>
-                Ripristina valori predefiniti
-              </Text>
-            </TouchableOpacity>
+            {/* === BORDO — SEMPLIFICATO 2026-08-27 v65.8 (Fabio) ===============
+                Rimossi: slider spessore (fissato a 3 px), toggle "Colore
+                idle più visibile" (colore fisso champagne), pulsante
+                "Ripristina valori predefiniti". Resta solo il raggio
+                angoli, che è l'unico controllo veramente utile sui
+                telefoni con schermi curvi. */}
 
             {/* === MODALITÀ INPUT RIMOSSA (richiesta utente 2026-06) ===
                 L'utente passa già da voce a scrittura tramite lo swipe tra
@@ -6281,34 +6106,11 @@ export default function Taccuino() {
 
             <View style={styles.divider} />
 
-            {/* === NOTIFICHE: toggle on/off (richiesta utente 2026-06) ===
-                Aggiunto un interruttore semplice per abilitare/disabilitare
-                le notifiche da parte di Koda. Salvato in
-                profile.settings.notifications_enabled. Default: ON.
-                Il pulsante "Test notifica" è stato rimosso. */}
-            <Text style={styles.settingsSubtitle}>Notifiche</Text>
-            <View style={[styles.settingRow, { flexDirection: "row", alignItems: "center", justifyContent: "space-between" }]}>
-              <View style={{ flex: 1, paddingRight: 12 }}>
-                <Text style={styles.settingLabel}>🔔 Notifiche da Koda</Text>
-                <Text style={styles.settingHint}>
-                  Se le abiliti, Koda può inviarti notifiche locali (promemoria,
-                  check-in). Tutto sul tuo telefono, niente esce.
-                </Text>
-              </View>
-              <Switch
-                value={(profile?.settings as any)?.notifications_enabled !== false}
-                onValueChange={async (on) => {
-                  if (!profile) return;
-                  const nextSettings = { ...profile.settings, notifications_enabled: on } as any;
-                  setProfile({ ...profile, settings: nextSettings });
-                  try {
-                    await api.updateProfile({ settings: nextSettings });
-                  } catch {}
-                }}
-                trackColor={{ false: "rgba(255,255,255,0.18)", true: "#0E7C7B" }}
-                thumbColor="#FFFFFF"
-              />
-            </View>
+            {/* === NOTIFICHE toggle RIMOSSO 2026-08-27 v65.8 (Fabio) ==========
+                "🔔 Notifiche da Koda" faceva parte del Blocco A (notifiche
+                proattive) che è stato rimosso questa notte. Il campo
+                notifications_enabled resta nel profilo per retrocompatibilità
+                ma non è più esposto. */}
 
             {/* === GEOLOCATION TOGGLE (P2 Fabio 2026-06-20) ===
                 Quando attivo: al boot dell'app il client chiede il
@@ -6487,20 +6289,217 @@ export default function Taccuino() {
               <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
             </TouchableOpacity>
 
-            {/* === LA MIA PROMESSA (revisione 2026-07, testo utente) ===
-                Versione breve, calda, one-liner. Prima c'era un box con
-                descrizione tecnica dettagliata di modalità normale /
-                Stanza dello Sfogo / Ghost / GDPR — spostata via su
-                richiesta esplicita dell'utente ("verificare se serve,
-                modificare o rimuovere"). Ora resta un solo blocco: la
-                promessa nuda, senza tecnicismi. */}
+            {/* === LA MIA PROMESSA RIMOSSA 2026-08-27 v65.8 (Fabio) ============
+                Sezione rimossa: non aveva funzione chiara ed era testo
+                statico duplicato rispetto al futuro Privacy Policy. Il
+                contenuto sostanziale della promessa (i dati non escono
+                dal telefono in Lascia andare, niente addestramento su
+                dati utente) resterà nel Privacy Policy quando sarà
+                scritto ufficialmente. */}
+
+            {/* === INFORMAZIONI LEGALI 2026-08-27 v65.8 (Fabio, Apple 5.1.1v) =
+                Placeholder cliccabili per Privacy Policy e Termini di
+                Servizio. I documenti reali NON esistono ancora — quando
+                l'utente tocca, mostriamo un Alert "In arrivo — contatta
+                hello@koda.app". Prima della pubblicazione pubblica su App
+                Store questi devono essere sostituiti con URL veri
+                (raccomandato: pagina esterna su dominio Koda + Linking).
+                RESTA COMUNQUE UN BLOCCANTE DI LANCIO, non risolto. */}
             <View style={styles.divider} />
-            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>🛡️ La mia promessa</Text>
-            <View style={styles.promessaBox}>
-              <Text style={styles.promessaText}>
-                Quello che mi dici resta tra noi. Non lo vende nessuno, non lo usa nessuno per addestrare altri modelli, non esce dal nostro spazio. In Lascia andare non esce nemmeno dal tuo telefono. È tuo. È nostro.
-              </Text>
-            </View>
+            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>⚖️ Informazioni legali</Text>
+
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  "Privacy Policy",
+                  "In arrivo. Per informazioni sulla privacy scrivi a hello@koda.app.",
+                  [{ text: "OK", style: "default" }],
+                );
+              }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.14)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                marginTop: 6,
+              }}
+              testID="privacy-policy-btn"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>📄 Privacy Policy</Text>
+                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>In arrivo — hello@koda.app</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  "Termini di Servizio",
+                  "In arrivo. Per informazioni sui termini scrivi a hello@koda.app.",
+                  [{ text: "OK", style: "default" }],
+                );
+              }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.14)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                marginTop: 8,
+              }}
+              testID="terms-btn"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>📜 Termini di Servizio</Text>
+                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>In arrivo — hello@koda.app</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+            </TouchableOpacity>
+
+            {/* === ACCOUNT 2026-08-27 v65.8 (Fabio) ============================
+                Logout + Elimina Account. Logout: doppia conferma via Alert,
+                poi useAuth().signOut() + router.replace login. Elimina
+                Account: TRIPLA conferma (Alert.alert con 3 step), poi
+                DELETE /api/account → signOut(). Coerente con Apple
+                Guideline 5.1.1(v) — cancellazione DEVE essere accessibile
+                dentro l'app, non solo via email/web. */}
+            <View style={styles.divider} />
+            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>👤 Account</Text>
+
+            {/* Info email loggato (best-effort — dal profilo se presente) */}
+            {(() => {
+              const emailShown =
+                (profile as any)?.email ||
+                (profile as any)?.auth_email ||
+                (profile as any)?.user_email ||
+                null;
+              if (!emailShown) return null;
+              return (
+                <View style={{ paddingHorizontal: 4, marginBottom: 10 }}>
+                  <Text style={[styles.settingHint, { fontSize: 13 }]}>
+                    Loggato come: {emailShown}
+                  </Text>
+                </View>
+              );
+            })()}
+
+            {/* Logout — conferma singola */}
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  "Uscire da Koda?",
+                  "La tua memoria resta al sicuro. Puoi rientrare quando vuoi con la stessa email.",
+                  [
+                    { text: "Annulla", style: "cancel" },
+                    {
+                      text: "Esci",
+                      style: "destructive",
+                      onPress: async () => {
+                        try {
+                          setShowSettings(false);
+                          await new Promise((r) => setTimeout(r, 150));
+                          await auth.signOut();
+                        } catch (e) {
+                          console.warn("[logout] failed:", e);
+                          Alert.alert("Errore", "Non sono riuscito a uscire. Riprova.");
+                        }
+                      },
+                    },
+                  ],
+                );
+              }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.14)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+              }}
+              testID="logout-btn"
+            >
+              <Text style={styles.settingLabel}>🚪 Esci</Text>
+              <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+            </TouchableOpacity>
+
+            {/* Elimina account — tripla conferma */}
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  "Elimina il tuo account",
+                  "Cancellerai per SEMPRE il tuo profilo, tutta la memoria di Koda su di te, le sessioni attive e ogni traccia sul server. Non si può annullare.",
+                  [
+                    { text: "Annulla", style: "cancel" },
+                    {
+                      text: "Continua",
+                      style: "destructive",
+                      onPress: () => {
+                        Alert.alert(
+                          "Ne sei davvero sicuro?",
+                          "Ultimo controllo. Se procedi ora, dovrai ricreare tutto da zero se un giorno vorrai tornare.",
+                          [
+                            { text: "Annulla", style: "cancel" },
+                            {
+                              text: "Elimina tutto",
+                              style: "destructive",
+                              onPress: async () => {
+                                try {
+                                  setShowSettings(false);
+                                  await new Promise((r) => setTimeout(r, 150));
+                                  const res = await api.deleteAccount();
+                                  console.log("[deleteAccount] result:", res);
+                                  await auth.signOut();
+                                } catch (e: any) {
+                                  console.warn("[deleteAccount] failed:", e);
+                                  Alert.alert(
+                                    "Errore",
+                                    `Non sono riuscito a completare la cancellazione: ${e?.message || e}`,
+                                  );
+                                }
+                              },
+                            },
+                          ],
+                        );
+                      },
+                    },
+                  ],
+                );
+              }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(220, 40, 40, 0.10)",
+                borderWidth: 1,
+                borderColor: "rgba(220, 40, 40, 0.35)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                marginTop: 10,
+              }}
+              testID="delete-account-btn"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.settingLabel, { color: "#FF6B6B" }]}>🗑️ Elimina il mio account</Text>
+                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>
+                  Cancella per sempre profilo, memoria e sessioni. Non annullabile.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#FF6B6B" />
+            </TouchableOpacity>
 
             {/* === MINI-PANEL ADMIN WHITELIST (2026-07-24, PAYWALL_POLICY) ===
                 Visibile SOLO all'owner (backend risponde is_admin=true su

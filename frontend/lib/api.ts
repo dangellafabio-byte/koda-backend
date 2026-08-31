@@ -253,6 +253,20 @@ export const api = {
     }),
   authLogout: () => jsonReq<{ ok: boolean }>("/auth/logout", { method: "POST" }),
 
+  // === DELETE ACCOUNT (Apple 5.1.1(v) — Fabio 2026-08-27) ==============
+  // Cancella DEFINITIVAMENTE l'account: profilo, timeline, memories,
+  // key_facts, situations+evidences, voiceprint, tutte le sessions e
+  // whitelist unlimited. Dopo il 200, il client DEVE forzare signOut()
+  // e portare l'utente al login screen. Un secondo login con la stessa
+  // email creerà un profilo NUOVO da zero.
+  deleteAccount: () =>
+    jsonReq<{
+      ok: boolean;
+      message: string;
+      email: string | null;
+      counts: Record<string, number>;
+    }>("/account", { method: "DELETE" }),
+
   // === SITUATION TRACKING (V3.1 — Fabio 2026-08-22) ==================
   // Flat semantic ledger (no psychological profiling). Ogni chiamata
   // richiede opt-in ON lato server (except getStatus e wipe).
