@@ -64,12 +64,16 @@ export default function IntroPremium() {
   const safetyTimerRef = useRef<any>(null);
   const tapHintTimerRef = useRef<any>(null);
   const mountedRef = useRef(true);
-  // === FIX 2026-08-27 v65.4 — Ref-based orb measurement (Fabio) ============
-  // Prima: rect calcolato come (W/2 - orbSize/2, H/2 - orbSize/2). Su Android
-  // il rettangolo era off rispetto al visual dell'orb → l'evidenziatura non
-  // era centrata. Ora misuriamo l'orb VERO col ref e usiamo quelle
-  // coordinate. Fallback al calcolo se la misura fallisce.
+  // === FIX 2026-08-27 v65.12 — Ring/orb allineamento Android (Fabio) ========
+  // Prima (v65.4): measureInWindow orb → RECT assoluto. Su Android edge-to-edge
+  // la Y ritornata INCLUDE lo status bar mentre il ROOT del componente (che è
+  // parent del ring) parte SOTTO lo status bar → mismatch di ~24-32px.
+  // Ora misuriamo ANCHE il ROOT e sottraiamo la sua Y, ottenendo coordinate
+  // RELATIVE al root — così ring e orb condividono lo stesso sistema di
+  // riferimento su qualsiasi configurazione (iOS notch, Android edge-to-edge,
+  // Android status bar bianca, foldable, ecc.).
   const orbRefEl = useRef<any>(null);
+  const rootRefEl = useRef<any>(null);
   const [measuredOrbRect, setMeasuredOrbRect] = useState<Rect | null>(null);
 
   // ==================== RECTS (coerenti con home reale) ====================
@@ -89,22 +93,41 @@ export default function IntroPremium() {
     settings: { x: W - 58, y: headerCY - 22, w: 44, h: 44 },
   };
 
-  // === FIX 2026-08-27 v65.4 — Misura orb reale prima di mostrare ring ======
-  // measureInWindow è affidabile su iOS+Android e restituisce coordinate
-  // absolute rispetto alla root window (che è la stessa base del ring).
+  // === FIX 2026-08-27 v65.12 — Misura RELATIVE al root (fix Android) =====
+  // Misuriamo sia orb che root, poi facciamo la differenza. Se root non è
+  // ancora montato (edge case), fallback a coordinate assolute (v65.4 style).
   useEffect(() => {
-    const t = setTimeout(() => {
+    let done = false;
+    const measureNow = () => {
+      if (done || !mountedRef.current) return;
       try {
-        orbRefEl.current?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
-          if (!mountedRef.current) return;
-          if (w > 0 && h > 0) {
-            console.log(`${TAG} orb measured: x=${x.toFixed(1)} y=${y.toFixed(1)} w=${w.toFixed(1)} h=${h.toFixed(1)}`);
-            setMeasuredOrbRect({ x, y, w, h });
+        const orbNode = orbRefEl.current;
+        const rootNode = rootRefEl.current;
+        if (!orbNode) return;
+        orbNode.measureInWindow?.((ox: number, oy: number, ow: number, oh: number) => {
+          if (!mountedRef.current || !(ow > 0 && oh > 0)) return;
+          if (rootNode?.measureInWindow) {
+            rootNode.measureInWindow((rx: number, ry: number) => {
+              if (!mountedRef.current) return;
+              const relX = ox - rx;
+              const relY = oy - ry;
+              console.log(`${TAG} orb measured RELATIVE: root=(${rx.toFixed(0)},${ry.toFixed(0)}) orb=(${ox.toFixed(0)},${oy.toFixed(0)}) rel=(${relX.toFixed(0)},${relY.toFixed(0)}) size=${ow.toFixed(0)}x${oh.toFixed(0)}`);
+              setMeasuredOrbRect({ x: relX, y: relY, w: ow, h: oh });
+              done = true;
+            });
+          } else {
+            // Fallback: coordinate assolute (comportamento v65.4)
+            console.log(`${TAG} orb measured ABS (root ref missing): x=${ox.toFixed(0)} y=${oy.toFixed(0)}`);
+            setMeasuredOrbRect({ x: ox, y: oy, w: ow, h: oh });
+            done = true;
           }
         });
       } catch (e) { console.warn(`${TAG} measure failed:`, e); }
-    }, 400); // aspetta che il layout sia stabilizzato
-    return () => clearTimeout(t);
+    };
+    // Doppio tentativo: 400ms (primo layout) e 900ms (se il primo era prematuro)
+    const t1 = setTimeout(measureNow, 400);
+    const t2 = setTimeout(measureNow, 900);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
   // ==================== AUDIO ====================
@@ -143,6 +166,20 @@ export default function IntroPremium() {
     try {
       const player = createAudioPlayer(CLIP_ECCOMI, { updateInterval: 100 });
       currentPlayerRef.current = player;
+      // === FIX 2026-08-27 v65.12 — Volume esplicito + wait load (Android) =====
+      // Su Android alcuni device inizializzano il player con volume<1.0
+      // (specialmente se la sessione audio precedente aveva ducking attivo).
+      // Forziamo full volume subito dopo la creazione.
+      try { (player as any).volume = 1.0; } catch {}
+      // Aspettiamo che il player sia caricato prima di play. Su Android
+      // createAudioPlayer è async internamente e `play()` prima del load
+      // silenzia il primo turno di intro (bug osservato Stefania 2026-08-27).
+      // Polling: max 2s (20 × 100ms).
+      for (let i = 0; i < 20; i++) {
+        if ((player as any).isLoaded === true) break;
+        await new Promise((r) => setTimeout(r, 100));
+        if (!mountedRef.current) return;
+      }
       const onStatus = (s: { didJustFinish?: boolean }) => {
         if (s.didJustFinish) {
           try { player.removeListener("playbackStatusUpdate", onStatus); } catch {}
@@ -150,7 +187,10 @@ export default function IntroPremium() {
         }
       };
       player.addListener("playbackStatusUpdate", onStatus);
+      // Volume di nuovo dopo load (alcuni Android lo resettano)
+      try { (player as any).volume = 1.0; } catch {}
       player.play();
+      console.log(`${TAG} clip started (isLoaded=${(player as any).isLoaded}, volume=${(player as any).volume})`);
       safetyTimerRef.current = setTimeout(() => { console.warn(`${TAG} clip safety`); onFinish(); }, 12000);
     } catch (e) {
       console.warn(`${TAG} playClip failed:`, e);
@@ -368,7 +408,7 @@ export default function IntroPremium() {
     : { pointerEvents: "none" as const };
 
   return (
-    <Animated.View style={[styles.screen, { opacity: screenOpacity }]}>
+    <Animated.View ref={rootRefEl} style={[styles.screen, { opacity: screenOpacity }]}>
       {/* Wrapper che riceve l'auto-swipe: contiene TUTTI gli elementi
           della fake-home (orb + toggle + pillola + ⋯) — la card resta
           fuori dal wrapper così non si muove. */}
