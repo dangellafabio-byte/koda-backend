@@ -121,6 +121,8 @@ async def _kodabuildversion():
     _has_parroting_fix = None
     _has_new_ascolto = None
     _has_mirroring_prosodic = None
+    _fast_has_regola_zero = None
+    _fast_has_agenda_ferrea = None
     try:
         _p = await get_or_create_profile()
         _sample = _build_conversation_system_prompt(_p, [], memories=None, trial_state="active")
@@ -129,6 +131,13 @@ async def _kodabuildversion():
         _has_mirroring_prosodic = "MIRRORING PROSODICO" in _sample
     except Exception as _e:
         logger.warning(f"[_version] prompt inspection failed: {_e}")
+    try:
+        _p_fast = await get_or_create_profile()
+        _fast_sample = _build_fast_system_prompt(_p_fast, [], memories=None, trial_state="active")
+        _fast_has_regola_zero = "REGOLA ZERO — ANTI-PARROTING" in _fast_sample
+        _fast_has_agenda_ferrea = "parroting travestito" in _fast_sample
+    except Exception as _e:
+        logger.warning(f"[_version] fast prompt inspection failed: {_e}")
     return {
         "version": _KODA_BACKEND_VERSION,
         "build_ts": _KODA_BACKEND_BUILD_TS,
@@ -136,6 +145,10 @@ async def _kodabuildversion():
             "has_parroting_ban": _has_parroting_fix,
             "has_new_ascolto_attivo": _has_new_ascolto,
             "has_mirroring_prosodic": _has_mirroring_prosodic,
+        },
+        "parroting_fix_fast_prompt_v65_11": {
+            "has_regola_zero_in_fast_prompt": _fast_has_regola_zero,
+            "has_agenda_ferrea_in_fast_prompt": _fast_has_agenda_ferrea,
         },
         "features": [
             "auth_bound_freemium",
