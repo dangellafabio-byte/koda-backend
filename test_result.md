@@ -1,3 +1,38 @@
+## SESSIONE 2026-08-28 — v65.13: FIX MID-SESSION TIER DOWNGRADE (P0)
+
+### 🔴 P0 — Root cause identificata dai log iOS
+Log: `[KODA_ROUTER] tier changed in-session → re-evaluate (was ee4e...:unlimited, now ee4e...:free) → replace to /lascia-andare`
+
+**Causa tecnica**: 
+- `is_user_unlimited` in `server.py` catturava eccezioni MongoDB con `logger.warning` e cascava sul `return (False, "not_whitelisted")` finale. Un transient DB failure (Railway MongoDB latency spike, connection reset) → whitelist patch fallita → `/api/profile` restituiva `subscription_tier=None` → il router frontend rilevava paid→free e faceva `router.replace('/lascia-andare')` durante una sessione voce attiva.
+
+### ✅ Fix applicati
+
+**Backend `server.py`**:
+1. `is_user_unlimited`: aggiunto STATIC PRESEED CHECK prima del DB. Owner (Fabio) e Stefania sono verificati contro `_UNLIMITED_PRESEED_EMAILS` in-memoria → immuni ai transient DB failure.
+2. Cache: gli esiti negativi da errore DB (`db_error_no_cache`) NON vengono cachati → il turno successivo riprova.
+3. `/api/profile`: LAST-RESORT FALLBACK. Se `is_user_unlimited` ritorna False MA l'uid è in `_ADMIN_UIDS` o preseed uids, forziamo `unlimited`. Owner e Stefania non possono MAI essere degradati a free.
+4. Log strutturato `[PAYWALL_BYPASS_FORCED]` / `[PAYWALL_BYPASS_EXCEPTION_FALLBACK]` per audit.
+
+**Frontend `app/index.tsx` + `lib/routerGlobalState.ts`**:
+1. Nuovi flag module-level: `setConvVoiceActive(bool)` + `markPaidTierSeen()` / `isPaidTierRecent(graceMs)`.
+2. KODA_ROUTER useEffect: GUARD `isConvVoiceActive()` → nessun `router.replace` durante sessione voce attiva. La decisione è deferita al termine della conversazione.
+3. GRACE PERIOD 60s: se il tier corrente è free/null MA meno di 60s fa era paid, NON fare replace. Refetch `/api/profile` fire-and-forget e aspetta il prossimo tick.
+4. Sync automatico `convActive` state → module flag (via useEffect già esistente).
+5. Reset del flag globale al unmount della Home per evitare stale state.
+
+### 🔍 Verifica locale
+- Backend `curl /api/profile` con `X-User-Id=ee4e7261...` → `subscription_tier=unlimited`, reason=`static_preseed_uid` (log confermato).
+- Version endpoint `/api/_version` → `v65.13-tier-stability-fix-20260828`.
+- Prompt anti-parroting v65.11 markers ancora presenti (regressione zero).
+
+### 📦 Deploy
+- Backend Railway: push su `koda-backend/main` → auto-deploy.
+- Frontend: richiede EAS build per validazione su device reale.
+
+---
+
+
 ## SESSIONE 2026-06-08 — LEGAL DOCS LIVE + email + version bump
 
 ### ✅ Documenti legali pronti per gli store

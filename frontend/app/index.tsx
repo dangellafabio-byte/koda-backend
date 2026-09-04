@@ -118,6 +118,10 @@ import {
   markSessionSplashShown,
   resetLastDecidedKey,
   resetRouterGlobalState,
+  setConvVoiceActive,
+  isConvVoiceActive,
+  markPaidTierSeen,
+  isPaidTierRecent,
 } from "../lib/routerGlobalState";
 import type { SafetyCheckResult, FreemiumStatus as FreemiumStatusType } from "../lib/api";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
@@ -1156,6 +1160,55 @@ export default function Taccuino() {
     const isPaid = tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
     const currentKey = currentProfileId === null ? null : `${currentProfileId}:${tier ?? "free"}`;
 
+    // === v65.13 (2026-08-28) — MEMORIA "PAID VISTO DI RECENTE" =============
+    // Ogni volta che vediamo un tier paid, marchiamo il timestamp. Serve
+    // per rilevare cambi paid→free sospetti (transient DB failure lato
+    // backend) e deferire la decisione invece di kickare l'utente.
+    if (isPaid) {
+      markPaidTierSeen();
+    }
+
+    // === v65.13 (2026-08-28) — GUARD SESSIONE VOCE ATTIVA ==================
+    // Se l'utente è in un turno hands-free live (convActive=true), NON
+    // possiamo replace() verso /lascia-andare: sovrapporremmo due schermate
+    // e uccideremmo lo stream vocale. Il router ridecide appena la sessione
+    // si chiude naturalmente (convActive=false → cambio dep → re-run).
+    if (isConvVoiceActive() && !isPaid) {
+      console.log(
+        `[KODA_ROUTER] convActive=true → DEFER decision (tier=${tier || "none"}, ` +
+        `pid=${currentProfileId ? currentProfileId.slice(0, 8) : "null"}). ` +
+        `Router non farà replace durante sessione voce attiva.`
+      );
+      return;
+    }
+
+    // === v65.13 (2026-08-28) — GRACE PERIOD paid→free =====================
+    // Se il current tier è free/null MA meno di 60s fa era paid, è un
+    // sintomo di transient failure lato backend (whitelist patch fallita,
+    // DB temporarily unavailable). Deferisci: al prossimo tick (network
+    // refresh su resume, TrialWatcher, altro trigger) il tier tornerà
+    // corretto e il router ridecide con dati stabili.
+    if (!isPaid && isPaidTierRecent(60_000)) {
+      console.warn(
+        `[KODA_ROUTER] SUSPICIOUS DOWNGRADE (tier=${tier || "none"} ma paid<60s fa) ` +
+        `→ DEFER + trigger refresh profilo. Non tocco la route.`
+      );
+      // Trigger fetch profile ri-verifica (fire-and-forget). Se il backend
+      // ora restituisce di nuovo il tier paid, setProfile aggiorna e questo
+      // useEffect rigira col tier corretto (guard qui sopra scatta).
+      (async () => {
+        try {
+          const p = await api.getProfile();
+          if (p && p.id) {
+            setProfile(p);
+          }
+        } catch (e) {
+          console.warn("[KODA_ROUTER] grace-period refetch failed:", e);
+        }
+      })();
+      return;
+    }
+
     // === FIX BUG CACHE TIER IN-SESSIONE — Keyed invalidation locale =========
     // Se il tier è cambiato dall'ultima decisione locale, RESETTA il ref
     // così il router può ridecidere per la nuova chiave (anche se avevamo
@@ -1380,7 +1433,18 @@ export default function Taccuino() {
   const convActiveRef = useRef(false);
   useEffect(() => {
     convActiveRef.current = convActive;
+    // v65.13 (2026-08-28): sync anche il flag module-level letto dal
+    // router useEffect qui sopra (dichiarato prima del state convActive
+    // → non può accedere direttamente al ref locale).
+    setConvVoiceActive(convActive);
   }, [convActive]);
+  // v65.13: al unmount della Home, azzeriamo il flag globale — altrimenti
+  // un remount rischia di partire con convVoiceActive=true stale.
+  useEffect(() => {
+    return () => {
+      setConvVoiceActive(false);
+    };
+  }, []);
 
   // === HANDS-FREE MODE ===
   // Default ON. Quando attivo, il microfono si apre da solo non appena Coda

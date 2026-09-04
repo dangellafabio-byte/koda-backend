@@ -109,7 +109,7 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v65.11-parroting-fix-deep-20260827"
+_KODA_BACKEND_VERSION = "v65.13-tier-stability-fix-20260828"
 _KODA_BACKEND_BUILD_TS = "2026-07-13T16:00:00Z"
 
 
@@ -3423,6 +3423,21 @@ async def api_get_profile(request: Request):
     # In caso di rimozione dalla whitelist, non c'è pulizia da fare sul
     # profilo (nessun dato persistito). Il campo `subscription_tier="unlimited"`
     # è già gestito ovunque nel codice (frontend + paywall + trial state).
+    #
+    # === FIX 2026-08-28 v65.13 — TIER-STABILITY BELT+SUSPENDERS ===========
+    # Bug fatale iOS: il patch whitelist poteva fallire silenziosamente
+    # (DB transient, cache stale, edge cases) e restituire tier=None
+    # → il router frontend rilevava "tier changed unlimited→free" e faceva
+    # replace verso `/lascia-andare` durante una sessione voce attiva.
+    # 
+    # Difesa in profondità:
+    # 1. `is_user_unlimited` ora ha static preseed check (owner + Stefania)
+    #    che NON dipende dal DB → immune ai transient failure.
+    # 2. Qui aggiungiamo un last-resort fallback: se l'uid corrente ∈ 
+    #    _ADMIN_UIDS OR corrisponde alle preseed email via _email_to_uid,
+    #    forziamo tier="unlimited" INDIPENDENTEMENTE dall'esito del check.
+    #    Owner e Stefania NON possono MAI essere degradati a free.
+    # 3. Log strutturato per audit: ogni forzatura è tracciata con reason.
     try:
         uid = current_user_id()
         email_for_check = None
@@ -3434,6 +3449,23 @@ async def api_get_profile(request: Request):
         if email_for_check is None:
             email_for_check = await _uid_email_from_session_or_profile(uid)
         unlimited_flag, unlim_reason = await is_user_unlimited(email_for_check, uid)
+
+        # v65.13 LAST-RESORT: se il check ha detto False MA l'uid è pre-seed
+        # (owner/Stefania) o admin, FORZIAMO unlimited. Questo copre:
+        #   - transient DB failure (`db_error_no_cache`)
+        #   - profile senza email popolata E DB unreachable
+        #   - qualunque futuro edge case che facesse cascare il check.
+        if not unlimited_flag:
+            _preseed_uids_safe = {_email_to_uid(e) for (e, _n) in _UNLIMITED_PRESEED_EMAILS}
+            if uid in _preseed_uids_safe or uid in _ADMIN_UIDS:
+                logger.warning(
+                    f"[PAYWALL_BYPASS_FORCED uid={uid[:8]}... email={email_for_check or '(none)'}] "
+                    f"is_user_unlimited returned False (reason={unlim_reason}) BUT uid is in "
+                    f"static preseed/admin list → FORCING unlimited"
+                )
+                unlimited_flag = True
+                unlim_reason = "static_admin_last_resort"
+
         if unlimited_flag:
             logger.info(
                 f"[PAYWALL_BYPASS user={email_for_check or uid[:8]} reason={unlim_reason}] "
@@ -3442,7 +3474,22 @@ async def api_get_profile(request: Request):
             p.subscription_active = True
             p.subscription_tier = "unlimited"
     except Exception as _e:
+        # v65.13: se anche il try esterno esplode, controlliamo comunque
+        # se l'uid è admin/preseed e forziamo unlimited. NON possiamo
+        # tollerare un downgrade silenzioso per l'owner.
         logger.warning(f"[profile/whitelist-patch] failed: {_e}")
+        try:
+            _uid_fb = current_user_id()
+            _preseed_uids_fb = {_email_to_uid(e) for (e, _n) in _UNLIMITED_PRESEED_EMAILS}
+            if _uid_fb in _preseed_uids_fb or _uid_fb in _ADMIN_UIDS:
+                logger.warning(
+                    f"[PAYWALL_BYPASS_EXCEPTION_FALLBACK uid={_uid_fb[:8]}...] "
+                    f"patch threw ({_e}) → forcing unlimited from static admin list"
+                )
+                p.subscription_active = True
+                p.subscription_tier = "unlimited"
+        except Exception as _e2:
+            logger.error(f"[profile/whitelist-patch] fallback ALSO failed: {_e2}")
     # === FIX 2026-07-02 (Fabio) — Rimossa enrichment "background" ===
     # La feature "sfondo custom" è stata rimossa dall'UI. Non generiamo più
     # URL /api/profile/background nel payload di risposta. Il codice
@@ -4591,8 +4638,15 @@ async def is_user_unlimited(email: Optional[str], uid: Optional[str]) -> tuple[b
       1. Env var KODA_UNLIMITED_USER_IDS (uid diretto)
       2. Env var KODA_UNLIMITED_USERS (email)
       3. Collection MongoDB `unlimited_users` (self-service admin)
+      4. Fallback statico su _UNLIMITED_PRESEED_EMAILS + _ADMIN_UIDS
+         (v65.13, 2026-08-28): se il DB è momentaneamente indisponibile,
+         gli utenti pre-seed (owner, Stefania) NON devono essere degradati
+         a free. Prima il codice cascava sul return finale `(False, ...)`
+         → `/api/profile` restituiva tier=None → router frontend kickava
+         l'utente su `/lascia-andare` mid-session (bug fatale iOS).
 
-    Cache in-memory 30s per non hammer DB.
+    Cache in-memory 30s SOLO per esiti definitivi (True o negative confermato
+    da DB). Errori DB NON vengono cachati → ritento al prossimo turno.
     """
     import time as _time
     now = _time.time()
@@ -4613,7 +4667,22 @@ async def is_user_unlimited(email: Optional[str], uid: Optional[str]) -> tuple[b
         _UNLIMITED_CACHE[cache_key] = (True, now + _UNLIMITED_CACHE_TTL)
         return (True, "env_email")
 
+    # 2.5 STATIC PRE-SEED CHECK (v65.13, 2026-08-28) — SEMPRE prima del DB.
+    # Owner (Fabio) + Stefania sono hardcoded nel codice via
+    # _UNLIMITED_PRESEED_EMAILS. Non dipendono dal DB → immuni ai transient
+    # MongoDB failure. Questo elimina la classe di bug "downgrade mid-session
+    # perché il DB era slow/unreachable per una singola call".
+    _preseed_emails = {e.strip().lower() for (e, _n) in _UNLIMITED_PRESEED_EMAILS}
+    _preseed_uids = {_email_to_uid(e) for (e, _n) in _UNLIMITED_PRESEED_EMAILS}
+    if email_norm and email_norm in _preseed_emails:
+        _UNLIMITED_CACHE[cache_key] = (True, now + _UNLIMITED_CACHE_TTL)
+        return (True, "static_preseed_email")
+    if uid and uid in _preseed_uids:
+        _UNLIMITED_CACHE[cache_key] = (True, now + _UNLIMITED_CACHE_TTL)
+        return (True, "static_preseed_uid")
+
     # 3. DB whitelist (self-service)
+    _db_error = False
     if email_norm:
         try:
             doc = await db.unlimited_users.find_one({"email": email_norm})
@@ -4621,6 +4690,7 @@ async def is_user_unlimited(email: Optional[str], uid: Optional[str]) -> tuple[b
                 _UNLIMITED_CACHE[cache_key] = (True, now + _UNLIMITED_CACHE_TTL)
                 return (True, "db_email")
         except Exception as e:
+            _db_error = True
             logger.warning(f"[unlimited] DB lookup by email failed: {e}")
 
     # 4. DB whitelist lookup per uid (fallback quando email non è nota nella
@@ -4634,9 +4704,19 @@ async def is_user_unlimited(email: Optional[str], uid: Optional[str]) -> tuple[b
                 _UNLIMITED_CACHE[cache_key] = (True, now + _UNLIMITED_CACHE_TTL)
                 return (True, "db_uid")
         except Exception as e:
+            _db_error = True
             logger.warning(f"[unlimited] DB lookup by uid failed: {e}")
 
-    # Non unlimited
+    # v65.13: se il DB ha fallito, NON cachare esito negativo. Restituisci
+    # False ma senza inquinare la cache — il prossimo turno riproverà.
+    if _db_error:
+        logger.warning(
+            f"[unlimited] DB unavailable for email={email_norm or '(none)'} "
+            f"uid={uid[:8] if uid else '(none)'}... → returning False WITHOUT caching"
+        )
+        return (False, "db_error_no_cache")
+
+    # Non unlimited (esito DB confermato negativo)
     _UNLIMITED_CACHE[cache_key] = (False, now + _UNLIMITED_CACHE_TTL)
     return (False, "not_whitelisted")
 

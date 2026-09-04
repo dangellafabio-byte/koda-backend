@@ -107,3 +107,49 @@ export function resetRouterGlobalState(): void {
 export function resetLastDecidedKey(): void {
   _lastDecidedKey = null;
 }
+
+// === FIX 2026-08-28 v65.13 — SESSIONE VOCE ATTIVA GLOBAL FLAG ===============
+// Bug fatale iOS: mid-conversazione, un poll di /api/profile poteva
+// restituire tier=free (transient DB failure / cache poison) → il router
+// KODA_ROUTER faceva `router.replace('/lascia-andare')` sovrascrivendo
+// la UI attiva della voce durante il turno di Koda. L'utente vedeva
+// due schermate overlappate e il flusso vocale si interrompeva.
+//
+// Difesa: mentre `convActive === true` (utente in sessione hands-free
+// live) NESSUN router.replace è consentito verso /lascia-andare o simili
+// downgrade paths. La decisione viene deferita: quando la sessione voce
+// finisce, il router ridecide con dati freschi.
+//
+// Flag a livello modulo perché la useEffect del router è dichiarata PRIMA
+// del state `convActive` nel componente <Taccuino> → il ref locale
+// non è ancora disponibile in quel punto. Il flag qui è pilotato dal
+// setter setConvVoiceActive() invocato ogni volta che convActive cambia.
+let _convVoiceActive = false;
+
+export function setConvVoiceActive(active: boolean): void {
+  _convVoiceActive = !!active;
+}
+
+export function isConvVoiceActive(): boolean {
+  return _convVoiceActive;
+}
+
+// === FIX 2026-08-28 v65.13 — TIER STABILITY GRACE ===========================
+// Il router non deve reagire immediatamente a un cambio tier paid→free.
+// Memorizziamo l'ultimo tier "paid" osservato e il timestamp. Se ora
+// vediamo free ma abbiamo visto paid meno di GRACE_MS fa, deferiamo la
+// decisione (aspetta il prossimo fetch, magari è un transient).
+let _lastPaidTierSeenAt: number | null = null;
+
+export function markPaidTierSeen(): void {
+  _lastPaidTierSeenAt = Date.now();
+}
+
+export function isPaidTierRecent(graceMs: number = 60_000): boolean {
+  if (_lastPaidTierSeenAt === null) return false;
+  return Date.now() - _lastPaidTierSeenAt < graceMs;
+}
+
+export function clearPaidTierMemory(): void {
+  _lastPaidTierSeenAt = null;
+}

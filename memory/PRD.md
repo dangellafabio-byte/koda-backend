@@ -21,6 +21,12 @@ Prima di lavorare su queste aree, l'agent DEVE leggere il documento di policy co
 Checkpoint stabile corrente: **`v60.4-stable`** su `koda-backend/main`
 (tag annotated, ripristinabile con `git checkout v60.4-stable`).
 
+
+### v65.13 (2026-08-28) — Tier stability fix (P0)
+- Fix mid-session tier downgrade che kickava utenti whitelisted su `/lascia-andare` durante sessione voce.
+- Backend: `is_user_unlimited` con static preseed check + last-resort fallback in `/api/profile` che forza `unlimited` per owner/Stefania anche se DB fallisce.
+- Frontend: router blocca `router.replace` durante `convActive=true` + grace period 60s per cambi paid→free.
+
 ---
 
 ## Vision
