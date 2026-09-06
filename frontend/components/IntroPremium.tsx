@@ -25,7 +25,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as SecureStore from "expo-secure-store";
 import { router } from "expo-router";
-import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
+import { createAudioPlayer, setAudioModeAsync, setIsAudioActiveAsync } from "expo-audio";
 import EclipseOrb from "./EclipseOrb";
 import HandsFreeOrb from "./HandsFreeOrb";
 import { ensureSpeechPermission } from "../lib/speechPermission";
@@ -148,6 +148,21 @@ export default function IntroPremium() {
         interruptionModeAndroid: "duckOthers",
         shouldRouteThroughEarpiece: false,
       } as any);
+      // === FIX 2026-09-06 v65.21 — ATTIVAZIONE ESPLICITA AUDIO SESSION (Fabio) ===
+      // ROOT CAUSE VERO del bug audio Android:
+      // `setAudioModeAsync` configura ma NON attiva l'audio focus su Android.
+      // Senza `setIsAudioActiveAsync(true)` esplicito, il primo `play()`
+      // fallisce silenziosamente perché il sistema non ha ancora concesso
+      // l'audio focus al processo. Confermato dal fatto che Lascia Andare
+      // (che chiama setIsAudioActiveAsync(true)) FUNZIONA su Android,
+      // mentre IntroPremium senza la chiamata NON funziona sullo stesso device.
+      // Su iOS `setAudioModeAsync` implica l'attivazione → chiamata idempotente.
+      try {
+        if (typeof setIsAudioActiveAsync === "function") {
+          await setIsAudioActiveAsync(true);
+          console.log(`${TAG} setIsAudioActiveAsync(true) OK`);
+        }
+      } catch (e) { console.warn(`${TAG} setIsAudioActiveAsync failed:`, e); }
     } catch (e) { console.warn(`${TAG} audio mode:`, e); }
   }, []);
 

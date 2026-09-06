@@ -25,7 +25,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as SecureStore from "expo-secure-store";
-import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
+import { createAudioPlayer, setAudioModeAsync, setIsAudioActiveAsync } from "expo-audio";
 import { api } from "../lib/api";
 
 const TAG = "[intro-premium-final]";
@@ -109,6 +109,16 @@ export default function IntroPremiumFinalStep({ onComplete }: Props) {
         interruptionModeAndroid: "duckOthers",
         shouldRouteThroughEarpiece: false,
       } as any);
+      // === FIX 2026-09-06 v65.21 — ATTIVAZIONE ESPLICITA AUDIO SESSION (Fabio) ===
+      // Stesso fix di IntroPremium.tsx: Android non attiva l'audio focus
+      // finché non chiamiamo esplicitamente setIsAudioActiveAsync(true).
+      // Senza questa chiamata il play() fallisce silenziosamente.
+      try {
+        if (typeof setIsAudioActiveAsync === "function") {
+          await setIsAudioActiveAsync(true);
+          console.log(`[KODA_INTRO_FINAL] setIsAudioActiveAsync(true) OK`);
+        }
+      } catch (e) { console.warn(`[KODA_INTRO_FINAL] setIsAudioActiveAsync failed:`, e); }
     } catch (e) {
       console.warn(`${TAG} setAudioModeAsync failed:`, e);
     }

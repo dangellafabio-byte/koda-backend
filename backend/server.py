@@ -109,7 +109,7 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v65.20-android-intro-audio-parity-20260906"
+_KODA_BACKEND_VERSION = "v65.21-audio-focus-force-free-bypass-20260906"
 _KODA_BACKEND_BUILD_TS = "2026-07-13T16:00:00Z"
 
 
@@ -3440,6 +3440,24 @@ async def api_get_profile(request: Request):
     # 3. Log strutturato per audit: ogni forzatura è tracciata con reason.
     try:
         uid = current_user_id()
+        # === FIX 2026-09-06 v65.21 — DEV BYPASS FORCE FREE (Fabio) ============
+        # Fabio non può testare l'Intro Free perché il last-resort fallback
+        # qui sotto lo forza sempre a `unlimited` (uid nei preseed hardcoded).
+        # Bypass via query param `?force_free=1` — se presente skippiamo TUTTA
+        # la logica whitelist e restituiamo il profilo così com'è
+        # (tier=None → frontend router lo manda su /lascia-andare).
+        # Effimero, per-request, nessuna scrittura DB → azzerabile togliendo
+        # il param. Sicuro perché non attivabile dalla UI utente comune.
+        try:
+            _force_free = str(request.query_params.get("force_free", "")).strip().lower()
+            if _force_free in ("1", "true", "yes"):
+                logger.warning(
+                    f"[PAYWALL_DEV_BYPASS_FORCE_FREE uid={uid[:8]}...] "
+                    f"query param force_free=1 → SKIP whitelist patch, tier resta None"
+                )
+                return p  # exit early: no whitelist injection, tier=None
+        except Exception:
+            pass  # se query_params fallisce, procedi con logica normale
         email_for_check = None
         for _k in ("email", "auth_email", "user_email"):
             _v = getattr(p, _k, None)

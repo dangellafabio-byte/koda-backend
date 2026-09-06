@@ -487,7 +487,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v65.20-android-intro-audio-parity";
+  const KODA_BUILD_SHORT_TAG = "build-v65.21-audio-focus-force-free-bypass";
   const KODA_BUILD_DATE = "2026-09-06";
   useEffect(() => {
     console.log(
@@ -6319,6 +6319,51 @@ export default function Taccuino() {
                   <Text style={styles.settingLabel}>💎 Rivedi Intro Premium (admin)</Text>
                   <Text style={styles.settingHint}>
                     Reset flag + replay della sequenza voce + 5 coach-mark.
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+              </TouchableOpacity>
+            ) : null}
+
+            {/* === TOGGLE TEST INTRO FREE (admin-only, Fabio 2026-09-06) ===
+                Bypass del last-resort fallback whitelist: quando ATTIVO,
+                getProfile() aggiunge ?force_free=1 al GET → backend NON
+                forza `unlimited` per l'uid → router porta a /lascia-andare
+                → possibilità di testare l'Intro Free e la Lascia Andare
+                free-experience senza rimuovere l'account dalla whitelist DB.
+                Il flag è persistito in SecureStore (`koda_dev_force_free_tier`)
+                e reversibile con un tap. */}
+            {isAdmin ? (
+              <TouchableOpacity
+                style={[styles.settingRow, { paddingVertical: 14 }]}
+                onPress={async () => {
+                  try {
+                    const SS = await import("expo-secure-store");
+                    const cur = await SS.getItemAsync("koda_dev_force_free_tier");
+                    const isOn = cur === "1" || cur === "true";
+                    if (isOn) {
+                      await SS.deleteItemAsync("koda_dev_force_free_tier");
+                      Alert.alert(
+                        "Test Intro Free disattivato",
+                        "Torni al tier normale (unlimited). Riavvia l'app per far ripartire il router.",
+                      );
+                    } else {
+                      await SS.setItemAsync("koda_dev_force_free_tier", "1");
+                      Alert.alert(
+                        "Test Intro Free ATTIVATO",
+                        "Al prossimo getProfile() il backend restituirà tier=None → router ti porterà su /lascia-andare (Intro Free). Riavvia l'app.",
+                      );
+                    }
+                  } catch (e) {
+                    console.warn("[force-free-toggle] failed:", e);
+                  }
+                }}
+                testID="toggle-force-free"
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingLabel}>🧪 Test Intro Free (admin)</Text>
+                  <Text style={styles.settingHint}>
+                    Toggle bypass whitelist. Ti mostra tier=Free per testare la Lascia Andare senza toccare il DB.
                   </Text>
                 </View>
                 <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />

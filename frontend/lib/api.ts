@@ -158,7 +158,26 @@ async function jsonReq<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  getProfile: () => jsonReq<Profile>("/profile"),
+  getProfile: async () => {
+    // === DEV BYPASS v65.21 (Fabio) ==========================================
+    // Se SecureStore ha `koda_dev_force_free_tier=1`, aggiungiamo ?force_free=1
+    // al GET /profile. Backend skippa il last-resort fallback whitelist e
+    // restituisce tier=None → router frontend manda su /lascia-andare.
+    // Utile per testare l'Intro Free su un account che è in whitelist
+    // hardcoded (owner Fabio, Stefania). Reversibile: rimuovi il flag e
+    // il profilo torna paid.
+    let qs = "";
+    try {
+      // Import dinamico per non pesare sul cold start
+      const SS = await import("expo-secure-store");
+      const flag = await SS.getItemAsync("koda_dev_force_free_tier");
+      if (flag === "1" || flag === "true") {
+        qs = "?force_free=1";
+        console.warn("[KODA_DEV] getProfile with force_free=1 (SecureStore flag active)");
+      }
+    } catch {}
+    return jsonReq<Profile>(`/profile${qs}`);
+  },
   updateProfile: (patch: Partial<Profile>) =>
     jsonReq<Profile>("/profile", {
       method: "PUT",
