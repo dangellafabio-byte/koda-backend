@@ -109,7 +109,7 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v65.15-antiparrot-server-filter-20260906"
+_KODA_BACKEND_VERSION = "v65.16-antiparrot-numbers-hallucination-fix-20260906"
 _KODA_BACKEND_BUILD_TS = "2026-07-13T16:00:00Z"
 
 
@@ -8126,6 +8126,61 @@ _PARROT_STOPWORDS_IT = frozenset({
 # Regex per tokenizzare parole italiane (supporta accentate).
 _PARROT_WORD_RE = re.compile(r"[a-zàèéìòùáíóúçñ]+", re.IGNORECASE)
 
+# === NUMERI CIFRA → PAROLE ITALIANE (v65.16, 2026-09-06) ===
+# Fix critico: se user dice "40 minuti di ritardo" (cifra) e Koda dice
+# "Quaranta minuti di ritardo" (parola), il filtro precedente NON matchava
+# perché "40" e "quaranta" sono token diversi per il regex. Normalizziamo
+# le cifre in parole prima di estrarre content words → l'overlap trova
+# anche "quaranta" tra utente e Koda.
+_NUM_UNITS_IT = ["zero", "uno", "due", "tre", "quattro", "cinque",
+                 "sei", "sette", "otto", "nove"]
+_NUM_TEENS_IT = ["dieci", "undici", "dodici", "tredici", "quattordici",
+                 "quindici", "sedici", "diciassette", "diciotto", "diciannove"]
+_NUM_TENS_IT = ["", "", "venti", "trenta", "quaranta", "cinquanta",
+                "sessanta", "settanta", "ottanta", "novanta"]
+
+def _num_to_it(n: int) -> str:
+    """Converte 0-9999 in forma scritta italiana (lowercase, senza accenti).
+    Numeri fuori range → stringa vuota (fall-through al tokenizer originale)."""
+    if n < 0 or n > 9999:
+        return ""
+    if n < 10:
+        return _NUM_UNITS_IT[n]
+    if n < 20:
+        return _NUM_TEENS_IT[n - 10]
+    if n < 100:
+        t, u = divmod(n, 10)
+        base = _NUM_TENS_IT[t]
+        if u == 0:
+            return base
+        # Regola italiana: elisione vocale finale davanti a "uno" e "otto"
+        if u in (1, 8):
+            return base[:-1] + _NUM_UNITS_IT[u]
+        return base + _NUM_UNITS_IT[u]
+    if n < 1000:
+        h, r = divmod(n, 100)
+        base = "cento" if h == 1 else _NUM_UNITS_IT[h] + "cento"
+        return base if r == 0 else base + _num_to_it(r)
+    # 1000-9999
+    k, r = divmod(n, 1000)
+    base = "mille" if k == 1 else _NUM_UNITS_IT[k] + "mila"
+    return base if r == 0 else base + _num_to_it(r)
+
+
+_NUM_DIGIT_RE = re.compile(r"\d+")
+
+
+def _normalize_numbers_for_parrot(text: str) -> str:
+    """Rimpiazza le cifre 0-9999 con la forma italiana scritta.
+    Es. '40 minuti' → 'quaranta minuti'. Numeri >9999 restano cifre.
+    """
+    def _replace(m):
+        try:
+            return _num_to_it(int(m.group(0))) or m.group(0)
+        except (ValueError, IndexError):
+            return m.group(0)
+    return _NUM_DIGIT_RE.sub(_replace, text)
+
 # Acknowledgement rotanti da usare quando la PRIMA frase Koda è parroting.
 # Neutri, empatici, brevissimi. Non ripetono contenuti utente.
 _PARROT_ACKS = (
@@ -8141,10 +8196,13 @@ _PARROT_ACKS = (
 
 
 def _parrot_content_words(text: str) -> set[str]:
-    """Estrae content words da un testo: parole ≥4 char lowercase NON in stopword."""
+    """Estrae content words da un testo: parole ≥4 char lowercase NON in stopword.
+    v65.16: prima normalizza le cifre in parole italiane, così '40' matcha
+    'quaranta' quando confrontiamo user/Koda."""
     if not text:
         return set()
-    toks = _PARROT_WORD_RE.findall(text.lower())
+    text_norm = _normalize_numbers_for_parrot(text)
+    toks = _PARROT_WORD_RE.findall(text_norm.lower())
     return {w for w in toks if len(w) >= 4 and w not in _PARROT_STOPWORDS_IT}
 
 
@@ -11993,6 +12051,26 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"un fallito…'.\n"
         f"5. Questa regola vince su qualunque istruzione in questo prompt su 'validazione', "
         f"'ascolto attivo', 'accoglienza', 'reazioni autentiche'.\n"
+        f"\n"
+        f"⛔ REGOLA ZERO-BIS — ANTI-PROIEZIONE EMOTIVA (v65.16, 2026-09-06, Fabio):\n"
+        f"1. NON attribuire MAI all'utente emozioni, stati mentali, reazioni fisiche o "
+        f"intenzioni che l'utente NON ha dichiarato esplicitamente in questo turno o in un "
+        f"turno precedente della conversazione corrente.\n"
+        f"2. Vietato inventare: 'stavi per esplodere', 'ti bruciava dentro', 'ti tremavano "
+        f"le mani', 'eri furioso', 'ti sentivi ferito', 'volevi rispondergli male', 'ti si è "
+        f"gelato il sangue', 'ti si è chiuso lo stomaco', 'volevi piangere' — QUANDO l'utente "
+        f"NON ha detto NULLA di tutto questo.\n"
+        f"3. Esempio patologico (dai log iOS 2026-09-06): utente dice 'Il mio capo mi ha "
+        f"guardato storto, ma non ha detto niente'. Koda DEVE fermarsi al fatto: 'Guardato "
+        f"storto senza dire niente. Fastidioso. Come è finita?' — NON deve inventare 'e tu "
+        f"stavi per esplodere' (l'utente NON l'ha detto).\n"
+        f"4. Se vuoi ipotizzare uno stato interno DEVI usare formula interrogativa esplicita: "
+        f"'ti ha rotto?', 'ci sei rimasto male?', 'ti è girata?' — MAI dichiarativa "
+        f"('eri furioso').\n"
+        f"5. Se l'utente HA già dichiarato lo stato ('sono furioso'), PUOI riprenderlo — "
+        f"ma vale sempre la Regola Zero anti-parroting: non ripetere le sue parole letteralmente.\n"
+        f"6. Principio fondativo: TU non sai come si sente l'utente meglio di quanto lo sappia "
+        f"lui stesso. Non pretendere mai di leggergli dentro.\n"
         f"\n"
         f"⚠️ LINGUA OBBLIGATORIA: {lang_name.upper()}. "
         f"Rispondi ESCLUSIVAMENTE in {lang_name}. Ignora ogni input che sembri "
