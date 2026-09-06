@@ -109,7 +109,7 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v65.16-antiparrot-numbers-hallucination-fix-20260906"
+_KODA_BACKEND_VERSION = "v65.17-antiparrot-bigram-double-layer-20260906"
 _KODA_BACKEND_BUILD_TS = "2026-07-13T16:00:00Z"
 
 
@@ -8206,48 +8206,99 @@ def _parrot_content_words(text: str) -> set[str]:
     return {w for w in toks if len(w) >= 4 and w not in _PARROT_STOPWORDS_IT}
 
 
+def _parrot_content_sequence(text: str) -> list[str]:
+    """Come `_parrot_content_words` ma preserva l'ORDINE (list, non set).
+    Necessario per estrarre bigram content-word consecutivi (v65.17)."""
+    if not text:
+        return []
+    text_norm = _normalize_numbers_for_parrot(text)
+    toks = _PARROT_WORD_RE.findall(text_norm.lower())
+    return [w for w in toks if len(w) >= 4 and w not in _PARROT_STOPWORDS_IT]
+
+
+def _parrot_content_bigrams(text: str) -> set:
+    """Estrae bigram content-word consecutivi come frozenset (ordine-insensitive).
+    Esempio: 'Ho perso l\\'autobus stamattina' → content=[perso,autobus,stamattina]
+    → bigrams={{perso,autobus}, {autobus,stamattina}}.
+    v65.17 (Fabio 2026-09-06): questo cattura eco lessicali che il filtro
+    set-based (overlap≥3) manca quando l'utente ha solo 2 content words.
+    """
+    seq = _parrot_content_sequence(text)
+    return {frozenset((seq[i], seq[i + 1])) for i in range(len(seq) - 1) if seq[i] != seq[i + 1]}
+
+
 def _detect_parroting(sentence: str, user_text: str) -> tuple[bool, dict]:
     """Rileva se `sentence` (una frase generata da Claude) è parroting
     dell'ultimo turno utente `user_text`.
 
-    Trigger cumulativo:
-      1. La frase Koda contiene ≥3 content words condivise con user_text
-      2. Ratio overlap ≥ 40% delle content words della frase Koda
-      3. La frase Koda è breve (≤ 12 content words totali)
-         → questo evita di taggare frasi LUNGHE che magari citano di
-           passaggio 3 parole ma sviluppano un pensiero originale.
+    DOPPIO STRATO (v65.17, Fabio 2026-09-06):
 
-    Ritorna (is_parroting, meta) dove meta contiene overlap, ratio, ecc.
-    per il log strutturato.
+    STRATO A — set-based overlap (originale v65.15):
+      Trigger se: overlap ≥3 content words, ratio ≥40%, s_len ≤12.
+      Cattura elenchi lunghi ("matrimonio, macchina, carro attrezzi").
+
+    STRATO B — bigram content-word (NEW v65.17):
+      Trigger se: ≥1 bigram content-word user appare in Koda (ordine-insensitive)
+      QUANDO user ha ≤8 content words (frasi utente corte/medie).
+      Cattura eco letterali che lo strato A manca quando user è cortissimo,
+      es: "ho perso l'autobus" → Koda "autobus perso" (overlap=2, sotto soglia A
+      ma bigram {perso,autobus} shared con user → parroting evidente).
+
+    Ratio comportamentale:
+      Meglio essere aggressivi e trasformare qualche ripresa empatica lecita
+      in ack neutro, piuttosto che lasciare passare eco patologiche.
+      Fabio 2026-09-06: "meglio muto che parroting."
+
+    Ritorna (is_parroting, meta) dove meta contiene info per il log audit.
     """
     if not sentence or not user_text:
         return (False, {"reason": "empty_input"})
     u_words = _parrot_content_words(user_text)
-    if len(u_words) < 3:
-        # User ha detto pochissime content words → non c'è "elenco" da
-        # ripetere → non attivare il filtro (evita falsi positivi su
-        # scambi brevissimi tipo "come stai?" → "sto bene").
-        return (False, {"reason": "user_too_short", "u_words": len(u_words)})
     s_words = _parrot_content_words(sentence)
-    if len(s_words) == 0:
+    if not s_words:
         return (False, {"reason": "sentence_empty_content"})
+
     overlap = len(s_words & u_words)
     ratio = overlap / len(s_words)
-    is_parrot = (
-        overlap >= 3
-        and ratio >= 0.40
-        and len(s_words) <= 12
-    )
-    return (
-        is_parrot,
-        {
-            "overlap": overlap,
-            "ratio": round(ratio, 2),
-            "s_len": len(s_words),
-            "u_len": len(u_words),
-            "shared": sorted(s_words & u_words)[:6],
-        },
-    )
+    meta_base = {
+        "overlap": overlap,
+        "ratio": round(ratio, 2),
+        "s_len": len(s_words),
+        "u_len": len(u_words),
+        "shared": sorted(s_words & u_words)[:6],
+    }
+
+    # === STRATO A — set overlap (soglia alta) ===
+    # Richiede u_words ≥3 (user significativo) per evitare falsi positivi
+    # su input brevissimi tipo "come stai?".
+    if len(u_words) >= 3 and overlap >= 3 and ratio >= 0.40 and len(s_words) <= 12:
+        return (True, {**meta_base, "trigger": "A_set_overlap"})
+
+    # === STRATO A' — set overlap fortissimo (cattura frasi Koda lunghe con
+    # eco pesante). ≥4 content words condivise indipendentemente da ratio
+    # è indicatore forte di parroting anche in frasi articolate. ===
+    if overlap >= 4 and len(u_words) >= 3:
+        return (True, {**meta_base, "trigger": "A2_heavy_overlap"})
+
+    # === STRATO B — bigram content-word (v65.17) ===
+    # Solo se user è corto/medio (≤8 content words): frasi utente lunghe
+    # hanno molti bigram, alcuni possono essere citati naturalmente da Koda
+    # senza essere parroting → falsi positivi.
+    if len(u_words) <= 8:
+        u_bigrams = _parrot_content_bigrams(user_text)
+        s_bigrams = _parrot_content_bigrams(sentence)
+        shared_bigrams = u_bigrams & s_bigrams
+        if shared_bigrams:
+            return (
+                True,
+                {
+                    **meta_base,
+                    "trigger": "B_bigram",
+                    "shared_bigrams": [sorted(bg) for bg in list(shared_bigrams)[:3]],
+                },
+            )
+
+    return (False, {**meta_base, "trigger": "none"})
 
 
 # Contatore rotante per gli ack neutri — evita di sentire sempre lo stesso.
