@@ -590,7 +590,7 @@ export class VoiceClientSttSession {
         // PROSSIMO turno parte da uno stato garantito pulito. Costo zero
         // percepito dall'utente (avviene DOPO che ha già visto l'errore).
         //
-        // Log taggato `[AUDIO_ZOMBIE_RECOVERY]` per telemetria: se in 2
+        // Log taggato `[KODA_AUDIO_ZOMBIE_RECOVERY]` per telemetria: se in 2
         // settimane non compare mai in produzione, il bug è definitivamente
         // morto per cambio architetturale e possiamo rimuovere il fix.
         const msg = String(evt.message || "");
@@ -1016,7 +1016,7 @@ export class VoiceClientSttSession {
    * pulito, anche se l'errore ha lasciato la session in stato residuale
    * "!act" (OSStatus 560557684).
    *
-   * Log tag `[AUDIO_ZOMBIE_RECOVERY]` è cercabile grep-per-grep dai log
+   * Log tag `[KODA_AUDIO_ZOMBIE_RECOVERY]` è cercabile grep-per-grep dai log
    * TestFlight/producdion. Se in 2 settimane non compare = bug morto per
    * cambio architetturale (Fase B), fix rimovibile. Se compare = telemetria
    * di quante volte scatta e con quali codici — decisione informata sul
@@ -1034,7 +1034,7 @@ export class VoiceClientSttSession {
     // Log SEMPRE (anche se non riteniamo sia zombie) — la telemetria vale
     // più della latenza di una console.log.
     console.log(
-      `[AUDIO_ZOMBIE_RECOVERY] triggered code=${errorCode || "?"} ` +
+      `[KODA_AUDIO_ZOMBIE_RECOVERY] triggered code=${errorCode || "?"} ` +
         `msg="${(errorMsg || "").slice(0, 120)}" ` +
         `zombie_candidate=${isZombieCandidate ? "yes" : "no"}`
     );
@@ -1050,10 +1050,10 @@ export class VoiceClientSttSession {
           shouldPlayInBackground: false,
           shouldRouteThroughEarpiece: false,
         });
-        console.log(`[AUDIO_ZOMBIE_RECOVERY] step1 deactivate OK`);
+        console.log(`[KODA_AUDIO_ZOMBIE_RECOVERY] step1 deactivate OK`);
       } catch (e: any) {
         console.log(
-          `[AUDIO_ZOMBIE_RECOVERY] step1 deactivate FAILED: ${e?.message || e}`
+          `[KODA_AUDIO_ZOMBIE_RECOVERY] step1 deactivate FAILED: ${e?.message || e}`
         );
       }
       // Step 2: attendi che iOS rilasci davvero l'hardware audio.
@@ -1069,17 +1069,17 @@ export class VoiceClientSttSession {
           shouldPlayInBackground: false,
           shouldRouteThroughEarpiece: false,
         });
-        console.log(`[AUDIO_ZOMBIE_RECOVERY] step3 reactivate OK`);
+        console.log(`[KODA_AUDIO_ZOMBIE_RECOVERY] step3 reactivate OK`);
       } catch (e: any) {
         console.log(
-          `[AUDIO_ZOMBIE_RECOVERY] step3 reactivate FAILED: ${e?.message || e}`
+          `[KODA_AUDIO_ZOMBIE_RECOVERY] step3 reactivate FAILED: ${e?.message || e}`
         );
       }
-      console.log(`[AUDIO_ZOMBIE_RECOVERY] cycle complete — next turn should start clean`);
+      console.log(`[KODA_AUDIO_ZOMBIE_RECOVERY] cycle complete — next turn should start clean`);
     } catch (outer: any) {
       // expo-audio require() failed o altro crash: non blocchiamo mai.
       console.log(
-        `[AUDIO_ZOMBIE_RECOVERY] outer exception: ${outer?.message || outer}`
+        `[KODA_AUDIO_ZOMBIE_RECOVERY] outer exception: ${outer?.message || outer}`
       );
     }
   }

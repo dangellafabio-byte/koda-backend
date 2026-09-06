@@ -487,7 +487,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v65.18-echo-intentional-bypass";
+  const KODA_BUILD_SHORT_TAG = "build-v65.19-zombie-recovery-visible-diag";
   const KODA_BUILD_DATE = "2026-09-06";
   useEffect(() => {
     console.log(
