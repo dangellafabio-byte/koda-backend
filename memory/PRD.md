@@ -46,7 +46,16 @@ Checkpoint stabile corrente: **`v60.4-stable`** su `koda-backend/main`
 - Regole prompt: fast system prompt sezione "REGOLA ECHO — PARROTING INTENZIONALE"
 
 
-### v65.23 (2026-09-07) — Android Orb centering + iOS Audio recovery hardening
+### v65.24 (2026-09-07) — MicroDemo Orb centrato (fix vero) + rollback v65.23 orb padding
+- **Screenshot Fabio (22:27, v65.22)** dimostra orb `MicroDemoKoda` decentrato **verso il basso** (~90px sotto centro visivo). Indicatore "0 / 3" in fondo = `turnCount / MAX_TURNS` di MicroDemoKoda, non le 3 frasi narrative iniziali (KodaIntroV3).
+- **Root cause identificato in `MicroDemoKoda.tsx`:**
+  - `centerContainer.paddingTop: 90` (residuo pattern "replica home Page 0" del 2026-08-23) → sposta il centro flex di **+45px verso il basso**.
+  - Spacer `<View style={{ height: 34 }}>` sotto l'orb → il centro geometrico del BLOCCO {orb + spacer} è 17px sotto il centro dell'orb → orb spinto di altri **+17px verso il basso** rispetto al centro flex.
+  - Totale: orb visualmente ~62px sotto H/2.
+- **Fix v65.24:** rimossi entrambi (paddingTop=0, spacer eliminato). Stessa pulizia già applicata a lascia-andare, KodaIntroV3, HeartVoiceReveal, home Page 0 in Iterazione 23 (2026-08-24). `MicroDemoKoda` era stato dimenticato.
+- **Rollback padding v65.23** su `lascia-andare.tsx`, `KodaIntroV3.tsx`, `HeartVoiceReveal.tsx`: il fix generico su asimmetria safe area non era la causa dello screenshot. Ripristinato spec Fabio "orb esatto a H/2".
+- **iOS OSStatus 560557684 recovery hardening** invariato da v65.23 (foreground gate, setActive(false) esplicito, retry backoff 0/500/1200ms, setActive(true) finale).
+
 - **Android Orb decentrato in Lascia Andare / Free Intro** — root cause: `edgeToEdgeEnabled: true` estende la View sotto status/nav bar. Con safe area asimmetriche (Android 3-button: top≈24 / bottom≈48) il centro flex geometrico H/2 ≠ centro visivo. Fix: padding correttivo dinamico su `styles.center` — `paddingTop = max(0, insets.top - insets.bottom)`, `paddingBottom = max(0, insets.bottom - insets.top)`. Applicato in `lascia-andare.tsx`, `KodaIntroV3.tsx`, `HeartVoiceReveal.tsx`. Su iOS delta minore (~10-25px), effetto trascurabile.
 - **iOS OSStatus 560557684 (`!act`) recovery hardening** — `performAudioSessionRecoveryCycle` in `voiceClientStt.ts`:
   1. **Foreground gate**: skip se `AppState.currentState !== "active"` (setAudioModeAsync fallisce in background con `!pri`).

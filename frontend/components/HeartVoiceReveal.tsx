@@ -236,15 +236,7 @@ export default function HeartVoiceReveal() {
   return (
     <Animated.View style={[styles.root, { opacity: screenOpacity }]}>
       {/* Orb centrale */}
-      <View
-        style={[
-          styles.centerContainer,
-          {
-            paddingTop: Math.max(0, insets.top - insets.bottom),
-            paddingBottom: Math.max(0, insets.bottom - insets.top),
-          },
-        ]}
-      >
+      <View style={styles.centerContainer}>
         <Animated.View
           style={{
             opacity: orbOpacity,

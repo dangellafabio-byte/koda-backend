@@ -635,7 +635,15 @@ export default function MicroDemoKoda() {
       </TouchableOpacity>
 
       {/* Orb centrato */}
-      <View style={styles.centerContainer}>
+      <View
+        style={[
+          styles.centerContainer,
+          {
+            paddingTop: Math.max(0, insets.top - insets.bottom),
+            paddingBottom: Math.max(0, insets.bottom - insets.top),
+          },
+        ]}
+      >
         <Animated.View
           style={{
             opacity: orbOpacity,
@@ -649,9 +657,15 @@ export default function MicroDemoKoda() {
             tone={orbProps.tone}
             size={ORB_SIZE}
           />
-          {/* Spacer per replicare layout home (Fabio 2026-08-23):
-              gap:18 + statusLabel 16px sotto orb = 34px totali. */}
-          <View style={{ height: 34 }} pointerEvents="none" />
+          {/* === FIX ORB CENTRATO (v65.24 — 2026-09-07) ==================
+              Spacer 34px RIMOSSO. Era un residuo del pattern "replica
+              home Page 0" (Fabio 2026-08-23) che allineava il centro del
+              BLOCCO {orb + spacer} anziché il centro dell'orb, spingendo
+              l'orb 17px verso l'alto e visualmente decentrandolo. Ora
+              l'unico figlio del flex-center è l'orb → orb al centro
+              geometrico del centerContainer.
+              Coerente con le pulizie Iterazione 23 (2026-08-24) su
+              lascia-andare, KodaIntroV3, HeartVoiceReveal, home Page 0. */}
         </Animated.View>
       </View>
 
@@ -693,10 +707,14 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    // Allineamento pixel-perfect con home Page 0 (Fabio 2026-08-23):
-    // stesso paddingTop del wrapper home (index.tsx riga ~5247) →
-    // orb sempre nella stessa posizione, senza salti tra sessioni.
-    paddingTop: 90,
+    // === FIX ORB CENTRATO (v65.24 — 2026-09-07) ============================
+    // paddingTop:90 RIMOSSO. Era il residuo del pattern "replica home Page 0"
+    // (Fabio 2026-08-23) che spingeva l'orb 45px sotto H/2. Combinato con lo
+    // spacer 34px sotto l'orb (rimosso anch'esso), il centro visibile finiva
+    // ~28-45px sotto il centro visivo dello schermo → screenshot MicroDemo
+    // 22:27 (v65.22) confermava l'offset. Coerente con Iterazione 23 su
+    // lascia-andare, KodaIntroV3, HeartVoiceReveal → paddingTop=0.
+    paddingTop: 0,
   },
   counterBox: {
     position: "absolute",
