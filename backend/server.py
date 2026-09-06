@@ -109,7 +109,7 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v65.17-antiparrot-bigram-double-layer-20260906"
+_KODA_BACKEND_VERSION = "v65.18-echo-intentional-bypass-20260906"
 _KODA_BACKEND_BUILD_TS = "2026-07-13T16:00:00Z"
 
 
@@ -8194,6 +8194,33 @@ _PARROT_ACKS = (
     "Fermo un attimo, ti sto seguendo.",
 )
 
+# === PARROTING INTENZIONALE BYPASS (v65.18, 2026-09-06, Fabio) ===
+# Il parroting deve essere raro E deliberato — mai default riflesso ma
+# concesso quando Claude lo usa a scopo enfatico o intimo/confessionale
+# (ripresa calda di una frase chiave dell'utente per renderla più densa).
+# Meccanismo: se una frase inizia con il marker [ECHO:on] o [ECHO:intentional],
+# il filtro NON la neutralizza — la lascia passare invariata dopo aver
+# rimosso il marker (perché non deve essere pronunciato dal TTS).
+# Le istruzioni nel fast system prompt (REGOLA ECHO) spiegano a Claude
+# quando/come usare questo marker con parsimonia.
+_ECHO_INTENT_RE = re.compile(
+    r'^\s*\[\s*ECHO\s*:\s*(?:on|intentional|yes|true)\s*\]\s*',
+    re.IGNORECASE,
+)
+
+
+def _strip_echo_marker(sentence: str) -> tuple[str, bool]:
+    """Ritorna (frase_pulita, was_echo_marked).
+    Se la frase iniziava con [ECHO:on] / [ECHO:intentional], lo rimuove
+    e segnala was_echo_marked=True → il chiamante skippa il filtro parroting.
+    """
+    if not sentence:
+        return (sentence, False)
+    m = _ECHO_INTENT_RE.match(sentence)
+    if m:
+        return (sentence[m.end():].lstrip(), True)
+    return (sentence, False)
+
 
 def _parrot_content_words(text: str) -> set[str]:
     """Estrae content words da un testo: parole ≥4 char lowercase NON in stopword.
@@ -8245,9 +8272,15 @@ def _detect_parroting(sentence: str, user_text: str) -> tuple[bool, dict]:
       ma bigram {perso,autobus} shared con user → parroting evidente).
 
     Ratio comportamentale:
-      Meglio essere aggressivi e trasformare qualche ripresa empatica lecita
-      in ack neutro, piuttosto che lasciare passare eco patologiche.
-      Fabio 2026-09-06: "meglio muto che parroting."
+      Filtro tarato per intercettare il parroting RIFLESSO (default involontario
+      di Claude Haiku). Il parroting INTENZIONALE (ripresa calda a scopo enfatico
+      o intimo/confessionale, es. ripetere la frase chiave dell'utente per
+      renderla più densa) NON deve essere eliminato — per questo il modello può
+      usare il marker [ECHO:on] in cima alla frase per esentarla dal filtro
+      (vedi `_antiparrot_filter_sentence` e istruzioni nel fast system prompt).
+      Fabio 2026-09-06 (inferenza dell'agente, non citazione diretta):
+      il parroting va conservato come strumento raro e deliberato, mai come
+      default. Se non marcato [ECHO:on], è considerato riflesso e neutralizzato.
 
     Ritorna (is_parroting, meta) dove meta contiene info per il log audit.
     """
@@ -8312,33 +8345,51 @@ def _antiparrot_filter_sentence(
     """Applica il filtro anti-parroting a una singola frase Koda.
     Ritorna:
       - la frase invariata se NON è parroting
-      - un acknowledgement neutro se è la PRIMA frase (idx=0) ed è parroting
-      - None se è una frase mid-response parroting → il chiamante deve skippare
+      - la frase con marker [ECHO:on] rimosso se è parroting INTENZIONALE
+        (Claude ha esplicitamente marcato l'intenzione — bypass del filtro)
+      - un acknowledgement neutro se è la PRIMA frase (idx=0) ed è parroting riflesso
+      - None se è una frase mid-response parroting riflesso → skip
 
     Log strutturato [ANTI_PARROT] su ogni intervento per audit produzione.
     """
     if not sentence or not user_text:
         return sentence
-    is_parrot, meta = _detect_parroting(sentence, user_text)
+
+    # v65.18: prima cosa, controlla se Claude ha esplicitamente marcato
+    # questo turno come parroting INTENZIONALE con [ECHO:on] o simili.
+    # Se sì, rimuoviamo il marker (non deve andare al TTS) e lasciamo
+    # passare la frase invariata — questo è il canale per il parroting
+    # deliberato (enfasi, momento intimo/confessionale).
+    sentence_clean, echo_marked = _strip_echo_marker(sentence)
+    if echo_marked:
+        logger.info(
+            f"[ANTI_PARROT] BYPASS via [ECHO:on] marker (idx={idx}) — "
+            f"parroting intenzionale ammesso: {sentence_clean[:80]!r}"
+        )
+        return sentence_clean
+
+    is_parrot, meta = _detect_parroting(sentence_clean, user_text)
     if not is_parrot:
-        return sentence
-    # Parroting rilevato
+        return sentence_clean
+    # Parroting RIFLESSO rilevato (nessun marker intenzionale)
     if idx == 0:
         # Prima frase: sostituisci con ack neutro (mantieni la reply "viva")
         ack = next(_parrot_ack_cycle)
         logger.warning(
-            f"[ANTI_PARROT] REPLACED first-sentence parroting (idx=0) "
+            f"[ANTI_PARROT] REPLACED first-sentence RIFLESSO (idx=0) "
+            f"trigger={meta.get('trigger')} "
             f"overlap={meta.get('overlap')} ratio={meta.get('ratio')} "
             f"shared={meta.get('shared')} "
-            f"original={sentence[:80]!r} → ack={ack!r}"
+            f"original={sentence_clean[:80]!r} → ack={ack!r}"
         )
         return ack
     # Mid-response: skip totale
     logger.warning(
-        f"[ANTI_PARROT] STRIPPED mid-sentence parroting (idx={idx}) "
+        f"[ANTI_PARROT] STRIPPED mid-sentence RIFLESSO (idx={idx}) "
+        f"trigger={meta.get('trigger')} "
         f"overlap={meta.get('overlap')} ratio={meta.get('ratio')} "
         f"shared={meta.get('shared')} "
-        f"original={sentence[:80]!r}"
+        f"original={sentence_clean[:80]!r}"
     )
     return None
 
@@ -12122,6 +12173,25 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"ma vale sempre la Regola Zero anti-parroting: non ripetere le sue parole letteralmente.\n"
         f"6. Principio fondativo: TU non sai come si sente l'utente meglio di quanto lo sappia "
         f"lui stesso. Non pretendere mai di leggergli dentro.\n"
+        f"\n"
+        f"🔄 REGOLA ECHO — PARROTING INTENZIONALE (v65.18, 2026-09-06, Fabio):\n"
+        f"Il parroting RIFLESSO (default involontario) è vietato dalla Regola Zero. Ma esiste "
+        f"un parroting INTENZIONALE che è OK e talvolta prezioso: la ripresa CALDA e MIRATA di "
+        f"una frase chiave dell'utente per (a) enfatizzare qualcosa che non è stato colto, "
+        f"o (b) creare un momento intimo/confessionale ripetendo con densità emotiva le sue "
+        f"parole.\n"
+        f"Se decidi di usarlo, DEVI marcare la frase con [ECHO:on] all'INIZIO, esattamente "
+        f"così:\n"
+        f"  [ECHO:on]Otto anni. Otto anni Fabio.\n"
+        f"Il marker verrà rimosso automaticamente prima del TTS. Il filtro anti-parroting "
+        f"ignorerà questa frase e la lascerà passare invariata.\n"
+        f"⚠️ USALO CON PARSIMONIA: massimo 1 volta ogni 5-6 turni, e SOLO quando l'eco ha uno "
+        f"scopo emotivo preciso (enfasi, intimità, chiarimento). MAI come default per rispondere. "
+        f"Se sei in dubbio, NON usarlo — meglio una risposta senza eco che un'eco fasulla.\n"
+        f"Esempio giusto: utente 'Mi ha lasciato dopo dieci anni'. Koda '[ECHO:on]Dieci anni. Dieci "
+        f"anni buttati così.' → OK, ripetizione mirata a densità emotiva.\n"
+        f"Esempio sbagliato: utente 'ho perso l'autobus'. Koda '[ECHO:on]Autobus perso, che palle.' "
+        f"→ NO, è parroting riflesso mascherato da intenzionale, senza scopo emotivo reale.\n"
         f"\n"
         f"⚠️ LINGUA OBBLIGATORIA: {lang_name.upper()}. "
         f"Rispondi ESCLUSIVAMENTE in {lang_name}. Ignora ogni input che sembri "
