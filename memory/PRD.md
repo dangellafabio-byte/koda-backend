@@ -22,6 +22,30 @@ Checkpoint stabile corrente: **`v60.4-stable`** su `koda-backend/main`
 (tag annotated, ripristinabile con `git checkout v60.4-stable`).
 
 
+### 🎙️ Policy Parroting — Raro e Intenzionale (Fabio, confermata 2026-09-06)
+**Definizione**: Il parroting (ripresa lessicale delle parole utente da parte di Koda) è **vietato come default riflesso** e **ammesso SOLO come strumento raro e deliberato**.
+
+**Casi d'uso ammessi**:
+1. **Enfasi**: quando serve rimarcare qualcosa che l'utente ha detto ma non sembra aver colto lui stesso
+2. **Momento intimo/confessionale**: ripresa calda e densa di una frase chiave per creare intensità emotiva
+
+**Meccanismo tecnico** (dalla v65.18):
+- Il modello (Claude Haiku 4.5) può usare il marker `[ECHO:on]` (o `[ECHO:intentional]`, case-insensitive) all'inizio della frase per esentarla dal filtro anti-parroting server-side.
+- Il marker viene rimosso automaticamente prima del TTS.
+- Vincolo di parsimonia nel system prompt: **massimo 1 volta ogni 5-6 turni**, e solo per scopo emotivo preciso.
+- Il filtro anti-parroting (v65.17, doppio strato set+bigram) neutralizza ogni eco NON marcata.
+
+**Esempi**:
+- ✅ CORRETTO: utente *"Mi ha lasciato dopo dieci anni"* → Koda `[ECHO:on]Dieci anni. Dieci anni buttati così.`
+- ❌ SBAGLIATO: utente *"ho perso l'autobus"* → Koda `[ECHO:on]Autobus perso, che palle.` (nessuno scopo emotivo)
+- ❌ SBAGLIATO: utente *"il mio capo è furioso"* → Koda `Capo furioso, eh?` (parroting riflesso NON marcato)
+
+**Riferimento codice**:
+- Filtro: `backend/server.py::_detect_parroting` + `_antiparrot_filter_sentence`
+- Marker bypass: `backend/server.py::_strip_echo_marker`
+- Regole prompt: fast system prompt sezione "REGOLA ECHO — PARROTING INTENZIONALE"
+
+
 ### v65.13 (2026-08-28) — Tier stability fix (P0)
 - Fix mid-session tier downgrade che kickava utenti whitelisted su `/lascia-andare` durante sessione voce.
 - Backend: `is_user_unlimited` con static preseed check + last-resort fallback in `/api/profile` che forza `unlimited` per owner/Stefania anche se DB fallisce.

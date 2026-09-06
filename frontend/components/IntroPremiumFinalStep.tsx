@@ -91,17 +91,71 @@ export default function IntroPremiumFinalStep({ onComplete }: Props) {
 
   const playClosingClip = useCallback(async () => {
     try {
+      // === FIX 2026-09-06 v65.20 — Android audio parità con IntroPremium (Fabio) ==
+      // Bug: la clip "Adesso ci siamo. Cominciamo." era MUTA su Android
+      // perché questo componente aveva un setAudioModeAsync minimo, senza
+      // i field Android specifici del fix v65.5/v65.12 in IntroPremium.tsx.
+      // Ora applichiamo lo stesso trattamento completo:
+      //   - interruptionMode + interruptionModeAndroid espliciti
+      //   - shouldRouteThroughEarpiece:false
+      //   - volume=1.0 doppio (creazione + post-load)
+      //   - polling isLoaded fino a 2s (createAudioPlayer è async internamente)
+      //   - logging strutturato [KODA_INTRO_FINAL] per diag buffer Fabio
       await setAudioModeAsync({
-        allowsRecording: false, playsInSilentMode: true, shouldPlayInBackground: false,
+        allowsRecording: false,
+        playsInSilentMode: true,
+        shouldPlayInBackground: false,
+        interruptionMode: "duckOthers",
+        interruptionModeAndroid: "duckOthers",
+        shouldRouteThroughEarpiece: false,
       } as any);
-    } catch {}
-    await new Promise((r) => setTimeout(r, 120));
+    } catch (e) {
+      console.warn(`${TAG} setAudioModeAsync failed:`, e);
+    }
+    // Delay più lungo (250ms invece di 120) per lasciare che Android
+    // settle l'audio focus dopo il release della session precedente.
+    await new Promise((r) => setTimeout(r, 250));
+    if (!mountedRef.current) return;
     try {
       const player = createAudioPlayer(CLIP_CLOSING, { updateInterval: 100 });
       playerRef.current = player;
+      // Volume immediato (Android alcuni device inizializzano a 0.x)
+      try { (player as any).volume = 1.0; } catch {}
+      // Polling isLoaded fino a 2s (Stefania bug fix v65.5, riportato qui)
+      for (let i = 0; i < 20; i++) {
+        if ((player as any).isLoaded === true) break;
+        await new Promise((r) => setTimeout(r, 100));
+        if (!mountedRef.current) return;
+      }
+      // Volume di nuovo dopo load (alcuni Android lo resettano)
+      try { (player as any).volume = 1.0; } catch {}
       player.play();
+      console.log(
+        `[KODA_INTRO_FINAL] closing clip started platform=${Platform.OS} ` +
+        `isLoaded=${(player as any).isLoaded} volume=${(player as any).volume} ` +
+        `playing=${(player as any).playing ?? '?'} status=${(player as any).status ?? '?'}`
+      );
+      // v65.20 (Fabio 2026-09-06): Android watchdog double-play — vedi
+      // stesso pattern in IntroPremium.tsx.
+      if (Platform.OS === "android") {
+        setTimeout(() => {
+          if (!mountedRef.current) return;
+          try {
+            const playing = (player as any).playing;
+            if (playing !== true) {
+              console.warn(
+                `[KODA_INTRO_FINAL] Android double-play triggered: ` +
+                `playing=${playing} isLoaded=${(player as any).isLoaded}`
+              );
+              try { player.play(); } catch (e) { console.warn(`${TAG} double-play failed:`, e); }
+            } else {
+              console.log(`[KODA_INTRO_FINAL] Android watchdog OK — playing confirmed`);
+            }
+          } catch (e) { console.warn(`${TAG} watchdog exception:`, e); }
+        }, 500);
+      }
     } catch (e) {
-      console.warn(`${TAG} closing clip failed:`, e);
+      console.warn(`[KODA_INTRO_FINAL] closing clip failed:`, e);
     }
   }, []);
 

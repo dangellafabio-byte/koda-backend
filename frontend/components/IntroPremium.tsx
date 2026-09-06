@@ -153,7 +153,10 @@ export default function IntroPremium() {
 
   const playIntroClip = useCallback(async () => {
     await configureAudio();
-    await new Promise((r) => setTimeout(r, 120));
+    // v65.20 (Fabio 2026-09-06): delay 250ms invece di 120 per lasciare che
+    // Android settle l'audio focus dopo il release della session precedente
+    // (router.replace da paywall/router può lasciare ducking residuo).
+    await new Promise((r) => setTimeout(r, 250));
     if (!mountedRef.current) return;
 
     setPhase("speaking"); setOrbState("speaking");
@@ -190,7 +193,32 @@ export default function IntroPremium() {
       // Volume di nuovo dopo load (alcuni Android lo resettano)
       try { (player as any).volume = 1.0; } catch {}
       player.play();
-      console.log(`${TAG} clip started (isLoaded=${(player as any).isLoaded}, volume=${(player as any).volume})`);
+      console.log(
+        `[KODA_INTRO_PREMIUM] clip started platform=${Platform.OS} ` +
+        `isLoaded=${(player as any).isLoaded} volume=${(player as any).volume} ` +
+        `playing=${(player as any).playing ?? '?'} status=${(player as any).status ?? '?'}`
+      );
+      // v65.20 (Fabio 2026-09-06): watchdog Android — se dopo 500ms il player
+      // NON risulta playing, rilancia play() (double-play trick). Bug osservato
+      // su alcuni Android build dove il primo play() fallisce silenziosamente
+      // se l'audio focus non è ancora granted a livello sistema.
+      if (Platform.OS === "android") {
+        setTimeout(() => {
+          if (!mountedRef.current) return;
+          try {
+            const playing = (player as any).playing;
+            if (playing !== true) {
+              console.warn(
+                `[KODA_INTRO_PREMIUM] Android double-play triggered: ` +
+                `playing=${playing} isLoaded=${(player as any).isLoaded}`
+              );
+              try { player.play(); } catch (e) { console.warn(`${TAG} double-play failed:`, e); }
+            } else {
+              console.log(`[KODA_INTRO_PREMIUM] Android watchdog OK — playing confirmed`);
+            }
+          } catch (e) { console.warn(`${TAG} watchdog exception:`, e); }
+        }, 500);
+      }
       safetyTimerRef.current = setTimeout(() => { console.warn(`${TAG} clip safety`); onFinish(); }, 12000);
     } catch (e) {
       console.warn(`${TAG} playClip failed:`, e);
