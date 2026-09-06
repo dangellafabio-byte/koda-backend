@@ -487,7 +487,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v65.21-audio-focus-force-free-bypass";
+  const KODA_BUILD_SHORT_TAG = "build-v65.22-torna-free-v2-reset-intro-flow";
   const KODA_BUILD_DATE = "2026-09-06";
   useEffect(() => {
     console.log(
@@ -6882,13 +6882,36 @@ export default function Taccuino() {
                     setAdminError(null);
                     try {
                       await api.devSetTier(null);
+                      // === FIX 2026-09-06 v65.22 (Fabio) ===================
+                      // "Torna Free · v2" faceva router.replace('/lascia-andare')
+                      // DIRETTAMENTE → saltava il modal LasciaAndareIntroModal
+                      // e la sequenza di preambolo. L'utente non poteva
+                      // testare l'intro Free "dall'inizio inizio".
+                      // Fix: 
+                      //   1. Reset flag `lascia_andare_intro_seen_at` server-side
+                      //      (devFirstBootReset unset TUTTI i flag onboarding,
+                      //       adesso incluso il nome corretto del campo LA)
+                      //   2. Reset SecureStore locale (device-specific)
+                      //   3. router.replace('/') → home → tap pill Lascia Andare
+                      //      → modal preambolo → naviga a /lascia-andare vera
+                      // L'utente vede l'intero flow di scoperta come al
+                      // primissimo boot.
+                      try { await api.devFirstBootReset(); } catch (e) {
+                        console.warn("[DEV_SIMULATE_FREE] first-boot-reset failed:", e);
+                      }
+                      try {
+                        const secureKeys = [
+                          "la_intro_seen",
+                          "koda_disclaimer_seen_v2",
+                          "koda_intro_seen",
+                          "hint_first_scroll_seen",
+                          "hint_write_seen",
+                        ];
+                        await Promise.all(secureKeys.map((k) =>
+                          SecureStore.deleteItemAsync(k).catch(() => {})
+                        ));
+                      } catch {}
                       const p = await api.getProfile();
-                      // === FIX BUG CACHE TIER IN-SESSIONE v2 (Fabio 2026-08-24) ===
-                      // Approccio DETERMINISTICO come su "Simula Premium":
-                      // aggiorniamo state + refs per coerenza al re-mount,
-                      // MA la navigazione a /lascia-andare avviene DIRETTAMENTE
-                      // qui, senza affidarci alla catena useEffect + deps che
-                      // ha race conditions difficili da diagnosticare.
                       hasRedirectedIntroV3Ref.current = false;
                       lastV3DecidedKeyRef.current = null;
                       hasRedirectedFreeUserRef.current = false;
@@ -6896,7 +6919,6 @@ export default function Taccuino() {
                       hasRedirectedIntroPremiumRef.current = false;
                       lastIntroPremiumDecidedKeyRef.current = null;
                       resetLastDecidedKey();
-                      // Downgrade: allinea intro premium state al backend
                       let introSeen = true;
                       try {
                         const st = await api.getIntroPremiumState();
@@ -6906,14 +6928,13 @@ export default function Taccuino() {
                       saveProfileCache(p).catch(() => {});
                       setProfile(p);
                       setProfileHydrated("network");
-                      // Chiudi Settings prima della nav
                       setShowSettings(false);
-                      // Marca decisione locale così Home router non ridecide
-                      // se dovesse re-mountare mentre siamo su /lascia-andare
                       markRouterDecided((p as any)?.id || null, null);
-                      // Navigazione DIRETTA: Free → Lascia Andare (landing)
-                      console.log("[DEV_SIMULATE_FREE] → /lascia-andare");
-                      router.replace("/lascia-andare");
+                      // Naviga a HOME, NON direttamente a lascia-andare —
+                      // così il tap sul pill triggera il modal di preambolo
+                      // ora che il flag è azzerato.
+                      console.log("[DEV_SIMULATE_FREE_V2] reset done → router.replace('/')");
+                      router.replace("/");
                     } catch (e: any) {
                       setAdminError(`Errore: ${e?.message || e}`);
                     } finally {

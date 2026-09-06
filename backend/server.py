@@ -109,7 +109,7 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v65.21-audio-focus-force-free-bypass-20260906"
+_KODA_BACKEND_VERSION = "v65.22-torna-free-v2-reset-intro-flow-20260906"
 _KODA_BACKEND_BUILD_TS = "2026-07-13T16:00:00Z"
 
 
@@ -5521,7 +5521,12 @@ async def api_dev_first_boot_reset():
         "subscription_tier": "",
         "onboarded": "",
         "intro_premium_seen_at": "",
-        "la_intro_seen": "",
+        # === FIX 2026-09-06 v65.22 — nome campo Profile corretto ============
+        # Il campo vero nel Profile model (linea 2037) è
+        # `lascia_andare_intro_seen_at`, NON `la_intro_seen`. Il reset
+        # precedente unset-ava una chiave inesistente → il modal presentazione
+        # LA restava dismissed anche dopo "First Boot Reset".
+        "lascia_andare_intro_seen_at": "",
         "disclaimer_accepted_at": "",
         "disclaimer_accepted_version": "",
         "intro_v3_completed_at": "",
