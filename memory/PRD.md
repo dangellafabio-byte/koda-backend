@@ -46,6 +46,15 @@ Checkpoint stabile corrente: **`v60.4-stable`** su `koda-backend/main`
 - Regole prompt: fast system prompt sezione "REGOLA ECHO — PARROTING INTENZIONALE"
 
 
+### v65.23 (2026-09-07) — Android Orb centering + iOS Audio recovery hardening
+- **Android Orb decentrato in Lascia Andare / Free Intro** — root cause: `edgeToEdgeEnabled: true` estende la View sotto status/nav bar. Con safe area asimmetriche (Android 3-button: top≈24 / bottom≈48) il centro flex geometrico H/2 ≠ centro visivo. Fix: padding correttivo dinamico su `styles.center` — `paddingTop = max(0, insets.top - insets.bottom)`, `paddingBottom = max(0, insets.bottom - insets.top)`. Applicato in `lascia-andare.tsx`, `KodaIntroV3.tsx`, `HeartVoiceReveal.tsx`. Su iOS delta minore (~10-25px), effetto trascurabile.
+- **iOS OSStatus 560557684 (`!act`) recovery hardening** — `performAudioSessionRecoveryCycle` in `voiceClientStt.ts`:
+  1. **Foreground gate**: skip se `AppState.currentState !== "active"` (setAudioModeAsync fallisce in background con `!pri`).
+  2. **Step 0 esplicito**: `setIsAudioActiveAsync(false)` prima del cambio mode. Il vecchio ciclo si limitava a `setAudioModeAsync(allowsRecording:false)` che modifica config ma non chiama `AVAudioSession.setActive(false)` — il flag resta on e la riattivazione può fallire con `!act`.
+  3. **Reactivate con retry backoff** (max 3 tentativi: 0ms → 500ms → 1200ms) per gestire route switch (bluetooth dis/connect, silent switch flip, chiamata inbound conclusa da poco).
+  4. **Step 3 finale**: `setIsAudioActiveAsync(true)` esplicito dopo `setAudioModeAsync` per riacquisire l'hardware focus (fix collaterale: Android duck bug in cui TTS successivo usciva muto).
+
+
 ### v65.13 (2026-08-28) — Tier stability fix (P0)
 - Fix mid-session tier downgrade che kickava utenti whitelisted su `/lascia-andare` durante sessione voce.
 - Backend: `is_user_unlimited` con static preseed check + last-resort fallback in `/api/profile` che forza `unlimited` per owner/Stefania anche se DB fallisce.

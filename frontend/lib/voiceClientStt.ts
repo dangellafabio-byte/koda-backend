@@ -56,7 +56,7 @@
  *  - Diagnostica: log `[KODA_CLIENT_STT]` per differenziarlo dal Deepgram path.
  */
 
-import { Platform } from "react-native";
+import { Platform, AppState } from "react-native";
 import { ExpoSpeechRecognitionModule } from "expo-speech-recognition";
 import type {
   ExpoSpeechRecognitionResultEvent,
@@ -1038,10 +1038,42 @@ export class VoiceClientSttSession {
         `msg="${(errorMsg || "").slice(0, 120)}" ` +
         `zombie_candidate=${isZombieCandidate ? "yes" : "no"}`
     );
+    // === FIX v65.23 — Foreground gate =======================================
+    // `setAudioModeAsync` / `setIsAudioActiveAsync` FALLISCONO se l'app è in
+    // background: iOS rifiuta l'attivazione di audio session e restituisce
+    // OSStatus 561015905 (`!pri`) o 560557684 (`!act`). Se siamo in background
+    // saltiamo il recovery: verrà rieseguito al ritorno in foreground alla
+    // prossima chiamata di start(). Vale sia iOS che Android.
+    const currentAppState = AppState.currentState;
+    if (currentAppState !== "active") {
+      console.log(
+        `[KODA_AUDIO_ZOMBIE_RECOVERY] SKIP — app not active (state=${currentAppState}), ` +
+          `defer recovery to next foreground start()`
+      );
+      return;
+    }
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { setAudioModeAsync } = require("expo-audio");
-      // Step 1: deactivate — dice a iOS "rilascia la session, non serve"
+      const AudioMod = require("expo-audio");
+      const setAudioModeAsync = AudioMod.setAudioModeAsync;
+      const setIsAudioActiveAsync = AudioMod.setIsAudioActiveAsync;
+      // === FIX v65.23 — Explicit setIsAudioActiveAsync(false) =============
+      // Il vecchio ciclo si limitava a setAudioModeAsync(allowsRecording:false).
+      // Su iOS questo cambia la config della session ma NON chiama
+      // AVAudioSession.setActive(false) — il flag "audio active" resta acceso
+      // e alla riattivazione iOS può rifiutare con `!act` (OSStatus 560557684).
+      // La sequenza corretta è: deactivate flag → cambio mode → reattivate flag.
+      try {
+        if (typeof setIsAudioActiveAsync === "function") {
+          await setIsAudioActiveAsync(false);
+          console.log(`[KODA_AUDIO_ZOMBIE_RECOVERY] step0 setActive(false) OK`);
+        }
+      } catch (e: any) {
+        console.log(
+          `[KODA_AUDIO_ZOMBIE_RECOVERY] step0 setActive(false) FAILED: ${e?.message || e}`
+        );
+      }
+      // Step 1: deactivate mode — dice a iOS "rilascia la session, non serve"
       try {
         await setAudioModeAsync({
           allowsRecording: false,
@@ -1060,22 +1092,54 @@ export class VoiceClientSttSession {
       // 300ms è il valore empirico dal doc audio-robustness: sotto rischi
       // race condition, sopra è overkill.
       await new Promise((r) => setTimeout(r, 300));
-      // Step 3: reactivate in modalità record-ready.
-      try {
-        await setAudioModeAsync({
-          allowsRecording: true,
-          playsInSilentMode: true,
-          interruptionMode: "duckOthers",
-          shouldPlayInBackground: false,
-          shouldRouteThroughEarpiece: false,
-        });
-        console.log(`[KODA_AUDIO_ZOMBIE_RECOVERY] step3 reactivate OK`);
-      } catch (e: any) {
+      // === FIX v65.23 — Reactivate con retry backoff (max 3 tentativi) =====
+      // Se il primo reactivate fallisce con `!pri` (categoria audio non
+      // ancora liberata da un'altra app / route in transizione), riproviamo
+      // con backoff: 300ms → 800ms → 1500ms. In pratica basta quasi sempre
+      // il primo tentativo; il retry copre i casi di route switch (bluetooth
+      // dis/connect, silent switch flip, chiamata inbound conclusa da poco).
+      const backoffMs = [0, 500, 1200];
+      let reactivateOk = false;
+      let lastError: string = "";
+      for (let attempt = 0; attempt < backoffMs.length; attempt++) {
+        if (backoffMs[attempt] > 0) {
+          await new Promise((r) => setTimeout(r, backoffMs[attempt]));
+        }
+        try {
+          await setAudioModeAsync({
+            allowsRecording: true,
+            playsInSilentMode: true,
+            interruptionMode: "duckOthers",
+            shouldPlayInBackground: false,
+            shouldRouteThroughEarpiece: false,
+          });
+          // Riacquisisce esplicitamente il flag "audio active" — necessario
+          // perché step0 lo ha spento e il solo setAudioModeAsync non lo
+          // riaccende. Senza questa chiamata il TTS successivo non ha
+          // hardware focus e la voce esce muta (Android duck bug noto).
+          if (typeof setIsAudioActiveAsync === "function") {
+            await setIsAudioActiveAsync(true);
+          }
+          reactivateOk = true;
+          console.log(
+            `[KODA_AUDIO_ZOMBIE_RECOVERY] step3 reactivate OK (attempt=${attempt + 1})`
+          );
+          break;
+        } catch (e: any) {
+          lastError = e?.message || String(e);
+          console.log(
+            `[KODA_AUDIO_ZOMBIE_RECOVERY] step3 reactivate FAILED attempt=${attempt + 1}: ${lastError}`
+          );
+        }
+      }
+      if (!reactivateOk) {
         console.log(
-          `[KODA_AUDIO_ZOMBIE_RECOVERY] step3 reactivate FAILED: ${e?.message || e}`
+          `[KODA_AUDIO_ZOMBIE_RECOVERY] step3 EXHAUSTED after ${backoffMs.length} attempts — last="${lastError}"`
         );
       }
-      console.log(`[KODA_AUDIO_ZOMBIE_RECOVERY] cycle complete — next turn should start clean`);
+      console.log(
+        `[KODA_AUDIO_ZOMBIE_RECOVERY] cycle complete reactivate=${reactivateOk ? "ok" : "failed"} — next turn ${reactivateOk ? "should start clean" : "will retry from start()"}`
+      );
     } catch (outer: any) {
       // expo-audio require() failed o altro crash: non blocchiamo mai.
       console.log(

@@ -703,7 +703,15 @@ export default function KodaIntroV3() {
           `firstBootGate` in app/lascia-andare.tsx. */}
 
       {/* Orb centrale */}
-      <View style={styles.centerContainer}>
+      <View
+        style={[
+          styles.centerContainer,
+          {
+            paddingTop: Math.max(0, insets.top - insets.bottom),
+            paddingBottom: Math.max(0, insets.bottom - insets.top),
+          },
+        ]}
+      >
         <Animated.View
           style={[
             styles.orbWrap,

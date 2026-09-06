@@ -1199,6 +1199,19 @@ export default function LasciaAndareScreen() {
     return <View style={[styles.root, { backgroundColor: "#000000" }]} />;
   }
 
+  // === FIX ANDROID ORB DECENTRATO (v65.23 — 2026-09) =====================
+  // Con `edgeToEdgeEnabled: true` in app.json, la View root copre l'intero
+  // schermo. Il centro flex = H/2 (centro GEOMETRICO). Ma se le safe area
+  // sono asimmetriche (Android 3-button: top≈24, bottom≈48 → delta 24px)
+  // il centro VISIVO ≠ centro geometrico e l'orb appare basso.
+  // Compensiamo pareggiando le due insets con padding sul CONTENITORE
+  // FLEX CENTRALE (styles.center), non sul root: così gli elementi
+  // absolute figli di root (exitBtn, hintBox, pillBox) non sono influenzati
+  // dal padding-box shift. Uno dei due valori è sempre 0.
+  // Su iOS (delta ~10-25px, notch>home indicator) l'effetto è minimo.
+  const centerPadTop = Math.max(0, insets.top - insets.bottom);
+  const centerPadBottom = Math.max(0, insets.bottom - insets.top);
+
   return (
     <View style={styles.root}>
       {/* Uscita — pulsante discreto in alto a sinistra.
@@ -1235,7 +1248,12 @@ export default function LasciaAndareScreen() {
           - entryScale (0.3→1.0): animazione d'ingresso / d'uscita
           - breathScale (1.0↔1.05): respiro base continuo
           - voiceScale (1.0↔1.12): pulsazione con la voce dell'utente */}
-      <View style={styles.center}>
+      <View
+        style={[
+          styles.center,
+          { paddingTop: centerPadTop, paddingBottom: centerPadBottom },
+        ]}
+      >
         <Animated.View
           style={{
             // === PUNTO 1 D5+D6 — opacity finale = entry × voiceGlow ========

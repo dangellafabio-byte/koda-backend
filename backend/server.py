@@ -109,7 +109,7 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v65.22-torna-free-v2-reset-intro-flow-20260906"
+_KODA_BACKEND_VERSION = "v65.23-android-orb-center-ios-audio-recovery-20260907"
 _KODA_BACKEND_BUILD_TS = "2026-07-13T16:00:00Z"
 
 
