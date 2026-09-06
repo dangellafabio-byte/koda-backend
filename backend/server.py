@@ -109,7 +109,7 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v65.14-railway-build-fix-litellm-20260905"
+_KODA_BACKEND_VERSION = "v65.15-antiparrot-server-filter-20260906"
 _KODA_BACKEND_BUILD_TS = "2026-07-13T16:00:00Z"
 
 
@@ -8064,6 +8064,175 @@ _VALID_TONES = {"calm", "energetic", "concerned", "urgent", "warm", "neutral", "
 # Pattern del tag inline. Tolerante a spazi e a maiuscole/minuscole.
 _TONE_TAG_RE = re.compile(r'^\s*\[\s*TONE\s*:\s*([a-zA-Z]+)\s*\]\s*', re.IGNORECASE)
 
+
+# ============================================================================
+# ANTI-PARROTING POST-LLM FILTER (v65.14, Fabio 2026-09-06)
+# ============================================================================
+# Il prompt-only anti-parroting (REGOLA ZERO) ha fallito in produzione:
+# Claude Haiku 4.5 lo ignora sotto certi pattern (elenchi lunghi utente,
+# cambi di topic bruschi). Prova nei log iOS 2026-09-06:
+#
+#   User:  "ieri siamo andati al matrimonio. Poi si è rotta la macchina.
+#           Poi abbiamo portata il carro attrezzi..."
+#   Koda:  "Matrimonio, macchina rotta, carro attrezzi..."   ← PARROTING
+#
+# Soluzione: filtro server-side che intercetta OGNI frase generata da
+# Claude PRIMA del TTS ElevenLabs. Se la frase ha overlap alto di content
+# words con l'ultimo turno utente (≥3 parole di 4+ char condivise, ratio
+# ≥ 0.4, frase corta ≤12 parole), la neutralizziamo:
+#   - Prima frase della reply parroting → sostituisci con un
+#     acknowledgement breve neutro rotante.
+#   - Frase successiva parroting → skip totale (return None).
+#
+# Costo: 0ms (regex + set intersection). Zero LLM extra. Zero rete.
+# ============================================================================
+
+# Stopwords italiane per il filtro parroting — parole "non-content" che
+# NON contano nell'overlap check (articoli, preposizioni, congiunzioni,
+# pronomi, ausiliari, avverbi generici).
+_PARROT_STOPWORDS_IT = frozenset({
+    # articoli / preposizioni / congiunzioni
+    "il", "lo", "la", "i", "gli", "le", "un", "uno", "una",
+    "e", "ed", "o", "od", "ma", "però", "anzi", "quindi", "perché", "poiché",
+    "a", "al", "allo", "alla", "ai", "agli", "alle",
+    "di", "del", "dello", "della", "dei", "degli", "delle",
+    "da", "dal", "dallo", "dalla", "dai", "dagli", "dalle",
+    "in", "nel", "nello", "nella", "nei", "negli", "nelle",
+    "con", "col", "coi",
+    "su", "sul", "sullo", "sulla", "sui", "sugli", "sulle",
+    "per", "tra", "fra", "sopra", "sotto",
+    # pronomi / ausiliari / dimostrativi
+    "che", "chi", "cui", "quale", "quali", "quando", "come", "dove",
+    "io", "tu", "lui", "lei", "noi", "voi", "loro",
+    "mi", "ti", "si", "ci", "vi", "gli", "ne", "lo", "la",
+    "questo", "questa", "questi", "queste", "quello", "quella", "quelli", "quelle",
+    "sono", "sei", "è", "siamo", "siete", "sto", "stai", "sta", "stiamo", "state", "stanno",
+    "ho", "hai", "ha", "abbiamo", "avete", "hanno",
+    "essere", "avere", "fare", "andare", "venire",
+    # avverbi comuni
+    "non", "già", "ancora", "sempre", "mai", "solo", "anche", "proprio",
+    "così", "molto", "poco", "tanto", "troppo", "abbastanza",
+    "adesso", "ora", "prima", "dopo", "poi", "subito", "presto", "tardi",
+    "qui", "lì", "là", "vicino", "lontano",
+    "sì", "no", "forse", "davvero", "veramente", "comunque",
+    # filler/interazionali
+    "ok", "eh", "ah", "oh", "boh", "mah", "ecco", "vabbè", "beh",
+    "ciao", "grazie", "prego", "scusa",
+    # numeri scritti brevi
+    "due", "tre", "quattro", "cinque", "sei", "sette", "otto", "nove", "dieci",
+    "cento", "mille",
+})
+
+# Regex per tokenizzare parole italiane (supporta accentate).
+_PARROT_WORD_RE = re.compile(r"[a-zàèéìòùáíóúçñ]+", re.IGNORECASE)
+
+# Acknowledgement rotanti da usare quando la PRIMA frase Koda è parroting.
+# Neutri, empatici, brevissimi. Non ripetono contenuti utente.
+_PARROT_ACKS = (
+    "Ti ascolto.",
+    "Sono qui.",
+    "Ok, dimmi.",
+    "Ti seguo.",
+    "Vai avanti.",
+    "Ci sono.",
+    "Va bene, continua.",
+    "Fermo un attimo, ti sto seguendo.",
+)
+
+
+def _parrot_content_words(text: str) -> set[str]:
+    """Estrae content words da un testo: parole ≥4 char lowercase NON in stopword."""
+    if not text:
+        return set()
+    toks = _PARROT_WORD_RE.findall(text.lower())
+    return {w for w in toks if len(w) >= 4 and w not in _PARROT_STOPWORDS_IT}
+
+
+def _detect_parroting(sentence: str, user_text: str) -> tuple[bool, dict]:
+    """Rileva se `sentence` (una frase generata da Claude) è parroting
+    dell'ultimo turno utente `user_text`.
+
+    Trigger cumulativo:
+      1. La frase Koda contiene ≥3 content words condivise con user_text
+      2. Ratio overlap ≥ 40% delle content words della frase Koda
+      3. La frase Koda è breve (≤ 12 content words totali)
+         → questo evita di taggare frasi LUNGHE che magari citano di
+           passaggio 3 parole ma sviluppano un pensiero originale.
+
+    Ritorna (is_parroting, meta) dove meta contiene overlap, ratio, ecc.
+    per il log strutturato.
+    """
+    if not sentence or not user_text:
+        return (False, {"reason": "empty_input"})
+    u_words = _parrot_content_words(user_text)
+    if len(u_words) < 3:
+        # User ha detto pochissime content words → non c'è "elenco" da
+        # ripetere → non attivare il filtro (evita falsi positivi su
+        # scambi brevissimi tipo "come stai?" → "sto bene").
+        return (False, {"reason": "user_too_short", "u_words": len(u_words)})
+    s_words = _parrot_content_words(sentence)
+    if len(s_words) == 0:
+        return (False, {"reason": "sentence_empty_content"})
+    overlap = len(s_words & u_words)
+    ratio = overlap / len(s_words)
+    is_parrot = (
+        overlap >= 3
+        and ratio >= 0.40
+        and len(s_words) <= 12
+    )
+    return (
+        is_parrot,
+        {
+            "overlap": overlap,
+            "ratio": round(ratio, 2),
+            "s_len": len(s_words),
+            "u_len": len(u_words),
+            "shared": sorted(s_words & u_words)[:6],
+        },
+    )
+
+
+# Contatore rotante per gli ack neutri — evita di sentire sempre lo stesso.
+import itertools as _itertools
+_parrot_ack_cycle = _itertools.cycle(_PARROT_ACKS)
+
+
+def _antiparrot_filter_sentence(
+    idx: int, sentence: str, user_text: str
+) -> Optional[str]:
+    """Applica il filtro anti-parroting a una singola frase Koda.
+    Ritorna:
+      - la frase invariata se NON è parroting
+      - un acknowledgement neutro se è la PRIMA frase (idx=0) ed è parroting
+      - None se è una frase mid-response parroting → il chiamante deve skippare
+
+    Log strutturato [ANTI_PARROT] su ogni intervento per audit produzione.
+    """
+    if not sentence or not user_text:
+        return sentence
+    is_parrot, meta = _detect_parroting(sentence, user_text)
+    if not is_parrot:
+        return sentence
+    # Parroting rilevato
+    if idx == 0:
+        # Prima frase: sostituisci con ack neutro (mantieni la reply "viva")
+        ack = next(_parrot_ack_cycle)
+        logger.warning(
+            f"[ANTI_PARROT] REPLACED first-sentence parroting (idx=0) "
+            f"overlap={meta.get('overlap')} ratio={meta.get('ratio')} "
+            f"shared={meta.get('shared')} "
+            f"original={sentence[:80]!r} → ack={ack!r}"
+        )
+        return ack
+    # Mid-response: skip totale
+    logger.warning(
+        f"[ANTI_PARROT] STRIPPED mid-sentence parroting (idx={idx}) "
+        f"overlap={meta.get('overlap')} ratio={meta.get('ratio')} "
+        f"shared={meta.get('shared')} "
+        f"original={sentence[:80]!r}"
+    )
+    return None
+
 # Keyword italiane per detection euristica (priorità top→bottom).
 # IMPORTANTE: le chiavi sono normalizzate (lowercase, niente accenti tolti).
 _TONE_KEYWORDS = {
@@ -13083,6 +13252,18 @@ async def _fast_pipeline_task(
                 clean = _strip_audio_tags(sentence) or sentence
                 if not clean.strip():
                     return
+                # === ANTI-PARROTING POST-LLM FILTER (v65.14, Fabio 2026-09-06) ===
+                # Il prompt-only fallisce in produzione. Qui, PRIMA del TTS,
+                # controlliamo se la frase è parroting dell'ultimo turno utente
+                # (`text`, param di _fast_pipeline_task). Se sì:
+                #  - idx=0 → sostituiamo con un ack neutro (mantiene la reply "viva")
+                #  - idx>0 → skip totale (return)
+                # Log strutturato [ANTI_PARROT] per audit produzione.
+                filtered = _antiparrot_filter_sentence(idx, clean, text or "")
+                if filtered is None:
+                    # Mid-response parroting → salta questa frase, NIENTE TTS.
+                    return
+                clean = filtered
                 # Normalizza simboli/unità per il TTS italiano: "29°C" → "29 gradi",
                 # "50%" → "50 percento", "€9,99" → "9 euro e 99", ecc.
                 # Solo per il TTS — il testo visualizzato in chat resta intatto.
