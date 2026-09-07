@@ -635,15 +635,7 @@ export default function MicroDemoKoda() {
       </TouchableOpacity>
 
       {/* Orb centrato */}
-      <View
-        style={[
-          styles.centerContainer,
-          {
-            paddingTop: Math.max(0, insets.top - insets.bottom),
-            paddingBottom: Math.max(0, insets.bottom - insets.top),
-          },
-        ]}
-      >
+      <View style={styles.centerContainer}>
         <Animated.View
           style={{
             opacity: orbOpacity,
