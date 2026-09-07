@@ -359,6 +359,15 @@ export default function LasciaAndareScreen() {
   const revealWatcherRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const MIN_SESSION_MS = 60_000;      // min 60s garantiti prima del reveal
   const SILENCE_FOR_REVEAL_MS = 15_000; // 15s silenzio continuo → trigger
+  // === FIX v65.30 (2026-09-07) — FALLBACK HARD-TIMEOUT ======================
+  // BUG (Fabio 2026-09-07): il silence-watcher non triggerava mai (100s+).
+  // Root cause: in ambiente domestico il rumore di fondo (aria condizionata,
+  // TV, traffico, ventole PC) supera continuamente SPEECH_DB (-35 dB) →
+  // `lastSpeechAtRef` aggiornato ogni 100ms → silenceElapsed mai >= 15s →
+  // trigger mai raggiunto.
+  // Fallback: dopo 90s dal boot, trigger reveal indipendentemente dal VAD.
+  // Copre il caso "utente in ambiente rumoroso ma passivo".
+  const HARD_TIMEOUT_MS = 90_000;
 
   // Naviga al reveal della voce (chiamata da X o dal silence-watcher)
   const triggerHeartReveal = useCallback(() => {
@@ -1163,7 +1172,7 @@ export default function LasciaAndareScreen() {
     sessionStartedAtRef.current = Date.now();
     lastSpeechAtRef.current = Date.now();
     revealTriggeredRef.current = false;
-    console.log(`[KODA_LA_REVEAL] watcher started (firstBoot=1, min=${MIN_SESSION_MS}ms, silence=${SILENCE_FOR_REVEAL_MS}ms)`);
+    console.log(`[KODA_LA_REVEAL] watcher started (firstBoot=1, min=${MIN_SESSION_MS}ms, silence=${SILENCE_FOR_REVEAL_MS}ms, hardTimeout=${HARD_TIMEOUT_MS}ms)`);
     revealWatcherRef.current = setInterval(() => {
       if (revealTriggeredRef.current) return;
       const now = Date.now();
@@ -1171,6 +1180,16 @@ export default function LasciaAndareScreen() {
       const silenceElapsed = now - lastSpeechAtRef.current;
       if (sessionElapsed >= MIN_SESSION_MS && silenceElapsed >= SILENCE_FOR_REVEAL_MS) {
         console.log(`[KODA_LA_REVEAL] silence trigger — session=${(sessionElapsed / 1000).toFixed(1)}s silence=${(silenceElapsed / 1000).toFixed(1)}s`);
+        triggerHeartReveal();
+        return;
+      }
+      // === FIX v65.30 — HARD-TIMEOUT FALLBACK ==============================
+      // Se dopo 90s dal boot il silence-watcher non ha ancora triggerato
+      // (rumore ambientale continuo mantiene silenceElapsed < 15s), forza
+      // il reveal comunque. Garantisce che l'utente non resti bloccato
+      // in Lascia Andare indefinitamente in ambienti rumorosi.
+      if (sessionElapsed >= HARD_TIMEOUT_MS) {
+        console.log(`[KODA_LA_REVEAL] hard-timeout trigger — session=${(sessionElapsed / 1000).toFixed(1)}s (VAD-independent fallback, silenceElapsed=${(silenceElapsed / 1000).toFixed(1)}s)`);
         triggerHeartReveal();
       }
     }, 500);

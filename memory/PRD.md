@@ -46,6 +46,19 @@ Checkpoint stabile corrente: **`v60.4-stable`** su `koda-backend/main`
 - Regole prompt: fast system prompt sezione "REGOLA ECHO — PARROTING INTENZIONALE"
 
 
+### v65.30 (2026-09-07) — LA reveal hard-timeout fallback (rumore ambientale)
+- **Segnalato Fabio 2026-09-07:** dopo 100s in Lascia Andare firstBoot=1 il silence-watcher non triggerava automaticamente heart-voice-reveal. Il tap manuale della X funzionava correttamente.
+- **Root cause:** il watcher in `lascia-andare.tsx:1167-1176` richiede `silenceElapsed >= 15s` calcolato da `lastSpeechAtRef` aggiornato ogni volta che `db > SPEECH_DB (-35 dB)`. In ambiente domestico (aria condizionata, TV, traffico) il rumore di fondo supera continuamente -35 dB → `lastSpeechAtRef` aggiornato ogni 100ms → `silenceElapsed` mai >= 15s → trigger mai raggiunto.
+- **Fix:** aggiunto hard-timeout fallback a 90s (`HARD_TIMEOUT_MS`). Se dopo 90s il silence-watcher non ha ancora triggerato, forza reveal indipendentemente dal VAD. Copre il caso "utente in ambiente rumoroso ma passivo". Log: `[KODA_LA_REVEAL] hard-timeout trigger — session=90.0s (VAD-independent fallback, silenceElapsed=X.Xs)`.
+
+### v65.29 (2026-09-07) — Torna Free · v2 force_free flag (REGRESSIONE CRITICA)
+- **Root cause reale del bug "va a Intro Premium invece che intro-v3":** `_UNLIMITED_PRESEED_EMAILS` in `server.py:4693` è una whitelist hardcoded che a ogni `GET /api/profile` forza `subscription_tier="unlimited"` per l'email di Fabio (owner). `devSetTier(null)` scrive tier=null nel DB, ma al prossimo getProfile la whitelist patch lo ripristina a "unlimited" → router intro-premium ridirige a `/intro-premium` invece che a `/intro-v3`.
+- Il codice v65.21 aveva già creato il flag SecureStore `koda_dev_force_free_tier` che aggiunge `?force_free=1` a GET /profile (backend `server.py:3452` skippa la whitelist patch). Ma il bottone "Torna Free · v2" NON lo attivava.
+- **Fix:** aggiunto `SecureStore.setItemAsync("koda_dev_force_free_tier", "1")` all'inizio del bottone, PRIMA di `getProfile()`. Log: `[DEV_SIMULATE_FREE_V2] koda_dev_force_free_tier=1 → backend whitelist patch SKIPPED`.
+- **Verificato da Fabio 2026-09-07:** flusso completo funziona: Torna Free · v2 → intro-v3 → LA → tap X → heart-voice-reveal → 3 frasi microdemo → paywall ✓
+- **Verificato bug tap-to-stop conversazione (v65.26+v65.27):** dopo hard-stop, il ri-tap fa ripartire mic al primo colpo. Fabio ha testato 3 volte con successo.
+
+
 ### v65.27 (2026-09-07) — Fix regressione tap + "Torna Free" state stale
 **BUG A — Tap paralizzato dal v65.26**
 - Il check `state === "restoring"` nella v65.26 poteva restare bloccato (se ScreenDimmer non usciva mai da "restoring", es. animateBrightness abortito senza onComplete) → tap-to-stop paralizzato permanentemente.
