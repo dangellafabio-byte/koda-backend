@@ -487,7 +487,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v65.25-torna-free-v2-regression-fix";
+  const KODA_BUILD_SHORT_TAG = "build-v65.26-tap-dimmer-swallow-audio-reset";
   const KODA_BUILD_DATE = "2026-09-06";
   useEffect(() => {
     console.log(
@@ -4114,6 +4114,35 @@ export default function Taccuino() {
   };
 
   const onBigButton = () => {
+    // === FIX v65.26 (2026-09-07) — DIMMER SWALLOW FIRST-TAP =================
+    // BUG (segnalato Fabio 2026-09-07): quando lo schermo era dimmato al 50%
+    // (dopo 35s di inattività touch in hands-free), il primo tocco per
+    // ripristinare la luminosità veniva ANCHE interpretato come tap-to-stop
+    // → conversazione stoppata per errore. Deve funzionare così:
+    //   • Primo tap in stato dimmed/dimming/restoring → SOLO restore
+    //     luminosità (via ScreenDimmer.noteInteraction chiamato al root
+    //     onStartShouldSetResponder, che è già stato invocato prima di qui).
+    //   • Secondo tap (dimmer=watching) → tap-to-stop normale.
+    // Il touch al root (index.tsx:7560) chiama noteInteraction() PRIMA che
+    // l'evento propaghi al bottone orb (return false → propaga). Se
+    // noteInteraction ha appena avviato il restore luminosità (state passa
+    // a "restoring" o "watching"), il tap è da "consumare" qui senza stop.
+    try {
+      const dimmerState = ScreenDimmer.getDebugState().state;
+      if (
+        dimmerState === "dimmed" ||
+        dimmerState === "dimming" ||
+        dimmerState === "restoring"
+      ) {
+        console.log(
+          `[KODA_TAP_RESET] SWALLOW first-tap — screen was ${dimmerState}, restore-only (no hard-stop)`
+        );
+        return;
+      }
+    } catch {
+      // ScreenDimmer non deve mai bloccare il tap in caso di errore
+    }
+
     // === FIRST-TAP GATE ===
     // Qualsiasi tap dell'utente sul big button marca "ho interagito in
     // questa sessione foreground". Da qui in poi, il loop hands-free
@@ -4188,6 +4217,34 @@ export default function Taccuino() {
       closeSessionPauseRef.current = true;
       // 7) UI immediatamente in idle
       setStatus("idle");
+      // === FIX v65.26 (2026-09-07) — AUDIO SESSION RESET post hard-stop ====
+      // BUG (segnalato Fabio 2026-09-07): dopo aver premuto tap-to-stop,
+      // ri-tappare per riprendere la conversazione fa partire "recording"
+      // ma il mic non sente nulla (3 tentativi, poi → idle). Solo il kill
+      // completo dell'app ripristina.
+      // ROOT CAUSE: SpeechMod.stop() ferma il TTS ma il flag
+      // `setIsAudioActiveAsync=true` (attivato per la playback TTS) rimane
+      // acceso. Al prossimo startTalk, setAudioModeAsync(record) modifica
+      // la config ma non chiama setActive(false)→setActive(true) → la
+      // sessione iOS resta in stato residuale playAndRecord "sporco" →
+      // il mic hardware non riparte davvero.
+      // FIX: fire-and-forget setIsAudioActiveAsync(false) qui, senza await
+      // (non blocchiamo l'UI). Il prossimo startTalk in voiceStream/voice.ts
+      // ri-attiverà la sessione con setActive(true) da uno stato pulito.
+      if (Platform.OS !== "web") {
+        (async () => {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const Audio: any = require("expo-audio");
+            if (typeof Audio.setIsAudioActiveAsync === "function") {
+              await Audio.setIsAudioActiveAsync(false);
+              console.log(`[KODA_TAP_RESET] audio session deactivated — next tap will re-activate clean`);
+            }
+          } catch (e: any) {
+            console.log(`[KODA_TAP_RESET] setIsAudioActiveAsync(false) failed: ${e?.message || e}`);
+          }
+        })();
+      }
       return;
     }
 

@@ -46,6 +46,18 @@ Checkpoint stabile corrente: **`v60.4-stable`** su `koda-backend/main`
 - Regole prompt: fast system prompt sezione "REGOLA ECHO — PARROTING INTENZIONALE"
 
 
+### v65.26 (2026-09-07) — Tap: dimmer swallow-first-tap + audio session reset post hard-stop
+**BUG #1 — Dimmer non "consuma" il primo tap**
+- Segnalato Fabio 2026-09-07: schermo dimmato al 50% dopo 35s inattività, il primo tap per ripristinare la luminosità veniva anche interpretato come tap-to-stop → conversazione stoppata per errore.
+- Root cause: root View chiama `ScreenDimmer.noteInteraction()` in `onStartShouldSetResponder` con `return false` → l'evento propaga al bottone orb → `onBigButton` esegue hard-stop.
+- Fix (`index.tsx::onBigButton`): all'inizio della funzione, se `ScreenDimmer.getDebugState().state` è `"dimmed"`, `"dimming"` o `"restoring"`, RETURN early (il restore luminosità è già stato avviato da noteInteraction al root, il tap deve essere "consumato" senza altri effetti). Il tap successivo (dimmer=watching) è tap-to-stop normale.
+
+**BUG #2 — Conversazione non riprende dopo tap-to-stop**
+- Segnalato Fabio 2026-09-07: dopo tap-to-stop, ri-tappare fa partire "recording" ma il mic non sente (3 tentativi, poi idle). Solo kill dell'app ripristina.
+- Root cause: `SpeechMod.stop()` ferma il TTS ma il flag `setIsAudioActiveAsync(true)` (attivato per playback TTS) resta acceso. Al prossimo `startTalk`, `setAudioModeAsync(record)` modifica la config ma non chiama `setActive(false)→setActive(true)` → sessione iOS in stato residuale `playAndRecord` "sporco" → mic hardware non riparte davvero.
+- Fix (`index.tsx::onBigButton` branch hard-stop): fire-and-forget `Audio.setIsAudioActiveAsync(false)` alla fine della sequenza di reset (dopo setStatus("idle")). Il prossimo startTalk ri-attiverà la sessione con `setActive(true)` da uno stato pulito. Log `[KODA_TAP_RESET] audio session deactivated — next tap will re-activate clean` per verifica telemetria.
+
+
 ### v65.25 (2026-09-07) — REGRESSIONE: "Torna Free · v2" saltava sequenza Free
 - **Segnalata da Fabio 2026-09-07 sera:** premendo "Torna Free · v2" da Settings non arriva mai al paywall e il ritorno paywall→LA sembra rotto.
 - **Root cause diagnosticata** in `index.tsx` (bottone `dev-simulate-free-btn`, lines 6899-6913 v65.24):

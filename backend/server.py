@@ -109,7 +109,7 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v65.25-torna-free-v2-regression-fix-20260907"
+_KODA_BACKEND_VERSION = "v65.26-tap-dimmer-swallow-audio-reset-20260907"
 _KODA_BACKEND_BUILD_TS = "2026-07-13T16:00:00Z"
 
 
