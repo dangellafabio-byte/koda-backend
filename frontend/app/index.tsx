@@ -487,7 +487,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v65.28-coerenza-microdemo-orb-h2-verified";
+  const KODA_BUILD_SHORT_TAG = "build-v65.29-torna-free-v2-force-free-flag-fix";
   const KODA_BUILD_DATE = "2026-09-06";
   useEffect(() => {
     console.log(
@@ -6951,6 +6951,32 @@ export default function Taccuino() {
                       // primissimo boot.
                       try { await api.devFirstBootReset(); } catch (e) {
                         console.warn("[DEV_SIMULATE_FREE] first-boot-reset failed:", e);
+                      }
+                      // === FIX v65.29 (2026-09-07) — REGRESSIONE CRITICA ============
+                      // Il backend `/api/profile` ha una whitelist hardcoded
+                      // (`_UNLIMITED_PRESEED_EMAILS` in server.py:4693) che
+                      // FORZA `subscription_tier="unlimited"` per Fabio a
+                      // ogni chiamata → devSetTier(null) è inutile perché al
+                      // prossimo getProfile() il tier viene ripristinato a
+                      // "unlimited" → il router intro-premium redirige a
+                      // /intro-premium ("Ho capito, Ho capito, Ho capito")
+                      // invece di /intro-v3.
+                      // Il codice v65.21 aveva già creato il flag
+                      // `koda_dev_force_free_tier` che aggiunge `?force_free=1`
+                      // a GET /profile (backend server.py:3452 skippa la
+                      // whitelist patch), ma il bottone "Torna Free · v2"
+                      // non lo attivava. Attivo il flag QUI, prima di
+                      // getProfile(), così tier resta null e Fabio vede la
+                      // sequenza Free reale.
+                      // NOTA: il flag resterà settato finché Fabio non lo
+                      // toglie dal toggle "Forza Free (dev)" in Settings.
+                      try {
+                        await SecureStore.setItemAsync("koda_dev_force_free_tier", "1");
+                        console.warn(
+                          "[DEV_SIMULATE_FREE_V2] koda_dev_force_free_tier=1 → backend whitelist patch SKIPPED"
+                        );
+                      } catch (e) {
+                        console.warn("[DEV_SIMULATE_FREE_V2] force_free flag set failed:", e);
                       }
                       try {
                         const secureKeys = [
