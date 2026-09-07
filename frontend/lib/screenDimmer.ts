@@ -70,6 +70,16 @@ type DimmerState = "off" | "watching" | "dimming" | "dimmed" | "restoring";
 let state: DimmerState = "off";
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 let fadeTimer: ReturnType<typeof setInterval> | null = null;
+// === v65.31 (2026-09-07) — DIAGNOSTIC TIMER ==================================
+// BUG (Fabio 2026-09-07): il dimmer non si scurisce più. Causa ignota.
+// Aggiungo un log periodico ogni 10s quando state!=off per capire se:
+//   1. startWatching viene chiamato (state passa a "watching")
+//   2. Il timer di 35s viene resettato di continuo da noteInteraction
+//   3. Il timer scatta ma triggerDim viene skippato per qualche motivo
+// Log filtrabile con grep "[KODA_DIMMER] heartbeat"
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let lastInteractionAtMs: number = 0;
+let idleTimerArmedAtMs: number = 0;
 
 /** Il brightness "originale" al momento in cui abbiamo iniziato a osservare.
  *  Al restore torniamo a QUESTO valore (rispettando la scelta dell'utente). */
@@ -178,12 +188,34 @@ export async function startWatching(): Promise<void> {
   if (state !== "off") {
     // Già watching: NO-OP totale. Il cambio di stato di Koda (recording
     // → thinking → speaking) NON deve resettare il timer di inattività.
+    log(`startWatching skipped — already state=${state}`);
     return;
   }
   await captureOriginalIfNeeded();
   state = "watching";
-  log("startWatching → armed idle timer (35s)");
+  lastInteractionAtMs = Date.now();
+  log(`startWatching → armed idle timer (${IDLE_BEFORE_DIM_MS}ms), original=${originalBrightness?.toFixed(3) ?? "null"}`);
   resetIdleTimer();
+  // === v65.31 — DIAGNOSTIC HEARTBEAT ====================================
+  // Log periodico ogni 10s per capire perché il dimmer non si scurisce.
+  // Mostra: state corrente, tempo da ultima interazione, tempo da idle
+  // timer armato, brightness applicata. Filtrabile con grep "heartbeat".
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  heartbeatTimer = setInterval(() => {
+    if (state === "off") {
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+      return;
+    }
+    const now = Date.now();
+    const sinceInteraction = now - lastInteractionAtMs;
+    const sinceIdleArmed = now - idleTimerArmedAtMs;
+    log(
+      `heartbeat state=${state} sinceInteraction=${(sinceInteraction / 1000).toFixed(1)}s ` +
+      `sinceIdleArmed=${(sinceIdleArmed / 1000).toFixed(1)}s ` +
+      `brightness_current=${currentAppliedBrightness?.toFixed(3) ?? "null"} ` +
+      `brightness_original=${originalBrightness?.toFixed(3) ?? "null"}`
+    );
+  }, 10_000);
 }
 
 /**
@@ -194,6 +226,7 @@ export async function startWatching(): Promise<void> {
 export async function stopWatching(): Promise<void> {
   if (Platform.OS === "web") return;
   clearIdleTimer();
+  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
   if (state === "off") return;
   const wasDimmed = state === "dimming" || state === "dimmed" || state === "restoring";
   const from = currentAppliedBrightness ?? originalBrightness ?? 1.0;
@@ -227,11 +260,13 @@ export function noteInteraction(): void {
   if (Platform.OS === "web") return;
   if (state === "off") return;
 
+  lastInteractionAtMs = Date.now();
+
   // Se siamo dimmerati o stavamo per farlo, restore
   if (state === "dimming" || state === "dimmed" || state === "restoring") {
     const from = currentAppliedBrightness ?? originalBrightness ?? 1.0;
     const to = originalBrightness ?? 1.0;
-    log(`noteInteraction → restore from ${from.toFixed(3)} to ${to.toFixed(3)}`);
+    log(`noteInteraction → restore from ${from.toFixed(3)} to ${to.toFixed(3)} (was state=${state})`);
     if (Math.abs(from - to) > 0.01) {
       state = "restoring";
       animateBrightness(from, to, FADE_UP_MS, () => {
@@ -254,6 +289,7 @@ export function noteInteraction(): void {
 export function resetIdleTimer(): void {
   if (state === "off") return;
   clearIdleTimer();
+  idleTimerArmedAtMs = Date.now();
   log(`resetIdleTimer — timer armato per ${IDLE_BEFORE_DIM_MS}ms (state=${state})`);
   // Aspetta IDLE_BEFORE_DIM_MS senza altre interazioni → dim
   idleTimer = setTimeout(() => {
