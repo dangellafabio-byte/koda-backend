@@ -487,7 +487,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v65.26-tap-dimmer-swallow-audio-reset";
+  const KODA_BUILD_SHORT_TAG = "build-v65.27-tap-swallow-deterministic-intro-v3-state-reset";
   const KODA_BUILD_DATE = "2026-09-06";
   useEffect(() => {
     console.log(
@@ -1124,6 +1124,14 @@ export default function Taccuino() {
   // === Nota 2026-08-21 (Fabio) ===
   // `pathname` è già dichiarato sopra (fix TDZ) — qui non lo ridichiariamo.
   const hasRedirectedFreeUserRef = useRef<boolean>(false);
+  // === v65.27 — DIMMER SWALLOW REF (deterministic, expiry-based) ============
+  // Ref timestamp fino a quando il prossimo tap sul big button deve essere
+  // SILENZIATO (perché era stato usato solo per ripristinare la luminosità).
+  // Settato dal root View onStartShouldSetResponder QUANDO il dimmer è in
+  // stato dimmed/dimming AL MOMENTO del touch — timing deterministico,
+  // niente race condition su state="restoring" residuale.
+  // TTL 500ms: coerente con FADE_UP_MS=300ms del ScreenDimmer + margine.
+  const swallowNextBigButtonTapUntilRef = useRef<number>(0);
   // === FIX BUG CACHE TIER IN-SESSIONE (Fabio 2026-08-24) ===================
   // Keyed invalidation locale, coerente con V3 e Intro Premium router.
   // PRIMA: `hasRedirectedFreeUserRef` non veniva mai resettato → cambio tier
@@ -4114,33 +4122,21 @@ export default function Taccuino() {
   };
 
   const onBigButton = () => {
-    // === FIX v65.26 (2026-09-07) — DIMMER SWALLOW FIRST-TAP =================
-    // BUG (segnalato Fabio 2026-09-07): quando lo schermo era dimmato al 50%
-    // (dopo 35s di inattività touch in hands-free), il primo tocco per
-    // ripristinare la luminosità veniva ANCHE interpretato come tap-to-stop
-    // → conversazione stoppata per errore. Deve funzionare così:
-    //   • Primo tap in stato dimmed/dimming/restoring → SOLO restore
-    //     luminosità (via ScreenDimmer.noteInteraction chiamato al root
-    //     onStartShouldSetResponder, che è già stato invocato prima di qui).
-    //   • Secondo tap (dimmer=watching) → tap-to-stop normale.
-    // Il touch al root (index.tsx:7560) chiama noteInteraction() PRIMA che
-    // l'evento propaghi al bottone orb (return false → propaga). Se
-    // noteInteraction ha appena avviato il restore luminosità (state passa
-    // a "restoring" o "watching"), il tap è da "consumare" qui senza stop.
-    try {
-      const dimmerState = ScreenDimmer.getDebugState().state;
-      if (
-        dimmerState === "dimmed" ||
-        dimmerState === "dimming" ||
-        dimmerState === "restoring"
-      ) {
-        console.log(
-          `[KODA_TAP_RESET] SWALLOW first-tap — screen was ${dimmerState}, restore-only (no hard-stop)`
-        );
-        return;
-      }
-    } catch {
-      // ScreenDimmer non deve mai bloccare il tap in caso di errore
+    // === FIX v65.27 (2026-09-07) — DIMMER SWALLOW FIRST-TAP (deterministic) ==
+    // Se al momento del touch il dimmer era dimmed/dimming, il root View ha
+    // settato `swallowNextBigButtonTapUntilRef` a `now + 500ms` PRIMA di
+    // chiamare noteInteraction (che cambia lo state). Qui controlliamo il
+    // timestamp: se il tap arriva entro la window, è "consumato" per il
+    // solo restore luminosità → return early SENZA hard-stop.
+    // Il check è timing-based, NON dipende dallo state corrente del dimmer
+    // → nessun race condition su "restoring" residuale (che nella v65.26
+    // poteva restare bloccato e paralizzava permanentemente il tap-to-stop).
+    if (Date.now() < swallowNextBigButtonTapUntilRef.current) {
+      swallowNextBigButtonTapUntilRef.current = 0; // consuma la window
+      console.log(
+        `[KODA_TAP_RESET] SWALLOW first-tap — screen was dim, restore-only (no hard-stop)`
+      );
+      return;
     }
 
     // === FIRST-TAP GATE ===
@@ -6988,6 +6984,17 @@ export default function Taccuino() {
                       lastFreePremiumDecidedKeyRef.current = null;
                       hasRedirectedIntroPremiumRef.current = false;
                       lastIntroPremiumDecidedKeyRef.current = null;
+                      // === FIX v65.27 (2026-09-07) — REGRESSIONE GRAVE =========
+                      // BUG: "Torna Free · v2" cancellava SecureStore ma NON
+                      // resettava `introV3State` in memoria. Il router V3
+                      // (index.tsx:1035) controlla `if (introV3State !== "needed") return;`.
+                      // Dopo il bottone, `introV3State` restava "completed"
+                      // (stale, valore letto al primo mount) → router V3 NON
+                      // reindirizzava a /intro-v3 → l'utente non vedeva mai
+                      // la sequenza narrativa iniziale nonostante il flag
+                      // SecureStore fosse stato cancellato.
+                      // FIX: forziamo lo state a "needed" ora che il flag è null.
+                      setIntroV3State("needed");
                       resetLastDecidedKey();
                       let introSeen = true;
                       try {
@@ -7616,6 +7623,15 @@ export default function Taccuino() {
       // No-op se ScreenDimmer non è in watching (fuori da hands-free).
       onStartShouldSetResponder={() => {
         try {
+          // === v65.27 — dimmer swallow (deterministic) ==================
+          // Se al momento del touch il dimmer è dimmed/dimming, segna che
+          // il PROSSIMO tap sul big button (che arriverà via propagazione)
+          // dev'essere silenziato. Timing deterministic: leggiamo PRIMA
+          // che noteInteraction cambi lo state a "restoring".
+          const st = ScreenDimmer.getDebugState().state;
+          if (st === "dimmed" || st === "dimming") {
+            swallowNextBigButtonTapUntilRef.current = Date.now() + 500;
+          }
           ScreenDimmer.noteInteraction();
         } catch {}
         return false; // Non consumiamo l'evento

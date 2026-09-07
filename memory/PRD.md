@@ -46,6 +46,25 @@ Checkpoint stabile corrente: **`v60.4-stable`** su `koda-backend/main`
 - Regole prompt: fast system prompt sezione "REGOLA ECHO — PARROTING INTENZIONALE"
 
 
+### v65.27 (2026-09-07) — Fix regressione tap + "Torna Free" state stale
+**BUG A — Tap paralizzato dal v65.26**
+- Il check `state === "restoring"` nella v65.26 poteva restare bloccato (se ScreenDimmer non usciva mai da "restoring", es. animateBrightness abortito senza onComplete) → tap-to-stop paralizzato permanentemente.
+- Race condition: leggere `dimmer.state` DOPO `noteInteraction()` è fragile perché lo state è già cambiato.
+- **Fix v65.27:** approccio deterministico basato su timestamp.
+  - Nuovo ref `swallowNextBigButtonTapUntilRef: number`.
+  - Root View onStartShouldSetResponder: PRIMA di `noteInteraction()`, legge `state`. Se `dimmed || dimming`, setta ref = `now + 500ms`.
+  - `onBigButton`: se `Date.now() < swallowNextBigButtonTapUntilRef.current` → return early e consuma la window. Altrimenti procede normalmente.
+  - Timing deterministico, niente dipendenza da state residuali. TTL 500ms = FADE_UP_MS (300ms) + margine.
+
+**BUG B — "Torna Free · v2" non parte intro-v3 (state stale)**
+- Il bottone cancellava SecureStore ma NON resettava `introV3State` in memoria. Il router V3 (`index.tsx:1035`) controlla `if (introV3State !== "needed") return;`. `introV3State` restava "completed" (valore letto al primo mount) → router V3 NON reindirizzava a `/intro-v3` → utente non vedeva mai la sequenza narrativa iniziale nonostante il flag SecureStore fosse stato cancellato.
+- **Fix v65.27:** aggiunto `setIntroV3State("needed")` nel bottone dopo il reset SecureStore.
+
+**BUG C — Audio session reset post hard-stop (mantenuto da v65.26)**
+- `Audio.setIsAudioActiveAsync(false)` fire-and-forget alla fine del branch hard-stop. Il prossimo tap ri-attiva sessione pulita.
+
+
+
 ### v65.26 (2026-09-07) — Tap: dimmer swallow-first-tap + audio session reset post hard-stop
 **BUG #1 — Dimmer non "consuma" il primo tap**
 - Segnalato Fabio 2026-09-07: schermo dimmato al 50% dopo 35s inattività, il primo tap per ripristinare la luminosità veniva anche interpretato come tap-to-stop → conversazione stoppata per errore.
