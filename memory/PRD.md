@@ -46,6 +46,19 @@ Checkpoint stabile corrente: **`v60.4-stable`** su `koda-backend/main`
 - Regole prompt: fast system prompt sezione "REGOLA ECHO — PARROTING INTENZIONALE"
 
 
+### v65.25 (2026-09-07) — REGRESSIONE: "Torna Free · v2" saltava sequenza Free
+- **Segnalata da Fabio 2026-09-07 sera:** premendo "Torna Free · v2" da Settings non arriva mai al paywall e il ritorno paywall→LA sembra rotto.
+- **Root cause diagnosticata** in `index.tsx` (bottone `dev-simulate-free-btn`, lines 6899-6913 v65.24):
+  - Cancellava dal SecureStore solo 5 chiavi legacy (`la_intro_seen`, `koda_disclaimer_seen_v2`, `koda_intro_seen`, `hint_first_scroll_seen`, `hint_write_seen`).
+  - **Mancavano 3 chiavi critiche** per il flusso Free→Paywall:
+    - `intro_v3_completed_at` → se presente, `lascia-andare.tsx:172` non fa redirect a `/intro-v3`, la sequenza narrativa iniziale non parte.
+    - `heart_reveal_dismissed_at` → `heart-voice-reveal` non riparte più.
+    - `microdemo_last_at` → se < 24h, `lascia-andare.tsx:1063-1067` fa `router.push("/paywall?variant=post-demo")` **saltando** la micro-demo delle 3 frasi Free.
+  - Il codice sapeva già che vanno cancellate: stesse 3 chiavi sono cancellate correttamente in `index.tsx:4361-4364`, `index.tsx:7015-7020`, `lascia-andare.tsx:1120-1122`. Nel bottone v2 erano dimenticate → regressione introdotta con la creazione del bottone v2 (v65.22, 2026-09-06).
+- **Fix v65.25:** aggiunte le 3 chiavi mancanti alla lista `secureKeys`. Log esplicito con l'elenco delle chiavi cancellate per telemetria.
+- **Effetto sul ritorno paywall→LA:** `paywall.tsx:250-268` è corretto (se `isPostDemo=true` fa `router.replace("/lascia-andare")`). L'utente non tornava a LA perché in realtà non stava arrivando nemmeno al paywall in modo pulito, e il flusso era "corto-circuitato" dal rate-limit `microdemo_last_at`.
+
+
 ### v65.24 (2026-09-07) — MicroDemo Orb centrato (fix vero) + rollback v65.23 orb padding
 - **Screenshot Fabio (22:27, v65.22)** dimostra orb `MicroDemoKoda` decentrato **verso il basso** (~90px sotto centro visivo). Indicatore "0 / 3" in fondo = `turnCount / MAX_TURNS` di MicroDemoKoda, non le 3 frasi narrative iniziali (KodaIntroV3).
 - **Root cause identificato in `MicroDemoKoda.tsx`:**

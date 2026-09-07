@@ -487,7 +487,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v65.24-microdemo-orb-centered-ios-audio-recovery";
+  const KODA_BUILD_SHORT_TAG = "build-v65.25-torna-free-v2-regression-fix";
   const KODA_BUILD_DATE = "2026-09-06";
   useEffect(() => {
     console.log(
@@ -6906,6 +6906,19 @@ export default function Taccuino() {
                           "koda_intro_seen",
                           "hint_first_scroll_seen",
                           "hint_write_seen",
+                          // === FIX v65.25 (2026-09-07) — REGRESSIONE FLUSSO FREE =========
+                          // Prima queste 3 chiavi restavano in SecureStore dopo
+                          // "Torna Free · v2" → l'utente saltava la sequenza
+                          // completa Free e finiva DIRETTAMENTE al paywall
+                          // (rate-limit microdemo 24h) o saltava intro-v3
+                          // (intro_v3_completed_at presente). Il codice sapeva
+                          // già che vanno cancellate: stesse 3 chiavi sono
+                          // già cancellate correttamente in altri 3 punti
+                          // (index.tsx:4361-4364, index.tsx:7015-7020,
+                          //  lascia-andare.tsx:1120-1122). Qui erano dimenticate.
+                          "intro_v3_completed_at",
+                          "heart_reveal_dismissed_at",
+                          "microdemo_last_at",
                         ];
                         await Promise.all(secureKeys.map((k) =>
                           SecureStore.deleteItemAsync(k).catch(() => {})
@@ -6933,7 +6946,13 @@ export default function Taccuino() {
                       // Naviga a HOME, NON direttamente a lascia-andare —
                       // così il tap sul pill triggera il modal di preambolo
                       // ora che il flag è azzerato.
-                      console.log("[DEV_SIMULATE_FREE_V2] reset done → router.replace('/')");
+                      console.log(
+                        "[DEV_SIMULATE_FREE_V2] reset done — cleared SecureStore keys=[" +
+                          "la_intro_seen, koda_disclaimer_seen_v2, koda_intro_seen, " +
+                          "hint_first_scroll_seen, hint_write_seen, " +
+                          "intro_v3_completed_at, heart_reveal_dismissed_at, microdemo_last_at" +
+                          "] → router.replace('/')"
+                      );
                       router.replace("/");
                     } catch (e: any) {
                       setAdminError(`Errore: ${e?.message || e}`);
