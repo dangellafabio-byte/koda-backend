@@ -209,26 +209,15 @@ export default function HeartVoiceReveal() {
         player.addListener("playbackStatusUpdate", onStatus);
         player.play();
         console.log(`[${TAG}] reveal clip started`);
-        // Fallback duration-based: `duration` è disponibile dopo play()
-        // (potrebbe richiedere un tick per essere popolato).
-        setTimeout(() => {
-          try {
-            const durationSec: number =
-              typeof (player as any).duration === "number"
-                ? (player as any).duration
-                : 15; // safe default se metadata non ancora caricato
-            const fallbackMs = Math.max(3000, durationSec * 1000 + 2000);
-            console.log(
-              `[${TAG}] fallback timer armed (${fallbackMs}ms, duration=${durationSec.toFixed(2)}s)`
-            );
-            fallbackTimer = setTimeout(() => {
-              console.log(`[${TAG}] fallback timer fired → showCTA (Android didJustFinish bypass)`);
-              showCTA();
-            }, fallbackMs);
-          } catch (e: any) {
-            console.warn(`[${TAG}] fallback timer setup failed: ${e?.message || e}`);
-          }
-        }, 200);
+        // === FIX v65.33 (2026-09-08) — FALLBACK FISSO 15s ==================
+        // player.duration su Android è spesso 0/NaN nei primi ms dopo play,
+        // rendendo il timer dinamico inaffidabile. La clip reveal è ~10s.
+        // Timer fisso 15s garantisce sempre CTA visibile anche se
+        // didJustFinish non arriva mai. Idempotente con showCTA.
+        fallbackTimer = setTimeout(() => {
+          console.log(`[${TAG}] fallback timer fired (fixed 15s) → showCTA`);
+          showCTA();
+        }, 15000);
       } catch (e) {
         console.warn(`[${TAG}] playback failed:`, e);
         // Fallback: mostra CTA comunque dopo 3s per non lasciare l'utente bloccato

@@ -772,19 +772,15 @@ export default function LasciaAndareScreen() {
             outputFormat: "mpeg4",
             audioEncoder: "aac",
             isMeteringEnabled: true,
-            // === FIX v65.32 (2026-09-07) — VAD ANDROID METERING ================
-            // BUG (Fabio 2026-09-07): in Lascia Andare Android l'orb non
-            // reagiva al parlato — VAD sempre a -100 dB → mai transizione
-            // a "recording", nessun aggiornamento lastVoiceAtRef.
-            // Root cause: audioSource="voice_communication" attiva il DSP
-            // hardware Android (AGC + Noise Suppression + Echo Cancellation)
-            // che su MOLTI device (Samsung, Xiaomi, OnePlus post-Android 12)
-            // NON popola il campo `metering` del recording status → sempre
-            // -100. `voice_communication` è pensato per VoIP dove serve
-            // echo cancellation, ma qui è metering-only.
-            // Fix: `"mic"` — audioSource generico, metering reale garantito.
-            // Su iOS non ha effetto (audioSource è Android-only in expo-audio).
-            audioSource: "mic",
+            // === FIX v65.33 (2026-09-08) — VAD ANDROID METERING (retry) =========
+            // v65.32 aveva provato `audioSource: "mic"` — non ha risolto.
+            // Approccio nuovo: NESSUN audioSource specificato → expo-audio
+            // sceglie il default Android che è "MediaRecorder.AudioSource.MIC"
+            // (metering-friendly). Il valore "voice_communication" attivava
+            // il DSP hardware che azzerava metering; "mic" doveva essere OK
+            // ma su alcuni device (Samsung One UI 7) è aliased al DSP.
+            // Il default nativo (MIC senza specifica) è quello che funziona
+            // storicamente in altri progetti expo-audio.
           },
           ios: {
             ...(base.ios || {}),
@@ -835,6 +831,11 @@ export default function LasciaAndareScreen() {
         // e aggiorniamo lo stato dell'orb. L'audio scritto nel .m4a non
         // viene MAI letto né trasmesso — verrà cancellato all'uscita.
         lastVoiceAtRef.current = 0;
+        // === v65.33 — LOG DIAGNOSTICO METERING ===========================
+        // Log ogni 3s del valore reale letto dal recorder. Se resta -100
+        // costante, il metering non funziona su questo device (bug DSP).
+        let pollTickCount = 0;
+        let lastLoggedDb: number | null = null;
         pollRef.current = setInterval(() => {
           if (exitingRef.current) return; // durante l'uscita non aggiorniamo
           try {
@@ -842,6 +843,17 @@ export default function LasciaAndareScreen() {
             if (!st || !st.isRecording) return;
             const db: number =
               typeof st.metering === "number" ? st.metering : -100;
+            // Log ogni 30 tick (~3s) o quando cambia significativamente
+            pollTickCount++;
+            if (
+              pollTickCount % 30 === 0 ||
+              (lastLoggedDb !== null && Math.abs(db - lastLoggedDb) > 15)
+            ) {
+              console.log(
+                `[KODA_LA_VAD] meter=${db.toFixed(1)}dB threshold=${SPEECH_DB}dB active=${db > SPEECH_DB ? "Y" : "N"} isRecording=${st.isRecording}`
+              );
+              lastLoggedDb = db;
+            }
             setMeterDb(db);
             const now = Date.now();
             if (db > SPEECH_DB) {
