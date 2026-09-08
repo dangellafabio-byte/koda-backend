@@ -772,15 +772,19 @@ export default function LasciaAndareScreen() {
             outputFormat: "mpeg4",
             audioEncoder: "aac",
             isMeteringEnabled: true,
-            // === FIX v65.33 (2026-09-08) — VAD ANDROID METERING (retry) =========
-            // v65.32 aveva provato `audioSource: "mic"` — non ha risolto.
-            // Approccio nuovo: NESSUN audioSource specificato → expo-audio
-            // sceglie il default Android che è "MediaRecorder.AudioSource.MIC"
-            // (metering-friendly). Il valore "voice_communication" attivava
-            // il DSP hardware che azzerava metering; "mic" doveva essere OK
-            // ma su alcuni device (Samsung One UI 7) è aliased al DSP.
-            // Il default nativo (MIC senza specifica) è quello che funziona
-            // storicamente in altri progetti expo-audio.
+            // === FIX v65.34 (2026-09-08) — VAD ANDROID METERING (retry #3) ======
+            // Storia tentativi:
+            //   v65.32: "mic" — non risolto (aliased al DSP su Samsung One UI 7)
+            //   v65.33: nessuna specifica — non risolto (default aliased al DSP)
+            //   v65.34: "unprocessed" — bypass ESPLICITO di tutti i DSP hardware
+            //          (AGC, NS, EC). Su Android 10+ questo audioSource dice
+            //          al framework "voglio audio RAW senza processing" →
+            //          MediaRecorder emette metering reale dai campioni PCM.
+            // Se anche unprocessed non funziona, il device rifiuta il metering
+            // via MediaRecorder (bug hardware/driver). In quel caso il fallback
+            // v64.1 tiene l'orb in "recording" perpetuo così l'utente non
+            // vede uno stato bloccato, ma la modulazione VU sarà assente.
+            audioSource: "unprocessed",
           },
           ios: {
             ...(base.ios || {}),

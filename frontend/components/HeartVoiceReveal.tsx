@@ -45,6 +45,26 @@ const ORB_SIZE = Math.min(WINDOW_WIDTH * 0.78, 360);
 
 async function configureAudioForPlayback(): Promise<void> {
   if (Platform.OS === "web") return;
+  // === FIX v65.34 (2026-09-08) — RESET AUDIO SESSION COMPLETO =============
+  // BUG: dopo Lascia Andare (recorder attivo con allowsRecording:true),
+  // arriva HeartReveal → configureAudioForPlayback voleva impostare
+  // allowsRecording:false. Su Android la transizione può fallire
+  // silenziosamente se la sessione recorder non è stata rilasciata.
+  // Risultato: player.play() non fa suono, didJustFinish non arriva,
+  // CTA non appaiono. Fix: setActive(false) → wait 250ms → setAudioModeAsync
+  // → setActive(true). Sequenza pulita che forza iOS/Android a rilasciare
+  // qualsiasi hold audio residuo prima di riabilitare per playback.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Audio: any = require("expo-audio");
+    if (typeof Audio.setIsAudioActiveAsync === "function") {
+      await Audio.setIsAudioActiveAsync(false);
+      console.log(`[${TAG}] audio session deactivated`);
+    }
+  } catch (e: any) {
+    console.warn(`[${TAG}] setIsAudioActiveAsync(false) failed:`, e?.message || e);
+  }
+  await new Promise((r) => setTimeout(r, 250));
   try {
     await setAudioModeAsync({
       allowsRecording: false,
@@ -53,8 +73,19 @@ async function configureAudioForPlayback(): Promise<void> {
       shouldPlayInBackground: false,
       shouldRouteThroughEarpiece: false,
     });
+    console.log(`[${TAG}] audio mode configured for playback`);
   } catch (e) {
-    console.warn(`[${TAG}] configureAudioForPlayback failed:`, e);
+    console.warn(`[${TAG}] configureAudioForPlayback setAudioMode failed:`, e);
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Audio: any = require("expo-audio");
+    if (typeof Audio.setIsAudioActiveAsync === "function") {
+      await Audio.setIsAudioActiveAsync(true);
+      console.log(`[${TAG}] audio session re-activated for playback`);
+    }
+  } catch (e: any) {
+    console.warn(`[${TAG}] setIsAudioActiveAsync(true) failed:`, e?.message || e);
   }
 }
 
@@ -192,14 +223,23 @@ export default function HeartVoiceReveal() {
     };
     let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
     const startPlayback = async () => {
+      console.log(`[${TAG}] startPlayback: begin — configuring audio for playback`);
       await configureAudioForPlayback();
       await new Promise((r) => setTimeout(r, 120)); // stabilizza audio session
-      if (!mountedRef.current || clipStarted) return;
+      if (!mountedRef.current || clipStarted) {
+        console.log(`[${TAG}] startPlayback: aborted mounted=${mountedRef.current} clipStarted=${clipStarted}`);
+        return;
+      }
       clipStarted = true;
       try {
+        console.log(`[${TAG}] startPlayback: createAudioPlayer`);
         const player = createAudioPlayer(REVEAL_CLIP, { updateInterval: 100 });
         playerRef.current = player;
-        const onStatus = (status: { didJustFinish?: boolean }) => {
+        // Forza volume max esplicitamente per evitare bug volume=0 residuo
+        try {
+          (player as any).volume = 1.0;
+        } catch {}
+        const onStatus = (status: { didJustFinish?: boolean; currentTime?: number; duration?: number }) => {
           if (status.didJustFinish) {
             try { player.removeListener("playbackStatusUpdate", onStatus); } catch {}
             console.log(`[${TAG}] didJustFinish received → showCTA`);
@@ -207,8 +247,9 @@ export default function HeartVoiceReveal() {
           }
         };
         player.addListener("playbackStatusUpdate", onStatus);
+        console.log(`[${TAG}] startPlayback: calling player.play()`);
         player.play();
-        console.log(`[${TAG}] reveal clip started`);
+        console.log(`[${TAG}] reveal clip started (play() returned)`);
         // === FIX v65.33 (2026-09-08) — FALLBACK FISSO 15s ==================
         // player.duration su Android è spesso 0/NaN nei primi ms dopo play,
         // rendendo il timer dinamico inaffidabile. La clip reveal è ~10s.
