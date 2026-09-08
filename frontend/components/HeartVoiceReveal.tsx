@@ -171,6 +171,26 @@ export default function HeartVoiceReveal() {
 
     // Play clip dopo grace period 800ms (dà tempo all'orb di apparire)
     let clipStarted = false;
+    // === FIX v65.32 (2026-09-07) — ANDROID CTA FALLBACK =================
+    // BUG (Fabio 2026-09-07): su Android l'orb resta bloccato in animazione
+    // breathe dopo la clip → CTA mai visibile → utente non può uscire.
+    // Root cause: `expo-audio` su Android non emette sempre `didJustFinish`
+    // in modo affidabile (bug noto SDK 52+). Su iOS funziona correttamente.
+    // Fix: fallback timer basato su durata reale della clip (player.duration
+    // è disponibile dopo play()) + margine 2s. Idempotente con listener:
+    // qualunque dei due arriva prima triggera showCTA una sola volta.
+    let ctaShown = false;
+    const showCTA = () => {
+      if (ctaShown || !mountedRef.current) return;
+      ctaShown = true;
+      setCtaVisible(true);
+      Animated.timing(ctaOpacity, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true,
+      }).start();
+    };
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
     const startPlayback = async () => {
       await configureAudioForPlayback();
       await new Promise((r) => setTimeout(r, 120)); // stabilizza audio session
@@ -182,33 +202,39 @@ export default function HeartVoiceReveal() {
         const onStatus = (status: { didJustFinish?: boolean }) => {
           if (status.didJustFinish) {
             try { player.removeListener("playbackStatusUpdate", onStatus); } catch {}
-            // Clip finita → fade-in CTA
-            if (mountedRef.current) {
-              setCtaVisible(true);
-              Animated.timing(ctaOpacity, {
-                toValue: 1,
-                duration: 500,
-                useNativeDriver: true,
-              }).start();
-            }
+            console.log(`[${TAG}] didJustFinish received → showCTA`);
+            showCTA();
           }
         };
         player.addListener("playbackStatusUpdate", onStatus);
         player.play();
         console.log(`[${TAG}] reveal clip started`);
+        // Fallback duration-based: `duration` è disponibile dopo play()
+        // (potrebbe richiedere un tick per essere popolato).
+        setTimeout(() => {
+          try {
+            const durationSec: number =
+              typeof (player as any).duration === "number"
+                ? (player as any).duration
+                : 15; // safe default se metadata non ancora caricato
+            const fallbackMs = Math.max(3000, durationSec * 1000 + 2000);
+            console.log(
+              `[${TAG}] fallback timer armed (${fallbackMs}ms, duration=${durationSec.toFixed(2)}s)`
+            );
+            fallbackTimer = setTimeout(() => {
+              console.log(`[${TAG}] fallback timer fired → showCTA (Android didJustFinish bypass)`);
+              showCTA();
+            }, fallbackMs);
+          } catch (e: any) {
+            console.warn(`[${TAG}] fallback timer setup failed: ${e?.message || e}`);
+          }
+        }, 200);
       } catch (e) {
         console.warn(`[${TAG}] playback failed:`, e);
         // Fallback: mostra CTA comunque dopo 3s per non lasciare l'utente bloccato
         if (mountedRef.current) {
           setTimeout(() => {
-            if (mountedRef.current) {
-              setCtaVisible(true);
-              Animated.timing(ctaOpacity, {
-                toValue: 1,
-                duration: 500,
-                useNativeDriver: true,
-              }).start();
-            }
+            showCTA();
           }, 3000);
         }
       }
@@ -218,6 +244,7 @@ export default function HeartVoiceReveal() {
     return () => {
       mountedRef.current = false;
       clearTimeout(clipTimer);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
       breatheLoop.stop();
       try { playerRef.current?.remove(); } catch {}
     };

@@ -772,7 +772,19 @@ export default function LasciaAndareScreen() {
             outputFormat: "mpeg4",
             audioEncoder: "aac",
             isMeteringEnabled: true,
-            audioSource: "voice_communication",
+            // === FIX v65.32 (2026-09-07) — VAD ANDROID METERING ================
+            // BUG (Fabio 2026-09-07): in Lascia Andare Android l'orb non
+            // reagiva al parlato — VAD sempre a -100 dB → mai transizione
+            // a "recording", nessun aggiornamento lastVoiceAtRef.
+            // Root cause: audioSource="voice_communication" attiva il DSP
+            // hardware Android (AGC + Noise Suppression + Echo Cancellation)
+            // che su MOLTI device (Samsung, Xiaomi, OnePlus post-Android 12)
+            // NON popola il campo `metering` del recording status → sempre
+            // -100. `voice_communication` è pensato per VoIP dove serve
+            // echo cancellation, ma qui è metering-only.
+            // Fix: `"mic"` — audioSource generico, metering reale garantito.
+            // Su iOS non ha effetto (audioSource è Android-only in expo-audio).
+            audioSource: "mic",
           },
           ios: {
             ...(base.ios || {}),

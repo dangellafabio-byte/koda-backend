@@ -46,6 +46,18 @@ Checkpoint stabile corrente: **`v60.4-stable`** su `koda-backend/main`
 - Regole prompt: fast system prompt sezione "REGOLA ECHO — PARROTING INTENZIONALE"
 
 
+### v65.32 (2026-09-08) — Android: HeartReveal CTA fallback + LA VAD metering
+**BUG 1 — Android orb bloccato in HeartVoiceReveal**
+- Segnalato Fabio 2026-09-08: su Android, dopo Lascia Andare finito, l'orb resta "bloccato" (in realtà loop breathe di `HeartVoiceReveal`), i due CTA "Ascolta la mia voce" / "Non ora grazie" non appaiono mai → utente non può uscire.
+- Root cause: `expo-audio` su Android SDK 52+ ha un bug noto per cui `player.addListener("playbackStatusUpdate", onStatus)` NON emette sempre `didJustFinish` in modo affidabile → il callback che triggera `setCtaVisible(true)` non parte mai.
+- Fix (`HeartVoiceReveal.tsx:172-215`): aggiunto fallback timer duration-based. Dopo `player.play()` legge `player.duration` (disponibile ~200ms dopo play) e arma un timer = `duration_sec * 1000 + 2000ms`. Se `didJustFinish` non arriva entro quel tempo, il timer forza `showCTA()`. Guardia `ctaShown` per idempotenza (qualunque dei due arriva prima vince). Log: `[KODA_HEART_REVEAL] fallback timer fired → showCTA (Android didJustFinish bypass)`.
+
+**BUG 2 — Android VAD Lascia Andare mai attivo**
+- Segnalato Fabio 2026-09-08: in Lascia Andare su Android, l'orb non reagisce mai al parlato — sembra "non mi sente".
+- Root cause: `lascia-andare.tsx:775` usa `audioSource: "voice_communication"` per il recorder expo-audio. Su MOLTI device Android post-Android 12 (Samsung, Xiaomi, OnePlus) questo audioSource attiva il DSP hardware (AGC + Noise Suppression + Echo Cancellation) che NON popola il campo `metering` del recording status → sempre -100 dB → `db > SPEECH_DB` (-35) mai vero → orb mai reagisce, `lastSpeechAtRef` mai aggiornato, silence-watcher mai partito (in aggiunta al hard-timeout v65.30).
+- Fix: `audioSource: "mic"` — audioSource generico Android, metering reale garantito. iOS non impattato (`audioSource` è Android-only in expo-audio).
+
+
 ### v65.30 (2026-09-07) — LA reveal hard-timeout fallback (rumore ambientale)
 - **Segnalato Fabio 2026-09-07:** dopo 100s in Lascia Andare firstBoot=1 il silence-watcher non triggerava automaticamente heart-voice-reveal. Il tap manuale della X funzionava correttamente.
 - **Root cause:** il watcher in `lascia-andare.tsx:1167-1176` richiede `silenceElapsed >= 15s` calcolato da `lastSpeechAtRef` aggiornato ogni volta che `db > SPEECH_DB (-35 dB)`. In ambiente domestico (aria condizionata, TV, traffico) il rumore di fondo supera continuamente -35 dB → `lastSpeechAtRef` aggiornato ogni 100ms → `silenceElapsed` mai >= 15s → trigger mai raggiunto.
