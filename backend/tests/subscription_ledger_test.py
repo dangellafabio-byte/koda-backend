@@ -5,7 +5,7 @@ Coverage completa degli scenari approvati con Fabio (2026-08-14):
 - Monthly: consumo + fine mese senza carryover
 - Bimonthly M1→M2: creazione slot con cap 50
 - Bimonthly renewal: reset totale a fine M2
-- Annual peak M3: 110 base + 50 (da M1) + 50 (da M2) = 210 max disponibile
+- Annual peak M3: 230 base + 50 (da M1) + 50 (da M2) = 330 max disponibile
 - Annual FIFO: consumo eccessivo scala prima gli slot più vecchi
 - Annual slot expiration: slot da M1 scade a fine M3
 - Annual renewal (fine M12): tutti gli slot vengono scartati
@@ -73,9 +73,9 @@ def test_monthly_no_carryover():
     _assert(ledger.base_minutes_used == 0.0, "base resettato a 0")
     _assert(ledger.current_period_index == 1, "index resettato a M1 (nuovo ciclo)")
 
-    # Nuovo mese: budget pieno 90
+    # Nuovo mese: budget pieno 200
     summary = remaining_summary(ledger, now=_dt(2026, 2, 20))
-    _assert(summary["base_minutes_remaining"] == 90.0, "budget pieno nel nuovo mese")
+    _assert(summary["base_minutes_remaining"] == 200.0, "budget pieno nel nuovo mese")
     _assert(summary["carryover_minutes_total"] == 0.0, "carryover 0")
 
 
@@ -89,7 +89,7 @@ def test_bimonthly_slot_creation():
     purchase = _dt(2026, 1, 15)
     ledger = create_ledger("bimonthly", purchase_date=purchase)
 
-    # M1: consumo 30 min → leftover 70 (ma cap 50)
+    # M1: consumo 30 min → leftover 200 (ma cap 50)
     consume(ledger, 30.0, now=_dt(2026, 1, 20))
     _assert(ledger.base_minutes_used == 30.0, "M1: base_used = 30")
 
@@ -98,12 +98,12 @@ def test_bimonthly_slot_creation():
     _assert(ledger.current_period_index == 2, "siamo in M2")
     _assert(len(ledger.carryover_slots) == 1, "1 slot creato")
     _assert(ledger.carryover_slots[0].minutes_remaining == 50.0,
-            "slot ha 50 min (capped, non 70)")
+            "slot ha 50 min (capped, non 200)")
     _assert(ledger.carryover_slots[0].origin_month_index == 1, "slot da M1")
 
     # Verifica scadenza slot = fine M2
     summary = remaining_summary(ledger, now=_dt(2026, 2, 20))
-    _assert(summary["total_available_minutes"] == 150.0, "M2 ha 100 base + 50 slot = 150")
+    _assert(summary["total_available_minutes"] == 280.0, "M2 ha 230 base + 50 slot = 280")
 
 
 # ==============================================================================
@@ -132,25 +132,25 @@ def test_bimonthly_renewal():
 
 
 # ==============================================================================
-# TEST 4 — Annual peak M3: 210 min disponibili SE M2 non ha consumo
+# TEST 4 — Annual peak M3: 330 min disponibili SE M2 non ha consumo
 # ==============================================================================
-# La specifica dice "picco 210 al mese 3" come MASSIMO CUMULABILE. Con
-# carryover-first, il picco 210 si materializza solo se M2 non tocca gli
+# La specifica dice "picco 330 al mese 3" come MASSIMO CUMULABILE. Con
+# carryover-first, il picco 330 si materializza solo se M2 non tocca gli
 # slot vecchi. Test 5b copre lo scenario "60/60 moderato" invece.
 
 def test_annual_peak_m3():
-    print("\n[TEST 4] Annual peak M3: 110 base + 50 (M1) + 50 (M2) = 210 (M2 senza consumo)")
+    print("\n[TEST 4] Annual peak M3: 230 base + 50 (M1) + 50 (M2) = 330 (M2 senza consumo)")
 
     purchase = _dt(2026, 1, 15)
     ledger = create_ledger("annual", purchase_date=purchase)
 
-    # M1: consumo 60 → residuo 50 → slot A (50, expires end M3)
+    # M1: consumo 60 → residuo 170 → slot A (cap 50, expires end M3)
     consume(ledger, 60.0, now=_dt(2026, 1, 20))
     advance_period(ledger, now=_dt(2026, 2, 20))
     _assert(len(ledger.carryover_slots) == 1, "M2: 1 slot (da M1)")
     _assert(ledger.carryover_slots[0].minutes_remaining == 50.0, "slot M1 = 50")
 
-    # M2: NESSUN consumo → residuo base 110 → slot B (50, capped, expires end M4)
+    # M2: NESSUN consumo → residuo base 230 → slot B (cap 50, expires end M4)
     # Slot A resta intatto perché non è stato toccato.
     advance_period(ledger, now=_dt(2026, 3, 20))
     _assert(len(ledger.carryover_slots) == 2, "M3: 2 slot attivi (da M1 e M2)")
@@ -161,10 +161,10 @@ def test_annual_peak_m3():
 
     # Verifica peak disponibile in M3
     summary = remaining_summary(ledger, now=_dt(2026, 3, 20))
-    _assert(summary["total_available_minutes"] == 210.0,
-            f"M3 peak = 210 (got {summary['total_available_minutes']})")
+    _assert(summary["total_available_minutes"] == 330.0,
+            f"M3 peak = 330 (got {summary['total_available_minutes']})")
     _assert(summary["carryover_minutes_total"] == 100.0, "100 min totali negli slot")
-    _assert(summary["base_minutes_remaining"] == 110.0, "base intatto in M3")
+    _assert(summary["base_minutes_remaining"] == 230.0, "base intatto in M3")
 
 
 # ==============================================================================
@@ -215,7 +215,7 @@ def test_annual_moderate_usage_60_per_month():
     purchase = _dt(2026, 1, 15)
     ledger = create_ledger("annual", purchase_date=purchase)
 
-    # M1: consumo 60 dal base → residuo base 50 → Slot A (50)
+    # M1: consumo 60 dal base → residuo base 170 → Slot A (50, cap)
     consume(ledger, 60.0, now=_dt(2026, 1, 20))
     _assert(ledger.base_minutes_used == 60.0, "M1: base_used = 60")
 
@@ -233,7 +233,7 @@ def test_annual_moderate_usage_60_per_month():
     _assert(len(ledger.carryover_slots) == 0, "M2: Slot A svuotato e rimosso")
 
     # Transizione M2→M3 — REGOLA CHIAVE:
-    # leftover base M2 = 110 - 10 = 100 → capped 50 → Slot B(50, PIENO)
+    # leftover base M2 = 230 - 10 = 220 → capped 50 → Slot B(50, PIENO)
     # Il nuovo slot NON è ridotto dal fatto che Slot A sia stato consumato.
     advance_period(ledger, now=_dt(2026, 3, 20))
     _assert(len(ledger.carryover_slots) == 1, "M3 start: Slot B presente")
@@ -242,10 +242,10 @@ def test_annual_moderate_usage_60_per_month():
     _assert(slot_b.minutes_remaining == 50.0,
             f"Slot B PIENO a 50 (non ridotto dal consumo di Slot A) — got {slot_b.minutes_remaining}")
 
-    # Disponibile in M3 = 110 base + 50 Slot B = 160
+    # Disponibile in M3 = 230 base + 50 Slot B = 280
     summary_m3 = remaining_summary(ledger, now=_dt(2026, 3, 20))
-    _assert(summary_m3["total_available_minutes"] == 160.0,
-            f"M3: 160 min disponibili (110 base + 50 Slot B) — got {summary_m3['total_available_minutes']}")
+    _assert(summary_m3["total_available_minutes"] == 280.0,
+            f"M3: 280 min disponibili (230 base + 50 Slot B) — got {summary_m3['total_available_minutes']}")
 
     # M3: consumo 60 → 50 da Slot B (svuotato), 10 dal base → Slot C(50) a fine M3
     consume(ledger, 60.0, now=_dt(2026, 3, 25))
@@ -282,11 +282,11 @@ def test_annual_slot_expiration():
     advance_period(ledger, now=_dt(2026, 2, 20))
     _assert(len(ledger.carryover_slots) == 1, "M2: slot M1 presente")
 
-    # M2: NON consumo → residuo 100 → slot B (50, expires end M4)
+    # M2: NON consumo → residuo 230 → slot B (50, expires end M4)
     advance_period(ledger, now=_dt(2026, 3, 20))
     _assert(len(ledger.carryover_slots) == 2, "M3: 2 slot")
 
-    # M3: NON consumo → residuo 110 → slot C (50, expires end M5)
+    # M3: NON consumo → residuo 230 → slot C (50, expires end M5)
     advance_period(ledger, now=_dt(2026, 4, 20))
 
     # M4: slot A (da M1) deve essere scaduto (expires end M3 = ~15 apr)
@@ -336,12 +336,12 @@ def test_consume_over_budget():
     print("\n[TEST 8] Consume oltre budget disponibile: unfulfilled > 0")
 
     ledger = create_ledger("monthly", purchase_date=_dt(2026, 1, 15))
-    result = consume(ledger, 200.0, now=_dt(2026, 1, 20))
+    result = consume(ledger, 300.0, now=_dt(2026, 1, 20))
 
-    _assert(result.consumed_from_base == 90.0, "consumati max base (90)")
-    _assert(result.total_consumed == 90.0, "totale = 90")
-    _assert(result.unfulfilled == 110.0, "unfulfilled = 200-90 = 110")
-    _assert(ledger.base_minutes_used == 90.0, "base saturato")
+    _assert(result.consumed_from_base == 200.0, "consumati max base (200)")
+    _assert(result.total_consumed == 200.0, "totale = 200")
+    _assert(result.unfulfilled == 100.0, "unfulfilled = 300-200 = 100")
+    _assert(ledger.base_minutes_used == 200.0, "base saturato")
 
 
 # ==============================================================================

@@ -4403,29 +4403,34 @@ FREE_TRIAL_DAYS = 5                # durata finestra trial in giorni
 # Legacy — non più usati dopo il 2026-08-10, tenuti per retro-compat schema
 FREE_TRIAL_MINUTES = 15.0          # DEPRECATO — sostituito da FREE_TRIAL_SECONDS
 
-# Budget per tier (minuti/mese)
+# Budget per tier (minuti/mese) — DEPRECATO 2026-09-06 (Fabio)
+# Fonte di verità unica: `subscription_ledger.TIER_BASE_MINUTES`.
+# Questi dict sono dead code storico; lasciati allineati per riferimento.
 TIER_MONTHLY_BUDGET = {
-    "monthly":   100.0,
-    "bimonthly": 200.0,
-    "annual":    350.0,
+    "monthly":   200.0,
+    "bimonthly": 230.0,
+    "annual":    230.0,
 }
 # Pool massimo di carryover per tier (minuti totali conservabili)
 TIER_POOL_MAX = {
     "monthly":   0.0,          # 0 mesi carryover
-    "bimonthly": 200.0,        # 1 mese carryover
-    "annual":    1050.0,       # 3 mesi carryover
+    "bimonthly": 50.0,         # 1 slot da max 50 (vive 1 mese)
+    "annual":    100.0,        # 2 slot da max 50 (ciascuno vive 2 mesi)
 }
 # Cap hard mensile di CONSUMO (budget + pool_consumato_nel_mese ≤ hard_cap)
 TIER_MONTHLY_HARD_CAP = {
-    "monthly":   100.0,
-    "bimonthly": 300.0,        # 200 budget + max 100 dal pool
-    "annual":    380.0,        # 350 budget + max 30 dal pool (protezione worst-case)
+    "monthly":   200.0,
+    "bimonthly": 280.0,        # 230 budget + max 50 dal pool
+    "annual":    330.0,        # 230 budget + max 100 dal pool (2 slot)
 }
 # Soglia di warning gentile (percentuale del budget mensile)
 WARNING_THRESHOLD_PCT = 0.90
 
 # Costo di riferimento per calcoli economici (overage worst-case)
-OVERAGE_COST_PER_MINUTE_EUR = 0.091
+# 2026-09-06 (Fabio): allineato a costo reale ElevenLabs misurato in
+# dashboard (~€0.021-0.024/min) + margine sicurezza. Prima era €0.091
+# (stima teorica pre-lancio, contraddetta dai dati reali).
+OVERAGE_COST_PER_MINUTE_EUR = 0.03
 
 
 def _today_utc_str() -> str:

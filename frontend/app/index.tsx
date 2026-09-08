@@ -405,17 +405,20 @@ export default function Taccuino() {
   // dell'orb Home per calibrare la posizione. Non serve più: layout
   // ora è stabile. Rimosso overlay, state, callback e ref associati.
 
-  // === DISCLAIMER blocking overlay (Fabio 2026-07-28) =========================
+  // === DISCLAIMER blocking overlay (Fabio 2026-07-28, riveduto 2026-09-06) ==
   // `disclaimerState`:
-  //   'loading'  → chiamata /legal/disclaimer/status in corso (nascondi UI)
-  //   'blocking' → utente non ha accettato (o versione diversa) → mostra overlay
-  //   'accepted' → utente ha accettato la versione corrente → render app normale
-  // Al boot facciamo un GET al backend per capire lo stato reale.
-  // Su errore di rete assumiamo 'accepted' (fail-open): meglio mostrare l'app
-  // che bloccarla se il backend non risponde — l'utente potrà accettare
-  // al prossimo boot quando la connessione torna.
+  //   'loading'       → chiamata /legal/disclaimer/status in corso o retry
+  //                     con backoff in coda (nascondi UI, mostra spinner)
+  //   'blocking'      → utente non ha accettato → mostra overlay
+  //   'accepted'      → utente ha accettato la versione corrente
+  //   'network_error' → dopo N retry falliti, mostra UI blocking con
+  //                     bottone "Riprova". MAI silent fail-open (2026-09-06):
+  //                     un utente con rete instabile NON deve poter
+  //                     bypassare il disclaimer legale obbligatorio.
+  // Al boot facciamo GET /legal/disclaimer/status con retry 3×
+  // (backoff 1s/2s/4s). Se tutti falliscono → 'network_error'.
   const [disclaimerState, setDisclaimerState] = useState<
-    "loading" | "blocking" | "accepted"
+    "loading" | "blocking" | "accepted" | "network_error"
   >("loading");
   const [status, _setStatusRaw] = useState<Status>("idle");
   // === ORB SILENCE SYNC (Task 2 — Fabio 2026-08) ===
@@ -497,26 +500,51 @@ export default function Taccuino() {
     );
   }, []);
 
-  // === DISCLAIMER — check al boot (Fabio 2026-07-28) =========================
+  // === DISCLAIMER — check al boot (Fabio 2026-07-28, retry 2026-09-06) ======
   // Chiama /legal/disclaimer/status per capire se mostrare l'overlay blocking.
-  // Fail-open in caso di errore: se il backend è irraggiungibile mostriamo
-  // comunque l'app, l'accettazione si potrà fare al prossimo boot online.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
+  // 2026-09-06 (Fabio): NO fail-open silenzioso. Retry 3× con backoff
+  // esponenziale (1s/2s/4s), poi stato 'network_error' con UI di retry
+  // manuale. Rischio legale (utente bypassa disclaimer con rete instabile)
+  // vince sul rischio UX (utente vede spinner qualche secondo in più).
+  const disclaimerRetryTokenRef = useRef<number>(0);
+  const runDisclaimerCheck = useCallback(async () => {
+    const token = ++disclaimerRetryTokenRef.current;
+    setDisclaimerState("loading");
+    const backoffMs = [0, 1000, 2000, 4000]; // 4 tentativi totali
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < backoffMs.length; attempt++) {
+      if (token !== disclaimerRetryTokenRef.current) return; // superseded
+      if (backoffMs[attempt] > 0) {
+        await new Promise((r) => setTimeout(r, backoffMs[attempt]));
+        if (token !== disclaimerRetryTokenRef.current) return;
+      }
       try {
         const st = await api.getDisclaimerStatus();
-        if (cancelled) return;
+        if (token !== disclaimerRetryTokenRef.current) return;
         setDisclaimerState(st.needs_acceptance ? "blocking" : "accepted");
+        console.log(
+          `[DISCLAIMER] check OK attempt=${attempt + 1} needs_acceptance=${st.needs_acceptance}`
+        );
+        return;
       } catch (e) {
-        console.warn("[DISCLAIMER] status check failed, fail-open:", e);
-        if (!cancelled) setDisclaimerState("accepted");
+        lastErr = e;
+        console.warn(
+          `[DISCLAIMER] status check attempt=${attempt + 1}/${backoffMs.length} failed:`,
+          e
+        );
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    }
+    if (token !== disclaimerRetryTokenRef.current) return;
+    console.warn("[DISCLAIMER] all retries exhausted → network_error", lastErr);
+    setDisclaimerState("network_error");
   }, []);
+  useEffect(() => {
+    runDisclaimerCheck();
+    return () => {
+      // Invalida qualsiasi retry in coda al momento dell'unmount
+      disclaimerRetryTokenRef.current++;
+    };
+  }, [runDisclaimerCheck]);
   const [textInput, setTextInput] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
   // === KODA INTRO ===
@@ -7698,9 +7726,84 @@ export default function Taccuino() {
       >
         <DisclaimerScreen onAccepted={() => setDisclaimerState("accepted")} />
       </Modal>
+      {/* === DISCLAIMER network_error retry (Fabio 2026-09-06) ==================
+          Se il check /legal/disclaimer/status ha fallito tutti i retry
+          (3× con backoff 1/2/4s), NON facciamo fail-open silente: mostriamo
+          un overlay bloccante con "Riprova". Motivazione: la Privacy Policy
+          firmata dichiara il disclaimer come step obbligatorio prima di
+          ogni interazione — un fail-open silenzioso è un'esposizione
+          legale reale (bypass del disclaimer con rete instabile).
+          Design allineato al DisclaimerScreen: sfondo nero pieno, testo
+          bianco, singolo CTA. */}
+      <Modal
+        visible={disclaimerState === "network_error"}
+        transparent={false}
+        animationType="fade"
+        statusBarTranslucent
+        presentationStyle="fullScreen"
+        hardwareAccelerated
+      >
+        <View style={disclaimerRetryStyles.wrap}>
+          <Text style={disclaimerRetryStyles.title}>Connessione richiesta</Text>
+          <Text style={disclaimerRetryStyles.body}>
+            Al primo avvio Koda deve verificare online il disclaimer legale
+            obbligatorio. La rete non risponde.{"\n\n"}
+            Controlla la connessione e riprova.
+          </Text>
+          <TouchableOpacity
+            testID="disclaimer-retry-btn"
+            style={disclaimerRetryStyles.btn}
+            onPress={runDisclaimerCheck}
+            accessibilityRole="button"
+            accessibilityLabel="Riprova verifica disclaimer"
+          >
+            <Text style={disclaimerRetryStyles.btnText}>Riprova</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </View>
   );
 }
+
+// === Stili overlay retry disclaimer (2026-09-06) =============================
+// Colori hardcoded: overlay legale identico in light/dark, no theme.
+const disclaimerRetryStyles = StyleSheet.create({
+  wrap: {
+    flex: 1,
+    backgroundColor: "#0a0a0a",
+    paddingHorizontal: 32,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: "600",
+    color: "#ffffff",
+    marginBottom: 16,
+    textAlign: "center",
+  },
+  body: {
+    fontSize: 16,
+    lineHeight: 24,
+    color: "#d4d4d4",
+    textAlign: "center",
+    marginBottom: 32,
+  },
+  btn: {
+    minHeight: 48,
+    paddingHorizontal: 32,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: "#ffffff",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  btnText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#0a0a0a",
+  },
+});
 
 // =============== Sub components ===============
 

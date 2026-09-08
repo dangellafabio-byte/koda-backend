@@ -1,15 +1,16 @@
 /**
- * /paywall — Struttura economica finale (Fabio 2026-08-11):
+ * /paywall — Struttura economica finale (Fabio 2026-09-06 ripricing):
  *
  *   Tier 3 (Mensile / Bimestrale / Annuale) con budget MINUTI dedicati.
  *   Nessun badge "MIGLIORE" / "consigliato" — coerenza con la scelta
  *   commerciale di non spingere aggressivamente l'Annuale (piano
  *   economicamente più fragile).
  *
- *   Prezzi (congelati nel documento economico):
- *     Mensile:    19,99 €/mese   — 90 min base, no carryover
- *     Bimestrale: 35,99 €/2 mesi — 100 min base/mese, carryover 50→mese 2 (picco 150)
- *     Annuale:   209,99 €/anno   — 110 min base/mese, carryover 50+50 su 2 mesi (picco 210 ogni 3)
+ *   Prezzi (congelati) + minuti (2026-09-06, allineati a costo reale
+ *   ElevenLabs misurato €0.021-0.024/min, margine ~44% verificato):
+ *     Mensile:    19,99 €/mese   — 200 min base, no carryover
+ *     Bimestrale: 35,99 €/2 mesi — 230 min base/mese, carryover 50→mese 2 (picco 280)
+ *     Annuale:   209,99 €/anno   — 230 min base/mese, carryover 50+50 su 2 mesi (picco 330 ogni 3)
  *
  *   Nomi voci ("eco"/"aria"/"Acqua"/"Vento") RIMOSSI dalla UI —
  *   identificativi interni maschile/femminile (non user-facing).
@@ -55,21 +56,21 @@ const PLANS: PlanInfo[] = [
     label: "Mensile",
     price: "19,99 €",
     priceUnit: "/mese",
-    minutesLine: "90 minuti al mese",
+    minutesLine: "200 minuti al mese",
   },
   {
     id: "bimonthly",
     label: "Bimestrale",
     price: "35,99 €",
     priceUnit: "/2 mesi",
-    minutesLine: "100 min/mese · carryover fino a 50 min",
+    minutesLine: "230 min/mese · carryover fino a 50 min",
   },
   {
     id: "yearly",
     label: "Annuale",
     price: "209,99 €",
     priceUnit: "/anno",
-    minutesLine: "110 min/mese · carryover 50 min su 2 mesi",
+    minutesLine: "230 min/mese · carryover 50 min su 2 mesi",
   },
 ];
 

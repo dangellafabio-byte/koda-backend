@@ -46,6 +46,16 @@ Checkpoint stabile corrente: **`v60.4-stable`** su `koda-backend/main`
 - Regole prompt: fast system prompt sezione "REGOLA ECHO — PARROTING INTENZIONALE"
 
 
+### v65.34 (2026-09-08) — Confermato: HeartReveal + audio session reset OK, VAD LA Android = limite hardware
+**HeartVoiceReveal Android — RISOLTO**
+Log v65.34 confermano che la sequenza audio session reset (setActive(false) → 250ms → setAudioModeAsync(playback) → setActive(true)) fa partire play() correttamente. `didJustFinish` arriva nativamente dopo ~10s, CTA appare, utente ha completato micro-demo con 3 turni + closing clip + rate-limit consumato.
+
+**Lascia Andare VAD Android — LIMITE HARDWARE (non risolvibile via codice)**
+Test esaustivi con 4 audioSource diversi (`voice_communication`, `mic`, default, `unprocessed`) — tutti danno metering=-100 dB costante su device Fabio. Log confermano `isRecording=true` (microfono ATTIVO) ma `st.metering` non è mai un numero valido.
+Causa: `MediaRecorder.getMaxAmplitude()` non supportato/emesso da driver audio del device (bug noto expo/expo#36953). Non è patch-abile lato codice o expo-audio.
+Comportamento residuo: orb LA fisso in animazione "recording" (già così da v64.1 `LASCIA_ANDARE_ORB_ALWAYS_RECORDING_V64_2`) senza modulazione VU voce. Silence-watcher hard-timeout 90s (v65.30) copre la mancata rilevazione voce.
+
+
 ### v65.32 (2026-09-08) — Android: HeartReveal CTA fallback + LA VAD metering
 **BUG 1 — Android orb bloccato in HeartVoiceReveal**
 - Segnalato Fabio 2026-09-08: su Android, dopo Lascia Andare finito, l'orb resta "bloccato" (in realtà loop breathe di `HeartVoiceReveal`), i due CTA "Ascolta la mia voce" / "Non ora grazie" non appaiono mai → utente non può uscire.
@@ -832,3 +842,44 @@ Generare un nuovo APK dal pulsante Publish. Al primo avvio, in Impostazioni:
 - Se footer mostra `rt:1.0.113` → container serve snapshot vecchio → prova per Emergent Support.
 
 Ticket completo pronto in: `/app/EMERGENT_SUPPORT_TICKET_EAS_STALE_v65.md`
+
+---
+
+## 2026-09-06 — RIPRICING MINUTI + DISCLAIMER NO-FAIL-OPEN (v65.35)
+
+### Ripricing basato su costo reale ElevenLabs (Fabio dashboard, ~€0.021-0.024/min)
+Nuovi budget e overage cost, margine ~44% verificato:
+
+**`subscription_ledger.py::TIER_BASE_MINUTES`** (source of truth):
+- monthly: 90 → **200**
+- bimonthly: 100 → **230**
+- annual: 110 → **230**
+
+**`server.py::OVERAGE_COST_PER_MINUTE_EUR`**: 0.091 → **0.03**
+
+**`paywall.tsx::PLANS[].minutesLine`** allineato + docstring aggiornato.
+
+**Dead-code sync** (`server.py::TIER_MONTHLY_BUDGET/POOL_MAX/HARD_CAP`):
+allineati a 200/230/230 per riferimento, con nota `DEPRECATED — see subscription_ledger.py`.
+
+**Test ledger**: `subscription_ledger_test.py` 13/13 ✓ dopo aggiornamento assertion
+(150→280, 210→330, 160→280, over-budget 200→300, ecc.).
+
+Carryover invariato: 50 min/slot; bimonthly picco M2 = 280; annual picco M3 = 330.
+
+### Disclaimer legale — NO fail-open silente
+`app/index.tsx` — nuovo stato `network_error` + retry con backoff.
+
+**Prima**: su errore rete → `setDisclaimerState("accepted")` silente → utente
+bypassa il disclaimer legale obbligatorio. Esposizione contrattuale (Privacy Policy).
+
+**Dopo**: 4 tentativi con backoff 0/1s/2s/4s → se tutti falliscono,
+`disclaimerState = "network_error"` + Modal fullscreen bloccante con CTA "Riprova".
+Guard su tutti i router (`disclaimerState !== "accepted"`) impedisce navigazione.
+`useCallback` `runDisclaimerCheck` riutilizzato per il retry manuale;
+token ref per invalidare retry in coda su unmount.
+
+### Non ancora eseguito (bloccato)
+- **VAD Android orb** (`@siteed/audio-studio` swap): richiesto da utente 1b,
+  in attesa di conferma compatibilità Samsung One UI prima di swap.
+- **Screen Dimmer**: in attesa di log `[KODA_DIMMER]` da `/diagnostics`.

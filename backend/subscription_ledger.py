@@ -39,9 +39,12 @@ from dateutil.relativedelta import relativedelta
 # Approvate da Fabio 2026-08-14. Modificare qui, non in server.py.
 
 TIER_BASE_MINUTES: Dict[str, float] = {
-    "monthly":   90.0,
-    "bimonthly": 100.0,
-    "annual":    110.0,
+    # 2026-09-06 (Fabio) — Ripricing basato su costo reale ElevenLabs
+    # misurato in dashboard (~€0.021-0.024/min). Nuovi budget con
+    # margine ~44% verificato. Costo di riferimento overage: €0.03/min.
+    "monthly":   200.0,
+    "bimonthly": 230.0,
+    "annual":    230.0,
 }
 
 # Massimo minuti trasferibili come carryover DA UN SINGOLO MESE.
