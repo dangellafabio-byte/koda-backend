@@ -1,0 +1,272 @@
+# Set frasi blind test TTS — Cielo Locale vs ElevenLabs V3
+# ==========================================================
+# Fabio 2026-09-10, protocollo blind test Koda.
+#
+# Strategia: 34 frasi suddivise in 8 categorie funzionali coperte dal protocollo
+# di Fabio (punto 4). Ogni categoria stressa un aspetto specifico della voce
+# Cielo che potrebbe fallire su Kyutai/Qwen3 rispetto a ElevenLabs V3.
+#
+# Formato: JSON per essere leggibile programmaticamente dalla pipeline
+# di generazione batch (script /app/backend/scripts/blind_test_generator.py
+# lo consumerà per generare A/B/C).
+#
+# Categorie in ordine di CRITICITÀ decrescente per Koda:
+#   1. INTIMITY_PRESENCE   → cuore dell'esperienza Koda ("essere con l'utente")
+#   2. EMOTION_HEAVY       → cadute emotive, momenti carichi
+#   3. LONG_FORM           → risposte estese, prosodia sostenuta 30-60s
+#   4. NORMAL_CONV         → base line, chiacchierata standard
+#   5. SURPRISE_LIGHTNESS  → risata leggera, sorpresa positiva
+#   6. NAMES_NUMBERS       → nomi propri, numeri, orari (pronuncia critica)
+#   7. HARD_ITALIAN        → parole italiane difficili (accenti, dittonghi)
+#   8. COMPLEX_PROSODY     → punteggiatura densa, pause interne, rispiri
+
+{
+  "meta": {
+    "voice_name": "Cielo",
+    "language": "it-IT",
+    "gender": "f",
+    "target_style": "presente, calma, calda, non terapeutica, italiano naturale conversazionale",
+    "protocol_version": "1.0 (Piano B — Kyutai-first ridotto)",
+    "total_phrases": 34,
+    "engines_to_test": ["elevenlabs_v3_reference_A", "kyutai_tts_local_B"],
+    "notes": "Se test Piano B passa quality gate, aggiungere Qwen3-TTS e hybrid come C nel test integrale."
+  },
+
+  "phrases": [
+    // === 1. INTIMITY_PRESENCE (6) — cuore dell'esperienza ===================
+    // Frasi corte, tono basso, presenza silenziosa. Se Kyutai è freddo o
+    // "robotico" qui, tutto il resto è irrilevante.
+    {
+      "id": "intimity_01",
+      "category": "INTIMITY_PRESENCE",
+      "text": "Sono qui.",
+      "why_this_phrase": "Frase base Koda. Solo 3 parole ma il timbro deve trasmettere presenza."
+    },
+    {
+      "id": "intimity_02",
+      "category": "INTIMITY_PRESENCE",
+      "text": "Ehi... va tutto bene. Sono qui.",
+      "why_this_phrase": "Pausa dopo 'Ehi' — testa il rendering delle pause naturali."
+    },
+    {
+      "id": "intimity_03",
+      "category": "INTIMITY_PRESENCE",
+      "text": "Respira. Resta qui con me, non c'è fretta.",
+      "why_this_phrase": "Comando gentile, cadenza rallentata. Kyutai può accelerare troppo."
+    },
+    {
+      "id": "intimity_04",
+      "category": "INTIMITY_PRESENCE",
+      "text": "Ti ascolto. Anche quando non dici niente.",
+      "why_this_phrase": "Silenzio come contenuto. Testo con enfasi sul 'niente' finale."
+    },
+    {
+      "id": "intimity_05",
+      "category": "INTIMITY_PRESENCE",
+      "text": "Non serve spiegare tutto. Basta essere qui.",
+      "why_this_phrase": "Frase breve, doppia unità ritmica. Testa la pausa dopo il punto."
+    },
+    {
+      "id": "intimity_06",
+      "category": "INTIMITY_PRESENCE",
+      "text": "Va bene così. Davvero.",
+      "why_this_phrase": "Il 'Davvero' finale deve suonare sincero, non piatto o interrogativo."
+    },
+
+    // === 2. EMOTION_HEAVY (5) — momenti carichi ===============================
+    // Frasi che seguono un dolore, una perdita, una crisi. Serve prosodia
+    // rallentata, timbro più basso, fragilità controllata.
+    {
+      "id": "emotion_01",
+      "category": "EMOTION_HEAVY",
+      "text": "Mi dispiace. Quello che stai attraversando è pesante.",
+      "why_this_phrase": "Riconoscimento del dolore. Timbro deve scendere, non 'recitare' l'empatia."
+    },
+    {
+      "id": "emotion_02",
+      "category": "EMOTION_HEAVY",
+      "text": "Puoi piangere adesso. Non devi tenerlo dentro se non vuoi.",
+      "why_this_phrase": "Permesso emotivo. Frase con potenziale rischio di suonare paternalistica."
+    },
+    {
+      "id": "emotion_03",
+      "category": "EMOTION_HEAVY",
+      "text": "Anch'io ci sono passata. Non è uguale al tuo, ma so cosa vuol dire.",
+      "why_this_phrase": "Empatia + limite (Koda non dice 'ti capisco perfettamente'). Cadenza matura."
+    },
+    {
+      "id": "emotion_04",
+      "category": "EMOTION_HEAVY",
+      "text": "Se fa male, fa male. Non c'è modo giusto di sentirsi in questo momento.",
+      "why_this_phrase": "Ripetizione 'fa male' — testa naturalezza vs monotonia sui riecheggi."
+    },
+    {
+      "id": "emotion_05",
+      "category": "EMOTION_HEAVY",
+      "text": "Mi fa piacere che tu me l'abbia detto. Non era scontato.",
+      "why_this_phrase": "Riconoscimento del gesto dell'aprirsi. Timbro caldo ma non zuccheroso."
+    },
+
+    // === 3. LONG_FORM (4) — risposte estese ===================================
+    // Testi 30-60s. Testano tenuta prosodia, respiri interni, non-monotonia
+    // sul lungo periodo. È qui che i TTS locali cascano tipicamente.
+    {
+      "id": "long_01",
+      "category": "LONG_FORM",
+      "text": "Sai cosa mi viene in mente? Che a volte le cose non tornano subito. Ti giri, provi, cerchi di capire, e per un po' resta tutto sospeso. Non è un errore che sia così. È solo che ci vuole tempo. Il tempo non è uno spreco. Serve.",
+      "why_this_phrase": "43 parole, 6 frasi. Testa se la voce mantiene calore fino alla fine o si spegne."
+    },
+    {
+      "id": "long_02",
+      "category": "LONG_FORM",
+      "text": "Quello che mi racconti non è banale. Non so come dirtelo senza sembrare retorica, ma quando qualcuno mette in parole una cosa che ha tenuto dentro per mesi, o anni, qualcosa cambia. Non tutto si sistema. Ma qualcosa si allenta. Anche solo un po'.",
+      "why_this_phrase": "48 parole, molte subordinate. Testa fluidità e respiri naturali intermedi."
+    },
+    {
+      "id": "long_03",
+      "category": "LONG_FORM",
+      "text": "Sono le due di notte. Fuori è buio, dentro è silenzio, e tu sei sveglia con i pensieri che non ti mollano. Va bene. Ci sono le notti così. Non serve trovarci un senso adesso. Basta attraversarle. E se ti serve una voce, io sono qui.",
+      "why_this_phrase": "Testa cadenza contemplativa. Ultima frase 'io sono qui' deve chiudere con presenza."
+    },
+    {
+      "id": "long_04",
+      "category": "LONG_FORM",
+      "text": "Non ti sto dicendo che è facile. Non lo è. Ma qualcosa te lo dico lo stesso, perché credo tu abbia bisogno di sentirlo: quello che hai fatto oggi, anche se ti sembra poco, è già qualcosa. Non è niente. È già qualcosa.",
+      "why_this_phrase": "Ripetizione 'qualcosa' finale con enfasi crescente. Test capacità di intensificare."
+    },
+
+    // === 4. NORMAL_CONV (5) — baseline conversazionale ========================
+    // Chiacchierata di tutti i giorni. Se qui Kyutai suona artificiale,
+    // fallisce di netto perché è lo stato più frequente in Koda.
+    {
+      "id": "normal_01",
+      "category": "NORMAL_CONV",
+      "text": "Ciao. Come stai oggi?",
+      "why_this_phrase": "Apertura standard. Se non suona naturale qui, il resto crolla."
+    },
+    {
+      "id": "normal_02",
+      "category": "NORMAL_CONV",
+      "text": "Ah, capisco. E poi cosa è successo?",
+      "why_this_phrase": "Interiezione + domanda. Testa cambio di tono naturale."
+    },
+    {
+      "id": "normal_03",
+      "category": "NORMAL_CONV",
+      "text": "Ti va di raccontarmi com'è andata la giornata?",
+      "why_this_phrase": "Invito conversazionale. Testa apertura senza forzatura."
+    },
+    {
+      "id": "normal_04",
+      "category": "NORMAL_CONV",
+      "text": "Mmm, interessante. Non ci avevo pensato in quel modo.",
+      "why_this_phrase": "Riflessione naturale. 'Mmm' è un test cruciale — molti TTS lo pronunciano male."
+    },
+    {
+      "id": "normal_05",
+      "category": "NORMAL_CONV",
+      "text": "Dai, dimmi tutto. Anche i dettagli che ti sembrano stupidi.",
+      "why_this_phrase": "Colloquiale, informale. Testa naturalezza del registro basso."
+    },
+
+    // === 5. SURPRISE_LIGHTNESS (4) — risata, sorpresa positiva ================
+    // Emozione positiva senza scivolare in ridicolo. Testa espressività
+    // in su, non in giù.
+    {
+      "id": "surprise_01",
+      "category": "SURPRISE_LIGHTNESS",
+      "text": "Ma dai! Sul serio? Che bella notizia!",
+      "why_this_phrase": "Sorpresa positiva escalante. Testa se la voce sale senza rompere."
+    },
+    {
+      "id": "surprise_02",
+      "category": "SURPRISE_LIGHTNESS",
+      "text": "Ahah, no vabbè, questa non me l'aspettavo proprio.",
+      "why_this_phrase": "'Ahah' come sound tag. Se il TTS lo pronuncia letteralmente 'a-h-a-h' = fail."
+    },
+    {
+      "id": "surprise_03",
+      "category": "SURPRISE_LIGHTNESS",
+      "text": "Ma quindi hai detto veramente così? In faccia? Sei un mito.",
+      "why_this_phrase": "Ammirazione giocosa. Testa capacità di enfasi selettiva ('mito')."
+    },
+    {
+      "id": "surprise_04",
+      "category": "SURPRISE_LIGHTNESS",
+      "text": "Aspetta, aspetta. Fammi capire. Hai davvero fatto quella cosa? Ok, wow.",
+      "why_this_phrase": "Interruzioni interne + 'wow' finale. Testa gestione delle pause riflessive."
+    },
+
+    // === 6. NAMES_NUMBERS (4) — pronuncia critica =============================
+    // Nomi propri italiani + esteri, numeri, orari. Questi difetti sono
+    // discriminanti immediati per un utente reale.
+    {
+      "id": "namesnum_01",
+      "category": "NAMES_NUMBERS",
+      "text": "Ho letto un libro di Alessandro Baricco l'altra settimana. Si chiamava Novecento.",
+      "why_this_phrase": "Nomi propri italiani. 'Baricco' con doppia 'c' e 'Novecento' con 'c' morbida."
+    },
+    {
+      "id": "namesnum_02",
+      "category": "NAMES_NUMBERS",
+      "text": "L'appuntamento è alle 14:30. Sono le due e mezza del pomeriggio.",
+      "why_this_phrase": "Orario numerico + versione italiana. Testa disambiguazione '14:30'."
+    },
+    {
+      "id": "namesnum_03",
+      "category": "NAMES_NUMBERS",
+      "text": "Sono nata nel 1987. Quindi ho 38 anni. O quasi.",
+      "why_this_phrase": "Anno (millenovecentottantasette) + età. Numeri lunghi = tipico punto di crollo TTS."
+    },
+    {
+      "id": "namesnum_04",
+      "category": "NAMES_NUMBERS",
+      "text": "Il numero è 348 5567892. Puoi chiamarmi anche dopo le 19.",
+      "why_this_phrase": "Numero telefono lungo. Segmentazione naturale (3-4-3) vs cifra per cifra."
+    },
+
+    // === 7. HARD_ITALIAN (3) — parole italiane difficili ======================
+    // Accenti, dittonghi, parole rare che stressano i TTS meno-tuned su
+    // italiano nativo.
+    {
+      "id": "hard_it_01",
+      "category": "HARD_ITALIAN",
+      "text": "L'ho fatto perché c'era bisogno di qualcosa che scioccasse un po'. Anche se rischioso.",
+      "why_this_phrase": "'Sciocc-asse' (ss+c), 'rischioso' con 'sch'. Suoni ostici per TTS non-italiani."
+    },
+    {
+      "id": "hard_it_02",
+      "category": "HARD_ITALIAN",
+      "text": "Non è colpa tua. Néè un fallimento. È solo che le circostanze erano complicate.",
+      "why_this_phrase": "'Né' con accento, 'circostanze' lunga. Testa gestione accenti diacritici."
+    },
+    {
+      "id": "hard_it_03",
+      "category": "HARD_ITALIAN",
+      "text": "Il ghiaccio si scioglie in fretta, sotto quest'aria, in questa stagione. Perciò conviene aspettare.",
+      "why_this_phrase": "'Ghiaccio', 'scioglie', 'perciò' — molte c-dolci consecutive. Test brutale."
+    },
+
+    // === 8. COMPLEX_PROSODY (3) — punteggiatura densa =========================
+    // Frasi con virgole/punti fitti, cambi di tono interni, respiri
+    // impliciti. Kyutai/Qwen3 tendono a leggere piatto qui.
+    {
+      "id": "prosody_01",
+      "category": "COMPLEX_PROSODY",
+      "text": "Ecco, il punto è questo: non serve avere ragione. A volte, sai, basta essere lì. Presenti. Basta.",
+      "why_this_phrase": "5 unità prosodiche in 1 frase. Testa capacità di micro-pause diverse tra virgola e punto."
+    },
+    {
+      "id": "prosody_02",
+      "category": "COMPLEX_PROSODY",
+      "text": "Aspetta... no, no. Non intendevo quello. Volevo dire — come posso spiegarlo — che è più complicato di così.",
+      "why_this_phrase": "Ellissi + trattini + auto-correzione. Testa rendering della disfluenza controllata."
+    },
+    {
+      "id": "prosody_03",
+      "category": "COMPLEX_PROSODY",
+      "text": "«Ti voglio bene», mi disse. Poi silenzio. E io lì, con la tazza in mano, senza sapere cosa rispondere.",
+      "why_this_phrase": "Discorso diretto + descrizione. Testa cambio di registro tra citazione e narrazione."
+    }
+  ]
+}

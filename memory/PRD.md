@@ -1001,3 +1001,81 @@ swap chirurgico richiede:
 5. Enroll Apple Small Business Program prima del primo submit
 6. Copiare log `[KODA_DIMMER] heartbeat` + `⚠️ NO-OP DETECTED` da `/diagnostics`
    dopo prossima sessione hands-free per chiudere l'analisi dimmer
+
+---
+
+## 2026-09-10 (autonomo, blind test scaffold) — INFRASTRUTTURA PRONTA
+
+### Deliverable pronti (bloccanti per Fabio: fonte audio Cielo)
+
+**1. Set frasi test** — `/app/backend/scripts/blind_test_phrases.jsonc`
+   - 34 frasi in 8 categorie: INTIMITY_PRESENCE (6), EMOTION_HEAVY (5),
+     LONG_FORM (4), NORMAL_CONV (5), SURPRISE_LIGHTNESS (4), NAMES_NUMBERS (4),
+     HARD_ITALIAN (3), COMPLEX_PROSODY (3).
+   - Ogni frase con `why_this_phrase` che documenta cosa stressa.
+   - Format JSONC (con commenti) per leggibilità + parser custom in backend.
+
+**2. Backend API** — `/app/backend/routes/blind_test.py`
+   - `POST /api/blind-test/session` (crea o riprende sessione tester)
+   - `GET  /api/blind-test/next-pair` (prossima coppia BLIND, label A/B randomizzata 50/50)
+   - `POST /api/blind-test/vote` (rating 1-10 per clip A + clip B + preferred A/B/TIE + notes)
+   - `GET  /api/blind-test/audio/{clip_id}` (serve MP3/WAV, cache-none, no engine leakage)
+   - `GET  /api/blind-test/results` (aggregato ADMIN-ONLY, rating medi per engine + preferenze per categoria)
+   - Modello DB: `blind_test_sessions`, `blind_test_clips`, `blind_test_votes`,
+     `blind_test_pair_serves` (mapping blind label→engine per sessione).
+   - Router agganciato a server.py:15450+.
+
+**3. Frontend blind test page** — `/app/frontend/app/blind-test.tsx`
+   - Route: `/blind-test`
+   - Flow: intake (email+nome) → play A / play B → rating 1-10 × 2 → preferenza A/B/TIE → note → next
+   - Progress bar (X su 34), possibilità di riprendere con stessa email
+   - Zero label engine (no "V3", no "Kyutai", no loghi) — blind integrity
+   - Design coerente con `/vad-test` (sfondo scuro, colori hardcoded per pagina diagnostica)
+
+**4. Generator script** — `/app/backend/scripts/blind_test_generator.py`
+   - Modes: `--mock` (silence WAV per test flow), `--engine=A|B|all`
+   - Scaffold `generate_v3_reference()` e `generate_kyutai_local()` — raise NotImplementedError con TODO chiari
+   - Skip clip già generate (idempotente)
+   - Registra ogni clip in `blind_test_clips` con metadata (duration, engine, filepath)
+
+**5. Test flow E2E completato con mock clip** (silence WAV 2s):
+   - Session create → next-pair blind → audio serve 200 OK → vote persisted → counter correct
+   - 68 clip mock generati (34 frasi × 2 engine), DB popolato
+   - Il flow funziona a livello backend+frontend. Manca solo la generazione REALE dei clip.
+
+### Blocker per procedere (Fabio side)
+
+**BLOCCANTE A — Fonte audio reference Cielo**
+- Scenario 1 (ideale): file `.wav`/`.mp3` originale usato su ElevenLabs → upload su Emergent Object Storage o `.env: KODA_CIELO_REFERENCE_AUDIO=/path/to/file.wav`
+- Scenario 2 (accettabile con caveat): generiamo io stesso 3-5 min via ElevenLabs V3 API su testo neutro come reference → uso quello per clone Kyutai. Documentato come limite metodologico
+- Scenario 3 (sconsigliato): nuova registrazione voice actor → costa tempo e soldi
+
+**BLOCCANTE B — ElevenLabs API key + voice_id Cielo**
+- Serve `ELEVENLABS_API_KEY` in `.env` + `KODA_CIELO_VOICE_ID`
+- Poi implemento `generate_v3_reference()` con `elevenlabs.text_to_speech.convert(model_id='eleven_v3', voice_id=...)` (stesso pattern del fast pipeline in server.py)
+
+**BLOCCANTE C — GPU cloud per Kyutai (già autorizzato $5-10 da Fabio)**
+- Modal Labs / Replicate / HuggingFace Inference Endpoints
+- Serve API key + endpoint URL
+- Alternativa: Kyutai su CPU container Emergent (2-4× real-time, batch offline OK per 68 clip)
+
+**Nota critica su Kyutai TTS 1.6b Italian**:
+Il modello è ottimizzato EN/FR. Sull'italiano la qualità è degradata.
+Alternative da valutare in un primo A/B **interno** (Fabio+Neo su 5 frasi)
+prima di reclutare tester esterni:
+- Kyutai TTS 1.6b (baseline)
+- MegaTTS3 (Alibaba, migliore su lingue non-EN)
+- XTTS-v2 (Coqui, deprecato ma ancora forte su Italian)
+
+Serve decidere quale motore usare come "B" prima di committare 15-20 ore
+di infrastruttura. Se anche il migliore fallisce l'A/B interno preliminare,
+Piano B si chiude e resta V3 come unica opzione (nessuna necessità di test esterni).
+
+### File modificati / creati in questo turno
+
+- `/app/backend/scripts/blind_test_phrases.jsonc` (NEW — 34 frasi)
+- `/app/backend/routes/blind_test.py` (NEW — API blind test)
+- `/app/backend/scripts/blind_test_generator.py` (NEW — scaffold)
+- `/app/backend/server.py` (registrato router blind_test)
+- `/app/frontend/app/blind-test.tsx` (NEW — pagina tester)
+- `/app/backend/_blind_test_clips/*.wav` (68 mock clip per test flow)

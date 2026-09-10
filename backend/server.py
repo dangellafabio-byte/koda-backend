@@ -15444,6 +15444,22 @@ try:
 except Exception as _poc_err:  # pragma: no cover
     logger.warning(f"[startup] POC OpenAI Realtime routes NOT registered: {_poc_err}")
 
+# ============================================================
+# BLIND TEST TTS (Fabio 2026-09-10) — Piano B Kyutai-first
+# ============================================================
+# Endpoint per blind test A/B tra Cielo ElevenLabs V3 (reference) e
+# Kyutai TTS locale. Le clip vengono pre-generate offline via
+# /app/backend/scripts/blind_test_generator.py (dopo che Fabio conferma
+# la fonte audio Cielo per il cloning).
+# Router montato su /api/blind-test/*. Endpoint admin-only per i risultati.
+try:
+    from routes.blind_test import router as blind_test_router, register_db as _bt_register_db  # noqa: E402
+    _bt_register_db(db)
+    app.include_router(blind_test_router)
+    logger.info("[startup] Blind test TTS routes registered")
+except Exception as _bt_err:  # pragma: no cover
+    logger.warning(f"[startup] Blind test TTS routes NOT registered: {_bt_err}")
+
 app.include_router(api_router)
 
 # === DEMO SOUNDS (preview only) ============================================
