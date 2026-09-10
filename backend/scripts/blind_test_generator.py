@@ -103,16 +103,66 @@ def make_silence_wav(path: Path, duration_s: float = 2.0, sample_rate: int = 16_
 async def generate_v3_reference(phrase: dict, out_path: Path) -> float:
     """
     Genera clip via ElevenLabs V3 API con voice Cielo.
-    RITORNA la durata in secondi.
+    RITORNA la durata in secondi (stimata via bytes/16000 su mp3_44100_128).
 
-    BLOCCATO: serve ELEVENLABS_API_KEY + voice_id Cielo in env.
-    Implementare qui la chiamata a elevenlabs.text_to_speech.convert()
-    con model_id='eleven_v3' e stability=0.5 come nel fast pipeline di server.py.
+    Config:
+      - ELEVENLABS_API_KEY (env)
+      - KODA_CIELO_VOICE_ID (env)  → default hardcoded fallback
+
+    Params allineati al fast pipeline di server.py:
+      - model_id="eleven_v3"
+      - output_format="mp3_44100_128"
+      - language_code="it"
+      - voice_settings: stability=0.5, similarity_boost=0.75, style=0.35
+        (valori "presente calma calda" da _voice_settings_for_tone default)
     """
-    raise NotImplementedError(
-        "Implementare integrazione ElevenLabs V3 con voice_id Cielo. "
-        "Serve ELEVENLABS_API_KEY + KODA_CIELO_VOICE_ID in .env."
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    voice_id = os.getenv("KODA_CIELO_VOICE_ID")
+    if not api_key:
+        raise RuntimeError("ELEVENLABS_API_KEY mancante in .env")
+    if not voice_id:
+        raise RuntimeError("KODA_CIELO_VOICE_ID mancante in .env")
+
+    from elevenlabs.client import ElevenLabs
+    client = ElevenLabs(api_key=api_key)
+
+    # === VOICE SETTINGS COERENTI CON PRODUCTION (server.py:_voice_settings_for_tone default) ===
+    # Il pre-test DEVE riflettere la voce che l'utente sente in Koda live.
+    # Cambiare parametri qui = testare un motore che NON è quello che arriverà
+    # all'utente → falsa il gate.
+    from elevenlabs import VoiceSettings
+    voice_settings = VoiceSettings(
+        stability=0.5,
+        similarity_boost=0.75,
+        style=0.35,
+        use_speaker_boost=True,
     )
+
+    text = phrase["text"]
+
+    # Chiamata SYNC dentro to_thread perché SDK 1.9.0 è sync.
+    def _tts() -> bytes:
+        chunks = client.text_to_speech.convert(
+            text=text,
+            voice_id=voice_id,
+            model_id="eleven_v3",
+            output_format="mp3_44100_128",
+            language_code="it",
+            voice_settings=voice_settings,
+        )
+        # chunks è generator di bytes → join
+        return b"".join(chunks) if hasattr(chunks, "__iter__") else bytes(chunks)
+
+    audio_bytes = await asyncio.to_thread(_tts)
+    if not audio_bytes or len(audio_bytes) < 200:
+        raise RuntimeError(f"ElevenLabs ritorno vuoto o troppo piccolo ({len(audio_bytes)} bytes)")
+
+    with open(out_path, "wb") as f:
+        f.write(audio_bytes)
+
+    # Stima durata: mp3_44100_128 = 128 kbps CBR → 16000 bytes/sec
+    duration = len(audio_bytes) / 16000.0
+    return duration
 
 
 async def generate_kyutai_local(phrase: dict, out_path: Path, reference_audio: Path) -> float:
@@ -140,9 +190,22 @@ async def generate_kyutai_local(phrase: dict, out_path: Path, reference_audio: P
     )
 
 
-async def run(mode: str, engine: str):
+async def run(mode: str, engine: str, gate1_only: bool = False):
     """Loop principale: genera tutti i clip mancanti + registra su DB."""
     phrases = load_phrases()
+    # === GATE 1 FILTER (Fabio 2026-09-10) ===
+    # Se gate1_only, restringe alle 5 frasi definite in meta.gate_1_pretest_phrase_ids
+    # (definite in blind_test_phrases.jsonc). Costo API ridotto del 85%
+    # (5 vs 34 frasi) → gate go/no-go rapido prima del batch completo.
+    if gate1_only:
+        with open(PHRASES_FILE, "r", encoding="utf-8") as f:
+            raw = f.read()
+        stripped = re.sub(r"//.*?$", "", raw, flags=re.MULTILINE)
+        stripped = re.sub(r"/\*.*?\*/", "", stripped, flags=re.DOTALL)
+        stripped = re.sub(r"^\s*#.*?$", "", stripped, flags=re.MULTILINE)
+        gate1_ids = set(json.loads(stripped)["meta"]["gate_1_pretest_phrase_ids"])
+        phrases = [p for p in phrases if p["id"] in gate1_ids]
+        print(f"[blind-test-gen] GATE 1 MODE: filtered to {len(phrases)} phrases: {sorted(p['id'] for p in phrases)}")
     print(f"[blind-test-gen] Loaded {len(phrases)} phrases")
 
     mongo_url = os.getenv("MONGO_URL", "mongodb://localhost:27017")
@@ -223,6 +286,8 @@ if __name__ == "__main__":
     parser.add_argument("--mock", action="store_true",
                         help="Generate silence WAV instead of real TTS (test flow)")
     parser.add_argument("--engine", choices=["A", "B", "all"], default="all")
+    parser.add_argument("--gate1-only", action="store_true",
+                        help="Genera solo le 5 frasi Gate 1 (pretest)")
     args = parser.parse_args()
     mode = "mock" if args.mock else "real"
-    asyncio.run(run(mode=mode, engine=args.engine))
+    asyncio.run(run(mode=mode, engine=args.engine, gate1_only=args.gate1_only))
