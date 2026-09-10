@@ -10149,6 +10149,48 @@ async def api_offline_clips_manifest(voice_id: str):
 
 import litellm  # noqa: E402  (kept here to avoid affecting cold-start of unrelated endpoints)
 
+
+# === FIX PROMPT CACHING (Fabio 2026-09-10, dopo escalation support Emergent) ===
+# litellm 1.80.0 (versione fornita da Emergent) strippa incondizionatamente il
+# marker `cache_control` da qualsiasi messaggio inviato via model prefix
+# `openai/*`, tramite `OpenAIGPTConfig.remove_cache_control_flag_from_messages_and_tools`.
+# Comportamento pensato per OpenAI ufficiale (che non supporta caching Anthropic),
+# ma applicato erroneamente ANCHE al proxy Emergent che invece è compatibile
+# Anthropic passthrough.
+#
+# Verificato empiricamente (10 settembre): con il patch attivo il body HTTP
+# inviato contiene `cache_control` e Anthropic risponde con
+# `cache_creation_input_tokens: 9999` (creazione cache riuscita) su prompt
+# di produzione da 11k token.
+#
+# Il fix upstream (`_should_preserve_cache_control_for_endpoint` — PR 30387)
+# è arrivato in versioni litellm successive alla 1.80.0. Fintantoché
+# `emergentintegrations` blocca litellm a 1.80.0, applichiamo il patch a mano.
+#
+# Il patch è a NO-OP (preserva `cache_control`) e viene applicato una sola
+# volta all'import di questo modulo. Tutti e 3 i call site litellm.acompletion
+# di server.py puntano al proxy Emergent → il patch è sicuro.
+try:
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig as _OpenAIGPTConfig
+
+    def _koda_preserve_cache_control(self, model, messages, tools=None):
+        """No-op: preserva `cache_control` nel body verso il proxy Emergent
+        (che supporta caching Anthropic passthrough end-to-end)."""
+        return messages, tools
+
+    _OpenAIGPTConfig.remove_cache_control_flag_from_messages_and_tools = (
+        _koda_preserve_cache_control
+    )
+    logger.info(
+        "[KODA_CACHE_PATCH] litellm OpenAIGPTConfig.remove_cache_control_flag "
+        "patched to no-op (Anthropic prompt caching via Emergent proxy)"
+    )
+except Exception as _cache_patch_err:
+    logger.error(
+        f"[KODA_CACHE_PATCH] FAILED to patch litellm cache_control strip: "
+        f"{_cache_patch_err!r} — prompt caching will remain DISABLED"
+    )
+
 # =============== TAVILY WEB SEARCH INTEGRATION ===============
 # Permette a Koda di cercare informazioni in tempo reale sul web (notizie,
 # eventi, fatti recenti). Attivato SOLO nel flusso non-confessionale
@@ -11429,7 +11471,27 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
             stream = await litellm.acompletion(
                 model='openai/claude-haiku-4-5-20251001',
                 messages=[
-                    {'role': 'system', 'content': system_prompt},
+                    # === FIX 2026-09-09 — Anthropic prompt caching ripristinato ===
+                    # Support Emergent ha confermato (mail 8 settembre) che il
+                    # caching sulla Universal Key funziona end-to-end sul path
+                    # openai/claude-haiku-4-5-20251001 → integrations.emergentagent.com/llm.
+                    # Questo call site (`/converse` HTTP streaming) NON aveva
+                    # `cache_control` — bug storico. Aggiunto ora: il system_prompt
+                    # di produzione è ~9-16k token (sopra soglia 4096 Haiku 4.5),
+                    # quindi cachable. Risparmio atteso: 90% input su prefix stabile.
+                    # NOTA: il prompt attuale contiene ANCHE parti dinamiche
+                    # (temporal, memory, timeline) che invalidano il prefix ad ogni
+                    # turno → HIT rate parziale. Split static/dynamic è Step 2.
+                    {
+                        'role': 'system',
+                        'content': [
+                            {
+                                'type': 'text',
+                                'text': system_prompt,
+                                'cache_control': {'type': 'ephemeral'},
+                            }
+                        ],
+                    },
                     {'role': 'user', 'content': user_payload},
                 ],
                 stream=True,
@@ -11437,6 +11499,9 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
                 api_base='https://integrations.emergentagent.com/llm',
                 max_tokens=600,
                 timeout=25,  # CRITICO: senza timeout, una chiamata Claude bloccata pianta tutto il worker FastAPI e l'app va in schermo nero/spinner infinito.
+                # Include usage nell'ultimo chunk (contiene cache_creation_input_tokens
+                # e cache_read_input_tokens) per telemetria HIT/MISS.
+                stream_options={"include_usage": True},
             )
 
             async for chunk in stream:

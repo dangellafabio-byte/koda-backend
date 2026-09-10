@@ -1,0 +1,53 @@
+{
+  "system_prompt_chars": 30265,
+  "results": [
+    {
+      "label": "T1_first_with_cache_control",
+      "wall_ms": 1322,
+      "usage": {
+        "prompt_tokens": 11389,
+        "completion_tokens": 30,
+        "total_tokens": 11419,
+        "cache_creation_input_tokens": 11359,
+        "cache_read_input_tokens": 0
+      },
+      "body_analysis": {
+        "cache_control_in_body": true,
+        "body_size_chars": 34530
+      },
+      "captured_url": "https://integrations.emergentagent.com/llm/chat/completions"
+    },
+    {
+      "label": "T2_second_with_cache_control_expected_HIT",
+      "wall_ms": 1117,
+      "usage": {
+        "prompt_tokens": 11389,
+        "completion_tokens": 30,
+        "total_tokens": 11419,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 11359
+      },
+      "body_analysis": {
+        "cache_control_in_body": true,
+        "body_size_chars": 34530
+      },
+      "captured_url": "https://integrations.emergentagent.com/llm/chat/completions"
+    },
+    {
+      "label": "T3_baseline_no_cache_control",
+      "wall_ms": 1031,
+      "usage": {
+        "prompt_tokens": 11389,
+        "completion_tokens": 30,
+        "total_tokens": 11419,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "body_analysis": {
+        "cache_control_in_body": false,
+        "body_size_chars": 34462
+      },
+      "captured_url": "https://integrations.emergentagent.com/llm/chat/completions"
+    }
+  ]
+}
