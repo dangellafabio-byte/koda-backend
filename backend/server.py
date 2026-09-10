@@ -6843,25 +6843,43 @@ async def api_converse(req: ConverseRequest):
     )
 
     try:
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=str(uuid.uuid4()),
-            system_message=system_prompt,
-        ).with_model("anthropic", "claude-haiku-4-5-20251001")  # HAIKU 4.5 = ~2× più veloce, near-frontier intelligence
-        msg = UserMessage(text=user_payload)
-        # === [KODA_TIMING] (sprint giugno 2026 v10) ===
-        # Log path-aware: questo è il path STANDARD /converse (fallback
-        # quando fast path fallisce, oppure chat scritta). USA un prompt
-        # COMPLETAMENTE diverso da fast (lungo ~10k chars) e modello
-        # Claude Haiku invece di gpt-5.4-mini. Se vediamo questo log
-        # frequente durante voce, vuol dire che il fast path sta fallendo.
+        # === FIX 2026-09-10 — migrato da LlmChat a litellm.acompletion diretto ===
+        # Motivo: LlmChat.send_message() non espone API per iniettare
+        # `cache_control` sui content-blocks del system prompt (formato content
+        # rimane string piatta). Con il monkey-patch OpenAIGPTConfig applicato
+        # a boot di server.py, litellm ora preserva `cache_control` fino al
+        # proxy Emergent → cache Anthropic attivata end-to-end anche su questo
+        # 4° call site (path `/converse` standard / chat scritta / fallback).
+        # System prompt è ~10k chars (>4096 tok soglia Haiku 4.5) → cachable.
+        # Semantica invariata: single-turn stateless (session_id era fresh uuid,
+        # nessuna history multi-turn da preservare).
         _kt_llm_start = time.time()
         logger.info(
             f"[KODA_TIMING] LLM_START_STANDARD path=/converse "
             f"prompt_chars={len(system_prompt)} model=claude-haiku-4-5 "
             f"ephemeral={req.ephemeral}"
         )
-        raw = await chat.send_message(msg)
+        resp = await litellm.acompletion(
+            model='openai/claude-haiku-4-5-20251001',
+            messages=[
+                {
+                    'role': 'system',
+                    'content': [
+                        {
+                            'type': 'text',
+                            'text': system_prompt,
+                            'cache_control': {'type': 'ephemeral'},
+                        }
+                    ],
+                },
+                {'role': 'user', 'content': user_payload},
+            ],
+            api_key=EMERGENT_LLM_KEY,
+            api_base='https://integrations.emergentagent.com/llm',
+            max_tokens=800,
+            timeout=25,
+        )
+        raw = resp["choices"][0]["message"]["content"] or ""
         logger.info(
             f"[KODA_TIMING] LLM_END_STANDARD path=/converse "
             f"elapsed_ms={int((time.time() - _kt_llm_start) * 1000)} "
@@ -13335,7 +13353,8 @@ async def _fast_pipeline_task(
             _user_payload_tokens = len(_enc.encode(user_payload))
             logger.info(
                 f"[KODA_TIMING] USER_PAYLOAD sid={session_id[:8]} "
-                f"chars={len(user_payload)} tokens_tiktoken={_user_payload_tokens}"
+                f"chars={len(user_payload)} tokens_tiktoken={_user_payload_tokens} "
+                f"user_audio_ms={audio_duration_ms if audio_duration_ms is not None else -1}"
             )
         except Exception as _tk_e:
             logger.warning(f"[KODA_TIMING] tiktoken unavailable: {_tk_e}")
@@ -14012,6 +14031,22 @@ async def _fast_pipeline_task(
                     logger.warning(f"[fast] empty TTS for sentence idx={idx}")
                     return
                 token = await _store_tts_audio(audio_bytes)
+                # === ESPERIMENTO D (Fabio 2026-09-10) — TELEMETRIA TTS/MIN ============
+                # Grep-friendly log per calcolare quanti secondi di TTS Koda
+                # sono effettivamente sintetizzati per turno. Combinato con
+                # `user_audio_ms` in [KODA_TIMING] USER_PAYLOAD sopra, permette
+                # di calcolare la ratio "TTS_reale / conversazione_totale".
+                # Cattura SEMPRE (indipendente da tier) — precondition necessaria
+                # per agganciare `subscription_ledger.consume()` in futuro.
+                try:
+                    _dur_chunk_all = _estimate_mp3_duration_seconds(audio_bytes)
+                    logger.info(
+                        f"[KODA_TTS_DUR] sid={session_id[:8]} idx={idx} "
+                        f"chunk_dur_seconds={_dur_chunk_all:.3f} "
+                        f"chunk_bytes={len(audio_bytes)}"
+                    )
+                except Exception:
+                    _dur_chunk_all = 0.0
                 # === TRIAL ACCOUNTING (2026-08-10, Fabio) — WS free-talk ===
                 # Ogni chunk TTS del turno viene contato nei secondi del trial.
                 # Solo per utenti nel trial (non paid, non unlimited).
@@ -14024,7 +14059,7 @@ async def _fast_pipeline_task(
                         if not _unlim_ws:
                             # REVERT B (2026-08-13): fast pipeline torna a mp3_44100_128
                             # → default 128kbps di _estimate_mp3_duration_seconds è ok.
-                            _dur_chunk = _estimate_mp3_duration_seconds(audio_bytes)
+                            _dur_chunk = _dur_chunk_all  # riuso calcolo già fatto sopra
                             if _dur_chunk > 0.0:
                                 _pid_ws = getattr(profile, "id", None) or _uid_ws
                                 await _increment_trial_seconds(_pid_ws, _dur_chunk)

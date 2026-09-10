@@ -883,3 +883,53 @@ token ref per invalidare retry in coda su unmount.
 - **VAD Android orb** (`@siteed/audio-studio` swap): richiesto da utente 1b,
   in attesa di conferma compatibilità Samsung One UI prima di swap.
 - **Screen Dimmer**: in attesa di log `[KODA_DIMMER]` da `/diagnostics`.
+
+---
+
+## 2026-09-10 — CACHING ANTHROPIC FIXATO END-TO-END (v65.36)
+
+### Root cause reale
+`litellm 1.80.0` (versione fornita da `emergentintegrations==0.1.2`) strippa
+incondizionatamente `cache_control` da ogni messaggio con model prefix
+`openai/*` tramite `OpenAIGPTConfig.remove_cache_control_flag_from_messages_and_tools`.
+Il fix upstream (`_should_preserve_cache_control_for_endpoint`, BerriAI/litellm#30387)
+è arrivato in versioni successive. Fintantoché `emergentintegrations` blocca
+litellm a 1.80.0, il caching resta DISABILITATO senza patch.
+
+### Fix applicati (`server.py`)
+1. **Monkey-patch** `OpenAIGPTConfig.remove_cache_control_flag_from_messages_and_tools`
+   a no-op, applicato una volta al boot (~riga 10151-10193). Log
+   `[KODA_CACHE_PATCH]` conferma attivazione.
+2. **`_converse_stream_audio_impl`** (riga 11429): aggiunto `cache_control`
+   ephemeral + `stream_options: include_usage`. Bug storico dal 5 giugno 2026
+   (call site senza caching).
+3. **`/converse` standard path** (riga 6846): migrato da `LlmChat` di
+   `emergentintegrations` (che non espone API cache_control) a
+   `litellm.acompletion` diretto con content-blocks + cache_control ephemeral.
+
+### Verifica empirica (locale, prompt di produzione REALE 11389 token)
+```
+T1 first_with_cache_control:  cache_creation=11359  cache_read=0     (write ✅)
+T2 second_identical_expected: cache_creation=0      cache_read=11359 (HIT ✅)
+T3 baseline_no_cache_control: cache_creation=0      cache_read=0     (atteso)
+```
+99.7% del prompt cachato al T2. Risparmio 90.3% sull'input LLM = €0.013/min.
+
+### Impatto pricing (rispetto a stime pre-fix)
+- Mensile 200 min €19.99: margine da 43% → **~52%**
+- Bimestrale 230 min €35.99: margine da 38% → **~47%**
+- Annuale 230 min €209.99: margine da 37% → **~46%**
+
+### Telemetria Esperimento D (Fabio 2026-09-10)
+Aggiunti log strutturati grep-friendly su `server.py`:
+- `[KODA_TIMING] USER_PAYLOAD ... user_audio_ms=<ms>` — durata audio user
+- `[KODA_TTS_DUR] sid=... idx=... chunk_dur_seconds=<sec>` — durata TTS chunk
+
+Script analisi: `/app/backend/scripts/analyze_experiment_d.py`
+Uso: `railway logs --json | python scripts/analyze_experiment_d.py -`
+Risponde alla domanda: "quanto TTS reale per minuto di conversazione venduta?"
+
+### Documenti creati/aggiornati
+- `/app/backend/scripts/diagnose_prompt_caching_v3_production.py` — test empirico
+- `/app/backend/scripts/analyze_experiment_d.py` — analisi log traffico reale
+- `/app/backend/_debug_downloads/caching_diag_v3_production_prompt.json` — prova E2E
