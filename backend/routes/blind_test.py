@@ -50,6 +50,11 @@ BLIND_TEST_CLIP_DIR = os.getenv(
     "/app/backend/_blind_test_clips",
 )
 
+# Engine A = reference V3 fisso. Engine B = candidato in test (rollout
+# progressivo Kyutai → MegaTTS3 → XTTS-v2). Cambio via env var.
+ENGINE_A_ID = "elevenlabs_v3_reference_A"
+ENGINE_B_ID = os.getenv("KODA_BLIND_TEST_ENGINE_B", "kyutai_tts_local_B")
+
 # Admin email autorizzato a vedere risultati aggregati
 ADMIN_EMAILS = {
     "dangella.fabio@gmail.com",
@@ -66,6 +71,10 @@ class SessionStartRequest(BaseModel):
     tester_email: str = Field(..., min_length=3, max_length=200)
     tester_name: Optional[str] = None
     device_info: Optional[str] = None  # e.g. "iPhone 15 Pro / iOS 18.2"
+    # === Fabio 2026-09-10 v2 — Gate 1 pre-test flag ==========================
+    # Se True, la sessione usa solo le 5 frasi Gate 1 (go/no-go tecnico
+    # Neo+Fabio, prima di committare 68 clip). Se False, blind test integrale.
+    pretest_only: bool = False
 
 
 class SessionStartResponse(BaseModel):
@@ -87,8 +96,18 @@ class NextPairResponse(BaseModel):
 class VoteRequest(BaseModel):
     session_id: str
     phrase_id: str
-    rating_a: int = Field(..., ge=1, le=10)
-    rating_b: int = Field(..., ge=1, le=10)
+    # === Fabio 2026-09-10 v2 — 3 rating separati (Gate 1 pre-test) ==========
+    # Un TTS può essere bello in demo ma insopportabile dopo 20 min di
+    # conversazione. Tre dimensioni indipendenti:
+    #   - naturalness  = suona come una persona vera?
+    #   - similarity   = suona come Cielo? (il timbro/personalità)
+    #   - desirability = ci vorresti parlare a lungo? (la METRICA CRITICA)
+    naturalness_a: int = Field(..., ge=1, le=10)
+    naturalness_b: int = Field(..., ge=1, le=10)
+    similarity_a: int = Field(..., ge=1, le=10)
+    similarity_b: int = Field(..., ge=1, le=10)
+    desirability_a: int = Field(..., ge=1, le=10)
+    desirability_b: int = Field(..., ge=1, le=10)
     preferred: str = Field(..., pattern="^(A|B|TIE)$")
     notes: Optional[str] = Field(default=None, max_length=500)
 
@@ -145,29 +164,36 @@ def _phrases_source_path() -> str:
 
 
 _phrases_cache: Optional[List[dict]] = None
+_phrases_meta_cache: Optional[dict] = None
 
 
-def _load_phrases() -> List[dict]:
-    """Carica set frasi dal file JSONC, cachato."""
-    global _phrases_cache
-    if _phrases_cache is not None:
-        return _phrases_cache
-    import json
-    import re
+def _load_phrases(pretest_only: bool = False) -> List[dict]:
+    """Carica set frasi dal file JSONC, cachato.
+    Se `pretest_only=True`, ritorna SOLO le 5 frasi selezionate per Gate 1
+    (elencate in meta.gate_1_pretest_phrase_ids).
+    """
+    global _phrases_cache, _phrases_meta_cache
+    if _phrases_cache is None:
+        import json
+        path = _phrases_source_path()
+        if not os.path.exists(path):
+            raise HTTPException(500, f"Phrase set not found: {path}")
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read()
+        # Strip JSONC/hash comments: // ... , /* ... */, # ...
+        import re
+        stripped = re.sub(r"//.*?$", "", raw, flags=re.MULTILINE)
+        stripped = re.sub(r"/\*.*?\*/", "", stripped, flags=re.DOTALL)
+        stripped = re.sub(r"^\s*#.*?$", "", stripped, flags=re.MULTILINE)
+        data = json.loads(stripped)
+        _phrases_cache = data.get("phrases", [])
+        _phrases_meta_cache = data.get("meta", {})
 
-    path = _phrases_source_path()
-    if not os.path.exists(path):
-        raise HTTPException(500, f"Phrase set not found: {path}")
-
-    with open(path, "r", encoding="utf-8") as f:
-        raw = f.read()
-    # Strip JSONC/hash comments: // ... , /* ... */, # ...
-    import re
-    stripped = re.sub(r"//.*?$", "", raw, flags=re.MULTILINE)
-    stripped = re.sub(r"/\*.*?\*/", "", stripped, flags=re.DOTALL)
-    stripped = re.sub(r"^\s*#.*?$", "", stripped, flags=re.MULTILINE)
-    data = json.loads(stripped)
-    _phrases_cache = data.get("phrases", [])
+    if pretest_only:
+        pretest_ids = set(
+            (_phrases_meta_cache or {}).get("gate_1_pretest_phrase_ids", [])
+        )
+        return [p for p in _phrases_cache if p["id"] in pretest_ids]
     return _phrases_cache
 
 
@@ -180,15 +206,17 @@ def _load_phrases() -> List[dict]:
 async def start_session(req: SessionStartRequest):
     """
     Crea nuova sessione tester o riprende una esistente per la stessa email.
-    Ogni tester vota TUTTE le frasi (34 nel Piano B). Se torna sull'app dopo
+    Ogni tester vota TUTTE le frasi del set. Se torna sull'app dopo
     aver votato metà, riprende da dove aveva lasciato.
+
+    `pretest_only=True` limita la sessione alle 5 frasi Gate 1 (Fabio+Neo).
     """
     coll = db().blind_test_sessions
     existing = await coll.find_one(
         {"tester_email": req.tester_email.lower().strip(), "completed_at": None}
     )
     if existing:
-        phrases = _load_phrases()
+        phrases = _load_phrases(pretest_only=existing.get("pretest_only", False))
         voted = existing.get("phrases_voted", [])
         return SessionStartResponse(
             session_id=existing["session_id"],
@@ -206,8 +234,10 @@ async def start_session(req: SessionStartRequest):
         "created_at": now,
         "completed_at": None,
         "phrases_voted": [],
+        "pretest_only": bool(req.pretest_only),
+        "engine_b_used": ENGINE_B_ID,
     })
-    phrases = _load_phrases()
+    phrases = _load_phrases(pretest_only=req.pretest_only)
     return SessionStartResponse(
         session_id=session_id,
         phrases_remaining=len(phrases),
@@ -232,7 +262,7 @@ async def next_pair(session_id: str):
     if session.get("completed_at"):
         raise HTTPException(400, "Session already completed")
 
-    phrases = _load_phrases()
+    phrases = _load_phrases(pretest_only=session.get("pretest_only", False))
     voted = set(session.get("phrases_voted", []))
     next_phrase = next((p for p in phrases if p["id"] not in voted), None)
     if not next_phrase:
@@ -248,22 +278,21 @@ async def next_pair(session_id: str):
         {"phrase_id": next_phrase["id"]}
     ).to_list(10)
     engines_available = {c["engine"]: c for c in clips}
-    engine_a_id = "elevenlabs_v3_reference_A"
-    engine_b_id = "kyutai_tts_local_B"
-    if engine_a_id not in engines_available or engine_b_id not in engines_available:
+    if ENGINE_A_ID not in engines_available or ENGINE_B_ID not in engines_available:
         raise HTTPException(
             500,
             f"Clip mancanti per frase {next_phrase['id']}: "
+            f"servono {ENGINE_A_ID} + {ENGINE_B_ID}, "
             f"disponibili {list(engines_available.keys())}",
         )
 
     # Blind randomization: 50/50 quale ordine viene mostrato al tester
     if random.random() < 0.5:
-        label_a_clip = engines_available[engine_a_id]
-        label_b_clip = engines_available[engine_b_id]
+        label_a_clip = engines_available[ENGINE_A_ID]
+        label_b_clip = engines_available[ENGINE_B_ID]
     else:
-        label_a_clip = engines_available[engine_b_id]
-        label_b_clip = engines_available[engine_a_id]
+        label_a_clip = engines_available[ENGINE_B_ID]
+        label_b_clip = engines_available[ENGINE_A_ID]
 
     # Persiste il mapping blind per questa specifica visualizzazione, così
     # al momento del voto sappiamo "A" e "B" nel contesto del tester = quale engine.
@@ -327,8 +356,13 @@ async def vote(req: VoteRequest):
         "phrase_id": req.phrase_id,
         "engine_a_shown_as_A": engine_a,
         "engine_b_shown_as_B": engine_b,
-        "rating_for_engine_a": req.rating_a,
-        "rating_for_engine_b": req.rating_b,
+        # 3 rating separati per lato (Fabio 2026-09-10 v2)
+        "naturalness_for_engine_a": req.naturalness_a,
+        "naturalness_for_engine_b": req.naturalness_b,
+        "similarity_for_engine_a": req.similarity_a,
+        "similarity_for_engine_b": req.similarity_b,
+        "desirability_for_engine_a": req.desirability_a,
+        "desirability_for_engine_b": req.desirability_b,
         "preferred_label": req.preferred,
         "preferred_engine": preferred_engine,
         "notes": (req.notes or "").strip() or None,
@@ -344,7 +378,7 @@ async def vote(req: VoteRequest):
         {"session_id": req.session_id}
     )
     voted_count = len(session.get("phrases_voted", []))
-    total = len(_load_phrases())
+    total = len(_load_phrases(pretest_only=session.get("pretest_only", False)))
 
     if voted_count >= total:
         await db().blind_test_sessions.update_one(
@@ -404,18 +438,34 @@ async def aggregate_results(x_admin_email: Optional[str] = Header(None)):
     for v in votes:
         e_a = v["engine_a_shown_as_A"]
         e_b = v["engine_b_shown_as_B"]
-        r_a = v["rating_for_engine_a"]
-        r_b = v["rating_for_engine_b"]
+        # Fabio 2026-09-10 v2 — 3 dimensioni separate
+        nat_a = v.get("naturalness_for_engine_a") or v.get("rating_for_engine_a", 0)
+        nat_b = v.get("naturalness_for_engine_b") or v.get("rating_for_engine_b", 0)
+        sim_a = v.get("similarity_for_engine_a", 0)
+        sim_b = v.get("similarity_for_engine_b", 0)
+        des_a = v.get("desirability_for_engine_a", 0)
+        des_b = v.get("desirability_for_engine_b", 0)
         pref = v["preferred_engine"]  # None = TIE
         cat = phrase_to_cat.get(v["phrase_id"], "UNKNOWN")
 
-        for engine, rating in [(e_a, r_a), (e_b, r_b)]:
+        for engine, nat, sim, des in [
+            (e_a, nat_a, sim_a, des_a),
+            (e_b, nat_b, sim_b, des_b),
+        ]:
             s = engine_stats.setdefault(engine, {
-                "rating_sum": 0, "rating_count": 0,
+                "naturalness_sum": 0, "naturalness_count": 0,
+                "similarity_sum": 0, "similarity_count": 0,
+                "desirability_sum": 0, "desirability_count": 0,
                 "wins": 0, "losses": 0, "ties": 0,
             })
-            s["rating_sum"] += rating
-            s["rating_count"] += 1
+            s["naturalness_sum"] += nat
+            s["naturalness_count"] += 1
+            if sim:
+                s["similarity_sum"] += sim
+                s["similarity_count"] += 1
+            if des:
+                s["desirability_sum"] += des
+                s["desirability_count"] += 1
 
         if pref is None:
             engine_stats[e_a]["ties"] += 1
@@ -433,11 +483,19 @@ async def aggregate_results(x_admin_email: Optional[str] = Header(None)):
         pref_key = pref or "TIE"
         cs["preference"][pref_key] = cs["preference"].get(pref_key, 0) + 1
 
-    # Calcola media rating per engine
+    # Calcola medie per engine — 3 dimensioni + preferenza globale
     for engine, s in engine_stats.items():
-        s["rating_mean"] = (
-            round(s["rating_sum"] / s["rating_count"], 2)
-            if s["rating_count"] > 0 else 0.0
+        s["naturalness_mean"] = (
+            round(s["naturalness_sum"] / s["naturalness_count"], 2)
+            if s["naturalness_count"] > 0 else 0.0
+        )
+        s["similarity_mean"] = (
+            round(s["similarity_sum"] / s["similarity_count"], 2)
+            if s["similarity_count"] > 0 else 0.0
+        )
+        s["desirability_mean"] = (
+            round(s["desirability_sum"] / s["desirability_count"], 2)
+            if s["desirability_count"] > 0 else 0.0
         )
 
     return AggregateResults(
@@ -447,3 +505,105 @@ async def aggregate_results(x_admin_email: Optional[str] = Header(None)):
         engine_stats=engine_stats,
         category_stats=category_stats,
     )
+
+
+# ============================================================================
+# ENDPOINT — GATE 1 SUMMARY (admin only) — go/no-go tecnico
+# ============================================================================
+
+
+@router.get("/gate-1-summary")
+async def gate_1_summary(x_admin_email: Optional[str] = Header(None)):
+    """
+    Summary specifica per Gate 1 pre-test (5 frasi Neo+Fabio).
+    Criteri PASS: MEDIA(desirability_B) >= 7.0 AND naturalness_B >= 6.5 AND
+    similarity_B >= 6.0.
+    Se motore B fallisce → si passa al motore successivo (env
+    KODA_BLIND_TEST_ENGINE_B).
+    """
+    if not x_admin_email or x_admin_email.lower().strip() not in ADMIN_EMAILS:
+        raise HTTPException(403, "Admin only")
+
+    # Solo voti su sessioni pretest_only=True
+    pretest_sessions = await db().blind_test_sessions.find(
+        {"pretest_only": True}
+    ).to_list(100)
+    pretest_sid_set = {s["session_id"] for s in pretest_sessions}
+    if not pretest_sid_set:
+        return {
+            "engine_b_in_test": ENGINE_B_ID,
+            "sessions": 0,
+            "verdict": "NO_DATA",
+            "note": "Nessuna sessione pretest_only=True completata",
+        }
+
+    votes = await db().blind_test_votes.find(
+        {"session_id": {"$in": list(pretest_sid_set)}}
+    ).to_list(1000)
+
+    # Aggrega per engine
+    stats = {}
+    for v in votes:
+        for engine_key, nat_k, sim_k, des_k in [
+            (v["engine_a_shown_as_A"],
+             "naturalness_for_engine_a",
+             "similarity_for_engine_a",
+             "desirability_for_engine_a"),
+            (v["engine_b_shown_as_B"],
+             "naturalness_for_engine_b",
+             "similarity_for_engine_b",
+             "desirability_for_engine_b"),
+        ]:
+            s = stats.setdefault(engine_key, {
+                "naturalness": [], "similarity": [], "desirability": [],
+            })
+            if v.get(nat_k) is not None:
+                s["naturalness"].append(v[nat_k])
+            if v.get(sim_k) is not None:
+                s["similarity"].append(v[sim_k])
+            if v.get(des_k) is not None:
+                s["desirability"].append(v[des_k])
+
+    def mean(lst):
+        return round(sum(lst) / len(lst), 2) if lst else 0.0
+
+    engine_b_stats = stats.get(ENGINE_B_ID, {})
+    nat_b = mean(engine_b_stats.get("naturalness", []))
+    sim_b = mean(engine_b_stats.get("similarity", []))
+    des_b = mean(engine_b_stats.get("desirability", []))
+
+    # Gate 1 criteria (Fabio 2026-09-10 v2)
+    passes = des_b >= 7.0 and nat_b >= 6.5 and sim_b >= 6.0
+    verdict = "PASS" if passes else "FAIL"
+
+    return {
+        "engine_b_in_test": ENGINE_B_ID,
+        "sessions": len(pretest_sessions),
+        "completed_sessions": sum(1 for s in pretest_sessions if s.get("completed_at")),
+        "total_votes": len(votes),
+        "engine_b_stats": {
+            "naturalness_mean": nat_b,
+            "similarity_mean": sim_b,
+            "desirability_mean": des_b,
+        },
+        "engine_a_stats": {
+            "naturalness_mean": mean(stats.get(ENGINE_A_ID, {}).get("naturalness", [])),
+            "similarity_mean": mean(stats.get(ENGINE_A_ID, {}).get("similarity", [])),
+            "desirability_mean": mean(stats.get(ENGINE_A_ID, {}).get("desirability", [])),
+        },
+        "gate_1_criteria": {
+            "desirability_threshold": 7.0,
+            "naturalness_threshold": 6.5,
+            "similarity_threshold": 6.0,
+        },
+        "verdict": verdict,
+        "next_action": (
+            "Procedi al blind test integrale su 34 frasi (Gate 2)."
+            if passes else
+            f"Motore {ENGINE_B_ID} bocciato. Passa al motore successivo: "
+            f"set env KODA_BLIND_TEST_ENGINE_B=megatts3_local_B (o xtts_v2_local_B) "
+            f"e rigenera le clip. Se tutti e 3 falliscono → chiudiamo il "
+            f"percorso locale ATTUALE (non conclude che TTS locale sia "
+            f"impossibile in assoluto)."
+        ),
+    }

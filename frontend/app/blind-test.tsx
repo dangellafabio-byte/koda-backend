@@ -69,9 +69,14 @@ export default function BlindTestScreen() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
+  const [pretestOnly, setPretestOnly] = useState(false);
   const [pair, setPair] = useState<Pair | null>(null);
-  const [ratingA, setRatingA] = useState<number | null>(null);
-  const [ratingB, setRatingB] = useState<number | null>(null);
+  const [ratingNaturalnessA, setRatingNaturalnessA] = useState<number | null>(null);
+  const [ratingNaturalnessB, setRatingNaturalnessB] = useState<number | null>(null);
+  const [ratingSimilarityA, setRatingSimilarityA] = useState<number | null>(null);
+  const [ratingSimilarityB, setRatingSimilarityB] = useState<number | null>(null);
+  const [ratingDesirabilityA, setRatingDesirabilityA] = useState<number | null>(null);
+  const [ratingDesirabilityB, setRatingDesirabilityB] = useState<number | null>(null);
   const [preferred, setPreferred] = useState<"A" | "B" | "TIE" | null>(null);
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -92,8 +97,12 @@ export default function BlindTestScreen() {
       setPair(p);
       setUrlA(`${BACKEND}${p.clip_a_url}`);
       setUrlB(`${BACKEND}${p.clip_b_url}`);
-      setRatingA(null);
-      setRatingB(null);
+      setRatingNaturalnessA(null);
+      setRatingNaturalnessB(null);
+      setRatingSimilarityA(null);
+      setRatingSimilarityB(null);
+      setRatingDesirabilityA(null);
+      setRatingDesirabilityB(null);
       setPreferred(null);
       setNotes("");
       setStage("voting");
@@ -123,6 +132,7 @@ export default function BlindTestScreen() {
             tester_email: email.trim(),
             tester_name: name.trim() || undefined,
             device_info: `${navigatorLike()}`,
+            pretest_only: pretestOnly,
           }),
         }
       );
@@ -162,10 +172,18 @@ export default function BlindTestScreen() {
 
   const submitVote = async () => {
     if (!sessionId || !pair) return;
-    if (ratingA == null || ratingB == null || preferred == null) {
+    if (
+      ratingNaturalnessA == null ||
+      ratingNaturalnessB == null ||
+      ratingSimilarityA == null ||
+      ratingSimilarityB == null ||
+      ratingDesirabilityA == null ||
+      ratingDesirabilityB == null ||
+      preferred == null
+    ) {
       Alert.alert(
         "Voto incompleto",
-        "Assegna rating a entrambe le clip e scegli la preferita."
+        "Assegna un valore a tutte e 6 le valutazioni (3 per Clip A, 3 per Clip B) e scegli la preferita."
       );
       return;
     }
@@ -177,8 +195,12 @@ export default function BlindTestScreen() {
         body: JSON.stringify({
           session_id: sessionId,
           phrase_id: pair.phrase_id,
-          rating_a: ratingA,
-          rating_b: ratingB,
+          naturalness_a: ratingNaturalnessA,
+          naturalness_b: ratingNaturalnessB,
+          similarity_a: ratingSimilarityA,
+          similarity_b: ratingSimilarityB,
+          desirability_a: ratingDesirabilityA,
+          desirability_b: ratingDesirabilityB,
           preferred,
           notes: notes.trim() || undefined,
         }),
@@ -228,6 +250,30 @@ export default function BlindTestScreen() {
             value={name}
             onChangeText={setName}
           />
+          {/* Toggle Gate 1 pretest — visibile solo ad admin per efficienza */}
+          <TouchableOpacity
+            style={styles.toggleRow}
+            onPress={() => setPretestOnly((v) => !v)}
+            accessibilityRole="switch"
+          >
+            <View
+              style={[
+                styles.toggleBox,
+                pretestOnly && styles.toggleBoxActive,
+              ]}
+            >
+              {pretestOnly && <Text style={styles.toggleTick}>✓</Text>}
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.toggleLabel}>
+                Modalità pre-test Gate 1 (solo 5 frasi)
+              </Text>
+              <Text style={styles.toggleHint}>
+                Uso interno: valutazione tecnica veloce prima di reclutare
+                tester esterni.
+              </Text>
+            </View>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.primaryBtn} onPress={onStart}>
             <Text style={styles.primaryBtnText}>Inizia</Text>
           </TouchableOpacity>
@@ -293,8 +339,24 @@ export default function BlindTestScreen() {
             <Text style={styles.playBtnText}>▶ Ascolta</Text>
           </TouchableOpacity>
         </View>
-        <Text style={styles.ratingHint}>Voto (1 = scarsa, 10 = eccellente)</Text>
-        <RatingRow value={ratingA} onChange={setRatingA} />
+        <RatingBlock
+          title="Naturalezza"
+          hint="Suona come una persona vera? (1 = robotica, 10 = umana)"
+          value={ratingNaturalnessA}
+          onChange={setRatingNaturalnessA}
+        />
+        <RatingBlock
+          title="Somiglianza a Cielo"
+          hint="Riconosceresti Cielo in questa voce? (1 = un'altra persona, 10 = identica)"
+          value={ratingSimilarityA}
+          onChange={setRatingSimilarityA}
+        />
+        <RatingBlock
+          title="Desiderabilità conversazione lunga"
+          hint="Ci parleresti a lungo? (1 = spegnerei subito, 10 = ci passerei ore)"
+          value={ratingDesirabilityA}
+          onChange={setRatingDesirabilityA}
+        />
       </View>
 
       {/* CLIP B */}
@@ -308,8 +370,24 @@ export default function BlindTestScreen() {
             <Text style={styles.playBtnText}>▶ Ascolta</Text>
           </TouchableOpacity>
         </View>
-        <Text style={styles.ratingHint}>Voto (1 = scarsa, 10 = eccellente)</Text>
-        <RatingRow value={ratingB} onChange={setRatingB} />
+        <RatingBlock
+          title="Naturalezza"
+          hint="Suona come una persona vera? (1 = robotica, 10 = umana)"
+          value={ratingNaturalnessB}
+          onChange={setRatingNaturalnessB}
+        />
+        <RatingBlock
+          title="Somiglianza a Cielo"
+          hint="Riconosceresti Cielo in questa voce? (1 = un'altra persona, 10 = identica)"
+          value={ratingSimilarityB}
+          onChange={setRatingSimilarityB}
+        />
+        <RatingBlock
+          title="Desiderabilità conversazione lunga"
+          hint="Ci parleresti a lungo? (1 = spegnerei subito, 10 = ci passerei ore)"
+          value={ratingDesirabilityB}
+          onChange={setRatingDesirabilityB}
+        />
       </View>
 
       {/* PREFERENZA */}
@@ -363,6 +441,26 @@ export default function BlindTestScreen() {
         )}
       </TouchableOpacity>
     </ScrollView>
+  );
+}
+
+function RatingBlock({
+  title,
+  hint,
+  value,
+  onChange,
+}: {
+  title: string;
+  hint: string;
+  value: number | null;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <View style={{ marginTop: 12 }}>
+      <Text style={styles.ratingBlockTitle}>{title}</Text>
+      <Text style={styles.ratingHint}>{hint}</Text>
+      <RatingRow value={value} onChange={onChange} />
+    </View>
   );
 }
 
@@ -540,7 +638,14 @@ const styles = StyleSheet.create({
   ratingHint: {
     color: "#737373",
     fontSize: 11,
+    marginTop: 2,
     marginBottom: 6,
+  },
+  ratingBlockTitle: {
+    color: "#e5e5e5",
+    fontSize: 13,
+    fontWeight: "600",
+    marginBottom: 2,
   },
   ratingRow: {
     flexDirection: "row",
@@ -624,5 +729,41 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     minHeight: 72,
     textAlignVertical: "top",
+  },
+  toggleRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginTop: 16,
+    gap: 12,
+  },
+  toggleBox: {
+    width: 22,
+    height: 22,
+    borderRadius: 5,
+    borderWidth: 2,
+    borderColor: "#525252",
+    backgroundColor: "#0a0a0a",
+    justifyContent: "center",
+    alignItems: "center",
+    marginTop: 2,
+  },
+  toggleBoxActive: {
+    backgroundColor: "#60a5fa",
+    borderColor: "#60a5fa",
+  },
+  toggleTick: {
+    color: "#0a0a0a",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  toggleLabel: {
+    color: "#e5e5e5",
+    fontSize: 14,
+    fontWeight: "500",
+  },
+  toggleHint: {
+    color: "#737373",
+    fontSize: 12,
+    marginTop: 2,
   },
 });

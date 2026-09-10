@@ -26,10 +26,30 @@
     "language": "it-IT",
     "gender": "f",
     "target_style": "presente, calma, calda, non terapeutica, italiano naturale conversazionale",
-    "protocol_version": "1.0 (Piano B — Kyutai-first ridotto)",
+    "protocol_version": "1.1 (Fabio 2026-09-10 rev — Gate 1 pre-test 5 frasi)",
     "total_phrases": 34,
     "engines_to_test": ["elevenlabs_v3_reference_A", "kyutai_tts_local_B"],
-    "notes": "Se test Piano B passa quality gate, aggiungere Qwen3-TTS e hybrid come C nel test integrale."
+    "notes": "Piano B tri-gate: (1) pre-test Neo+Fabio su 5 frasi selezionate — go/no-go tecnico. (2) Blind test 68 clip Neo+Fabio, ratings 3D. (3) 5-8 tester esterni SOLO se Gate 2 passa.",
+    "gate_1_pretest_phrase_ids": [
+      "intimity_02",
+      "emotion_02",
+      "normal_04",
+      "prosody_02",
+      "hard_it_03"
+    ],
+    "gate_1_pretest_rationale": {
+      "intimity_02": "'Ehi... va tutto bene. Sono qui.' — Se qui Cielo suona freddo/robotico, stop. È il cuore dell'esperienza Koda.",
+      "emotion_02": "'Puoi piangere adesso. Non devi tenerlo dentro se non vuoi.' — Empatia senza suonare paternalistica. Rischio timbro sbagliato = fine.",
+      "normal_04": "'Mmm, interessante. Non ci avevo pensato in quel modo.' — 'Mmm' è test crudele. Molti TTS lo pronunciano letteralmente 'emme-emme'. Se sbaglia qui, 80% dei turni Koda sarà rovinato.",
+      "prosody_02": "'Aspetta... no, no. Non intendevo quello. Volevo dire — come posso spiegarlo — che è più complicato di così.' — Disfluenze controllate, trattini, ellissi. Massimo stress prosodia.",
+      "hard_it_03": "'Il ghiaccio si scioglie in fretta, sotto quest'aria...' — 'ghiaccio' + 'scioglie' + 'perciò' concentrati. Se il motore non è addestrato bene su italiano fonetico, casca qui."
+    },
+    "rating_dimensions": {
+      "naturalness": "Suona come persona vera? 1-10",
+      "similarity_to_cielo": "È Cielo? 1-10",
+      "desirability_long_conversation": "Ci parleresti a lungo? 1-10 — METRICA CRITICA"
+    },
+    "gate_1_pass_criteria": "Al termine delle 5 frasi × 3 dimensioni × 2 clip = 30 rating, il motore B passa Gate 1 se: MEDIA(desirability_B) >= 7.0 E naturalness_B >= 6.5 E similarity_B >= 6.0. Sotto queste soglie, si passa al motore successivo (Kyutai → MegaTTS3 → XTTS-v2). Se tutti e 3 falliscono → chiudiamo il percorso locale ATTUALE (non conclude che TTS locale sia impossibile in assoluto)."
   },
 
   "phrases": [

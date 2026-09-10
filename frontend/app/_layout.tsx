@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import { Stack } from "expo-router";
+import { Stack, usePathname } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -14,6 +14,12 @@ import { prewarmAudio } from "../lib/speech";
 import { loadProfileCache } from "../lib/localCache";
 import { AuthProvider, useAuth } from "../lib/auth";
 import LoginScreen from "../components/LoginScreen";
+// === Route pubbliche (Fabio 2026-09-10) ===================================
+// `/blind-test` è accessibile ai tester esterni tramite link diretto, senza
+// account Koda. Bypass `AuthGate` per questa specifica route.
+// `/vad-test` è una pagina diagnostica interna, mantenuta pubblica per
+// permettere il test rapido su device Samsung senza flow login.
+const PUBLIC_ROUTES = new Set(["/blind-test", "/vad-test"]);
 import TrialWatcher from "../components/TrialWatcher";
 import OfflineOverlay from "../components/OfflineOverlay";
 import { installDiagLogger } from "../lib/diagLogger";
@@ -69,6 +75,11 @@ function ThemedShell({ children }: { children: React.ReactNode }) {
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
+  const pathname = usePathname();
+  // Route pubbliche (tester esterni, diagnostiche): skip login gate
+  if (PUBLIC_ROUTES.has(pathname || "")) {
+    return <>{children}</>;
+  }
   if (loading) {
     return <View style={[styles.root, { backgroundColor: "#000000" }]} />;
   }

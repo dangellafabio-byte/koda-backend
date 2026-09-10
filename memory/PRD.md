@@ -1079,3 +1079,128 @@ Piano B si chiude e resta V3 come unica opzione (nessuna necessità di test este
 - `/app/backend/server.py` (registrato router blind_test)
 - `/app/frontend/app/blind-test.tsx` (NEW — pagina tester)
 - `/app/backend/_blind_test_clips/*.wav` (68 mock clip per test flow)
+
+---
+
+## 2026-09-10 (autonomo, tri-gate protocol) — GATE 1 PRE-TEST PRONTO
+
+### Modifiche applicate su richiesta Fabio (rev v2)
+
+**Rating 3D** (Gate 1 e Gate 2):
+- `naturalness`: suona come persona vera? 1-10
+- `similarity`: è Cielo? 1-10
+- `desirability`: ci parleresti a lungo? 1-10 — **METRICA CRITICA**
+- API `POST /vote` aggiornata con 6 rating (3 × 2 clip) + preferenza A/B/TIE
+- Aggregate `/results` calcola medie per ciascuna dimensione + wins/losses/ties
+- Frontend `blind-test.tsx` con 3 blocchi rating per clip (etichettati con hint semantico)
+
+**Engine B configurabile** via env var `KODA_BLIND_TEST_ENGINE_B`:
+- Default: `kyutai_tts_local_B`
+- Alternative: `megatts3_local_B`, `xtts_v2_local_B`, `cartesia_cloud_B`
+- Cambio env var = automaticamente nuovo motore in test
+- Le clip vecchie restano in DB, next-pair filtra sul valore corrente
+
+**Gate 1 pre-test (5 frasi deliberate)**:
+Selezione documentata in `blind_test_phrases.jsonc::meta.gate_1_pretest_phrase_ids`:
+- `intimity_02`: "Ehi... va tutto bene. Sono qui." (cuore Koda)
+- `emotion_02`: "Puoi piangere adesso..." (empatia senza paternalismo)
+- `normal_04`: "Mmm, interessante..." ('Mmm' come test crudele)
+- `prosody_02`: "Aspetta... no, no. Non intendevo quello..." (disfluenza controllata)
+- `hard_it_03`: "Il ghiaccio si scioglie in fretta..." (fonetica italiana difficile)
+- Ognuna con `why_this_phrase` che documenta cosa stressa
+
+**Endpoint `/api/blind-test/gate-1-summary`** (admin only):
+- Filtra voti solo su sessioni `pretest_only=True`
+- Calcola medie 3D per engine A e B
+- Verdetto automatico: `PASS` se `desirability_B >= 7.0 AND naturalness_B >= 6.5 AND similarity_B >= 6.0`, altrimenti `FAIL`
+- Next action documentata: switch env var al motore successivo se FAIL. Se tutti e 3 falliscono → "chiudiamo il percorso locale ATTUALE (non conclude che TTS locale sia impossibile in assoluto)"
+
+**Tri-gate protocol formalizzato**:
+- Gate 1 (tecnico): Neo+Fabio su 5 frasi → merita ulteriore lavoro?
+- Gate 2 (prodotto): Neo+Fabio blind test 34 frasi → è abbastanza da essere Cielo?
+- Gate 3 (mercato): 5-8 tester esterni + price ladder → utenti preferiscono e pagherebbero?
+
+**Route pubblica** `/blind-test`:
+- `AuthGate` in `_layout.tsx` con whitelist `PUBLIC_ROUTES` (`/blind-test`, `/vad-test`)
+- I tester esterni accedono via link diretto senza account Koda
+- Verificato via screenshot: pagina intake raggiungibile senza login
+
+### Deliverable pronti (attesa sblocco Fabio)
+
+- `/blind-test` (frontend) — intake + rating 3D + progress bar
+- `POST /api/blind-test/session` con flag `pretest_only`
+- `GET /api/blind-test/gate-1-summary` (admin) — verdetto automatico
+- `blind_test_generator.py --engine=B` — pluggable via env var
+- `blind_test_phrases.jsonc` — 5 frasi Gate 1 documentate
+
+### Cosa serve da te per far partire Gate 1
+
+1. **`ELEVENLABS_API_KEY` + `KODA_CIELO_VOICE_ID`** in `.env` (bloccante hard)
+2. **Autorizzazione clone-of-clone** o file audio originale Cielo (già autorizzato scenario B nell'ultima mail — reference generato via V3 API)
+3. **Credenziali GPU cloud** (Modal/Replicate/HF) OPPURE conferma CPU-only 2-4h batch
+
+Con questi 3, in ~4-6 ore consegno le 10 clip Gate 1 (5 frasi × 2 engine), tu ed io le ascoltiamo, decidiamo se Kyutai passa o va al motore successivo. Zero committment sui 68 clip finché Gate 1 non è chiuso.
+
+### File modificati / creati in questo turno
+
+- `/app/backend/routes/blind_test.py` (rating 3D, engine B configurabile, endpoint gate-1-summary, pretest_only flag)
+- `/app/backend/scripts/blind_test_phrases.jsonc` (5 frasi Gate 1 + metadata criteri)
+- `/app/backend/scripts/blind_test_generator.py` (ENGINE_B_ID via env var)
+- `/app/frontend/app/blind-test.tsx` (3 rating blocks, toggle pretest_only)
+- `/app/frontend/app/_layout.tsx` (PUBLIC_ROUTES whitelist per bypass AuthGate)
+
+---
+
+## 2026-09-10 — Fix P0 wiring paid-tier subscription_ledger
+
+### Contesto
+
+Prima del wiring:
+- `_increment_trial_seconds` skippava esplicitamente i tier `monthly/bimonthly/annual`.
+- `subscription_ledger.consume()` era ORFANO nel codice.
+- Risultato: utenti paganti avevano minuti effettivi **infiniti** → perdita finanziaria illimitata su heavy user.
+
+### Modifiche `server.py`
+
+1. **Import** `import subscription_ledger as _sub_ledger`.
+2. **Nuovo campo `Profile.ledger_state: Optional[Dict[str, Any]]`** — snapshot serializzato di `SubscriptionLedger`.
+3. **3 helper aggiunti** (dopo `_increment_trial_seconds`):
+   - `_ensure_ledger_dict(profile)` — crea ledger fresh se assente o plan cambiato.
+   - `_consume_paid_seconds(profile, seconds)` — consuma dal ledger + persiste in DB + mirror `minutes_used_this_month`.
+   - `_compute_paid_state(profile)` — enum `"active"|"warning"|"expired"`.
+4. **Gate TTS** (`/api/tts`): utenti paid con `paid_state=="expired"` ricevono 402 `paid_quota_exhausted`.
+5. **Accounting sites aggiornati** (HTTP `/api/tts` e WS `_converse_stream_audio_impl`):
+   - Free trial → `_increment_trial_seconds` (invariato).
+   - Paid tier → `_consume_paid_seconds` (nuovo).
+   - Unlimited → nessun accounting.
+6. **Bootstrap ledger** su `POST /api/dev/set-tier` e `POST /api/subscription/sync`:
+   - Upgrade a paid → `create_ledger(plan)` fresh.
+   - Downgrade a None → `ledger_state=null`.
+   - Idempotente: se ledger esiste già sul piano corretto, non lo resetta.
+7. **Nuovo endpoint `GET /api/subscription/status`** — ritorna `subscription_tier`, `paid_state`, `ledger_summary` (base/carryover/total_available_minutes) e `minutes_used_this_month` per la UI.
+
+### Test verificati
+
+Script `/app/backend/scripts/test_paid_ledger_wiring.py`:
+- [1] Fresh profile → ledger creato via `_ensure_ledger_dict`.
+- [2] `_ensure_ledger_dict` idempotente.
+- [3] Consume 60s → `base_minutes_used=1.0` + mirror allineato.
+- [4] 201 min totali su monthly (cap 200) → `paid_state="expired"`, `unfulfilled=1.0`.
+- [5] Free tier → `_consume_paid_seconds` ritorna None.
+- [6] Upgrade monthly→bimonthly → nuovo ledger con plan corretto.
+
+`GET /api/subscription/status` → 200 OK (utente free): `{"subscription_tier": null, "trial_state": "active"}`.
+
+### Grazia sul turno in corso
+
+Coerente col pattern trial: il consume avviene DOPO la generazione TTS. Se il consume porta il ledger a `expired`, il turno corrente completa; il PROSSIMO tentativo TTS riceve 402.
+
+### File modificati
+
+- `/app/backend/server.py` (+~180 righe: import, campo Profile, 3 helper, gate paid, wiring accounting, bootstrap tier, endpoint status)
+- `/app/backend/scripts/test_paid_ledger_wiring.py` (nuovo — regression test)
+
+### Follow-up non fatti in questo turno
+
+- Enforcement WS `/api/voice/stream` (attualmente solo tracking, non gate). Aggiungere quando serve blocco immediato mid-stream (raro: il consume avviene chunk-by-chunk quindi il gate al PROSSIMO turno via `/api/tts` è sufficiente).
+- Webhook RC (`/subscription/webhook`) usa tier legacy (`plus/daily/essential`). Non aggiornato — mapping tier RC→interno è task separato.

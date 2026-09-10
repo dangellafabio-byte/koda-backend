@@ -42,6 +42,16 @@ from emergentintegrations.llm.openai import OpenAISpeechToText
 from fastapi import UploadFile, File, Form, Header, Cookie, Query
 from fastapi.responses import Response
 
+# === Paid-tier subscription ledger (Fabio 2026-08-14) =====================
+# Modulo PURO — nessuna dipendenza da server.py — che governa il consumo
+# minuti/mese, il carryover FIFO e la scadenza slot per i tier pagati
+# (monthly / bimonthly / annual). Prima del 2026-09-06 questa logica era
+# ORFANA: `_increment_trial_seconds` skippava esplicitamente i tier pagati
+# → utenti paganti avevano minuti INFINITI (bug P0 economico).
+# La wiring qui sotto (`_consume_paid_seconds`, `_compute_paid_state`,
+# `_ensure_ledger`) collega il ledger al pipeline TTS reale.
+import subscription_ledger as _sub_ledger
+
 # === Sealed Confessional crypto — RIMOSSO (Blocco B, feature deprecata) ===
 import base64  # ancora usato altrove nel file (safety, whisper base64 audio)
 
@@ -2003,6 +2013,16 @@ class Profile(BaseModel):
     subscription_expires_at: Optional[str] = None  # ISO datetime
     subscription_source: Optional[str] = None  # "apple_iap" | "revenuecat" | None
     rc_app_user_id: Optional[str] = None  # RevenueCat App User ID (opzionale)
+    # === PAID TIER LEDGER STATE (Fabio 2026-09-06) =========================
+    # Serialized snapshot dello stato del `SubscriptionLedger` per tier
+    # pagati. Contiene: plan, purchase_date_iso, cycle_start_iso,
+    # current_period_index, current_period_start/end_iso, base_minutes_used,
+    # carryover_slots[], last_rollover_check_iso.
+    # Vedi `subscription_ledger.SubscriptionLedger.from_dict()`.
+    # None → utente non paid o ledger non inizializzato. Viene creato/
+    # ricreato quando `subscription_tier` passa a monthly/bimonthly/annual
+    # (via /dev/set-tier o /subscription/sync o webhook RevenueCat).
+    ledger_state: Optional[Dict[str, Any]] = None
     settings: TaccuinoSettings = Field(default_factory=TaccuinoSettings)
     # Personalizzazioni stilistiche (palette colori blob, avatar, ecc.)
     # Salvato come dict aperto per consentire estensioni future senza migrazioni.
@@ -4561,6 +4581,191 @@ async def _increment_trial_seconds(profile_id: str, seconds: float) -> None:
         logger.warning(f"[trial] increment failed profile={profile_id}: {e}")
 
 
+# =========================================================================
+# PAID TIER LEDGER WIRING (Fabio 2026-09-06) — fix P0 minuti infiniti
+# =========================================================================
+# Bug: `_increment_trial_seconds` skippava i tier pagati e
+# `subscription_ledger.consume()` era ORFANO nel codice. Risultato: utenti
+# monthly/bimonthly/annual non venivano MAI addebitati → minuti effettivi
+# infiniti. Perdita finanziaria potenziale illimitata per heavy user.
+#
+# Fix: qui sotto tre helper che collegano il ledger al pipeline TTS.
+#   - `_ensure_ledger_dict(profile)`: garantisce che il profilo abbia un
+#      `ledger_state` coerente col `subscription_tier` corrente. Crea un
+#      nuovo ledger se assente o se il piano è cambiato.
+#   - `_consume_paid_seconds(profile, seconds)`: consuma N secondi dal
+#      ledger, persiste in DB, aggiorna il mirror `minutes_used_this_month`
+#      per compat UI. Ritorna ConsumeResult per audit/log.
+#   - `_compute_paid_state(profile)`: enum "active" | "warning" | "expired"
+#      analogo a `_compute_trial_state`, usato dal gate TTS.
+#
+# Regole enforcement (concordate con Fabio):
+#   - Tier "unlimited" e tier "None" (free) → NON gestiti qui.
+#   - Tier pagati: se `total_available_minutes <= 0` → expired.
+#      Il gate TTS blocca con 402 al TURNO SUCCESSIVO (grazia sul turno
+#      in corso, coerente con il pattern trial).
+#   - Warning: quando base_minutes_used >= 90% del budget mensile.
+#
+# NOTA CRITICA: le paid seconds NON incrementano `trial_seconds_used`.
+# Sono flussi indipendenti (i paid hanno già superato il trial da tempo).
+# =========================================================================
+
+_PAID_TIERS = ("monthly", "bimonthly", "annual")
+_WARNING_PCT = 0.90
+
+
+def _is_paid_tier(tier: Optional[str]) -> bool:
+    """True SOLO per monthly/bimonthly/annual. `unlimited` e None escluso."""
+    return tier in _PAID_TIERS
+
+
+def _ensure_ledger_dict(profile: "Profile") -> Optional[Dict[str, Any]]:
+    """Ritorna un dict ledger_state coerente col plan corrente.
+
+    - Se il profilo non è paid → None.
+    - Se `ledger_state` è None o il `plan` interno non matcha
+      `subscription_tier` (cambio piano) → crea un ledger fresh via
+      `create_ledger()` con purchase_date = now UTC (approssimazione;
+      il webhook RevenueCat può poi settarlo con precisione).
+    - Altrimenti restituisce il dict esistente (deserializzabile con
+      `SubscriptionLedger.from_dict`).
+
+    Questa funzione è pura (non tocca DB). Il caller persiste.
+    """
+    plan = getattr(profile, "subscription_tier", None)
+    if not _is_paid_tier(plan):
+        return None
+    state = getattr(profile, "ledger_state", None) or None
+    if not isinstance(state, dict) or state.get("plan") != plan:
+        # Nuovo ledger. purchase_date = now (fallback). Se il webhook
+        # RC ha fornito un `subscription_expires_at` reale, il rollover
+        # naturale allineerà i periodi.
+        try:
+            fresh = _sub_ledger.create_ledger(plan)
+            return fresh.to_dict()
+        except Exception as e:
+            logger.warning(f"[ledger] create_ledger failed plan={plan}: {e}")
+            return None
+    return state
+
+
+async def _consume_paid_seconds(profile: "Profile", seconds: float) -> Optional[Dict[str, Any]]:
+    """Consuma `seconds` dal ledger del profilo (solo tier pagati).
+
+    Persistenza: aggiorna `ledger_state` e `minutes_used_this_month`
+    (mirror per compat UI legacy). Ritorna il ConsumeResult come dict
+    (`consumed_from_slots`, `consumed_from_base`, `total_consumed`,
+    `unfulfilled`, `slots_touched`) per audit/log — o None se il profilo
+    non è paid o su errore.
+
+    NON solleva eccezioni: fallback silent-log per non abbattere il TTS
+    pipeline in produzione. Se `unfulfilled > 0` significa che l'utente
+    ha ecceduto il budget disponibile → il gate `_compute_paid_state` al
+    turno successivo bloccherà.
+    """
+    if seconds <= 0.0:
+        return None
+    plan = getattr(profile, "subscription_tier", None)
+    if not _is_paid_tier(plan):
+        return None
+    profile_id = getattr(profile, "id", None)
+    if not profile_id:
+        return None
+    try:
+        state = _ensure_ledger_dict(profile)
+        if not state:
+            return None
+        ledger = _sub_ledger.SubscriptionLedger.from_dict(state)
+        minutes = float(seconds) / 60.0
+        result = _sub_ledger.consume(ledger, minutes)
+        new_state = ledger.to_dict()
+        # Mirror del consumo cumulativo per compat con la UI /paywall
+        # (che legge `minutes_used_this_month`). Sommiamo `total_consumed`
+        # al valore precedente. Reset avverrà via advance_period sul
+        # ledger, mentre il mirror lo resettiamo quando il ledger cambia
+        # `current_period_index`.
+        prev_state = getattr(profile, "ledger_state", None) or {}
+        prev_idx = prev_state.get("current_period_index") if isinstance(prev_state, dict) else None
+        new_idx = new_state.get("current_period_index")
+        cur_mirror = float(getattr(profile, "minutes_used_this_month", 0.0) or 0.0)
+        if prev_idx is not None and new_idx is not None and prev_idx != new_idx:
+            # Nuovo periodo → mirror resettato
+            cur_mirror = 0.0
+        new_mirror = cur_mirror + float(result.total_consumed)
+        # Aggiornamento atomico DB
+        await db.taccuino_profile.update_one(
+            {"id": profile_id},
+            {"$set": {
+                "ledger_state": new_state,
+                "minutes_used_this_month": new_mirror,
+                "monthly_reset_date": _this_month_utc_str(),
+            }},
+            upsert=False,
+        )
+        # Aggiornamento in-memory del profile object (evita drift entro la
+        # stessa request)
+        try:
+            profile.ledger_state = new_state
+            profile.minutes_used_this_month = new_mirror
+        except Exception:
+            pass
+        if result.unfulfilled > 1e-6:
+            logger.warning(
+                f"[ledger] unfulfilled={result.unfulfilled:.3f}min plan={plan} "
+                f"profile={profile_id[:8]} consumed={result.total_consumed:.3f}min"
+            )
+        else:
+            logger.info(
+                f"[ledger] consume plan={plan} profile={profile_id[:8]} "
+                f"sec={seconds:.2f} slots={result.consumed_from_slots:.3f}min "
+                f"base={result.consumed_from_base:.3f}min "
+                f"total={result.total_consumed:.3f}min"
+            )
+        return {
+            "consumed_from_slots": result.consumed_from_slots,
+            "consumed_from_base": result.consumed_from_base,
+            "total_consumed": result.total_consumed,
+            "unfulfilled": result.unfulfilled,
+            "slots_touched": result.slots_touched,
+        }
+    except Exception as e:
+        logger.warning(f"[ledger] consume failed profile={profile_id}: {e}")
+        return None
+
+
+def _compute_paid_state(profile: "Profile") -> str:
+    """Ritorna 'active' | 'warning' | 'expired' per tier pagati.
+
+    - 'expired': total_available_minutes <= 0 (budget base + slot esauriti).
+    - 'warning': base_minutes_used >= 90% del budget mensile.
+    - 'active': altrimenti (o profilo non paid → sempre active).
+
+    Funzione PURA in-memory. Chiama advance_period sul ledger per
+    riflettere eventuali rollover mensili, ma NON persiste — la
+    persistenza avviene solo su consume().
+    """
+    plan = getattr(profile, "subscription_tier", None)
+    if not _is_paid_tier(plan):
+        return "active"
+    try:
+        state = _ensure_ledger_dict(profile)
+        if not state:
+            return "active"
+        ledger = _sub_ledger.SubscriptionLedger.from_dict(state)
+        summary = _sub_ledger.remaining_summary(ledger)
+        total_avail = float(summary.get("total_available_minutes", 0.0) or 0.0)
+        if total_avail <= 1e-6:
+            return "expired"
+        base_max = float(summary.get("base_minutes_total", 0.0) or 0.0)
+        base_used = float(summary.get("base_minutes_used", 0.0) or 0.0)
+        if base_max > 0 and (base_used / base_max) >= _WARNING_PCT:
+            return "warning"
+        return "active"
+    except Exception as e:
+        logger.warning(f"[ledger] compute_state failed: {e}")
+        return "active"
+
+
 
 #
 # NOTA IMPORTANTE (fix 2026-08-10): il testo non elenca le parole vietate
@@ -5480,12 +5685,29 @@ async def api_dev_set_tier(req: DevSetTierRequest):
     valid = {"monthly", "bimonthly", "annual", "unlimited", None}
     if req.tier not in valid:
         raise HTTPException(status_code=400, detail=f"tier deve essere uno di {sorted(v for v in valid if v)} o null")
+    # === LEDGER BOOTSTRAP (Fabio 2026-09-06) ===
+    # Al cambio tier verso monthly/bimonthly/annual creiamo un ledger
+    # fresco. Se il tier target è unlimited/None azzeriamo `ledger_state`
+    # (nessun accounting su quel piano). Passaggio tra tier pagati
+    # diversi (es. monthly→annual) implica nuovo ciclo — coerente con la
+    # semantica di RevenueCat "cambio prodotto = nuovo abbonamento".
+    _set: Dict[str, Any] = {"subscription_tier": req.tier}
+    if req.tier in _PAID_TIERS:
+        try:
+            _fresh_ledger = _sub_ledger.create_ledger(req.tier)
+            _set["ledger_state"] = _fresh_ledger.to_dict()
+            _set["minutes_used_this_month"] = 0.0
+            _set["monthly_reset_date"] = _this_month_utc_str()
+        except Exception as _le:
+            logger.warning(f"[dev/set-tier] ledger init failed: {_le}")
+    else:
+        _set["ledger_state"] = None
     await db.taccuino_profile.update_one(
         {"id": uid},
-        {"$set": {"subscription_tier": req.tier}},
+        {"$set": _set},
         upsert=False,
     )
-    logger.info(f"[dev/set-tier] user={uid[:8]} → tier={req.tier}")
+    logger.info(f"[dev/set-tier] user={uid[:8]} → tier={req.tier} ledger={'reset' if req.tier in _PAID_TIERS else 'cleared'}")
     return {"ok": True, "profile_id": uid, "subscription_tier": req.tier}
 
 
@@ -5791,11 +6013,34 @@ async def api_subscription_sync(req: SubscriptionSyncRequest):
     """Sincronizza lo stato abbonamento dal client (immediate UX update).
     Chiamato dopo successful purchase e al boot dopo Purchases.getCustomerInfo()."""
     uid = current_user_id()
-    update = {
+    new_tier = req.tier if req.entitlement_active else None
+    update: Dict[str, Any] = {
         "subscription_active": bool(req.entitlement_active),
-        "subscription_tier": req.tier if req.entitlement_active else None,
+        "subscription_tier": new_tier,
         "subscription_expires_at": req.expires_at if req.entitlement_active else None,
     }
+    # === LEDGER BOOTSTRAP (Fabio 2026-09-06) ===
+    # Se l'utente passa a un tier pagato E non ha già un ledger su quel
+    # piano → inizializzalo. Idempotente: se il ledger esiste ed è già
+    # sul piano corretto, non lo resettiamo (evita di azzerare il consumo
+    # ad ogni /subscription/sync al boot).
+    if new_tier in _PAID_TIERS:
+        try:
+            existing = await db.taccuino_profile.find_one(
+                {"id": uid}, {"ledger_state": 1}
+            )
+            existing_state = (existing or {}).get("ledger_state")
+            if not isinstance(existing_state, dict) or existing_state.get("plan") != new_tier:
+                fresh = _sub_ledger.create_ledger(new_tier)
+                update["ledger_state"] = fresh.to_dict()
+                update["minutes_used_this_month"] = 0.0
+                update["monthly_reset_date"] = _this_month_utc_str()
+        except Exception as _le:
+            logger.warning(f"[subscription/sync] ledger init failed: {_le}")
+    else:
+        # Downgrade a Free/None → azzera ledger. Il consumo storico resta
+        # solo come `minutes_used_this_month` mirror per report.
+        update["ledger_state"] = None
     await db.taccuino_profile.update_one({"id": uid}, {"$set": update})
     p = await get_or_create_profile()
     return {
@@ -5803,6 +6048,44 @@ async def api_subscription_sync(req: SubscriptionSyncRequest):
         "subscription_active": p.subscription_active,
         "subscription_tier": p.subscription_tier,
     }
+
+
+@api_router.get("/subscription/status")
+async def api_subscription_status():
+    """Ritorna lo stato commerciale corrente per la UI paywall.
+
+    Fields:
+      - subscription_tier: str | None
+      - paid_state: "active" | "warning" | "expired"  (solo tier pagati)
+      - ledger_summary: dict (vedi `subscription_ledger.remaining_summary`)
+        con base_minutes_total/used/remaining, carryover_slots[],
+        total_available_minutes, current_period_end.
+      - minutes_used_this_month: float (mirror legacy)
+
+    Per free-tier ritorna trial_state via campo dedicato.
+    """
+    try:
+        p = await get_or_create_profile()
+    except Exception:
+        return {"subscription_tier": None, "paid_state": "active"}
+    tier = getattr(p, "subscription_tier", None)
+    result: Dict[str, Any] = {
+        "subscription_tier": tier,
+        "subscription_active": bool(getattr(p, "subscription_active", False)),
+        "minutes_used_this_month": float(getattr(p, "minutes_used_this_month", 0.0) or 0.0),
+    }
+    if _is_paid_tier(tier):
+        state = _ensure_ledger_dict(p)
+        if state:
+            try:
+                ledger = _sub_ledger.SubscriptionLedger.from_dict(state)
+                result["ledger_summary"] = _sub_ledger.remaining_summary(ledger)
+            except Exception as e:
+                logger.warning(f"[subscription/status] summary failed: {e}")
+        result["paid_state"] = _compute_paid_state(p)
+    else:
+        result["trial_state"] = _compute_trial_state(p)
+    return result
 
 
 @api_router.post("/subscription/webhook")
@@ -9298,6 +9581,23 @@ async def api_tts(req: TTSRequest):
                         status_code=402,
                         detail={"error": "trial_expired", "trial_state": "expired"},
                     )
+        elif _is_paid and not _is_unlim:
+            # === PAID TIER ENFORCEMENT (Fabio 2026-09-06) ===
+            # Fix P0: prima del ledger wiring i tier pagati avevano minuti
+            # infiniti. Ora blocchiamo il TURNO SUCCESSIVO quando il
+            # ledger è esaurito. Grazia sul turno in corso invariata:
+            # se il consume dopo questo TTS porta a expired, il prossimo
+            # tentativo di generazione riceverà 402.
+            _pstate = _compute_paid_state(_profile_for_trial)
+            if _pstate == "expired":
+                raise HTTPException(
+                    status_code=402,
+                    detail={
+                        "error": "paid_quota_exhausted",
+                        "subscription_tier": _tier,
+                        "paid_state": "expired",
+                    },
+                )
 
     client_el = _get_eleven_client()
     if client_el is None:
@@ -9368,24 +9668,27 @@ voice_settings=voice_settings,
         logger.error(f"ElevenLabs TTS error: {e}")
         raise HTTPException(status_code=500, detail=f"TTS error: {str(e)}")
 
-    # === TRIAL ACCOUNTING (2026-08-10, Fabio) ===
-    # Incrementa il counter secondi TTS solo se l'utente è nel trial (non
-    # paid, non unlimited). Il calcolo bytes/16000 stima la durata da
-    # ElevenLabs mp3_44100_128 (128 kbps CBR) — corrispondenza col costo
-    # ElevenLabs reale. Grazia sul turno in corso: se questo incremento
-    # porta a expired, il PROSSIMO turno sarà bloccato dall'enforcement,
-    # non questo (che stiamo appena finendo di servire).
+    # === TRIAL / PAID ACCOUNTING (2026-08-10 → 2026-09-06 Fabio) ===
+    # Free trial:  incrementa `trial_seconds_used`.
+    # Paid tier:   consuma dal `subscription_ledger` (fix P0 minuti infiniti).
+    # Unlimited:   nessun accounting.
+    # Il calcolo bytes/16000 stima la durata da ElevenLabs mp3_44100_128
+    # (128 kbps CBR) — corrispondenza col costo ElevenLabs reale. Grazia
+    # sul turno in corso: se questo incremento porta a expired, il
+    # PROSSIMO turno sarà bloccato dall'enforcement, non questo.
     try:
         if _profile_for_trial is not None:
             _tier2 = getattr(_profile_for_trial, "subscription_tier", None)
             _is_paid2 = _tier2 in ("monthly", "bimonthly", "annual")
-            if not _is_paid2:
-                _uid2 = current_user_id()
-                _email2 = await _uid_email_from_session_or_profile(_uid2)
-                _is_unlim2, _ = await is_user_unlimited(_email2, _uid2)
-                if not _is_unlim2:
-                    _dur = _estimate_mp3_duration_seconds(audio_data)
-                    if _dur > 0.0:
+            _uid2 = current_user_id()
+            _email2 = await _uid_email_from_session_or_profile(_uid2)
+            _is_unlim2, _ = await is_user_unlimited(_email2, _uid2)
+            if not _is_unlim2:
+                _dur = _estimate_mp3_duration_seconds(audio_data)
+                if _dur > 0.0:
+                    if _is_paid2:
+                        await _consume_paid_seconds(_profile_for_trial, _dur)
+                    else:
                         _profile_id = getattr(_profile_for_trial, "id", None) or _uid2
                         await _increment_trial_seconds(_profile_id, _dur)
     except Exception as _acc_err:
@@ -14047,20 +14350,27 @@ async def _fast_pipeline_task(
                     )
                 except Exception:
                     _dur_chunk_all = 0.0
-                # === TRIAL ACCOUNTING (2026-08-10, Fabio) — WS free-talk ===
-                # Ogni chunk TTS del turno viene contato nei secondi del trial.
-                # Solo per utenti nel trial (non paid, non unlimited).
+                # === TRIAL / PAID ACCOUNTING (WS free-talk) — Fabio 2026-09-06 ===
+                # Free trial:  incrementa `trial_seconds_used`.
+                # Paid tier:   consuma dal `subscription_ledger` (fix P0
+                #              minuti infiniti). Ogni chunk TTS scala il
+                #              budget del mese; carryover FIFO gestito
+                #              nel modulo puro.
+                # Unlimited:   nessun accounting.
                 try:
                     _tier_ws = getattr(profile, "subscription_tier", None)
-                    if _tier_ws not in ("monthly", "bimonthly", "annual"):
-                        _uid_ws = current_user_id()
-                        _email_ws = await _uid_email_from_session_or_profile(_uid_ws)
-                        _unlim_ws, _ = await is_user_unlimited(_email_ws, _uid_ws)
-                        if not _unlim_ws:
-                            # REVERT B (2026-08-13): fast pipeline torna a mp3_44100_128
-                            # → default 128kbps di _estimate_mp3_duration_seconds è ok.
-                            _dur_chunk = _dur_chunk_all  # riuso calcolo già fatto sopra
-                            if _dur_chunk > 0.0:
+                    _is_paid_ws = _tier_ws in ("monthly", "bimonthly", "annual")
+                    _uid_ws = current_user_id()
+                    _email_ws = await _uid_email_from_session_or_profile(_uid_ws)
+                    _unlim_ws, _ = await is_user_unlimited(_email_ws, _uid_ws)
+                    if not _unlim_ws:
+                        # REVERT B (2026-08-13): fast pipeline torna a mp3_44100_128
+                        # → default 128kbps di _estimate_mp3_duration_seconds è ok.
+                        _dur_chunk = _dur_chunk_all  # riuso calcolo già fatto sopra
+                        if _dur_chunk > 0.0:
+                            if _is_paid_ws:
+                                await _consume_paid_seconds(profile, _dur_chunk)
+                            else:
                                 _pid_ws = getattr(profile, "id", None) or _uid_ws
                                 await _increment_trial_seconds(_pid_ws, _dur_chunk)
                 except Exception as _acc_e:

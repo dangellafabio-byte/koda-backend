@@ -54,8 +54,18 @@ CLIP_DIR.mkdir(parents=True, exist_ok=True)
 
 PHRASES_FILE = _root / "scripts" / "blind_test_phrases.jsonc"
 
+# === ENGINE B: motore alternativo in test (Fabio 2026-09-10 v2, rollout progressivo)
+# Il "motore B" è il candidato locale/cloud in test contro V3 (reference).
+# Valore controllato via env var `KODA_BLIND_TEST_ENGINE_B`:
+#   - kyutai_tts_local_B    (default, primo giro)
+#   - megatts3_local_B      (se Kyutai fallisce Gate 1)
+#   - xtts_v2_local_B       (se anche MegaTTS3 fallisce)
+#   - cartesia_cloud_B      (fallback hybrid se locale falliscono tutti)
+# Cambio del valore = automaticamente nuovo motore in test. Le clip generate
+# in giri precedenti restano in DB con `engine=<vecchio_valore>` — la ricerca
+# in next-pair filtra per il valore corrente. Zero conflitti.
 ENGINE_A_ID = "elevenlabs_v3_reference_A"
-ENGINE_B_ID = "kyutai_tts_local_B"
+ENGINE_B_ID = os.getenv("KODA_BLIND_TEST_ENGINE_B", "kyutai_tts_local_B")
 
 
 def load_phrases() -> list[dict]:
