@@ -22,6 +22,7 @@
     "@react-navigation/native": "^7.1.6",
     "@react-navigation/native-stack": "^7.3.10",
     "@shopify/flash-list": "2.0.2",
+    "@siteed/audio-studio": "^3.2.1",
     "expo": "~54.0.35",
     "expo-apple-authentication": "~8.0.8",
     "expo-application": "~7.0.8",

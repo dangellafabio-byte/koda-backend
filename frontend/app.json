@@ -87,6 +87,15 @@
             "com.google.android.googlequicksearchbox"
           ]
         }
+      ],
+      [
+        "@siteed/audio-studio",
+        {
+          "enableBackgroundAudio": false,
+          "enablePhoneStateHandling": false,
+          "enableNotifications": false,
+          "enableDeviceDetection": false
+        }
       ]
     ],
     "experiments": {

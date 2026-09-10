@@ -933,3 +933,71 @@ Risponde alla domanda: "quanto TTS reale per minuto di conversazione venduta?"
 - `/app/backend/scripts/diagnose_prompt_caching_v3_production.py` — test empirico
 - `/app/backend/scripts/analyze_experiment_d.py` — analisi log traffico reale
 - `/app/backend/_debug_downloads/caching_diag_v3_production_prompt.json` — prova E2E
+
+---
+
+## 2026-09-10 (turno autonomo) — VAD SWAP PRONTO + DIMMER DIAGNOSTIC
+
+### A) VAD Android — libreria + hook pronti per test empirico
+- **Installato** `@siteed/audio-studio@3.2.1` (successore di `@siteed/expo-audio-studio`,
+  compatibile Expo SDK 54).
+- **Config plugin** in `app.json` con `enableBackgroundAudio: false`,
+  `enablePhoneStateHandling: false`, `enableNotifications: false`,
+  `enableDeviceDetection: false` — VAD foreground-only, senza obblighi Play Store
+  extra e senza permessi non necessari.
+- **Hook creato**: `/app/frontend/lib/useLocalVadRecorder.ts`
+  - `useAudioRecorder()` con `encoding: 'pcm_16bit'`, `enableProcessing: true`,
+    `interval: 100ms`, `keepFullAnalysis: false` (memoria JS bounded 90s)
+  - Callback `onAudioAnalysis` legge `dataPoints[last].rms` + `.dB` + `.silent`
+  - Soglia voce: `RMS >= 0.02` (calibrare su Samsung reale)
+  - Reveal automatico: 15s silenzio consecutivo O 90s totali
+  - NO `onAudioStream` handler → PCM non lascia MAI il device (privacy locked)
+  - Cleanup su unmount, permessi RECORD_AUDIO idempotenti
+- **Pagina test**: `/app/frontend/app/vad-test.tsx` → route `/vad-test`
+  - Mostra RMS/dB/orbLevel live, tempo silenzio, contatore reveal
+  - Zero rete, zero dipendenze rispetto a `lascia-andare.tsx`
+  - Serve per calibrare `RMS_VOICE_THRESHOLD` su Samsung PRIMA di swap definitivo
+
+### `lascia-andare.tsx` NON toccato in questo turno
+Motivazione: file è 1464 righe con logica VAD/expo-audio interconnessa. Uno
+swap chirurgico richiede:
+1. Calibrazione empirica di `RMS_VOICE_THRESHOLD` (turno futuro)
+2. Test isolato del reveal timer via `/vad-test` (Fabio, post-build)
+3. Solo dopo verifica su Samsung: swap con feature flag `EXPO_PUBLIC_VAD_ENGINE`
+   e fallback a MediaRecorder in caso di regressione
+
+### B) Classifier TTS — verificato ready-state
+- Test suite `tts_intensity_classifier_test.py`: **13/13 PASSED**
+- Attivazione = 1 env var Railway: `KODA_TTS_CLASSIFIER_ENABLED=1`
+- Impatto atteso: 83% Turbo / 17% V3 = -40-45% costo TTS/min
+
+### C) Screen Dimmer — diagnostica potenziata (in attesa log user)
+- **Detezione no-op iOS Low Power Mode** aggiunta a `animateBrightness`:
+  read-after-write ogni ~10 step, log `⚠️ NO-OP DETECTED — wrote=X but read=Y`
+  se delta > 0.05. Cattura casi in cui `setBrightnessAsync` ritorna OK ma il
+  sistema (Low Power / restrizioni) blocca il valore.
+- **Log conversationOn** aggiunto al useEffect di `index.tsx`:
+  `[KODA_DIMMER] convActive=X → startWatching (conversationOn=Y, status=Z)`
+- Nota architetturale: dimmer parte SOLO se `conversationOn === true` (hands-free).
+  Se Fabio testava in tap-to-talk, dimmer non parte per design. Log conferma.
+
+### File modificati / creati
+- `/app/frontend/package.json` (+`@siteed/audio-studio@3.2.1`)
+- `/app/frontend/app.json` (plugin `@siteed/audio-studio` con config restrittiva)
+- `/app/frontend/lib/useLocalVadRecorder.ts` (NEW — hook VAD locale)
+- `/app/frontend/app/vad-test.tsx` (NEW — pagina calibrazione)
+- `/app/frontend/lib/screenDimmer.ts` (detezione no-op iOS Low Power)
+- `/app/frontend/app/index.tsx` (log conversationOn)
+
+### Cosa resta a Fabio
+1. **Push GitHub + generate build EAS Android** (per testare `/vad-test` su Samsung
+   — Expo Go NON supporta `@siteed/audio-studio`, richiede dev build)
+2. Naviga a `/vad-test` sul device Samsung → osserva se RMS varia con la voce
+   - Se sì: swap in `lascia-andare.tsx` diventa low-risk (turno futuro)
+   - Se no: bug hardware più profondo del previsto, servono altre opzioni
+3. Deploy Railway (`git push`) per attivare fix caching (fix precedente,
+   turno v65.36)
+4. Attivazione classifier TTS: 1 env var Railway `KODA_TTS_CLASSIFIER_ENABLED=1`
+5. Enroll Apple Small Business Program prima del primo submit
+6. Copiare log `[KODA_DIMMER] heartbeat` + `⚠️ NO-OP DETECTED` da `/diagnostics`
+   dopo prossima sessione hands-free per chiudere l'analisi dimmer

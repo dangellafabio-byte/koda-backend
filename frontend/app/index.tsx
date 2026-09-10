@@ -2181,11 +2181,22 @@ export default function Taccuino() {
   // (vedi return principale) → chiama ScreenDimmer.noteInteraction() ad ogni tap.
   useEffect(() => {
     if (Platform.OS === "web") return;
+    // === v65.37 diagnostic (Fabio 2026-09-10) ===
+    // Log ESPLICITO di conversationOn per capire se il dimmer non parte
+    // perché l'utente è in tap-to-talk (conversationOn=false → convActive
+    // resta false per design → dimmer non parte MAI). In tal caso non è
+    // un bug ma il comportamento voluto.
     if (convActive) {
-      console.log("[KODA_DIMMER] convActive=true → startWatching");
+      console.log(
+        `[KODA_DIMMER] convActive=true → startWatching ` +
+          `(conversationOn=${conversationOn}, status=${status})`
+      );
       ScreenDimmer.startWatching().catch(() => {});
     } else {
-      console.log("[KODA_DIMMER] convActive=false → stopWatching");
+      console.log(
+        `[KODA_DIMMER] convActive=false → stopWatching ` +
+          `(conversationOn=${conversationOn}, status=${status})`
+      );
       ScreenDimmer.stopWatching().catch(() => {});
     }
   }, [convActive]);

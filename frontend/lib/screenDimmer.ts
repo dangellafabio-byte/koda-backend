@@ -141,6 +141,13 @@ function animateBrightness(
   const steps = Math.max(1, Math.round(durationMs / FADE_TICK_MS));
   let step = 0;
   log(`animate: ${from.toFixed(3)} → ${to.toFixed(3)} in ${durationMs}ms (${steps} steps)`);
+  // === v65.37 (2026-09-10) — DETEZIONE NO-OP iOS Low Power Mode ==============
+  // Bug noto: su iOS con Low Power Mode attivo, `setBrightnessAsync(v)`
+  // ritorna senza errore MA il valore effettivo sullo schermo non cambia.
+  // Facciamo un read-after-write ogni ~10 step (330ms) e loggiamo se il
+  // valore letto diverge da quello scritto di oltre 0.05 → segnale di no-op.
+  let readbackChecksDone = 0;
+  let readbackNoopHits = 0;
   fadeTimer = setInterval(async () => {
     step += 1;
     const t = Math.min(1, step / steps);
@@ -150,6 +157,24 @@ function animateBrightness(
     currentAppliedBrightness = clamped;
     try {
       await Brightness.setBrightnessAsync(clamped);
+      // Read-after-write ogni ~10 step per verificare no-op sistema
+      if (step % 10 === 0 && readbackChecksDone < 3) {
+        readbackChecksDone += 1;
+        try {
+          const actual = await Brightness.getBrightnessAsync();
+          const delta = Math.abs(actual - clamped);
+          if (delta > 0.05) {
+            readbackNoopHits += 1;
+            log(
+              `⚠️ NO-OP DETECTED — wrote=${clamped.toFixed(3)} but read=${actual.toFixed(3)} ` +
+                `(delta=${delta.toFixed(3)}) — probabile iOS Low Power Mode ` +
+                `o restrizione sistema. hits=${readbackNoopHits}/${readbackChecksDone}`
+            );
+          }
+        } catch (rbErr) {
+          log(`readback check error: ${String(rbErr)}`);
+        }
+      }
     } catch (e) {
       // Log e interrompi: senza brightness non ha senso continuare
       log("setBrightnessAsync FAIL — err=", String(e));
@@ -157,7 +182,10 @@ function animateBrightness(
       return;
     }
     if (step >= steps) {
-      log(`animate DONE at ${clamped.toFixed(3)}`);
+      log(
+        `animate DONE at ${clamped.toFixed(3)} ` +
+          `(readback: ${readbackNoopHits}/${readbackChecksDone} no-op hits)`
+      );
       clearFadeTimer();
       if (onComplete) onComplete();
     }
