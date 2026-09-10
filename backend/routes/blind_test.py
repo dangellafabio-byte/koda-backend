@@ -406,10 +406,14 @@ async def serve_audio(clip_id: str):
     filepath = clip.get("filepath")
     if not filepath or not os.path.exists(filepath):
         raise HTTPException(404, f"Audio file missing: {filepath}")
+    # Content-type dinamico dall'estensione — Safari/iOS è più stretto di Chrome
+    # e rifiuta WAV serviti come audio/mpeg. Preserviamo blind (nessun hint engine).
+    ext = os.path.splitext(filepath)[1].lower()
+    mt = "audio/wav" if ext == ".wav" else "audio/mpeg"
     # NO metadata engine nell'HTTP response → blind test integrità garantita
     return FileResponse(
         filepath,
-        media_type="audio/mpeg",
+        media_type=mt,
         headers={
             "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
