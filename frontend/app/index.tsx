@@ -5600,52 +5600,43 @@ export default function Taccuino() {
               </View>
             </View>
           ) : (
-            // === FEEDBACK LOOP LONG-PRESS (Fabio 2026-09-11 v2, B-bis) =====
-            // Long-press sulla bolla AI apre KodaFeedbackMenu (privacy-safe).
-            // Wrap SEMPRE le bolle AI (anche pre-deploy senza event_id): il
-            // menu si apre in modalità readOnly quando event_id manca, per
-            // spiegare all'utente perché non può taggare (temporale, non
-            // guasto). Bolle utente: gesto libero, gestito da Bubble internal
-            // (Alert.alert "Dimentica").
-            it.entry.role === "ai" ? (
-              <Pressable
-                onLongPress={() => {
-                  setFeedbackEntry(it.entry);
-                  if (it.entry.event_id) {
-                    setFeedbackEventId(it.entry.event_id);
-                    setFeedbackReadOnly(false);
-                  } else {
-                    // Bolla pre-deploy: apri comunque il menu ma readOnly
-                    setFeedbackEventId(null);
-                    setFeedbackReadOnly(true);
-                  }
-                }}
-                delayLongPress={350}
-                android_ripple={{ color: "transparent" }}
-              >
-                <Bubble
-                  entry={it.entry}
-                  onReplay={replayMessage}
-                  onGhost={ghostMessage}
-                  bubbleAccent={bubbleAccent}
-                  bubbleStyle={bubbleStyle}
-                  textOnBubble={textOnBubble}
-                  textSize={textSize}
-                  aiFontFamily={aiFontFamily}
-                />
-              </Pressable>
-            ) : (
-              <Bubble
-                entry={it.entry}
-                onReplay={replayMessage}
-                onGhost={ghostMessage}
-                bubbleAccent={bubbleAccent}
-                bubbleStyle={bubbleStyle}
-                textOnBubble={textOnBubble}
-                textSize={textSize}
-                aiFontFamily={aiFontFamily}
-              />
-            )
+            // === FIX C 2026-09-11 (Fabio + Neo — no Pressable esterno) =====
+            // Il Pressable esterno che wrappava le bolle AI (Fix B-bis) è
+            // stato RIMOSSO. Motivo: React Native su iOS/Android dà la
+            // precedenza al Pressable figlio quando ha onPress, e il timer
+            // del long-press del parent non parte mai. Risultato: long-press
+            // sulla bolla AI = nessuna reazione (sintomo osservato da Fabio).
+            //
+            // Soluzione: `onLongPressFeedback` passato come prop a Bubble
+            // che lo applica al SUO wrapperPress interno, sullo stesso nodo
+            // di onPress (replay). React Native gestisce nativamente il
+            // conflitto onPress/onLongPress: se rilasci prima di 350ms →
+            // onPress (replay), altrimenti → onLongPress (feedback menu).
+            <Bubble
+              entry={it.entry}
+              onReplay={replayMessage}
+              onGhost={ghostMessage}
+              onLongPressFeedback={
+                it.entry.role === "ai"
+                  ? (e) => {
+                      setFeedbackEntry(e);
+                      if (e.event_id) {
+                        setFeedbackEventId(e.event_id);
+                        setFeedbackReadOnly(false);
+                      } else {
+                        // Bolla pre-deploy: apri comunque il menu ma readOnly
+                        setFeedbackEventId(null);
+                        setFeedbackReadOnly(true);
+                      }
+                    }
+                  : undefined
+              }
+              bubbleAccent={bubbleAccent}
+              bubbleStyle={bubbleStyle}
+              textOnBubble={textOnBubble}
+              textSize={textSize}
+              aiFontFamily={aiFontFamily}
+            />
           )
         }
         getItemType={(it) =>
@@ -8032,6 +8023,7 @@ function BubbleImpl({
   entry,
   onReplay,
   onGhost,
+  onLongPressFeedback,
   bubbleAccent,
   bubbleStyle,
   textOnBubble,
@@ -8042,6 +8034,15 @@ function BubbleImpl({
   onReplay?: (e: TimelineEntry) => void;
   /** Long-press handler for "Ghost" / "Dimentica questo". */
   onGhost?: (e: TimelineEntry) => void;
+  /**
+   * === FIX C 2026-09-11 (Fabio + Neo — conflitto onPress/onLongPress) ===
+   * Long-press handler per feedback loop AI. DEVE stare sullo stesso
+   * Pressable di onPress (replay) altrimenti il gesto tap-per-replay
+   * cattura il touch prima che il timer di long-press del parent parta,
+   * e il long-press non scatta mai (sintomo: nessun menu compare).
+   * Passato come prop dal chiamante SOLO per entry.role === "ai".
+   */
+  onLongPressFeedback?: (e: TimelineEntry) => void;
   bubbleAccent: { color: string; soft: string };
   bubbleStyle: "glass" | "solid";
   textOnBubble: string;
@@ -8107,37 +8108,37 @@ function BubbleImpl({
 
   const wrapperPress = (cb: () => void) => ({
     onPress: cb,
-    // === FIX 2026-09-11 (Fabio + Neo — conflitto gesto long-press) =========
-    // Il long-press AI è gestito dal <Pressable> ESTERNO in index.tsx:5602
-    // che apre KodaFeedbackMenu. In React Native/iOS il Pressable più
-    // profondo cattura il gesto → se qui applichiamo `onLongPress` sull'AI
-    // vince il figlio e l'utente vede il vecchio menu Alert.alert
-    // ("Risposta di Coda / Mostra orario / Dimentica / Annulla") invece
-    // del nuovo menu con 2 categorie feedback.
+    // === FIX C 2026-09-11 (Fabio + Neo) ======================================
+    // `onLongPress` DEVE stare sullo stesso Pressable di `onPress` altrimenti
+    // il responder system iOS/Android cattura il touch al primo child con
+    // onPress e il long-press del parent non scatta mai (bug osservato:
+    // long-press sulla bolla AI = nessuna reazione, tap = replay OK).
     //
-    // Soluzione: `onLongPress` attivo SOLO su bolle utente (dove serve
-    // ancora il Ghost per cancellare fatti dal server). Bolle AI: no long-
-    // press qui, il gesto passa al Pressable esterno che gestisce il
-    // feedback loop.
-    onLongPress: isUser && onGhost
-      ? () => {
-          Alert.alert(
-            "Questo messaggio",
-            "Vuoi che dimentichi questo fatto? Cancellerò il messaggio dal server. Se ha valore, terrò solo l'insegnamento nella memoria.",
-            [
-              { text: "Mostra orario", onPress: () => setShowTime((s) => !s) },
-              {
-                text: "Dimentica",
-                style: "destructive",
-                onPress: () => onGhost(entry),
-              },
-              { text: "Annulla", style: "cancel" },
-            ]
-          );
-        }
-      : isUser
-        ? () => setShowTime((s) => !s)
-        : undefined,
+    // - User bubble: onLongPress = Alert.alert "Dimentica" (feature Ghost)
+    // - AI bubble:   onLongPress = handler feedback loop (passato come prop)
+    //                Se il chiamante non lo passa (es. bolle di sistema)
+    //                fallback a "toggle timestamp".
+    onLongPress: isUser
+      ? onGhost
+        ? () => {
+            Alert.alert(
+              "Questo messaggio",
+              "Vuoi che dimentichi questo fatto? Cancellerò il messaggio dal server. Se ha valore, terrò solo l'insegnamento nella memoria.",
+              [
+                { text: "Mostra orario", onPress: () => setShowTime((s) => !s) },
+                {
+                  text: "Dimentica",
+                  style: "destructive",
+                  onPress: () => onGhost(entry),
+                },
+                { text: "Annulla", style: "cancel" },
+              ]
+            );
+          }
+        : () => setShowTime((s) => !s)
+      : onLongPressFeedback
+        ? () => onLongPressFeedback(entry)
+        : () => setShowTime((s) => !s),
     delayLongPress: 350,
   });
 
@@ -8258,6 +8259,17 @@ function arePropsEqualBubble(
     prev.bubbleAccent.soft === next.bubbleAccent.soft &&
     prev.onReplay === next.onReplay &&
     prev.onGhost === next.onGhost
+    // === NB (Fabio + Neo 2026-09-11 Fix C) =================================
+    // `onLongPressFeedback` deliberatamente NON incluso nel confronto.
+    // Il callback viene passato inline in TaccuinoScreen ed è ricreato ogni
+    // render, ma cattura solo setter di useState (setFeedbackEntry,
+    // setFeedbackEventId, setFeedbackReadOnly) che React garantisce stabili
+    // per l'intera vita del componente. Il closure "vecchio" della prima
+    // render funziona sempre → nessun bug di stale-state.
+    // Includerlo qui causerebbe re-render inutili di TUTTE le bolle a ogni
+    // render del root (che avviene ~ogni turno di conversazione).
+    // Se in futuro il callback dovesse catturare state variabile, allora sì:
+    // wrappare con useCallback E aggiungerlo qui.
   );
 }
 
