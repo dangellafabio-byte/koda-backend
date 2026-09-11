@@ -1062,13 +1062,36 @@ export default function LasciaAndareScreen() {
     }
   }, [router, teardown, orbEntryScale, orbOpacity, hintOpacity, voiceScale, voiceKey]);
 
-  // === PILL "PARLA CON KODA" (Fabio 2026-08-22) ==============================
-  // Check condizioni + fade-in + tap handler
+  // === PILL "PARLA CON KODA" (Fabio 2026-08-22, gated Premium 2026-09-11) ==
+  // Il pill era pensato come rampa Free→Premium (tap → microdemo o paywall).
+  // Per utenti già Premium è INUTILE (li porta al paywall che già hanno pagato)
+  // e visivamente confuso ("perché devo pagare qualcosa che ho già?").
+  // FIX 2026-09-11 (Fabio): non mostrare il pill se subscription_tier è a
+  // pagamento. Il fix di `onPillTap` più sotto (redirect a chat) è ridondante
+  // ma tenuto come safety net nel caso il flag arrivasse via race condition.
   useEffect(() => {
     if (isFirstBoot) return; // primo boot: no pill (l'utente sta vivendo il reveal)
     let cancelled = false;
     (async () => {
       try {
+        // Gate 1 — Premium: nessun pill
+        try {
+          const cached = await loadProfileCache<Profile>();
+          const tier = (cached as any)?.subscription_tier || null;
+          const isPaid =
+            tier === "monthly" ||
+            tier === "bimonthly" ||
+            tier === "annual" ||
+            tier === "unlimited";
+          if (isPaid) {
+            console.log(`[KODA_LA_PILL] hidden — user is Premium (${tier})`);
+            return;
+          }
+        } catch (e) {
+          console.warn("[KODA_LA_PILL] tier read failed, defaulting to show:", e);
+        }
+
+        // Gate 2 — Intro completata (comportamento pre-esistente)
         const introDone = await SecureStore.getItemAsync("intro_v3_completed_at");
         if (cancelled) return;
         if (!introDone) return; // se intro v3 non è completata, non mostrare
