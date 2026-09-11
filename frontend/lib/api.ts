@@ -47,6 +47,12 @@ export type TimelineEntry = {
   actions?: Action[] | null;
   audio_duration_ms?: number | null;
   timestamp: string;
+  // === FEEDBACK LOOP (Fabio 2026-09-11) ===
+  // Capability token opaco ricevuto in meta.event_id a fine turno.
+  // Presente SOLO su entry role="ai" recenti (RAM-only, non persistito
+  // in DB locale). Il long-press sulla bolla lo passa a KodaFeedbackMenu
+  // → POST /api/feedback. Zero user_id nel flusso.
+  event_id?: string | null;
 };
 
 export type ProfileSettings = {

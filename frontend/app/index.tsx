@@ -100,6 +100,7 @@ import RadialGlow from "../components/RadialGlow";
 import InfoModal from "../components/InfoModal";
 import SafetyAlert from "../components/SafetyAlert";
 import FreemiumCounter from "../components/FreemiumCounter";
+import { KodaFeedbackMenu } from "../components/KodaFeedbackMenu";
 // import ProactiveOffer from "../components/ProactiveOffer";  // Blocco A: rimosso
 import {
   loadBorderCalibration,
@@ -394,6 +395,11 @@ export default function Taccuino() {
     "empty" | "cache" | "network"
   >("empty");
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
+  // === FEEDBACK LOOP STATE (Fabio 2026-09-11) ===
+  // Il long-press su una bolla AI setta l'event_id qui → KodaFeedbackMenu
+  // si apre. null → menu chiuso. Non persistito: sopravvive solo alla
+  // sessione app corrente.
+  const [feedbackEventId, setFeedbackEventId] = useState<string | null>(null);
 
   // === ORB MEASURE 2026-08 (debug parity home ↔ intro) ===
   // measureInWindow ci dà le coordinate assolute dell'orb rispetto alla
@@ -3017,6 +3023,7 @@ export default function Taccuino() {
                           tone: (meta.tone as Tone) || "warm",
                           timestamp: new Date().toISOString(),
                           actions: meta.actions || undefined,
+                          event_id: meta.event_id || null,
                         };
                         setTimeline((prev) => {
                           const filtered = prev.filter((e) => e.id !== optimistic.id);
@@ -3068,6 +3075,7 @@ export default function Taccuino() {
                       tone: (meta.tone as Tone) || "warm",
                       timestamp: new Date().toISOString(),
                       actions: meta.actions || undefined,
+                      event_id: meta.event_id || null,
                     };
                     setTimeline((prev) => {
                       const filtered = prev.filter((e) => e.id !== optimistic.id);
@@ -5581,16 +5589,39 @@ export default function Taccuino() {
               </View>
             </View>
           ) : (
-            <Bubble
-              entry={it.entry}
-              onReplay={replayMessage}
-              onGhost={ghostMessage}
-              bubbleAccent={bubbleAccent}
-              bubbleStyle={bubbleStyle}
-              textOnBubble={textOnBubble}
-              textSize={textSize}
-              aiFontFamily={aiFontFamily}
-            />
+            // === FEEDBACK LOOP LONG-PRESS (Fabio 2026-09-11) ===
+            // Long-press sulla bolla AI apre KodaFeedbackMenu (privacy-safe).
+            // Wrap solo la bolla AI: sui msg user il long-press resta libero
+            // per eventuali menu native (copia testo, ecc).
+            it.entry.role === "ai" && it.entry.event_id ? (
+              <Pressable
+                onLongPress={() => setFeedbackEventId(it.entry.event_id!)}
+                delayLongPress={500}
+                android_ripple={{ color: "transparent" }}
+              >
+                <Bubble
+                  entry={it.entry}
+                  onReplay={replayMessage}
+                  onGhost={ghostMessage}
+                  bubbleAccent={bubbleAccent}
+                  bubbleStyle={bubbleStyle}
+                  textOnBubble={textOnBubble}
+                  textSize={textSize}
+                  aiFontFamily={aiFontFamily}
+                />
+              </Pressable>
+            ) : (
+              <Bubble
+                entry={it.entry}
+                onReplay={replayMessage}
+                onGhost={ghostMessage}
+                bubbleAccent={bubbleAccent}
+                bubbleStyle={bubbleStyle}
+                textOnBubble={textOnBubble}
+                textSize={textSize}
+                aiFontFamily={aiFontFamily}
+              />
+            )
           )
         }
         getItemType={(it) =>
@@ -7466,6 +7497,14 @@ export default function Taccuino() {
         onClose={() => setShowInfo(false)}
         aiName={profile?.ai_name || "Coda"}
         theme={theme}
+      />
+
+      {/* === FEEDBACK LOOP MENU (Fabio 2026-09-11) === */}
+      <KodaFeedbackMenu
+        eventId={feedbackEventId}
+        onClose={() => setFeedbackEventId(null)}
+        bgColor={bubbleAccent}
+        fgColor={textOnBubble}
       />
 
       {/* Seal Setup Modal — RIMOSSO (Blocco B, Confessionale cancellato) */}

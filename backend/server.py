@@ -51,6 +51,11 @@ from fastapi.responses import Response
 # La wiring qui sotto (`_consume_paid_seconds`, `_compute_paid_state`,
 # `_ensure_ledger`) collega il ledger al pipeline TTS reale.
 import subscription_ledger as _sub_ledger
+# === KODA FEEDBACK LOOP (Fabio 2026-09-11) ================================
+# Privacy-by-design: nessun user_id, nessun testo, timestamp a risoluzione
+# ORA. Aggancia il record `koda_events` a fine turno, ritorna `event_id`
+# al client per il feedback later. Vedi koda_feedback.py per lo schema.
+import koda_feedback as _koda_fb
 
 # === Sealed Confessional crypto — RIMOSSO (Blocco B, feature deprecata) ===
 import base64  # ancora usato altrove nel file (safety, whisper base64 audio)
@@ -6189,6 +6194,171 @@ async def api_subscription_sync(req: SubscriptionSyncRequest):
         "subscription_active": p.subscription_active,
         "subscription_tier": p.subscription_tier,
     }
+
+
+class FeedbackSubmitRequest(BaseModel):
+    """POST /api/feedback body — Fabio 2026-09-11."""
+    event_id: str
+    feedback_type: str  # "positive" | "negative"
+    feedback_category: Optional[str] = None  # solo per negative
+
+
+@api_router.post("/feedback")
+async def api_feedback_submit(req: FeedbackSubmitRequest):
+    """Registra il feedback utente per un event_id emesso a fine turno.
+
+    Privacy: nessun user_id salvato. L'unico "link" tra client e evento è
+    `event_id` (UUID capability) che il client tiene in RAM per la finestra
+    di feedback. Nessun modo di sapere lato server chi ha dato il feedback.
+
+    Idempotente: se l'event ha già feedback, restituisce 409.
+    """
+    ok, err = _koda_fb.validate_feedback(req.feedback_type, req.feedback_category)
+    if not ok:
+        raise HTTPException(400, err)
+    ev = await db.koda_events.find_one({"event_id": req.event_id})
+    if not ev:
+        raise HTTPException(404, "event_id not found or expired")
+    if ev.get("feedback_type") is not None:
+        raise HTTPException(409, "feedback already recorded for this event")
+    await db.koda_events.update_one(
+        {"event_id": req.event_id},
+        {"$set": {
+            "feedback_type": req.feedback_type,
+            "feedback_category": req.feedback_category,
+            "reviewed_at_bucket": _koda_fb.now_bucket_hour(),
+        }},
+    )
+    return {"ok": True}
+
+
+@api_router.get("/admin/feedback-stats")
+async def api_admin_feedback_stats(
+    days: int = 7,
+    admin_token: Optional[str] = None,
+):
+    """Aggregazione feedback per combinazione tono/intensity/trigger/model.
+
+    Ritorna per ogni combinazione: total_events, total_feedback,
+    positive_count, negative_count, feedback_rate, negative_feedback_rate,
+    confidence_flag, categories breakdown.
+
+    Regole azione (documentate, NON automatiche):
+      - confidence_flag=="solid" + negative_feedback_rate > 0.4 →
+        candidato per revisione manuale delle regole classifier/prompt.
+      - "weak" → segnale osservabile non azionabile.
+      - "insufficient" → ignora.
+    """
+    expected = os.environ.get("KODA_ADMIN_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(503, "admin endpoint disabled (KODA_ADMIN_TOKEN unset)")
+    if admin_token != expected:
+        raise HTTPException(403, "invalid admin_token")
+
+    days = max(1, min(days, 90))
+    from datetime import timedelta as _td
+    cutoff_day = (datetime.now(timezone.utc).date() - _td(days=days)).strftime("%Y-%m-%d")
+
+    pipeline = [
+        {"$match": {"created_at_bucket": {"$gte": cutoff_day}}},
+        {"$group": {
+            "_id": {
+                "tone_family":    "$tone_family",
+                "intensity_band": "$intensity_band",
+                "trigger_group":  "$trigger_group",
+                "voice_model":    "$voice_model",
+            },
+            "total_events": {"$sum": 1},
+            "positive_count": {"$sum": {"$cond": [{"$eq": ["$feedback_type", "positive"]}, 1, 0]}},
+            "negative_count": {"$sum": {"$cond": [{"$eq": ["$feedback_type", "negative"]}, 1, 0]}},
+            "cat_too_cold":       {"$sum": {"$cond": [{"$eq": ["$feedback_category", "too_cold"]}, 1, 0]}},
+            "cat_too_intense":    {"$sum": {"$cond": [{"$eq": ["$feedback_category", "too_intense"]}, 1, 0]}},
+            "cat_missed_meaning": {"$sum": {"$cond": [{"$eq": ["$feedback_category", "missed_meaning"]}, 1, 0]}},
+            "cat_wrong_moment":   {"$sum": {"$cond": [{"$eq": ["$feedback_category", "wrong_moment"]}, 1, 0]}},
+            "cat_other":          {"$sum": {"$cond": [{"$eq": ["$feedback_category", "other"]}, 1, 0]}},
+        }},
+        {"$sort": {"total_events": -1}},
+        {"$limit": 500},
+    ]
+    by_combo: List[Dict[str, Any]] = []
+    async for row in db.koda_events.aggregate(pipeline):
+        key = row["_id"]
+        total_events = int(row["total_events"])
+        total_feedback = int(row["positive_count"]) + int(row["negative_count"])
+        feedback_rate = (total_feedback / total_events) if total_events else 0.0
+        negative_rate = (row["negative_count"] / total_feedback) if total_feedback else 0.0
+        by_combo.append({
+            **key,
+            "total_events": total_events,
+            "total_feedback": total_feedback,
+            "positive_count": int(row["positive_count"]),
+            "negative_count": int(row["negative_count"]),
+            "feedback_rate": round(feedback_rate, 4),
+            "negative_feedback_rate": round(negative_rate, 4),
+            "confidence_flag": _koda_fb.confidence_flag(total_feedback, feedback_rate),
+            "categories": {
+                "too_cold":       int(row["cat_too_cold"]),
+                "too_intense":    int(row["cat_too_intense"]),
+                "missed_meaning": int(row["cat_missed_meaning"]),
+                "wrong_moment":   int(row["cat_wrong_moment"]),
+                "other":          int(row["cat_other"]),
+            },
+        })
+    # Totali globali
+    totals_pipe = [
+        {"$match": {"created_at_bucket": {"$gte": cutoff_day}}},
+        {"$group": {
+            "_id": None,
+            "total_events": {"$sum": 1},
+            "positive": {"$sum": {"$cond": [{"$eq": ["$feedback_type", "positive"]}, 1, 0]}},
+            "negative": {"$sum": {"$cond": [{"$eq": ["$feedback_type", "negative"]}, 1, 0]}},
+        }}
+    ]
+    totals = {"total_events": 0, "positive": 0, "negative": 0, "feedback_rate": 0.0}
+    async for row in db.koda_events.aggregate(totals_pipe):
+        te = int(row["total_events"])
+        tp = int(row["positive"])
+        tn = int(row["negative"])
+        totals = {
+            "total_events": te,
+            "positive": tp,
+            "negative": tn,
+            "feedback_rate": round((tp + tn) / te, 4) if te else 0.0,
+        }
+    return {
+        "days_requested": days,
+        "cutoff_day": cutoff_day,
+        "totals": totals,
+        "by_combination": by_combo,
+    }
+
+
+@api_router.post("/admin/feedback/purge")
+async def api_admin_feedback_purge(
+    admin_token: Optional[str] = None,
+    older_than_hours: int = 24,
+):
+    """Cancella event senza feedback più vecchi di N ore (default 24).
+
+    Chi ha dato feedback resta in DB (dataset di analisi). Chi non ha dato
+    feedback viene eliminato → non si può risalire a nulla di quel turno.
+    Da chiamare via cron esterno (Railway cron o job on-demand).
+    """
+    expected = os.environ.get("KODA_ADMIN_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(503, "admin endpoint disabled (KODA_ADMIN_TOKEN unset)")
+    if admin_token != expected:
+        raise HTTPException(403, "invalid admin_token")
+    older_than_hours = max(1, min(older_than_hours, 24 * 90))
+    from datetime import timedelta as _td
+    cutoff = datetime.now(timezone.utc) - _td(hours=older_than_hours)
+    cutoff_bucket = cutoff.strftime("%Y-%m-%d-%H")
+    r = await db.koda_events.delete_many({
+        "feedback_type": None,
+        "created_at_bucket": {"$lt": cutoff_bucket},
+    })
+    logger.info(f"[feedback/purge] deleted {r.deleted_count} unreviewed events < {cutoff_bucket}")
+    return {"ok": True, "deleted": r.deleted_count, "cutoff_bucket": cutoff_bucket}
 
 
 @api_router.get("/admin/classifier-stats")
@@ -15341,11 +15511,39 @@ async def _fast_pipeline_task(
             actions=[Action(**{k: v for k, v in a.items() if k in Action.model_fields}) for a in parsed_actions if isinstance(a, dict)],
         )
 
+        # === KODA FEEDBACK EVENT ID scope — Fabio 2026-09-11 ===
+        # Inizializzato PRIMA di `if not ephemeral` così è sempre accessibile
+        # nel payload meta finale (anche su ephemeral turns, dove resta None).
+        _fb_event_id: Optional[str] = None
+
         if not ephemeral:
             try:
                 await db.taccuino_timeline.insert_one(ai_entry.model_dump())
             except Exception as e:
                 logger.error(f"[fast] AI entry insert failed: {e}")
+            # === KODA FEEDBACK EVENT (Fabio 2026-09-11) ============================
+            # Insert privacy-safe event per feedback loop. Zero user_id,
+            # zero testo — solo bucket categoriali. event_id ritornato al
+            # client in meta.event_id per feedback later. Vedi koda_feedback.py.
+            try:
+                _int = int(turn_tts_state.get("classifier_intensity", 2))
+            except Exception:
+                _int = 2
+            _model_used = (
+                turn_tts_state.get("classifier_model")
+                or ("eleven_flash_v2_5" if turn_tts_state.get("locked_flash") else "eleven_turbo_v2_5")
+            )
+            try:
+                _event = _koda_fb.build_event(
+                    user_text=text or "",
+                    tone_final=ai_entry.tone or "warm",
+                    intensity=_int,
+                    voice_model=_model_used,
+                )
+                await db.koda_events.insert_one(_event)
+                _fb_event_id = _event["event_id"]
+            except Exception as _fb_err:
+                logger.warning(f"[feedback] event insert failed: {_fb_err}")
             try:
                 profile.total_messages += 1
                 profile.confidence_level = min(100, profile.confidence_level + 1)
@@ -15480,6 +15678,11 @@ async def _fast_pipeline_task(
             # nel fast pipeline (vedi riga ~3360 litellm.acompletion).
             "model": "claude-haiku-4-5",
             "path": "fast",
+            # === KODA FEEDBACK EVENT ID (Fabio 2026-09-11) ===
+            # Capability token per POST /api/feedback later. Il client lo
+            # tiene in RAM per la finestra di feedback (~5 min). Zero link
+            # a user_id / session_id lato server → privacy-by-design.
+            "event_id": _fb_event_id,
             # === KODA_SUMMARY timing breakdown (sprint v12) ===
             # I tre numeri che fanno capire dove vanno i secondi:
             #   llm_ttft_ms = quanto ha aspettato il backend prima del primo
