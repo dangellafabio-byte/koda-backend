@@ -6355,6 +6355,143 @@ async def api_admin_feedback_purge(
     logger.info(f"[feedback/purge] deleted {r.deleted_count} unreviewed events < {cutoff_bucket}")
     return {"ok": True, "deleted": r.deleted_count, "cutoff_bucket": cutoff_bucket}
 
+@api_router.get("/admin/tts-ratio")
+async def api_admin_tts_ratio(
+    days: int = 7,
+    admin_token: Optional[str] = None,
+):
+    """EXPERIMENT D — TTS reali / minuti conversazione (Fabio 2026-06).
+
+    Aggrega `koda_events` per rispondere:
+      "230 min di piano venduti = quanti min TTS Koda effettivi?"
+
+    Restituisce:
+      - totali: total_events, tts_seconds, user_audio_seconds
+      - ratio: tts_seconds / (user_audio_seconds + tts_seconds)
+      - projection_230min: minuti TTS reali attesi per un piano da 230 min
+        di conversazione totale, e costo ElevenLabs stimato (€0.023/min).
+      - by_voice_model: breakdown per modello (v3 / turbo / flash) —
+        utile per capire dove va il budget.
+
+    NB: i campi `tts_seconds` e `user_audio_ms` sono stati aggiunti a
+    `koda_events` il 2026-06 (Experiment D). Eventi antecedenti non li
+    hanno; vengono ignorati dai $match.
+    """
+    expected = os.environ.get("KODA_ADMIN_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(503, "admin endpoint disabled (KODA_ADMIN_TOKEN unset)")
+    if admin_token != expected:
+        raise HTTPException(403, "invalid admin_token")
+
+    days = max(1, min(days, 90))
+    from datetime import timedelta as _td
+    cutoff_day = (datetime.now(timezone.utc).date() - _td(days=days)).strftime("%Y-%m-%d")
+
+    # Match: eventi nel window con almeno un valore utilizzabile
+    match_stage = {
+        "created_at_bucket": {"$gte": cutoff_day},
+        "$or": [
+            {"tts_seconds": {"$gt": 0}},
+            {"user_audio_ms": {"$gt": 0}},
+        ],
+    }
+
+    # Totali globali
+    totals_pipe = [
+        {"$match": match_stage},
+        {"$group": {
+            "_id": None,
+            "total_events": {"$sum": 1},
+            "tts_seconds_sum": {"$sum": {"$ifNull": ["$tts_seconds", 0]}},
+            "tts_chunks_sum": {"$sum": {"$ifNull": ["$tts_chunks_count", 0]}},
+            "user_audio_ms_sum": {"$sum": {"$ifNull": ["$user_audio_ms", 0]}},
+            "events_with_tts": {"$sum": {"$cond": [{"$gt": ["$tts_seconds", 0]}, 1, 0]}},
+            "events_with_user_audio": {"$sum": {"$cond": [{"$gt": ["$user_audio_ms", 0]}, 1, 0]}},
+        }}
+    ]
+    totals = {
+        "total_events": 0,
+        "tts_seconds": 0.0,
+        "tts_chunks": 0,
+        "user_audio_seconds": 0.0,
+        "events_with_tts": 0,
+        "events_with_user_audio": 0,
+    }
+    async for row in db.koda_events.aggregate(totals_pipe):
+        totals = {
+            "total_events": int(row.get("total_events", 0)),
+            "tts_seconds": round(float(row.get("tts_seconds_sum", 0.0)), 2),
+            "tts_chunks": int(row.get("tts_chunks_sum", 0)),
+            "user_audio_seconds": round(float(row.get("user_audio_ms_sum", 0)) / 1000.0, 2),
+            "events_with_tts": int(row.get("events_with_tts", 0)),
+            "events_with_user_audio": int(row.get("events_with_user_audio", 0)),
+        }
+
+    # Ratio + projection
+    total_conv_s = float(totals["tts_seconds"]) + float(totals["user_audio_seconds"])
+    ratio = (float(totals["tts_seconds"]) / total_conv_s) if total_conv_s > 0 else 0.0
+    # Avg per-turn
+    avg_tts_per_turn = (
+        float(totals["tts_seconds"]) / float(totals["events_with_tts"])
+        if totals["events_with_tts"] else 0.0
+    )
+    avg_user_per_turn = (
+        float(totals["user_audio_seconds"]) / float(totals["events_with_user_audio"])
+        if totals["events_with_user_audio"] else 0.0
+    )
+    # Projection: per un piano di 230 min di CONVERSAZIONE totale,
+    # quanti minuti di TTS reale genera?
+    ELEVEN_COST_PER_MIN_EUR = 0.023  # tariffa ElevenLabs indicativa
+    projected_tts_min_for_230 = round((230.0 * ratio), 2)
+    projected_cost_eur_for_230 = round(projected_tts_min_for_230 * ELEVEN_COST_PER_MIN_EUR, 3)
+
+    # Breakdown per voice_model
+    by_model_pipe = [
+        {"$match": match_stage},
+        {"$group": {
+            "_id": "$voice_model",
+            "events": {"$sum": 1},
+            "tts_seconds": {"$sum": {"$ifNull": ["$tts_seconds", 0]}},
+            "tts_chunks": {"$sum": {"$ifNull": ["$tts_chunks_count", 0]}},
+            "user_audio_ms": {"$sum": {"$ifNull": ["$user_audio_ms", 0]}},
+        }},
+        {"$sort": {"tts_seconds": -1}},
+    ]
+    by_voice_model: List[Dict[str, Any]] = []
+    async for row in db.koda_events.aggregate(by_model_pipe):
+        model = row.get("_id") or "unknown"
+        tts_s = float(row.get("tts_seconds", 0.0))
+        user_s = float(row.get("user_audio_ms", 0)) / 1000.0
+        conv_s = tts_s + user_s
+        r = (tts_s / conv_s) if conv_s > 0 else 0.0
+        by_voice_model.append({
+            "voice_model": model,
+            "events": int(row.get("events", 0)),
+            "tts_seconds": round(tts_s, 2),
+            "tts_chunks": int(row.get("tts_chunks", 0)),
+            "user_audio_seconds": round(user_s, 2),
+            "ratio_tts_over_total": round(r, 4),
+            "cost_eur_estimate": round((tts_s / 60.0) * ELEVEN_COST_PER_MIN_EUR, 3),
+        })
+
+    return {
+        "days_requested": days,
+        "cutoff_day": cutoff_day,
+        "totals": totals,
+        "ratio_tts_over_total": round(ratio, 4),
+        "avg_tts_seconds_per_turn": round(avg_tts_per_turn, 2),
+        "avg_user_audio_seconds_per_turn": round(avg_user_per_turn, 2),
+        "projection": {
+            "plan_minutes_sold": 230,
+            "expected_tts_minutes": projected_tts_min_for_230,
+            "expected_tts_cost_eur": projected_cost_eur_for_230,
+            "cost_per_min_eur_ref": ELEVEN_COST_PER_MIN_EUR,
+        },
+        "by_voice_model": by_voice_model,
+    }
+
+
+
 
 @api_router.get("/admin/classifier-stats")
 async def api_admin_classifier_stats(
@@ -14160,7 +14297,17 @@ async def _fast_pipeline_task(
         # timbrica dentro il turno. Meglio "tutto flash" di "misto".
         # Rimane naturale la variazione tra TURNI diversi (nuovo turno =
         # nuovo tentativo v3, se riesce restiamo su v3 per tutto quel turno).
-        turn_tts_state: Dict[str, Any] = {"locked_flash": False, "reason": None}
+        turn_tts_state: Dict[str, Any] = {
+            "locked_flash": False,
+            "reason": None,
+            # === EXPERIMENT D — accumulatori TTS reali (Fabio 2026-06) =========
+            # Sommiamo qui la durata di OGNI chunk TTS sintetizzato con
+            # successo nel turno. A fine turno finiscono nel record
+            # `koda_events` (scalari privacy-safe, già presenti nei log).
+            # Alimentano l'endpoint /api/admin/tts-ratio.
+            "tts_seconds_total": 0.0,
+            "tts_chunks_count": 0,
+        }
         ttft_logged = False
         first_audio_logged = False
         current_tone = "warm"
@@ -14762,6 +14909,18 @@ async def _fast_pipeline_task(
                         f"chunk_dur_seconds={_dur_chunk_all:.3f} "
                         f"chunk_bytes={len(audio_bytes)}"
                     )
+                    # === EXPERIMENT D — accumulo turn-level (Fabio 2026-06) ==
+                    # Somma di TUTTI i chunk TTS del turno. Verrà persistito
+                    # nel record `koda_events` a fine turno per aggregation
+                    # via /api/admin/tts-ratio.
+                    if _dur_chunk_all > 0.0:
+                        turn_tts_state["tts_seconds_total"] = (
+                            float(turn_tts_state.get("tts_seconds_total", 0.0))
+                            + float(_dur_chunk_all)
+                        )
+                        turn_tts_state["tts_chunks_count"] = (
+                            int(turn_tts_state.get("tts_chunks_count", 0)) + 1
+                        )
                 except Exception:
                     _dur_chunk_all = 0.0
                 # === TRIAL / PAID ACCOUNTING (WS free-talk) — Fabio 2026-09-06 ===
@@ -15535,6 +15694,25 @@ async def _fast_pipeline_task(
                     intensity=_int,
                     voice_model=_model_used,
                 )
+                # === EXPERIMENT D — scalari TTS/user audio (Fabio 2026-06) ===
+                # Aggiungiamo qui le metriche già loggate (KODA_TTS_DUR /
+                # USER_PAYLOAD). Sono NUMERI PURI, zero re-identificazione.
+                # Alimentano /api/admin/tts-ratio per rispondere alla
+                # domanda: "230 min di piano venduti = quanti min TTS?"
+                try:
+                    _event["tts_seconds"] = round(
+                        float(turn_tts_state.get("tts_seconds_total", 0.0)), 3
+                    )
+                    _event["tts_chunks_count"] = int(
+                        turn_tts_state.get("tts_chunks_count", 0)
+                    )
+                    _event["user_audio_ms"] = (
+                        int(audio_duration_ms)
+                        if isinstance(audio_duration_ms, (int, float)) and audio_duration_ms > 0
+                        else None
+                    )
+                except Exception:
+                    pass
                 await db.koda_events.insert_one(_event)
                 _fb_event_id = _event["event_id"]
             except Exception as _fb_err:

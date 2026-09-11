@@ -1204,3 +1204,46 @@ Coerente col pattern trial: il consume avviene DOPO la generazione TTS. Se il co
 
 - Enforcement WS `/api/voice/stream` (attualmente solo tracking, non gate). Aggiungere quando serve blocco immediato mid-stream (raro: il consume avviene chunk-by-chunk quindi il gate al PROSSIMO turno via `/api/tts` è sufficiente).
 - Webhook RC (`/subscription/webhook`) usa tier legacy (`plus/daily/essential`). Non aggiornato — mapping tier RC→interno è task separato.
+
+## EXPERIMENT D — TTS Ratio Endpoint (2026-06)
+
+**Obiettivo:** rispondere a "230 min di piano venduti = quanti min TTS reali?" senza dover parsare log Railway.
+
+### Cosa è stato fatto
+
+1. **Persistenza scalari TTS in `koda_events`** (privacy-safe: solo numeri, zero user_id, zero testo):
+   - `tts_seconds` (float): somma durata di tutti i chunk TTS del turno
+   - `tts_chunks_count` (int): numero di chunk sintetizzati
+   - `user_audio_ms` (int|null): durata parlato utente dal payload STT
+
+2. **Accumulo turn-level in `turn_tts_state`** (`server.py` `_fast_pipeline_task`):
+   - Nuovi campi `tts_seconds_total` / `tts_chunks_count` incrementati in `_synth_and_publish` accanto al log `[KODA_TTS_DUR]` esistente.
+   - Persistiti sul record `koda_events` a fine turno (line ~15540).
+
+3. **Nuovo endpoint `GET /api/admin/tts-ratio`** (auth: `KODA_ADMIN_TOKEN`):
+   - Aggrega ultimi N giorni (max 90).
+   - Ritorna:
+     - `totals`: events, tts_seconds, user_audio_seconds, chunks
+     - `ratio_tts_over_total`: TTS/(TTS+user)
+     - `avg_*_per_turn`
+     - `projection.expected_tts_minutes` e `expected_tts_cost_eur` per 230 min di piano (€0.023/min ElevenLabs ref)
+     - `by_voice_model`: breakdown v3/turbo/flash per capire dove va il budget
+
+### Test verificato
+
+Seed 30 eventi (20 turbo 10s+5s user, 10 flash 7s+4s user) → endpoint ritorna:
+- Totali: 270s TTS, 140s user (410s conv)
+- Ratio: 0.6585
+- Projection 230 min: 151.46 min TTS = **3.48€/mese** ElevenLabs
+- Breakdown turbo/flash coerente
+
+### File modificati
+
+- `/app/backend/server.py`: nuovi campi `turn_tts_state`, accumulo in `_synth_and_publish`, persist in `koda_events`, nuovo `@api_router.get("/admin/tts-ratio")` (line 6358).
+- `/app/backend/.env`: aggiunto placeholder `KODA_ADMIN_TOKEN` (da ruotare in prod Railway).
+
+### Note operative
+
+- Eventi ANTECEDENTI al deploy non hanno `tts_seconds`/`user_audio_ms` → esclusi dal $match. La finestra utile di dati parte dal deploy.
+- Il token admin è lo stesso di `/api/admin/feedback/stats` — riuso identità.
+
