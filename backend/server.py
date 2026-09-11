@@ -14157,12 +14157,21 @@ async def _fast_pipeline_task(
                 # === FIX 2026-08-14 (Fabio) — TTS INTENSITY CLASSIFIER v0 ===
                 # Se `KODA_TTS_CLASSIFIER_ENABLED=1` è attivo, il classificatore
                 # pure-Python decide V3 vs Turbo v2.5 in base al testo+tone
-                # già prodotti da Claude (traffic split atteso: 83% Turbo /
-                # 17% V3). La decisione è fissata sul chunk 0 e riusata per
-                # tutti i chunk successivi dello stesso turno via
+                # già prodotti da Claude. La decisione è fissata sul chunk 0 e
+                # riusata per tutti i chunk successivi dello stesso turno via
                 # `turn_tts_state["classifier_model"]` — così NON si sente
                 # cambio timbrico intra-turno. Zero modifica al prompt.
-                # PRIORITÀ: locked_flash (safety) > classifier_model > v3
+                #
+                # === FIX 2026-09-11 (Fabio) — V3 MAI COME DEFAULT ===
+                # Prima del fix: `else` finale e `except` di questo blocco
+                # cadevano su `model_id = "eleven_v3"` hardcoded → V3
+                # sfuggiva al gate classifier+pacing (buco silenzioso).
+                # Ora il default è `eleven_turbo_v2_5`: V3 è raggiungibile
+                # SOLO se il classifier lo sceglie ESPLICITAMENTE
+                # (intensity==4 o safety_nums) e passa il pacing giornaliero.
+                # Coerente con la policy "V3 come eccezione vera".
+                #
+                # PRIORITÀ: locked_flash (safety) > classifier_model > classifier > TURBO default
                 if turn_tts_state.get("locked_flash"):
                     model_id = "eleven_flash_v2_5"
                     logger.info(
@@ -14171,24 +14180,20 @@ async def _fast_pipeline_task(
                     )
                 elif turn_tts_state.get("classifier_model"):
                     # Turno corrente: la decisione del classifier è già stata
-                    # presa sul chunk 0 → riusa per chunk 1+ (coerenza timbrica).
+                    # presa → riusa per coerenza timbrica intra-turno.
                     model_id = turn_tts_state["classifier_model"]
                 elif (
                     _TTS_CLASSIFIER_AVAILABLE
                     and os.environ.get("KODA_TTS_CLASSIFIER_ENABLED") == "1"
-                    and idx == 0
                 ):
-                    # Chunk 0: chiamata al classifier. Il testo qui è ancora
-                    # breve (aggressive early chunk, ~80 char) ma abbiamo già
-                    # `current_tone` estratto dal reply prefix [TONE:xxx].
-                    # Il classifier è progettato per fare safe fallback a V3
-                    # se il segnale è insufficiente (tone None o pochi words).
+                    # FIX 2026-09-11: rimosso il vincolo `idx == 0` — se per
+                    # qualsiasi motivo (eccezione, race) il chunk 0 NON ha
+                    # salvato una decisione, chunk N chiama il classifier con
+                    # il testo che ha (che è comunque migliore del default
+                    # V3 hardcoded precedente).
                     try:
                         _dec = _tts_classify(clean_tts, current_tone)
                         # === V3 DAILY BUDGET PACING (Fabio 2026-09-11) ===
-                        # Applica il gate giornaliero DOPO la decisione del
-                        # classifier: se il budget V3 è esaurito, downgrade
-                        # silente a Turbo. Zero messaggi utente.
                         _final_model, _final_reason, _tele = await _gate_v3_daily_budget(
                             profile, _dec
                         )
@@ -14199,7 +14204,7 @@ async def _fast_pipeline_task(
                         turn_tts_state["classifier_reason"] = _final_reason
                         logger.info(
                             f"[KODA_CLASSIFIER] sid={session_id[:8]} "
-                            f"tone={current_tone} mode={_dec.mode} "
+                            f"idx={idx} tone={current_tone} mode={_dec.mode} "
                             f"intensity={_dec.intensity} words={_dec.n_words} "
                             f"reason={_final_reason} → model={_final_model} "
                             f"[pacing v3={_tele.get('v3_used')}/{_tele.get('v3_budget')} "
@@ -14207,16 +14212,24 @@ async def _fast_pipeline_task(
                             f"downgrades={_tele.get('downgrades_paced')}]"
                         )
                     except Exception as _cls_err:
-                        # Fallback silente a V3 (comportamento attuale) se il
-                        # classifier per QUALSIASI motivo alza — mai rompere il
-                        # turno per un errore del layer di ottimizzazione.
-                        model_id = "eleven_v3"
+                        # FIX 2026-09-11: fallback → Turbo (era V3). V3 mai
+                        # come default silenzioso. Salviamo in state per
+                        # coerenza chunk 1+.
+                        model_id = "eleven_turbo_v2_5"
+                        turn_tts_state["classifier_model"] = "eleven_turbo_v2_5"
+                        turn_tts_state["classifier_reason"] = "classifier_error_turbo_default"
                         logger.warning(
                             f"[KODA_CLASSIFIER] sid={session_id[:8]} "
-                            f"error={_cls_err!r} → fallback v3"
+                            f"idx={idx} error={_cls_err!r} → fallback TURBO (was v3)"
                         )
                 else:
-                    model_id = "eleven_v3"
+                    # FIX 2026-09-11: classifier disabilitato → default Turbo
+                    # (era V3). Coerente con "V3 solo se scelto esplicitamente".
+                    # NB: se si vuole tornare al comportamento V3-always
+                    # baseline, disabilitare il classifier lascia comunque
+                    # Turbo — richiede rollback esplicito di questo commit.
+                    model_id = "eleven_turbo_v2_5"
+                    turn_tts_state["classifier_model"] = "eleven_turbo_v2_5"
 
                 def _do_tts():
                     audio = bytearray()
