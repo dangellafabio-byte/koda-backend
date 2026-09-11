@@ -1092,6 +1092,37 @@ export default function LasciaAndareScreen() {
 
   const onPillTap = useCallback(async () => {
     console.log(`[KODA_LA_PILL] tap Parla con Koda`);
+    // === FIX 2026-09-11 (Fabio — no paywall/demo per Premium) ================
+    // Prima di questo fix, il pill mandava SEMPRE a /microdemo o /paywall,
+    // ignorando il tier dell'utente. Sintomo: Fabio (Premium) vedeva la
+    // barriera "passa a Premium" pur essendo già Premium.
+    // Ora: legge la cache locale del profilo; Premium → chat piena (/),
+    // Free → mantiene il flusso demo/paywall originale.
+    try {
+      const cached = await loadProfileCache<Profile>();
+      const tier = (cached as any)?.subscription_tier || null;
+      const isPaid =
+        tier === "monthly" ||
+        tier === "bimonthly" ||
+        tier === "annual" ||
+        tier === "unlimited";
+      if (isPaid) {
+        console.log(`[KODA_LA_PILL] Premium (${tier}) → chat piena`);
+        // Premium: se la LA è stata aperta DALLA chat (Home), torna
+        // indietro per non impilare due Home nello stack. Altrimenti
+        // replace a "/".
+        if (router.canGoBack()) {
+          router.back();
+        } else {
+          router.replace("/");
+        }
+        return;
+      }
+    } catch (e) {
+      console.warn(`[KODA_LA_PILL] tier read failed, fallback Free flow:`, e);
+    }
+
+    // Utente Free: flusso originale con rate-limit microdemo
     try {
       const lastAtStr = await SecureStore.getItemAsync("microdemo_last_at");
       const lastAt = lastAtStr ? parseInt(lastAtStr, 10) : 0;
@@ -1099,11 +1130,12 @@ export default function LasciaAndareScreen() {
       const now = Date.now();
       if (lastAt && now - lastAt < RATE_LIMIT_MS) {
         // Fuori rate-limit → paywall diretto
-        console.log(`[KODA_LA_PILL] rate-limited → paywall`);
+        console.log(`[KODA_LA_PILL] Free rate-limited → paywall`);
         router.push("/paywall?variant=post-demo");
         return;
       }
       // Ok → naviga alla demo
+      console.log(`[KODA_LA_PILL] Free → /microdemo`);
       router.push("/microdemo");
     } catch (e) {
       console.warn(`[KODA_LA_PILL] tap handler failed:`, e);
