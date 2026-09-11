@@ -1,12 +1,10 @@
 """
-test_feedback_flow.py — Fabio 2026-09-11
+test_feedback_flow.py — Fabio 2026-09-11 (v2 semplificato)
 
-Test integrazione feedback loop:
-  1. Insert event fittizio in koda_events
-  2. POST /api/feedback → aggiorna
-  3. Retry POST /api/feedback → 409 conflict
-  4. GET /api/admin/feedback-stats → aggregation corretta
-  5. POST /api/admin/feedback/purge → cancella event senza feedback
+Test integrazione feedback loop v2:
+  - Solo NEGATIVE feedback (nessun positive)
+  - 2 categorie: wrong_content, wrong_delivery
+  - Denominatore: total_events (silenzio = positivo)
 """
 import asyncio
 import os
@@ -25,7 +23,6 @@ import server
 import koda_feedback as kfb
 
 from motor.motor_asyncio import AsyncIOMotorClient
-import httpx
 
 
 async def main():
@@ -33,80 +30,95 @@ async def main():
     db = client[os.environ["DB_NAME"]]
     server.db = db
 
-    # Cleanup dai run precedenti
     await db.koda_events.delete_many({})
     print("[cleanup] koda_events cleared\n")
 
-    # Test 1: insert diretto via koda_feedback.build_event
-    print("[test 1] Insert 5 event con diverse combinazioni...")
+    # Insert 6 event di varia natura
+    print("[test 1] Insert 6 event...")
     combos = [
         ("Non ce la faccio più, sto crollando", "concerned", 4, "eleven_v3"),
         ("Ciao come stai?", "warm", 1, "eleven_turbo_v2_5"),
         ("Il classifier è bugged", "warm", 2, "eleven_turbo_v2_5"),
         ("Sono felice, ce l'ho fatta!", "energetic", 2, "eleven_turbo_v2_5"),
         ("Mi manca troppo", "concerned", 3, "eleven_turbo_v2_5"),
+        ("Boh, uhm", "neutral", 0, "eleven_turbo_v2_5"),
     ]
     event_ids = []
     for user_text, tone, intensity, model in combos:
         e = kfb.build_event(user_text, tone, intensity, model)
         await db.koda_events.insert_one(e)
         event_ids.append(e["event_id"])
-        print(f"  ✓ {e['tone_family']:<10} {e['intensity_band']:<7} {e['trigger_group']:<22} → {e['event_id'][:8]}...")
+        print(f"  ✓ {e['tone_family']:<10} {e['intensity_band']:<7} {e['trigger_group']:<22}")
 
-    # Test 2: POST /api/feedback (uso server.api_feedback_submit direttamente)
-    print("\n[test 2] POST feedback su 3 event...")
-    for ev_id, ftype, fcat in [
-        (event_ids[0], "negative", "too_intense"),
-        (event_ids[1], "positive", None),
-        (event_ids[2], "negative", "too_cold"),
+    # 2 feedback negativi (uno per categoria)
+    print("\n[test 2] POST 2 feedback (solo negativi ammessi)...")
+    for ev_id, cat in [
+        (event_ids[0], "wrong_content"),
+        (event_ids[2], "wrong_delivery"),
     ]:
-        req = server.FeedbackSubmitRequest(event_id=ev_id, feedback_type=ftype, feedback_category=fcat)
+        req = server.FeedbackSubmitRequest(
+            event_id=ev_id, feedback_type="negative", feedback_category=cat,
+        )
         r = await server.api_feedback_submit(req)
-        print(f"  ✓ {ev_id[:8]}... {ftype:<8} {str(fcat or '-'):<15} → {r}")
+        print(f"  ✓ {ev_id[:8]}... negative/{cat:<20} → {r}")
 
-    # Test 3: retry stesso event → 409
-    print("\n[test 3] Retry feedback su event già votato...")
+    # Try positive → 400 (Pydantic rifiuta prima o validator)
+    print("\n[test 3] POST 'positive' (deve fallire)...")
     try:
-        req = server.FeedbackSubmitRequest(event_id=event_ids[0], feedback_type="positive")
+        req = server.FeedbackSubmitRequest(
+            event_id=event_ids[1], feedback_type="positive", feedback_category="wrong_content",
+        )
         await server.api_feedback_submit(req)
-        print("  ✗ MANCATO 409")
+        print("  ✗ MANCATO 400")
     except Exception as e:
-        assert "409" in str(e) or "already" in str(e).lower()
-        print(f"  ✓ 409 as expected: {str(e)[:80]}")
+        assert "400" in str(e) or "must be one of" in str(e).lower()
+        print(f"  ✓ 400 as expected: {str(e)[:80]}")
 
-    # Test 4: /admin/feedback-stats
-    print("\n[test 4] GET /admin/feedback-stats...")
+    # Try negative senza categoria → 400
+    print("\n[test 4] POST 'negative' senza categoria (deve fallire)...")
+    try:
+        req = server.FeedbackSubmitRequest(
+            event_id=event_ids[1], feedback_type="negative", feedback_category="invalid_cat",
+        )
+        await server.api_feedback_submit(req)
+        print("  ✗ MANCATO 400")
+    except Exception as e:
+        print(f"  ✓ 400 as expected: {str(e)[:80]}")
+
+    # Stats
+    print("\n[test 5] GET /admin/feedback-stats...")
     stats = await server.api_admin_feedback_stats(days=7, admin_token="test_admin_token_123")
     print(f"  totals: {stats['totals']}")
-    print(f"  by_combination ({len(stats['by_combination'])} rows):")
-    for row in stats["by_combination"][:5]:
-        print(f"    tone={row['tone_family']:<10} intensity={row['intensity_band']:<7} "
-              f"trigger={row['trigger_group']:<22} model={row['voice_model']:<20} "
-              f"total={row['total_events']} fb={row['total_feedback']} "
-              f"neg_rate={row['negative_feedback_rate']} confidence={row['confidence_flag']}")
-    assert stats["totals"]["total_events"] == 5
-    assert stats["totals"]["positive"] == 1
+    for row in stats["by_combination"][:6]:
+        print(f"    {row['tone_family']:<10} {row['intensity_band']:<7} "
+              f"{row['trigger_group']:<22} {row['voice_model']:<20} "
+              f"total={row['total_events']} neg={row['negative_count']} "
+              f"neg_rate={row['negative_rate']} conf={row['confidence_flag']} "
+              f"cats={row['categories']}")
+    assert stats["totals"]["total_events"] == 6
     assert stats["totals"]["negative"] == 2
-    assert stats["totals"]["feedback_rate"] == 0.6
+    assert stats["totals"]["negative_rate"] == round(2/6, 4)
 
-    # Test 5: purge event senza feedback (simulo age > 24h)
-    print("\n[test 5] Purge unreviewed events (older_than_hours=0)...")
-    # Modifico bucket a 2 giorni fa per far scattare il purge
+    # Purge
+    print("\n[test 6] Purge unreviewed events...")
     old_bucket = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d-%H")
     await db.koda_events.update_many(
-        {"feedback_type": None},
-        {"$set": {"created_at_bucket": old_bucket}},
+        {"feedback_type": None}, {"$set": {"created_at_bucket": old_bucket}},
     )
     r = await server.api_admin_feedback_purge(admin_token="test_admin_token_123", older_than_hours=24)
-    print(f"  ✓ purge deleted={r['deleted']} (expected 2 unreviewed)")
-    assert r["deleted"] == 2
-
-    # I 3 event con feedback devono restare
+    print(f"  ✓ purge deleted={r['deleted']} (expected 4 unreviewed)")
+    assert r["deleted"] == 4
     remaining = await db.koda_events.count_documents({})
-    assert remaining == 3, f"expected 3 events with feedback, got {remaining}"
-    print(f"  ✓ remaining events: {remaining} (tutti con feedback)")
+    assert remaining == 2
+    print(f"  ✓ remaining events: {remaining}")
 
-    # Cleanup
+    # Confidence
+    print("\n[test 7] Confidence flag...")
+    assert kfb.confidence_flag(35, 600) == "solid"
+    assert kfb.confidence_flag(15, 200) == "weak"
+    assert kfb.confidence_flag(5, 50) == "insufficient"
+    print("  ✓ solid(35, 600) / weak(15, 200) / insufficient(5, 50)")
+
     await db.koda_events.delete_many({})
     print("\n=== TUTTI I TEST PASSATI ===")
 

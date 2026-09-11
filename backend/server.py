@@ -6197,10 +6197,14 @@ async def api_subscription_sync(req: SubscriptionSyncRequest):
 
 
 class FeedbackSubmitRequest(BaseModel):
-    """POST /api/feedback body — Fabio 2026-09-11."""
+    """POST /api/feedback body — Fabio 2026-09-11 (v2 semplificato).
+
+    Solo feedback NEGATIVI. Il silenzio è il segnale positivo.
+    Categoria SEMPRE obbligatoria: `wrong_content` | `wrong_delivery`.
+    """
     event_id: str
-    feedback_type: str  # "positive" | "negative"
-    feedback_category: Optional[str] = None  # solo per negative
+    feedback_type: str  # "negative" (unico valore ammesso)
+    feedback_category: str  # "wrong_content" | "wrong_delivery"
 
 
 @api_router.post("/feedback")
@@ -6211,6 +6215,7 @@ async def api_feedback_submit(req: FeedbackSubmitRequest):
     `event_id` (UUID capability) che il client tiene in RAM per la finestra
     di feedback. Nessun modo di sapere lato server chi ha dato il feedback.
 
+    Design v2 (Fabio 2026-09-11): solo NEGATIVE + categoria obbligatoria.
     Idempotente: se l'event ha già feedback, restituisce 409.
     """
     ok, err = _koda_fb.validate_feedback(req.feedback_type, req.feedback_category)
@@ -6239,12 +6244,14 @@ async def api_admin_feedback_stats(
 ):
     """Aggregazione feedback per combinazione tono/intensity/trigger/model.
 
-    Ritorna per ogni combinazione: total_events, total_feedback,
-    positive_count, negative_count, feedback_rate, negative_feedback_rate,
-    confidence_flag, categories breakdown.
+    Design v2 (Fabio 2026-09-11): solo negativi. Denominatore = total_events.
+
+    Ritorna per ogni combinazione:
+      total_events, negative_count, negative_rate (= neg/total_events),
+      confidence_flag, categories {wrong_content, wrong_delivery}.
 
     Regole azione (documentate, NON automatiche):
-      - confidence_flag=="solid" + negative_feedback_rate > 0.4 →
+      - confidence_flag=="solid" + negative_rate > 0.10 →
         candidato per revisione manuale delle regole classifier/prompt.
       - "weak" → segnale osservabile non azionabile.
       - "insufficient" → ignora.
@@ -6269,13 +6276,9 @@ async def api_admin_feedback_stats(
                 "voice_model":    "$voice_model",
             },
             "total_events": {"$sum": 1},
-            "positive_count": {"$sum": {"$cond": [{"$eq": ["$feedback_type", "positive"]}, 1, 0]}},
             "negative_count": {"$sum": {"$cond": [{"$eq": ["$feedback_type", "negative"]}, 1, 0]}},
-            "cat_too_cold":       {"$sum": {"$cond": [{"$eq": ["$feedback_category", "too_cold"]}, 1, 0]}},
-            "cat_too_intense":    {"$sum": {"$cond": [{"$eq": ["$feedback_category", "too_intense"]}, 1, 0]}},
-            "cat_missed_meaning": {"$sum": {"$cond": [{"$eq": ["$feedback_category", "missed_meaning"]}, 1, 0]}},
-            "cat_wrong_moment":   {"$sum": {"$cond": [{"$eq": ["$feedback_category", "wrong_moment"]}, 1, 0]}},
-            "cat_other":          {"$sum": {"$cond": [{"$eq": ["$feedback_category", "other"]}, 1, 0]}},
+            "cat_wrong_content":  {"$sum": {"$cond": [{"$eq": ["$feedback_category", "wrong_content"]}, 1, 0]}},
+            "cat_wrong_delivery": {"$sum": {"$cond": [{"$eq": ["$feedback_category", "wrong_delivery"]}, 1, 0]}},
         }},
         {"$sort": {"total_events": -1}},
         {"$limit": 500},
@@ -6284,24 +6287,19 @@ async def api_admin_feedback_stats(
     async for row in db.koda_events.aggregate(pipeline):
         key = row["_id"]
         total_events = int(row["total_events"])
-        total_feedback = int(row["positive_count"]) + int(row["negative_count"])
-        feedback_rate = (total_feedback / total_events) if total_events else 0.0
-        negative_rate = (row["negative_count"] / total_feedback) if total_feedback else 0.0
+        negative_count = int(row["negative_count"])
+        # Design v2 (Fabio 2026-09-11): negativi / totale. Nessun positive
+        # esplicito. Il silenzio è il segnale positivo.
+        negative_rate_over_total = (negative_count / total_events) if total_events else 0.0
         by_combo.append({
             **key,
             "total_events": total_events,
-            "total_feedback": total_feedback,
-            "positive_count": int(row["positive_count"]),
-            "negative_count": int(row["negative_count"]),
-            "feedback_rate": round(feedback_rate, 4),
-            "negative_feedback_rate": round(negative_rate, 4),
-            "confidence_flag": _koda_fb.confidence_flag(total_feedback, feedback_rate),
+            "negative_count": negative_count,
+            "negative_rate": round(negative_rate_over_total, 4),
+            "confidence_flag": _koda_fb.confidence_flag(negative_count, total_events),
             "categories": {
-                "too_cold":       int(row["cat_too_cold"]),
-                "too_intense":    int(row["cat_too_intense"]),
-                "missed_meaning": int(row["cat_missed_meaning"]),
-                "wrong_moment":   int(row["cat_wrong_moment"]),
-                "other":          int(row["cat_other"]),
+                "wrong_content":  int(row["cat_wrong_content"]),
+                "wrong_delivery": int(row["cat_wrong_delivery"]),
             },
         })
     # Totali globali
@@ -6310,20 +6308,17 @@ async def api_admin_feedback_stats(
         {"$group": {
             "_id": None,
             "total_events": {"$sum": 1},
-            "positive": {"$sum": {"$cond": [{"$eq": ["$feedback_type", "positive"]}, 1, 0]}},
             "negative": {"$sum": {"$cond": [{"$eq": ["$feedback_type", "negative"]}, 1, 0]}},
         }}
     ]
-    totals = {"total_events": 0, "positive": 0, "negative": 0, "feedback_rate": 0.0}
+    totals = {"total_events": 0, "negative": 0, "negative_rate": 0.0}
     async for row in db.koda_events.aggregate(totals_pipe):
         te = int(row["total_events"])
-        tp = int(row["positive"])
         tn = int(row["negative"])
         totals = {
             "total_events": te,
-            "positive": tp,
             "negative": tn,
-            "feedback_rate": round((tp + tn) / te, 4) if te else 0.0,
+            "negative_rate": round(tn / te, 4) if te else 0.0,
         }
     return {
         "days_requested": days,

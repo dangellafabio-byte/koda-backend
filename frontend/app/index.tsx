@@ -400,6 +400,11 @@ export default function Taccuino() {
   // si apre. null → menu chiuso. Non persistito: sopravvive solo alla
   // sessione app corrente.
   const [feedbackEventId, setFeedbackEventId] = useState<string | null>(null);
+  // === FEEDBACK MENU — reference alla entry attiva ===
+  // Necessario per passare `bubbleText` e `onDelete` a KodaFeedbackMenu
+  // (le voci Copia/Elimina lavorano sulla bolla su cui l'utente ha fatto
+  // long-press, non su una qualsiasi).
+  const [feedbackEntry, setFeedbackEntry] = useState<TimelineEntry | null>(null);
 
   // === ORB MEASURE 2026-08 (debug parity home ↔ intro) ===
   // measureInWindow ci dà le coordinate assolute dell'orb rispetto alla
@@ -5595,7 +5600,10 @@ export default function Taccuino() {
             // per eventuali menu native (copia testo, ecc).
             it.entry.role === "ai" && it.entry.event_id ? (
               <Pressable
-                onLongPress={() => setFeedbackEventId(it.entry.event_id!)}
+                onLongPress={() => {
+                  setFeedbackEntry(it.entry);
+                  setFeedbackEventId(it.entry.event_id!);
+                }}
                 delayLongPress={500}
                 android_ripple={{ color: "transparent" }}
               >
@@ -7502,7 +7510,21 @@ export default function Taccuino() {
       {/* === FEEDBACK LOOP MENU (Fabio 2026-09-11) === */}
       <KodaFeedbackMenu
         eventId={feedbackEventId}
-        onClose={() => setFeedbackEventId(null)}
+        bubbleText={feedbackEntry?.text}
+        onDelete={
+          feedbackEntry
+            ? () => {
+                const e = feedbackEntry;
+                setFeedbackEntry(null);
+                setFeedbackEventId(null);
+                ghostMessage(e);
+              }
+            : undefined
+        }
+        onClose={() => {
+          setFeedbackEventId(null);
+          setFeedbackEntry(null);
+        }}
         bgColor={bubbleAccent}
         fgColor={textOnBubble}
       />

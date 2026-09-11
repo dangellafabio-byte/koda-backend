@@ -206,13 +206,10 @@ def now_bucket_day() -> str:
 # EVENT BUILDER
 # =========================================================================
 
-_VALID_FEEDBACK_TYPES = {"positive", "negative"}
+_VALID_FEEDBACK_TYPES = {"negative"}
 _VALID_FEEDBACK_CATEGORIES = {
-    "too_cold",         # 👎 Troppo fredda
-    "too_intense",      # 👎 Troppo intensa
-    "missed_meaning",   # 👎 Non mi ha capito
-    "wrong_moment",     # 👎 Fuori momento
-    "other",            # 👎 Altro
+    "wrong_content",   # 👇 Cosa ha detto — contenuto sbagliato/fuori tema
+    "wrong_delivery",  # 👇 Come l'ha detto — tono, modo, lentezza, tempismo, interruzioni
 }
 
 
@@ -224,6 +221,11 @@ def build_event(
 ) -> Dict[str, Any]:
     """Costruisce il record koda_events da inserire a fine turno.
 
+    Design 2026-09-11 (v2, Fabio): rimosso il tracking `positive`. Il
+    silenzio è il segnale positivo. Il denominatore per i tassi è
+    `total_events`, non `total_feedback` — accettiamo minor precisione
+    in cambio di UI più semplice (nessun 👍 da mostrare).
+
     NON salva user_text — lo usa solo per calcolare `trigger_group`.
     """
     return {
@@ -232,8 +234,8 @@ def build_event(
         "intensity_band": intensity_to_band(intensity),
         "trigger_group": classify_trigger_group(user_text),
         "voice_model": voice_model or "unknown",
-        "feedback_type": None,
-        "feedback_category": None,
+        "feedback_type": None,        # None | "negative"
+        "feedback_category": None,    # None | "wrong_content" | "wrong_delivery"
         "created_at_bucket": now_bucket_hour(),
         "reviewed_at_bucket": None,
     }
@@ -243,13 +245,16 @@ def validate_feedback(
     feedback_type: str,
     feedback_category: Optional[str] = None,
 ) -> Tuple[bool, Optional[str]]:
-    """Valida input POST /api/feedback. Ritorna (ok, error_msg)."""
+    """Valida input POST /api/feedback. Ritorna (ok, error_msg).
+
+    Design v2 (Fabio 2026-09-11): SOLO `negative` è accettato. Un feedback
+    positivo esplicito non esiste in questo modello. Categoria SEMPRE
+    obbligatoria (wrong_content | wrong_delivery).
+    """
     if feedback_type not in _VALID_FEEDBACK_TYPES:
         return False, f"feedback_type must be one of {sorted(_VALID_FEEDBACK_TYPES)}"
-    if feedback_category is not None and feedback_category not in _VALID_FEEDBACK_CATEGORIES:
-        return False, f"feedback_category must be one of {sorted(_VALID_FEEDBACK_CATEGORIES)} or null"
-    if feedback_type == "positive" and feedback_category is not None:
-        return False, "feedback_category must be null for positive feedback"
+    if feedback_category not in _VALID_FEEDBACK_CATEGORIES:
+        return False, f"feedback_category must be one of {sorted(_VALID_FEEDBACK_CATEGORIES)}"
     return True, None
 
 
@@ -257,15 +262,24 @@ def validate_feedback(
 # CONFIDENCE FLAG (per stats aggregate)
 # =========================================================================
 
-def confidence_flag(total_feedback: int, feedback_rate: float) -> str:
+def confidence_flag(negative_count: int, total_events: int) -> str:
     """Solid / weak / insufficient.
-    Regola concordata con Fabio 2026-09-11:
-      - solid:        total_feedback >= 100 AND feedback_rate >= 0.15
-      - weak:         total_feedback >=  50 AND feedback_rate >= 0.05
+
+    Design v2 (Fabio 2026-09-11): il denominatore è `total_events` (tutti i
+    turni serviti nel bucket) invece di `total_feedback` (che qui coincide
+    con `negative_count` visto che non tracciamo più il positive).
+
+    Regole:
+      - solid:        total_events >= 500 AND negative_count >= 30
+      - weak:         total_events >= 100 AND negative_count >= 10
       - insufficient: altrimenti
+
+    Rationale: soglia più alta rispetto a v1 (che era 100 events / 15%
+    feedback_rate) perché ora ogni event conta come denominatore anche se
+    l'utente non ha detto nulla — servono più dati per avere confidenza.
     """
-    if total_feedback >= 100 and feedback_rate >= 0.15:
+    if total_events >= 500 and negative_count >= 30:
         return "solid"
-    if total_feedback >= 50 and feedback_rate >= 0.05:
+    if total_events >= 100 and negative_count >= 10:
         return "weak"
     return "insufficient"
