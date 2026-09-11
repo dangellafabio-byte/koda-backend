@@ -2023,6 +2023,23 @@ class Profile(BaseModel):
     # ricreato quando `subscription_tier` passa a monthly/bimonthly/annual
     # (via /dev/set-tier o /subscription/sync o webhook RevenueCat).
     ledger_state: Optional[Dict[str, Any]] = None
+    # === V3 DAILY BUDGET STATE (Fabio 2026-09-11) ================================
+    # Pacing giornaliero del modello TTS `eleven_v3`. Il classifier alza a
+    # soglia estrema (intensity==4 o safety_nums) → V3 diventa raro di
+    # default. Questo gate aggiunge un tetto GIORNALIERO oltre alla logica
+    # classifier: se il budget V3 del giorno è esaurito, override silente a
+    # Turbo (no messaggi utente, no interpretazione clinica).
+    # Schema:
+    #   {
+    #     "date_iso": "2026-09-11",    # data corrente UTC (YYYY-MM-DD)
+    #     "v3_turns_used": 3,          # V3 emessi oggi
+    #     "v3_turns_budget": 10,       # tetto del giorno (env-tunable)
+    #     "turbo_turns": 27,           # per telemetria
+    #     "downgrades_paced": 0,       # quante volte pacing ha bloccato V3
+    #     "intensity_hist": [0,4,20,3,0]  # istogramma intensity 0..4 giornaliero
+    #   }
+    # None → mai inizializzato. Reset automatico quando date_iso cambia.
+    daily_v3_state: Optional[Dict[str, Any]] = None
     settings: TaccuinoSettings = Field(default_factory=TaccuinoSettings)
     # Personalizzazioni stilistiche (palette colori blob, avatar, ecc.)
     # Salvato come dict aperto per consentire estensioni future senza migrazioni.
@@ -4766,6 +4783,130 @@ def _compute_paid_state(profile: "Profile") -> str:
         return "active"
 
 
+# =========================================================================
+# V3 DAILY BUDGET GATE (Fabio 2026-09-11)
+# =========================================================================
+# Il classifier alza la soglia (V3 solo su intensity==4 o safety), ma
+# aggiungiamo un ULTERIORE gate: tetto giornaliero sui turni V3 per
+# proteggere l'esperienza dal rischio "budget bruciato nei primi 2
+# giorni → Koda suona diversa il resto del mese".
+#
+# Design:
+#   - Il classifier ritorna decision.use_v3=True raramente. Questo gate
+#     applica il PACING: se `v3_turns_used_today >= budget_today` →
+#     override silente a Turbo. Log `[KODA_PACING] downgrade v3→turbo`.
+#   - Budget giornaliero: env var `KODA_TTS_V3_DAILY_BUDGET` (int, default 10).
+#   - Reset naturale al cambio di data UTC.
+#   - Zero side-effect classifier: gate applicato in server.py NEL caller.
+#   - Persistenza: Profile.daily_v3_state (schema documentato nel modello).
+#   - Telemetria: aggregata nella stessa struct (turbo_turns, downgrades_paced,
+#     intensity_hist). Endpoint /api/admin/classifier-stats aggrega per data.
+#
+# Grazia sul turno in corso: come per il ledger, il gate agisce sul
+# CHUNK 0 del turno. La decisione presa lì viene riusata per i chunk
+# successivi (coerenza timbrica). Nessun cambio mid-turno.
+# =========================================================================
+
+
+def _today_utc_iso() -> str:
+    """YYYY-MM-DD UTC — chiave di reset giornaliero."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _get_v3_daily_budget() -> int:
+    """Legge il budget V3 per giorno da env. Default 10."""
+    try:
+        raw = os.environ.get("KODA_TTS_V3_DAILY_BUDGET", "10")
+        v = int(raw)
+        return max(0, v)
+    except Exception:
+        return 10
+
+
+async def _gate_v3_daily_budget(
+    profile: "Profile",
+    decision: "Any",
+) -> tuple:
+    """Applica il pacing V3 giornaliero e persiste la telemetria.
+
+    Args:
+        profile: Profile utente corrente (con eventuale daily_v3_state)
+        decision: ClassifierDecision restituita da _tts_classify
+
+    Returns:
+        Tuple[final_model_id, final_reason, telemetry_snapshot]
+          - final_model_id: model_id EFFETTIVO da usare (post-pacing)
+          - final_reason: reason string arricchita con eventuale downgrade
+          - telemetry_snapshot: dict con contatori aggiornati per log
+
+    Side effect:
+        Aggiorna Profile.daily_v3_state su DB (upsert). Non blocca il turno
+        su errori DB (silent fallback = usa decision così com'è).
+    """
+    profile_id = getattr(profile, "id", None)
+    if not profile_id:
+        return decision.model_id, decision.reason, {}
+
+    today = _today_utc_iso()
+    budget_today = _get_v3_daily_budget()
+
+    # Carica state esistente o inizializza per oggi.
+    state = getattr(profile, "daily_v3_state", None) or None
+    if not isinstance(state, dict) or state.get("date_iso") != today:
+        state = {
+            "date_iso": today,
+            "v3_turns_used": 0,
+            "v3_turns_budget": budget_today,
+            "turbo_turns": 0,
+            "downgrades_paced": 0,
+            "intensity_hist": [0, 0, 0, 0, 0],  # index 0..4
+        }
+    else:
+        # Ricalcola budget corrente (env var può essere cambiata in giornata).
+        state["v3_turns_budget"] = budget_today
+
+    # Aggiorna istogramma intensity per telemetria (indipendente da decisione).
+    _int = max(0, min(4, int(getattr(decision, "intensity", 2))))
+    state["intensity_hist"][_int] += 1
+
+    # Decisione finale con pacing.
+    final_model = decision.model_id
+    final_reason = decision.reason
+    if decision.use_v3:
+        if state["v3_turns_used"] < budget_today:
+            state["v3_turns_used"] += 1
+        else:
+            # Budget esaurito → downgrade silente a Turbo.
+            final_model = "eleven_turbo_v2_5"
+            final_reason = f"{decision.reason}+paced_downgrade"
+            state["downgrades_paced"] += 1
+            state["turbo_turns"] += 1
+    else:
+        state["turbo_turns"] += 1
+
+    # Persistenza atomica (best-effort; errori non abbattono il turno).
+    try:
+        await db.taccuino_profile.update_one(
+            {"id": profile_id},
+            {"$set": {"daily_v3_state": state}},
+            upsert=False,
+        )
+        try:
+            profile.daily_v3_state = state
+        except Exception:
+            pass
+    except Exception as e:
+        logger.warning(f"[pacing] persist failed profile={profile_id[:8]}: {e}")
+
+    telemetry = {
+        "v3_used": state["v3_turns_used"],
+        "v3_budget": budget_today,
+        "turbo_turns": state["turbo_turns"],
+        "downgrades_paced": state["downgrades_paced"],
+    }
+    return final_model, final_reason, telemetry
+
+
 
 #
 # NOTA IMPORTANTE (fix 2026-08-10): il testo non elenca le parole vietate
@@ -6047,6 +6188,91 @@ async def api_subscription_sync(req: SubscriptionSyncRequest):
         "ok": True,
         "subscription_active": p.subscription_active,
         "subscription_tier": p.subscription_tier,
+    }
+
+
+@api_router.get("/admin/classifier-stats")
+async def api_admin_classifier_stats(
+    days: int = 7,
+    admin_token: Optional[str] = None,
+):
+    """Aggregazione telemetria classifier + pacing V3 giornaliero.
+
+    Restituisce per gli ultimi `days` giorni (UTC):
+      - v3_turns_used (turni V3 emessi)
+      - v3_turns_budget (tetto/giorno da env)
+      - downgrades_paced (turni che sarebbero stati V3 ma tetto raggiunto)
+      - turbo_turns
+      - intensity_hist [0..4] aggregato
+      - users_hit_cap (utenti che almeno una volta hanno saturato il budget)
+
+    Uso operativo:
+      - Se `downgrades_paced == 0` per giorni → soglia troppo restrittiva o
+        budget troppo alto (Turbo sempre, V3 mai). Rilassa o abbassa tetto.
+      - Se `downgrades_paced / v3_turns_used > 0.5` → utenti frustrati (V3
+        richiesto ma bloccato spesso). Alza budget o soglia meno restrittiva.
+      - `intensity_hist[4]` = quante volte scattava intensity max (dovrebbe
+        essere raro; se ~=0 la soglia è probabilmente troppo alta).
+
+    Protezione: usa `admin_token` query param o header X-Admin-Token, deve
+    matchare env `KODA_ADMIN_TOKEN`. Se env non set → endpoint disabilitato.
+    """
+    expected = os.environ.get("KODA_ADMIN_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(503, "admin endpoint disabled (KODA_ADMIN_TOKEN unset)")
+    if admin_token != expected:
+        raise HTTPException(403, "invalid admin_token")
+
+    days = max(1, min(days, 90))
+    # Aggregazione via find + reduce Python (semplice, dataset piccolo).
+    profiles = await db.taccuino_profile.find(
+        {"daily_v3_state": {"$ne": None}},
+        {"id": 1, "daily_v3_state": 1},
+    ).to_list(10000)
+
+    today = datetime.now(timezone.utc).date()
+    daily_agg: Dict[str, Dict[str, Any]] = {}
+    users_hit_cap_by_day: Dict[str, set] = {}
+
+    for p in profiles:
+        state = p.get("daily_v3_state") or {}
+        date_iso = state.get("date_iso")
+        if not date_iso:
+            continue
+        try:
+            d = datetime.strptime(date_iso, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if (today - d).days >= days:
+            continue
+
+        day = daily_agg.setdefault(date_iso, {
+            "date_iso": date_iso,
+            "v3_turns_used": 0,
+            "downgrades_paced": 0,
+            "turbo_turns": 0,
+            "intensity_hist": [0, 0, 0, 0, 0],
+            "v3_turns_budget": state.get("v3_turns_budget", 10),
+            "users_active": 0,
+        })
+        day["v3_turns_used"] += int(state.get("v3_turns_used", 0))
+        day["downgrades_paced"] += int(state.get("downgrades_paced", 0))
+        day["turbo_turns"] += int(state.get("turbo_turns", 0))
+        day["users_active"] += 1
+        hist = state.get("intensity_hist") or [0, 0, 0, 0, 0]
+        for i in range(5):
+            day["intensity_hist"][i] += int(hist[i]) if i < len(hist) else 0
+
+        if int(state.get("downgrades_paced", 0)) > 0:
+            users_hit_cap_by_day.setdefault(date_iso, set()).add(p["id"])
+
+    for date_iso, day in daily_agg.items():
+        day["users_hit_cap"] = len(users_hit_cap_by_day.get(date_iso, set()))
+
+    return {
+        "days_requested": days,
+        "v3_daily_budget_env": _get_v3_daily_budget(),
+        "daily": sorted(daily_agg.values(), key=lambda x: x["date_iso"], reverse=True),
     }
 
 
@@ -13959,16 +14185,26 @@ async def _fast_pipeline_task(
                     # se il segnale è insufficiente (tone None o pochi words).
                     try:
                         _dec = _tts_classify(clean_tts, current_tone)
-                        model_id = _dec.model_id
-                        turn_tts_state["classifier_model"] = _dec.model_id
+                        # === V3 DAILY BUDGET PACING (Fabio 2026-09-11) ===
+                        # Applica il gate giornaliero DOPO la decisione del
+                        # classifier: se il budget V3 è esaurito, downgrade
+                        # silente a Turbo. Zero messaggi utente.
+                        _final_model, _final_reason, _tele = await _gate_v3_daily_budget(
+                            profile, _dec
+                        )
+                        model_id = _final_model
+                        turn_tts_state["classifier_model"] = _final_model
                         turn_tts_state["classifier_mode"] = _dec.mode
                         turn_tts_state["classifier_intensity"] = _dec.intensity
-                        turn_tts_state["classifier_reason"] = _dec.reason
+                        turn_tts_state["classifier_reason"] = _final_reason
                         logger.info(
                             f"[KODA_CLASSIFIER] sid={session_id[:8]} "
                             f"tone={current_tone} mode={_dec.mode} "
                             f"intensity={_dec.intensity} words={_dec.n_words} "
-                            f"reason={_dec.reason} → model={_dec.model_id}"
+                            f"reason={_final_reason} → model={_final_model} "
+                            f"[pacing v3={_tele.get('v3_used')}/{_tele.get('v3_budget')} "
+                            f"turbo={_tele.get('turbo_turns')} "
+                            f"downgrades={_tele.get('downgrades_paced')}]"
                         )
                     except Exception as _cls_err:
                         # Fallback silente a V3 (comportamento attuale) se il

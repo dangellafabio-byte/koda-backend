@@ -211,12 +211,20 @@ def classify(text: str, tone: Optional[str]) -> ClassifierDecision:
         ClassifierDecision con model_id già pronto per essere passato a
         `client.text_to_speech.convert_as_stream(model_id=...)`.
 
-    Regola V3:
-        USE V3 se:  MODE ∈ {SALIRE, TENERE, ADMIT_FAULT}
-                 OR INTENSITY ≥ 3
-                 OR tone == concerned
-                 OR contiene numeri di emergenza (1522/112/118)
-        USE Turbo altrimenti.
+    Regola V3 (Fabio 2026-09-11 — "V3 come eccezione vera, non moderata"):
+        USE V3 SOLO se:
+            - INTENSITY == 4 (crisi acuta: safety, SALIRE+concerned, urgenza)
+            - OR contiene numeri di emergenza (1522/112/118) — safety obbligatoria
+        USE Turbo in TUTTI gli altri casi:
+            - mode ∈ {SALIRE, TENERE, ADMIT_FAULT} SENZA intensity 4 → Turbo
+            - tone == concerned generico (senza SALIRE / senza safety) → Turbo
+            - momento denso (intensity 3) → Turbo
+            - gioia forte, humility esplicita, warmth normale → Turbo
+
+    Motivazione business:
+        V3 diventa un'ECCEZIONE strutturale. Il rischio "Koda suona diversa
+        dopo che il budget V3 giornaliero è finito" si mitiga perché V3
+        parte già rara di default. Cost cut atteso: ~55-60% turni V3 → Turbo.
 
     Safe default:
         - Se `text` vuoto o < 3 parole → V3 (safe, non guadagniamo nulla
@@ -243,29 +251,21 @@ def classify(text: str, tone: Optional[str]) -> ClassifierDecision:
     mode = _detect_mode(clean, tone_norm)
     intensity = _detect_intensity(clean, tone_norm, mode)
 
-    # Regola binaria V3 vs Turbo
-    if mode in _MODES_FORCE_V3:
-        return ClassifierDecision(
-            model_id=V3_MODEL_ID, mode=mode, intensity=intensity,
-            reason="mode_high", use_v3=True, n_words=n_words,
-        )
-    if intensity >= 3:
-        return ClassifierDecision(
-            model_id=V3_MODEL_ID, mode=mode, intensity=intensity,
-            reason="intensity_ge_3", use_v3=True, n_words=n_words,
-        )
-    if tone_norm == "concerned":
-        return ClassifierDecision(
-            model_id=V3_MODEL_ID, mode=mode, intensity=intensity,
-            reason="tone_concerned", use_v3=True, n_words=n_words,
-        )
+    # === REGOLA V3 RESTRITTIVA (Fabio 2026-09-11) ===
+    # V3 SOLO per intensità massima (4) o safety numbers. Tutto il resto → Turbo.
     if _RE_URGENT_NUM.search(clean):
         return ClassifierDecision(
             model_id=V3_MODEL_ID, mode=mode, intensity=intensity,
             reason="safety_nums", use_v3=True, n_words=n_words,
         )
+    if intensity >= 4:
+        return ClassifierDecision(
+            model_id=V3_MODEL_ID, mode=mode, intensity=intensity,
+            reason="intensity_max", use_v3=True, n_words=n_words,
+        )
 
-    # Default: risparmio latenza con Turbo
+    # Default: risparmio latenza con Turbo (include mode_high, tone_concerned,
+    # intensity 3 — tutti downgradati a Turbo rispetto alla policy v0).
     return ClassifierDecision(
         model_id=TURBO_MODEL_ID, mode=mode, intensity=intensity,
         reason="default_turbo", use_v3=False, n_words=n_words,

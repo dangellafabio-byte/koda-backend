@@ -1,8 +1,12 @@
-"""Smoke test del classificatore TTS.
+"""Smoke test del classificatore TTS — policy v1 restrittiva (Fabio 2026-09-11).
 
 Non è pytest — solo assert per validare che il modulo produzione
-riproduca esattamente le decisioni dell'analisi offline sui casi
-"anti-regression" identificati con Fabio.
+riproduca esattamente le decisioni della policy V3-rara.
+
+Policy v1 (2026-09-11):
+    V3 SOLO se: intensity == 4 (crisi acuta) OR safety_nums (1522/112/...)
+    Turbo altrimenti (include ex-V3 di v0: TENERE, ADMIT_FAULT, tone_concerned,
+    intensity 3, gioia forte, SALIRE senza tone concerned).
 
 Esegui:  python /app/backend/tts_intensity_classifier_test.py
 """
@@ -15,39 +19,52 @@ from tts_intensity_classifier import (
 
 TESTS = [
     # (description, text, tone, expected_model, expected_reason_substr, expected_mode)
-    # === Anti-regression: casi ovvi V3 ===
+
+    # === V3 residuo: SOLO crisi acuta (intensity==4) o safety numbers ===
     (
-        "SALIRE + concerned → V3 (crisi)",
+        "SALIRE + concerned → V3 (crisi acuta, intensity=4)",
         "Fabio, aspetta. Sei ancora lì? Mi dici cosa stai provando?",
-        "concerned", V3_MODEL_ID, "mode_high", MODE_SALIRE,
+        "concerned", V3_MODEL_ID, "intensity_max", MODE_SALIRE,
     ),
     (
-        "ADMIT_FAULT → V3 (humility)",
-        "Hai ragione, mi sono incartata male. È stata una mia cazzata. Scusa davvero.",
-        "warm", V3_MODEL_ID, "mode_high", MODE_ADMIT,
-    ),
-    (
-        "TENERE su concerned → V3 (validazione ferma)",
-        "Hai ragione a essere arrabbiato con lei. È normale, non ti stai esagerando.",
-        "concerned", V3_MODEL_ID, "mode_high", MODE_TENERE,
-    ),
-    (
-        "SALIRE su warm → V3 (rallentamento intenzionale)",
-        "Aspetta. Sono qui. Prenditi il tempo che serve.",
-        "warm", V3_MODEL_ID, "mode_high", MODE_SALIRE,
-    ),
-    (
-        "concerned SPECCHIO senza mode marker → V3",
-        "Fabio, mi sembra che tu stia elencando categorie, non parlando. Cosa succede?",
-        "concerned", V3_MODEL_ID, None, MODE_SPECCHIO,  # accept any reason
-    ),
-    (
-        "Numero safety 1522 → V3",
+        "Numero safety 1522 → V3 (safety obbligatoria)",
         "Se ti va, prova a chiamare il 1522. Sono lì per aiutare, davvero.",
-        "warm", V3_MODEL_ID, "mode_high", MODE_SALIRE,  # urgent = SALIRE
+        "warm", V3_MODEL_ID, "safety_nums", MODE_SALIRE,
+    ),
+    (
+        "Numero safety 112 → V3",
+        "Chiama subito il 112 e resta al telefono, non chiudere.",
+        "urgent", V3_MODEL_ID, "safety_nums", None,
     ),
 
-    # === Anti-regression: casi ovvi Turbo ===
+    # === Downgrade v0→v1: prima erano V3, ora Turbo (INTENZIONALE) ===
+    (
+        "ADMIT_FAULT → Turbo (humility ora è Turbo)",
+        "Hai ragione, mi sono incartata male. È stata una mia cazzata. Scusa davvero.",
+        "warm", TURBO_MODEL_ID, "default_turbo", MODE_ADMIT,
+    ),
+    (
+        "TENERE su concerned → Turbo (validazione ferma non più V3)",
+        "Hai ragione a essere arrabbiato con lei. È normale, non ti stai esagerando.",
+        "concerned", TURBO_MODEL_ID, "default_turbo", MODE_TENERE,
+    ),
+    (
+        "SALIRE su warm → Turbo (rallentamento senza tono concerned = Turbo)",
+        "Aspetta. Sono qui. Prenditi il tempo che serve.",
+        "warm", TURBO_MODEL_ID, "default_turbo", MODE_SALIRE,
+    ),
+    (
+        "concerned SPECCHIO senza mode marker → Turbo (concerned generico non più V3)",
+        "Fabio, mi sembra che tu stia elencando categorie, non parlando. Cosa succede?",
+        "concerned", TURBO_MODEL_ID, "default_turbo", MODE_SPECCHIO,
+    ),
+    (
+        "Gioia forte (has_joy + long) → Turbo (intensity=3 non più V3)",
+        "Che bello! Sono davvero felice per te, dimmi tutto adesso.",
+        "warm", TURBO_MODEL_ID, "default_turbo", MODE_SPECCHIO,
+    ),
+
+    # === Anti-regression: casi ovvi Turbo (invariati da v0) ===
     (
         "Saluto breve warm → Turbo",
         "Ciao Fabio, sto bene, e tu?",
@@ -71,7 +88,7 @@ TESTS = [
         "warm", TURBO_MODEL_ID, "default_turbo", MODE_SPECCHIO,
     ),
 
-    # === Safe fallback: senza segnale → V3 ===
+    # === Safe fallback: senza segnale → V3 (invariato) ===
     (
         "Tone None → V3 safe",
         "Un testo qualsiasi ma senza tono estratto.",
@@ -81,13 +98,6 @@ TESTS = [
         "Testo cortissimo → V3 safe",
         "Ah.",
         "warm", V3_MODEL_ID, "insufficient_signal", MODE_SPECCHIO,
-    ),
-
-    # === Intensity high ===
-    (
-        "Gioia forte (has_joy + long) → V3",
-        "Che bello! Sono davvero felice per te, dimmi tutto adesso.",
-        "warm", V3_MODEL_ID, "intensity_ge_3", MODE_SPECCHIO,
     ),
 ]
 
