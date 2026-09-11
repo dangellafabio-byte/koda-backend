@@ -7514,7 +7514,14 @@ export default function Taccuino() {
         theme={theme}
       />
 
-      {/* === FEEDBACK LOOP MENU (Fabio 2026-09-11, B-bis) === */}
+      {/* === FEEDBACK LOOP MENU (Fabio 2026-09-11, B-bis + Fix C) ============
+          Colori HARDCODATI (non ereditati dalla bolla) perché il menu è un
+          modal contestuale a schermo intero: deve essere sempre leggibile
+          indipendentemente dal colore della bolla o dal tema utente. Bug
+          precedente: passare `bubbleAccent` (oggetto) come `bgColor`
+          (stringa) faceva cadere il modal sul default `#1F1F1F` E
+          `textOnBubble` era nero se la bolla era ambra → testo nero su
+          sfondo nero = invisibile. Ora sfondo scuro + testo chiaro fissi. */}
       <KodaFeedbackMenu
         eventId={feedbackEventId}
         visibleOverride={feedbackReadOnly}
@@ -7535,8 +7542,6 @@ export default function Taccuino() {
           setFeedbackEntry(null);
           setFeedbackReadOnly(false);
         }}
-        bgColor={bubbleAccent}
-        fgColor={textOnBubble}
       />
 
       {/* Seal Setup Modal — RIMOSSO (Blocco B, Confessionale cancellato) */}
