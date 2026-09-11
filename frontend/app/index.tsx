@@ -405,6 +405,12 @@ export default function Taccuino() {
   // (le voci Copia/Elimina lavorano sulla bolla su cui l'utente ha fatto
   // long-press, non su una qualsiasi).
   const [feedbackEntry, setFeedbackEntry] = useState<TimelineEntry | null>(null);
+  // === FEEDBACK MENU readOnly flag (Fabio + Neo 2026-09-11 B-bis) =========
+  // Bolle AI pre-deploy del feedback loop non hanno event_id. In quel caso
+  // il menu si apre lo stesso ma con le 2 CTA feedback disabilitate e
+  // subtitle "Feedback disponibile solo sui messaggi nuovi". Zero id lato
+  // client → nessun rischio privacy, nessun 404 di rete.
+  const [feedbackReadOnly, setFeedbackReadOnly] = useState(false);
 
   // === ORB MEASURE 2026-08 (debug parity home ↔ intro) ===
   // measureInWindow ci dà le coordinate assolute dell'orb rispetto alla
@@ -5594,17 +5600,27 @@ export default function Taccuino() {
               </View>
             </View>
           ) : (
-            // === FEEDBACK LOOP LONG-PRESS (Fabio 2026-09-11) ===
+            // === FEEDBACK LOOP LONG-PRESS (Fabio 2026-09-11 v2, B-bis) =====
             // Long-press sulla bolla AI apre KodaFeedbackMenu (privacy-safe).
-            // Wrap solo la bolla AI: sui msg user il long-press resta libero
-            // per eventuali menu native (copia testo, ecc).
-            it.entry.role === "ai" && it.entry.event_id ? (
+            // Wrap SEMPRE le bolle AI (anche pre-deploy senza event_id): il
+            // menu si apre in modalità readOnly quando event_id manca, per
+            // spiegare all'utente perché non può taggare (temporale, non
+            // guasto). Bolle utente: gesto libero, gestito da Bubble internal
+            // (Alert.alert "Dimentica").
+            it.entry.role === "ai" ? (
               <Pressable
                 onLongPress={() => {
                   setFeedbackEntry(it.entry);
-                  setFeedbackEventId(it.entry.event_id!);
+                  if (it.entry.event_id) {
+                    setFeedbackEventId(it.entry.event_id);
+                    setFeedbackReadOnly(false);
+                  } else {
+                    // Bolla pre-deploy: apri comunque il menu ma readOnly
+                    setFeedbackEventId(null);
+                    setFeedbackReadOnly(true);
+                  }
                 }}
-                delayLongPress={500}
+                delayLongPress={350}
                 android_ripple={{ color: "transparent" }}
               >
                 <Bubble
@@ -7507,9 +7523,10 @@ export default function Taccuino() {
         theme={theme}
       />
 
-      {/* === FEEDBACK LOOP MENU (Fabio 2026-09-11) === */}
+      {/* === FEEDBACK LOOP MENU (Fabio 2026-09-11, B-bis) === */}
       <KodaFeedbackMenu
         eventId={feedbackEventId}
+        visibleOverride={feedbackReadOnly}
         bubbleText={feedbackEntry?.text}
         onDelete={
           feedbackEntry
@@ -7517,6 +7534,7 @@ export default function Taccuino() {
                 const e = feedbackEntry;
                 setFeedbackEntry(null);
                 setFeedbackEventId(null);
+                setFeedbackReadOnly(false);
                 ghostMessage(e);
               }
             : undefined
@@ -7524,6 +7542,7 @@ export default function Taccuino() {
         onClose={() => {
           setFeedbackEventId(null);
           setFeedbackEntry(null);
+          setFeedbackReadOnly(false);
         }}
         bgColor={bubbleAccent}
         fgColor={textOnBubble}
@@ -8088,32 +8107,37 @@ function BubbleImpl({
 
   const wrapperPress = (cb: () => void) => ({
     onPress: cb,
-    onLongPress: () => {
-      // === Long-press → menu Ghost (Dimentica) o orario.
-      //     Su tutte le entry permettiamo di "ghostare" il fatto: viene
-      //     cancellato dal server e l'insegnamento viene preservato in
-      //     memory_summary (vedi POST /api/ghost). Sull'AI consente di
-      //     cancellare la sua risposta (utile per riformulare).
-      if (onGhost) {
-        Alert.alert(
-          isUser ? "Questo messaggio" : "Risposta di Coda",
-          isUser
-            ? "Vuoi che dimentichi questo fatto? Cancellerò il messaggio dal server. Se ha valore, terrò solo l'insegnamento nella memoria."
-            : "Vuoi cancellare questa risposta?",
-          [
-            { text: "Mostra orario", onPress: () => setShowTime((s) => !s) },
-            {
-              text: "Dimentica",
-              style: "destructive",
-              onPress: () => onGhost(entry),
-            },
-            { text: "Annulla", style: "cancel" },
-          ]
-        );
-      } else {
-        setShowTime((s) => !s);
-      }
-    },
+    // === FIX 2026-09-11 (Fabio + Neo — conflitto gesto long-press) =========
+    // Il long-press AI è gestito dal <Pressable> ESTERNO in index.tsx:5602
+    // che apre KodaFeedbackMenu. In React Native/iOS il Pressable più
+    // profondo cattura il gesto → se qui applichiamo `onLongPress` sull'AI
+    // vince il figlio e l'utente vede il vecchio menu Alert.alert
+    // ("Risposta di Coda / Mostra orario / Dimentica / Annulla") invece
+    // del nuovo menu con 2 categorie feedback.
+    //
+    // Soluzione: `onLongPress` attivo SOLO su bolle utente (dove serve
+    // ancora il Ghost per cancellare fatti dal server). Bolle AI: no long-
+    // press qui, il gesto passa al Pressable esterno che gestisce il
+    // feedback loop.
+    onLongPress: isUser && onGhost
+      ? () => {
+          Alert.alert(
+            "Questo messaggio",
+            "Vuoi che dimentichi questo fatto? Cancellerò il messaggio dal server. Se ha valore, terrò solo l'insegnamento nella memoria.",
+            [
+              { text: "Mostra orario", onPress: () => setShowTime((s) => !s) },
+              {
+                text: "Dimentica",
+                style: "destructive",
+                onPress: () => onGhost(entry),
+              },
+              { text: "Annulla", style: "cancel" },
+            ]
+          );
+        }
+      : isUser
+        ? () => setShowTime((s) => !s)
+        : undefined,
     delayLongPress: 350,
   });
 

@@ -31,8 +31,14 @@ import {
 } from "../lib/feedback";
 
 type Props = {
-  /** UUID capability del turno; null = menu chiuso */
+  /** UUID capability del turno; null = feedback readOnly (bolle pre-deploy) */
   eventId: string | null;
+  /**
+   * Forza apertura del menu anche senza eventId (readOnly).
+   * Se true + eventId null → CTA feedback disabilitate con explainer temporale.
+   * Se false + eventId null → menu chiuso.
+   */
+  visibleOverride?: boolean;
   /** Testo della bolla, per la voce "Copia" */
   bubbleText?: string;
   /** Handler per "Elimina" — di solito `ghostMessage` */
@@ -46,6 +52,7 @@ type Props = {
 
 export function KodaFeedbackMenu({
   eventId,
+  visibleOverride,
   bubbleText,
   onDelete,
   onClose,
@@ -53,7 +60,15 @@ export function KodaFeedbackMenu({
   fgColor = "#F5F5F5",
   accentColor = "#FCD34D",
 }: Props) {
-  const visible = !!eventId;
+  // === FIX 2026-09-11 B-bis (Fabio + Neo — bolle pre-deploy) ==============
+  // Menu apribile in 2 modalità:
+  //  1. FULL:      eventId presente → tutte le righe attive
+  //  2. READ_ONLY: eventId null + visibleOverride=true → Copia/Elimina attive,
+  //                le 2 righe feedback disabilitate con motivazione TEMPORALE
+  //                (non "bug"). Zero chiamate network → nessun 404 possibile.
+  //                Zero id generati lato client → nessun rischio privacy.
+  const visible = !!eventId || !!visibleOverride;
+  const readOnly = !eventId;
   const [phase, setPhase] = useState<"idle" | "sending" | "done">("idle");
 
   const reset = () => setPhase("idle");
@@ -120,15 +135,25 @@ export function KodaFeedbackMenu({
               />
               <MenuRow
                 label={FEEDBACK_CATEGORY_LABELS.wrong_content}
-                subtitle={FEEDBACK_CATEGORY_DESCRIPTIONS.wrong_content}
+                subtitle={
+                  readOnly
+                    ? "Feedback disponibile solo sui messaggi nuovi"
+                    : FEEDBACK_CATEGORY_DESCRIPTIONS.wrong_content
+                }
                 fgColor={fgColor}
                 onPress={() => handleCategory("wrong_content")}
+                disabled={readOnly}
               />
               <MenuRow
                 label={FEEDBACK_CATEGORY_LABELS.wrong_delivery}
-                subtitle={FEEDBACK_CATEGORY_DESCRIPTIONS.wrong_delivery}
+                subtitle={
+                  readOnly
+                    ? "Feedback disponibile solo sui messaggi nuovi"
+                    : FEEDBACK_CATEGORY_DESCRIPTIONS.wrong_delivery
+                }
                 fgColor={fgColor}
                 onPress={() => handleCategory("wrong_delivery")}
+                disabled={readOnly}
                 isLast
               />
             </>
