@@ -519,6 +519,20 @@ export const api = {
       "/dev/intro-premium/reset",
       { method: "POST" }
     ),
+  /** DEV admin-only: recupera gli ultimi errori catturati dal backend
+   *  (utile per debug 500 su Railway senza guardare i log). */
+  devLastErrors: (limit: number = 5) =>
+    jsonReq<{
+      count: number;
+      errors: Array<{
+        when_utc: string;
+        where: string;
+        type: string;
+        message: string;
+        traceback: string;
+      }>;
+    }>(`/admin/last-errors?limit=${limit}`, { method: "GET" }),
+
   /** DEV admin-only: reset COMPLETO onboarding server-side per rivedere
    *  l'intero flusso primo-boot (Fabio 2026-08-24). */
   devFirstBootReset: () =>

@@ -5585,6 +5585,40 @@ def _require_admin() -> str:
     return uid
 
 
+# === IN-MEMORY ERROR RING (Fabio 2026-06) ==================================
+# Cattura gli ultimi N errori sollevati dagli endpoint /dev/* e /admin/*
+# (o qualsiasi codice che chiami `_record_error`). Serve per debug remoto
+# quando il client vede un HTTP 500 su Railway: `GET /api/admin/last-errors`
+# ritorna gli ultimi errori con traceback, senza serve accedere ai log
+# Railway (che possono avere rotation aggressiva).
+_LAST_ERRORS: "_deque[Dict[str, Any]]" = _deque(maxlen=25)
+
+
+def _record_error(where: str, exc: BaseException) -> None:
+    """Registra un errore nell'anello in-memory + logga."""
+    import traceback
+    tb = traceback.format_exc()
+    _LAST_ERRORS.append({
+        "when_utc": datetime.now(timezone.utc).isoformat(),
+        "where": where,
+        "type": type(exc).__name__,
+        "message": str(exc)[:500],
+        "traceback": tb[-2000:],
+    })
+    logger.error(f"[error_ring] {where}: {type(exc).__name__}: {exc}\n{tb}")
+
+
+@api_router.get("/admin/last-errors")
+async def api_admin_last_errors(limit: int = 10):
+    """DEV admin-only: ritorna gli ultimi N errori catturati con
+    `_record_error()`. Utile per debuggare 500 remoti senza accedere ai
+    log Railway."""
+    _require_admin()
+    n = max(1, min(limit, 25))
+    items = list(_LAST_ERRORS)[-n:]
+    return {"count": len(items), "errors": items}
+
+
 @api_router.get("/admin/whoami", response_model=AdminWhoAmIResponse)
 async def api_admin_whoami():
     """Il frontend chiama questo endpoint al boot per capire se mostrare
@@ -5836,55 +5870,44 @@ async def api_dev_set_tier(req: DevSetTierRequest):
     """DEV admin-only: forza subscription_tier per testare flussi Premium
     (es. Intro Premium) senza dover attivare RevenueCat. Tier valido:
     monthly | bimonthly | annual | unlimited | null (torna Free).
+
+    2026-06 UPDATE (Fabio 500 debugging):
+    Tutto il body è avvolto in try/except globale che ritorna l'errore
+    reale nel detail invece di generic "Internal Server Error". Copre
+    anche exception PRE-ledger (auth, parsing, mongo connection, etc).
     """
-    uid = _require_admin()
-    valid = {"monthly", "bimonthly", "annual", "unlimited", None}
-    if req.tier not in valid:
-        raise HTTPException(status_code=400, detail=f"tier deve essere uno di {sorted(v for v in valid if v)} o null")
-    # === LEDGER BOOTSTRAP (Fabio 2026-09-06 · error surface 2026-06) ==========
-    # Al cambio tier verso monthly/bimonthly/annual creiamo un ledger fresco.
-    # Se il tier target è unlimited/None azzeriamo `ledger_state` (nessun
-    # accounting su quel piano). Passaggio tra tier pagati diversi implica
-    # nuovo ciclo — coerente con la semantica RevenueCat "cambio prodotto =
-    # nuovo abbonamento".
-    #
-    # 2026-06 UPDATE: espongo l'errore vero al client (invece del generic
-    # 500) quando l'inizializzazione ledger fallisce. Prima era wrappato in
-    # try/except che loggava un warning ma poi Mongo esplodeva su una key
-    # None → il client riceveva "Internal Server Error" senza contesto.
-    _set: Dict[str, Any] = {"subscription_tier": req.tier}
-    if req.tier in _PAID_TIERS:
-        try:
+    try:
+        uid = _require_admin()
+        valid = {"monthly", "bimonthly", "annual", "unlimited", None}
+        if req.tier not in valid:
+            raise HTTPException(status_code=400, detail=f"tier deve essere uno di {sorted(v for v in valid if v)} o null")
+
+        _set: Dict[str, Any] = {"subscription_tier": req.tier}
+        if req.tier in _PAID_TIERS:
             _fresh_ledger = _sub_ledger.create_ledger(req.tier)
             _set["ledger_state"] = _fresh_ledger.to_dict()
             _set["minutes_used_this_month"] = 0.0
             _set["monthly_reset_date"] = _this_month_utc_str()
-        except Exception as _le:
-            import traceback
-            tb = traceback.format_exc()
-            logger.error(f"[dev/set-tier] ledger init FAILED for tier={req.tier}: {_le}\n{tb}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"ledger init failed: {type(_le).__name__}: {str(_le)[:200]}",
-            )
-    else:
-        _set["ledger_state"] = None
-    try:
+        else:
+            _set["ledger_state"] = None
+
         await db.taccuino_profile.update_one(
             {"id": uid},
             {"$set": _set},
             upsert=False,
         )
-    except Exception as _me:
-        import traceback
-        tb = traceback.format_exc()
-        logger.error(f"[dev/set-tier] mongo update FAILED: {_me}\n{tb}")
+        logger.info(f"[dev/set-tier] user={uid[:8]} → tier={req.tier} ledger={'reset' if req.tier in _PAID_TIERS else 'cleared'}")
+        return {"ok": True, "profile_id": uid, "subscription_tier": req.tier}
+    except HTTPException:
+        # Rilancia 400/403 così com'è — non wrappare come 500
+        raise
+    except Exception as _e:
+        _record_error("dev/set-tier", _e)
+        # Rende visibile la CAUSA nel client (Alert body) invece che generic 500
         raise HTTPException(
             status_code=500,
-            detail=f"mongo update failed: {type(_me).__name__}: {str(_me)[:200]}",
+            detail=f"{type(_e).__name__}: {str(_e)[:280]}",
         )
-    logger.info(f"[dev/set-tier] user={uid[:8]} → tier={req.tier} ledger={'reset' if req.tier in _PAID_TIERS else 'cleared'}")
-    return {"ok": True, "profile_id": uid, "subscription_tier": req.tier}
 
 
 @api_router.post("/dev/intro-premium/reset")

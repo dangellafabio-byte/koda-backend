@@ -4573,6 +4573,32 @@ export default function Taccuino() {
             }
           },
         },
+        {
+          text: "Vedi ultimi errori server",
+          onPress: async () => {
+            try {
+              const r = await api.devLastErrors(5);
+              if (r.count === 0) {
+                Alert.alert("Nessun errore recente", "Il server non ha registrato eccezioni.", [{ text: "OK" }]);
+                return;
+              }
+              const lines = r.errors
+                .slice(-3)
+                .reverse()
+                .map((e) => `• ${e.where} → ${e.type}: ${e.message}`.slice(0, 240))
+                .join("\n\n");
+              Alert.alert(
+                `Ultimi ${r.count} errori`,
+                lines || "vuoto",
+                [{ text: "OK" }]
+              );
+              // Log completo (con traceback) su console per copia veloce
+              console.log("[DevMenu] last errors:", JSON.stringify(r.errors, null, 2));
+            } catch (e) {
+              Alert.alert("Errore", String(e).slice(0, 200), [{ text: "OK" }]);
+            }
+          },
+        },
         { text: "Annulla", style: "cancel" },
       ],
       { cancelable: true }
