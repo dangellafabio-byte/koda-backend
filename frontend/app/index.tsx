@@ -4502,6 +4502,17 @@ export default function Taccuino() {
           onPress: async () => {
             try {
               const r = await api.devSetTier("monthly");
+              // === FIX 2026-06 — refetch profile dopo cambio tier ===========
+              // Senza questo, il componente SubscriptionStatus in Impostazioni
+              // continua a mostrare il vecchio profilo (senza ledger_state
+              // fresco appena creato dal backend). Utente vedeva 500 min
+              // sempre pieni e "Prossimo rinnovo: —".
+              try {
+                const p = await api.getProfile();
+                setProfile(p);
+              } catch (fe) {
+                console.warn("[DevMenu] refetch profile failed:", String(fe).slice(0, 120));
+              }
               Alert.alert(
                 "Premium attivo",
                 `Tier: ${r.subscription_tier || "monthly"}. Riapri l'app per prendere effetto pulito.`,
@@ -4517,6 +4528,13 @@ export default function Taccuino() {
           onPress: async () => {
             try {
               const r = await api.devSetTier(null);
+              // Refetch anche qui — vedi commento sopra.
+              try {
+                const p = await api.getProfile();
+                setProfile(p);
+              } catch (fe) {
+                console.warn("[DevMenu] refetch profile failed:", String(fe).slice(0, 120));
+              }
               Alert.alert(
                 "Free attivo",
                 `Tier: ${r.subscription_tier || "null"}. Riapri l'app per prendere effetto pulito.`,
@@ -5291,7 +5309,18 @@ export default function Taccuino() {
           <TouchableOpacity
             ref={menuBtnRef}
             style={[styles.headerBtn, { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" }]}
-            onPress={() => setShowSettings(true)}
+            onPress={() => {
+              setShowSettings(true);
+              // === FIX 2026-06 — refetch profile all'apertura Impostazioni ==
+              // Serve per far vedere sempre lo stato aggiornato del piano/
+              // consumo minuti (barra SubscriptionStatus). Il consumo avviene
+              // lato backend (fast pipeline WS) ma il profilo client resta
+              // stale finché non refetchiamo. Fire-and-forget: se fallisce,
+              // Impostazioni si apre comunque con dati cachati.
+              api.getProfile()
+                .then((p) => setProfile(p))
+                .catch((e) => console.warn("[settings] profile refetch failed:", String(e).slice(0, 120)));
+            }}
             hitSlop={20}
             testID="settings-toggle"
             accessibilityLabel="Apri impostazioni"

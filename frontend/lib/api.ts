@@ -110,8 +110,37 @@ export type Profile = {
   // === Freemium counter (giugno 2026)
   free_messages_used?: number;
   subscription_active?: boolean;
-  subscription_tier?: "essential" | "daily" | "plus" | null;
+  // Tier attuali (Fabio 2026-06): monthly/bimonthly/annual/unlimited.
+  // I vecchi "essential/daily/plus" restano tollerati per profili legacy
+  // ma nuovi acquisti usano solo i 3 moderni + unlimited.
+  subscription_tier?:
+    | "monthly"
+    | "bimonthly"
+    | "annual"
+    | "unlimited"
+    | "essential"
+    | "daily"
+    | "plus"
+    | null;
   subscription_expires_at?: string | null;
+  // === Ledger stato (Fabio 2026-06) — serializzato dal backend
+  //     (subscription_ledger.py:SubscriptionLedger.to_dict()).
+  //     Presente solo se subscription_tier è paid (monthly/bimonthly/annual).
+  //     Se unlimited o null → è null.
+  ledger_state?: {
+    plan: "monthly" | "bimonthly" | "annual";
+    current_period_index: number;
+    current_period_end: string;
+    current_period_start?: string;
+    base_minutes_used: number;
+    carryover_slots: Array<{
+      origin_month_index: number;
+      minutes_remaining: number;
+      expires_at: string;
+    }>;
+    topup_minutes_remaining?: number;
+  } | null;
+  minutes_used_this_month?: number;
   settings: ProfileSettings;
   memory_summary: string;
   created_at: string;
