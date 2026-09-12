@@ -5449,16 +5449,32 @@ export default function Taccuino() {
           Mostrato SOLO se profile.subscription_tier è paid (monthly/
           bimonthly/annual) AND base_used >= 85% del piano. Auto-hide
           via tap X per la sessione corrente (state locale). Non blocca
-          nulla: la chat testuale resta sempre disponibile. */}
-      <View style={{ position: "absolute", top: Math.max(insets.top + 60, 100), left: 0, right: 0, zIndex: 10 }} pointerEvents="box-none">
+          nulla: la chat testuale resta sempre disponibile.
+
+          === FIX 2026-06 (Fabio) — POSIZIONAMENTO ============================
+          Prima top=insets.top+60 (100 min) mentre "Lascia andare" era a
+          insets.top+100 → il banner (specie con CTA +30 min alto ~150px)
+          si sovrapponeva alla pill "Lascia andare" coprendone il testo.
+          Ora il banner sta SOTTO "Lascia andare" (insets.top+160) con
+          un margine di respiro. */}
+      <View style={{ position: "absolute", top: Math.max(insets.top + 160, 210), left: 0, right: 0, zIndex: 10 }} pointerEvents="box-none">
         <MinutesWarningBanner
           profile={profile as any}
           onOpenTopup={() => {
-            try {
-              router.push("/paywall?variant=topup");
-            } catch (e) {
-              console.warn("[MinutesBanner] router.push failed:", String(e).slice(0, 120));
-            }
+            // === TOP-UP CTA (Fabio 2026-06) ===================================
+            // Il bottone "+30 min · 2,49€" deve triggerare il Consumable IAP
+            // `koda_topup_30min_249` — NON il paywall abbonamenti (dove il
+            // prezzo 2,49€ non esiste, sono altri tier).
+            // Prima: router.push("/paywall?variant=topup") → apriva paywall
+            // abbonamenti con prezzi mensile/bimestrale/annuale. Confusione.
+            // Ora: placeholder Alert finché RevenueCat non è hookato (P2
+            // backlog). Quando l'integrazione RC sarà attiva, sostituire il
+            // body con: Purchases.purchaseProduct("koda_topup_30min_249").
+            Alert.alert(
+              "Ricarica +30 min · €2,49",
+              "Il pacchetto ricarica sarà attivo appena l'integrazione pagamenti in-app (RevenueCat) sarà pubblicata nella prossima build.\n\nNel frattempo, Koda resta a tua disposizione in chat scritta senza limiti.",
+              [{ text: "OK" }]
+            );
           }}
         />
       </View>
