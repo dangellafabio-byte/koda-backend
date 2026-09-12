@@ -56,6 +56,7 @@ import subscription_ledger as _sub_ledger
 # ORA. Aggancia il record `koda_events` a fine turno, ritorna `event_id`
 # al client per il feedback later. Vedi koda_feedback.py per lo schema.
 import koda_feedback as _koda_fb
+import koda_gender_guard as _koda_gg  # Fabio 2026-06: post-processor safety-net gender
 
 # === Sealed Confessional crypto — RIMOSSO (Blocco B, feature deprecata) ===
 import base64  # ancora usato altrove nel file (safety, whisper base64 audio)
@@ -2883,22 +2884,28 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         # ============================================================
         f"DINAMICITÀ EMOTIVA (REGOLA SUPERIORE ALLO SPECCHIO):\n"
         f"Prima di rispondere, LEGGI l'EMOZIONE SOTTOSTANTE al messaggio, non solo "
-        f"le parole. Poi decidi consapevolmente UNA delle 4 modalità:\n"
+        f"le parole. Poi decidi consapevolmente UNA delle 4 modalità e imposta il "
+        f"campo `tone` del JSON di conseguenza. La modulazione della VOCE (sussurro, "
+        f"rallentamento) la applica il backend in base a `tone` — TU NON DEVI mai "
+        f"scrivere tag audio inline [softly]/[warmly]/[gently]/[thoughtful] nel testo.\n"
         f"\n"
-        f"  1. SPECCHIO (default) — quando l'utente è equilibrato/colloquiale: rifletti "
-        f"     il suo registro, segui il flusso, fai compagnia. Battute se scherza, "
-        f"     ironia se è ironico, tranquillità se è tranquillo.\n"
-        f"     → Tag emotiva: [warmly] / [softly] / [thoughtful]\n"
+        f"  1. SPECCHIO (default, 80%+ dei turni) — quando l'utente è equilibrato/"
+        f"     colloquiale/tecnico/informativo: rifletti il suo registro, segui il "
+        f"     flusso, fai compagnia. Battute se scherza, ironia se è ironico, "
+        f"     tranquillità se è tranquillo, tecnico se parla tecnico.\n"
+        f"     → tone JSON: 'warm' o 'neutral' (voce naturale, ZERO modulazione)\n"
+        f"     → NON usare 'concerned' o 'paced' come default: quelli fanno "
+        f"       rallentare/sussurrare la voce e sono FUORI POSTO su un turno normale.\n"
         f"\n"
         f"  2. SALIRE IN SERIETÀ — quando l'utente sta dicendo cose oggettivamente "
         f"     pesanti (lutto, malattia, separazione, fallimento, pensieri scuri) MA "
         f"     usa un tono leggero/sbrigativo per difendersi. NON specchiare la "
         f"     leggerezza: alza il livello, rallenta, fai sentire che hai CAPITO il "
         f"     peso reale. Tempo dilatato, frasi brevi, presenza piena.\n"
-        f"     → Tag emotiva: [gently] / [concerned] / [softly]\n"
+        f"     → tone JSON: 'concerned' (backend applica [gently] al TTS)\n"
         f"     → Esempio: utente dice 'comunque mio padre è morto, vabbè' → tu NON "
-        f"       rispondi 'eh vabbè succede', tu rispondi: '[gently] Aspetta. Non è "
-        f"       un vabbè. Tuo padre. Vuoi dirmi com'è successo, se ti va?'\n"
+        f"       rispondi 'eh vabbè succede', tu rispondi (tone=concerned): 'Aspetta. "
+        f"       Non è un vabbè. Tuo padre. Vuoi dirmi com'è successo, se ti va?'\n"
         f"\n"
         f"  3. SDRAMMATIZZARE CON TATTO — quando l'utente sta affogando in pensieri "
         f"     negativi/catastrofici, generalizzazioni del tipo 'è tutto inutile, "
@@ -2906,21 +2913,24 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"     minimizzare. Inserisci una briciola di prospettiva, di leggerezza "
         f"     UMANA (non da motivatore): un dettaglio reale, una battuta misurata, "
         f"     un ricordo concreto, qualcosa che riporti al presente vivibile.\n"
-        f"     → Tag emotiva: [warmly] / [softly]\n"
-        f"     → Esempio: utente dice 'mi sa che faccio cagare a tutti' → tu rispondi: "
-        f"       '[softly] A tutti tutti? Anche al barista che ti ha sorriso stamattina? "
-        f"       Dai, vediamo questa cosa con calma — chi ti ha fatto sentire così?'\n"
+        f"     → tone JSON: 'warm' (voce naturale, senza modulazione — la leggerezza "
+        f"       la fai con le PAROLE, non con la voce sussurrata)\n"
+        f"     → Esempio: utente 'mi sa che faccio cagare a tutti' → tu (tone=warm): "
+        f"       'A tutti tutti? Anche al barista che ti ha sorriso stamattina? "
+        f"       Dai, vediamo — chi ti ha fatto sentire così?'\n"
         f"\n"
         f"  4. TENERE IL PUNTO — quando l'utente è gonfio di rabbia o paura. NON "
         f"     amplificare l'emozione, ma nemmeno calmarlo prematuramente. Sii roccia: "
         f"     presenza ferma, valida ('hai ragione a essere arrabbiato'), poi piano "
         f"     piano apri uno spazio di pensiero.\n"
-        f"     → Tag emotiva: [thoughtful] / [calm] / [softly]\n"
+        f"     → tone JSON: 'concerned' se paura/dolore, 'warm' se rabbia validata\n"
         f"\n"
         f"REGOLA CHIAVE: la dinamicità emotiva SUPERA lo specchio del registro. Se "
         f"l'utente scherza su una tragedia, tu sali in serietà ANCHE se rompi lo "
-        f"specchio. Lo specchio è il default; la dinamicità è quando serve davvero "
-        f"una presenza fraterna viva e partecipe, non un riflesso passivo.\n"
+        f"specchio. Lo specchio è il default (80%+); la dinamicità è quando serve "
+        f"DAVVERO — dolore reale, safety, gioia forte. Se sei in dubbio se un turno "
+        f"merita 'concerned' o 'warm', scegli SEMPRE 'warm' — è meglio uno specchio "
+        f"leggermente sotto-modulato che una voce sussurrata su una spiegazione tecnica.\n"
         f"\n"
         # ============================================================
         # UMANITÀ CALIBRATA — Imperfezione che ti fa amica vera
@@ -12469,6 +12479,25 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
 
         # === Post-stream: parse full JSON for metadata, persist to MongoDB. ===
         full_reply = ''.join(full_reply_chars).strip() or "..."
+        # === GENDER SAFETY-NET (Fabio 2026-06) ================================
+        # Post-processor puro: se ai_gender è m/f e Claude Haiku ha scivolato
+        # nel genere opposto parlando di sé ("sono contento" con ai_gender=f),
+        # correggi automaticamente. Non tocca aggettivi rivolti all'utente
+        # (quelli richiederebbero parsing sintattico completo). Idempotente,
+        # <1ms per turno. Log un WARNING quando corregge → monitoring bias LLM.
+        try:
+            _ai_g = (profile.ai_gender or "").lower().strip()
+            if _ai_g in ("f", "m"):
+                _corrected, _n_fix = _koda_gg.fix_ai_gender(full_reply, _ai_g)
+                if _n_fix > 0:
+                    logger.warning(
+                        f"[KODA_GENDER_FIX] ai_gender={_ai_g} "
+                        f"corrections={_n_fix} "
+                        f"before={full_reply[:80]!r} after={_corrected[:80]!r}"
+                    )
+                    full_reply = _corrected
+        except Exception as _gg_err:
+            logger.warning(f"[KODA_GENDER_FIX] guard failed: {_gg_err!r}")
         try:
             data = extract_json(extractor.full_buffer) or {}
         except Exception:
@@ -13435,7 +13464,10 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"o 'non lo leggo' — è falso.\n"
         f"\n"
         f"VIETATO: 'Certo!', 'Come posso aiutarti', 'Sono qui per…', elenchi puntati, moralismi, "
-        f"narrazione azioni (*sospira*, (ride), [softly]) — esprimi emozione con le PAROLE. "
+        f"narrazione azioni (*sospira*, (ride)) e tag audio inline "
+        f"([softly], [warmly], [gently], [thoughtful], [breath], [pause]) — la modulazione la decide "
+        f"il backend tramite il campo `tone`, i tag inline vengono letti come testo o ignorati. "
+        f"Esprimi emozione con le PAROLE. "
         f"Interpreti l'intent SEMPRE su frasi solo AMBIGUE (parola scambiata, punteggiatura, ordine confuso). "
         f"⚠️ ECCEZIONE (Fabio 2026-07-01) — solo quando il testo è CHIARAMENTE incomprensibile: "
         f"frase troncata a metà senza senso ('vado a fare la ma-'), parole random senza contesto, "
@@ -13550,7 +13582,49 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
     trial_block = ""
     if trial_state == "closing":
         trial_block = "\n" + TRIAL_CLOSING_PROMPT_BLOCK
-    return temporal_block + "\n" + base_prompt + trial_block
+
+    # === REMINDER FINALE — GENDER + MODULATION (Fabio 2026-06) ================
+    # Piazzato in coda al system prompt SFRUTTA il bias recency di Claude Haiku
+    # 4.5: le istruzioni lette per ultime hanno peso maggiore sul prossimo token.
+    # Copre due difetti noti che le regole in cima al prompt (~3-4KB sopra) non
+    # riescono a tenere per turni lunghi:
+    #  1) Gender drift ("sono contento" al posto di "sono contenta" con
+    #     ai_gender="f"). C'è comunque il post-processor safety-net, ma qui
+    #     preveniamo alla fonte.
+    #  2) Audio tag inline ([softly], [warmly], [gently], [thoughtful], *sospira*):
+    #     Claude NON DEVE emetterli. La modulazione la decide il backend in base
+    #     al tone JSON. Se Claude scrive [softly] inline, il TTS lo interpreta
+    #     due volte → sussurro esagerato o parola letta.
+    if ai_g == "m":
+        _final_gender_line = (
+            f"⚠️ RICORDA (regola gender, sovrascrive ogni bias): "
+            f"TU SEI MASCHIO ({ai_name}). Parla di TE STESSO al MASCHILE — "
+            f"'sono pronto/contento/sicuro/stato/riuscito'. MAI '-a/-e' su di te."
+        )
+    elif ai_g == "f":
+        _final_gender_line = (
+            f"⚠️ RICORDA (regola gender, sovrascrive ogni bias): "
+            f"TU SEI FEMMINA ({ai_name}). Parla di TE STESSA al FEMMINILE — "
+            f"'sono pronta/contenta/sicura/stata/riuscita'. MAI '-o' su di te."
+        )
+    else:
+        _final_gender_line = f"⚠️ RICORDA: genere neutro — evita aggettivi declinati su di te."
+
+    final_reminder = (
+        f"\n\n━━━ REMINDER FINALE (leggi PRIMA di rispondere) ━━━\n"
+        f"{_final_gender_line}\n"
+        f"⚠️ ZERO AUDIO TAG INLINE: mai [softly], [warmly], [gently], [thoughtful], "
+        f"[breath], [pause], [excited], [urgent] dentro il campo `reply`. NON "
+        f"funzionano come credi: il backend inietta la modulazione via `tone` JSON, "
+        f"il tuo [softly] finisce nel TTS come suono strano o come testo letto.\n"
+        f"⚠️ ZERO NARRAZIONE AZIONI: mai *sospira*, (ride), *pensa*, [pausa].\n"
+        f"⚠️ MODULAZIONE = SPECCHIO DEFAULT: se l'utente parla lucido/tecnico/"
+        f"colloquiale, tu tone=warm o neutral → registro naturale, NIENTE voce "
+        f"sussurrata o rallentata. Modula (tone=concerned/urgent/energetic) SOLO "
+        f"quando serve DAVVERO — dolore reale, safety, gioia forte. Regola pratica: "
+        f"80%+ dei turni sono tone=warm/neutral, mai concerned/paced per default.\n"
+    )
+    return temporal_block + "\n" + base_prompt + trial_block + final_reminder
 
 
 # ============================================================
@@ -14448,24 +14522,34 @@ async def _fast_pipeline_task(
                 # TAG emotivo iniettato all'inizio di OGNI frase, derivato dal
                 # current_tone scelto da Claude. V3 interpreta i tag inline
                 # come direzione di recitazione (analogo al copione teatrale).
+                #
+                # === FIX 2026-06 (Fabio "Koda modula anche quando non serve") ==
+                # I toni SPECCHIO (warm/calm/paced/neutral) NON devono più
+                # avere tag di modulazione hardcoded. Il "warm" è il registro
+                # fraterno di default: se lo prefissiamo con [warmly] TTS
+                # modula SEMPRE la voce, anche in turni tecnici/informativi
+                # (Fabio dice "sviluppo, deploy, calibra classifier" → Koda
+                # risponde con voce sussurrata e lenta → sbagliato).
+                # Regola nuova: tag SOLO sui toni che rappresentano un
+                # cambio di modulazione VERO rispetto allo SPECCHIO neutro:
+                #   concerned → [gently]  (dolore, preoccupazione)
+                #   energetic → [excited] (gioia forte)
+                #   urgent    → [urgent]  (crisi/safety)
+                # warm/calm/paced/neutral → NESSUN TAG (voice_settings già
+                # gestisce speed/stability/style differenti tra warm e calm).
                 _TONE_TO_V3_TAG = {
-                    "calm":      "[softly]",
+                    "calm":      "",           # SPECCHIO — no modulation tag
                     "concerned": "[gently]",
-                    "warm":      "[warmly]",
+                    "warm":      "",           # SPECCHIO — no modulation tag
                     "energetic": "[excited]",
                     "urgent":    "[urgent]",
                     "neutral":   "",
-                    # === PACED (agosto 2026) ============================
-                    # [softly] apre ogni frase del paced. Il [breath] è
-                    # BANDITO da _strip_audio_tags (che rimuove tutti i
-                    # tag inline emessi da Claude prima che arriviamo
-                    # qui) → safety net implicito. Le pause tra le frasi
-                    # non servono come tag [pause]: il fast pipeline
-                    # chunka frase-per-frase, quindi il silenzio tra
-                    # sentence è già naturale. Le voice_settings paced
-                    # (speed 0.74) creano il ritmo lento; [softly] tiene
-                    # la morbidezza; nessun respiro udibile.
-                    "paced":     "[softly]",
+                    # PACED: registro deliberatamente lento (Fabio 2026-08).
+                    # Il ritmo è già impostato da voice_settings (speed 0.74).
+                    # Il tag [softly] causava sussurro anche sui turni tecnici
+                    # con paced non voluto → rimosso. Se serve sussurro,
+                    # Claude può scegliere tone=concerned esplicitamente.
+                    "paced":     "",
                 }
                 _v3_tag = _TONE_TO_V3_TAG.get(current_tone or "warm", "")
                 clean_tts_v3 = (
@@ -15490,6 +15574,25 @@ async def _fast_pipeline_task(
             pass
 
         full_reply = ''.join(full_reply_chars).strip() or "..."
+        # === GENDER SAFETY-NET (Fabio 2026-06) ================================
+        # Post-processor puro: se ai_gender è m/f e Claude Haiku ha scivolato
+        # nel genere opposto parlando di sé ("sono contento" con ai_gender=f),
+        # correggi automaticamente. Non tocca aggettivi rivolti all'utente
+        # (quelli richiederebbero parsing sintattico completo). Idempotente,
+        # <1ms per turno. Log un WARNING quando corregge → monitoring bias LLM.
+        try:
+            _ai_g = (profile.ai_gender or "").lower().strip()
+            if _ai_g in ("f", "m"):
+                _corrected, _n_fix = _koda_gg.fix_ai_gender(full_reply, _ai_g)
+                if _n_fix > 0:
+                    logger.warning(
+                        f"[KODA_GENDER_FIX] ai_gender={_ai_g} "
+                        f"corrections={_n_fix} "
+                        f"before={full_reply[:80]!r} after={_corrected[:80]!r}"
+                    )
+                    full_reply = _corrected
+        except Exception as _gg_err:
+            logger.warning(f"[KODA_GENDER_FIX] guard failed: {_gg_err!r}")
         # === DIAG LINGUA (sprint 2026-06-20 escalation) ===
         # Fabio segnala: "TUTTE le risposte sono in spagnolo, SEMPRE, da
         # mesi". Pattern deterministico → bug nel prompt o nel profilo,
