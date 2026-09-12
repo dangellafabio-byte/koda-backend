@@ -130,13 +130,16 @@ export type Profile = {
   ledger_state?: {
     plan: "monthly" | "bimonthly" | "annual";
     current_period_index: number;
-    current_period_end: string;
-    current_period_start?: string;
+    // FIX 2026-06 — nomi con suffisso _iso per matchare dataclass Python
+    // SubscriptionLedger.to_dict() (subscription_ledger.py). Prima
+    // usavo `current_period_end` senza `_iso` → sempre undefined.
+    current_period_end_iso: string;
+    current_period_start_iso?: string;
     base_minutes_used: number;
     carryover_slots: Array<{
       origin_month_index: number;
       minutes_remaining: number;
-      expires_at: string;
+      expires_at_iso: string;
     }>;
     topup_minutes_remaining?: number;
   } | null;
@@ -521,6 +524,26 @@ export const api = {
   devFirstBootReset: () =>
     jsonReq<{ ok: boolean; profile_id: string; reset: string[] }>(
       "/dev/first-boot/reset",
+      { method: "POST" }
+    ),
+
+  /** DEV admin-only: pre-popola il ledger con valori arbitrari per QA
+   *  della barra SubscriptionStatus (Fabio 2026-06). Setta il tier al
+   *  plan indicato + inserisce base_used/carryover/topup fittizi. */
+  devSeedLedger: (
+    plan: "monthly" | "bimonthly" | "annual",
+    baseUsed: number,
+    carryover: number,
+    topup: number
+  ) =>
+    jsonReq<{
+      ok: boolean;
+      profile_id: string;
+      plan: string;
+      summary: any;
+      ledger_state: any;
+    }>(
+      `/dev/seed-ledger?plan=${plan}&base_used=${baseUsed}&carryover=${carryover}&topup=${topup}`,
       { method: "POST" }
     ),
 

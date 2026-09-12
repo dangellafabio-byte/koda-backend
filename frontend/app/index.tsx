@@ -4525,6 +4525,33 @@ export default function Taccuino() {
           },
         },
         {
+          text: "Simula ledger (250 usati + 200 carry + 30 topup)",
+          onPress: async () => {
+            try {
+              const r = await api.devSeedLedger("bimonthly", 250, 200, 30);
+              try {
+                const p = await api.getProfile();
+                setProfile(p);
+              } catch (fe) {
+                console.warn("[DevMenu] refetch profile failed:", String(fe).slice(0, 120));
+              }
+              const s = r?.summary || {};
+              Alert.alert(
+                "Ledger simulato",
+                `Bimestrale attivo.\n` +
+                  `Base rimanente: ${Math.round(s.base_minutes_remaining || 0)} min\n` +
+                  `Carryover: ${Math.round(s.carryover_minutes_total || 0)} min\n` +
+                  `Top-up: ${Math.round(s.topup_minutes_remaining || 0)} min\n` +
+                  `Base usato: ${Math.round(s.base_minutes_used || 0)} min\n\n` +
+                  `Apri Impostazioni per vedere la barra a 4 segmenti.`,
+                [{ text: "OK" }]
+              );
+            } catch (e) {
+              Alert.alert("Errore", String(e).slice(0, 160), [{ text: "OK" }]);
+            }
+          },
+        },
+        {
           text: "Force Free",
           onPress: async () => {
             try {

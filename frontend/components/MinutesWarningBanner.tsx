@@ -22,7 +22,7 @@ import { View, Text, StyleSheet, Pressable } from "react-native";
 
 type LedgerState = {
   plan: "monthly" | "bimonthly" | "annual";
-  current_period_end: string;
+  current_period_end_iso: string;  // FIX 2026-06: allineato al dataclass Python
   base_minutes_used: number;
   carryover_slots: Array<{ minutes_remaining: number }>;
   topup_minutes_remaining?: number;

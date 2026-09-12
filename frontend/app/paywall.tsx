@@ -438,13 +438,31 @@ export default function PaywallScreen() {
           style={[
             styles.cta,
             {
-              backgroundColor: theme.primary,
-              opacity: (loading || !waiverAccepted) ? 0.4 : 1,
+              // === FIX 2026-06 (Fabio, screenshot bug) ==================
+              // Prima usavo `backgroundColor: theme.primary` + opacity 0.4
+              // quando disabled. Ma theme.primary è un teal saturo: con
+              // opacity 0.4 sopra il paywall dark, resta comunque teal —
+              // Fabio non riusciva a distinguere lo stato attivo da quello
+              // disabled a colpo d'occhio. Ora: background grigio scuro
+              // quando disabled → contrasto netto.
+              backgroundColor:
+                loading || !waiverAccepted
+                  ? theme.border  // grigio ~#2A2A34 in dark, quasi trasparente in light
+                  : theme.primary,
+              opacity: loading || !waiverAccepted ? 0.55 : 1,
             },
           ]}
           testID="paywall-purchase-cta"
         >
-          <Text style={[styles.ctaText, { color: theme.bg }]}>
+          <Text style={[
+            styles.ctaText,
+            {
+              // Testo grigio spento quando disabled, in modo che l'utente
+              // capisca ancora COSA farebbe il pulsante, ma sappia che ora
+              // non è tap-abile.
+              color: loading || !waiverAccepted ? theme.textDim : theme.bg,
+            },
+          ]}>
             {loading ? "Apertura pagamento…" : `Resta con Koda — ${selected.price}${selected.priceUnit}`}
           </Text>
         </Pressable>

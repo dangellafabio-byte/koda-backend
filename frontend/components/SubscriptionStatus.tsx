@@ -28,13 +28,18 @@ import { View, Text, StyleSheet } from "react-native";
 type CarryoverSlot = {
   origin_month_index: number;
   minutes_remaining: number;
-  expires_at: string;
+  expires_at_iso: string;  // FIX 2026-06: field name allineato al backend dataclass (subscription_ledger.py:CarryoverSlot.expires_at_iso)
 };
 
 type LedgerState = {
   plan: "monthly" | "bimonthly" | "annual";
   current_period_index: number;
-  current_period_end: string;
+  // FIX 2026-06 — nomi campo devono avere suffisso `_iso` per matchare il
+  // dataclass Python `SubscriptionLedger` serializzato via `to_dict()`.
+  // Prima leggevo `current_period_end` (senza _iso) → sempre undefined
+  // → UI mostrava "Prossimo rinnovo minuti: —" (bug segnalato da Fabio).
+  current_period_end_iso: string;
+  current_period_start_iso?: string;
   base_minutes_used: number;
   carryover_slots: CarryoverSlot[];
   topup_minutes_remaining?: number;
@@ -131,7 +136,7 @@ export default function SubscriptionStatus({ profile }: { profile: Profile | nul
         <Text style={styles.planName}>{PLAN_LABEL[plan] || plan}</Text>
       </View>
       <Text style={styles.renewalLine}>
-        Prossimo rinnovo minuti: {formatDate(ls?.current_period_end)}
+        Prossimo rinnovo minuti: {formatDate(ls?.current_period_end_iso)}
       </Text>
 
       {/* Barra a segmenti proporzionali. Layout: base (verde) + carryover

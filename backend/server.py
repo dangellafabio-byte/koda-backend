@@ -5924,6 +5924,79 @@ async def api_dev_first_boot_reset():
     return {"ok": True, "profile_id": uid, "reset": list(unset_fields.keys())}
 
 
+# === DEV SEED LEDGER — simula consumo + carryover + topup (Fabio 2026-06) ===
+@api_router.post("/dev/seed-ledger")
+async def api_dev_seed_ledger(
+    plan: str = "bimonthly",
+    base_used: float = 250.0,
+    carryover: float = 200.0,
+    topup: float = 30.0,
+):
+    """Pre-popola il ledger di un profilo admin con valori arbitrari per
+    QA della barra `SubscriptionStatus`. Testa il rendering di tutti e 4
+    i segmenti (base rimanente + carryover + topup + consumato) senza
+    dover attendere consumo reale.
+
+    Args:
+        plan: "monthly" | "bimonthly" | "annual"
+        base_used: minuti del base già consumati (0 <= x <= 500)
+        carryover: minuti del carryover attivo (0 <= x <= 500)
+        topup: minuti pacchetto top-up (0 <= x)
+
+    Esempio: /api/dev/seed-ledger?plan=bimonthly&base_used=250&carryover=200&topup=30
+    → barra: [base 250 · carryover 200 · topup 30 · consumed 250]
+    → totale disponibile 480 min, di cui 250 usati.
+    """
+    uid = _require_admin()
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    if plan not in _sub_ledger.TIER_BASE_MINUTES:
+        raise HTTPException(400, f"plan invalid: {plan}")
+
+    # 1. Crea ledger fresco
+    ledger = _sub_ledger.create_ledger(plan, now=now)
+
+    # 2. Simula consumo del base (senza toccare carryover slots)
+    base_max = _sub_ledger.TIER_BASE_MINUTES[plan]
+    ledger.base_minutes_used = max(0.0, min(base_max, float(base_used)))
+
+    # 3. Aggiungi uno slot carryover fittizio (con expires_at_iso = fine
+    #    del mese corrente per garantire sopravvivenza fino al rollover
+    #    successivo).
+    if carryover > 0:
+        slot = _sub_ledger.CarryoverSlot(
+            origin_month_index=0,
+            minutes_remaining=float(carryover),
+            expires_at_iso=ledger.current_period_end_iso,
+        )
+        ledger.carryover_slots.append(slot)
+
+    # 4. Aggiungi top-up
+    if topup > 0:
+        _sub_ledger.add_topup(ledger, float(topup))
+
+    new_state = ledger.to_dict()
+    await db.taccuino_profile.update_one(
+        {"id": uid},
+        {"$set": {
+            "subscription_tier": plan,
+            "subscription_active": True,
+            "ledger_state": new_state,
+        }},
+        upsert=False,
+    )
+    summary = _sub_ledger.remaining_summary(ledger)
+    logger.info(f"[dev/seed-ledger] user={uid[:8]} plan={plan} seeded state={summary}")
+    return {
+        "ok": True,
+        "profile_id": uid,
+        "plan": plan,
+        "summary": summary,
+        "ledger_state": new_state,
+    }
+
+
 
 # ============================================================
 # FINE dev endpoints trial
