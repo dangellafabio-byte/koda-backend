@@ -39,21 +39,29 @@ from dateutil.relativedelta import relativedelta
 # Approvate da Fabio 2026-08-14. Modificare qui, non in server.py.
 
 TIER_BASE_MINUTES: Dict[str, float] = {
-    # 2026-09-06 (Fabio) — Ripricing basato su costo reale ElevenLabs
-    # misurato in dashboard (~€0.021-0.024/min). Nuovi budget con
-    # margine ~44% verificato. Costo di riferimento overage: €0.03/min.
-    "monthly":   200.0,
-    "bimonthly": 230.0,
-    "annual":    230.0,
+    # 2026-06-15 (Fabio) — Nuovo pricing definitivo per lancio.
+    # Tutti i tier hanno 500 min/mese (uniforme). Differenziazione tra
+    # tier avviene su prezzo, durata impegno, e sopravvivenza dei residui
+    # (carryover): monthly=no, bimonthly=1 mese, annual=2 mesi.
+    # Vecchi valori 2026-09-06 (200/230/230) → sostituiti con 500 per
+    # tutti in coerenza col paywall commerciale finale.
+    "monthly":   500.0,
+    "bimonthly": 500.0,
+    "annual":    500.0,
 }
 
 # Massimo minuti trasferibili come carryover DA UN SINGOLO MESE.
-# NB: per l'annual, il ledger può contenere fino a 2 slot attivi
-# contemporaneamente (residui di 2 mesi diversi), ma ciascuno cap 50.
+# Formula prodotto (Fabio 2026-06): carryover = min(saldo_fine_mese, 500).
+# Se l'utente arriva a fine mese con 300 min non usati → 300 di carryover.
+# Se l'utente ha usato 0 min → 500 di carryover (cap = piena mensilità).
+# NB annual: il ledger può contenere fino a 2 slot attivi contemporaneamente
+# (residui di 2 mesi diversi), ciascuno cap 500 → theoric max disponibile
+# in un mese = 500 (base) + 500 + 500 (2 slot) = 1500 min. In pratica
+# raro perché slot=1 mese di vita, il secondo slot generato scarta il primo.
 TIER_MAX_CARRYOVER_PER_SLOT: Dict[str, float] = {
-    "monthly":   0.0,   # nessun carryover
-    "bimonthly": 50.0,  # 1 slot solo, cap 50, vive 1 mese
-    "annual":    50.0,  # slot multipli, ciascuno cap 50, vivono 2 mesi
+    "monthly":   0.0,     # nessun carryover — piano corto, no residui
+    "bimonthly": 500.0,   # 1 slot solo, cap 500 = intera mensilità, vive 1 mese
+    "annual":    500.0,   # slot multipli (fino a 2), ciascuno cap 500, vivono 2 mesi
 }
 
 # Numero di mesi in cui uno slot resta "spendibile" dopo la sua creazione.
@@ -155,6 +163,13 @@ class SubscriptionLedger:
     base_minutes_used: float               # consumati dal budget base del mese corrente
     carryover_slots: List[CarryoverSlot]   # slot residui, ordinati per origin_month_index
     last_rollover_check_iso: str           # ultima chiamata ad advance_period()
+    # === TOP-UP (Fabio 2026-06) =============================================
+    # Minuti pacchetto extra (+30 min/€2,49 Consumable IAP, product ID
+    # `koda_topup_30min_249`). NON scadono al rollover mese: rimangono nel
+    # ledger fino ad esaurimento. Consumati DOPO carryover e base (ordine
+    # FIFO nel consume()), così i minuti "gratis" del piano si consumano
+    # per primi e il denaro fresh dell'utente resta il più a lungo possibile.
+    topup_minutes_remaining: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -175,6 +190,8 @@ class SubscriptionLedger:
             base_minutes_used=float(d["base_minutes_used"]),
             carryover_slots=slots,
             last_rollover_check_iso=str(d["last_rollover_check_iso"]),
+            # Backfill 0.0 per ledger creati prima del 2026-06 (no topup key)
+            topup_minutes_remaining=float(d.get("topup_minutes_remaining", 0.0)),
         )
 
 
@@ -206,7 +223,35 @@ def create_ledger(plan: str, purchase_date: Optional[datetime] = None) -> Subscr
         base_minutes_used=0.0,
         carryover_slots=[],
         last_rollover_check_iso=_iso(now),
+        topup_minutes_remaining=0.0,
     )
+
+
+# =============================================================================
+# Top-up — accredito minuti pacchetto Consumable IAP (Fabio 2026-06)
+# =============================================================================
+
+def add_topup(ledger: SubscriptionLedger, minutes: float) -> SubscriptionLedger:
+    """
+    Accredita `minutes` al pacchetto top-up dell'utente.
+
+    Chiamato dal callback IAP quando l'utente acquista il prodotto Consumable
+    `koda_topup_30min_249` (+30 min · €2,49). Ogni acquisto **somma** al saldo
+    già presente — non ci sono limiti di stacking, il top-up non scade al
+    rollover del mese (rimane finché consumato).
+
+    Idempotenza: NON è idempotente per definizione (IAP callback può ripetersi
+    ma il livello sopra `apply_iap_callback` deve gestire dedup via
+    transaction_id Apple/Google).
+
+    Args:
+        ledger: ledger stateful (mutato in-place).
+        minutes: minuti da accreditare (>0). Tipicamente 30.
+    """
+    if minutes <= 0:
+        raise ValueError(f"add_topup: minutes deve essere > 0, ricevuto {minutes}")
+    ledger.topup_minutes_remaining = max(0.0, ledger.topup_minutes_remaining) + float(minutes)
+    return ledger
 
 
 # =============================================================================
@@ -307,7 +352,8 @@ class ConsumeResult:
     """Risultato dettagliato di un consume(), utile per debug e logging."""
     consumed_from_slots: float       # totale minuti scalati dagli slot carryover
     consumed_from_base: float        # totale minuti scalati dal base del mese
-    total_consumed: float            # consumed_from_slots + consumed_from_base
+    consumed_from_topup: float       # totale minuti scalati dal top-up (Fabio 2026-06)
+    total_consumed: float            # consumed_from_slots + consumed_from_base + consumed_from_topup
     requested: float                 # minuti richiesti dal caller
     unfulfilled: float               # requested - total_consumed (>0 = paywall)
     slots_touched: List[Dict[str, Any]]  # dettaglio per audit
@@ -319,12 +365,16 @@ def consume(
     now: Optional[datetime] = None,
 ) -> ConsumeResult:
     """
-    Scala `minutes` dal ledger seguendo FIFO carryover-first:
+    Scala `minutes` dal ledger seguendo ordine FIFO carryover-first, poi
+    base del mese, poi top-up per ultimo (Fabio 2026-06):
       1. Chiama advance_period per allineare al presente.
       2. Prende dagli slot più vecchi (origin_month_index crescente).
       3. Quando gli slot sono esauriti, incrementa base_minutes_used
          fino al tetto TIER_BASE_MINUTES[plan].
-      4. Se le richieste eccedono il totale disponibile, `unfulfilled` > 0.
+      4. Se la base è esaurita, attinge dal top-up (pacchetti +30min IAP).
+         Il top-up è consumato per ultimo perché è denaro fresh: l'utente
+         deve "spendere" prima i minuti gratis del piano.
+      5. Se le richieste eccedono il totale disponibile, `unfulfilled` > 0.
          Il caller decide cosa fare (bloccare turno, notificare paywall, ecc.).
 
     Il ledger viene mutato in-place. Ritorna un ConsumeResult per audit/log.
@@ -337,6 +387,7 @@ def consume(
     result = ConsumeResult(
         consumed_from_slots=0.0,
         consumed_from_base=0.0,
+        consumed_from_topup=0.0,
         total_consumed=0.0,
         requested=minutes,
         unfulfilled=0.0,
@@ -345,7 +396,7 @@ def consume(
 
     remaining_to_consume = minutes
 
-    # Fase 1 — FIFO dai carryover slots (più vecchi first)
+    # Fase 1 — FIFO dai carryover slots (più vecchi first, evitano scadenza)
     ledger.carryover_slots.sort(key=lambda s: s.origin_month_index)
     for slot in ledger.carryover_slots:
         if remaining_to_consume <= 0:
@@ -374,7 +425,18 @@ def consume(
         remaining_to_consume -= take
         result.consumed_from_base += take
 
-    result.total_consumed = result.consumed_from_slots + result.consumed_from_base
+    # Fase 3 — dal top-up (pacchetti IAP, ultimo perché è denaro extra)
+    if remaining_to_consume > 0 and ledger.topup_minutes_remaining > 0:
+        take = min(ledger.topup_minutes_remaining, remaining_to_consume)
+        ledger.topup_minutes_remaining -= take
+        remaining_to_consume -= take
+        result.consumed_from_topup += take
+
+    result.total_consumed = (
+        result.consumed_from_slots
+        + result.consumed_from_base
+        + result.consumed_from_topup
+    )
     result.unfulfilled = max(0.0, minutes - result.total_consumed)
 
     return result
@@ -397,7 +459,8 @@ def remaining_summary(
     base_max = TIER_BASE_MINUTES[ledger.plan]
     base_remaining = max(0.0, base_max - ledger.base_minutes_used)
     slots_remaining_total = sum(s.minutes_remaining for s in ledger.carryover_slots)
-    total_available = base_remaining + slots_remaining_total
+    topup_remaining = max(0.0, float(ledger.topup_minutes_remaining))
+    total_available = base_remaining + slots_remaining_total + topup_remaining
 
     return {
         "plan": ledger.plan,
@@ -417,5 +480,6 @@ def remaining_summary(
             for s in ledger.carryover_slots
         ],
         "carryover_minutes_total": slots_remaining_total,
+        "topup_minutes_remaining": topup_remaining,
         "total_available_minutes": total_available,
     }

@@ -56,27 +56,37 @@ const PLANS: PlanInfo[] = [
     label: "Mensile",
     price: "19,99 €",
     priceUnit: "/mese",
-    minutesLine: "200 minuti al mese",
+    minutesLine: "500 minuti al mese",
   },
   {
     id: "bimonthly",
     label: "Bimestrale",
     price: "35,99 €",
     priceUnit: "/2 mesi",
-    minutesLine: "230 min/mese · carryover fino a 50 min",
+    minutesLine: "500 min/mese · carryover fino a 500 min",
   },
   {
     id: "yearly",
     label: "Annuale",
     price: "209,99 €",
     priceUnit: "/anno",
-    minutesLine: "230 min/mese · carryover 50 min su 2 mesi",
+    minutesLine: "500 min/mese · carryover 500 min ogni mese",
   },
 ];
 
 // === URL Legali (Fabio 2026-07-29) ==========================================
 const PRIVACY_URL = kodaBackendHttpUrl("/api/legal/privacy");
 const TOS_URL = kodaBackendHttpUrl("/api/legal/terms");
+
+// === WAIVER RECESSO — PLACEHOLDER (Fabio 2026-06) ===========================
+// Testo provvisorio in attesa della formulazione finale di Francesco (legale).
+// Non modificare senza revisione legale. La versione del testo va registrata
+// insieme all'atto di acquisto per audit trail (variabile WAIVER_TEXT_VERSION).
+const WAIVER_TEXT_VERSION = "v0.1-placeholder-2026-06";
+const WAIVER_PLACEHOLDER_TEXT =
+  "Chiedo espressamente l'attivazione immediata del servizio e riconosco che, " +
+  "una volta iniziato l'utilizzo, perderò il diritto di recesso previsto dagli " +
+  "artt. 52 e seguenti del Codice del Consumo. [Testo definitivo in revisione]";
 
 export default function PaywallScreen() {
   const router = useRouter();
@@ -89,6 +99,11 @@ export default function PaywallScreen() {
   // equilibrato senza favorire l'Annuale).
   const [selectedPlan, setSelectedPlan] = useState<PlanId>("bimonthly");
   const [loading, setLoading] = useState(false);
+  // === WAIVER RECESSO (Fabio 2026-06) — checkbox obbligatoria per abilitare CTA
+  //     NON pre-selezionata: l'utente deve compiere un atto positivo di
+  //     rinuncia al diritto di recesso. Il pulsante Acquista è disabilitato
+  //     finché waiverAccepted === false.
+  const [waiverAccepted, setWaiverAccepted] = useState<boolean>(false);
   // Flag admin/dev override — se true il paywall permette una X sempre
   // funzionante. Per utenti reali con trial expired, la X è nascosta
   // (l'enforcement bloccante è voluto).
@@ -226,6 +241,26 @@ export default function PaywallScreen() {
 
   const handlePurchase = async () => {
     if (loading) return;
+    // === WAIVER GATE (Fabio 2026-06) ==============================
+    // Non basta il disabled del CTA: verifichiamo di nuovo qui in
+    // caso il gate visivo fosse bypassato (dev tools, race condition).
+    if (!waiverAccepted) {
+      Alert.alert(
+        "Conferma richiesta",
+        "Per attivare l'abbonamento immediatamente devi confermare la rinuncia al diritto di recesso.",
+        [{ text: "OK" }]
+      );
+      return;
+    }
+    // Timestamp/versione testo del waiver per audit trail (verranno
+    // trasmessi a RevenueCat/backend al momento della purchase reale).
+    const waiverMeta = {
+      version: WAIVER_TEXT_VERSION,
+      accepted_at_iso: new Date().toISOString(),
+      platform: Platform.OS,
+      plan: selectedPlan,
+    };
+    console.log("[paywall] waiver accepted:", JSON.stringify(waiverMeta));
     setLoading(true);
     try {
       // === PLACEHOLDER fino a integrazione react-native-purchases ===
@@ -350,14 +385,64 @@ export default function PaywallScreen() {
           })}
         </View>
 
+        {/* === CLAIM CARRYOVER (Fabio 2026-06) =================================
+            Messaggio commerciale del meccanismo dei minuti che non si perdono.
+            "1000 min" = valore MAX teorico (500 base + 500 carryover slot). */}
+        <View style={styles.carryoverClaim}>
+          <Text style={[styles.carryoverClaimText, { color: theme.textDim }]}>
+            500 minuti al mese. Se non li usi tutti, restano tuoi —
+            fino a 1.000 minuti disponibili quando ne hai davvero bisogno.
+          </Text>
+          <Text style={[styles.carryoverTopup, { color: theme.textDim + "99" }]}>
+            Hai ancora qualcosa da dire? +30 min · 2,49 €
+          </Text>
+        </View>
+
+        {/* === CHECKBOX RINUNCIA DIRITTO DI RECESSO (Fabio 2026-06) ============
+            Copy PLACEHOLDER in attesa della formulazione finale di Francesco.
+            Legalmente necessario per attivare la subscription immediatamente
+            senza attendere il periodo di ripensamento di 14 giorni (art. 59
+            Codice del Consumo IT + art. 16 Direttiva 2011/83/UE).
+            Registrazione (timestamp/versione testo/piattaforma/transazione)
+            avverrà lato backend all'atto della purchase (RevenueCat webhook). */}
+        <Pressable
+          onPress={() => setWaiverAccepted((v) => !v)}
+          style={styles.waiverRow}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: waiverAccepted }}
+          accessibilityLabel="Rinuncia diritto di recesso"
+          testID="paywall-waiver-checkbox"
+        >
+          <View
+            style={[
+              styles.waiverBox,
+              {
+                borderColor: waiverAccepted ? theme.primary : theme.border,
+                backgroundColor: waiverAccepted ? theme.primary : "transparent",
+              },
+            ]}
+          >
+            {waiverAccepted && (
+              <Text style={styles.waiverCheck}>✓</Text>
+            )}
+          </View>
+          <Text style={[styles.waiverText, { color: theme.textDim }]}>
+            {WAIVER_PLACEHOLDER_TEXT}
+          </Text>
+        </Pressable>
+
         {/* CTA */}
         <Pressable
           onPress={handlePurchase}
-          disabled={loading}
+          disabled={loading || !waiverAccepted}
           style={[
             styles.cta,
-            { backgroundColor: theme.primary, opacity: loading ? 0.6 : 1 },
+            {
+              backgroundColor: theme.primary,
+              opacity: (loading || !waiverAccepted) ? 0.4 : 1,
+            },
           ]}
+          testID="paywall-purchase-cta"
         >
           <Text style={[styles.ctaText, { color: theme.bg }]}>
             {loading ? "Apertura pagamento…" : `Resta con Koda — ${selected.price}${selected.priceUnit}`}
@@ -460,4 +545,51 @@ const styles = StyleSheet.create({
   legalRow: { flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 18, flexWrap: "wrap" },
   legalLink: { fontSize: 12, textDecorationLine: "underline" },
   legalDot: { fontSize: 12 },
+  // === CARRYOVER CLAIM (Fabio 2026-06) ==============================
+  carryoverClaim: {
+    marginTop: 18,
+    paddingHorizontal: 6,
+  },
+  carryoverClaimText: {
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: "center",
+    fontStyle: "italic",
+  },
+  carryoverTopup: {
+    fontSize: 11.5,
+    lineHeight: 17,
+    textAlign: "center",
+    marginTop: 8,
+  },
+  // === WAIVER RECESSO (Fabio 2026-06) ===============================
+  waiverRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginTop: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    gap: 12,
+    minHeight: 44,  // touch target
+  },
+  waiverBox: {
+    width: 22,
+    height: 22,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 1,
+  },
+  waiverCheck: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "700",
+    lineHeight: 20,
+  },
+  waiverText: {
+    flex: 1,
+    fontSize: 11.5,
+    lineHeight: 17,
+  },
 });

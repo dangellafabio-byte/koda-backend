@@ -29,6 +29,7 @@ import { TouchableOpacity as GHTouchableOpacity } from "react-native-gesture-han
 import { Ionicons } from "@expo/vector-icons";
 import HandsFreeOrb from "../components/HandsFreeOrb";
 import LasciaAndareIntroModal from "../components/LasciaAndareIntroModal";
+import SubscriptionStatus from "../components/SubscriptionStatus";
 import { FlashList } from "@shopify/flash-list";
 import LatencyOverlay from "../components/LatencyOverlay";
 import { traceStart, traceMark } from "../lib/latencyTracer";
@@ -6015,6 +6016,12 @@ export default function Taccuino() {
               keyboardDismissMode="on-drag"
             >
 {showSettings && (<>
+
+            {/* === PIANO ATTIVO + BARRA CONSUMO MINUTI (Fabio 2026-06) =========
+                Visibile SOLO se subscription_tier è paid (monthly/bimonthly/
+                annual/unlimited). Se Free, il componente restituisce null e
+                Impostazioni parte dalla sezione successiva. */}
+            <SubscriptionStatus profile={profile as any} />
 
             {/* === IDENTITÀ — L'Amico Fraterno =======================
                 L'unica variabile di identità modificabile è il NOME dell'amico.
