@@ -4442,6 +4442,96 @@ export default function Taccuino() {
     }
   };
 
+  // === DEV MENU QA — 5 tap sul numero versione (Fabio 2026-06) ============
+  // Attivazione nascosta agli utenti finali. Testabile senza terminale.
+  // Uso: apri Impostazioni → scroll fino a "Koda v..." → 5 tap veloci
+  // (entro 3s) → si apre Alert QA con 3 azioni distruttive/di test.
+  // Il contatore si azzera dopo 3s di inattività così un utente che tocca
+  // per caso il footer non entra mai nel Dev Menu.
+  const devMenuTapCountRef = useRef(0);
+  const devMenuTapResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleDevMenuTap = useCallback(() => {
+    if (devMenuTapResetTimerRef.current) {
+      clearTimeout(devMenuTapResetTimerRef.current);
+      devMenuTapResetTimerRef.current = null;
+    }
+    devMenuTapCountRef.current += 1;
+    if (devMenuTapCountRef.current < 5) {
+      devMenuTapResetTimerRef.current = setTimeout(() => {
+        devMenuTapCountRef.current = 0;
+      }, 3000);
+      return;
+    }
+    // 5° tap → apri Dev Menu, azzera counter
+    devMenuTapCountRef.current = 0;
+    console.log("[DevMenu] 5-tap unlock — opening QA menu");
+    Alert.alert(
+      "Dev Menu QA",
+      "Solo per test. Ogni azione richiede riapertura app per prendere effetto pulito.",
+      [
+        {
+          text: "Reset onboarding + microdemo",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              // 1. Reset server (profilo, timeline, chiavi biografiche)
+              await api.devFirstBootReset();
+            } catch (e) {
+              console.warn("[DevMenu] devFirstBootReset failed:", String(e).slice(0, 120));
+            }
+            try {
+              // 2. Reset SecureStore locale
+              await SecureStore.deleteItemAsync("microdemo_last_at").catch(() => {});
+              await SecureStore.deleteItemAsync("koda_intro_completed_at").catch(() => {});
+              await SecureStore.deleteItemAsync("koda_text_only_mode").catch(() => {});
+              await SecureStore.deleteItemAsync("intro_v3_completed_at").catch(() => {});
+            } catch (e) {
+              console.warn("[DevMenu] SecureStore cleanup failed:", String(e).slice(0, 120));
+            }
+            Alert.alert(
+              "Reset completato",
+              "Chiudi e riapri l'app per vedere il flow completo (Setup → Intro V2 → MicroDemo → Paywall).",
+              [{ text: "OK" }]
+            );
+          },
+        },
+        {
+          text: "Force Premium (monthly)",
+          onPress: async () => {
+            try {
+              const r = await api.devSetTier("monthly");
+              Alert.alert(
+                "Premium attivo",
+                `Tier: ${r.subscription_tier || "monthly"}. Riapri l'app per prendere effetto pulito.`,
+                [{ text: "OK" }]
+              );
+            } catch (e) {
+              Alert.alert("Errore", String(e).slice(0, 160), [{ text: "OK" }]);
+            }
+          },
+        },
+        {
+          text: "Force Free",
+          onPress: async () => {
+            try {
+              const r = await api.devSetTier(null);
+              Alert.alert(
+                "Free attivo",
+                `Tier: ${r.subscription_tier || "null"}. Riapri l'app per prendere effetto pulito.`,
+                [{ text: "OK" }]
+              );
+            } catch (e) {
+              Alert.alert("Errore", String(e).slice(0, 160), [{ text: "OK" }]);
+            }
+          },
+        },
+        { text: "Annulla", style: "cancel" },
+      ],
+      { cancelable: true }
+    );
+  }, []);
+
   const resetMemory = async () => {
     // === FIX 2026-06-30 — Doppia conferma (Fabio "rischio cliccare per sbaglio") ===
     // Prima il bottone "Cancella tutta la memoria" partiva DIRETTAMENTE al
@@ -7428,11 +7518,23 @@ export default function Taccuino() {
             {/* === VERSIONE APP (pre-lancio 2026-07-24) ===
                 Footer minimale user-facing. NB: il triple-tap Easter egg
                 che puntava a /mockup-light è stato rimosso 2026-08-04
-                insieme al mockup light-mode (tema light rimosso). */}
+                insieme al mockup light-mode (tema light rimosso).
+
+                === DEV MENU QA (Fabio 2026-06) ===
+                5 tap consecutivi sul numero versione entro 3s → Alert QA
+                con 3 azioni (reset onboarding + microdemo cooldown, force
+                Premium monthly, force Free). Invisibile agli utenti finali.
+                Il tap counter si azzera dopo 3s di inattività. */}
             <View style={{ alignItems: "center", marginTop: 24, marginBottom: 8 }}>
-              <Text style={{ color: theme.text + "55", fontSize: 11, fontStyle: "italic" }}>
-                Koda v{Constants.expoConfig?.version || "1.0.1"}
-              </Text>
+              <TouchableOpacity
+                activeOpacity={1}
+                onPress={handleDevMenuTap}
+                testID="dev-menu-tap-target"
+              >
+                <Text style={{ color: theme.text + "55", fontSize: 11, fontStyle: "italic" }}>
+                  Koda v{Constants.expoConfig?.version || "1.0.1"}
+                </Text>
+              </TouchableOpacity>
               <Text style={{ color: theme.text + "33", fontSize: 9, marginTop: 3, letterSpacing: 0.5 }}>
                 {KODA_BUILD_SHORT_TAG}
               </Text>

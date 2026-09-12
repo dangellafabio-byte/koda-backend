@@ -1149,7 +1149,10 @@ export default function LasciaAndareScreen() {
     try {
       const lastAtStr = await SecureStore.getItemAsync("microdemo_last_at");
       const lastAt = lastAtStr ? parseInt(lastAtStr, 10) : 0;
-      const RATE_LIMIT_MS = 24 * 60 * 60 * 1000;
+      // === RATE-LIMIT ALLINEATO A MICRODEMO (Fabio 2026-06) ===================
+      // Alzato da 24h→72h in coerenza con MicroDemoKoda.tsx. Se cambi qua,
+      // cambia anche là (o meglio: estrai in una costante condivisa).
+      const RATE_LIMIT_MS = 72 * 60 * 60 * 1000;
       const now = Date.now();
       if (lastAt && now - lastAt < RATE_LIMIT_MS) {
         // Fuori rate-limit → paywall diretto

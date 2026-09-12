@@ -57,9 +57,15 @@ const CLIP_OPEN = require("../assets/sounds/intro/microdemo_open-cielo.mp3");
 const CLIP_CLOSE = require("../assets/sounds/intro/microdemo_close-cielo.mp3");
 const VOICE_CIELO_ID = "POuqf18evoXOKIqV2Px7";
 
-const MAX_TURNS = 3;
+const MAX_TURNS = 5; // Fabio 2026-06: 3→5 turni per far percepire meglio Koda prima del paywall
+// === RATE-LIMIT MICRODEMO (Fabio 2026-06) ==============================
+// Alzato da 24h→72h perché con MicroDemo esteso a 5 turni un "assaggio"
+// ogni 3 giorni è più coerente con il valore percepito e riduce il rumore
+// del pill "Parla con Koda" nella LA per utenti Free che hanno appena
+// completato la demo. Chi ha rifiutato il paywall vede il pill dopo 72h,
+// non dopo 24h.
+const RATE_LIMIT_MS = 72 * 60 * 60 * 1000; // 72h
 const MAX_DURATION_MS = 90_000;
-const RATE_LIMIT_MS = 24 * 60 * 60 * 1000; // 24h
 
 const { width: WINDOW_WIDTH } = Dimensions.get("window");
 const ORB_SIZE = Math.min(WINDOW_WIDTH * 0.78, 360);

@@ -7743,8 +7743,14 @@ async def api_converse(req: ConverseRequest):
     actions_raw = data.get("actions") or []
     # DEBUG: log delle actions per capire cosa Claude restituisce.
     # In particolare per il cambio tema dove l'utente diceva "non funziona".
+    # === PRIVACY (Fabio 2026-06) — MicroDemo non deve mai finire nei log ====
+    # Il flag ephemeral=true indica MicroDemo o Confessionale. In quei casi
+    # NON logghiamo il testo utente né la risposta AI, nemmeno se il debug
+    # tema è attivo. La Privacy Policy garantisce zero trascrizione persistente
+    # per l'esperienza gratuita di prova; onoriamo la promessa anche a livello
+    # di observability.
     try:
-        if "tema" in (text or "").lower() or "theme" in (text or "").lower():
+        if (not req.ephemeral) and ("tema" in (text or "").lower() or "theme" in (text or "").lower()):
             logger.info(f"[DEBUG TEMA] user='{text}' actions={actions_raw} reply='{reply_text[:120]}'")
     except Exception:
         pass
@@ -10170,6 +10176,18 @@ async def api_tts(req: TTSRequest):
         # — only v3 honors them. For plain text use FLASH (faster than turbo).
         use_v3 = _has_audio_tags(text)
         model = "eleven_v3" if use_v3 else "eleven_flash_v2_5"
+        # === MICRODEMO — Force Turbo v2.5 (Fabio 2026-06) =====================
+        # Il MicroDemo è la prima esperienza vocale reale prima del paywall:
+        # deve essere qualitativamente rappresentativa di ciò che l'utente
+        # comprerà. Flash v2.5 è ottimizzato SOLO per latenza (qualità
+        # inferiore); V3 ha latenza alta che spezza il ritmo conversazionale.
+        # Turbo v2.5 è il compromesso corretto (qualità media, latenza bassa)
+        # e coincide con la baseline non-emotiva del Premium reale.
+        # Bypassiamo qui la scelta automatica e forziamo Turbo.
+        if req.microdemo:
+            model = "eleven_turbo_v2_5"
+            use_v3 = False
+            logger.info(f"[tts] microdemo=true → forcing model={model}")
         try:
             convert_kwargs = dict(
                 text=text,

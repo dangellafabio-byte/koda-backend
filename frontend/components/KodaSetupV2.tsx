@@ -61,6 +61,7 @@ import { StatusBar } from "expo-status-bar";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ExpoSpeechRecognitionModule } from "expo-speech-recognition";
+import * as SecureStore from "expo-secure-store";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 
@@ -80,15 +81,16 @@ const EMAIL_HINT = "Serve per riconoscerti tra un accesso e l'altro.";
 const EMAIL_PLACEHOLDER = "tu@esempio.it";
 const EMAIL_CTA = "Continua";
 
-const MIC_PRE_TITLE = "Quasi pronto";
-const MIC_PRE_BODY = "Koda ha bisogno del microfono per parlare con te.";
-const MIC_PRE_CTA = "Concedi l'accesso";
+const MIC_PRE_TITLE = "Un momento…";
+const MIC_PRE_BODY = "";  // Fabio 2026-06: nessuna spiegazione prima del popup nativo
+const MIC_PRE_CTA = "";   // rimosso — mic auto-requested al mount dello step
 
-const MIC_DENIED_TITLE = "Serve il microfono";
+const MIC_DENIED_TITLE = "Va bene lo stesso";
 const MIC_DENIED_BODY =
-  "Senza microfono Koda non può parlare con te. Puoi abilitarlo dalle impostazioni del sistema.";
+  "Senza microfono non puoi parlare a voce con Koda, ma puoi comunque scrivergli. La chat scritta è sempre disponibile.";
 const MIC_DENIED_RETRY_CTA = "Riprova";
 const MIC_DENIED_SETTINGS_CTA = "Apri Impostazioni";
+const MIC_DENIED_TEXT_ONLY_CTA = "Continua solo con la chat scritta";
 // ================================================================================
 
 // ==================== ANALYTICS EVENTS =========================================
@@ -96,6 +98,7 @@ const EV_SETUP_STARTED = "setup_v2_started";
 const EV_DISCLAIMER_CONTINUED = "setup_v2_disclaimer_continued";
 const EV_EMAIL_SUBMITTED = "setup_v2_email_submitted";
 const EV_MIC_PERMISSION_RESULT = "setup_v2_microphone_permission_result";
+const EV_MIC_DENIED_TEXT_ONLY = "setup_v2_mic_denied_text_only_fallback";
 const EV_INTRO_STARTED = "setup_v2_intro_v2_started";
 
 function track(event: string, props?: Record<string, unknown>) {
@@ -205,6 +208,75 @@ export default function KodaSetupV2() {
     });
   }, []);
 
+  // === FALLBACK CHAT TESTUALE (Fabio 2026-06) =============================
+  // Se l'utente nega il microfono, offriamo un'uscita che non lo blocca:
+  // saltiamo l'Intro V2 (vocale) e apriamo direttamente la chat scritta.
+  // Replichiamo la parte "onboarded" di Intro V2 così l'utente non ci
+  // ritorna al prossimo boot.
+  const continueTextOnly = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    track(EV_MIC_DENIED_TEXT_ONLY, {});
+    try {
+      // 1. Marca profilo come completato (nessun voice, gender default 'n')
+      //    NB: user_gender resta null — Koda non lo chiede più a monte se
+      //    l'utente sceglie chat-only. Ai_gender=f (Cielo) resta default
+      //    per coerenza col resto del prodotto.
+      await api.updateProfile({
+        name: undefined,
+        koda_voice: "aria",
+        ai_gender: "f",
+        onboarded: true,
+      });
+    } catch (e) {
+      console.warn("[SetupV2] text-only profile save failed:", String(e).slice(0, 120));
+      // Non blocchiamo: se la save fallisce, l'utente ripeterà il flow al
+      // prossimo boot, ma almeno adesso arriva alla chat.
+    }
+    try {
+      // 2. Flag "intro completed" per bypass splash + evitare re-onboarding
+      await SecureStore.setItemAsync("koda_intro_completed_at", String(Date.now()));
+      // 3. Flag "text-only mode" — la chat può leggerlo per capire se
+      //    mostrare o meno il pulsante voce (Home / LA). Non usato subito,
+      //    ma preparato per una futura scelta UX.
+      await SecureStore.setItemAsync("koda_text_only_mode", "1");
+    } catch (e) {
+      console.warn("[SetupV2] text-only secure-store failed:", String(e).slice(0, 120));
+    }
+    // 4. Dissolvenza + go home (chat scritta è la Home standard `/`)
+    Animated.timing(fadeOpacity, {
+      toValue: 0,
+      duration: 700,
+      easing: Easing.inOut(Easing.quad),
+      useNativeDriver: true,
+    }).start(() => {
+      try {
+        router.replace("/");
+      } catch (e) {
+        console.warn("[SetupV2] navigate to home failed:", String(e).slice(0, 120));
+      } finally {
+        setBusy(false);
+      }
+    });
+  }, [busy, fadeOpacity, router]);
+
+  // === AUTO-TRIGGER PERMESSO MICROFONO (Fabio 2026-06) ====================
+  // Politica: nessuna schermata di spiegazione prima del popup nativo.
+  // Quando entriamo nello step "mic_pre" chiamiamo direttamente
+  // requestPermissionsAsync(). L'utente vede solo il popup di sistema.
+  // Se ha già negato una volta, `canAskAgain=false` → step "mic_denied"
+  // con CTA "Apri Impostazioni" + "Continua solo con la chat scritta".
+  useEffect(() => {
+    if (step !== "mic_pre") return;
+    // Piccolo delay per far montare il fondo scuro prima del popup nativo
+    // (evita flash bianco su iOS durante presentazione del popup).
+    const t = setTimeout(() => {
+      requestMic();
+    }, 80);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+
   return (
     <Animated.View
       style={[
@@ -278,22 +350,17 @@ export default function KodaSetupV2() {
       {step === "mic_pre" && (
         <View style={styles.stepContainer}>
           <View style={styles.contentWrap}>
+            {/* === Fabio 2026-06: NO copy, NO tasto CTA. Il popup nativo di
+                sistema (iOS/Android) parte automaticamente al mount di questo
+                step (useEffect sopra). Manteniamo solo un titolo minimo di
+                cortesia + spinner, così se il popup arriva con lieve delay
+                l'utente non vede uno schermo nero vuoto. === */}
             <Text style={styles.stepTitle}>{MIC_PRE_TITLE}</Text>
-            <Text style={styles.stepBody}>{MIC_PRE_BODY}</Text>
+            {MIC_PRE_BODY ? (
+              <Text style={styles.stepBody}>{MIC_PRE_BODY}</Text>
+            ) : null}
+            <ActivityIndicator color="#FFFFFF" style={{ marginTop: 24 }} />
           </View>
-          <TouchableOpacity
-            style={[styles.primaryBtn, busy && styles.primaryBtnDisabled]}
-            onPress={requestMic}
-            disabled={busy}
-            testID="setup-v2-mic-request"
-            activeOpacity={0.8}
-          >
-            {busy ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <Text style={styles.primaryBtnText}>{MIC_PRE_CTA}</Text>
-            )}
-          </TouchableOpacity>
         </View>
       )}
 
@@ -303,6 +370,10 @@ export default function KodaSetupV2() {
             <Text style={styles.stepTitle}>{MIC_DENIED_TITLE}</Text>
             <Text style={styles.stepBody}>{MIC_DENIED_BODY}</Text>
           </View>
+          {/* CTA primario dipende da canAskAgain (Retry vs Impostazioni).
+              CTA secondario SEMPRE presente: continua solo in chat testuale.
+              Fabio 2026-06: se l'utente ha detto NO al microfono, non lo
+              blocchiamo — la chat scritta è sempre disponibile. */}
           {micCanAskAgain ? (
             <TouchableOpacity
               style={styles.primaryBtn}
@@ -322,6 +393,19 @@ export default function KodaSetupV2() {
               <Text style={styles.primaryBtnText}>{MIC_DENIED_SETTINGS_CTA}</Text>
             </TouchableOpacity>
           )}
+          <TouchableOpacity
+            style={[styles.secondaryBtn, busy && styles.primaryBtnDisabled]}
+            onPress={continueTextOnly}
+            disabled={busy}
+            testID="setup-v2-mic-denied-text-only"
+            activeOpacity={0.8}
+          >
+            {busy ? (
+              <ActivityIndicator color="#B0B0B8" />
+            ) : (
+              <Text style={styles.secondaryBtnText}>{MIC_DENIED_TEXT_ONLY_CTA}</Text>
+            )}
+          </TouchableOpacity>
         </View>
       )}
 
@@ -391,6 +475,26 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 16,
     fontWeight: "600",
+    letterSpacing: 0.3,
+  },
+  // Secondary CTA (Fabio 2026-06): usato per "Continua solo con la chat scritta"
+  // nello step mic_denied. Visualmente più basso in gerarchia rispetto a
+  // Riprova/Apri Impostazioni ma comunque toccabile e chiaramente button-like.
+  secondaryBtn: {
+    backgroundColor: "transparent",
+    borderRadius: 999,
+    paddingVertical: 14,
+    alignItems: "center",
+    marginBottom: 24,
+    minHeight: 48,
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#3A3A44",
+  },
+  secondaryBtnText: {
+    color: "#B0B0B8",
+    fontSize: 15,
+    fontWeight: "500",
     letterSpacing: 0.3,
   },
 });
