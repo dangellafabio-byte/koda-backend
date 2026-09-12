@@ -5591,7 +5591,9 @@ def _require_admin() -> str:
 # quando il client vede un HTTP 500 su Railway: `GET /api/admin/last-errors`
 # ritorna gli ultimi errori con traceback, senza serve accedere ai log
 # Railway (che possono avere rotation aggressiva).
-_LAST_ERRORS: "_deque[Dict[str, Any]]" = _deque(maxlen=25)
+# NB: usiamo `deque` (importato line ~210), non `_deque` che è aliasato
+# molto più in basso nel file.
+_LAST_ERRORS: "deque[Dict[str, Any]]" = deque(maxlen=25)
 
 
 def _record_error(where: str, exc: BaseException) -> None:
