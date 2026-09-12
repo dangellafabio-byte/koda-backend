@@ -189,8 +189,32 @@ async function jsonReq<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (!r.ok) {
-    const t = await r.text();
-    throw new Error(`HTTP ${r.status}: ${t}`);
+    // === PARSING ERROR VERBOSO (Fabio 2026-06) =============================
+    // Prima ritornavamo `HTTP {status}: {raw_body}` — se il body era JSON
+    // FastAPI `{"detail":"CausaReale"}` l'utente vedeva la stringa JSON
+    // grezza nel messaggio. Ora estraiamo `detail` (o `message`) se il body
+    // è JSON parsabile → messaggio pulito nell'Alert client.
+    const rawText = await r.text();
+    let msg = rawText;
+    try {
+      const parsed = JSON.parse(rawText);
+      if (parsed && typeof parsed === "object") {
+        // FastAPI: {"detail": "..."} — può essere string OR dict (rate limit response)
+        if (typeof parsed.detail === "string") {
+          msg = parsed.detail;
+        } else if (typeof parsed.detail === "object" && parsed.detail?.message) {
+          msg = String(parsed.detail.message);
+        } else if (typeof parsed.message === "string") {
+          msg = parsed.message;
+        } else {
+          msg = JSON.stringify(parsed).slice(0, 400);
+        }
+      }
+    } catch {
+      // body non JSON (es. Uvicorn worker crashed → plain "Internal Server Error")
+      // Manteniamo rawText così com'è per non nascondere l'informazione
+    }
+    throw new Error(`HTTP ${r.status}: ${msg}`);
   }
   return r.json();
 }

@@ -5611,11 +5611,21 @@ def _record_error(where: str, exc: BaseException) -> None:
 
 
 @api_router.get("/admin/last-errors")
-async def api_admin_last_errors(limit: int = 10):
+async def api_admin_last_errors(limit: int = 10, admin_token: Optional[str] = None):
     """DEV admin-only: ritorna gli ultimi N errori catturati con
     `_record_error()`. Utile per debuggare 500 remoti senza accedere ai
-    log Railway."""
-    _require_admin()
+    log Railway.
+
+    Auth: **due modi** — così Fabio può fetchare anche senza aver ancora
+    installato una build EAS con il Dev Menu aggiornato:
+      1. Come admin loggato (cookie/token) → `_require_admin()`
+      2. Via query param `?admin_token=<KODA_ADMIN_TOKEN>` — comodo per
+         curl da terminale su Railway senza dover autenticarsi.
+    """
+    expected = os.environ.get("KODA_ADMIN_TOKEN", "").strip()
+    is_env_auth = bool(expected) and admin_token == expected
+    if not is_env_auth:
+        _require_admin()
     n = max(1, min(limit, 25))
     items = list(_LAST_ERRORS)[-n:]
     return {"count": len(items), "errors": items}
