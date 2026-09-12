@@ -6359,23 +6359,30 @@ async def api_admin_feedback_purge(
 async def api_admin_tts_ratio(
     days: int = 7,
     admin_token: Optional[str] = None,
+    plans: str = "500,750,1000",
 ):
     """EXPERIMENT D — TTS reali / minuti conversazione (Fabio 2026-06).
 
     Aggrega `koda_events` per rispondere:
-      "230 min di piano venduti = quanti min TTS Koda effettivi?"
+      "Un piano da N min venduti = quanti min TTS Koda reali + costo €?"
+
+    Query params:
+      - days: window aggregazione (max 90).
+      - plans: CSV di minuti-piano da proiettare (default "500,750,1000"
+        = target Mensile/Bimestrale/Annuale 2026-06). Ogni piano è indipendente:
+        stessa `ratio` misurata, moltiplicata per i minuti del piano.
 
     Restituisce:
-      - totali: total_events, tts_seconds, user_audio_seconds
-      - ratio: tts_seconds / (user_audio_seconds + tts_seconds)
-      - projection_230min: minuti TTS reali attesi per un piano da 230 min
-        di conversazione totale, e costo ElevenLabs stimato (€0.023/min).
-      - by_voice_model: breakdown per modello (v3 / turbo / flash) —
-        utile per capire dove va il budget.
+      - totals: events, tts_seconds, user_audio_seconds, chunks
+      - ratio_tts_over_total: tts_seconds / (user_audio_seconds + tts_seconds)
+      - avg_*_per_turn
+      - projections: LISTA — un blocco per ogni piano richiesto con
+        expected_tts_minutes ed expected_tts_cost_eur (ref €0.023/min ElevenLabs)
+      - by_voice_model: breakdown v3/turbo/flash per capire dove va il budget
 
-    NB: i campi `tts_seconds` e `user_audio_ms` sono stati aggiunti a
-    `koda_events` il 2026-06 (Experiment D). Eventi antecedenti non li
-    hanno; vengono ignorati dai $match.
+    NB: `tts_seconds` e `user_audio_ms` sono stati aggiunti a `koda_events`
+    il 2026-06 (Experiment D). Eventi antecedenti non li hanno → esclusi dal $match.
+    Servono dati REALI post-deploy — il ratio non è affidabile fino a >100 turni.
     """
     expected = os.environ.get("KODA_ADMIN_TOKEN", "").strip()
     if not expected:
@@ -6439,11 +6446,24 @@ async def api_admin_tts_ratio(
         float(totals["user_audio_seconds"]) / float(totals["events_with_user_audio"])
         if totals["events_with_user_audio"] else 0.0
     )
-    # Projection: per un piano di 230 min di CONVERSAZIONE totale,
-    # quanti minuti di TTS reale genera?
+    # Projections: per ciascun piano in `plans` CSV, calcola minuti TTS
+    # reali attesi + costo ElevenLabs, applicando la ratio misurata.
     ELEVEN_COST_PER_MIN_EUR = 0.023  # tariffa ElevenLabs indicativa
-    projected_tts_min_for_230 = round((230.0 * ratio), 2)
-    projected_cost_eur_for_230 = round(projected_tts_min_for_230 * ELEVEN_COST_PER_MIN_EUR, 3)
+    projections: List[Dict[str, Any]] = []
+    try:
+        plan_list = [int(p.strip()) for p in plans.split(",") if p.strip().isdigit()]
+    except Exception:
+        plan_list = [500, 750, 1000]
+    if not plan_list:
+        plan_list = [500, 750, 1000]
+    for plan_min in plan_list:
+        exp_tts_min = round(plan_min * ratio, 2)
+        exp_cost = round(exp_tts_min * ELEVEN_COST_PER_MIN_EUR, 3)
+        projections.append({
+            "plan_minutes_sold": plan_min,
+            "expected_tts_minutes": exp_tts_min,
+            "expected_tts_cost_eur": exp_cost,
+        })
 
     # Breakdown per voice_model
     by_model_pipe = [
@@ -6481,12 +6501,13 @@ async def api_admin_tts_ratio(
         "ratio_tts_over_total": round(ratio, 4),
         "avg_tts_seconds_per_turn": round(avg_tts_per_turn, 2),
         "avg_user_audio_seconds_per_turn": round(avg_user_per_turn, 2),
-        "projection": {
-            "plan_minutes_sold": 230,
-            "expected_tts_minutes": projected_tts_min_for_230,
-            "expected_tts_cost_eur": projected_cost_eur_for_230,
-            "cost_per_min_eur_ref": ELEVEN_COST_PER_MIN_EUR,
-        },
+        "projections": projections,
+        "cost_per_min_eur_ref": ELEVEN_COST_PER_MIN_EUR,
+        "data_confidence": (
+            "solid" if totals["events_with_tts"] >= 500
+            else "weak" if totals["events_with_tts"] >= 100
+            else "insufficient"
+        ),
         "by_voice_model": by_voice_model,
     }
 
