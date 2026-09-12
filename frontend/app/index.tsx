@@ -30,6 +30,7 @@ import { Ionicons } from "@expo/vector-icons";
 import HandsFreeOrb from "../components/HandsFreeOrb";
 import LasciaAndareIntroModal from "../components/LasciaAndareIntroModal";
 import SubscriptionStatus from "../components/SubscriptionStatus";
+import MinutesWarningBanner from "../components/MinutesWarningBanner";
 import { FlashList } from "@shopify/flash-list";
 import LatencyOverlay from "../components/LatencyOverlay";
 import { traceStart, traceMark } from "../lib/latencyTracer";
@@ -5332,6 +5333,24 @@ export default function Taccuino() {
             />
           </TouchableOpacity>
         </View>
+      </View>
+
+      {/* === BANNER MINUTI IN ESAURIMENTO (Fabio 2026-06) ==========
+          Mostrato SOLO se profile.subscription_tier è paid (monthly/
+          bimonthly/annual) AND base_used >= 85% del piano. Auto-hide
+          via tap X per la sessione corrente (state locale). Non blocca
+          nulla: la chat testuale resta sempre disponibile. */}
+      <View style={{ position: "absolute", top: Math.max(insets.top + 60, 100), left: 0, right: 0, zIndex: 10 }} pointerEvents="box-none">
+        <MinutesWarningBanner
+          profile={profile as any}
+          onOpenTopup={() => {
+            try {
+              router.push("/paywall?variant=topup");
+            } catch (e) {
+              console.warn("[MinutesBanner] router.push failed:", String(e).slice(0, 120));
+            }
+          }}
+        />
       </View>
 
       {/* === RIGA 2: TOGGLE "LASCIA ANDARE" (centrato, più in basso) === */}

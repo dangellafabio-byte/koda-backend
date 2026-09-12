@@ -7577,6 +7577,26 @@ async def api_converse(req: ConverseRequest):
         raise HTTPException(status_code=400, detail="Empty message")
 
     profile = await get_or_create_profile()
+
+    # === RATE-LIMIT ANTI-ABUSO CHAT TESTUALE (Fabio 2026-06) =============
+    # La chat testuale è "sempre illimitata" per gli utenti umani, ma senza
+    # cap per-user un bot con IP rotante potrebbe drenare LLM/costi. 30 msg/
+    # minuto è oltre ogni uso umano realistico → bloccare oltre quel valore.
+    # Skippiamo la protezione in modalità ephemeral (MicroDemo/Confessionale
+    # hanno flow controllati dal client, il rate-limit IP è sufficiente).
+    if not req.ephemeral:
+        _user_id = getattr(profile, "id", None) or "anon"
+        if not _check_text_rate_limit(_user_id):
+            logger.warning(f"[rate_limit] text-chat cap hit user_id={_user_id[:12]}")
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "text_rate_limit",
+                    "message": "Troppi messaggi in poco tempo. Riprova tra qualche secondo.",
+                    "retry_after_seconds": 60,
+                },
+            )
+
     if not profile.settings.ai_enabled:
         # AI disabled — store user message only with a stub AI reply
         user_entry = TimelineEntry(role="user", text=text, audio_duration_ms=req.audio_duration_ms)
@@ -8189,6 +8209,45 @@ from collections import deque as _deque
 _rate_buckets: Dict[str, Any] = {}
 _RATE_LIMIT = 150        # richieste
 _RATE_WINDOW = 60        # secondi
+
+# === RATE-LIMIT ANTI-ABUSO PER-UTENTE CHAT TESTUALE (Fabio 2026-06) =========
+# Il rate-limit IP sopra (_rate_limit_mw) è generale e per-IP → un bot con
+# IP rotanti può bypassarlo. Serve un cap per-USER specifico su /api/converse
+# (chat testuale, promessa "sempre illimitata" per utenti umani) che tagli
+# fuori bot comportamentali senza toccare mai un uso umano realistico.
+#
+# Soglia: 30 msg/min per user_id. Un utente umano che chatta velocissimo
+# fa 5-10 msg/min al massimo. 30/min è ~1 msg ogni 2 sec sostenuto per un
+# minuto → sicuramente non umano. Se scatta ritorna 429 con corpo dedicato.
+#
+# Storage: dict in-memory {user_id: deque[timestamps]}. Non persiste tra
+# restart del backend (accettabile: worst case i primi 30 msg dopo restart
+# passano senza cap).
+_TEXT_RATE_BUCKETS: Dict[str, "_deque[float]"] = {}
+_TEXT_RATE_LIMIT = 30     # msg/min per utente
+_TEXT_RATE_WINDOW = 60    # sec
+
+
+def _check_text_rate_limit(user_id: str) -> bool:
+    """True = OK (procedi), False = rate-limited (blocca con 429).
+
+    Nota: il gate è ephemeral (in-memory), non persiste. Buono per anti-
+    abuso comportamentale, insufficiente per audit forensi (che non
+    servono al nostro use case attuale).
+    """
+    if not user_id:
+        return True  # anonimi: coperti dal rate-limit IP a monte
+    now = _time.time()
+    dq = _TEXT_RATE_BUCKETS.get(user_id)
+    if dq is None:
+        dq = _deque()
+        _TEXT_RATE_BUCKETS[user_id] = dq
+    while dq and now - dq[0] > _TEXT_RATE_WINDOW:
+        dq.popleft()
+    if len(dq) >= _TEXT_RATE_LIMIT:
+        return False
+    dq.append(now)
+    return True
 
 
 @app.middleware("http")
