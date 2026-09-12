@@ -5841,12 +5841,17 @@ async def api_dev_set_tier(req: DevSetTierRequest):
     valid = {"monthly", "bimonthly", "annual", "unlimited", None}
     if req.tier not in valid:
         raise HTTPException(status_code=400, detail=f"tier deve essere uno di {sorted(v for v in valid if v)} o null")
-    # === LEDGER BOOTSTRAP (Fabio 2026-09-06) ===
-    # Al cambio tier verso monthly/bimonthly/annual creiamo un ledger
-    # fresco. Se il tier target è unlimited/None azzeriamo `ledger_state`
-    # (nessun accounting su quel piano). Passaggio tra tier pagati
-    # diversi (es. monthly→annual) implica nuovo ciclo — coerente con la
-    # semantica di RevenueCat "cambio prodotto = nuovo abbonamento".
+    # === LEDGER BOOTSTRAP (Fabio 2026-09-06 · error surface 2026-06) ==========
+    # Al cambio tier verso monthly/bimonthly/annual creiamo un ledger fresco.
+    # Se il tier target è unlimited/None azzeriamo `ledger_state` (nessun
+    # accounting su quel piano). Passaggio tra tier pagati diversi implica
+    # nuovo ciclo — coerente con la semantica RevenueCat "cambio prodotto =
+    # nuovo abbonamento".
+    #
+    # 2026-06 UPDATE: espongo l'errore vero al client (invece del generic
+    # 500) quando l'inizializzazione ledger fallisce. Prima era wrappato in
+    # try/except che loggava un warning ma poi Mongo esplodeva su una key
+    # None → il client riceveva "Internal Server Error" senza contesto.
     _set: Dict[str, Any] = {"subscription_tier": req.tier}
     if req.tier in _PAID_TIERS:
         try:
@@ -5855,14 +5860,29 @@ async def api_dev_set_tier(req: DevSetTierRequest):
             _set["minutes_used_this_month"] = 0.0
             _set["monthly_reset_date"] = _this_month_utc_str()
         except Exception as _le:
-            logger.warning(f"[dev/set-tier] ledger init failed: {_le}")
+            import traceback
+            tb = traceback.format_exc()
+            logger.error(f"[dev/set-tier] ledger init FAILED for tier={req.tier}: {_le}\n{tb}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"ledger init failed: {type(_le).__name__}: {str(_le)[:200]}",
+            )
     else:
         _set["ledger_state"] = None
-    await db.taccuino_profile.update_one(
-        {"id": uid},
-        {"$set": _set},
-        upsert=False,
-    )
+    try:
+        await db.taccuino_profile.update_one(
+            {"id": uid},
+            {"$set": _set},
+            upsert=False,
+        )
+    except Exception as _me:
+        import traceback
+        tb = traceback.format_exc()
+        logger.error(f"[dev/set-tier] mongo update FAILED: {_me}\n{tb}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"mongo update failed: {type(_me).__name__}: {str(_me)[:200]}",
+        )
     logger.info(f"[dev/set-tier] user={uid[:8]} → tier={req.tier} ledger={'reset' if req.tier in _PAID_TIERS else 'cleared'}")
     return {"ok": True, "profile_id": uid, "subscription_tier": req.tier}
 
@@ -5954,8 +5974,8 @@ async def api_dev_seed_ledger(
     if plan not in _sub_ledger.TIER_BASE_MINUTES:
         raise HTTPException(400, f"plan invalid: {plan}")
 
-    # 1. Crea ledger fresco
-    ledger = _sub_ledger.create_ledger(plan, now=now)
+    # 1. Crea ledger fresco (kwarg è `purchase_date`, non `now`)
+    ledger = _sub_ledger.create_ledger(plan, purchase_date=now)
 
     # 2. Simula consumo del base (senza toccare carryover slots)
     base_max = _sub_ledger.TIER_BASE_MINUTES[plan]
