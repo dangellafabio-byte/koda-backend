@@ -125,7 +125,7 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v65.34-heart-audio-session-reset-vad-unprocessed-20260908"
+_KODA_BACKEND_VERSION = "v65.35-dev-instrumentation-step-ring-carryover-fix-20260912"
 _KODA_BACKEND_BUILD_TS = "2026-07-13T16:00:00Z"
 
 
@@ -618,6 +618,13 @@ async def user_id_middleware(request, call_next):
     v25 (2026-07-13): dopo aver risolto uid con successo dal session_token,
     salva la mappa fingerprint(IP + UA) → uid in `_HTTP_TO_UID_CACHE` così
     l'endpoint WS voce può ricostruire l'uid pur non passando dal middleware.
+
+    2026-06 (Fabio 500 debug): wrap `call_next(request)` in try/except.
+    Se un'eccezione bubblea fin qui (non catturata dagli endpoint /dev/*),
+    la registriamo in `_LAST_ERRORS` con path + traceback così l'admin
+    può fetchare via `/api/admin/last-errors` anche crash che sfuggono
+    ai try/except locali (es. Pydantic parsing pre-endpoint, response
+    serialization post-endpoint, o dipendenze FastAPI).
     """
     session_uid = await _resolve_uid_from_session(request)
     if session_uid:
@@ -640,7 +647,29 @@ async def user_id_middleware(request, call_next):
         pass
     token = _current_user_id.set(uid)
     try:
-        return await call_next(request)
+        try:
+            return await call_next(request)
+        except HTTPException:
+            # Lasciamo passare le HTTPException — FastAPI le converte in
+            # risposte JSON normalmente. NON logghiamo, non è un errore.
+            raise
+        except Exception as _mw_exc:
+            # Crash NON gestito dall'endpoint. Registriamolo prima che
+            # Starlette lo trasformi in "Internal Server Error" opaco.
+            try:
+                path = str(request.url.path)
+            except Exception:
+                path = "?"
+            try:
+                # _record_error potrebbe non essere ancora definito al
+                # cold start se il crash avviene molto presto; usiamo un
+                # accesso protetto.
+                _record_error(f"middleware:{path}", _mw_exc)  # type: ignore[name-defined]
+            except Exception:
+                pass
+            # Rilancia per lasciare che FastAPI generi la 500 normale.
+            # Ora però `_LAST_ERRORS` ha traccia.
+            raise
     finally:
         _current_user_id.reset(token)
 
@@ -5596,6 +5625,26 @@ def _require_admin() -> str:
 _LAST_ERRORS: "deque[Dict[str, Any]]" = deque(maxlen=25)
 
 
+# === IN-MEMORY STEP RING (Fabio 2026-06) ===================================
+# Registra step di esecuzione (start / mid / end) degli endpoint /dev/*.
+# Diagnostica per il caso in cui `_LAST_ERRORS` resta vuoto (== il worker
+# viene killato PRIMA di raggiungere l'except). Lo step più recente rivela
+# fino a dove è arrivata l'esecuzione: se STEP N loggato + STEP N+1 no →
+# il crash è tra N e N+1.
+_LAST_STEPS: "deque[Dict[str, Any]]" = deque(maxlen=100)
+
+
+def _record_step(where: str, step: str, payload: Optional[Dict[str, Any]] = None) -> None:
+    """Registra uno step di esecuzione nell'anello in-memory + logga."""
+    _LAST_STEPS.append({
+        "when_utc": datetime.now(timezone.utc).isoformat(),
+        "where": where,
+        "step": step,
+        "payload": payload,
+    })
+    logger.info(f"[step_ring] {where} :: {step} :: {payload}")
+
+
 def _record_error(where: str, exc: BaseException) -> None:
     """Registra un errore nell'anello in-memory + logga."""
     import traceback
@@ -5629,6 +5678,23 @@ async def api_admin_last_errors(limit: int = 10, admin_token: Optional[str] = No
     n = max(1, min(limit, 25))
     items = list(_LAST_ERRORS)[-n:]
     return {"count": len(items), "errors": items}
+
+
+@api_router.get("/admin/last-steps")
+async def api_admin_last_steps(limit: int = 30, admin_token: Optional[str] = None):
+    """DEV admin-only: ritorna gli ultimi N step di esecuzione loggati con
+    `_record_step()`. Utile quando `_LAST_ERRORS` è vuoto: rivela fino a
+    dove è arrivata la richiesta prima che il worker crashasse.
+
+    Auth: stessa logica di `/admin/last-errors` (token via env o admin cookie).
+    """
+    expected = os.environ.get("KODA_ADMIN_TOKEN", "").strip()
+    is_env_auth = bool(expected) and admin_token == expected
+    if not is_env_auth:
+        _require_admin()
+    n = max(1, min(limit, 100))
+    items = list(_LAST_STEPS)[-n:]
+    return {"count": len(items), "steps": items}
 
 
 @api_router.get("/admin/whoami", response_model=AdminWhoAmIResponse)
@@ -5889,7 +5955,9 @@ async def api_dev_set_tier(req: DevSetTierRequest):
     anche exception PRE-ledger (auth, parsing, mongo connection, etc).
     """
     try:
+        _record_step("dev/set-tier", "start", {"tier": req.tier})
         uid = _require_admin()
+        _record_step("dev/set-tier", "admin_ok", {"uid_short": uid[:8]})
         valid = {"monthly", "bimonthly", "annual", "unlimited", None}
         if req.tier not in valid:
             raise HTTPException(status_code=400, detail=f"tier deve essere uno di {sorted(v for v in valid if v)} o null")
@@ -5897,17 +5965,21 @@ async def api_dev_set_tier(req: DevSetTierRequest):
         _set: Dict[str, Any] = {"subscription_tier": req.tier}
         if req.tier in _PAID_TIERS:
             _fresh_ledger = _sub_ledger.create_ledger(req.tier)
+            _record_step("dev/set-tier", "ledger_created", {"plan": req.tier})
             _set["ledger_state"] = _fresh_ledger.to_dict()
+            _record_step("dev/set-tier", "to_dict_ok", {"keys": sorted(_set["ledger_state"].keys())})
             _set["minutes_used_this_month"] = 0.0
             _set["monthly_reset_date"] = _this_month_utc_str()
         else:
             _set["ledger_state"] = None
 
+        _record_step("dev/set-tier", "pre_mongo_update", {"set_keys": sorted(_set.keys())})
         await db.taccuino_profile.update_one(
             {"id": uid},
             {"$set": _set},
             upsert=False,
         )
+        _record_step("dev/set-tier", "mongo_updated", None)
         logger.info(f"[dev/set-tier] user={uid[:8]} → tier={req.tier} ledger={'reset' if req.tier in _PAID_TIERS else 'cleared'}")
         return {"ok": True, "profile_id": uid, "subscription_tier": req.tier}
     except HTTPException:
@@ -6001,55 +6073,83 @@ async def api_dev_seed_ledger(
     Esempio: /api/dev/seed-ledger?plan=bimonthly&base_used=250&carryover=200&topup=30
     → barra: [base 250 · carryover 200 · topup 30 · consumed 250]
     → totale disponibile 480 min, di cui 250 usati.
+
+    2026-06 UPDATE (Fabio 500 debug):
+    Endpoint avvolto in try/except globale che ritorna la CAUSA vera nel
+    detail invece di generic "Internal Server Error". Registra anche
+    l'errore nel ring buffer `/api/admin/last-errors`.
     """
-    uid = _require_admin()
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc)
+    try:
+        _record_step("dev/seed-ledger", "start", {"plan": plan, "base_used": base_used, "carryover": carryover, "topup": topup})
+        uid = _require_admin()
+        _record_step("dev/seed-ledger", "admin_ok", {"uid_short": uid[:8]})
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
 
-    if plan not in _sub_ledger.TIER_BASE_MINUTES:
-        raise HTTPException(400, f"plan invalid: {plan}")
+        if plan not in _sub_ledger.TIER_BASE_MINUTES:
+            raise HTTPException(400, f"plan invalid: {plan}")
 
-    # 1. Crea ledger fresco (kwarg è `purchase_date`, non `now`)
-    ledger = _sub_ledger.create_ledger(plan, purchase_date=now)
+        # 1. Crea ledger fresco (kwarg è `purchase_date`, non `now`)
+        ledger = _sub_ledger.create_ledger(plan, purchase_date=now)
+        _record_step("dev/seed-ledger", "ledger_created", {"plan": plan})
 
-    # 2. Simula consumo del base (senza toccare carryover slots)
-    base_max = _sub_ledger.TIER_BASE_MINUTES[plan]
-    ledger.base_minutes_used = max(0.0, min(base_max, float(base_used)))
+        # 2. Simula consumo del base (senza toccare carryover slots)
+        base_max = _sub_ledger.TIER_BASE_MINUTES[plan]
+        ledger.base_minutes_used = max(0.0, min(base_max, float(base_used)))
 
-    # 3. Aggiungi uno slot carryover fittizio (con expires_at_iso = fine
-    #    del mese corrente per garantire sopravvivenza fino al rollover
-    #    successivo).
-    if carryover > 0:
-        slot = _sub_ledger.CarryoverSlot(
-            origin_month_index=0,
-            minutes_remaining=float(carryover),
-            expires_at_iso=ledger.current_period_end_iso,
+        # 3. Aggiungi uno slot carryover fittizio (con expires_at_iso = fine
+        #    del mese corrente per garantire sopravvivenza fino al rollover
+        #    successivo).
+        # === FIX 2026-06 (Fabio 500 debug) =====================================
+        # CarryoverSlot ha 4 required fields (subscription_ledger.py:124), non 3.
+        # Manca `origin_period_end_iso` → TypeError silente perché endpoint non
+        # aveva try/except. Aggiungo il campo e wrap in try/except sotto.
+        if carryover > 0:
+            slot = _sub_ledger.CarryoverSlot(
+                origin_month_index=0,
+                origin_period_end_iso=ledger.current_period_end_iso,
+                minutes_remaining=float(carryover),
+                expires_at_iso=ledger.current_period_end_iso,
+            )
+            ledger.carryover_slots.append(slot)
+        _record_step("dev/seed-ledger", "carryover_added", {"slots": len(ledger.carryover_slots)})
+
+        # 4. Aggiungi top-up
+        if topup > 0:
+            _sub_ledger.add_topup(ledger, float(topup))
+        _record_step("dev/seed-ledger", "topup_added", {"topup": ledger.topup_minutes_remaining})
+
+        new_state = ledger.to_dict()
+        _record_step("dev/seed-ledger", "to_dict_ok", {"keys": sorted(new_state.keys())})
+
+        await db.taccuino_profile.update_one(
+            {"id": uid},
+            {"$set": {
+                "subscription_tier": plan,
+                "subscription_active": True,
+                "ledger_state": new_state,
+            }},
+            upsert=False,
         )
-        ledger.carryover_slots.append(slot)
+        _record_step("dev/seed-ledger", "mongo_updated", None)
 
-    # 4. Aggiungi top-up
-    if topup > 0:
-        _sub_ledger.add_topup(ledger, float(topup))
-
-    new_state = ledger.to_dict()
-    await db.taccuino_profile.update_one(
-        {"id": uid},
-        {"$set": {
-            "subscription_tier": plan,
-            "subscription_active": True,
+        summary = _sub_ledger.remaining_summary(ledger)
+        logger.info(f"[dev/seed-ledger] user={uid[:8]} plan={plan} seeded state={summary}")
+        return {
+            "ok": True,
+            "profile_id": uid,
+            "plan": plan,
+            "summary": summary,
             "ledger_state": new_state,
-        }},
-        upsert=False,
-    )
-    summary = _sub_ledger.remaining_summary(ledger)
-    logger.info(f"[dev/seed-ledger] user={uid[:8]} plan={plan} seeded state={summary}")
-    return {
-        "ok": True,
-        "profile_id": uid,
-        "plan": plan,
-        "summary": summary,
-        "ledger_state": new_state,
-    }
+        }
+    except HTTPException:
+        raise
+    except Exception as _e:
+        _record_error("dev/seed-ledger", _e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"{type(_e).__name__}: {str(_e)[:280]}",
+        )
 
 
 
