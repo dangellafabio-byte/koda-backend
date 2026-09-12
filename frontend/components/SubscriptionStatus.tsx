@@ -72,7 +72,12 @@ const COLORS = {
   base: "#7A5CFF",       // primary — minuti base del mese
   carryover: "#4FC3F7",  // azzurro — carryover slot
   topup: "#B39DDB",      // viola chiaro — top-up
-  consumed: "#3A3A44",   // grigio — consumati
+  // 2026-06 (Fabio) — prima era #3A3A44 == identico al backgroundColor
+  // della barra vuota (styles.bar linea ~220) → il segmento consumato
+  // era invisibile, sembrava "spazio vuoto". Ora un grigio più chiaro
+  // con leggero contrasto, così i 4 segmenti sono tutti distinguibili.
+  consumed: "#5C5C6E",   // grigio medio — consumati (visibile)
+  barBg: "#2A2A34",      // fondo barra (più scuro del segmento consumed)
   border: "#2A2A34",
   text: "#F0F0F5",
   textDim: "#9A9AA5",
@@ -166,6 +171,12 @@ export default function SubscriptionStatus({ profile }: { profile: Profile | nul
             <Text style={styles.legendText}>{Math.round(topup)} top-up</Text>
           </View>
         )}
+        {baseUsed > 0 && (
+          <View style={styles.legendItem}>
+            <View style={[styles.dot, { backgroundColor: COLORS.consumed }]} />
+            <Text style={styles.legendText}>{Math.round(baseUsed)} usati</Text>
+          </View>
+        )}
       </View>
 
       <Text style={styles.totalLine}>
@@ -217,7 +228,7 @@ const styles = StyleSheet.create({
     height: 10,
     borderRadius: 5,
     overflow: "hidden",
-    backgroundColor: COLORS.consumed,
+    backgroundColor: COLORS.barBg,
     marginBottom: 10,
   },
   barSeg: {

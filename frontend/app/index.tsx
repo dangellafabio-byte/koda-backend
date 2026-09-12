@@ -4552,6 +4552,63 @@ export default function Taccuino() {
           },
         },
         {
+          text: "🟡 Banner 85% (425/500 usati)",
+          onPress: async () => {
+            try {
+              await api.devSeedLedger("monthly", 425, 0, 0);
+              try {
+                const p = await api.getProfile();
+                setProfile(p);
+              } catch {}
+              Alert.alert(
+                "Banner 85% attivo",
+                `Mensile · 425/500 usati (85%).\nApri Home per vedere il banner giallo.`,
+                [{ text: "OK" }]
+              );
+            } catch (e) {
+              Alert.alert("Errore", String(e).slice(0, 160), [{ text: "OK" }]);
+            }
+          },
+        },
+        {
+          text: "🟠 Banner 95% (475/500 usati)",
+          onPress: async () => {
+            try {
+              await api.devSeedLedger("monthly", 475, 0, 0);
+              try {
+                const p = await api.getProfile();
+                setProfile(p);
+              } catch {}
+              Alert.alert(
+                "Banner 95% attivo",
+                `Mensile · 475/500 usati (95%).\nApri Home per vedere il banner rosso + CTA top-up.`,
+                [{ text: "OK" }]
+              );
+            } catch (e) {
+              Alert.alert("Errore", String(e).slice(0, 160), [{ text: "OK" }]);
+            }
+          },
+        },
+        {
+          text: "🔴 Banner 100% (500/500 esauriti)",
+          onPress: async () => {
+            try {
+              await api.devSeedLedger("monthly", 500, 0, 0);
+              try {
+                const p = await api.getProfile();
+                setProfile(p);
+              } catch {}
+              Alert.alert(
+                "Banner 100% attivo",
+                `Mensile · 500/500 esauriti.\nApri Home per vedere il banner viola "Minuti finiti".`,
+                [{ text: "OK" }]
+              );
+            } catch (e) {
+              Alert.alert("Errore", String(e).slice(0, 160), [{ text: "OK" }]);
+            }
+          },
+        },
+        {
           text: "Force Free",
           onPress: async () => {
             try {
