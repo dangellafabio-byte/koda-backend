@@ -262,7 +262,7 @@ export const api = {
   converse: (
     text: string,
     audio_duration_ms?: number,
-    opts?: { ephemeral?: boolean; bridged_secrets?: string[] }
+    opts?: { ephemeral?: boolean; bridged_secrets?: string[]; is_voice_turn?: boolean }
   ) =>
     jsonReq<{
       user_entry: TimelineEntry;
@@ -274,6 +274,10 @@ export const api = {
         text,
         audio_duration_ms,
         ephemeral: !!opts?.ephemeral,
+        // === TURNO VOCE (Fabio 2026-06) =========================================
+        // True → backend applica il gate `paid_quota_exhausted` (blocca a 0 min).
+        // False (chat scritta) → nessun blocco, la chat è sempre illimitata.
+        is_voice_turn: !!opts?.is_voice_turn,
         // PORTA FUORI: segreti DECRIFRATI dal client con la parola segreta,
         // inviati one-shot al backend solo per questo turno (forza ephemeral).
         // La parola segreta NON viene mai inviata.

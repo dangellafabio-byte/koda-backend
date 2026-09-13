@@ -129,6 +129,12 @@ import {
 import type { SafetyCheckResult, FreemiumStatus as FreemiumStatusType } from "../lib/api";
 import { useOrbAmbient } from "../lib/useOrbAmbient";
 import { useRenderCounter, startFpsMonitor } from "../lib/perfDiag";
+import {
+  handleQuotaExhausted,
+  isQuotaExhaustedError,
+  isQuotaExhaustedSession,
+  resetQuotaExhaustedSession,
+} from "../lib/quotaExhaustedAudio";
 import { useFonts } from "expo-font";
 // === Caveat font (Fabio 2026-06-21 v15): caricato via expo-font + file
 // .ttf locali in assets/fonts/. Sostituisce @expo-google-fonts/caveat che
@@ -2091,6 +2097,37 @@ export default function Taccuino() {
   }, [profile?.id]);
 
 
+  // === QUOTA EXHAUSTED SESSION RESET (Fabio 2026-06) =========================
+  // Quando il profilo torna a uno stato paid attivo (aggiunta minuti, cambio
+  // tier, dev button, top-up completato) → resettiamo la session flag
+  // `sessionQuotaExhausted` così l'utente può ricominciare a parlare senza
+  // dover ricaricare l'app. Il check è deterministico: se abbiamo un ledger
+  // con base_remaining + carryover + topup > 0 → non exhausted.
+  useEffect(() => {
+    if (!profile) return;
+    const tier = profile.subscription_tier || null;
+    const ls: any = (profile as any).ledger_state;
+    // Se non è paid, o unlimited → mai exhausted. Reset se era attivo.
+    if (tier === "unlimited" || !tier || !["monthly", "bimonthly", "annual"].includes(tier)) {
+      if (isQuotaExhaustedSession()) resetQuotaExhaustedSession();
+      return;
+    }
+    if (!ls) return;
+    const baseMax = { monthly: 500, bimonthly: 500, annual: 500 }[tier as "monthly" | "bimonthly" | "annual"] || 500;
+    const baseRem = Math.max(0, baseMax - (ls.base_minutes_used || 0));
+    const carry = (ls.carryover_slots || []).reduce(
+      (acc: number, s: any) => acc + (s?.minutes_remaining || 0),
+      0
+    );
+    const topup = Math.max(0, ls.topup_minutes_remaining || 0);
+    const total = baseRem + carry + topup;
+    if (total > 0.5 && isQuotaExhaustedSession()) {
+      console.log("[quota] profile refreshed → quota available again → reset session flag");
+      resetQuotaExhaustedSession();
+    }
+  }, [profile]);
+
+
   // === KEEP SCREEN AWAKE durante conversazione attiva ===
   // === FIX 2026-07-26 v64.0 — HONOR/HUAWEI SCREEN FLASH FIX ===
   //
@@ -2528,6 +2565,16 @@ export default function Taccuino() {
       }
       const lang = profile?.language || "it";
       const langTag = lang === "it" ? "it-IT" : lang === "en" ? "en-US" : lang;
+
+      // === QUOTA EXHAUSTED GUARD (Fabio 2026-06) =========================
+      // Se in questa sessione il backend ha già segnalato paid_quota_exhausted,
+      // NON chiamiamo TTS (che ritornerebbe 402 con fallback silente a
+      // expo-speech robotica). Il messaggio pre-registrato è già stato
+      // riprodotto una volta in handleQuotaExhausted() al momento del gate.
+      if (isQuotaExhaustedSession()) {
+        setStatus("idle");
+        return;
+      }
 
       // PIANO A: SEMPRE modalità sequenziale push-to-talk.
       // L'AI parla → finisce → torna idle → l'utente tappa per parlare.
@@ -3151,7 +3198,13 @@ export default function Taccuino() {
           }
         }
         // === STANDARD FLOW (fallback) ===
-        const res = await api.converse(txt, undefined, { ephemeral: false });
+        // is_voice_turn: !fromText → il gate `paid_quota_exhausted` scatta
+        // solo sui turni voce. Chat scritta (fromText=true) resta sempre
+        // illimitata come da policy prodotto (Fabio 2026-06).
+        const res = await api.converse(txt, undefined, {
+          ephemeral: false,
+          is_voice_turn: !fromText,
+        });
         traceMark("converse:response");
         // Replace optimistic with real, then add AI entry.
         setTimeline((prev) => {
@@ -3170,6 +3223,49 @@ export default function Taccuino() {
         }
       } catch (e: any) {
         const msg = String(e?.message || "");
+        // === GATE MINUTI ESAURITI (Fabio 2026-06) =========================
+        // Il backend ritorna HTTP 402 `paid_quota_exhausted` quando l'utente
+        // ha finito i minuti voce. Il client:
+        //   1. Riproduce il messaggio audio pre-registrato (una sola volta
+        //      per sessione — vedi lib/quotaExhaustedAudio.ts)
+        //   2. Attiva la sessione "quota exhausted" → prossimi turni voce
+        //      bloccati automaticamente
+        //   3. Mostra il messaggio Koda in timeline come AI entry sintetica
+        //      così l'utente ha ANCHE la controparte scritta
+        //   4. NON mostra Alert modal — il banner viola in home + audio
+        //      bastano
+        if (isQuotaExhaustedError(e)) {
+          console.log("[quota] voice turn blocked (paid_quota_exhausted) → play pre-recorded audio");
+          try {
+            await handleQuotaExhausted();
+          } catch (playErr) {
+            console.warn("[quota] handleQuotaExhausted threw:", String(playErr).slice(0, 120));
+          }
+          // Rimuovi optimistic user message (non fu processato dal backend)
+          setTimeline((prev) => {
+            const filtered = prev.filter((e) => e.id !== optimistic.id);
+            // Se il turno era voce (STT), l'input dell'utente NON viene
+            // salvato dal backend (402 pre-Claude) → cancelliamo l'ottimistica.
+            // Se era testo (non dovrebbe accadere perché is_voice_turn=false
+            // sui text turn, ma difensivamente), teniamo l'utente.
+            if (!fromText) return filtered;
+            return [...filtered, optimistic];
+          });
+          // Sintetizza una AI entry con il testo del messaggio pre-registrato
+          // così l'utente vede ANCHE per iscritto il perché del blocco.
+          const quotaAiEntry: TimelineEntry = {
+            id: `quota-${Date.now()}`,
+            role: "ai",
+            text:
+              "Hai finito i minuti voce di questo mese. Continuiamo in chat scritta, sono qui. " +
+              "Se vuoi, aggiungi trenta minuti dalla home.",
+            tone: "warm",
+            timestamp: new Date().toISOString(),
+          };
+          setTimeline((prev) => [...prev, quotaAiEntry]);
+          setStatus("idle");
+          return;
+        }
         if (msg.includes("Parola Segreta")) {
           setError("Parola Segreta non sbloccata. Tocca il lucchetto per riprovare.");
         } else {

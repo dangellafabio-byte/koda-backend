@@ -125,7 +125,7 @@ api_router = APIRouter(prefix="/api")
 # https://<host>/api/_version per un check dalla riga di comando. Aggiornalo
 # ad ogni fix rilevante lato server.
 # ============================================================================
-_KODA_BACKEND_VERSION = "v65.35-dev-instrumentation-step-ring-carryover-fix-20260912"
+_KODA_BACKEND_VERSION = "v65.36-converse-quota-gate-audio-prerecorded-20260913"
 _KODA_BACKEND_BUILD_TS = "2026-07-13T16:00:00Z"
 
 
@@ -2189,6 +2189,14 @@ class ConverseRequest(BaseModel):
     # memory_summary, NON incluso negli ultimi messaggi del prompt. Vive
     # solo nella risposta corrente (e in RAM client). Per inconfessabili.
     ephemeral: bool = False
+    # === TURNO VOCE (Fabio 2026-06) =========================================
+    # True quando la request proviene dalla pipeline voce (STT → converse →
+    # TTS), False dalla chat scritta. Serve al gate `paid_quota_exhausted`
+    # per bloccare **solo** i turni voce a 0 minuti — la chat testuale resta
+    # sempre illimitata (policy prodotto Fabio 2026-06).
+    # Client legacy che non passano il flag → default False → chat scritta
+    # (nessun blocco). Non regressione.
+    is_voice_turn: bool = False
 
 
 class ConverseResponse(BaseModel):
@@ -7805,6 +7813,34 @@ async def api_converse(req: ConverseRequest):
         raise HTTPException(status_code=400, detail="Empty message")
 
     profile = await get_or_create_profile()
+
+    # === GATE MINUTI ESAURITI — TURNO VOCE (Fabio 2026-06) ================
+    # Se l'utente ha finito i minuti voce del piano E questa request è un
+    # turno voce, blocchiamo PRIMA di chiamare Claude (risparmio LLM) e PRIMA
+    # di TTS (già bloccato a linea ~10450). Il client (se aggiornato al flag
+    # is_voice_turn) riceve 402 → riproduce il messaggio audio pre-registrato
+    # /assets/audio/koda_quota_exhausted.mp3 e disabilita la voce per la
+    # sessione. La chat scritta (is_voice_turn=False) NON viene mai bloccata:
+    # è "sempre illimitata" per policy prodotto.
+    # Skippiamo ephemeral (MicroDemo non consuma dal ledger reale).
+    if req.is_voice_turn and not req.ephemeral:
+        try:
+            _pstate_conv = _compute_paid_state(profile)
+        except Exception:
+            _pstate_conv = "active"
+        if _pstate_conv == "expired":
+            logger.info(
+                f"[converse] voice-turn blocked (quota exhausted) user={getattr(profile, 'id', '?')[:8]} tier={getattr(profile, 'subscription_tier', None)}"
+            )
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "paid_quota_exhausted",
+                    "subscription_tier": getattr(profile, "subscription_tier", None),
+                    "paid_state": "expired",
+                    "message": "Minuti voce esauriti. Continua in chat scritta o aggiungi 30 min.",
+                },
+            )
 
     # === RATE-LIMIT ANTI-ABUSO CHAT TESTUALE (Fabio 2026-06) =============
     # La chat testuale è "sempre illimitata" per gli utenti umani, ma senza
