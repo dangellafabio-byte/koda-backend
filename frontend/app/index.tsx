@@ -9278,11 +9278,24 @@ const makeStyles = (t: any) => StyleSheet.create({
     marginBottom: 16,
   },
   settingsTitle: { color: t.text, fontSize: 18, fontWeight: "700" },
+  // === CARD STYLE (Fabio 2026-06) =========================================
+  // Ogni riga controllo del Settings modal è ora una card visivamente
+  // distinta (background surfaceAlt + border sottile + padding + marginBottom).
+  // Prima le righe erano separate solo da linee divisorie sottili —
+  // leggibilità pessima su mobile. Ora ogni settaggio è un blocco
+  // riconoscibile, come "Piano attivo" ed "Elimina il mio account" che
+  // già seguivano questo pattern.
   settingRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 18,
-    gap: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 14,
+    gap: 14,
+    backgroundColor: t.surfaceAlt,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: t.border,
+    marginBottom: 10,
   },
   // v57 UI polish (Fabio 2026-07-13): +size, +weight, lineHeight esplicito
   // per allineamento verticale ottimale con emoji (altrimenti su Android
@@ -9303,25 +9316,46 @@ const makeStyles = (t: any) => StyleSheet.create({
     marginTop: 4,
     opacity: 0.9,
   },
-  // Separatore più marcato tra sezioni: raddoppiato margin verticale e
-  // altezza per creare respiro tra IDENTITÀ / COMPORTAMENTO / TEMA.
+  // Divider — con le card, non serve più separatore visibile tra righe
+  // (le card hanno già marginBottom). Lasciato invisibile per compatibilità
+  // con eventuali usi legacy; se il layout richiede spazio extra tra
+  // gruppi, usare marginTop sul primo elemento del gruppo successivo.
   divider: {
-    height: 1,
-    backgroundColor: t.divider,
-    marginVertical: 24,
-    opacity: 0.7,
+    height: 0,
+    backgroundColor: "transparent",
+    marginVertical: 6,
+    opacity: 0,
   },
 
   // Header sezione: chip con bordo accent sinistro + padding, più visibile
   // e distinto ("badge" style). Usa colore text pieno invece di textMuted.
+  // === CARD WRAPPER PER GRUPPO SETTAGGI (Fabio 2026-06) =====================
+  // Contenitore che avvolge ogni sezione del Settings modal. Prima i controlli
+  // erano separati solo da linee orizzontali sottili — leggibilità pessima
+  // su mobile. Ora ogni gruppo è una card visivamente distinta (surface +
+  // border sottile + padding + margin verticale).
+  //
+  // Uso:
+  //   <View style={styles.settingsGroup}>
+  //     <Text style={styles.settingsSubtitle}>🔧 Comportamento</Text>
+  //     ... controlli del gruppo ...
+  //   </View>
+  settingsGroup: {
+    backgroundColor: t.surfaceAlt,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: t.border,
+  },
   settingsSubtitle: {
     color: t.text,
     fontSize: 13,
     fontWeight: "800",
     letterSpacing: 1.5,
     textTransform: "uppercase",
-    marginTop: 28,
-    marginBottom: 14,
+    marginTop: 22,
+    marginBottom: 12,
     paddingLeft: 12,
     paddingVertical: 4,
     borderLeftWidth: 3,
