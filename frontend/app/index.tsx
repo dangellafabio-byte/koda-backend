@@ -2035,6 +2035,14 @@ export default function Taccuino() {
           recRef.current = null;
         }
         setStatus("idle");
+        // === Fabio 2026-06 iter 6 — SPLASH ON LONG-RESUME =====================
+        // Se l'app torna foreground e il TTL splash è scaduto (>5 min),
+        // il getter torna false → mostriamo il KodaSplash. Sensazione app
+        // fresca all'utente che ha rilasciato la app da tempo. Se resume
+        // rapido (<5 min), skippa (nessun disturbo).
+        if (!getSessionHasShownSplash()) {
+          setShowSplash(true);
+        }
         // Audio session warm-up (async, fire-and-forget — non blocchiamo UI).
         (async () => {
           try {
@@ -7224,6 +7232,10 @@ export default function Taccuino() {
               <SettingsWalletStack
                 cards={settingsCards}
                 onClose={() => closeSettings()}
+                version={Constants.expoConfig?.version || "1.0.1"}
+                buildTag={isAdmin ? KODA_BUILD_SHORT_TAG : undefined}
+                runtimeInfo={isAdmin ? `rt:${Constants.expoConfig?.runtimeVersion || "?"} · vc:${Constants.expoConfig?.android?.versionCode ?? Constants.expoConfig?.ios?.buildNumber ?? "?"}` : undefined}
+                onVersionTap={handleDevMenuTap}
               />
             ) : null}
           </View>

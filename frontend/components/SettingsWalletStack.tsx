@@ -67,6 +67,14 @@ type Props = {
   title?: string;
   subtitle?: string;
   hint?: string;
+  /** Numero versione mostrato nel footer, es. "1.0.263". */
+  version?: string;
+  /** Build tag hash visibile SOLO ad admin (es. "v65.36-..."). */
+  buildTag?: string;
+  /** Info diagnostica runtime, visibile SOLO ad admin (es. "rt:1.0.126 · vc:25"). */
+  runtimeInfo?: string;
+  /** Handler tap sul numero versione (per Dev Menu 5-tap). */
+  onVersionTap?: () => void;
 };
 
 const { height: SCREEN_H } = Dimensions.get("window");
@@ -80,8 +88,8 @@ const { height: SCREEN_H } = Dimensions.get("window");
 const HEADER_CONTENT_H = 110;
 // Altezza della "testata" visibile in vista browse per ogni card.
 const CARD_HEADER_H = 84;
-// Peek delle card compresse quando UNA è espansa.
-const PEEK_H = 12;
+// Peek delle card compresse quando UNA è espansa (strip visibile).
+const PEEK_H = 22;
 
 export default function SettingsWalletStack({
   cards,
@@ -89,6 +97,10 @@ export default function SettingsWalletStack({
   title = "Impostazioni",
   subtitle = "Personalizza Koda come vuoi",
   hint = "Tocca una scheda per aprirla.",
+  version,
+  buildTag,
+  runtimeInfo,
+  onVersionTap,
 }: Props) {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
@@ -163,6 +175,28 @@ export default function SettingsWalletStack({
           );
         })}
       </View>
+
+      {/* === FOOTER VERSION — sempre visibile in fondo, sopra safe-bottom.
+          Tap 5 volte sulla versione = Dev Menu (per admin/whitelist).
+          Utenti normali vedono solo "Koda v1.0.263" pulito. */}
+      {version ? (
+        <View style={styles.footerWrap}>
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={onVersionTap}
+            testID="settings-wallet-version-tap"
+            hitSlop={{ top: 8, bottom: 8, left: 20, right: 20 }}
+          >
+            <Text style={styles.footerVersion}>Koda v{version}</Text>
+          </TouchableOpacity>
+          {buildTag ? (
+            <Text style={styles.footerBuildTag}>{buildTag}</Text>
+          ) : null}
+          {runtimeInfo ? (
+            <Text style={styles.footerRuntime}>{runtimeInfo}</Text>
+          ) : null}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -210,14 +244,16 @@ function WalletCardItem({
   //   - se questa è quella espansa: top piccolo (subito sotto header), height = expandedH
   //   - se questa è PRIMA di quella espansa: compressa in cima (i * PEEK_H)
   //   - se questa è DOPO quella espansa: compressa in fondo (stackHeight - (total-i)*PEEK_H)
-  // Fabio 2026-06 iter 4 (fix accavallamento):
-  //   Il layout "peek sopra + peek sotto" mescolava targetHeight=CARD_HEADER_H
-  //   con targetTop=index*PEEK_H → card si sovrapponevano visivamente e
-  //   l'utente non riusciva più a leggere/toccare nulla.
-  //   Nuovo layout: quando UNA card è espansa, le altre spariscono
-  //   completamente (opacity 0, non-touchable, spostate fuori area).
-  //   Per tornare indietro: tap sull'intestazione della card espansa
-  //   (chevron ↓ già presente) o pulsante X del header.
+  // Fabio 2026-06 iter 5 — PEEK WALLET REALE:
+  //   Quando UNA card è espansa, le altre restano visibili come strisce
+  //   sottili (peek = 20px con solo icona compressa in orizzontale).
+  //   Le card PRIMA della espansa: impilate in cima
+  //     top = i * 20, height = 20
+  //   Le card DOPO la espansa: impilate in fondo
+  //     top = stackBottom - (n_after - k) * 20 - 20
+  //   La card espansa: occupa lo spazio tra le due pile
+  //   L'utente può tappare qualsiasi peek → chiude la corrente e apre quella.
+  const PEEK_STRIP = PEEK_H;
   const browseTop = index * browseCardStep;
 
   let targetTop = browseTop;
@@ -225,20 +261,33 @@ function WalletCardItem({
   let targetOpacity = 1;
   let targetZ = index;
   let targetPointer: "auto" | "none" = "auto";
+  let compactMode = false;
 
   if (anyExpanded) {
     if (isExpanded) {
-      targetTop = 0;
-      targetHeight = expandedH + 30; // riempie tutta l'area stack
+      // Card espansa: sotto le compresse-sopra, sopra le compresse-sotto
+      const topPileH = expandedIndex * PEEK_STRIP;
+      const bottomCount = total - expandedIndex - 1;
+      const bottomPileH = bottomCount * PEEK_STRIP;
+      targetTop = topPileH + 6;
+      targetHeight = stackHeight - topPileH - bottomPileH - 10;
       targetZ = 100;
       targetOpacity = 1;
+    } else if (index < expandedIndex) {
+      // Peek sopra la espansa: strip 22px in cima
+      targetTop = index * PEEK_STRIP;
+      targetHeight = PEEK_STRIP + 12; // 12px extra per tap area invisibile
+      targetOpacity = 0.85;
+      targetZ = index;
+      compactMode = true;
     } else {
-      // Altre card durante l'espansione: fuori schermo + invisibili
-      targetTop = index < expandedIndex ? -CARD_HEADER_H - 20 : stackHeight + 20;
-      targetHeight = CARD_HEADER_H;
-      targetOpacity = 0;
-      targetPointer = "none";
-      targetZ = 0;
+      // Peek sotto la espansa: strip 22px in fondo
+      const kFromEnd = total - 1 - index; // 0 = ultima
+      targetTop = stackHeight - (kFromEnd + 1) * PEEK_STRIP - 4;
+      targetHeight = PEEK_STRIP + 12;
+      targetOpacity = 0.85;
+      targetZ = index;
+      compactMode = true;
     }
   }
 
@@ -275,43 +324,55 @@ function WalletCardItem({
       pointerEvents={targetPointer}
       testID={`settings-card-${card.key}`}
     >
-      <View style={styles.card}>
+      <View style={[styles.card, compactMode ? styles.cardCompact : null]}>
         {/* Header cliccabile — apre/chiude */}
         <TouchableOpacity
           activeOpacity={0.85}
           onPress={onHeaderPress}
-          style={styles.cardHeaderTouch}
+          style={[styles.cardHeaderTouch, compactMode ? styles.cardHeaderCompact : null]}
         >
-          <View style={styles.iconBubble}>
-            <Text style={styles.iconEmoji}>{card.icon}</Text>
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.cardTitle}>{card.title}</Text>
-            {card.description ? (
-              <Text style={styles.cardDescription} numberOfLines={2}>
-                {card.description}
+          {compactMode ? (
+            // Peek mode: solo icona piccola + titolo inline, tutto in strip 22px
+            <>
+              <Text style={styles.iconEmojiCompact}>{card.icon}</Text>
+              <Text style={styles.cardTitleCompact} numberOfLines={1}>
+                {card.title}
               </Text>
-            ) : null}
-          </View>
-          {typeof card.count === "number" && card.count > 0 ? (
-            <View style={styles.countBadge}>
-              <Text style={styles.countText}>{card.count}</Text>
-            </View>
-          ) : null}
-          {isExpanded ? (
-            <Ionicons
-              name="chevron-down"
-              size={22}
-              color={theme.textDim}
-              style={{ marginLeft: 6 }}
-            />
+            </>
           ) : (
-            <Ionicons
-              name="chevron-forward"
-              size={22}
-              color={theme.textDim}
-              style={{ marginLeft: 6 }}
-            />
+            <>
+              <View style={styles.iconBubble}>
+                <Text style={styles.iconEmoji}>{card.icon}</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardTitle}>{card.title}</Text>
+                {card.description ? (
+                  <Text style={styles.cardDescription} numberOfLines={2}>
+                    {card.description}
+                  </Text>
+                ) : null}
+              </View>
+              {typeof card.count === "number" && card.count > 0 ? (
+                <View style={styles.countBadge}>
+                  <Text style={styles.countText}>{card.count}</Text>
+                </View>
+              ) : null}
+              {isExpanded ? (
+                <Ionicons
+                  name="chevron-down"
+                  size={22}
+                  color={theme.textDim}
+                  style={{ marginLeft: 6 }}
+                />
+              ) : (
+                <Ionicons
+                  name="chevron-forward"
+                  size={22}
+                  color={theme.textDim}
+                  style={{ marginLeft: 6 }}
+                />
+              )}
+            </>
           )}
         </TouchableOpacity>
 
@@ -454,6 +515,56 @@ function makeStyles(t: any, safeTop: number, safeBottom: number) {
     cardBody: {
       flex: 1,
       paddingHorizontal: 16,
+    },
+    // === PEEK MODE (Fabio 2026-06 iter 5) ================================
+    // Strip 22px con solo icona compressa + titolo inline. Serve a mostrare
+    // le card sopra/sotto quando una è espansa, come nel Wallet iPhone.
+    cardCompact: {
+      borderRadius: 14,
+    },
+    cardHeaderCompact: {
+      height: PEEK_H + 12, // 22 + 12 padding
+      paddingVertical: 4,
+      paddingHorizontal: 12,
+      gap: 8,
+    },
+    iconEmojiCompact: {
+      fontSize: 14,
+      lineHeight: 18,
+    },
+    cardTitleCompact: {
+      color: t.text,
+      fontSize: 13,
+      fontWeight: "700",
+      flex: 1,
+    },
+    // === FOOTER VERSION ==================================================
+    // Ripristinato 2026-06 (Fabio): senza questo l'utente admin non ha piu'
+    // accesso al Dev Menu (5-tap sulla version footer).
+    footerWrap: {
+      paddingVertical: 10,
+      alignItems: "center",
+      backgroundColor: t.bg,
+    },
+    footerVersion: {
+      color: t.textDim,
+      fontSize: 11,
+      fontStyle: "italic",
+      opacity: 0.7,
+    },
+    footerBuildTag: {
+      color: t.textDim,
+      fontSize: 9,
+      letterSpacing: 0.5,
+      marginTop: 3,
+      opacity: 0.4,
+    },
+    footerRuntime: {
+      color: t.textDim,
+      fontSize: 8,
+      letterSpacing: 0.3,
+      marginTop: 2,
+      opacity: 0.3,
     },
   });
 }

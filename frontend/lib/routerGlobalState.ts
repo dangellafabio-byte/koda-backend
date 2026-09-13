@@ -65,27 +65,34 @@ export function getLastDecidedProfileId(): string | null {
 // Con questo flag, dopo il primo splash della sessione, i mount successivi
 // della Home partono già con `showSplash=false` → transizione fluida.
 //
-// Semantica identica a `_lastDecidedProfileId`:
+// === Fabio 2026-06 iter aggiuntivo — TIMESTAMP + TTL ========================
+// Prima era boolean `_sessionHasShownSplash`. Problema segnalato: se l'utente
+// mette l'app in background e la riapre poco/tanto dopo, il modulo persiste
+// in memoria → il splash non riappare mai finché il processo non muore.
+// Fix: uso un TIMESTAMP; il splash resta "già mostrato" solo per SPLASH_TTL_MS
+// (5 minuti). Se torni oltre, il splash riappare — anche senza kill del task.
+//
+// Semantica:
 //   - Vive a livello di modulo → sopravvive a unmount+remount di Home
-//   - NON è persistito → al cold boot il modulo si ricarica e lo splash
-//     si vede di nuovo (comportamento corretto: il splash appartiene
-//     all'apertura app, non alla singola visita della Home)
+//   - NON è persistito → cold boot = splash appare sempre
+//   - TTL 5 min → resume dopo lunga pausa = splash riappare (impressione app nuova)
 //   - Resettato esplicitamente da resetRouterGlobalState() su signOut
-//     (per igiene semantica: nuovo utente → nuova prima impressione)
-let _sessionHasShownSplash = false;
+const SPLASH_TTL_MS = 5 * 60 * 1000; // 5 minuti
+let _sessionSplashShownAt = 0;
 
 /** Restituisce true se il KodaSplash è già stato mostrato in questa
- *  sessione app. La Home lo legge al mount per decidere lo stato iniziale
- *  di `showSplash`. */
+ *  sessione app di RECENTE (< SPLASH_TTL_MS). La Home lo legge al mount
+ *  per decidere lo stato iniziale di `showSplash`. */
 export function getSessionHasShownSplash(): boolean {
-  return _sessionHasShownSplash;
+  if (!_sessionSplashShownAt) return false;
+  return Date.now() - _sessionSplashShownAt < SPLASH_TTL_MS;
 }
 
-/** Marca il splash come "già mostrato" per la sessione app in corso.
- *  Chiamato quando `setShowSplash(false)` viene invocato (naturalmente al
- *  termine del KodaSplash da 10s, o via skip-splash-after-intro). */
+/** Marca il splash come "già mostrato" ORA. Chiamato quando
+ *  `setShowSplash(false)` viene invocato (naturalmente al termine del
+ *  KodaSplash da 10s, o via skip-splash-after-intro). */
 export function markSessionSplashShown(): void {
-  _sessionHasShownSplash = true;
+  _sessionSplashShownAt = Date.now();
 }
 
 /** Azzera lo stato del router. Chiamato da lib/auth.tsx:signOut() così
@@ -94,7 +101,7 @@ export function markSessionSplashShown(): void {
  *  l'ingresso identitario dell'app (KodaSplash) al primo boot. */
 export function resetRouterGlobalState(): void {
   _lastDecidedKey = null;
-  _sessionHasShownSplash = false;
+  _sessionSplashShownAt = 0;
 }
 
 /** === FIX BUG CACHE TIER IN-SESSIONE (Fabio 2026-08-24) ===================
