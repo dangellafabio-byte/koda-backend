@@ -210,31 +210,35 @@ function WalletCardItem({
   //   - se questa è quella espansa: top piccolo (subito sotto header), height = expandedH
   //   - se questa è PRIMA di quella espansa: compressa in cima (i * PEEK_H)
   //   - se questa è DOPO quella espansa: compressa in fondo (stackHeight - (total-i)*PEEK_H)
+  // Fabio 2026-06 iter 4 (fix accavallamento):
+  //   Il layout "peek sopra + peek sotto" mescolava targetHeight=CARD_HEADER_H
+  //   con targetTop=index*PEEK_H → card si sovrapponevano visivamente e
+  //   l'utente non riusciva più a leggere/toccare nulla.
+  //   Nuovo layout: quando UNA card è espansa, le altre spariscono
+  //   completamente (opacity 0, non-touchable, spostate fuori area).
+  //   Per tornare indietro: tap sull'intestazione della card espansa
+  //   (chevron ↓ già presente) o pulsante X del header.
   const browseTop = index * browseCardStep;
 
   let targetTop = browseTop;
-  let targetHeight = CARD_HEADER_H + 12; // card in vista browse (solo header + un po')
+  let targetHeight = CARD_HEADER_H + 12; // card in vista browse
   let targetOpacity = 1;
   let targetZ = index;
+  let targetPointer: "auto" | "none" = "auto";
 
   if (anyExpanded) {
     if (isExpanded) {
-      targetTop = expandedIndex * PEEK_H + 8;
-      targetHeight = expandedH;
+      targetTop = 0;
+      targetHeight = expandedH + 30; // riempie tutta l'area stack
       targetZ = 100;
-    } else if (index < expandedIndex) {
-      // Compressa sopra la espansa
-      targetTop = index * PEEK_H;
-      targetHeight = CARD_HEADER_H;
-      targetOpacity = 0.55;
-      targetZ = index;
+      targetOpacity = 1;
     } else {
-      // Compressa sotto la espansa (peek in fondo)
-      const offsetFromEnd = total - 1 - index;
-      targetTop = stackHeight - PEEK_H * (offsetFromEnd + 1) - CARD_HEADER_H + 20;
+      // Altre card durante l'espansione: fuori schermo + invisibili
+      targetTop = index < expandedIndex ? -CARD_HEADER_H - 20 : stackHeight + 20;
       targetHeight = CARD_HEADER_H;
-      targetOpacity = 0.55;
-      targetZ = index;
+      targetOpacity = 0;
+      targetPointer = "none";
+      targetZ = 0;
     }
   }
 
@@ -268,6 +272,7 @@ function WalletCardItem({
   return (
     <Animated.View
       style={[styles.cardWrap, aStyle, { zIndex: targetZ }]}
+      pointerEvents={targetPointer}
       testID={`settings-card-${card.key}`}
     >
       <View style={styles.card}>
