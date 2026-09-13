@@ -6469,69 +6469,12 @@ export default function Taccuino() {
 
             <View style={styles.divider} />
 
-            {/* === BORDO — Calibrazione utente (2026-08-02, Fabio) ============
-                Su alcuni schermi curvi Android (Honor, Xiaomi 4-lati) il
-                NeonBorder default si vede poco perché la curvatura fisica
-                del vetro lo copre agli angoli. L'utente può calibrare
-                radius/spessore/colore idle a occhio, valori persistiti
-                per-device in SecureStore locale. */}
-            <View style={styles.divider} />
-            <Text style={styles.settingsSubtitle}>📱 Bordo dello schermo</Text>
-            <Text style={styles.settingsHint}>
-              Se il bordo colorato di Koda si vede poco agli angoli del tuo
-              telefono, regola qui il raggio degli angoli.
-            </Text>
-
-            {/* Slider raggio angoli */}
-            <View style={{ marginTop: 12 }}>
-              <Text style={styles.settingsHint}>
-                Raggio angoli: {borderCal.radius ?? "auto"}
-                {borderCal.radius !== null ? " px" : " (rilevato)"}
-              </Text>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
-                <TouchableOpacity
-                  onPress={async () => {
-                    const cur = borderCal.radius ?? 48;
-                    const next: BorderCalibration = { ...borderCal, radius: Math.max(0, cur - 4) };
-                    setBorderCal(next);
-                    await saveBorderCalibration(next);
-                  }}
-                  style={[styles.modeBtn, { paddingHorizontal: 14, minHeight: 40 }]}
-                  accessibilityLabel="Riduci raggio bordo"
-                >
-                  <Text style={{ color: theme.text, fontSize: 18, fontWeight: "600" }}>−</Text>
-                </TouchableOpacity>
-                <View style={{ flex: 1, height: 6, backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 3 }}>
-                  <View
-                    style={{
-                      height: "100%",
-                      width: `${Math.min(100, ((borderCal.radius ?? 48) / 70) * 100)}%`,
-                      backgroundColor: bubbleAccent.color,
-                      borderRadius: 3,
-                    }}
-                  />
-                </View>
-                <TouchableOpacity
-                  onPress={async () => {
-                    const cur = borderCal.radius ?? 48;
-                    const next: BorderCalibration = { ...borderCal, radius: Math.min(70, cur + 4) };
-                    setBorderCal(next);
-                    await saveBorderCalibration(next);
-                  }}
-                  style={[styles.modeBtn, { paddingHorizontal: 14, minHeight: 40 }]}
-                  accessibilityLabel="Aumenta raggio bordo"
-                >
-                  <Text style={{ color: theme.text, fontSize: 18, fontWeight: "600" }}>+</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* === BORDO — SEMPLIFICATO 2026-08-27 v65.8 (Fabio) ===============
-                Rimossi: slider spessore (fissato a 3 px), toggle "Colore
-                idle più visibile" (colore fisso champagne), pulsante
-                "Ripristina valori predefiniti". Resta solo il raggio
-                angoli, che è l'unico controllo veramente utile sui
-                telefoni con schermi curvi. */}
+            {/* === BORDO — RIMOSSO 2026-06 (Fabio) ============================
+                Lo slider "Raggio angoli" era un tool di calibrazione dev.
+                Non serve né agli utenti né a Fabio (admin) — il default
+                automatico è ok su tutti gli schermi testati.
+                Se serve reintrodurre calibrazione device-specifica,
+                rimettere qui il blocco rimosso in questo commit. */}
 
             {/* === MODALITÀ INPUT RIMOSSA (richiesta utente 2026-06) ===
                 L'utente passa già da voce a scrittura tramite lo swipe tra
@@ -7510,40 +7453,12 @@ export default function Taccuino() {
                   </Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={{
-                    paddingVertical: 12,
-                    paddingHorizontal: 14,
-                    backgroundColor: theme.text + "0c",
-                    borderRadius: 10,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    opacity: adminBusy ? 0.5 : 1,
-                  }}
-                  disabled={adminBusy}
-                  onPress={async () => {
-                    setAdminBusy(true);
-                    setAdminError(null);
-                    try {
-                      await api.devIntroPremiumReset();
-                      try { await SecureStore.deleteItemAsync("intro_premium_seen_at"); } catch {}
-                      Alert.alert(
-                        "✓ Reset fatto",
-                        "L'Intro Premium ripartirà al prossimo ingresso alla home Koda conv da Premium."
-                      );
-                    } catch (e: any) {
-                      setAdminError(`Errore: ${e?.message || e}`);
-                    } finally {
-                      setAdminBusy(false);
-                    }
-                  }}
-                  testID="dev-reset-intro-premium-btn"
-                >
-                  <Ionicons name="refresh-outline" size={18} color={theme.text + "99"} />
-                  <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500", marginLeft: 10 }}>
-                    Ripeti Intro Premium
-                  </Text>
-                </TouchableOpacity>
+                {/* === "Ripeti Intro Premium" RIMOSSO 2026-06 (Fabio) ==========
+                    Era duplicato del "Rivedi Intro Premium (admin)" (vicino
+                    a "I miei ricordi", riga ~6752) che fa replay immediato
+                    del flusso. Questo qui faceva solo reset del flag (utile
+                    per QA cold-start ma poco distinto UX). Consolidato:
+                    l'unico entry point è "Rivedi Intro Premium (admin)". */}
 
                 {/* === RIPETI PRIMO BOOT COMPLETO (Fabio 2026-08-24) ===
                     Reset TOTALE dell'onboarding: server-side (tier→Free,
@@ -7812,18 +7727,28 @@ export default function Taccuino() {
                   Koda v{Constants.expoConfig?.version || "1.0.1"}
                 </Text>
               </TouchableOpacity>
-              <Text style={{ color: theme.text + "33", fontSize: 9, marginTop: 3, letterSpacing: 0.5 }}>
-                {KODA_BUILD_SHORT_TAG}
-              </Text>
-              {/* === DIAGNOSTICA runtimeVersion (2026-08-26, Fabio) =============
-                  Se il footer sotto mostra "rt:1.0.113" invece di "rt:1.0.126",
-                  significa che questo APK è stato costruito da uno snapshot
-                  container ANTECEDENTE al bump — prova che la pipeline di
-                  build serve uno snapshot stale. Utile per il ticket Emergent
-                  Support. Testo minuscolo per non disturbare l'UI. */}
-              <Text style={{ color: theme.text + "22", fontSize: 8, marginTop: 2, letterSpacing: 0.3 }}>
-                rt:{Constants.expoConfig?.runtimeVersion || "?"} · vc:{Constants.expoConfig?.android?.versionCode ?? Constants.expoConfig?.ios?.buildNumber ?? "?"}
-              </Text>
+              {/* === FOOTER DEBUG INFO — SOLO ADMIN (Fabio 2026-06) =============
+                  Il build tag (v65.xx-descriptor) e la riga rt/vc sono
+                  informazioni tecniche utili per debug/support ma confondono
+                  l'utente finale ("perché questa stringa criptica?").
+                  Le mostriamo SOLO agli admin (whitelist). L'utente vede
+                  solo "Koda v1.0.263" pulito. */}
+              {isAdmin ? (
+                <>
+                  <Text style={{ color: theme.text + "33", fontSize: 9, marginTop: 3, letterSpacing: 0.5 }}>
+                    {KODA_BUILD_SHORT_TAG}
+                  </Text>
+                  {/* === DIAGNOSTICA runtimeVersion (2026-08-26, Fabio) =============
+                      Se il footer sotto mostra "rt:1.0.113" invece di "rt:1.0.126",
+                      significa che questo APK è stato costruito da uno snapshot
+                      container ANTECEDENTE al bump — prova che la pipeline di
+                      build serve uno snapshot stale. Utile per il ticket Emergent
+                      Support. Testo minuscolo per non disturbare l'UI. */}
+                  <Text style={{ color: theme.text + "22", fontSize: 8, marginTop: 2, letterSpacing: 0.3 }}>
+                    rt:{Constants.expoConfig?.runtimeVersion || "?"} · vc:{Constants.expoConfig?.android?.versionCode ?? Constants.expoConfig?.ios?.buildNumber ?? "?"}
+                  </Text>
+                </>
+              ) : null}
             </View>
 </>)}
             </ScrollView>
