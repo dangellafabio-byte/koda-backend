@@ -110,6 +110,7 @@ import {
   resetBorderCalibration,
   ALT_IDLE_COLOR,
   DEFAULT_CALIBRATION,
+  estimateCornerRadius,
   type BorderCalibration,
 } from "../lib/borderCalibration";
 import { useRouter, usePathname, useLocalSearchParams } from "expo-router";
@@ -6469,12 +6470,104 @@ export default function Taccuino() {
 
             <View style={styles.divider} />
 
-            {/* === BORDO — RIMOSSO 2026-06 (Fabio) ============================
-                Lo slider "Raggio angoli" era un tool di calibrazione dev.
-                Non serve né agli utenti né a Fabio (admin) — il default
-                automatico è ok su tutti gli schermi testati.
-                Se serve reintrodurre calibrazione device-specifica,
-                rimettere qui il blocco rimosso in questo commit. */}
+            {/* === BORDO — Calibrazione con auto-stima (2026-08-02 / 2026-06 v2) ==
+                iOS e Android non espongono il corner radius fisico del display.
+                Fix v2 (Fabio 2026-06): auto-stimiamo il radius dal safe-area
+                top inset (correlato al design del device: notch, Dynamic
+                Island, rettangolare). Il valore auto-stimato è il DEFAULT.
+                Lo slider resta disponibile perché nessun auto-detect è
+                perfetto (device con schermi curvi anomali tipo Honor/OnePlus)
+                — se la stima non basta, l'utente può regolare a mano. */}
+            <View style={styles.divider} />
+            <Text style={styles.settingsSubtitle}>📱 Bordo dello schermo</Text>
+            <Text style={styles.settingsHint}>
+              Il raggio degli angoli si adatta al tuo telefono automaticamente.
+              Se il bordo colorato non si vede bene, regola qui.
+            </Text>
+
+            {/* Slider raggio angoli con auto-stima */}
+            <View style={{ marginTop: 12 }}>
+              <Text style={styles.settingsHint}>
+                {(() => {
+                  const autoR = estimateCornerRadius(insets.top || 0, Platform.OS);
+                  const isAuto = borderCal.radius === null;
+                  const displayR = isAuto ? autoR : borderCal.radius;
+                  return `Raggio angoli: ${displayR} px${isAuto ? " (auto)" : ""}`;
+                })()}
+              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
+                <TouchableOpacity
+                  onPress={async () => {
+                    // Se era in modalità auto, parti dal valore stimato — così
+                    // il tap del "-" fa un delta relativo alla stima invece che
+                    // resettare a un hardcoded arbitrario.
+                    const autoR = estimateCornerRadius(insets.top || 0, Platform.OS);
+                    const cur = borderCal.radius ?? autoR;
+                    const next: BorderCalibration = { ...borderCal, radius: Math.max(0, cur - 4) };
+                    setBorderCal(next);
+                    await saveBorderCalibration(next);
+                  }}
+                  style={[styles.modeBtn, { paddingHorizontal: 14, minHeight: 40 }]}
+                  accessibilityLabel="Riduci raggio bordo"
+                >
+                  <Text style={{ color: theme.text, fontSize: 18, fontWeight: "600" }}>−</Text>
+                </TouchableOpacity>
+                <View style={{ flex: 1, height: 6, backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 3 }}>
+                  {(() => {
+                    const autoR = estimateCornerRadius(insets.top || 0, Platform.OS);
+                    const shownR = borderCal.radius ?? autoR;
+                    return (
+                      <View
+                        style={{
+                          height: "100%",
+                          width: `${Math.min(100, (shownR / 70) * 100)}%`,
+                          backgroundColor: bubbleAccent.color,
+                          borderRadius: 3,
+                        }}
+                      />
+                    );
+                  })()}
+                </View>
+                <TouchableOpacity
+                  onPress={async () => {
+                    const autoR = estimateCornerRadius(insets.top || 0, Platform.OS);
+                    const cur = borderCal.radius ?? autoR;
+                    const next: BorderCalibration = { ...borderCal, radius: Math.min(70, cur + 4) };
+                    setBorderCal(next);
+                    await saveBorderCalibration(next);
+                  }}
+                  style={[styles.modeBtn, { paddingHorizontal: 14, minHeight: 40 }]}
+                  accessibilityLabel="Aumenta raggio bordo"
+                >
+                  <Text style={{ color: theme.text, fontSize: 18, fontWeight: "600" }}>+</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Pulsante "Torna all'auto" — visibile SOLO se l'utente ha
+                  regolato manualmente. Riporta a null → riparte la stima. */}
+              {borderCal.radius !== null ? (
+                <TouchableOpacity
+                  onPress={async () => {
+                    const next: BorderCalibration = { ...borderCal, radius: null };
+                    setBorderCal(next);
+                    await saveBorderCalibration(next);
+                  }}
+                  style={{
+                    marginTop: 10,
+                    paddingVertical: 8,
+                    paddingHorizontal: 12,
+                    alignSelf: "flex-start",
+                    borderRadius: 8,
+                    backgroundColor: "rgba(255,255,255,0.06)",
+                  }}
+                  accessibilityLabel="Torna alla regolazione automatica"
+                >
+                  <Text style={{ color: theme.text + "cc", fontSize: 12 }}>
+                    ↺ Torna all&apos;automatica
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
 
             {/* === MODALITÀ INPUT RIMOSSA (richiesta utente 2026-06) ===
                 L'utente passa già da voce a scrittura tramite lo swipe tra
@@ -7453,12 +7546,48 @@ export default function Taccuino() {
                   </Text>
                 </TouchableOpacity>
 
-                {/* === "Ripeti Intro Premium" RIMOSSO 2026-06 (Fabio) ==========
-                    Era duplicato del "Rivedi Intro Premium (admin)" (vicino
-                    a "I miei ricordi", riga ~6752) che fa replay immediato
-                    del flusso. Questo qui faceva solo reset del flag (utile
-                    per QA cold-start ma poco distinto UX). Consolidato:
-                    l'unico entry point è "Rivedi Intro Premium (admin)". */}
+                {/* === RIPETI INTRO PREMIUM — RIPRISTINATO 2026-06 (Fabio) =====
+                    NOTA: Non è duplicato di "Rivedi Intro Premium (admin)"
+                    (vicino a "I miei ricordi"). Sono due strumenti diversi:
+                    - "Rivedi Intro Premium (admin)" → replay IMMEDIATO del
+                      flusso (client-side reopenIntroPremium)
+                    - "Ripeti Intro Premium" (qui) → reset flag server-side
+                      (devIntroPremiumReset), l'Intro parte al PROSSIMO ingresso
+                      alla home Premium — utile per QA cold-boot. */}
+                <TouchableOpacity
+                  style={{
+                    paddingVertical: 12,
+                    paddingHorizontal: 14,
+                    backgroundColor: theme.text + "0c",
+                    borderRadius: 10,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    opacity: adminBusy ? 0.5 : 1,
+                  }}
+                  disabled={adminBusy}
+                  onPress={async () => {
+                    setAdminBusy(true);
+                    setAdminError(null);
+                    try {
+                      await api.devIntroPremiumReset();
+                      try { await SecureStore.deleteItemAsync("intro_premium_seen_at"); } catch {}
+                      Alert.alert(
+                        "✓ Reset fatto",
+                        "L'Intro Premium ripartirà al prossimo ingresso alla home Koda conv da Premium."
+                      );
+                    } catch (e: any) {
+                      setAdminError(`Errore: ${e?.message || e}`);
+                    } finally {
+                      setAdminBusy(false);
+                    }
+                  }}
+                  testID="dev-reset-intro-premium-btn"
+                >
+                  <Ionicons name="refresh-outline" size={18} color={theme.text + "99"} />
+                  <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500", marginLeft: 10 }}>
+                    Ripeti Intro Premium (reset flag)
+                  </Text>
+                </TouchableOpacity>
 
                 {/* === RIPETI PRIMO BOOT COMPLETO (Fabio 2026-08-24) ===
                     Reset TOTALE dell'onboarding: server-side (tier→Free,
@@ -7994,7 +8123,7 @@ export default function Taccuino() {
       speakingColorOverride={getVoiceSpeakingColor(
         (profile?.settings as any)?.tts_voice_id
       )}
-      radiusOverride={borderCal.radius ?? undefined}
+      radiusOverride={borderCal.radius ?? estimateCornerRadius(insets.top || 0, Platform.OS)}
       idleColorOverride={borderCal.useAltIdleColor ? ALT_IDLE_COLOR : undefined}
     />
   );

@@ -47,6 +47,38 @@ export const DEFAULT_CALIBRATION: BorderCalibration = {
   useAltIdleColor: false,
 };
 
+
+/**
+ * Stima il corner radius fisico dello schermo del device basandosi sul
+ * safe-area inset TOP (che React Native espone sempre) + Platform.OS.
+ *
+ * PERCHÉ QUI (2026-06 Fabio):
+ * iOS e Android NON espongono API pubbliche per leggere il vero corner
+ * radius del display. `expo-device` e `react-native-device-info` non lo
+ * forniscono. L'unico modo affidabile senza mapping hardcoded per ogni
+ * modello (fragile: nuovi device escono ogni anno) è **stimare** dal
+ * safe-area top inset, che correla fortemente col design del device:
+ *
+ *   iOS Dynamic Island (iPhone 14 Pro+):  top ≥ 54  → radius ~55
+ *   iOS Notch classico   (iPhone X-13):   top ≥ 44  → radius ~47
+ *   Android con notch/hole:                top ≥ 24  → radius ~32
+ *   Rettangolare (iPhone SE, Android old): top < 24  → radius 0
+ *
+ * Non è PERFETTO (OnePlus/Xiaomi con schermi curvi 4-lati possono avere
+ * radius reali diversi), ma copre ~90% dei device correttamente.
+ * L'utente può SEMPRE override manualmente dallo slider in Impostazioni.
+ */
+export function estimateCornerRadius(topInset: number, platformOS: string): number {
+  if (platformOS === "ios") {
+    if (topInset >= 54) return 55; // Dynamic Island
+    if (topInset >= 44) return 47; // Notch classico
+    return 0; // iPhone SE / iPad rettangolari
+  }
+  // Android — più eterogeneo, valori medi euristici
+  if (topInset >= 24) return 32;
+  return 8;
+}
+
 /** Legge la calibrazione salvata. Se non esiste o è corrotta, ritorna default. */
 export async function loadBorderCalibration(): Promise<BorderCalibration> {
   try {
