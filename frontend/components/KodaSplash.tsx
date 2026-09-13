@@ -171,13 +171,29 @@ export default function KodaSplash({ aiName, duration = 10000, onComplete }: Pro
   return (
     <Animated.View style={[styles.root, { opacity: fade }]} pointerEvents="auto">
       <Pressable style={StyleSheet.absoluteFill} onPress={handleSkip}>
-        <View style={styles.centerWrap}>
-          {/* Eclissi: 4 cerchi sempre montati, opacity ciclica continua —
-              cross-fade perpetuo senza reset = zero stacchi di colore. */}
+        {/* === IMMAGINE SPLASH (Fabio 2026-06) ===============================
+            Foto creata dall'utente con eclissi viola + testo "Koda / Sempre
+            con te / Ascolta • Parla • Sentiti meglio / Qualcosa di bello ti
+            aspetta". Usata come base fissa. Il "cambio colore fluido"
+            (attuale meccanismo 4-palette cross-fade) è mantenuto come layer
+            overlay SOPRA l'eclissi dell'immagine, così pulsa cambiando
+            tinta senza distruggere la composizione. */}
+        <Animated.Image
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          source={require("../assets/splash_koda_eclipse.webp")}
+          style={[
+            StyleSheet.absoluteFill,
+            { opacity: fade, width: "100%", height: "100%" },
+          ]}
+          resizeMode="cover"
+        />
+
+        {/* GLOW OVERLAY animato — cross-fade tra 4 palette. Posizionato
+            SOPRA l'area dell'eclissi (top ~24% viewport, centro orizz.). */}
+        <View style={styles.glowLayer} pointerEvents="none">
           <Animated.View
             style={{
               opacity: orbFade,
-              marginBottom: 40,
               width: orbSize,
               height: orbSize,
             }}
@@ -185,17 +201,26 @@ export default function KodaSplash({ aiName, duration = 10000, onComplete }: Pro
             {PALETTES.map((p, k) => (
               <Animated.View
                 key={p[1]}
-                style={[StyleSheet.absoluteFill, { opacity: opacityFor(k) }]}
-              >
-                <OrbCircle palette={p} size={orbSize} />
-              </Animated.View>
+                style={[
+                  StyleSheet.absoluteFill,
+                  {
+                    opacity: opacityFor(k),
+                    borderRadius: orbSize / 2,
+                    // Alone colorato: tinta che cambia ciclicamente.
+                    // Non ridisegna l'eclissi (che è nell'immagine), aggiunge
+                    // solo un glow perimetrale che pulsa di tinta.
+                    shadowColor: p[1],
+                    shadowOpacity: 0.75,
+                    shadowRadius: 60,
+                    shadowOffset: { width: 0, height: 0 },
+                    backgroundColor: "transparent",
+                    borderWidth: 1,
+                    borderColor: p[1] + "44",
+                  },
+                ]}
+              />
             ))}
           </Animated.View>
-
-          {/* Solo nome AI, niente sottotitolo */}
-          <Animated.Text style={[styles.name, { opacity: nameFade }]}>
-            {displayName}
-          </Animated.Text>
         </View>
       </Pressable>
     </Animated.View>
@@ -212,6 +237,16 @@ const styles = StyleSheet.create({
     backgroundColor: "#06060A",
     zIndex: 9999,
     elevation: 9999,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  // Layer glow: posizionato sull'area dove sta l'eclissi nell'immagine
+  // (circa 32% dall'alto). Non blocca i tocchi.
+  glowLayer: {
+    position: "absolute",
+    top: "20%",
+    left: 0,
+    right: 0,
     alignItems: "center",
     justifyContent: "center",
   },

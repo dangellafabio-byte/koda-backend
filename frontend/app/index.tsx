@@ -7107,12 +7107,16 @@ export default function Taccuino() {
                   automatica della tastiera. */}
               <GHTouchableOpacity
                 onPress={sendTextFromBox}
-                style={[styles.sendBtn, !textInput.trim() ? { opacity: 0.4 } : styles.sendBtnActive]}
+                style={[styles.sendBtn, textInput.trim() ? styles.sendBtnActive : null]}
                 disabled={!textInput.trim()}
                 hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                 testID="send-btn"
               >
-                <Ionicons name="arrow-up" size={20} color={theme.primaryText} />
+                <Ionicons
+                  name="arrow-up"
+                  size={22}
+                  color={textInput.trim() ? theme.primaryText : theme.textDim}
+                />
               </GHTouchableOpacity>
             </View>
           </KeyboardAvoidingView>
@@ -7168,12 +7172,16 @@ export default function Taccuino() {
                   />
                   <GHTouchableOpacity
                     onPress={sendTextFromBox}
-                    style={[styles.sendBtn, !textInput.trim() ? { opacity: 0.4 } : styles.sendBtnActive]}
+                    style={[styles.sendBtn, textInput.trim() ? styles.sendBtnActive : null]}
                     disabled={!textInput.trim()}
                     hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                     testID="send-btn-reading"
                   >
-                    <Ionicons name="arrow-up" size={20} color={theme.primaryText} />
+                    <Ionicons
+                      name="arrow-up"
+                      size={22}
+                      color={textInput.trim() ? theme.primaryText : theme.textDim}
+                    />
                   </GHTouchableOpacity>
                 </View>
               </KeyboardAvoidingView>
@@ -8523,25 +8531,31 @@ const makeStyles = (t: any) => StyleSheet.create({
     maxHeight: 100,
   },
   sendBtn: {
-    width: 38,
-    height: 38,
+    width: 42,
+    height: 42,
     borderRadius: 999,
-    backgroundColor: t.primary,
+    // === EMPTY STATE (Fabio 2026-06) =========================================
+    // Prima: sfondo sempre t.primary con opacity 0.4 → si vedeva ma sembrava
+    // "attivo" comunque, l'utente non capiva se poteva inviare.
+    // Ora empty: sfondo trasparente + bordo dim + freccia dim → chiaramente
+    // "non pronto". Full: sfondo pieno + freccia chiara + shadow → attivo.
+    backgroundColor: "transparent",
+    borderWidth: 1.5,
+    borderColor: t.textDim,
     alignItems: "center",
     justifyContent: "center",
   },
   sendBtnActive: {
-    // === FIX EVIDENZIAZIONE PULSANTE INVIO (giugno 2026 #6) ===
-    // L'utente segnalava che il pulsante non si "evidenzia" quando
-    // c'è del testo. Aggiungiamo un alone/ombra brillante + bordo
-    // luminoso quando attivo per renderlo nettamente più visibile.
+    // === FILLED STATE (giugno 2026 #6 rev Fabio) ============================
+    // Pulsante ora chiaramente evidenziato: background pieno primary +
+    // bordo luminoso + shadow bianca alone → "clicca qui per inviare".
+    backgroundColor: t.primary,
+    borderColor: "rgba(255,255,255,0.5)",
     shadowColor: t.primary,
-    shadowOpacity: 0.7,
-    shadowRadius: 8,
+    shadowOpacity: 0.85,
+    shadowRadius: 10,
     shadowOffset: { width: 0, height: 0 },
-    elevation: 6,
-    borderWidth: 1.5,
-    borderColor: "rgba(255,255,255,0.4)",
+    elevation: 8,
   },
 
   // Modals
