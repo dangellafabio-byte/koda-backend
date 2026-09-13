@@ -1,53 +1,63 @@
 /**
- * SettingsWalletStack.tsx
- * ========================
- * Refactor del Settings modal in stile Apple Wallet **verticale**:
- * card sfalsate impilate verticalmente, swipe su/giù, snap magnetico.
- * Peek delle card sopra/sotto sempre visibile — l'utente non vede mai
- * una card intera isolata, come nel Wallet iPhone.
+ * SettingsWalletStack.tsx — v2 (Fabio 2026-06)
+ * ============================================
+ * Ricreato per replicare fedelmente il pattern **Apple Wallet reale**:
  *
- * Design (Fabio 2026-06):
- *  - Header "Impostazioni" fisso in cima
- *  - Sotto: subtitle + hint "Scorri per esplorare"
- *  - ScrollView verticale con card di altezza fissa (~76% viewport)
- *  - Snap magnetico su ogni card
- *  - Card attiva: piena opacità, scale 1.0
- *  - Card non-attive: opacità ridotta, leggera scale-down → effetto "stack"
- *  - Page dots in fondo (opzionale, hidden se scroll continuo)
+ *   Vista BROWSE (default all'apertura):
+ *     ┌────────────────────┐
+ *     │ 💎 Piano attivo    │  ← card 1, header visibile
+ *     ├────────────────────┤
+ *     │ 💬 Comportamento   │  ← card 2, sotto la 1
+ *     ├────────────────────┤
+ *     │ 🎙️ Voce            │
+ *     └────────────────────┘
+ *     Tutte le card impilate in unica schermata SENZA scroll — vedi TUTTE
+ *     le card contemporaneamente e tocchi direttamente quella che vuoi.
  *
- * NB: NON è orizzontale. Fabio ha già uno swipe orizzontale sull'app
- * (index scroll) → collision. Solo verticale.
+ *   Vista EXPANDED (tap su una card):
+ *     ┌────────────────────┐
+ *     │ 💎 Piano attivo    │
+ *     │                    │
+ *     │  ...controlli...   │  ← card espansa a tutto schermo
+ *     │                    │
+ *     └────────────────────┘
+ *     ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁ ← peek minimo delle altre in fondo
+ *     Tap sulla card espansa (o su "X") → torna a browse.
+ *
+ * Sfondo OPACO (theme.bg), copre completamente la home sotto.
+ * Nessun scroll verticale sulla vista browse. Nessuna sovrapposizione con
+ * la home sottostante.
+ *
+ * Fabio 2026-06 iter 2:
+ *   - v1 (scrollstack) SCARTATO: era ScrollView con snap, si vedeva la home
+ *     sotto tra le card. Non è quello che chiede Wallet.
+ *   - v2 (questo): browse-all-visible + expand-on-tap, sfondo opaco.
  */
-import React, { useMemo, useRef, useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
   Dimensions,
-  Animated,
-  ScrollView,
   TouchableOpacity,
+  ScrollView,
   Platform,
 } from "react-native";
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  withSpring,
+} from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../lib/theme";
 
 export type SettingsCard = {
-  /** Chiave univoca (usata per React key + testID) */
   key: string;
-  /** Emoji o icona breve mostrata nell'header della card */
   icon: string;
-  /** Titolo principale, grande */
   title: string;
-  /** Descrizione breve sotto il titolo (1-2 righe) */
   description?: string;
-  /** Counter opzionale "N impostazioni" mostrato in alto a destra */
   count?: number;
-  /**
-   * Corpo della card — JSX già renderizzato dal chiamante con accesso al
-   * suo scope (state, callback, refs). Il wallet non gestisce i controlli,
-   * si limita a impilarli e scrollarli.
-   */
   body: React.ReactNode;
 };
 
@@ -61,44 +71,49 @@ type Props = {
 
 const { height: SCREEN_H } = Dimensions.get("window");
 
-// Altezza fissa card (76% viewport). Più bassa dello schermo intero così
-// vediamo sempre peek della card sopra/sotto → effetto Wallet stack.
-const CARD_HEIGHT = Math.max(560, Math.round(SCREEN_H * 0.76));
-const CARD_GAP = 14;
-const SNAP_INTERVAL = CARD_HEIGHT + CARD_GAP;
+// Altezza dell'header (titolo Impostazioni + subtitle + hint) fisso in cima.
+const HEADER_H = Platform.OS === "ios" ? 130 : 120;
+// Altezza della "testata" visibile in vista browse per ogni card.
+const CARD_HEADER_H = 100;
+// Peek delle card compresse in fondo quando UNA è espansa.
+const PEEK_H = 12;
 
 export default function SettingsWalletStack({
   cards,
   onClose,
   title = "Impostazioni",
   subtitle = "Personalizza Koda come vuoi",
-  hint = "Scorri le schede per esplorare tutte le sezioni.",
+  hint = "Tocca una scheda per aprirla.",
 }: Props) {
   const { theme } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const scrollY = useRef(new Animated.Value(0)).current;
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
-  const handleScroll = Animated.event(
-    [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-    {
-      useNativeDriver: true,
-      listener: (e: any) => {
-        const y = e.nativeEvent.contentOffset.y;
-        const idx = Math.max(0, Math.min(cards.length - 1, Math.round(y / SNAP_INTERVAL)));
-        if (idx !== activeIndex) setActiveIndex(idx);
-      },
-    }
+  // Area disponibile per lo stack (tolto header + safe bottom)
+  const stackTop = HEADER_H;
+  const stackHeight = SCREEN_H - stackTop - 20;
+  const n = cards.length;
+  // In vista browse: ogni card header alta CARD_HEADER_H con overlap piccolo
+  // per lasciarne visibile un tag. Se ci stanno tutte le testate a
+  // CARD_HEADER_H, uso quello; altrimenti riduco per stare in una schermata.
+  const browseCardStep = Math.min(
+    CARD_HEADER_H,
+    Math.max(72, (stackHeight - CARD_HEADER_H) / Math.max(1, n - 1))
   );
+  // Altezza card espansa: quasi tutta l'area stack, meno peek delle nascoste.
+  const collapsedCount = Math.max(0, n - 1);
+  const expandedH = stackHeight - collapsedCount * PEEK_H - 12;
 
   return (
     <View style={styles.container} testID="settings-wallet-stack">
-      {/* HEADER — fisso, non scrolla con le card */}
+      {/* HEADER — fisso, opaco */}
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>{title}</Text>
           <Text style={styles.subtitle}>{subtitle}</Text>
-          <Text style={styles.hint}>{hint}</Text>
+          <Text style={styles.hint}>
+            {expandedKey ? "Tocca l'intestazione per tornare indietro." : hint}
+          </Text>
         </View>
         <TouchableOpacity
           onPress={onClose}
@@ -111,110 +126,208 @@ export default function SettingsWalletStack({
         </TouchableOpacity>
       </View>
 
-      {/* STACK DELLE CARD — scroll verticale con snap magnetico */}
-      <Animated.ScrollView
-        style={styles.scroll}
-        contentContainerStyle={{
-          paddingTop: 20,
-          paddingBottom: SCREEN_H * 0.24, // permette all'ultima card di raggiungere il centro
-        }}
-        showsVerticalScrollIndicator={false}
-        snapToInterval={SNAP_INTERVAL}
-        decelerationRate="fast"
-        snapToAlignment="start"
-        onScroll={handleScroll}
-        scrollEventThrottle={16}
-      >
+      {/* STACK — sfondo opaco, area assoluta sotto l'header */}
+      <View style={styles.stackArea}>
         {cards.map((card, i) => {
-          // Animazione: la card active è a scale 1, opacità 1.
-          // Le card sopra/sotto sono scaled 0.94 + opacità 0.55 → effetto stack.
-          const inputRange = [
-            (i - 1) * SNAP_INTERVAL,
-            i * SNAP_INTERVAL,
-            (i + 1) * SNAP_INTERVAL,
-          ];
-          const scale = scrollY.interpolate({
-            inputRange,
-            outputRange: [0.94, 1, 0.94],
-            extrapolate: "clamp",
-          });
-          const opacity = scrollY.interpolate({
-            inputRange,
-            outputRange: [0.55, 1, 0.55],
-            extrapolate: "clamp",
-          });
-
+          const isExpanded = expandedKey === card.key;
+          const anyExpanded = expandedKey !== null;
           return (
-            <Animated.View
+            <WalletCardItem
               key={card.key}
-              style={[
-                styles.cardOuter,
-                { height: CARD_HEIGHT, marginBottom: CARD_GAP, transform: [{ scale }], opacity },
-              ]}
-              testID={`settings-card-${card.key}`}
-            >
-              <View style={styles.card}>
-                {/* HEADER CARD: icona + titolo + counter */}
-                <View style={styles.cardHeader}>
-                  <View style={styles.iconBubble}>
-                    <Text style={styles.iconEmoji}>{card.icon}</Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.cardTitle}>{card.title}</Text>
-                    {card.description ? (
-                      <Text style={styles.cardDescription}>{card.description}</Text>
-                    ) : null}
-                  </View>
-                  {typeof card.count === "number" && card.count > 0 ? (
-                    <View style={styles.countBadge}>
-                      <Text style={styles.countText}>{card.count}</Text>
-                    </View>
-                  ) : null}
-                </View>
-
-                {/* BODY CARD: contenuto scrollabile se troppo lungo */}
-                <ScrollView
-                  style={styles.cardBody}
-                  contentContainerStyle={{ paddingBottom: 20 }}
-                  showsVerticalScrollIndicator={false}
-                  nestedScrollEnabled
-                >
-                  {card.body}
-                </ScrollView>
-              </View>
-            </Animated.View>
+              card={card}
+              index={i}
+              total={n}
+              isExpanded={isExpanded}
+              anyExpanded={anyExpanded}
+              onOpen={() => setExpandedKey(card.key)}
+              onClose={() => setExpandedKey(null)}
+              browseCardStep={browseCardStep}
+              expandedH={expandedH}
+              stackHeight={stackHeight}
+              theme={theme}
+              styles={styles}
+              expandedKey={expandedKey}
+              expandedIndex={
+                expandedKey ? cards.findIndex((c) => c.key === expandedKey) : -1
+              }
+            />
           );
         })}
-      </Animated.ScrollView>
-
-      {/* PAGE DOTS — indicator di posizione */}
-      <View style={styles.dotsRow} pointerEvents="none">
-        {cards.map((_, i) => (
-          <View
-            key={i}
-            style={[
-              styles.dot,
-              i === activeIndex ? styles.dotActive : styles.dotIdle,
-            ]}
-          />
-        ))}
       </View>
     </View>
   );
 }
 
+// ============================================================================
+// WalletCardItem — singola card con animazione position/height
+// ============================================================================
+
+type ItemProps = {
+  card: SettingsCard;
+  index: number;
+  total: number;
+  isExpanded: boolean;
+  anyExpanded: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+  browseCardStep: number;
+  expandedH: number;
+  stackHeight: number;
+  theme: any;
+  styles: any;
+  expandedKey: string | null;
+  expandedIndex: number;
+};
+
+function WalletCardItem({
+  card,
+  index,
+  total,
+  isExpanded,
+  anyExpanded,
+  onOpen,
+  onClose,
+  browseCardStep,
+  expandedH,
+  stackHeight,
+  theme,
+  styles,
+  expandedKey,
+  expandedIndex,
+}: ItemProps) {
+  // Posizioni target in base allo state.
+  // BROWSE state: card i-esima ha top = i * browseCardStep, altezza CARD_HEADER_H (con contenuto nascosto).
+  // EXPANDED state (una qualsiasi espansa):
+  //   - se questa è quella espansa: top piccolo (subito sotto header), height = expandedH
+  //   - se questa è PRIMA di quella espansa: compressa in cima (i * PEEK_H)
+  //   - se questa è DOPO quella espansa: compressa in fondo (stackHeight - (total-i)*PEEK_H)
+  const browseTop = index * browseCardStep;
+
+  let targetTop = browseTop;
+  let targetHeight = CARD_HEADER_H + 12; // card in vista browse (solo header + un po')
+  let targetOpacity = 1;
+  let targetZ = index;
+
+  if (anyExpanded) {
+    if (isExpanded) {
+      targetTop = expandedIndex * PEEK_H + 8;
+      targetHeight = expandedH;
+      targetZ = 100;
+    } else if (index < expandedIndex) {
+      // Compressa sopra la espansa
+      targetTop = index * PEEK_H;
+      targetHeight = CARD_HEADER_H;
+      targetOpacity = 0.55;
+      targetZ = index;
+    } else {
+      // Compressa sotto la espansa (peek in fondo)
+      const offsetFromEnd = total - 1 - index;
+      targetTop = stackHeight - PEEK_H * (offsetFromEnd + 1) - CARD_HEADER_H + 20;
+      targetHeight = CARD_HEADER_H;
+      targetOpacity = 0.55;
+      targetZ = index;
+    }
+  }
+
+  // Reanimated shared values per animare
+  const topSV = useSharedValue(targetTop);
+  const heightSV = useSharedValue(targetHeight);
+  const opacitySV = useSharedValue(targetOpacity);
+
+  // Sync target quando cambia state
+  React.useEffect(() => {
+    topSV.value = withSpring(targetTop, { damping: 20, stiffness: 160 });
+    heightSV.value = withSpring(targetHeight, { damping: 22, stiffness: 180 });
+    opacitySV.value = withTiming(targetOpacity, { duration: 220 });
+  }, [targetTop, targetHeight, targetOpacity, topSV, heightSV, opacitySV]);
+
+  const aStyle = useAnimatedStyle(() => ({
+    top: topSV.value,
+    height: heightSV.value,
+    opacity: opacitySV.value,
+  }));
+
+  // Header tap: se in browse, apre; se espansa, chiude
+  const onHeaderPress = () => {
+    if (isExpanded) onClose();
+    else onOpen();
+  };
+
+  return (
+    <Animated.View
+      style={[styles.cardWrap, aStyle, { zIndex: targetZ }]}
+      testID={`settings-card-${card.key}`}
+    >
+      <View style={styles.card}>
+        {/* Header cliccabile — apre/chiude */}
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={onHeaderPress}
+          style={styles.cardHeaderTouch}
+        >
+          <View style={styles.iconBubble}>
+            <Text style={styles.iconEmoji}>{card.icon}</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.cardTitle}>{card.title}</Text>
+            {card.description ? (
+              <Text style={styles.cardDescription} numberOfLines={2}>
+                {card.description}
+              </Text>
+            ) : null}
+          </View>
+          {typeof card.count === "number" && card.count > 0 ? (
+            <View style={styles.countBadge}>
+              <Text style={styles.countText}>{card.count}</Text>
+            </View>
+          ) : null}
+          {isExpanded ? (
+            <Ionicons
+              name="chevron-down"
+              size={22}
+              color={theme.textDim}
+              style={{ marginLeft: 6 }}
+            />
+          ) : (
+            <Ionicons
+              name="chevron-forward"
+              size={22}
+              color={theme.textDim}
+              style={{ marginLeft: 6 }}
+            />
+          )}
+        </TouchableOpacity>
+
+        {/* Body — visibile solo quando espansa */}
+        {isExpanded ? (
+          <ScrollView
+            style={styles.cardBody}
+            contentContainerStyle={{ paddingBottom: 24 }}
+            showsVerticalScrollIndicator={false}
+            nestedScrollEnabled
+          >
+            {card.body}
+          </ScrollView>
+        ) : null}
+      </View>
+    </Animated.View>
+  );
+}
+
 function makeStyles(t: any) {
   return StyleSheet.create({
+    // Sfondo pieno opaco — copre completamente la home sotto.
     container: {
       flex: 1,
-      backgroundColor: t.background,
+      backgroundColor: t.bg,
     },
     header: {
       flexDirection: "row",
       alignItems: "flex-start",
       paddingHorizontal: 22,
-      paddingTop: Platform.OS === "ios" ? 8 : 12,
-      paddingBottom: 4,
+      paddingTop: Platform.OS === "ios" ? 12 : 16,
+      paddingBottom: 8,
+      backgroundColor: t.bg,
     },
     title: {
       color: t.text,
@@ -243,36 +356,42 @@ function makeStyles(t: any) {
       justifyContent: "center",
       marginTop: 6,
     },
-    scroll: {
+    stackArea: {
       flex: 1,
+      position: "relative",
+      paddingHorizontal: 14,
     },
-    cardOuter: {
-      paddingHorizontal: 18,
+    cardWrap: {
+      position: "absolute",
+      left: 14,
+      right: 14,
     },
     card: {
       flex: 1,
       backgroundColor: t.surface,
-      borderRadius: 26,
+      borderRadius: 22,
       borderWidth: 1,
       borderColor: t.border,
-      padding: 22,
-      // Shadow iOS + Android per profondità wallet-like
+      overflow: "hidden",
+      // Shadow per profondità wallet-like
       shadowColor: "#000",
       shadowOffset: { width: 0, height: 8 },
-      shadowOpacity: 0.35,
-      shadowRadius: 16,
-      elevation: 8,
+      shadowOpacity: 0.4,
+      shadowRadius: 14,
+      elevation: 10,
     },
-    cardHeader: {
+    cardHeaderTouch: {
       flexDirection: "row",
       alignItems: "center",
-      gap: 14,
-      marginBottom: 18,
+      gap: 12,
+      paddingHorizontal: 16,
+      paddingVertical: 16,
+      height: CARD_HEADER_H,
     },
     iconBubble: {
-      width: 54,
-      height: 54,
-      borderRadius: 16,
+      width: 48,
+      height: 48,
+      borderRadius: 14,
       backgroundColor: t.surfaceAlt,
       alignItems: "center",
       justifyContent: "center",
@@ -280,28 +399,30 @@ function makeStyles(t: any) {
       borderColor: t.border,
     },
     iconEmoji: {
-      fontSize: 26,
-      lineHeight: 30,
+      fontSize: 24,
+      lineHeight: 28,
     },
     cardTitle: {
       color: t.text,
-      fontSize: 22,
+      fontSize: 19,
       fontWeight: "800",
       letterSpacing: -0.3,
     },
     cardDescription: {
       color: t.textDim,
-      fontSize: 13,
-      lineHeight: 18,
+      fontSize: 12,
+      lineHeight: 16,
       marginTop: 2,
     },
     countBadge: {
       backgroundColor: t.surfaceAlt,
       borderRadius: 999,
-      paddingHorizontal: 10,
-      paddingVertical: 4,
+      paddingHorizontal: 9,
+      paddingVertical: 3,
       borderWidth: 1,
       borderColor: t.border,
+      minWidth: 26,
+      alignItems: "center",
     },
     countText: {
       color: t.textDim,
@@ -310,29 +431,7 @@ function makeStyles(t: any) {
     },
     cardBody: {
       flex: 1,
-    },
-    dotsRow: {
-      position: "absolute",
-      bottom: 20,
-      left: 0,
-      right: 0,
-      flexDirection: "row",
-      justifyContent: "center",
-      alignItems: "center",
-      gap: 6,
-    },
-    dot: {
-      width: 6,
-      height: 6,
-      borderRadius: 3,
-    },
-    dotActive: {
-      backgroundColor: t.primary,
-      width: 20,
-    },
-    dotIdle: {
-      backgroundColor: t.textDim,
-      opacity: 0.35,
+      paddingHorizontal: 18,
     },
   });
 }
