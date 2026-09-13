@@ -41,7 +41,6 @@ import {
   Dimensions,
   TouchableOpacity,
   ScrollView,
-  Platform,
 } from "react-native";
 import Animated, {
   useSharedValue,
@@ -49,6 +48,7 @@ import Animated, {
   withTiming,
   withSpring,
 } from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../lib/theme";
 
@@ -71,11 +71,16 @@ type Props = {
 
 const { height: SCREEN_H } = Dimensions.get("window");
 
+// Fabio 2026-06 iter 3:
+//   - Header top: usato safe-area insets (era troppo in alto vicino notch)
+//   - CARD_HEADER_H ridotto da 100 → 84 così tutte le 10 card entrano
+//     nello schermo senza sforare in fondo
+//   - PEEK_H invariato (12 px)
 // Altezza dell'header (titolo Impostazioni + subtitle + hint) fisso in cima.
-const HEADER_H = Platform.OS === "ios" ? 130 : 120;
+const HEADER_CONTENT_H = 110;
 // Altezza della "testata" visibile in vista browse per ogni card.
-const CARD_HEADER_H = 100;
-// Peek delle card compresse in fondo quando UNA è espansa.
+const CARD_HEADER_H = 84;
+// Peek delle card compresse quando UNA è espansa.
 const PEEK_H = 12;
 
 export default function SettingsWalletStack({
@@ -86,19 +91,23 @@ export default function SettingsWalletStack({
   hint = "Tocca una scheda per aprirla.",
 }: Props) {
   const { theme } = useTheme();
-  const styles = useMemo(() => makeStyles(theme), [theme]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(theme, insets.top, insets.bottom), [theme, insets.top, insets.bottom]);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
-  // Area disponibile per lo stack (tolto header + safe bottom)
-  const stackTop = HEADER_H;
-  const stackHeight = SCREEN_H - stackTop - 20;
+  // Fabio 2026-06 iter 3: calcolo area disponibile tenendo conto di:
+  //   - safe-area top (notch/Dynamic Island)
+  //   - HEADER_CONTENT_H (titolo + subtitle + hint)
+  //   - safe-area bottom (home indicator iOS / navbar Android)
+  //   - un margine di 20 px per respiro finale
+  const headerTotalH = insets.top + HEADER_CONTENT_H + 8; // 8 = paddingBottom header
+  const stackHeight = SCREEN_H - headerTotalH - insets.bottom - 20;
   const n = cards.length;
-  // In vista browse: ogni card header alta CARD_HEADER_H con overlap piccolo
-  // per lasciarne visibile un tag. Se ci stanno tutte le testate a
-  // CARD_HEADER_H, uso quello; altrimenti riduco per stare in una schermata.
-  const browseCardStep = Math.min(
-    CARD_HEADER_H,
-    Math.max(72, (stackHeight - CARD_HEADER_H) / Math.max(1, n - 1))
+  // In vista browse: step tra card. Se ne mettessi CARD_HEADER_H piene
+  // sforerei; adatto lo step così TUTTE le n card stanno nell'area stack.
+  const browseCardStep = Math.max(
+    56,
+    Math.min(CARD_HEADER_H, (stackHeight - CARD_HEADER_H) / Math.max(1, n - 1))
   );
   // Altezza card espansa: quasi tutta l'area stack, meno peek delle nascoste.
   const collapsedCount = Math.max(0, n - 1);
@@ -235,10 +244,13 @@ function WalletCardItem({
   const opacitySV = useSharedValue(targetOpacity);
 
   // Sync target quando cambia state
+  // Fabio 2026-06 iter 3: escursione ridotta.
+  //   Prima: damping 20, stiffness 160 (troppo bouncy)
+  //   Ora: damping 28, stiffness 110 (molla più lenta, meno oscillazione)
   React.useEffect(() => {
-    topSV.value = withSpring(targetTop, { damping: 20, stiffness: 160 });
-    heightSV.value = withSpring(targetHeight, { damping: 22, stiffness: 180 });
-    opacitySV.value = withTiming(targetOpacity, { duration: 220 });
+    topSV.value = withSpring(targetTop, { damping: 28, stiffness: 110 });
+    heightSV.value = withSpring(targetHeight, { damping: 30, stiffness: 130 });
+    opacitySV.value = withTiming(targetOpacity, { duration: 260 });
   }, [targetTop, targetHeight, targetOpacity, topSV, heightSV, opacitySV]);
 
   const aStyle = useAnimatedStyle(() => ({
@@ -314,7 +326,7 @@ function WalletCardItem({
   );
 }
 
-function makeStyles(t: any) {
+function makeStyles(t: any, safeTop: number, safeBottom: number) {
   return StyleSheet.create({
     // Sfondo pieno opaco — copre completamente la home sotto.
     container: {
@@ -325,19 +337,21 @@ function makeStyles(t: any) {
       flexDirection: "row",
       alignItems: "flex-start",
       paddingHorizontal: 22,
-      paddingTop: Platform.OS === "ios" ? 12 : 16,
+      // Fabio 2026-06 iter 3: paddingTop dinamico via safe-area top inset.
+      // Prima era hardcoded 12 → il titolo era troppo vicino al notch/status bar.
+      paddingTop: safeTop + 8,
       paddingBottom: 8,
       backgroundColor: t.bg,
     },
     title: {
       color: t.text,
-      fontSize: 32,
+      fontSize: 28,
       fontWeight: "800",
       letterSpacing: -0.5,
     },
     subtitle: {
       color: t.text,
-      fontSize: 15,
+      fontSize: 14,
       fontWeight: "600",
       marginTop: 4,
       opacity: 0.85,
@@ -345,21 +359,24 @@ function makeStyles(t: any) {
     hint: {
       color: t.textDim,
       fontSize: 12,
-      marginTop: 4,
+      marginTop: 3,
     },
     closeBtn: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
+      width: 36,
+      height: 36,
+      borderRadius: 18,
       backgroundColor: t.surfaceAlt,
       alignItems: "center",
       justifyContent: "center",
-      marginTop: 6,
+      marginTop: 4,
     },
     stackArea: {
       flex: 1,
       position: "relative",
       paddingHorizontal: 14,
+      // Fabio 2026-06 iter 3: safe-bottom per non far sforare l'ultima card
+      // sotto il home indicator iOS / gesture bar Android.
+      paddingBottom: safeBottom + 4,
     },
     cardWrap: {
       position: "absolute",
@@ -369,29 +386,29 @@ function makeStyles(t: any) {
     card: {
       flex: 1,
       backgroundColor: t.surface,
-      borderRadius: 22,
+      borderRadius: 20,
       borderWidth: 1,
       borderColor: t.border,
       overflow: "hidden",
       // Shadow per profondità wallet-like
       shadowColor: "#000",
-      shadowOffset: { width: 0, height: 8 },
-      shadowOpacity: 0.4,
-      shadowRadius: 14,
-      elevation: 10,
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.35,
+      shadowRadius: 12,
+      elevation: 8,
     },
     cardHeaderTouch: {
       flexDirection: "row",
       alignItems: "center",
       gap: 12,
-      paddingHorizontal: 16,
-      paddingVertical: 16,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
       height: CARD_HEADER_H,
     },
     iconBubble: {
-      width: 48,
-      height: 48,
-      borderRadius: 14,
+      width: 44,
+      height: 44,
+      borderRadius: 12,
       backgroundColor: t.surfaceAlt,
       alignItems: "center",
       justifyContent: "center",
@@ -399,29 +416,29 @@ function makeStyles(t: any) {
       borderColor: t.border,
     },
     iconEmoji: {
-      fontSize: 24,
-      lineHeight: 28,
+      fontSize: 22,
+      lineHeight: 26,
     },
     cardTitle: {
       color: t.text,
-      fontSize: 19,
+      fontSize: 17,
       fontWeight: "800",
       letterSpacing: -0.3,
     },
     cardDescription: {
       color: t.textDim,
       fontSize: 12,
-      lineHeight: 16,
+      lineHeight: 15,
       marginTop: 2,
     },
     countBadge: {
       backgroundColor: t.surfaceAlt,
       borderRadius: 999,
-      paddingHorizontal: 9,
+      paddingHorizontal: 8,
       paddingVertical: 3,
       borderWidth: 1,
       borderColor: t.border,
-      minWidth: 26,
+      minWidth: 24,
       alignItems: "center",
     },
     countText: {
@@ -431,7 +448,7 @@ function makeStyles(t: any) {
     },
     cardBody: {
       flex: 1,
-      paddingHorizontal: 18,
+      paddingHorizontal: 16,
     },
   });
 }
