@@ -30,6 +30,7 @@ import { Ionicons } from "@expo/vector-icons";
 import HandsFreeOrb from "../components/HandsFreeOrb";
 import LasciaAndareIntroModal from "../components/LasciaAndareIntroModal";
 import SubscriptionStatus from "../components/SubscriptionStatus";
+import SettingsWalletStack, { type SettingsCard } from "../components/SettingsWalletStack";
 import MinutesWarningBanner from "../components/MinutesWarningBanner";
 import { FlashList } from "@shopify/flash-list";
 import LatencyOverlay from "../components/LatencyOverlay";
@@ -5426,6 +5427,941 @@ export default function Taccuino() {
   // Build the screen wrapper. Il tema (giorno/notte/auto-orario) è
   // l'unica fonte del colore di sfondo. I vecchi override (BG_PRESETS,
   // Liquid, Aurora, immagini custom) sono stati rimossi il 2026-08-04.
+  // === SETTINGS WALLET CARDS (Fabio 2026-06) ===============================
+  // Dati per il nuovo Settings modal in stile Apple Wallet (verticale).
+  // Ogni card è una sezione autonoma con controlli inline.
+  const settingsCards = useMemo<SettingsCard[]>(() => [
+    // Card 1: Piano attivo (subscription status con barra minuti)
+    {
+      key: "plan",
+      icon: "💎",
+      title: "Piano attivo",
+      description: "Minuti disponibili, rinnovo e carryover.",
+      count: 1,
+      body: <SubscriptionStatus profile={profile as any} />,
+    },
+    // Card 2: Comportamento
+    {
+      key: "behavior",
+      icon: "💬",
+      title: "Comportamento",
+      description: "Decidi cosa può fare Koda e come gestisce le informazioni.",
+      count: 3,
+      body: (
+        <>
+            {/* === RICERCA WEB (Tavily) — toggle privacy ====================
+                Quando attivo: se l'utente fa domande fattuali (meteo, notizie,
+                prezzi), Koda esegue una ricerca su fonti italiane certificate
+                (ANSA, Repubblica, Corriere, Wikipedia, meteo.it, ecc.) PRIMA
+                di rispondere. Solo la query corrente viene inviata, nessun
+                dato personale. Quando OFF: Koda usa SOLO la sua conoscenza
+                statica, nessuna comunicazione esterna oltre l'LLM. MAI
+                attivo nel Confessionale a prescindere dal toggle. */}
+            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8, marginTop: 14 }]}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingLabel}>🌐 Ricerca web</Text>
+                  <Text style={styles.settingHint}>
+                    Permetti a Koda di consultare fonti certificate (ANSA,
+                    Repubblica, Wikipedia, meteo.it…) per meteo, notizie e fatti
+                    recenti. In Lascia andare resta sempre spento.
+                  </Text>
+                </View>
+                <Switch
+                  value={(profile?.settings as any)?.web_search_enabled !== false}
+                  onValueChange={async (on) => {
+                    if (!profile) return;
+                    const nextSettings = { ...profile.settings, web_search_enabled: on } as any;
+                    setProfile({ ...profile, settings: nextSettings });
+                    try {
+                      await api.updateProfile({ settings: nextSettings });
+                    } catch {}
+                  }}
+                  trackColor={{ false: theme.muted + "55", true: bubbleAccent.color }}
+                  thumbColor="#fff"
+                />
+              </View>
+            </View>
+
+            {/* === SITUATION TRACKING V3.1 (agosto 2026, Fabio) =============
+                Opt-in ESPLICITO, default OFF. Copy scelto dall'utente:
+                deve essere fattuale, senza dark pattern, senza pressione
+                a lasciarlo attivo. Niente "profila la tua persona": SOLO
+                "ricorda le cose che tu le racconti, quando torni a
+                parlarne tu". Il viewer per vedere/cancellare cosa Koda
+                ricorda verrà aggiunto in un secondo momento — per ora,
+                se l'utente vuole ripulire tutto, c'è comunque il reset
+                completo nella sezione admin. */}
+            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8, marginTop: 14 }]}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingLabel}>🧭 Cosa Koda ricorda</Text>
+                  <Text style={styles.settingHint}>
+                    Se lo attivi, Koda può ricordare le cose che le hai
+                    raccontato — persone, argomenti, situazioni. Le ricorda
+                    quando torni a parlarne tu. Se lo lasci spento, Koda
+                    non conserva questo tipo di contesto.
+                  </Text>
+                </View>
+                <Switch
+                  value={(profile?.settings as any)?.situation_tracking_enabled === true}
+                  onValueChange={async (on) => {
+                    if (!profile) return;
+                    const nextSettings = { ...profile.settings, situation_tracking_enabled: on } as any;
+                    setProfile({ ...profile, settings: nextSettings });
+                    try {
+                      await api.updateProfile({ settings: nextSettings });
+                    } catch {}
+                  }}
+                  trackColor={{ false: theme.muted + "55", true: bubbleAccent.color }}
+                  thumbColor="#fff"
+                />
+              </View>
+              {/* === Vedi cosa Koda ricorda — link viewer (v65.8 Fabio) =======
+                  Il viewer /situations esisteva già ma non era accessibile
+                  dall'UI. Ora c'è un CTA chiaro sotto il toggle: se attivo
+                  → naviga; se disattivato → messaggio "Attiva prima il
+                  toggle sopra per vedere". */}
+              <TouchableOpacity
+                onPress={() => {
+                  const enabled = (profile?.settings as any)?.situation_tracking_enabled === true;
+                  if (!enabled) {
+                    Alert.alert(
+                      "Memoria disattivata",
+                      "Attiva prima il toggle qui sopra per vedere cosa Koda ricorda.",
+                    );
+                    return;
+                  }
+                  setShowSettings(false);
+                  setTimeout(() => { try { router.push("/situations"); } catch {} }, 100);
+                }}
+                style={{
+                  marginTop: 12,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  backgroundColor: "rgba(255,255,255,0.06)",
+                  borderWidth: 1,
+                  borderColor: "rgba(255,255,255,0.14)",
+                  borderRadius: 10,
+                  paddingHorizontal: 14,
+                  paddingVertical: 12,
+                }}
+                testID="see-memory-btn"
+              >
+                <Text style={[styles.settingLabel, { fontSize: 14 }]}>📖 Vedi cosa Koda ricorda</Text>
+                <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.divider} />
+        </>
+      ),
+    },
+    // Card 3: Voce di Koda
+    {
+      key: "voice",
+      icon: "🎙️",
+      title: "Voce di Koda",
+      description: "La voce di Koda: scegli quella con cui vuoi sentirla parlare.",
+      count: 1,
+      body: (
+        <>
+
+            {/* === HEADER VOCI: RIMOSSO IL VECCHIO HEADER QUI (2026-06-27 v22) ===
+                Era presente un doppio header "Voce dell'assistente" + hint
+                "Tocca per selezionare. Premi ▶ per ascoltare un'anteprima."
+                seguito dall'indicatore Confidenza e poi da un altro header
+                "🎙️ Scegli la voce di Koda" + il nuovo selettore a cerchi.
+                Risultato: l'utente vedeva il vecchio titolo + testo, dava
+                per scontato che la UI fosse quella, e il selettore a cerchi
+                colorati restava fuori schermo. Adesso resta solo il nuovo
+                header sopra i cerchi (a ~50 righe sotto). */}
+
+            {/* === INDICATORE CONFIDENZA (richiesta utente 2026-06, opt B) ===
+                Read-only. Mostra al volo a che fase relazionale è Koda.
+                Cresce di +1 ad ogni messaggio fuori dalla Stanza dello Sfogo.
+                0-10 = appena conosciuti, 100 = confidenza totale. */}
+            <View style={styles.confidenceRow} testID="confidence-indicator">
+              <Text style={styles.confidenceLabel}>
+                💞 Confidenza con Koda — {profile?.confidence_level ?? 0}/100 ({((): string => {
+                  const lv = profile?.confidence_level ?? 0;
+                  if (lv >= 100) return "totale";
+                  if (lv >= 61) return "amici stretti";
+                  if (lv >= 31) return "amici";
+                  if (lv >= 11) return "prendiamo confidenza";
+                  return "appena conosciuti";
+                })()})
+              </Text>
+              <View style={styles.confidenceBar}>
+                <View
+                  style={[
+                    styles.confidenceFill,
+                    { width: `${Math.min(100, Math.max(0, profile?.confidence_level ?? 0))}%` },
+                  ]}
+                />
+              </View>
+              <Text style={[styles.settingsHint, { fontSize: 13, marginTop: 4, fontStyle: "italic" }]}>
+                Cresce automaticamente man mano che parliamo. I messaggi in Lascia andare non contano.
+              </Text>
+            </View>
+            <View style={styles.voicesList}>
+              {/* === FIX TITOLO VOCI (richiesta utente giugno 2026 #5) ===
+                  Il titolo "Voce dell'assistente" era separato dalla lista
+                  dall'indicatore di Confidenza in mezzo → l'utente percepiva
+                  la lista come senza titolo. Aggiungiamo un sotto-titolo
+                  chiaro qui sopra le card delle voci. */}
+              <Text style={[styles.settingsSubtitle, { marginTop: 4, marginBottom: 6 }]}>
+                🎙️ Scegli la voce di Koda
+              </Text>
+              {/* === NUOVO SELETTORE VOCI (2026-06) ===
+                  Niente più nomi né etichette: ogni voce È il suo colore.
+                  Due cerchi colorati grandi, side-by-side. Tap = preview audio
+                  + selezione automatica. Il cerchio selezionato ha un anello
+                  bianco e una checkmark sottile. */}
+              {/* === FIX 2026-06-30 — Lock selettore voce durante stati attivi ===
+                  Se l'utente cambia voce mentre Koda sta registrando,
+                  pensando o parlando, la sessione streaming si scontra con
+                  la nuova voce → stato corrotto / freeze. Blocchiamo i
+                  bottoni quando status !== "idle" e mostriamo un hint
+                  chiaro. */}
+              {(() => {
+                const voiceLocked = status !== "idle";
+                const lockHint = (() => {
+                  switch (status) {
+                    case "recording":
+                      return "🎙️ Aspetta che finisca di ascoltarti per cambiare voce";
+                    case "transcribing":
+                      return "✍️ Sto leggendo… cambierai voce tra un attimo";
+                    case "thinking":
+                      return "💭 Sto pensando… cambierai voce tra un attimo";
+                    case "speaking":
+                      return "🔊 Aspetta che finisca di parlare per cambiare voce";
+                    default:
+                      return "Tocca per ascoltare";
+                  }
+                })();
+                return (
+                  <>
+                    <Text style={styles.voicePickerHint}>{lockHint}</Text>
+                    <View style={styles.voicePickerRow}>
+                      {voices.map((v) => {
+                        const selected = profile?.settings?.tts_voice_id === v.voice_id;
+                        const loading = voicePreviewLoading === v.voice_id;
+                        const voiceColor =
+                          VOICE_SPEAKING_COLORS[v.voice_id] || theme.primary;
+                        return (
+                          <TouchableOpacity
+                            key={v.voice_id}
+                            onPress={() => selectAndPreviewVoice(v.voice_id, v.name)}
+                            style={[
+                              styles.voiceCircleWrap,
+                              voiceLocked && { opacity: 0.45 },
+                            ]}
+                            testID={`voice-${v.voice_id}`}
+                            activeOpacity={0.75}
+                            disabled={voiceLocked}
+                            accessibilityState={{ disabled: voiceLocked }}
+                          >
+                            {/* Glow soft attorno al cerchio (più visibile se selezionato) */}
+                            <View
+                              style={[
+                                styles.voiceCircleGlow,
+                                {
+                                  backgroundColor: voiceColor,
+                                  opacity: selected ? 0.45 : 0.22,
+                                },
+                              ]}
+                            />
+                            {/* Cerchio principale */}
+                            <View
+                              style={[
+                                styles.voiceCircle,
+                                {
+                                  backgroundColor: voiceColor,
+                                  borderColor: selected ? "#FFFFFF" : "transparent",
+                                  borderWidth: selected ? 3 : 0,
+                                  shadowColor: voiceColor,
+                                },
+                              ]}
+                            >
+                              {loading ? (
+                                <ActivityIndicator size="small" color="#FFFFFF" />
+                              ) : selected ? (
+                                <Ionicons name="checkmark" size={28} color="#FFFFFF" />
+                              ) : null}
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </>
+                );
+              })()}
+            </View>
+
+            <View style={styles.divider} />
+        </>
+      ),
+    },
+    // Card 4: Schermo
+    {
+      key: "border",
+      icon: "📱",
+      title: "Schermo",
+      description: "Adatta il bordo colorato di Koda al tuo telefono.",
+      count: 1,
+      body: (
+        <>
+            {/* === BORDO — Calibrazione con auto-stima (2026-08-02 / 2026-06 v2) ==
+                iOS e Android non espongono il corner radius fisico del display.
+                Fix v2 (Fabio 2026-06): auto-stimiamo il radius dal safe-area
+                top inset (correlato al design del device: notch, Dynamic
+                Island, rettangolare). Il valore auto-stimato è il DEFAULT.
+                Lo slider resta disponibile perché nessun auto-detect è
+                perfetto (device con schermi curvi anomali tipo Honor/OnePlus)
+                — se la stima non basta, l'utente può regolare a mano. */}
+            <View style={styles.divider} />
+            <Text style={styles.settingsSubtitle}>📱 Bordo dello schermo</Text>
+            <Text style={styles.settingsHint}>
+              Il raggio degli angoli si adatta al tuo telefono automaticamente.
+              Se il bordo colorato non si vede bene, regola qui.
+            </Text>
+
+            {/* Slider raggio angoli con auto-stima */}
+            <View style={{ marginTop: 12 }}>
+              <Text style={styles.settingsHint}>
+                {(() => {
+                  const autoR = estimateCornerRadius(insets.top || 0, Platform.OS);
+                  const isAuto = borderCal.radius === null;
+                  const displayR = isAuto ? autoR : borderCal.radius;
+                  return `Raggio angoli: ${displayR} px${isAuto ? " (auto)" : ""}`;
+                })()}
+              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
+                <TouchableOpacity
+                  onPress={async () => {
+                    // Se era in modalità auto, parti dal valore stimato — così
+                    // il tap del "-" fa un delta relativo alla stima invece che
+                    // resettare a un hardcoded arbitrario.
+                    const autoR = estimateCornerRadius(insets.top || 0, Platform.OS);
+                    const cur = borderCal.radius ?? autoR;
+                    const next: BorderCalibration = { ...borderCal, radius: Math.max(0, cur - 4) };
+                    setBorderCal(next);
+                    await saveBorderCalibration(next);
+                  }}
+                  style={[styles.modeBtn, { paddingHorizontal: 14, minHeight: 40 }]}
+                  accessibilityLabel="Riduci raggio bordo"
+                >
+                  <Text style={{ color: theme.text, fontSize: 18, fontWeight: "600" }}>−</Text>
+                </TouchableOpacity>
+                <View style={{ flex: 1, height: 6, backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 3 }}>
+                  {(() => {
+                    const autoR = estimateCornerRadius(insets.top || 0, Platform.OS);
+                    const shownR = borderCal.radius ?? autoR;
+                    return (
+                      <View
+                        style={{
+                          height: "100%",
+                          width: `${Math.min(100, (shownR / 70) * 100)}%`,
+                          backgroundColor: bubbleAccent.color,
+                          borderRadius: 3,
+                        }}
+                      />
+                    );
+                  })()}
+                </View>
+                <TouchableOpacity
+                  onPress={async () => {
+                    const autoR = estimateCornerRadius(insets.top || 0, Platform.OS);
+                    const cur = borderCal.radius ?? autoR;
+                    const next: BorderCalibration = { ...borderCal, radius: Math.min(70, cur + 4) };
+                    setBorderCal(next);
+                    await saveBorderCalibration(next);
+                  }}
+                  style={[styles.modeBtn, { paddingHorizontal: 14, minHeight: 40 }]}
+                  accessibilityLabel="Aumenta raggio bordo"
+                >
+                  <Text style={{ color: theme.text, fontSize: 18, fontWeight: "600" }}>+</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Pulsante "Torna all'auto" — visibile SOLO se l'utente ha
+                  regolato manualmente. Riporta a null → riparte la stima. */}
+              {borderCal.radius !== null ? (
+                <TouchableOpacity
+                  onPress={async () => {
+                    const next: BorderCalibration = { ...borderCal, radius: null };
+                    setBorderCal(next);
+                    await saveBorderCalibration(next);
+                  }}
+                  style={{
+                    marginTop: 10,
+                    paddingVertical: 8,
+                    paddingHorizontal: 12,
+                    alignSelf: "flex-start",
+                    borderRadius: 8,
+                    backgroundColor: "rgba(255,255,255,0.06)",
+                  }}
+                  accessibilityLabel="Torna alla regolazione automatica"
+                >
+                  <Text style={{ color: theme.text + "cc", fontSize: 12 }}>
+                    ↺ Torna all&apos;automatica
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+        </>
+      ),
+    },
+    // Card 5: Dati e Città
+    {
+      key: "location",
+      icon: "📍",
+      title: "Dati e Città",
+      description: "Città per meteo/eventi locali. Scarica i tuoi dati (GDPR).",
+      count: 2,
+      body: (
+        <>
+            {/* === GEOLOCATION TOGGLE (P2 Fabio 2026-06-20) ===
+                Quando attivo: al boot dell'app il client chiede il
+                permesso location (UNA volta) e fa una getCurrentPosition
+                + reverse-geocode → invia la città al backend come key_fact
+                di categoria "luogo_geo". Permette a Koda di rispondere
+                a "che ore sono qui?" o "che tempo fa?" usando la città
+                giusta.
+                Default OFF — l'utente abilita esplicitamente per privacy.
+                Strategia ONE-SHOT: nessun watchPosition, nessun tracking
+                in background. Solo 1 fix per sessione foreground. */}
+            <View style={[styles.settingRow, { flexDirection: "row", alignItems: "center", justifyContent: "space-between" }]}>
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text style={styles.settingLabel}>📍 Condividi la mia città</Text>
+                <Text style={styles.settingHint}>
+                  Una volta sola all'avvio. Koda saprà solo la città (es. Pavia),
+                  non la posizione esatta. Serve per risposte tipo "che ore sono
+                  qui?". Tutto resta locale.
+                </Text>
+              </View>
+              <Switch
+                value={(profile?.settings as any)?.geolocation_enabled === true}
+                onValueChange={async (on) => {
+                  if (!profile) return;
+                  const nextSettings = { ...profile.settings, geolocation_enabled: on } as any;
+                  setProfile({ ...profile, settings: nextSettings });
+                  try {
+                    await api.updateProfile({ settings: nextSettings });
+                  } catch {}
+                  // === Trigger immediato quando l'utente attiva il toggle ===
+                  // Se attiva ORA, chiediamo subito permesso + città (non
+                  // serve aspettare il prossimo cold-start). Se rifiuta,
+                  // il toggle resta visivamente ON nelle impostazioni ma
+                  // la chiamata fallirà gentilmente al prossimo boot.
+                  if (on) {
+                    try {
+                      const { fetchLocationOnce } = await import("../lib/geolocation");
+                      const res = await fetchLocationOnce({ forceRequest: true });
+                      if (res.ok) {
+                        console.log(`[KODA_GEO] location attivata: ${res.city}`);
+                      } else if (res.reason === "blocked") {
+                        // Mostriamo un alert con bottone "Apri Impostazioni"
+                        Alert.alert(
+                          "Permesso bloccato",
+                          "Per condividere la città devi abilitare la posizione di Koda nelle Impostazioni del telefono.",
+                          [
+                            { text: "Annulla", style: "cancel" },
+                            { text: "Apri Impostazioni", onPress: () => Linking.openSettings() },
+                          ]
+                        );
+                      } else if (res.reason === "denied") {
+                        console.log("[KODA_GEO] permesso negato");
+                      }
+                    } catch (e) {
+                      console.warn("[KODA_GEO] fetchLocationOnce error:", e);
+                    }
+                  }
+                }}
+                trackColor={{ false: "rgba(255,255,255,0.18)", true: "#0E7C7B" }}
+                thumbColor="#FFFFFF"
+              />
+            </View>
+
+            <View style={styles.divider} />
+
+            {/* === SCARICA I MIEI DATI (GDPR Art. 20) ===
+                Esporta profilo, conversazioni, ricordi e voci del
+                Confessionale (queste ultime restano cifrate) in un JSON. */}
+            <TouchableOpacity
+              onPress={downloadMyData}
+              disabled={exportingData}
+              style={[styles.settingRow, { paddingVertical: 14 }]}
+              testID="gdpr-export-btn"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>📦 Scarica i miei dati</Text>
+                <Text style={styles.settingHint}>
+                  Esporta tutto in un file JSON (GDPR): profilo, conversazioni,
+                  ricordi. Lascia andare non finisce mai nell'export — non
+                  esiste sul server.
+                </Text>
+              </View>
+              {exportingData ? (
+                <ActivityIndicator size="small" color={theme.primary} />
+              ) : (
+                <Ionicons name="download-outline" size={18} color={theme.text + "88"} />
+              )}
+            </TouchableOpacity>
+
+            <View style={styles.divider} />
+        </>
+      ),
+    },
+    // Card 6: I miei ricordi
+    {
+      key: "memory",
+      icon: "🤍",
+      title: "I miei ricordi",
+      description: "Cosa Koda ricorda di te. Cancella o rivedi quando vuoi.",
+      count: 3,
+      body: (
+        <>
+            {/* === I MIEI RICORDI (Blocco C/D/E, Fabio 2026-08-25) ===
+                UI unificata GDPR-compliant per vedere, esportare (JSON) e
+                cancellare i ricordi che Koda ha estratto dagli scambi.
+                Sempre visibile — è un DIRITTO dell'utente, non feature admin. */}
+            <TouchableOpacity
+              style={[styles.settingRow, { paddingVertical: 14 }]}
+              onPress={() => {
+                setShowSettings(false);
+                setTimeout(() => { router.push("/memories"); }, 220);
+              }}
+              testID="open-memories"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>🤍 I miei ricordi</Text>
+                <Text style={styles.settingHint}>
+                  Vedi, esporta o cancella quello che Koda ha memorizzato di te.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+            </TouchableOpacity>
+
+            {/* === RIVEDI INTRO PREMIUM (admin-only, Fabio 2026-08-22) ===
+                Sostituisce il vecchio "Rivedi presentazione di Koda" che
+                puntava alla V1 (ora deprecata, nessun path di ingresso).
+                Visibile SOLO all'admin: rischio di alterare il flag
+                "vista una sola volta" se un utente normale lo tocca. */}
+            {isAdmin ? (
+              <TouchableOpacity
+                style={[styles.settingRow, { paddingVertical: 14 }]}
+                onPress={() => {
+                  setShowSettings(false);
+                  setTimeout(() => { reopenIntroPremium(); }, 220);
+                }}
+                testID="reopen-intro-premium"
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingLabel}>💎 Rivedi Intro Premium (admin)</Text>
+                  <Text style={styles.settingHint}>
+                    Reset flag + replay della sequenza voce + 5 coach-mark.
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+              </TouchableOpacity>
+            ) : null}
+
+            {/* === TOGGLE TEST INTRO FREE (admin-only, Fabio 2026-09-06) ===
+                Bypass del last-resort fallback whitelist: quando ATTIVO,
+                getProfile() aggiunge ?force_free=1 al GET → backend NON
+                forza `unlimited` per l'uid → router porta a /lascia-andare
+                → possibilità di testare l'Intro Free e la Lascia Andare
+                free-experience senza rimuovere l'account dalla whitelist DB.
+                Il flag è persistito in SecureStore (`koda_dev_force_free_tier`)
+                e reversibile con un tap. */}
+            {isAdmin ? (
+              <TouchableOpacity
+                style={[styles.settingRow, { paddingVertical: 14 }]}
+                onPress={async () => {
+                  try {
+                    const SS = await import("expo-secure-store");
+                    const cur = await SS.getItemAsync("koda_dev_force_free_tier");
+                    const isOn = cur === "1" || cur === "true";
+                    if (isOn) {
+                      await SS.deleteItemAsync("koda_dev_force_free_tier");
+                      Alert.alert(
+                        "Test Intro Free disattivato",
+                        "Torni al tier normale (unlimited). Riavvia l'app per far ripartire il router.",
+                      );
+                    } else {
+                      await SS.setItemAsync("koda_dev_force_free_tier", "1");
+                      Alert.alert(
+                        "Test Intro Free ATTIVATO",
+                        "Al prossimo getProfile() il backend restituirà tier=None → router ti porterà su /lascia-andare (Intro Free). Riavvia l'app.",
+                      );
+                    }
+                  } catch (e) {
+                    console.warn("[force-free-toggle] failed:", e);
+                  }
+                }}
+                testID="toggle-force-free"
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingLabel}>🧪 Test Intro Free (admin)</Text>
+                  <Text style={styles.settingHint}>
+                    Toggle bypass whitelist. Ti mostra tier=Free per testare la Lascia Andare senza toccare il DB.
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+              </TouchableOpacity>
+            ) : null}
+        </>
+      ),
+    },
+    // Card 7: Rivedi il tour
+    {
+      key: "tour",
+      icon: "🔄",
+      title: "Rivedi il tour",
+      description: "Riguarda l'introduzione con Koda.",
+      count: 1,
+      body: (
+        <>
+            {/* === RIVEDI IL TOUR (2026-07-24 pre-lancio, punto 1) ===
+                Il tour visivo 9-step NON parte più automaticamente al primo
+                avvio (era troppo pesante per un pubblico TikTok: 20 step
+                totali obbligatori). Ora è opt-in da qui: l'utente lo lancia
+                quando ha voglia di capire l'app, oppure lo ignora e scopre
+                tutto usando. Stesso codice di build/launch del percorso
+                automatico originale, solo triggerato on-demand. */}
+            <TouchableOpacity
+              style={[styles.settingRow, { paddingVertical: 14 }]}
+              onPress={async () => {
+                setShowSettings(false);
+                // Piccolo delay per dare tempo al modale Impostazioni di
+                // chiudersi prima di misurare la UI reale (stesso motivo
+                // del delay 600ms nel percorso automatico post-onboarding).
+                setTimeout(async () => {
+                  try {
+                    const steps = await buildTourSteps();
+                    setTourSteps(steps);
+                    setTourActive(true);
+                  } catch (e) {
+                    console.warn("[tour-replay] buildTourSteps failed:", e);
+                  }
+                }, 350);
+              }}
+              testID="replay-tour-btn"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>🧭 Rivedi il tour</Text>
+                <Text style={styles.settingHint}>
+                  Ti mostro con dei suggerimenti come usare l&apos;eclissi, la scrittura, il Confessionale e Lascia andare.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+            </TouchableOpacity>
+        </>
+      ),
+    },
+    // Card 8: Legale
+    {
+      key: "legal",
+      icon: "⚖️",
+      title: "Legale",
+      description: "Privacy Policy e Termini di Servizio.",
+      count: 2,
+      body: (
+        <>
+            {/* === INFORMAZIONI LEGALI 2026-08-27 v65.8 (Fabio, Apple 5.1.1v) =
+                Placeholder cliccabili per Privacy Policy e Termini di
+                Servizio. I documenti reali NON esistono ancora — quando
+                l'utente tocca, mostriamo un Alert "In arrivo — contatta
+                hello@koda.app". Prima della pubblicazione pubblica su App
+                Store questi devono essere sostituiti con URL veri
+                (raccomandato: pagina esterna su dominio Koda + Linking).
+                RESTA COMUNQUE UN BLOCCANTE DI LANCIO, non risolto. */}
+            <View style={styles.divider} />
+            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>⚖️ Informazioni legali</Text>
+
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  "Privacy Policy",
+                  "In arrivo. Per informazioni sulla privacy scrivi a hello@koda.app.",
+                  [{ text: "OK", style: "default" }],
+                );
+              }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.14)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                marginTop: 6,
+              }}
+              testID="privacy-policy-btn"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>📄 Privacy Policy</Text>
+                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>In arrivo — hello@koda.app</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  "Termini di Servizio",
+                  "In arrivo. Per informazioni sui termini scrivi a hello@koda.app.",
+                  [{ text: "OK", style: "default" }],
+                );
+              }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.14)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                marginTop: 8,
+              }}
+              testID="terms-btn"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>📜 Termini di Servizio</Text>
+                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>In arrivo — hello@koda.app</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+            </TouchableOpacity>
+        </>
+      ),
+    },
+    // Card 9: Account
+    {
+      key: "account",
+      icon: "👤",
+      title: "Account",
+      description: "Info account, Esci e Elimina account.",
+      count: 3,
+      body: (
+        <>
+            {/* === ACCOUNT 2026-08-27 v65.8 (Fabio) ============================
+                Logout + Elimina Account. Logout: doppia conferma via Alert,
+                poi useAuth().signOut() + router.replace login. Elimina
+                Account: TRIPLA conferma (Alert.alert con 3 step), poi
+                DELETE /api/account → signOut(). Coerente con Apple
+                Guideline 5.1.1(v) — cancellazione DEVE essere accessibile
+                dentro l'app, non solo via email/web. */}
+            <View style={styles.divider} />
+            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>👤 Account</Text>
+
+            {/* Info email loggato (best-effort — dal profilo se presente) */}
+            {(() => {
+              const emailShown =
+                (profile as any)?.email ||
+                (profile as any)?.auth_email ||
+                (profile as any)?.user_email ||
+                null;
+              if (!emailShown) return null;
+              return (
+                <View style={{ paddingHorizontal: 4, marginBottom: 10 }}>
+                  <Text style={[styles.settingHint, { fontSize: 13 }]}>
+                    Loggato come: {emailShown}
+                  </Text>
+                </View>
+              );
+            })()}
+
+            {/* Logout — conferma singola */}
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  "Uscire da Koda?",
+                  "La tua memoria resta al sicuro. Puoi rientrare quando vuoi con la stessa email.",
+                  [
+                    { text: "Annulla", style: "cancel" },
+                    {
+                      text: "Esci",
+                      style: "destructive",
+                      onPress: async () => {
+                        try {
+                          setShowSettings(false);
+                          await new Promise((r) => setTimeout(r, 150));
+                          await auth.signOut();
+                        } catch (e) {
+                          console.warn("[logout] failed:", e);
+                          Alert.alert("Errore", "Non sono riuscito a uscire. Riprova.");
+                        }
+                      },
+                    },
+                  ],
+                );
+              }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.14)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+              }}
+              testID="logout-btn"
+            >
+              <Text style={styles.settingLabel}>🚪 Esci</Text>
+              <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+            </TouchableOpacity>
+
+            {/* Elimina account — tripla conferma */}
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  "Elimina il tuo account",
+                  "Cancellerai per SEMPRE il tuo profilo, tutta la memoria di Koda su di te, le sessioni attive e ogni traccia sul server. Non si può annullare.",
+                  [
+                    { text: "Annulla", style: "cancel" },
+                    {
+                      text: "Continua",
+                      style: "destructive",
+                      onPress: () => {
+                        Alert.alert(
+                          "Ne sei davvero sicuro?",
+                          "Ultimo controllo. Se procedi ora, dovrai ricreare tutto da zero se un giorno vorrai tornare.",
+                          [
+                            { text: "Annulla", style: "cancel" },
+                            {
+                              text: "Elimina tutto",
+                              style: "destructive",
+                              onPress: async () => {
+                                try {
+                                  setShowSettings(false);
+                                  await new Promise((r) => setTimeout(r, 150));
+                                  const res = await api.deleteAccount();
+                                  console.log("[deleteAccount] result:", res);
+                                  await auth.signOut();
+                                } catch (e: any) {
+                                  console.warn("[deleteAccount] failed:", e);
+                                  Alert.alert(
+                                    "Errore",
+                                    `Non sono riuscito a completare la cancellazione: ${e?.message || e}`,
+                                  );
+                                }
+                              },
+                            },
+                          ],
+                        );
+                      },
+                    },
+                  ],
+                );
+              }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(220, 40, 40, 0.10)",
+                borderWidth: 1,
+                borderColor: "rgba(220, 40, 40, 0.35)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                marginTop: 10,
+              }}
+              testID="delete-account-btn"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.settingLabel, { color: "#FF6B6B" }]}>🗑️ Elimina il mio account</Text>
+                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>
+                  Cancella per sempre profilo, memoria e sessioni. Non annullabile.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#FF6B6B" />
+            </TouchableOpacity>
+        </>
+      ),
+    },
+    // Card 10: Aiuto
+    {
+      key: "help",
+      icon: "🆘",
+      title: "Aiuto",
+      description: "Hai un problema? Segnalalo direttamente qui.",
+      count: 1,
+      body: (
+        <>
+            {/* === AIUTO / SEGNALA UN PROBLEMA (2026-07-24 pre-lancio) ===
+                Reframing del vecchio bottone "Diagnostica" — stessa funzione
+                tecnica sotto (raccolta log [KODA_VAD] [KODA_TIMING]
+                [KODA_SUMMARY] + copia/condividi) ma presentata in modo
+                comprensibile per l'utente finale. Così anche dopo il lancio
+                continuiamo a ricevere diagnosi utili dagli utenti reali
+                che incontrano un problema. */}
+            <TouchableOpacity
+              style={{
+                marginTop: 16,
+                paddingVertical: 12,
+                paddingHorizontal: 14,
+                backgroundColor: theme.text + "0c",
+                borderRadius: 10,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+              onPress={() => {
+                closeSettings();
+                setTimeout(() => router.push("/diagnostics"), 200);
+              }}
+              testID="report-problem-btn"
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+                <Ionicons name="help-buoy-outline" size={18} color={theme.text + "99"} />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500" }}>
+                    Hai un problema? Segnala
+                  </Text>
+                  <Text style={{ color: theme.text + "66", fontSize: 11, marginTop: 2 }}>
+                    Raccoglie un piccolo diario tecnico da inviarci per capire cos&apos;è successo.
+                  </Text>
+                </View>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={theme.text + "66"} />
+            </TouchableOpacity>
+
+            {/* === RIMOSSO 2026-07-09 su richiesta utente ===
+                Il pulsante "Controlla aggiornamenti" non funzionava
+                (Updates.checkForUpdateAsync non rispondeva mai su questa
+                pipeline OTA). Rimosso completamente. Se serve ricontrollare
+                la versione bundle, il footer sotto mostra già il numero. */}
+
+            {/* === CANCELLA MEMORIA — POSIZIONE FINALE (2026-07, utente) ===
+                Posizionato subito sopra il footer bundle info per rendere
+                il gesto distruttivo l'ultimo elemento della lista. */}
+            <View style={styles.divider} />
+            <TouchableOpacity
+              onPress={resetMemory}
+              style={styles.dangerBtn}
+              testID="reset-btn"
+            >
+              <Ionicons name="trash-outline" size={16} color={theme.danger} />
+              <Text style={styles.dangerBtnText}>Cancella tutta la memoria</Text>
+            </TouchableOpacity>
+            <Text style={styles.dangerHint}>
+              Reset completo: profilo, taccuino e ogni ricordo.
+            </Text>
+        </>
+      ),
+    },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [profile, isAdmin, adminBusy, status, bubbleAccent, borderCal, insets.top, theme]);
+
   const screenInner = (
     <View style={[styles.screen, { backgroundColor: theme.bg }]}>
       {/* === ORB MEASURE DEBUG OVERLAY — RIMOSSO (Fabio 2026-08-12) ===
@@ -6261,7 +7197,13 @@ export default function Taccuino() {
                 referenziano (hands-free block, back-button intercept). */}
       {/* OLED DIM OVERLAY rimosso (richiesta utente giugno 2026). */}
 
-      {/* Settings modal */}
+      {/* Settings modal — WALLET STACK (Fabio 2026-06) ==================
+          Refactor v2: da ScrollView piatta (1600 righe) a wallet stack
+          verticale con card sfalsate stile Apple Wallet. Ogni sezione
+          è una card indipendente, swipe verticale, snap magnetico.
+          Le sezioni admin (Tier Switcher, Whitelist, Situation Tracking,
+          Test Intro Free) restano nel Dev Menu Alert dietro 5-tap sulla
+          version (accesso invariato). */}
       <Modal
         visible={showSettings}
         transparent
@@ -6269,1618 +7211,13 @@ export default function Taccuino() {
         onRequestClose={() => closeSettings()}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.settingsCard}>
-            <View style={styles.settingsHeader}>
-              <Text style={styles.settingsTitle}>Impostazioni</Text>
-              <TouchableOpacity onPress={() => closeSettings()}>
-                <Ionicons name="close" size={24} color={theme.text} />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView
-              style={{ flexGrow: 0 }}
-              contentContainerStyle={{ paddingBottom: 6 }}
-              showsVerticalScrollIndicator={true}
-              removeClippedSubviews={Platform.OS === "android"}
-              scrollEventThrottle={16}
-              keyboardShouldPersistTaps="handled"
-              keyboardDismissMode="on-drag"
-            >
-{showSettings && (<>
-
-            {/* === PIANO ATTIVO + BARRA CONSUMO MINUTI (Fabio 2026-06) =========
-                Visibile SOLO se subscription_tier è paid (monthly/bimonthly/
-                annual/unlimited). Se Free, il componente restituisce null e
-                Impostazioni parte dalla sezione successiva. */}
-            <SubscriptionStatus profile={profile as any} />
-
-            {/* === IDENTITÀ — L'Amico Fraterno =======================
-                L'unica variabile di identità modificabile è il NOME dell'amico.
-                Sesso utente + sesso AI servono per declinare aggettivi e
-                participi (es. "sei stanco/a") in modo corretto.
-                === RIMOSSO 2026-08-27 v65.8 (Fabio) ===
-                Sezione "Identità" spostata dentro "Rivedi Intro". Non più
-                una sezione separata in Impostazioni — le impostazioni
-                ai_name, user_gender restano modificabili SOLO rieseguendo
-                l'intro V3. Riduce clutter e mantiene coerenza con
-                l'onboarding come unico punto di configurazione identità. */}
-            {/* === "Koda è…" (ai_gender) — RIMOSSO 2026-07-24 pre-lancio ===
-                Prima qui c'era un selettore esplicito Femmina/Maschio/Neutro
-                per il genere grammaticale di Koda. Ridondante: durante
-                l'onboarding l'utente sceglie GIÀ la voce (Cielo=femminile,
-                Vento=maschile), e il codice mappa la voce a ai_gender
-                automaticamente (KodaIntro.tsx). Chiedere due scelte separate
-                per la stessa cosa creava confusione ai primi utenti.
-                Il valore ai_gender resta nel profilo, viene solo derivato
-                automaticamente dalla voce, non più esposto in Impostazioni.
-                (Un'eventuale opzione "Neutro" avanzata sarà aggiunta come
-                impostazione nascosta se richiesto — non ora.) */}
-
-            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>💬 Comportamento</Text>
-
-            {/* === TOGGLE RIMOSSI (richiesta utente 2026-05-25) ===
-                Prima qui c'erano 3 toggle: "AI attiva", "Risposta vocale",
-                "Modalità conversazione". Erano fonte di errore: a volte si
-                spegnevano da soli (default backend false?) e l'utente non
-                capiva perché l'app sembrava "rotta".
-                Adesso questi 3 valori sono SEMPRE TRUE forzati al boot
-                (vedi useEffect "force-on" più sotto). I comportamenti:
-                  - AI sempre attiva (elabora ogni messaggio)
-                  - Hands-free sempre attivo (dopo Koda parla, mic riapre)
-                  - Risposta vocale: gestita automaticamente dalla modalità
-                    (voce → Koda parla; scrittura → Koda solo scrive). */}
-
-            {/* === VOCE DI KODA — RIMOSSA (richiesta utente 2026-06) ===
-                Il selettore voce è stato rimosso dall'UI. Resta la
-                voce di default impostata dal backend. */}
-
-            {/* === Proactive Check-in RIMOSSO 2026-08-27 v65.8 (Fabio) =====
-                Il toggle "💌 Koda mi scrive quando attivo" faceva parte del
-                Blocco A (proactive engagement / notifiche proattive) che è
-                stato rimosso questa notte. Coerenza: niente notifiche
-                proattive, niente toggle proattivo. */}
-
-            {/* === RICERCA WEB (Tavily) — toggle privacy ====================
-                Quando attivo: se l'utente fa domande fattuali (meteo, notizie,
-                prezzi), Koda esegue una ricerca su fonti italiane certificate
-                (ANSA, Repubblica, Corriere, Wikipedia, meteo.it, ecc.) PRIMA
-                di rispondere. Solo la query corrente viene inviata, nessun
-                dato personale. Quando OFF: Koda usa SOLO la sua conoscenza
-                statica, nessuna comunicazione esterna oltre l'LLM. MAI
-                attivo nel Confessionale a prescindere dal toggle. */}
-            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8, marginTop: 14 }]}>
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.settingLabel}>🌐 Ricerca web</Text>
-                  <Text style={styles.settingHint}>
-                    Permetti a Koda di consultare fonti certificate (ANSA,
-                    Repubblica, Wikipedia, meteo.it…) per meteo, notizie e fatti
-                    recenti. In Lascia andare resta sempre spento.
-                  </Text>
-                </View>
-                <Switch
-                  value={(profile?.settings as any)?.web_search_enabled !== false}
-                  onValueChange={async (on) => {
-                    if (!profile) return;
-                    const nextSettings = { ...profile.settings, web_search_enabled: on } as any;
-                    setProfile({ ...profile, settings: nextSettings });
-                    try {
-                      await api.updateProfile({ settings: nextSettings });
-                    } catch {}
-                  }}
-                  trackColor={{ false: theme.muted + "55", true: bubbleAccent.color }}
-                  thumbColor="#fff"
-                />
-              </View>
-            </View>
-
-            {/* === SITUATION TRACKING V3.1 (agosto 2026, Fabio) =============
-                Opt-in ESPLICITO, default OFF. Copy scelto dall'utente:
-                deve essere fattuale, senza dark pattern, senza pressione
-                a lasciarlo attivo. Niente "profila la tua persona": SOLO
-                "ricorda le cose che tu le racconti, quando torni a
-                parlarne tu". Il viewer per vedere/cancellare cosa Koda
-                ricorda verrà aggiunto in un secondo momento — per ora,
-                se l'utente vuole ripulire tutto, c'è comunque il reset
-                completo nella sezione admin. */}
-            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8, marginTop: 14 }]}>
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.settingLabel}>🧭 Cosa Koda ricorda</Text>
-                  <Text style={styles.settingHint}>
-                    Se lo attivi, Koda può ricordare le cose che le hai
-                    raccontato — persone, argomenti, situazioni. Le ricorda
-                    quando torni a parlarne tu. Se lo lasci spento, Koda
-                    non conserva questo tipo di contesto.
-                  </Text>
-                </View>
-                <Switch
-                  value={(profile?.settings as any)?.situation_tracking_enabled === true}
-                  onValueChange={async (on) => {
-                    if (!profile) return;
-                    const nextSettings = { ...profile.settings, situation_tracking_enabled: on } as any;
-                    setProfile({ ...profile, settings: nextSettings });
-                    try {
-                      await api.updateProfile({ settings: nextSettings });
-                    } catch {}
-                  }}
-                  trackColor={{ false: theme.muted + "55", true: bubbleAccent.color }}
-                  thumbColor="#fff"
-                />
-              </View>
-              {/* === Vedi cosa Koda ricorda — link viewer (v65.8 Fabio) =======
-                  Il viewer /situations esisteva già ma non era accessibile
-                  dall'UI. Ora c'è un CTA chiaro sotto il toggle: se attivo
-                  → naviga; se disattivato → messaggio "Attiva prima il
-                  toggle sopra per vedere". */}
-              <TouchableOpacity
-                onPress={() => {
-                  const enabled = (profile?.settings as any)?.situation_tracking_enabled === true;
-                  if (!enabled) {
-                    Alert.alert(
-                      "Memoria disattivata",
-                      "Attiva prima il toggle qui sopra per vedere cosa Koda ricorda.",
-                    );
-                    return;
-                  }
-                  setShowSettings(false);
-                  setTimeout(() => { try { router.push("/situations"); } catch {} }, 100);
-                }}
-                style={{
-                  marginTop: 12,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  backgroundColor: "rgba(255,255,255,0.06)",
-                  borderWidth: 1,
-                  borderColor: "rgba(255,255,255,0.14)",
-                  borderRadius: 10,
-                  paddingHorizontal: 14,
-                  paddingVertical: 12,
-                }}
-                testID="see-memory-btn"
-              >
-                <Text style={[styles.settingLabel, { fontSize: 14 }]}>📖 Vedi cosa Koda ricorda</Text>
-                <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.divider} />
-
-            {/* === TEMA RIMOSSO 2026-08-04 (Fabio, dati alla mano) ===
-                Rimosso il selettore Chiaro/Scuro/Auto: 65-95% degli utenti
-                smartphone preferisce dark; per uso emotivo serale/notturno
-                (caso Koda) la preferenza sale a 87-91%. Koda ora è
-                dark-only. Vedi lib/theme.tsx per la palette unica. */}
-
-            <View style={styles.divider} />
-
-            {/* === ASPETTO CHAT RIMOSSO 2026-08-27 v65.8 (Fabio) ===============
-                Dimensione testo fissa a 1.0 (Normale). Rimosso il selettore
-                4-livelli. Il valore text_size resta nel profilo per
-                retrocompatibilità (utenti che avevano scelto XL/Piccolo)
-                ma non è più regolabile. Vedi useEffect "normalizzazione
-                impostazioni v65.8" più sotto per il reset one-shot. */}
-            {/* === STILE/COLORE BOLLE + SFONDO RIMOSSI (richiesta 2026-06 #10) ===
-                L'utente vuole minimalismo Zen: niente customizzazione
-                colori bolle, niente stili vetro/solido, niente upload foto
-                di sfondo, niente preset di sfondo. L'app deve avere
-                un'identità visiva UNICA. Resta solo: tema giorno/notte +
-                dimensione testo (accessibilità). */}
-
-            <View style={styles.divider} />
-
-            {/* === BORDO — Calibrazione con auto-stima (2026-08-02 / 2026-06 v2) ==
-                iOS e Android non espongono il corner radius fisico del display.
-                Fix v2 (Fabio 2026-06): auto-stimiamo il radius dal safe-area
-                top inset (correlato al design del device: notch, Dynamic
-                Island, rettangolare). Il valore auto-stimato è il DEFAULT.
-                Lo slider resta disponibile perché nessun auto-detect è
-                perfetto (device con schermi curvi anomali tipo Honor/OnePlus)
-                — se la stima non basta, l'utente può regolare a mano. */}
-            <View style={styles.divider} />
-            <Text style={styles.settingsSubtitle}>📱 Bordo dello schermo</Text>
-            <Text style={styles.settingsHint}>
-              Il raggio degli angoli si adatta al tuo telefono automaticamente.
-              Se il bordo colorato non si vede bene, regola qui.
-            </Text>
-
-            {/* Slider raggio angoli con auto-stima */}
-            <View style={{ marginTop: 12 }}>
-              <Text style={styles.settingsHint}>
-                {(() => {
-                  const autoR = estimateCornerRadius(insets.top || 0, Platform.OS);
-                  const isAuto = borderCal.radius === null;
-                  const displayR = isAuto ? autoR : borderCal.radius;
-                  return `Raggio angoli: ${displayR} px${isAuto ? " (auto)" : ""}`;
-                })()}
-              </Text>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
-                <TouchableOpacity
-                  onPress={async () => {
-                    // Se era in modalità auto, parti dal valore stimato — così
-                    // il tap del "-" fa un delta relativo alla stima invece che
-                    // resettare a un hardcoded arbitrario.
-                    const autoR = estimateCornerRadius(insets.top || 0, Platform.OS);
-                    const cur = borderCal.radius ?? autoR;
-                    const next: BorderCalibration = { ...borderCal, radius: Math.max(0, cur - 4) };
-                    setBorderCal(next);
-                    await saveBorderCalibration(next);
-                  }}
-                  style={[styles.modeBtn, { paddingHorizontal: 14, minHeight: 40 }]}
-                  accessibilityLabel="Riduci raggio bordo"
-                >
-                  <Text style={{ color: theme.text, fontSize: 18, fontWeight: "600" }}>−</Text>
-                </TouchableOpacity>
-                <View style={{ flex: 1, height: 6, backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 3 }}>
-                  {(() => {
-                    const autoR = estimateCornerRadius(insets.top || 0, Platform.OS);
-                    const shownR = borderCal.radius ?? autoR;
-                    return (
-                      <View
-                        style={{
-                          height: "100%",
-                          width: `${Math.min(100, (shownR / 70) * 100)}%`,
-                          backgroundColor: bubbleAccent.color,
-                          borderRadius: 3,
-                        }}
-                      />
-                    );
-                  })()}
-                </View>
-                <TouchableOpacity
-                  onPress={async () => {
-                    const autoR = estimateCornerRadius(insets.top || 0, Platform.OS);
-                    const cur = borderCal.radius ?? autoR;
-                    const next: BorderCalibration = { ...borderCal, radius: Math.min(70, cur + 4) };
-                    setBorderCal(next);
-                    await saveBorderCalibration(next);
-                  }}
-                  style={[styles.modeBtn, { paddingHorizontal: 14, minHeight: 40 }]}
-                  accessibilityLabel="Aumenta raggio bordo"
-                >
-                  <Text style={{ color: theme.text, fontSize: 18, fontWeight: "600" }}>+</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Pulsante "Torna all'auto" — visibile SOLO se l'utente ha
-                  regolato manualmente. Riporta a null → riparte la stima. */}
-              {borderCal.radius !== null ? (
-                <TouchableOpacity
-                  onPress={async () => {
-                    const next: BorderCalibration = { ...borderCal, radius: null };
-                    setBorderCal(next);
-                    await saveBorderCalibration(next);
-                  }}
-                  style={{
-                    marginTop: 10,
-                    paddingVertical: 8,
-                    paddingHorizontal: 12,
-                    alignSelf: "flex-start",
-                    borderRadius: 8,
-                    backgroundColor: "rgba(255,255,255,0.06)",
-                  }}
-                  accessibilityLabel="Torna alla regolazione automatica"
-                >
-                  <Text style={{ color: theme.text + "cc", fontSize: 12 }}>
-                    ↺ Torna all&apos;automatica
-                  </Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-
-            {/* === MODALITÀ INPUT RIMOSSA (richiesta utente 2026-06) ===
-                L'utente passa già da voce a scrittura tramite lo swipe tra
-                le due pagine principali (home voce ↔ chat scrittura).
-                Avere un toggle in Settings era ridondante e confondeva. */}
-            {/* Forziamo internamente input_mode su "both" così entrambi
-                i pannelli restano disponibili nel layout.
-                MOVED to useEffect — chiamare setInputMode() dentro render
-                causava re-render ricorrenti che laggavano lo scroll. */}
-
-            {/* === HEADER VOCI: RIMOSSO IL VECCHIO HEADER QUI (2026-06-27 v22) ===
-                Era presente un doppio header "Voce dell'assistente" + hint
-                "Tocca per selezionare. Premi ▶ per ascoltare un'anteprima."
-                seguito dall'indicatore Confidenza e poi da un altro header
-                "🎙️ Scegli la voce di Koda" + il nuovo selettore a cerchi.
-                Risultato: l'utente vedeva il vecchio titolo + testo, dava
-                per scontato che la UI fosse quella, e il selettore a cerchi
-                colorati restava fuori schermo. Adesso resta solo il nuovo
-                header sopra i cerchi (a ~50 righe sotto). */}
-
-            {/* === INDICATORE CONFIDENZA (richiesta utente 2026-06, opt B) ===
-                Read-only. Mostra al volo a che fase relazionale è Koda.
-                Cresce di +1 ad ogni messaggio fuori dalla Stanza dello Sfogo.
-                0-10 = appena conosciuti, 100 = confidenza totale. */}
-            <View style={styles.confidenceRow} testID="confidence-indicator">
-              <Text style={styles.confidenceLabel}>
-                💞 Confidenza con Koda — {profile?.confidence_level ?? 0}/100 ({((): string => {
-                  const lv = profile?.confidence_level ?? 0;
-                  if (lv >= 100) return "totale";
-                  if (lv >= 61) return "amici stretti";
-                  if (lv >= 31) return "amici";
-                  if (lv >= 11) return "prendiamo confidenza";
-                  return "appena conosciuti";
-                })()})
-              </Text>
-              <View style={styles.confidenceBar}>
-                <View
-                  style={[
-                    styles.confidenceFill,
-                    { width: `${Math.min(100, Math.max(0, profile?.confidence_level ?? 0))}%` },
-                  ]}
-                />
-              </View>
-              <Text style={[styles.settingsHint, { fontSize: 13, marginTop: 4, fontStyle: "italic" }]}>
-                Cresce automaticamente man mano che parliamo. I messaggi in Lascia andare non contano.
-              </Text>
-            </View>
-            <View style={styles.voicesList}>
-              {/* === FIX TITOLO VOCI (richiesta utente giugno 2026 #5) ===
-                  Il titolo "Voce dell'assistente" era separato dalla lista
-                  dall'indicatore di Confidenza in mezzo → l'utente percepiva
-                  la lista come senza titolo. Aggiungiamo un sotto-titolo
-                  chiaro qui sopra le card delle voci. */}
-              <Text style={[styles.settingsSubtitle, { marginTop: 4, marginBottom: 6 }]}>
-                🎙️ Scegli la voce di Koda
-              </Text>
-              {/* === NUOVO SELETTORE VOCI (2026-06) ===
-                  Niente più nomi né etichette: ogni voce È il suo colore.
-                  Due cerchi colorati grandi, side-by-side. Tap = preview audio
-                  + selezione automatica. Il cerchio selezionato ha un anello
-                  bianco e una checkmark sottile. */}
-              {/* === FIX 2026-06-30 — Lock selettore voce durante stati attivi ===
-                  Se l'utente cambia voce mentre Koda sta registrando,
-                  pensando o parlando, la sessione streaming si scontra con
-                  la nuova voce → stato corrotto / freeze. Blocchiamo i
-                  bottoni quando status !== "idle" e mostriamo un hint
-                  chiaro. */}
-              {(() => {
-                const voiceLocked = status !== "idle";
-                const lockHint = (() => {
-                  switch (status) {
-                    case "recording":
-                      return "🎙️ Aspetta che finisca di ascoltarti per cambiare voce";
-                    case "transcribing":
-                      return "✍️ Sto leggendo… cambierai voce tra un attimo";
-                    case "thinking":
-                      return "💭 Sto pensando… cambierai voce tra un attimo";
-                    case "speaking":
-                      return "🔊 Aspetta che finisca di parlare per cambiare voce";
-                    default:
-                      return "Tocca per ascoltare";
-                  }
-                })();
-                return (
-                  <>
-                    <Text style={styles.voicePickerHint}>{lockHint}</Text>
-                    <View style={styles.voicePickerRow}>
-                      {voices.map((v) => {
-                        const selected = profile?.settings?.tts_voice_id === v.voice_id;
-                        const loading = voicePreviewLoading === v.voice_id;
-                        const voiceColor =
-                          VOICE_SPEAKING_COLORS[v.voice_id] || theme.primary;
-                        return (
-                          <TouchableOpacity
-                            key={v.voice_id}
-                            onPress={() => selectAndPreviewVoice(v.voice_id, v.name)}
-                            style={[
-                              styles.voiceCircleWrap,
-                              voiceLocked && { opacity: 0.45 },
-                            ]}
-                            testID={`voice-${v.voice_id}`}
-                            activeOpacity={0.75}
-                            disabled={voiceLocked}
-                            accessibilityState={{ disabled: voiceLocked }}
-                          >
-                            {/* Glow soft attorno al cerchio (più visibile se selezionato) */}
-                            <View
-                              style={[
-                                styles.voiceCircleGlow,
-                                {
-                                  backgroundColor: voiceColor,
-                                  opacity: selected ? 0.45 : 0.22,
-                                },
-                              ]}
-                            />
-                            {/* Cerchio principale */}
-                            <View
-                              style={[
-                                styles.voiceCircle,
-                                {
-                                  backgroundColor: voiceColor,
-                                  borderColor: selected ? "#FFFFFF" : "transparent",
-                                  borderWidth: selected ? 3 : 0,
-                                  shadowColor: voiceColor,
-                                },
-                              ]}
-                            >
-                              {loading ? (
-                                <ActivityIndicator size="small" color="#FFFFFF" />
-                              ) : selected ? (
-                                <Ionicons name="checkmark" size={28} color="#FFFFFF" />
-                              ) : null}
-                            </View>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  </>
-                );
-              })()}
-            </View>
-
-            <View style={styles.divider} />
-
-            {/* === "Cosa sa di te" — NASCOSTO (richiesta utente 2026-06) ===
-                La sezione resta nel codice ma non è più visibile nel modal.
-                Per riattivarla, rimettere il blocco originale qui. */}
-
-            <View style={styles.divider} />
-
-            {/* === NOTIFICHE toggle RIMOSSO 2026-08-27 v65.8 (Fabio) ==========
-                "🔔 Notifiche da Koda" faceva parte del Blocco A (notifiche
-                proattive) che è stato rimosso questa notte. Il campo
-                notifications_enabled resta nel profilo per retrocompatibilità
-                ma non è più esposto. */}
-
-            {/* === GEOLOCATION TOGGLE (P2 Fabio 2026-06-20) ===
-                Quando attivo: al boot dell'app il client chiede il
-                permesso location (UNA volta) e fa una getCurrentPosition
-                + reverse-geocode → invia la città al backend come key_fact
-                di categoria "luogo_geo". Permette a Koda di rispondere
-                a "che ore sono qui?" o "che tempo fa?" usando la città
-                giusta.
-                Default OFF — l'utente abilita esplicitamente per privacy.
-                Strategia ONE-SHOT: nessun watchPosition, nessun tracking
-                in background. Solo 1 fix per sessione foreground. */}
-            <View style={[styles.settingRow, { flexDirection: "row", alignItems: "center", justifyContent: "space-between" }]}>
-              <View style={{ flex: 1, paddingRight: 12 }}>
-                <Text style={styles.settingLabel}>📍 Condividi la mia città</Text>
-                <Text style={styles.settingHint}>
-                  Una volta sola all'avvio. Koda saprà solo la città (es. Pavia),
-                  non la posizione esatta. Serve per risposte tipo "che ore sono
-                  qui?". Tutto resta locale.
-                </Text>
-              </View>
-              <Switch
-                value={(profile?.settings as any)?.geolocation_enabled === true}
-                onValueChange={async (on) => {
-                  if (!profile) return;
-                  const nextSettings = { ...profile.settings, geolocation_enabled: on } as any;
-                  setProfile({ ...profile, settings: nextSettings });
-                  try {
-                    await api.updateProfile({ settings: nextSettings });
-                  } catch {}
-                  // === Trigger immediato quando l'utente attiva il toggle ===
-                  // Se attiva ORA, chiediamo subito permesso + città (non
-                  // serve aspettare il prossimo cold-start). Se rifiuta,
-                  // il toggle resta visivamente ON nelle impostazioni ma
-                  // la chiamata fallirà gentilmente al prossimo boot.
-                  if (on) {
-                    try {
-                      const { fetchLocationOnce } = await import("../lib/geolocation");
-                      const res = await fetchLocationOnce({ forceRequest: true });
-                      if (res.ok) {
-                        console.log(`[KODA_GEO] location attivata: ${res.city}`);
-                      } else if (res.reason === "blocked") {
-                        // Mostriamo un alert con bottone "Apri Impostazioni"
-                        Alert.alert(
-                          "Permesso bloccato",
-                          "Per condividere la città devi abilitare la posizione di Koda nelle Impostazioni del telefono.",
-                          [
-                            { text: "Annulla", style: "cancel" },
-                            { text: "Apri Impostazioni", onPress: () => Linking.openSettings() },
-                          ]
-                        );
-                      } else if (res.reason === "denied") {
-                        console.log("[KODA_GEO] permesso negato");
-                      }
-                    } catch (e) {
-                      console.warn("[KODA_GEO] fetchLocationOnce error:", e);
-                    }
-                  }
-                }}
-                trackColor={{ false: "rgba(255,255,255,0.18)", true: "#0E7C7B" }}
-                thumbColor="#FFFFFF"
+          <View style={{ flex: 1, width: '100%' }}>
+            {showSettings ? (
+              <SettingsWalletStack
+                cards={settingsCards}
+                onClose={() => closeSettings()}
               />
-            </View>
-
-            <View style={styles.divider} />
-
-            {/* === SCARICA I MIEI DATI (GDPR Art. 20) ===
-                Esporta profilo, conversazioni, ricordi e voci del
-                Confessionale (queste ultime restano cifrate) in un JSON. */}
-            <TouchableOpacity
-              onPress={downloadMyData}
-              disabled={exportingData}
-              style={[styles.settingRow, { paddingVertical: 14 }]}
-              testID="gdpr-export-btn"
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>📦 Scarica i miei dati</Text>
-                <Text style={styles.settingHint}>
-                  Esporta tutto in un file JSON (GDPR): profilo, conversazioni,
-                  ricordi. Lascia andare non finisce mai nell'export — non
-                  esiste sul server.
-                </Text>
-              </View>
-              {exportingData ? (
-                <ActivityIndicator size="small" color={theme.primary} />
-              ) : (
-                <Ionicons name="download-outline" size={18} color={theme.text + "88"} />
-              )}
-            </TouchableOpacity>
-
-            <View style={styles.divider} />
-
-            {/* === CANCELLA MEMORIA — SPOSTATO IN FONDO (richiesta utente 2026-07) ===
-                Prima si trovava subito dopo "Scarica i miei dati", ma
-                l'utente ha chiesto di collocarlo il più in basso possibile,
-                subito sopra il footer con bundle info. In questo modo il
-                gesto distruttivo non è mai immediato durante la lettura
-                normale delle impostazioni. */}
-
-            {/* === I MIEI RICORDI (Blocco C/D/E, Fabio 2026-08-25) ===
-                UI unificata GDPR-compliant per vedere, esportare (JSON) e
-                cancellare i ricordi che Koda ha estratto dagli scambi.
-                Sempre visibile — è un DIRITTO dell'utente, non feature admin. */}
-            <TouchableOpacity
-              style={[styles.settingRow, { paddingVertical: 14 }]}
-              onPress={() => {
-                setShowSettings(false);
-                setTimeout(() => { router.push("/memories"); }, 220);
-              }}
-              testID="open-memories"
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>🤍 I miei ricordi</Text>
-                <Text style={styles.settingHint}>
-                  Vedi, esporta o cancella quello che Koda ha memorizzato di te.
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
-            </TouchableOpacity>
-
-            {/* === RIVEDI INTRO PREMIUM (admin-only, Fabio 2026-08-22) ===
-                Sostituisce il vecchio "Rivedi presentazione di Koda" che
-                puntava alla V1 (ora deprecata, nessun path di ingresso).
-                Visibile SOLO all'admin: rischio di alterare il flag
-                "vista una sola volta" se un utente normale lo tocca. */}
-            {isAdmin ? (
-              <TouchableOpacity
-                style={[styles.settingRow, { paddingVertical: 14 }]}
-                onPress={() => {
-                  setShowSettings(false);
-                  setTimeout(() => { reopenIntroPremium(); }, 220);
-                }}
-                testID="reopen-intro-premium"
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.settingLabel}>💎 Rivedi Intro Premium (admin)</Text>
-                  <Text style={styles.settingHint}>
-                    Reset flag + replay della sequenza voce + 5 coach-mark.
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
-              </TouchableOpacity>
             ) : null}
-
-            {/* === TOGGLE TEST INTRO FREE (admin-only, Fabio 2026-09-06) ===
-                Bypass del last-resort fallback whitelist: quando ATTIVO,
-                getProfile() aggiunge ?force_free=1 al GET → backend NON
-                forza `unlimited` per l'uid → router porta a /lascia-andare
-                → possibilità di testare l'Intro Free e la Lascia Andare
-                free-experience senza rimuovere l'account dalla whitelist DB.
-                Il flag è persistito in SecureStore (`koda_dev_force_free_tier`)
-                e reversibile con un tap. */}
-            {isAdmin ? (
-              <TouchableOpacity
-                style={[styles.settingRow, { paddingVertical: 14 }]}
-                onPress={async () => {
-                  try {
-                    const SS = await import("expo-secure-store");
-                    const cur = await SS.getItemAsync("koda_dev_force_free_tier");
-                    const isOn = cur === "1" || cur === "true";
-                    if (isOn) {
-                      await SS.deleteItemAsync("koda_dev_force_free_tier");
-                      Alert.alert(
-                        "Test Intro Free disattivato",
-                        "Torni al tier normale (unlimited). Riavvia l'app per far ripartire il router.",
-                      );
-                    } else {
-                      await SS.setItemAsync("koda_dev_force_free_tier", "1");
-                      Alert.alert(
-                        "Test Intro Free ATTIVATO",
-                        "Al prossimo getProfile() il backend restituirà tier=None → router ti porterà su /lascia-andare (Intro Free). Riavvia l'app.",
-                      );
-                    }
-                  } catch (e) {
-                    console.warn("[force-free-toggle] failed:", e);
-                  }
-                }}
-                testID="toggle-force-free"
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.settingLabel}>🧪 Test Intro Free (admin)</Text>
-                  <Text style={styles.settingHint}>
-                    Toggle bypass whitelist. Ti mostra tier=Free per testare la Lascia Andare senza toccare il DB.
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
-              </TouchableOpacity>
-            ) : null}
-
-            {/* === RIVEDI IL TOUR (2026-07-24 pre-lancio, punto 1) ===
-                Il tour visivo 9-step NON parte più automaticamente al primo
-                avvio (era troppo pesante per un pubblico TikTok: 20 step
-                totali obbligatori). Ora è opt-in da qui: l'utente lo lancia
-                quando ha voglia di capire l'app, oppure lo ignora e scopre
-                tutto usando. Stesso codice di build/launch del percorso
-                automatico originale, solo triggerato on-demand. */}
-            <TouchableOpacity
-              style={[styles.settingRow, { paddingVertical: 14 }]}
-              onPress={async () => {
-                setShowSettings(false);
-                // Piccolo delay per dare tempo al modale Impostazioni di
-                // chiudersi prima di misurare la UI reale (stesso motivo
-                // del delay 600ms nel percorso automatico post-onboarding).
-                setTimeout(async () => {
-                  try {
-                    const steps = await buildTourSteps();
-                    setTourSteps(steps);
-                    setTourActive(true);
-                  } catch (e) {
-                    console.warn("[tour-replay] buildTourSteps failed:", e);
-                  }
-                }, 350);
-              }}
-              testID="replay-tour-btn"
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>🧭 Rivedi il tour</Text>
-                <Text style={styles.settingHint}>
-                  Ti mostro con dei suggerimenti come usare l&apos;eclissi, la scrittura, il Confessionale e Lascia andare.
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
-            </TouchableOpacity>
-
-            {/* === LA MIA PROMESSA RIMOSSA 2026-08-27 v65.8 (Fabio) ============
-                Sezione rimossa: non aveva funzione chiara ed era testo
-                statico duplicato rispetto al futuro Privacy Policy. Il
-                contenuto sostanziale della promessa (i dati non escono
-                dal telefono in Lascia andare, niente addestramento su
-                dati utente) resterà nel Privacy Policy quando sarà
-                scritto ufficialmente. */}
-
-            {/* === INFORMAZIONI LEGALI 2026-08-27 v65.8 (Fabio, Apple 5.1.1v) =
-                Placeholder cliccabili per Privacy Policy e Termini di
-                Servizio. I documenti reali NON esistono ancora — quando
-                l'utente tocca, mostriamo un Alert "In arrivo — contatta
-                hello@koda.app". Prima della pubblicazione pubblica su App
-                Store questi devono essere sostituiti con URL veri
-                (raccomandato: pagina esterna su dominio Koda + Linking).
-                RESTA COMUNQUE UN BLOCCANTE DI LANCIO, non risolto. */}
-            <View style={styles.divider} />
-            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>⚖️ Informazioni legali</Text>
-
-            <TouchableOpacity
-              onPress={() => {
-                Alert.alert(
-                  "Privacy Policy",
-                  "In arrivo. Per informazioni sulla privacy scrivi a hello@koda.app.",
-                  [{ text: "OK", style: "default" }],
-                );
-              }}
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-                backgroundColor: "rgba(255,255,255,0.06)",
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.14)",
-                borderRadius: 10,
-                paddingHorizontal: 14,
-                paddingVertical: 12,
-                marginTop: 6,
-              }}
-              testID="privacy-policy-btn"
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>📄 Privacy Policy</Text>
-                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>In arrivo — hello@koda.app</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => {
-                Alert.alert(
-                  "Termini di Servizio",
-                  "In arrivo. Per informazioni sui termini scrivi a hello@koda.app.",
-                  [{ text: "OK", style: "default" }],
-                );
-              }}
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-                backgroundColor: "rgba(255,255,255,0.06)",
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.14)",
-                borderRadius: 10,
-                paddingHorizontal: 14,
-                paddingVertical: 12,
-                marginTop: 8,
-              }}
-              testID="terms-btn"
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>📜 Termini di Servizio</Text>
-                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>In arrivo — hello@koda.app</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
-            </TouchableOpacity>
-
-            {/* === ACCOUNT 2026-08-27 v65.8 (Fabio) ============================
-                Logout + Elimina Account. Logout: doppia conferma via Alert,
-                poi useAuth().signOut() + router.replace login. Elimina
-                Account: TRIPLA conferma (Alert.alert con 3 step), poi
-                DELETE /api/account → signOut(). Coerente con Apple
-                Guideline 5.1.1(v) — cancellazione DEVE essere accessibile
-                dentro l'app, non solo via email/web. */}
-            <View style={styles.divider} />
-            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>👤 Account</Text>
-
-            {/* Info email loggato (best-effort — dal profilo se presente) */}
-            {(() => {
-              const emailShown =
-                (profile as any)?.email ||
-                (profile as any)?.auth_email ||
-                (profile as any)?.user_email ||
-                null;
-              if (!emailShown) return null;
-              return (
-                <View style={{ paddingHorizontal: 4, marginBottom: 10 }}>
-                  <Text style={[styles.settingHint, { fontSize: 13 }]}>
-                    Loggato come: {emailShown}
-                  </Text>
-                </View>
-              );
-            })()}
-
-            {/* Logout — conferma singola */}
-            <TouchableOpacity
-              onPress={() => {
-                Alert.alert(
-                  "Uscire da Koda?",
-                  "La tua memoria resta al sicuro. Puoi rientrare quando vuoi con la stessa email.",
-                  [
-                    { text: "Annulla", style: "cancel" },
-                    {
-                      text: "Esci",
-                      style: "destructive",
-                      onPress: async () => {
-                        try {
-                          setShowSettings(false);
-                          await new Promise((r) => setTimeout(r, 150));
-                          await auth.signOut();
-                        } catch (e) {
-                          console.warn("[logout] failed:", e);
-                          Alert.alert("Errore", "Non sono riuscito a uscire. Riprova.");
-                        }
-                      },
-                    },
-                  ],
-                );
-              }}
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-                backgroundColor: "rgba(255,255,255,0.06)",
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.14)",
-                borderRadius: 10,
-                paddingHorizontal: 14,
-                paddingVertical: 12,
-              }}
-              testID="logout-btn"
-            >
-              <Text style={styles.settingLabel}>🚪 Esci</Text>
-              <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
-            </TouchableOpacity>
-
-            {/* Elimina account — tripla conferma */}
-            <TouchableOpacity
-              onPress={() => {
-                Alert.alert(
-                  "Elimina il tuo account",
-                  "Cancellerai per SEMPRE il tuo profilo, tutta la memoria di Koda su di te, le sessioni attive e ogni traccia sul server. Non si può annullare.",
-                  [
-                    { text: "Annulla", style: "cancel" },
-                    {
-                      text: "Continua",
-                      style: "destructive",
-                      onPress: () => {
-                        Alert.alert(
-                          "Ne sei davvero sicuro?",
-                          "Ultimo controllo. Se procedi ora, dovrai ricreare tutto da zero se un giorno vorrai tornare.",
-                          [
-                            { text: "Annulla", style: "cancel" },
-                            {
-                              text: "Elimina tutto",
-                              style: "destructive",
-                              onPress: async () => {
-                                try {
-                                  setShowSettings(false);
-                                  await new Promise((r) => setTimeout(r, 150));
-                                  const res = await api.deleteAccount();
-                                  console.log("[deleteAccount] result:", res);
-                                  await auth.signOut();
-                                } catch (e: any) {
-                                  console.warn("[deleteAccount] failed:", e);
-                                  Alert.alert(
-                                    "Errore",
-                                    `Non sono riuscito a completare la cancellazione: ${e?.message || e}`,
-                                  );
-                                }
-                              },
-                            },
-                          ],
-                        );
-                      },
-                    },
-                  ],
-                );
-              }}
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-                backgroundColor: "rgba(220, 40, 40, 0.10)",
-                borderWidth: 1,
-                borderColor: "rgba(220, 40, 40, 0.35)",
-                borderRadius: 10,
-                paddingHorizontal: 14,
-                paddingVertical: 12,
-                marginTop: 10,
-              }}
-              testID="delete-account-btn"
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.settingLabel, { color: "#FF6B6B" }]}>🗑️ Elimina il mio account</Text>
-                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>
-                  Cancella per sempre profilo, memoria e sessioni. Non annullabile.
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color="#FF6B6B" />
-            </TouchableOpacity>
-
-            {/* === MINI-PANEL ADMIN WHITELIST (2026-07-24, PAYWALL_POLICY) ===
-                Visibile SOLO all'owner (backend risponde is_admin=true su
-                /api/admin/whoami). Permette di aggiungere/rimuovere email
-                dalla whitelist "unlimited" senza toccare env var Railway.
-                Le email pre-seed (Fabio, Stefania) non sono rimovibili via UI. */}
-            {isAdmin ? (
-              <>
-                <View style={styles.divider} />
-                <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>
-                  🔑 Admin — Whitelist unlimited
-                </Text>
-                <Text style={[styles.settingHint, { marginBottom: 12, paddingHorizontal: 4 }]}>
-                  Email in questa lista bypassano il paywall (usa turni illimitati).
-                  Le email pre-caricate (te, Stefania) non si possono togliere da qui.
-                </Text>
-
-                {/* Lista attuale con refresh */}
-                <TouchableOpacity
-                  style={[styles.settingRow, { paddingVertical: 10 }]}
-                  onPress={async () => {
-                    setAdminBusy(true);
-                    setAdminError(null);
-                    try {
-                      const list = await api.adminUnlimitedList();
-                      setAdminUnlimitedList(list);
-                    } catch (e: any) {
-                      setAdminError(`Caricamento fallito: ${e?.message || e}`);
-                    } finally {
-                      setAdminBusy(false);
-                    }
-                  }}
-                  testID="admin-refresh-list-btn"
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.settingLabel}>
-                      {adminBusy ? "Caricamento…" : `📋 Aggiorna lista (${adminUnlimitedList.length})`}
-                    </Text>
-                    <Text style={styles.settingHint}>
-                      Tocca per aggiornare l&apos;elenco delle email whitelisted.
-                    </Text>
-                  </View>
-                  <Ionicons name="refresh" size={18} color={theme.text + "88"} />
-                </TouchableOpacity>
-
-                {/* Rendering della lista */}
-                {adminUnlimitedList.map((entry) => {
-                  const isPreseed = [
-                    "dangella.fabio@gmail.com",
-                    "wqm4r4jn7f@privaterelay.appleid.com",
-                    "stefania.russo82@gmail.com",
-                  ].includes(entry.email);
-                  return (
-                    <View
-                      key={entry.email}
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        paddingVertical: 8,
-                        paddingHorizontal: 4,
-                        borderBottomWidth: StyleSheet.hairlineWidth,
-                        borderBottomColor: theme.text + "18",
-                      }}
-                    >
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ color: theme.text, fontSize: 13 }}>
-                          {entry.email}
-                        </Text>
-                        {entry.note ? (
-                          <Text style={{ color: theme.text + "77", fontSize: 11, marginTop: 2 }}>
-                            {entry.note}
-                          </Text>
-                        ) : null}
-                      </View>
-                      {isPreseed ? (
-                        <Text style={{ color: theme.text + "55", fontSize: 10, fontStyle: "italic" }}>
-                          bloccata
-                        </Text>
-                      ) : (
-                        <TouchableOpacity
-                          onPress={async () => {
-                            setAdminBusy(true);
-                            setAdminError(null);
-                            try {
-                              await api.adminUnlimitedRemove(entry.email);
-                              const list = await api.adminUnlimitedList();
-                              setAdminUnlimitedList(list);
-                            } catch (e: any) {
-                              setAdminError(`Rimozione fallita: ${e?.message || e}`);
-                            } finally {
-                              setAdminBusy(false);
-                            }
-                          }}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        >
-                          <Ionicons name="trash-outline" size={18} color={theme.danger} />
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  );
-                })}
-
-                {/* Form aggiungi */}
-                <View style={{ marginTop: 14, gap: 8 }}>
-                  <TextInput
-                    value={adminAddEmail}
-                    onChangeText={setAdminAddEmail}
-                    placeholder="Nuova email (es. sorella@example.com)"
-                    placeholderTextColor={theme.muted}
-                    style={[styles.input, { paddingVertical: 10, fontSize: 14 }]}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    keyboardType="email-address"
-                  />
-                  <TextInput
-                    value={adminAddNote}
-                    onChangeText={setAdminAddNote}
-                    placeholder="Nota (opzionale, es. Sorella / Tester alfa)"
-                    placeholderTextColor={theme.muted}
-                    style={[styles.input, { paddingVertical: 10, fontSize: 14 }]}
-                    autoCapitalize="sentences"
-                  />
-                  <TouchableOpacity
-                    style={{
-                      backgroundColor: theme.primary,
-                      paddingVertical: 12,
-                      borderRadius: 10,
-                      alignItems: "center",
-                      opacity: adminBusy || !adminAddEmail.trim() ? 0.5 : 1,
-                    }}
-                    disabled={adminBusy || !adminAddEmail.trim()}
-                    onPress={async () => {
-                      const email = adminAddEmail.trim().toLowerCase();
-                      if (!email || !email.includes("@")) return;
-                      setAdminBusy(true);
-                      setAdminError(null);
-                      try {
-                        await api.adminUnlimitedAdd(email, adminAddNote.trim() || undefined);
-                        const list = await api.adminUnlimitedList();
-                        setAdminUnlimitedList(list);
-                        setAdminAddEmail("");
-                        setAdminAddNote("");
-                      } catch (e: any) {
-                        setAdminError(`Aggiunta fallita: ${e?.message || e}`);
-                      } finally {
-                        setAdminBusy(false);
-                      }
-                    }}
-                    testID="admin-add-email-btn"
-                  >
-                    <Text style={{ color: theme.primaryText, fontSize: 14, fontWeight: "600" }}>
-                      {adminBusy ? "Un attimo…" : "➕ Aggiungi alla whitelist"}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                {adminError ? (
-                  <Text style={{ color: theme.danger, fontSize: 12, marginTop: 8, textAlign: "center" }}>
-                    {adminError}
-                  </Text>
-                ) : null}
-
-                {/* === TIER SWITCHER (Fabio 2026-08-23) =====================
-                    3 bottoni MINIMI per alternare Free/Premium e resettare
-                    Intro Premium senza terminale. Serve per testare i
-                    flussi Free (V3) e Premium (Intro Premium) end-to-end. */}
-                <View style={styles.divider} />
-                <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>
-                  Tier switcher
-                </Text>
-                <Text style={[styles.settingHint, { marginBottom: 10, paddingHorizontal: 4 }]}>
-                  Tier corrente: <Text style={{ fontWeight: "700", color: theme.text }}>{((profile as any)?.subscription_tier as string | null) || "free"}</Text>
-                </Text>
-
-                <TouchableOpacity
-                  style={{
-                    paddingVertical: 12,
-                    paddingHorizontal: 14,
-                    backgroundColor: "rgba(0, 245, 212, 0.10)",
-                    borderRadius: 10,
-                    borderWidth: 1,
-                    borderColor: "rgba(0, 245, 212, 0.3)",
-                    flexDirection: "row",
-                    alignItems: "center",
-                    marginBottom: 8,
-                    opacity: adminBusy ? 0.5 : 1,
-                  }}
-                  disabled={adminBusy}
-                  onPress={async () => {
-                    setAdminBusy(true);
-                    setAdminError(null);
-                    try {
-                      await api.devSetTier("monthly");
-                      const p = await api.getProfile();
-                      // === FIX BUG CACHE TIER IN-SESSIONE v2 (Fabio 2026-08-24) ===
-                      // Approccio DETERMINISTICO: dopo aver settato il tier,
-                      // navighiamo DIRETTAMENTE senza affidarci alla catena
-                      // useEffect → deps → router.replace (che ha race conditions
-                      // di batching React difficili da debuggare in produzione).
-                      // Gli aggiornamenti di state + refs sono comunque fatti per
-                      // coerenza al re-mount successivo, ma la navigazione avviene
-                      // subito qui, in modo garantito.
-                      hasRedirectedIntroV3Ref.current = false;
-                      lastV3DecidedKeyRef.current = null;
-                      hasRedirectedFreeUserRef.current = false;
-                      lastFreePremiumDecidedKeyRef.current = null;
-                      hasRedirectedIntroPremiumRef.current = false;
-                      lastIntroPremiumDecidedKeyRef.current = null;
-                      resetLastDecidedKey();
-                      // Re-fetch intro premium state per decidere se
-                      // navigare a /intro-premium o restare sulla home.
-                      let introSeen = true; // fail-closed: se backend down, considera vista
-                      try {
-                        const st = await api.getIntroPremiumState();
-                        introSeen = !!st?.seen;
-                      } catch {}
-                      setIntroPremiumState(introSeen ? "completed" : "needed");
-                      saveProfileCache(p).catch(() => {});
-                      setProfile(p);
-                      setProfileHydrated("network");
-                      // Chiudi Settings prima della nav (Modal non deve
-                      // sopravvivere al cambio route in modo strano).
-                      setShowSettings(false);
-                      // Navigazione DIRETTA: se l'intro premium non è mai
-                      // stata vista, mandalo lì; altrimenti resta sulla home.
-                      // NOTA: NON servono ulteriori Alert — l'utente vede
-                      // il risultato visivo del cambio schermo.
-                      if (!introSeen) {
-                        console.log("[DEV_SIMULATE_PREMIUM] → /intro-premium (mai vista)");
-                        router.replace("/intro-premium");
-                      } else {
-                        console.log("[DEV_SIMULATE_PREMIUM] intro-premium già vista → stay on home");
-                        // Marca la key module-level così Home router non ridecide
-                        markRouterDecided((p as any)?.id || null, "monthly");
-                      }
-                    } catch (e: any) {
-                      setAdminError(`Errore: ${e?.message || e}`);
-                    } finally {
-                      setAdminBusy(false);
-                    }
-                  }}
-                  testID="dev-simulate-premium-btn"
-                >
-                  <Ionicons name="diamond-outline" size={18} color="#00F5D4" />
-                  <Text style={{ color: "#00F5D4", fontSize: 14, fontWeight: "600", marginLeft: 10 }}>
-                    Simula Premium (monthly) · v2
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={{
-                    paddingVertical: 12,
-                    paddingHorizontal: 14,
-                    backgroundColor: theme.text + "0c",
-                    borderRadius: 10,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    marginBottom: 8,
-                    opacity: adminBusy ? 0.5 : 1,
-                  }}
-                  disabled={adminBusy}
-                  onPress={async () => {
-                    setAdminBusy(true);
-                    setAdminError(null);
-                    try {
-                      await api.devSetTier(null);
-                      // === FIX 2026-09-06 v65.22 (Fabio) ===================
-                      // "Torna Free · v2" faceva router.replace('/lascia-andare')
-                      // DIRETTAMENTE → saltava il modal LasciaAndareIntroModal
-                      // e la sequenza di preambolo. L'utente non poteva
-                      // testare l'intro Free "dall'inizio inizio".
-                      // Fix: 
-                      //   1. Reset flag `lascia_andare_intro_seen_at` server-side
-                      //      (devFirstBootReset unset TUTTI i flag onboarding,
-                      //       adesso incluso il nome corretto del campo LA)
-                      //   2. Reset SecureStore locale (device-specific)
-                      //   3. router.replace('/') → home → tap pill Lascia Andare
-                      //      → modal preambolo → naviga a /lascia-andare vera
-                      // L'utente vede l'intero flow di scoperta come al
-                      // primissimo boot.
-                      try { await api.devFirstBootReset(); } catch (e) {
-                        console.warn("[DEV_SIMULATE_FREE] first-boot-reset failed:", e);
-                      }
-                      // === FIX v65.29 (2026-09-07) — REGRESSIONE CRITICA ============
-                      // Il backend `/api/profile` ha una whitelist hardcoded
-                      // (`_UNLIMITED_PRESEED_EMAILS` in server.py:4693) che
-                      // FORZA `subscription_tier="unlimited"` per Fabio a
-                      // ogni chiamata → devSetTier(null) è inutile perché al
-                      // prossimo getProfile() il tier viene ripristinato a
-                      // "unlimited" → il router intro-premium redirige a
-                      // /intro-premium ("Ho capito, Ho capito, Ho capito")
-                      // invece di /intro-v3.
-                      // Il codice v65.21 aveva già creato il flag
-                      // `koda_dev_force_free_tier` che aggiunge `?force_free=1`
-                      // a GET /profile (backend server.py:3452 skippa la
-                      // whitelist patch), ma il bottone "Torna Free · v2"
-                      // non lo attivava. Attivo il flag QUI, prima di
-                      // getProfile(), così tier resta null e Fabio vede la
-                      // sequenza Free reale.
-                      // NOTA: il flag resterà settato finché Fabio non lo
-                      // toglie dal toggle "Forza Free (dev)" in Settings.
-                      try {
-                        await SecureStore.setItemAsync("koda_dev_force_free_tier", "1");
-                        console.warn(
-                          "[DEV_SIMULATE_FREE_V2] koda_dev_force_free_tier=1 → backend whitelist patch SKIPPED"
-                        );
-                      } catch (e) {
-                        console.warn("[DEV_SIMULATE_FREE_V2] force_free flag set failed:", e);
-                      }
-                      try {
-                        const secureKeys = [
-                          "la_intro_seen",
-                          "koda_disclaimer_seen_v2",
-                          "koda_intro_seen",
-                          "hint_first_scroll_seen",
-                          "hint_write_seen",
-                          // === FIX v65.25 (2026-09-07) — REGRESSIONE FLUSSO FREE =========
-                          // Prima queste 3 chiavi restavano in SecureStore dopo
-                          // "Torna Free · v2" → l'utente saltava la sequenza
-                          // completa Free e finiva DIRETTAMENTE al paywall
-                          // (rate-limit microdemo 24h) o saltava intro-v3
-                          // (intro_v3_completed_at presente). Il codice sapeva
-                          // già che vanno cancellate: stesse 3 chiavi sono
-                          // già cancellate correttamente in altri 3 punti
-                          // (index.tsx:4361-4364, index.tsx:7015-7020,
-                          //  lascia-andare.tsx:1120-1122). Qui erano dimenticate.
-                          "intro_v3_completed_at",
-                          "heart_reveal_dismissed_at",
-                          "microdemo_last_at",
-                        ];
-                        await Promise.all(secureKeys.map((k) =>
-                          SecureStore.deleteItemAsync(k).catch(() => {})
-                        ));
-                      } catch {}
-                      const p = await api.getProfile();
-                      hasRedirectedIntroV3Ref.current = false;
-                      lastV3DecidedKeyRef.current = null;
-                      hasRedirectedFreeUserRef.current = false;
-                      lastFreePremiumDecidedKeyRef.current = null;
-                      hasRedirectedIntroPremiumRef.current = false;
-                      lastIntroPremiumDecidedKeyRef.current = null;
-                      // === FIX v65.27 (2026-09-07) — REGRESSIONE GRAVE =========
-                      // BUG: "Torna Free · v2" cancellava SecureStore ma NON
-                      // resettava `introV3State` in memoria. Il router V3
-                      // (index.tsx:1035) controlla `if (introV3State !== "needed") return;`.
-                      // Dopo il bottone, `introV3State` restava "completed"
-                      // (stale, valore letto al primo mount) → router V3 NON
-                      // reindirizzava a /intro-v3 → l'utente non vedeva mai
-                      // la sequenza narrativa iniziale nonostante il flag
-                      // SecureStore fosse stato cancellato.
-                      // FIX: forziamo lo state a "needed" ora che il flag è null.
-                      setIntroV3State("needed");
-                      resetLastDecidedKey();
-                      let introSeen = true;
-                      try {
-                        const st = await api.getIntroPremiumState();
-                        introSeen = !!st?.seen;
-                      } catch {}
-                      setIntroPremiumState(introSeen ? "completed" : "needed");
-                      saveProfileCache(p).catch(() => {});
-                      setProfile(p);
-                      setProfileHydrated("network");
-                      setShowSettings(false);
-                      markRouterDecided((p as any)?.id || null, null);
-                      // Naviga a HOME, NON direttamente a lascia-andare —
-                      // così il tap sul pill triggera il modal di preambolo
-                      // ora che il flag è azzerato.
-                      console.log(
-                        "[DEV_SIMULATE_FREE_V2] reset done — cleared SecureStore keys=[" +
-                          "la_intro_seen, koda_disclaimer_seen_v2, koda_intro_seen, " +
-                          "hint_first_scroll_seen, hint_write_seen, " +
-                          "intro_v3_completed_at, heart_reveal_dismissed_at, microdemo_last_at" +
-                          "] → router.replace('/')"
-                      );
-                      router.replace("/");
-                    } catch (e: any) {
-                      setAdminError(`Errore: ${e?.message || e}`);
-                    } finally {
-                      setAdminBusy(false);
-                    }
-                  }}
-                  testID="dev-simulate-free-btn"
-                >
-                  <Ionicons name="arrow-undo-outline" size={18} color={theme.text + "99"} />
-                  <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500", marginLeft: 10 }}>
-                    Torna Free · v2
-                  </Text>
-                </TouchableOpacity>
-
-                {/* === RIPETI INTRO PREMIUM — RIPRISTINATO 2026-06 (Fabio) =====
-                    NOTA: Non è duplicato di "Rivedi Intro Premium (admin)"
-                    (vicino a "I miei ricordi"). Sono due strumenti diversi:
-                    - "Rivedi Intro Premium (admin)" → replay IMMEDIATO del
-                      flusso (client-side reopenIntroPremium)
-                    - "Ripeti Intro Premium" (qui) → reset flag server-side
-                      (devIntroPremiumReset), l'Intro parte al PROSSIMO ingresso
-                      alla home Premium — utile per QA cold-boot. */}
-                <TouchableOpacity
-                  style={{
-                    paddingVertical: 12,
-                    paddingHorizontal: 14,
-                    backgroundColor: theme.text + "0c",
-                    borderRadius: 10,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    opacity: adminBusy ? 0.5 : 1,
-                  }}
-                  disabled={adminBusy}
-                  onPress={async () => {
-                    setAdminBusy(true);
-                    setAdminError(null);
-                    try {
-                      await api.devIntroPremiumReset();
-                      try { await SecureStore.deleteItemAsync("intro_premium_seen_at"); } catch {}
-                      Alert.alert(
-                        "✓ Reset fatto",
-                        "L'Intro Premium ripartirà al prossimo ingresso alla home Koda conv da Premium."
-                      );
-                    } catch (e: any) {
-                      setAdminError(`Errore: ${e?.message || e}`);
-                    } finally {
-                      setAdminBusy(false);
-                    }
-                  }}
-                  testID="dev-reset-intro-premium-btn"
-                >
-                  <Ionicons name="refresh-outline" size={18} color={theme.text + "99"} />
-                  <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500", marginLeft: 10 }}>
-                    Ripeti Intro Premium (reset flag)
-                  </Text>
-                </TouchableOpacity>
-
-                {/* === RIPETI PRIMO BOOT COMPLETO (Fabio 2026-08-24) ===
-                    Reset TOTALE dell'onboarding: server-side (tier→Free,
-                    intro-premium/V3/LA/disclaimer flag unset) + client-side
-                    (SecureStore + cache profilo + router state). Al termine
-                    l'app viene ricaricata via Updates.reloadAsync() così il
-                    boot flow riparte da capo: Splash → Disclaimer → V3 →
-                    HeartVoiceReveal → LA firstBoot → Home. */}
-                <TouchableOpacity
-                  style={{
-                    paddingVertical: 12,
-                    paddingHorizontal: 14,
-                    backgroundColor: "#F59E0B22",
-                    borderRadius: 10,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    opacity: adminBusy ? 0.5 : 1,
-                    borderWidth: 1,
-                    borderColor: "#F59E0B44",
-                  }}
-                  disabled={adminBusy}
-                  onPress={async () => {
-                    setAdminBusy(true);
-                    setAdminError(null);
-                    try {
-                      // 1) Reset server-side: tutti i flag onboarding
-                      await api.devFirstBootReset();
-                      // 2) Reset SecureStore locale (device-specific)
-                      const secureKeys = [
-                        "intro_v3_completed_at",
-                        "intro_premium_seen_at",
-                        "koda_disclaimer_seen_v2",
-                        "koda_intro_seen",
-                        "la_intro_seen",
-                        "heart_voice_reveal_seen",
-                        "hint_first_scroll_seen",
-                        "hint_write_seen",
-                      ];
-                      await Promise.all(
-                        secureKeys.map((k) =>
-                          SecureStore.deleteItemAsync(k).catch(() => {})
-                        )
-                      );
-                      // 3) Reset cache profilo su filesystem
-                      await clearProfileCache();
-                      // 4) Reset router state module-level (incluso session splash flag)
-                      resetRouterGlobalState();
-                      // 5) Reset refs locali (defensivo, prima del reload)
-                      hasRedirectedIntroV3Ref.current = false;
-                      lastV3DecidedKeyRef.current = null;
-                      hasRedirectedFreeUserRef.current = false;
-                      lastFreePremiumDecidedKeyRef.current = null;
-                      hasRedirectedIntroPremiumRef.current = false;
-                      lastIntroPremiumDecidedKeyRef.current = null;
-                      // 6) Chiudi Settings modal
-                      setShowSettings(false);
-                      // 7) Reload dell'app — Updates.reloadAsync() ricarica
-                      // il bundle JS. Su native rifà mount da zero (=cold boot
-                      // logico). Su web fa un window.location.reload().
-                      Alert.alert(
-                        "✓ Reset primo boot completo",
-                        "L'app riparte da zero: rivedrai Splash → Disclaimer → V3 → HeartVoiceReveal → LA firstBoot.",
-                        [
-                          {
-                            text: "Riparti ora",
-                            onPress: async () => {
-                              try {
-                                await Updates.reloadAsync();
-                              } catch (e) {
-                                // Fallback: naviga a "/" e forza reset stati React
-                                setProfile(null);
-                                setProfileHydrated("boot");
-                                setShowSplash(true);
-                                setIntroV3State("checking");
-                                setIntroPremiumState("checking");
-                                try { router.replace("/"); } catch {}
-                              }
-                            },
-                          },
-                        ]
-                      );
-                    } catch (e: any) {
-                      setAdminError(`Errore: ${e?.message || e}`);
-                    } finally {
-                      setAdminBusy(false);
-                    }
-                  }}
-                  testID="dev-first-boot-reset-btn"
-                >
-                  <Ionicons name="rocket-outline" size={18} color="#F59E0B" />
-                  <Text style={{ color: "#F59E0B", fontSize: 14, fontWeight: "600", marginLeft: 10 }}>
-                    Ripeti primo boot completo · v2
-                  </Text>
-                </TouchableOpacity>
-
-                {/* === SITUATION TRACKING TOGGLE (Fabio 2026-08-24) ===
-                    Attiva/disattiva la memoria situazionale per il test
-                    vocale delle 7 frasi. Legge lo stato attuale dal profile
-                    corrente, e al tap invia PUT /profile con il valore
-                    invertito. Il visual state si aggiorna dopo la risposta. */}
-                <TouchableOpacity
-                  style={{
-                    paddingVertical: 12,
-                    paddingHorizontal: 14,
-                    backgroundColor: (profile?.settings as any)?.situation_tracking_enabled
-                      ? "#00F5D422"
-                      : "#64748B22",
-                    borderRadius: 10,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    opacity: adminBusy ? 0.5 : 1,
-                    borderWidth: 1,
-                    borderColor: (profile?.settings as any)?.situation_tracking_enabled
-                      ? "#00F5D466"
-                      : "#64748B44",
-                  }}
-                  disabled={adminBusy}
-                  onPress={async () => {
-                    setAdminBusy(true);
-                    setAdminError(null);
-                    try {
-                      const current = !!(profile?.settings as any)?.situation_tracking_enabled;
-                      const next = !current;
-                      const updated = await api.updateProfile({
-                        settings: {
-                          ...(profile?.settings || {}),
-                          situation_tracking_enabled: next,
-                        } as any,
-                      });
-                      saveProfileCache(updated).catch(() => {});
-                      setProfile(updated);
-                      Alert.alert(
-                        next ? "✓ Situation Tracking ATTIVO" : "○ Situation Tracking disattivo",
-                        next
-                          ? "Ora Koda memorizzerà persone/situazioni durante le prossime conversazioni. Vai in home e dì le 7 frasi del test."
-                          : "Situation Tracking disabilitato. Le nuove conversazioni non popoleranno la collezione situations."
-                      );
-                    } catch (e: any) {
-                      setAdminError(`Errore: ${e?.message || e}`);
-                    } finally {
-                      setAdminBusy(false);
-                    }
-                  }}
-                  testID="dev-situation-tracking-toggle"
-                >
-                  <View style={{ flexDirection: "row", alignItems: "center" }}>
-                    <Ionicons
-                      name={
-                        (profile?.settings as any)?.situation_tracking_enabled
-                          ? "sparkles"
-                          : "sparkles-outline"
-                      }
-                      size={18}
-                      color={
-                        (profile?.settings as any)?.situation_tracking_enabled
-                          ? "#00F5D4"
-                          : "#94A3B8"
-                      }
-                    />
-                    <Text
-                      style={{
-                        color: (profile?.settings as any)?.situation_tracking_enabled
-                          ? "#00F5D4"
-                          : "#94A3B8",
-                        fontSize: 14,
-                        fontWeight: "600",
-                        marginLeft: 10,
-                      }}
-                    >
-                      Situation Tracking · v2
-                    </Text>
-                  </View>
-                  <Text
-                    style={{
-                      color: (profile?.settings as any)?.situation_tracking_enabled
-                        ? "#00F5D4"
-                        : "#94A3B8",
-                      fontSize: 13,
-                      fontWeight: "700",
-                    }}
-                  >
-                    {(profile?.settings as any)?.situation_tracking_enabled ? "ON" : "OFF"}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            ) : null}
-
-            {/* === AIUTO / SEGNALA UN PROBLEMA (2026-07-24 pre-lancio) ===
-                Reframing del vecchio bottone "Diagnostica" — stessa funzione
-                tecnica sotto (raccolta log [KODA_VAD] [KODA_TIMING]
-                [KODA_SUMMARY] + copia/condividi) ma presentata in modo
-                comprensibile per l'utente finale. Così anche dopo il lancio
-                continuiamo a ricevere diagnosi utili dagli utenti reali
-                che incontrano un problema. */}
-            <TouchableOpacity
-              style={{
-                marginTop: 16,
-                paddingVertical: 12,
-                paddingHorizontal: 14,
-                backgroundColor: theme.text + "0c",
-                borderRadius: 10,
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-              }}
-              onPress={() => {
-                closeSettings();
-                setTimeout(() => router.push("/diagnostics"), 200);
-              }}
-              testID="report-problem-btn"
-            >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
-                <Ionicons name="help-buoy-outline" size={18} color={theme.text + "99"} />
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500" }}>
-                    Hai un problema? Segnala
-                  </Text>
-                  <Text style={{ color: theme.text + "66", fontSize: 11, marginTop: 2 }}>
-                    Raccoglie un piccolo diario tecnico da inviarci per capire cos&apos;è successo.
-                  </Text>
-                </View>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={theme.text + "66"} />
-            </TouchableOpacity>
-
-            {/* === RIMOSSO 2026-07-09 su richiesta utente ===
-                Il pulsante "Controlla aggiornamenti" non funzionava
-                (Updates.checkForUpdateAsync non rispondeva mai su questa
-                pipeline OTA). Rimosso completamente. Se serve ricontrollare
-                la versione bundle, il footer sotto mostra già il numero. */}
-
-            {/* === CANCELLA MEMORIA — POSIZIONE FINALE (2026-07, utente) ===
-                Posizionato subito sopra il footer bundle info per rendere
-                il gesto distruttivo l'ultimo elemento della lista. */}
-            <View style={styles.divider} />
-            <TouchableOpacity
-              onPress={resetMemory}
-              style={styles.dangerBtn}
-              testID="reset-btn"
-            >
-              <Ionicons name="trash-outline" size={16} color={theme.danger} />
-              <Text style={styles.dangerBtnText}>Cancella tutta la memoria</Text>
-            </TouchableOpacity>
-            <Text style={styles.dangerHint}>
-              Reset completo: profilo, taccuino e ogni ricordo.
-            </Text>
-
-            {/* === VERSIONE APP (pre-lancio 2026-07-24) ===
-                Footer minimale user-facing. NB: il triple-tap Easter egg
-                che puntava a /mockup-light è stato rimosso 2026-08-04
-                insieme al mockup light-mode (tema light rimosso).
-
-                === DEV MENU QA (Fabio 2026-06) ===
-                5 tap consecutivi sul numero versione entro 3s → Alert QA
-                con 3 azioni (reset onboarding + microdemo cooldown, force
-                Premium monthly, force Free). Invisibile agli utenti finali.
-                Il tap counter si azzera dopo 3s di inattività. */}
-            <View style={{ alignItems: "center", marginTop: 24, marginBottom: 8 }}>
-              <TouchableOpacity
-                activeOpacity={1}
-                onPress={handleDevMenuTap}
-                testID="dev-menu-tap-target"
-              >
-                <Text style={{ color: theme.text + "55", fontSize: 11, fontStyle: "italic" }}>
-                  Koda v{Constants.expoConfig?.version || "1.0.1"}
-                </Text>
-              </TouchableOpacity>
-              {/* === FOOTER DEBUG INFO — SOLO ADMIN (Fabio 2026-06) =============
-                  Il build tag (v65.xx-descriptor) e la riga rt/vc sono
-                  informazioni tecniche utili per debug/support ma confondono
-                  l'utente finale ("perché questa stringa criptica?").
-                  Le mostriamo SOLO agli admin (whitelist). L'utente vede
-                  solo "Koda v1.0.263" pulito. */}
-              {isAdmin ? (
-                <>
-                  <Text style={{ color: theme.text + "33", fontSize: 9, marginTop: 3, letterSpacing: 0.5 }}>
-                    {KODA_BUILD_SHORT_TAG}
-                  </Text>
-                  {/* === DIAGNOSTICA runtimeVersion (2026-08-26, Fabio) =============
-                      Se il footer sotto mostra "rt:1.0.113" invece di "rt:1.0.126",
-                      significa che questo APK è stato costruito da uno snapshot
-                      container ANTECEDENTE al bump — prova che la pipeline di
-                      build serve uno snapshot stale. Utile per il ticket Emergent
-                      Support. Testo minuscolo per non disturbare l'UI. */}
-                  <Text style={{ color: theme.text + "22", fontSize: 8, marginTop: 2, letterSpacing: 0.3 }}>
-                    rt:{Constants.expoConfig?.runtimeVersion || "?"} · vc:{Constants.expoConfig?.android?.versionCode ?? Constants.expoConfig?.ios?.buildNumber ?? "?"}
-                  </Text>
-                </>
-              ) : null}
-            </View>
-</>)}
-            </ScrollView>
           </View>
         </View>
       </Modal>
