@@ -1,19 +1,22 @@
 /**
- * OllenyaSplash (già OllenyaSplash) — splash screen all'apertura dell'app.
+ * OllenyaSplash — splash identitario dell'app.
  *
- * === v65.39 REBRAND (Fabio 2026-06) ======================================
+ * === v65.42 (Fabio 2026-06 fix definitivo) ================================
  *
- * Fabio ha ribrandizzato l'app da "Ollenya" a "Ollenya" perché "Ollenya" era già
- * usato da altri prodotti. Il file mantiene il nome legacy `OllenyaSplash.tsx`
- * per non richiedere refactor import esteso (rename fisico in fase 2).
+ * Riscritto da zero per allineare esattamente al reference finale di Fabio
+ * (asset2.png): eclissi grande centrata, wordmark serif elegante "Ollenya"
+ * dove la "O" iniziale È essa stessa una piccola eclissi, sottotitolo
+ * "Sempre con te" italic con letter-spacing, sfondo nero puro.
  *
- * Splash aggiornato:
- *   1. Wordmark "Ollenya" (sostituisce "Ollenya") con MINI-ECLISSI al posto
- *      della prima "O" iniziale — mantiene il pattern iconico del logo.
- *   2. Glow monocolore CHAMPAGNE (stesso hex dell'idle NeonBorder:
- *      #F5E6CC / #D4B896 / #8B6F4E) — signature calda unica, no ciclo 4 colori.
- *   3. Pulse morbido: l'alone respira su/giù in opacity per dare vita
- *      senza cambiare tinta.
+ * Fix rispetto v65.41:
+ *   1. Eliminato il glow layer "Ollenya" completo che si sovrapponeva
+ *      graficamente sopra al row [mini-orb + "llenya"] causando doppioni.
+ *   2. Font cambiato a SERIF (Baskerville iOS / serif Android) per matchare
+ *      lo stile editoriale del reference.
+ *   3. Ciclo 4 palette PARTE DA CHAMPAGNE poi passa a viola → Tiffany →
+ *      ciclamino → rosa → ritorno a champagne. Il champagne è la firma
+ *      identitaria dominante.
+ *   4. Brand-lock: wordmark hardcoded "Ollenya", ignora `aiName` prop.
  */
 import React, { useEffect, useRef } from "react";
 import {
@@ -24,6 +27,7 @@ import {
   Easing,
   Pressable,
   Dimensions,
+  Platform,
 } from "react-native";
 import Svg, { Defs, RadialGradient, Stop, Circle } from "react-native-svg";
 
@@ -33,12 +37,18 @@ interface Props {
   onComplete: () => void;
 }
 
-// === PALETTE CHAMPAGNE (monocolore) ======================================
-// Riuso ESATTO della palette "neutral" dell'EclipseOrb (idle NeonBorder),
-// così il splash e lo stato idle dell'app condividono la stessa firma di
-// colore → coerenza identitaria.
-//   [alone chiaro, tinta media, tinta scura]
+// === 5 PALETTE (Champagne + 4 tonalità cicliche) ==========================
+// Il champagne è la firma: appare all'inizio e alla fine di ogni giro,
+// così l'utente lo vede sempre come tinta dominante. Le 4 tonalità
+// intermedie sono la "vita" dell'eclissi.
 const CHAMPAGNE: [string, string, string] = ["#F5E6CC", "#D4B896", "#8B6F4E"];
+const PALETTES: [string, string, string][] = [
+  CHAMPAGNE,                              // 0 — champagne (start/end)
+  ["#C4B5FD", "#8B5CF6", "#7C3AED"],      // 1 — viola/lavanda
+  ["#5EEAD4", "#14B8A6", "#0F766E"],      // 2 — Tiffany / petrolio
+  ["#F9A8D4", "#EC4899", "#BE185D"],      // 3 — ciclamino
+  ["#FBCFE8", "#F472B6", "#DB2777"],      // 4 — rosa caldo
+];
 
 // Sub-component: eclissi con anello luminoso + disco nero centrale.
 function OrbCircle({
@@ -77,80 +87,86 @@ function OrbCircle({
   );
 }
 
-export default function OllenyaSplash({ aiName: _aiName, duration = 10000, onComplete }: Props) {
-  // === BRAND-LOCK v65.41 (Fabio 2026-06 fix) ==============================
-  // Il splash è il LOGO DEL BRAND. Deve sempre mostrare "Ollenya"
-  // indipendentemente dal nome AI personalizzato dell'utente. In precedenza
-  // usavamo `aiName || "Ollenya"` come fallback, ma questo produceva "Koda"
-  // sul device di Fabio perché aveva salvato `ai_name = "Koda"` nel profilo
-  // prima del rebrand. Il nome AI personalizzato appartiene alla chat,
-  // non al brand.
-  void _aiName; // esplicitamente ignorato — riservato per future personalizzazioni
+// Font serif elegante multipiattaforma per il wordmark "Ollenya"
+const SERIF_FONT = Platform.select({
+  ios: "Didot",       // eleganza editoriale iOS
+  android: "serif",   // Android serif default (Droid Serif / Noto Serif)
+  default: "serif",
+});
+
+export default function OllenyaSplash({ aiName: _aiName, duration = 12000, onComplete }: Props) {
+  // Brand-lock: sempre "Ollenya", mai aiName utente.
+  void _aiName;
+  const suffix = "llenya"; // il "O" iniziale è la mini-eclissi
+
   const { width } = Dimensions.get("window");
-  const orbSize = Math.min(width * 0.78, 340);
-  const miniOrbSize = 38;
+  const orbSize = Math.min(width * 0.78, 360);
+  // Mini-eclissi allineata all'altezza x del serif (68pt) → ~44px
+  const miniOrbSize = 46;
 
   const fade = useRef(new Animated.Value(0)).current;
   const orbFade = useRef(new Animated.Value(0)).current;
   const textFade = useRef(new Animated.Value(0)).current;
-  // Pulse: opacity che respira 0.75 ↔ 1.0 in loop (2s andata, 2s ritorno)
-  const pulse = useRef(new Animated.Value(0)).current;
   const completedRef = useRef(false);
 
-  // === Fade-in iniziale ===
+  // === CROSS-FADE con PLATEAU su 5 palette ================================
+  const prog = useRef(new Animated.Value(0)).current;
+  const N = PALETTES.length; // 5
+  // Con duration=12s e N=5 → 2.4s per palette (>2s = ok visibile).
+  const segmentMs = Math.max(2000, Math.floor(duration / N));
+
+  // Fade-in scaglionato
   useEffect(() => {
     Animated.timing(fade, { toValue: 1, duration: 250, useNativeDriver: true }).start();
     Animated.timing(orbFade, {
-      toValue: 1,
-      duration: 1200,
-      delay: 100,
-      useNativeDriver: true,
+      toValue: 1, duration: 1200, delay: 100, useNativeDriver: true,
     }).start();
     Animated.timing(textFade, {
-      toValue: 1,
-      duration: 900,
-      delay: 900,
-      useNativeDriver: true,
+      toValue: 1, duration: 900, delay: 900, useNativeDriver: true,
     }).start();
   }, [fade, orbFade, textFade]);
 
-  // === Pulse: respiro morbido dell'alone ===
+  // Loop del progresso palette (0 → N in loop lineare)
   useEffect(() => {
     const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: 2200,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulse, {
-          toValue: 0,
-          duration: 2200,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-      ])
+      Animated.timing(prog, {
+        toValue: N,
+        duration: segmentMs * N,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
     );
     loop.start();
     return () => loop.stop();
-  }, [pulse]);
+  }, [prog, segmentMs, N]);
 
-  // Opacity dell'alone (pulse): oscilla 0.72 ↔ 1.0
-  const orbPulseOpacity = pulse.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.72, 1],
-  });
+  // Opacity con plateau per ogni palette (fw = fade width, on = plateau on)
+  const opacityFor = (k: number) => {
+    const fw = 0.2;
+    if (k === 0) {
+      // Champagne: doppio picco (start + wrap) per fluidità del loop
+      return prog.interpolate({
+        inputRange: [0, 1 - fw, 1, N - 1, N - fw, N],
+        outputRange: [1, 1, 0, 0, 1, 1],
+      });
+    }
+    const start = k - fw;
+    const on1 = k;
+    const on2 = k + 1 - fw;
+    const off = k + 1;
+    return prog.interpolate({
+      inputRange: [0, start, on1, on2, off, N],
+      outputRange: [0, 0, 1, 1, 0, 0],
+    });
+  };
 
-  // === Fade-out finale ===
+  // Fade-out finale
   useEffect(() => {
     const t = setTimeout(() => {
       if (completedRef.current) return;
       completedRef.current = true;
       Animated.timing(fade, {
-        toValue: 0,
-        duration: 800,
-        useNativeDriver: true,
+        toValue: 0, duration: 800, useNativeDriver: true,
       }).start(() => onComplete());
     }, duration);
     return () => clearTimeout(t);
@@ -160,72 +176,55 @@ export default function OllenyaSplash({ aiName: _aiName, duration = 10000, onCom
     if (completedRef.current) return;
     completedRef.current = true;
     Animated.timing(fade, {
-      toValue: 0,
-      duration: 350,
-      useNativeDriver: true,
+      toValue: 0, duration: 350, useNativeDriver: true,
     }).start(() => onComplete());
   };
-
-  // === Nome AI: fallback al nome brand "Ollenya" se non impostato =========
-  // === Nome del brand: hardcoded "Ollenya" (mai dinamico) =================
-  const rawName = "Ollenya";
-  // Split wordmark: cerca la PRIMA "o" case-insensitive.
-  // Per "Ollenya" → prefix="", suffix="llenya" → la mini-eclissi va PRIMA
-  // e il suffisso "llenya" dopo. Wordmark: [🌑]llenya
-  const oIdx = rawName.toLowerCase().indexOf("o");
-  const hasO = oIdx >= 0;
-  const prefix = hasO ? rawName.slice(0, oIdx) : rawName;
-  const suffix = hasO ? rawName.slice(oIdx + 1) : "";
 
   return (
     <Animated.View style={[styles.root, { opacity: fade }]} pointerEvents="auto">
       <Pressable style={StyleSheet.absoluteFill} onPress={handleSkip}>
         <View style={styles.centerCol}>
-          {/* === ECLISSI GRANDE — champagne monocolore con pulse ==========
-              Nessun ciclo di tinte: la firma è UNA — il champagne caldo
-              #D4B896 (stesso hex del NeonBorder idle). Vive di respiro,
-              non di cambio colore. */}
+          {/* === ECLISSI GRANDE — 5 palette con plateau (start: champagne) */}
           <Animated.View
             style={{
-              opacity: Animated.multiply(orbFade, orbPulseOpacity),
+              opacity: orbFade,
               width: orbSize,
               height: orbSize,
-              marginBottom: 48,
+              marginBottom: 56,
             }}
           >
-            <OrbCircle palette={CHAMPAGNE} size={orbSize} discRatio={0.58} />
+            {PALETTES.map((p, k) => (
+              <Animated.View
+                key={`orb_${k}`}
+                style={[StyleSheet.absoluteFill, { opacity: opacityFor(k) }]}
+              >
+                <OrbCircle palette={p} size={orbSize} discRatio={0.58} />
+              </Animated.View>
+            ))}
           </Animated.View>
 
-          {/* === WORDMARK "Ollenya" con MINI-ECLISSI al posto della "O" ===
-              Row: <mini-eclissi 38px> + "llenya"
-              La mini-eclissi ha lo stesso pulse dell'orb grande. */}
+          {/* === WORDMARK "Ollenya" — mini-eclissi + "llenya" serif italic
+               Row PULITO: [mini-orb] + [Text serif]. Nessun glow overlay
+               "Ollenya" completo dietro. Ogni elemento è indipendente. */}
           <Animated.View style={[styles.wordmarkRow, { opacity: textFade }]}>
-            {/* Glow layer champagne dietro (esteso, allargato) */}
-            <Text style={[styles.name, styles.nameGlow]} allowFontScaling={false}>
-              {rawName}
-            </Text>
-            {/* Prefix (per "Ollenya" è vuoto — o iniziale) */}
-            {prefix.length > 0 ? (
-              <Text style={[styles.name, styles.nameTop]} allowFontScaling={false}>
-                {prefix}
-              </Text>
-            ) : null}
-            {hasO ? (
-              <Animated.View
-                style={[
-                  styles.miniOrbWrap,
-                  { opacity: orbPulseOpacity },
-                ]}
-              >
-                <OrbCircle palette={CHAMPAGNE} size={miniOrbSize} discRatio={0.78} />
-              </Animated.View>
-            ) : null}
-            <Text style={[styles.name, styles.nameTop]} allowFontScaling={false}>
+            {/* Mini-eclissi al posto della "O" iniziale */}
+            <View style={styles.miniOrbWrap}>
+              {PALETTES.map((p, k) => (
+                <Animated.View
+                  key={`mini_${k}`}
+                  style={[StyleSheet.absoluteFill, { opacity: opacityFor(k) }]}
+                >
+                  <OrbCircle palette={p} size={miniOrbSize} discRatio={0.72} />
+                </Animated.View>
+              ))}
+            </View>
+            {/* Resto del wordmark */}
+            <Text style={styles.nameSuffix} allowFontScaling={false}>
               {suffix}
             </Text>
           </Animated.View>
 
-          {/* === SOTTOTITOLO ============================================= */}
+          {/* === SOTTOTITOLO — "Sempre con te" serif italic letter-spaced */}
           <Animated.Text
             style={[styles.tagline, { opacity: textFade }]}
             allowFontScaling={false}
@@ -261,41 +260,40 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 14,
-  },
-  name: {
-    color: "#F5E9DA", // bianco-crema caldo, matcha champagne
-    fontSize: 62,
-    fontWeight: "800",
-    letterSpacing: 1,
-    textAlign: "center",
-    includeFontPadding: false,
-  },
-  nameGlow: {
-    position: "absolute",
-    color: "rgba(212,184,150,0.28)",
-    textShadowColor: "rgba(212,184,150,0.9)",
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 26,
-    left: 0,
-    right: 0,
-    textAlign: "center",
-  },
-  nameTop: {
-    textShadowColor: "rgba(212,184,150,0.55)",
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 10,
+    marginBottom: 20,
+    // Ombra caldo-champagne dietro tutta la riga (sostituisce il glow
+    // duplicato che causava sovrapposizione). Effetto morbido di luce
+    // attorno al wordmark.
+    shadowColor: "#D4B896",
+    shadowOpacity: 0.5,
+    shadowRadius: 30,
+    shadowOffset: { width: 0, height: 0 },
   },
   miniOrbWrap: {
-    width: 38,
-    height: 38,
-    marginHorizontal: 1,
+    width: 46,
+    height: 46,
+    marginRight: 2,
+  },
+  nameSuffix: {
+    color: "#F5E9DA",
+    fontSize: 62,
+    fontWeight: "400",
+    letterSpacing: 0,
+    fontFamily: SERIF_FONT,
+    includeFontPadding: false,
+    textShadowColor: "rgba(212,184,150,0.6)",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 12,
   },
   tagline: {
-    color: "rgba(230,215,190,0.7)",
+    color: "rgba(230,215,190,0.75)",
     fontSize: 17,
-    letterSpacing: 3,
-    fontWeight: "400",
+    letterSpacing: 4,
+    fontStyle: "italic",
+    fontFamily: SERIF_FONT,
     textAlign: "center",
+    textShadowColor: "rgba(212,184,150,0.4)",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 8,
   },
 });
