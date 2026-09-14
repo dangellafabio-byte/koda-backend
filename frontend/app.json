@@ -13,7 +13,7 @@
       "supportsTablet": false,
       "usesAppleSignIn": true,
       "bundleIdentifier": "com.dangella.koda",
-      "buildNumber": "25",
+      "buildNumber": "26",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Per ascoltare la tua voce e parlare con Ollenya",
         "NSPhotoLibraryUsageDescription": "Per scegliere immagini di sfondo personalizzate",
@@ -27,7 +27,7 @@
     },
     "android": {
       "package": "com.dangella.koda",
-      "versionCode": 25,
+      "versionCode": 26,
       "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.RECORD_AUDIO",
