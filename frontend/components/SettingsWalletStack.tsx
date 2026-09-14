@@ -33,7 +33,7 @@
  *     sotto tra le card. Non è quello che chiede Wallet.
  *   - v2 (questo): browse-all-visible + expand-on-tap, sfondo opaco.
  */
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -41,7 +41,9 @@ import {
   Dimensions,
   TouchableOpacity,
   ScrollView,
+  PanResponder,
 } from "react-native";
+import * as Haptics from "expo-haptics";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -107,6 +109,27 @@ export default function SettingsWalletStack({
   const styles = useMemo(() => makeStyles(theme, insets.top, insets.bottom), [theme, insets.top, insets.bottom]);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
+  // === Navigazione Rolodex (Fabio 2026-06 v65.45) =========================
+  // Swipe verticale sull'header di una card espansa → cambia card.
+  //   swipe GIÙ  = card successiva (indice + 1)
+  //   swipe SU   = card precedente (indice - 1)
+  // Rispecchia il gesto fisico del Rolodex: giri la manopola verso di te
+  // → scheda dopo scorre in avanti. Threshold verticale 40px, agganciato al
+  // primo/ultimo (no wrap-around) per non disorientare l'utente.
+  const goToRelative = useCallback(
+    (delta: number) => {
+      if (!expandedKey) return;
+      const currentIdx = cards.findIndex((c) => c.key === expandedKey);
+      if (currentIdx < 0) return;
+      const targetIdx = Math.max(0, Math.min(cards.length - 1, currentIdx + delta));
+      if (targetIdx === currentIdx) return; // già ai bordi
+      // Haptic tick "clack" della manopola Rolodex
+      Haptics.selectionAsync().catch(() => {});
+      setExpandedKey(cards[targetIdx].key);
+    },
+    [cards, expandedKey],
+  );
+
   // Fabio 2026-06 iter 3: calcolo area disponibile tenendo conto di:
   //   - safe-area top (notch/Dynamic Island)
   //   - HEADER_CONTENT_H (titolo + subtitle + hint)
@@ -133,7 +156,7 @@ export default function SettingsWalletStack({
           <Text style={styles.title}>{title}</Text>
           <Text style={styles.subtitle}>{subtitle}</Text>
           <Text style={styles.hint}>
-            {expandedKey ? "Tocca l'intestazione per tornare indietro." : hint}
+            {expandedKey ? "Scorri su/giù per cambiare scheda · tocca l'intestazione per tornare." : hint}
           </Text>
         </View>
         <TouchableOpacity
@@ -171,6 +194,8 @@ export default function SettingsWalletStack({
               expandedIndex={
                 expandedKey ? cards.findIndex((c) => c.key === expandedKey) : -1
               }
+              onSwipeNext={() => goToRelative(+1)}
+              onSwipePrev={() => goToRelative(-1)}
             />
           );
         })}
@@ -220,6 +245,8 @@ type ItemProps = {
   styles: any;
   expandedKey: string | null;
   expandedIndex: number;
+  onSwipeNext?: () => void;
+  onSwipePrev?: () => void;
 };
 
 function WalletCardItem({
@@ -237,6 +264,8 @@ function WalletCardItem({
   styles,
   expandedKey,
   expandedIndex,
+  onSwipeNext,
+  onSwipePrev,
 }: ItemProps) {
   // Posizioni target in base allo state.
   // BROWSE state: card i-esima ha top = i * browseCardStep, altezza CARD_HEADER_H (con contenuto nascosto).
@@ -318,6 +347,37 @@ function WalletCardItem({
     else onOpen();
   };
 
+  // === PANRESPONDER ROLODEX (Fabio 2026-06 v65.45) =========================
+  // Swipe verticale sull'HEADER di una card ESPANSA → naviga alla prev/next
+  // card senza dover fare tap. Threshold 40px per evitare falsi trigger su
+  // micro-scroll. Attivo solo su card espansa; nel body (dove ci sono slider,
+  // toggle, scroll interno) NON viene applicato → nessuna interferenza con
+  // controlli interni.
+  //   dy > +40  → swipe GIÙ = card successiva (indice + 1)
+  //   dy < -40  → swipe SU  = card precedente (indice - 1)
+  const swipeThreshold = 40;
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        // Ci pigliamo il gesto solo se è chiaramente verticale e sopra soglia
+        // di intent. |dy| > 10 filtra i tap semplici (che restano al
+        // TouchableOpacity sottostante).
+        onMoveShouldSetPanResponder: (_, gs) => {
+          if (!isExpanded) return false;
+          return Math.abs(gs.dy) > 10 && Math.abs(gs.dy) > Math.abs(gs.dx);
+        },
+        onPanResponderRelease: (_, gs) => {
+          if (!isExpanded) return;
+          if (gs.dy > swipeThreshold) {
+            onSwipeNext?.();
+          } else if (gs.dy < -swipeThreshold) {
+            onSwipePrev?.();
+          }
+        },
+      }),
+    [isExpanded, onSwipeNext, onSwipePrev],
+  );
+
   return (
     <Animated.View
       style={[styles.cardWrap, aStyle, { zIndex: targetZ }]}
@@ -325,7 +385,8 @@ function WalletCardItem({
       testID={`settings-card-${card.key}`}
     >
       <View style={[styles.card, compactMode ? styles.cardCompact : null]}>
-        {/* Header cliccabile — apre/chiude */}
+        {/* Header — tap apre/chiude, swipe verticale naviga (solo se espansa) */}
+        <View {...panResponder.panHandlers}>
         <TouchableOpacity
           activeOpacity={0.85}
           onPress={onHeaderPress}
@@ -375,6 +436,7 @@ function WalletCardItem({
             </>
           )}
         </TouchableOpacity>
+        </View>
 
         {/* Body — visibile solo quando espansa */}
         {isExpanded ? (
