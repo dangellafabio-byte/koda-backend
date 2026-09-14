@@ -79,8 +79,8 @@ class TestProfileFabio:
     def test_profile_koda_voice_aria(self):
         r = requests.get(f"{BASE_URL}/api/profile", timeout=15)
         data = r.json()
-        assert data.get("koda_voice") == "aria", (
-            f"koda_voice={data.get('koda_voice')!r}, expected 'aria'"
+        assert data.get("ollenya_voice") == "aria", (
+            f"koda_voice={data.get('ollenya_voice')!r}, expected 'aria'"
         )
 
     def test_profile_onboarded_true(self):
@@ -124,7 +124,7 @@ class TestProfileConsistency:
             d = r.json()
             names.append(d.get("name"))
             msgs.append(d.get("total_messages"))
-            voices.append(d.get("koda_voice"))
+            voices.append(d.get("ollenya_voice"))
         # All 5 must be Fabio, aria — no oscillation allowed. total_messages
         # must be stable within the 5-call window (may be >=634 as profile grows).
         assert set(names) == {"Fabio"}, f"name oscillation: {names}"

@@ -22,7 +22,7 @@ const MAX_EVENTS = 500;
 // anche se in passato è stato emesso con prefisso vecchio (es. [VAD_TRACE]
 // senza "KODA_" davanti — bug del 2026-06-23 in voice.ts).
 const CAPTURE_PREFIXES = [
-  "[KODA_",        // Tutti gli eventi nuovi del sistema diagnostico Koda
+  "[KODA_",        // Tutti gli eventi nuovi del sistema diagnostico Ollenya
   "[VAD_",         // Legacy: [VAD_TRACE], [VAD_CALIB] emessi prima del rename
   "[AUDIO_HONESTY", // Honesty Phase 1
 ];
@@ -47,7 +47,7 @@ let originalError: typeof console.error | null = null;
 /**
  * Wrap che cattura un metodo di console (log/warn/error) nel buffer
  * diagnostico. Fix 2026-06-25: prima si intercettava SOLO console.log,
- * quindi `console.warn("[KODA_X] error: ...")` veniva eseguito ma NON
+ * quindi `console.warn("[OLLENYA_X] error: ...")` veniva eseguito ma NON
  * salvato nel ring buffer → "silenzio" ingannevole nei log esportati
  * (gli errori avvenivano, semplicemente non li vedevamo).
  */
@@ -103,16 +103,16 @@ export function clearDiagEvents(): void {
  * Formato: timestamp ISO relativo a "ora" + riga del log.
  *
  * Esempio output:
- *   -02:14.103 [KODA_VAD] heartbeat t=500ms ...
- *   -02:13.532 [KODA_VAD] speech_start db=-28 ...
- *   -02:13.103 [KODA_TIMING] VOICE_END 1234ms ...
+ *   -02:14.103 [OLLENYA_VAD] heartbeat t=500ms ...
+ *   -02:13.532 [OLLENYA_VAD] speech_start db=-28 ...
+ *   -02:13.103 [OLLENYA_TIMING] VOICE_END 1234ms ...
  */
 export function formatDiagEventsForExport(events?: DiagEvent[]): string {
   const evs = events ?? buffer;
   if (evs.length === 0) return "(nessun evento KODA_* catturato)";
   const now = Date.now();
   const lines: string[] = [];
-  lines.push(`=== Koda diag log — ${new Date(now).toISOString()} ===`);
+  lines.push(`=== Ollenya diag log — ${new Date(now).toISOString()} ===`);
   lines.push(`Eventi catturati: ${evs.length} (max ${MAX_EVENTS})`);
   lines.push("");
   for (const ev of evs) {

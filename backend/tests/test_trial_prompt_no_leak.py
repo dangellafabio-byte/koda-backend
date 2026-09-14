@@ -2,12 +2,12 @@
 === TRIAL CLOSING PROMPT — Anti-leak test (2026-08-10, Fabio) ===
 
 Test di sicurezza che blocca la build se il blocco iniettato nel system
-prompt di Koda durante la fase "closing" del trial contiene ANCHE UNA SOLA
+prompt di Ollenya durante la fase "closing" del trial contiene ANCHE UNA SOLA
 parola vietata dalla spec (numeri, prezzi, nomi piani, unità temporali,
 categorie commerciali).
 
 Se questo test fallisce dopo una modifica al codice, significa che qualcuno
-ha inavvertitamente introdotto un termine che rischia di far dire a Koda
+ha inavvertitamente introdotto un termine che rischia di far dire a Ollenya
 qualcosa di tecnico/commerciale nel momento più delicato dell'esperienza —
 la chiusura del primo incontro.
 
@@ -84,7 +84,7 @@ def test_trial_closing_prompt_has_no_forbidden_tokens():
             leaked.append(token)
     assert not leaked, (
         f"TRIAL_CLOSING_PROMPT_BLOCK contiene token vietati che potrebbero "
-        f"contaminare la risposta di Koda: {leaked}\n\n"
+        f"contaminare la risposta di Ollenya: {leaked}\n\n"
         f"Non aggiungere numeri/prezzi/nomi piani/unità temporali nel blocco. "
         f"Le direttive devono essere astratte e categoriali "
         f"(vedi spec Fabio 2026-08-10)."

@@ -5,7 +5,7 @@
  *
  * ⚠️  REGOLA DI PRIVACY BLOCCANTE (Fabio 2026-07-23) ⚠️
  * ─────────────────────────────────────────────────────────────
- * Questo modulo APRE WebSocket verso il backend Koda e INVIA testo
+ * Questo modulo APRE WebSocket verso il backend Ollenya e INVIA testo
  * trascritto tramite `{type:"transcript_from_client", text, ...}`.
  * Il testo LASCIA il device.
  *
@@ -26,7 +26,7 @@
  * via il pacchetto `expo-speech-recognition@3.1.3`. La trascrizione avviene
  * ON-DEVICE (nessun audio grezzo lascia il telefono), sfruttando il pipeline
  * di noise cancellation Apple. Solo il testo trascritto viene inviato al
- * backend WSS Koda, che poi esegue la pipeline LLM (Claude) + TTS (ElevenLabs)
+ * backend WSS Ollenya, che poi esegue la pipeline LLM (Claude) + TTS (ElevenLabs)
  * IDENTICA al percorso Deepgram.
  *
  * Interfaccia PUBBLICA equivalente a VoiceStreamSession (start/stop/abort +
@@ -34,7 +34,7 @@
  * (speech.ts) via feature flag EXPO_PUBLIC_USE_CLIENT_STT.
  *
  * Flusso:
- *   1. Apri WS al backend Koda
+ *   1. Apri WS al backend Ollenya
  *   2. Manda { type:"start", stt_source:"client_apple", ... } → backend sa che
  *      NON deve aspettare audio binario per Deepgram
  *   3. Avvia SFSpeechRecognizer on-device (lang="it-IT", ondevice=true)
@@ -53,7 +53,7 @@
  *  - NON toccare `voiceStream.ts` (percorso Deepgram) — deve restare intatto
  *    come fallback in caso di regressione.
  *  - NON modificare la firma di VoiceStreamCallbacks — è condivisa.
- *  - Diagnostica: log `[KODA_CLIENT_STT]` per differenziarlo dal Deepgram path.
+ *  - Diagnostica: log `[OLLENYA_CLIENT_STT]` per differenziarlo dal Deepgram path.
  */
 
 import { Platform, AppState } from "react-native";
@@ -75,7 +75,7 @@ const TAG = "KODA_CLIENT_STT";
 
 // === FIX 2026-07-23 — Usa Railway hardcoded, NON il preview Emergent ===
 // Il preview Emergent (`app-finder-408.emergent.host`) NON ha il backend voice
-// deployato → restituisce 502 sul WS. Il backend Koda vive su Railway
+// deployato → restituisce 502 sul WS. Il backend Ollenya vive su Railway
 // (koda-backend-production-4a34.up.railway.app). Usiamo lo stesso helper
 // hardcoded di voiceStream.ts (kodaBackendWsUrl) per garantire coerenza.
 function buildWsUrl(): string {
@@ -590,7 +590,7 @@ export class VoiceClientSttSession {
         // PROSSIMO turno parte da uno stato garantito pulito. Costo zero
         // percepito dall'utente (avviene DOPO che ha già visto l'errore).
         //
-        // Log taggato `[KODA_AUDIO_ZOMBIE_RECOVERY]` per telemetria: se in 2
+        // Log taggato `[OLLENYA_AUDIO_ZOMBIE_RECOVERY]` per telemetria: se in 2
         // settimane non compare mai in produzione, il bug è definitivamente
         // morto per cambio architetturale e possiamo rimuovere il fix.
         const msg = String(evt.message || "");
@@ -836,7 +836,7 @@ export class VoiceClientSttSession {
       this.callbacks.onFinal?.(text, conf, durMs);
     } catch {}
 
-    // Manda il transcript al backend Koda
+    // Manda il transcript al backend Ollenya
     try {
       this.sendJson({
         type: "transcript_from_client",
@@ -871,7 +871,7 @@ export class VoiceClientSttSession {
     // === FIX 2026-07-25 v63.8 — TTS MUTO su Android/MIUI (Fix C1) ===
     //
     // PROBLEMA (screenshot Fabio 25/07 7:11):
-    //   STT funziona (Google SpeechRecognizer trascrive), Koda risponde
+    //   STT funziona (Google SpeechRecognizer trascrive), Ollenya risponde
     //   con TESTO corretto, ma la sua VOCE non esce dall'altoparlante.
     //   Modalità testo chat → voce audibile. Modalità voce → voce muta.
     //
@@ -1016,7 +1016,7 @@ export class VoiceClientSttSession {
    * pulito, anche se l'errore ha lasciato la session in stato residuale
    * "!act" (OSStatus 560557684).
    *
-   * Log tag `[KODA_AUDIO_ZOMBIE_RECOVERY]` è cercabile grep-per-grep dai log
+   * Log tag `[OLLENYA_AUDIO_ZOMBIE_RECOVERY]` è cercabile grep-per-grep dai log
    * TestFlight/producdion. Se in 2 settimane non compare = bug morto per
    * cambio architetturale (Fase B), fix rimovibile. Se compare = telemetria
    * di quante volte scatta e con quali codici — decisione informata sul
@@ -1034,7 +1034,7 @@ export class VoiceClientSttSession {
     // Log SEMPRE (anche se non riteniamo sia zombie) — la telemetria vale
     // più della latenza di una console.log.
     console.log(
-      `[KODA_AUDIO_ZOMBIE_RECOVERY] triggered code=${errorCode || "?"} ` +
+      `[OLLENYA_AUDIO_ZOMBIE_RECOVERY] triggered code=${errorCode || "?"} ` +
         `msg="${(errorMsg || "").slice(0, 120)}" ` +
         `zombie_candidate=${isZombieCandidate ? "yes" : "no"}`
     );
@@ -1047,7 +1047,7 @@ export class VoiceClientSttSession {
     const currentAppState = AppState.currentState;
     if (currentAppState !== "active") {
       console.log(
-        `[KODA_AUDIO_ZOMBIE_RECOVERY] SKIP — app not active (state=${currentAppState}), ` +
+        `[OLLENYA_AUDIO_ZOMBIE_RECOVERY] SKIP — app not active (state=${currentAppState}), ` +
           `defer recovery to next foreground start()`
       );
       return;
@@ -1066,11 +1066,11 @@ export class VoiceClientSttSession {
       try {
         if (typeof setIsAudioActiveAsync === "function") {
           await setIsAudioActiveAsync(false);
-          console.log(`[KODA_AUDIO_ZOMBIE_RECOVERY] step0 setActive(false) OK`);
+          console.log(`[OLLENYA_AUDIO_ZOMBIE_RECOVERY] step0 setActive(false) OK`);
         }
       } catch (e: any) {
         console.log(
-          `[KODA_AUDIO_ZOMBIE_RECOVERY] step0 setActive(false) FAILED: ${e?.message || e}`
+          `[OLLENYA_AUDIO_ZOMBIE_RECOVERY] step0 setActive(false) FAILED: ${e?.message || e}`
         );
       }
       // Step 1: deactivate mode — dice a iOS "rilascia la session, non serve"
@@ -1082,10 +1082,10 @@ export class VoiceClientSttSession {
           shouldPlayInBackground: false,
           shouldRouteThroughEarpiece: false,
         });
-        console.log(`[KODA_AUDIO_ZOMBIE_RECOVERY] step1 deactivate OK`);
+        console.log(`[OLLENYA_AUDIO_ZOMBIE_RECOVERY] step1 deactivate OK`);
       } catch (e: any) {
         console.log(
-          `[KODA_AUDIO_ZOMBIE_RECOVERY] step1 deactivate FAILED: ${e?.message || e}`
+          `[OLLENYA_AUDIO_ZOMBIE_RECOVERY] step1 deactivate FAILED: ${e?.message || e}`
         );
       }
       // Step 2: attendi che iOS rilasci davvero l'hardware audio.
@@ -1122,28 +1122,28 @@ export class VoiceClientSttSession {
           }
           reactivateOk = true;
           console.log(
-            `[KODA_AUDIO_ZOMBIE_RECOVERY] step3 reactivate OK (attempt=${attempt + 1})`
+            `[OLLENYA_AUDIO_ZOMBIE_RECOVERY] step3 reactivate OK (attempt=${attempt + 1})`
           );
           break;
         } catch (e: any) {
           lastError = e?.message || String(e);
           console.log(
-            `[KODA_AUDIO_ZOMBIE_RECOVERY] step3 reactivate FAILED attempt=${attempt + 1}: ${lastError}`
+            `[OLLENYA_AUDIO_ZOMBIE_RECOVERY] step3 reactivate FAILED attempt=${attempt + 1}: ${lastError}`
           );
         }
       }
       if (!reactivateOk) {
         console.log(
-          `[KODA_AUDIO_ZOMBIE_RECOVERY] step3 EXHAUSTED after ${backoffMs.length} attempts — last="${lastError}"`
+          `[OLLENYA_AUDIO_ZOMBIE_RECOVERY] step3 EXHAUSTED after ${backoffMs.length} attempts — last="${lastError}"`
         );
       }
       console.log(
-        `[KODA_AUDIO_ZOMBIE_RECOVERY] cycle complete reactivate=${reactivateOk ? "ok" : "failed"} — next turn ${reactivateOk ? "should start clean" : "will retry from start()"}`
+        `[OLLENYA_AUDIO_ZOMBIE_RECOVERY] cycle complete reactivate=${reactivateOk ? "ok" : "failed"} — next turn ${reactivateOk ? "should start clean" : "will retry from start()"}`
       );
     } catch (outer: any) {
       // expo-audio require() failed o altro crash: non blocchiamo mai.
       console.log(
-        `[KODA_AUDIO_ZOMBIE_RECOVERY] outer exception: ${outer?.message || outer}`
+        `[OLLENYA_AUDIO_ZOMBIE_RECOVERY] outer exception: ${outer?.message || outer}`
       );
     }
   }
@@ -1253,7 +1253,7 @@ export class VoiceClientSttSession {
         break;
       case "sentence":
         // === FIX 2026-07-23 v3 — Nome messaggio corretto ===
-        // Il backend Koda emette `{"type":"sentence", i, text, waveform, ...}`
+        // Il backend Ollenya emette `{"type":"sentence", i, text, waveform, ...}`
         // seguito dal binary frame MP3. Nella prima versione avevo usato
         // erroneamente `"sentence_header"` che NON è il vero nome → il
         // messaggio veniva silenziosamente ignorato → pendingSentenceHeader

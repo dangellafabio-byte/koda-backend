@@ -1,5 +1,5 @@
 /**
- * MicroDemoKoda.tsx — Micro-demo vocale post-Heart-Reveal (Fabio 2026-08-22).
+ * MicroDemoOllenya.tsx — Micro-demo vocale post-Heart-Reveal (Fabio 2026-08-22).
  *
  * Fase D del piano onboarding V3. Attivata cliccando "Ascolta la mia voce"
  * sulla schermata HeartVoiceReveal.
@@ -12,8 +12,8 @@
  *   • Backend TTS: usa flag `microdemo: true` per bypassare trial enforcement
  *   • Backend converse: usa `ephemeral: true` per NON salvare in timeline
  *   • Copy fissi (approvazione Fabio, no modifiche senza consenso esplicito):
- *       Apertura Koda: "Eccomi. Dimmi qualcosa, quello che vuoi."
- *       Chiusura Koda: "Per ora è tutto. Ma possiamo continuare, se vuoi."
+ *       Apertura Ollenya: "Eccomi. Dimmi qualcosa, quello che vuoi."
+ *       Chiusura Ollenya: "Per ora è tutto. Ma possiamo continuare, se vuoi."
  *
  * ==== STATE MACHINE ====
  *   opening   → play clip microdemo_open, poi listening
@@ -57,11 +57,11 @@ const CLIP_OPEN = require("../assets/sounds/intro/microdemo_open-cielo.mp3");
 const CLIP_CLOSE = require("../assets/sounds/intro/microdemo_close-cielo.mp3");
 const VOICE_CIELO_ID = "POuqf18evoXOKIqV2Px7";
 
-const MAX_TURNS = 5; // Fabio 2026-06: 3→5 turni per far percepire meglio Koda prima del paywall
+const MAX_TURNS = 5; // Fabio 2026-06: 3→5 turni per far percepire meglio Ollenya prima del paywall
 // === RATE-LIMIT MICRODEMO (Fabio 2026-06) ==============================
 // Alzato da 24h→72h perché con MicroDemo esteso a 5 turni un "assaggio"
 // ogni 3 giorni è più coerente con il valore percepito e riduce il rumore
-// del pill "Parla con Koda" nella LA per utenti Free che hanno appena
+// del pill "Parla con Ollenya" nella LA per utenti Free che hanno appena
 // completato la demo. Chi ha rifiutato il paywall vede il pill dopo 72h,
 // non dopo 24h.
 const RATE_LIMIT_MS = 72 * 60 * 60 * 1000; // 72h
@@ -123,7 +123,7 @@ function normalizeVolume(rawValue: number): number {
   return Math.sqrt(Math.max(0, linear));
 }
 
-export default function MicroDemoKoda() {
+export default function MicroDemoOllenya() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
@@ -663,7 +663,7 @@ export default function MicroDemoKoda() {
               l'unico figlio del flex-center è l'orb → orb al centro
               geometrico del centerContainer.
               Coerente con le pulizie Iterazione 23 (2026-08-24) su
-              lascia-andare, KodaIntroV3, HeartVoiceReveal, home Page 0. */}
+              lascia-andare, OllenyaIntroV3, HeartVoiceReveal, home Page 0. */}
         </Animated.View>
       </View>
 
@@ -711,7 +711,7 @@ const styles = StyleSheet.create({
     // spacer 34px sotto l'orb (rimosso anch'esso), il centro visibile finiva
     // ~28-45px sotto il centro visivo dello schermo → screenshot MicroDemo
     // 22:27 (v65.22) confermava l'offset. Coerente con Iterazione 23 su
-    // lascia-andare, KodaIntroV3, HeartVoiceReveal → paddingTop=0.
+    // lascia-andare, OllenyaIntroV3, HeartVoiceReveal → paddingTop=0.
     paddingTop: 0,
   },
   counterBox: {

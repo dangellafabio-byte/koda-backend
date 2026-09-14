@@ -1,15 +1,15 @@
 /**
- * KodaIntroV3.tsx — L'intro del "Cuore" (2026-08-22, Fabio)
+ * OllenyaIntroV3.tsx — L'intro del "Cuore" (2026-08-22, Fabio)
  *
  * Onboarding narrativo del PRIMO BOOT che introduce SOLO Lascia Andare
- * ("il cuore di Koda"). La voce di Koda (Premium) NON viene mai
+ * ("il cuore di Ollenya"). La voce di Ollenya (Premium) NON viene mai
  * menzionata qui — arriva solo DOPO la prima sessione LA come reveal
  * separato (vedi HeartVoiceReveal).
  *
  * ==== SEQUENZA COMPLETA V3 ====
  *
  *  [1200ms silenzio apertura — orb idle]
- *  1. Cielo: "Ciao. Io sono Koda. Voglio farti conoscere il mio cuore."
+ *  1. Cielo: "Ciao. Io sono Ollenya. Voglio farti conoscere il mio cuore."
  *  [900ms — respiro: orb resta speaking]
  *  2. Cielo: "Come ti chiami?"
  *  3. [utente parla il nome — STT nativo con VAD end-of-speech]
@@ -18,10 +18,10 @@
  *     evita finta comprensione; onesto anche se STT fallisce)
  *  5. save profilo + handoff → /lascia-andare?firstBoot=1
  *
- * ==== DIFFERENZE DA V2 (KodaIntroConversational) ====
+ * ==== DIFFERENZE DA V2 (OllenyaIntroConversational) ====
  *   • RIMOSSO: runtime_tts_name ("[Nome].") — no finta comprensione
- *   • RIMOSSO: presentazione_koda ("Io sono Koda. Grazie di essere qui...")
- *   • RIMOSSO: live_response (Koda LLM inline) — Fase D è la demo separata
+ *   • RIMOSSO: presentazione_koda ("Io sono Ollenya. Grazie di essere qui...")
+ *   • RIMOSSO: live_response (Ollenya LLM inline) — Fase D è la demo separata
  *   • CAMBIATO: handoff a /lascia-andare?firstBoot=1 (non a /)
  *   • MANTENUTO: gender lookup in background (silenzioso, utile per app)
  *   • MANTENUTO: STT retry-on-silence
@@ -64,8 +64,8 @@ const TAG = "KODA_INTRO_V3";
 // sequenza "Come ti chiami?": come_ti_chiami-cielo.mp3, intro_v3_te_lo_mostro-cielo.mp3.
 // Aggiunta intro_v3_parte_di_me-cielo.mp3 come clip di transizione verso LA.
 // La clip intro_v3_saluto-cielo.mp3 è stata rigenerata con il nuovo testo:
-//   "Ciao, piacere di conoscerti… io sono Koda, e tu?"
-// (rispetto al vecchio testo "Ciao. Io sono Koda. Voglio farti conoscere il mio cuore.")
+//   "Ciao, piacere di conoscerti… io sono Ollenya, e tu?"
+// (rispetto al vecchio testo "Ciao. Io sono Ollenya. Voglio farti conoscere il mio cuore.")
 const CIELO_CLIPS = {
   intro_v3_saluto: require("../assets/sounds/intro/intro_v3_saluto-cielo.mp3"),
   intro_v3_parte_di_me: require("../assets/sounds/intro/intro_v3_parte_di_me-cielo.mp3"),
@@ -90,7 +90,7 @@ type Turn =
 // in Lascia Andare (dove sarà LA a gestire la sua fase iniziale).
 //
 //   #0 silence 1200ms      orb=idle       (apertura calma)
-//   #1 speak  saluto       orb=speaking   "Ciao, piacere di conoscerti… io sono Koda, e tu?"
+//   #1 speak  saluto       orb=speaking   "Ciao, piacere di conoscerti… io sono Ollenya, e tu?"
 //   #2 listen VAD-only     orb=listening  Utente risponde. STT usato SOLO come proxy VAD
 //                                          per rilevare l'end-of-speech. Il transcript è
 //                                          COMPLETAMENTE SCARTATO: niente updateProfile,
@@ -105,7 +105,7 @@ type Turn =
 const CONVERSATION_V3: Turn[] = [
   // #0 — apertura silenziosa: UNICO idle di tutto il flusso
   { kind: "silence", ms: 1200, label: "apertura", orbState: "idle" },
-  // #1 — saluto + domanda finale: "Ciao, piacere di conoscerti… io sono Koda, e tu?"
+  // #1 — saluto + domanda finale: "Ciao, piacere di conoscerti… io sono Ollenya, e tu?"
   { kind: "speak", clipKey: "intro_v3_saluto" },
   // #2 — VAD-only: transcript SCARTATO. Non usiamo il contenuto della risposta.
   { kind: "listen", maxMs: 45000, noTranscript: true },
@@ -184,7 +184,7 @@ async function configureAudioForRecording(): Promise<void> {
 const { width: WINDOW_WIDTH } = Dimensions.get("window");
 const ORB_SIZE = Math.min(WINDOW_WIDTH * 0.78, 360);
 
-export default function KodaIntroV3() {
+export default function OllenyaIntroV3() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const theme = useTheme();
@@ -322,7 +322,7 @@ export default function KodaIntroV3() {
 
       // 1. Permission — ora via helper condiviso (Fabio 2026-08-22).
       //    Coerenza rituale: stesso pre-prompt in tutta l'app (Intro Premium,
-      //    Home Koda conv, KodaIntroV3). Vedi lib/speechPermission.ts.
+      //    Home Ollenya conv, OllenyaIntroV3). Vedi lib/speechPermission.ts.
       try {
         const perm = await ensureSpeechPermission();
         if (!perm.granted) {

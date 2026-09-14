@@ -1,5 +1,5 @@
 /**
- * KodaFeedbackMenu — Menu contestuale long-press sulla bolla AI.
+ * OllenyaFeedbackMenu — Menu contestuale long-press sulla bolla AI.
  * Fabio 2026-09-11 (v2 semplificato).
  *
  * Design finale (4 righe):
@@ -50,7 +50,7 @@ type Props = {
   accentColor?: string;
 };
 
-export function KodaFeedbackMenu({
+export function OllenyaFeedbackMenu({
   eventId,
   visibleOverride,
   bubbleText,

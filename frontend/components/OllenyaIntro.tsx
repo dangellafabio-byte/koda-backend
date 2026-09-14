@@ -1,13 +1,13 @@
 /**
- * KodaIntro — La presentazione conversazionale di Koda al primo avvio.
+ * OllenyaIntro — La presentazione conversazionale di Ollenya al primo avvio.
  *
  * Sostituisce sia il vecchio "Onboarding modale a impostazioni" sia il
- * "ColorIntro" tutorial-colori. Koda si presenta in prima persona, spiega
+ * "ColorIntro" tutorial-colori. Ollenya si presenta in prima persona, spiega
  * chi è e come funziona, e raccoglie tutte le informazioni che gli servono
  * (nome utente, genere, voce preferita, modalità check-in, parola segreta,
  * 3 frasi di voiceprint) direttamente nel flusso del dialogo.
  *
- * Filosofia: niente schermate con form — Koda chiede UNA cosa alla volta,
+ * Filosofia: niente schermate con form — Ollenya chiede UNA cosa alla volta,
  * con la sua eclissi che cambia colore. Risposte: pulsanti per scelte
  * chiuse (più affidabili), text input con dictation-iOS per testo libero,
  * registrazioni audio per il voiceprint.
@@ -53,7 +53,7 @@ export type KodaIntroResult = {
   secret_word_set: boolean;
   voiceprint_enrolled: boolean;
   /** Se true, l'app deve lanciare il tour visivo subito dopo la chiusura
-   *  della KodaIntro. Usato per spiegare i tasti della home (icona pulse,
+   *  della OllenyaIntro. Usato per spiegare i tasti della home (icona pulse,
    *  Confessionale, ⋯, orb, swipe lettura, barra scrittura). */
   launch_tour?: boolean;
 };
@@ -62,8 +62,8 @@ type Props = {
   /** Voci ElevenLabs disponibili (per scegliere automaticamente in base al gender) */
   voices?: Array<{ voice_id: string; name: string; labels?: any }>;
   /** Voce attualmente scelta dall'utente (da profile.settings.tts_voice_id).
-   *  Se presente, KodaIntro la usa per parlare già da subito — così quando
-   *  l'utente rifà l'intro sente la SUA voce di Koda dall'inizio.
+   *  Se presente, OllenyaIntro la usa per parlare già da subito — così quando
+   *  l'utente rifà l'intro sente la SUA voce di Ollenya dall'inizio.
    *  Se assente (primo avvio), usa Sarah come fallback. */
   currentVoiceId?: string | null;
   /** Chiamata quando l'utente completa o salta */
@@ -72,7 +72,7 @@ type Props = {
   onCancel?: () => void;
   /** === FIX 2026-06-30 — Lock "Avanti" alla prima esecuzione (Fabio) ===
    *  Quando true (= utente NON ancora onboarded), l'utente NON può
-   *  premere "Avanti"/"Continua" mentre Koda sta parlando: la
+   *  premere "Avanti"/"Continua" mentre Ollenya sta parlando: la
    *  presentazione si guarda dall'inizio alla fine.
    *  Quando false (= "Rivedi la Intro" dalle impostazioni), libero.
    *  Default: false (comportamento storico = sempre libero). */
@@ -82,10 +82,10 @@ type Props = {
 // ====== 3 DOMANDE per il voiceprint enrollment (2026-08-04 imprinting) ======
 // Cambiamento concettuale (Fabio 2026-08-04): non più "leggi questa
 // frase ad alta voce" — l'utente parla in modo naturale rispondendo a
-// domande di Koda, esattamente come farà nell'uso quotidiano.
+// domande di Ollenya, esattamente come farà nell'uso quotidiano.
 // Vantaggi:
 //   • Zero senso di "test scolastico" ("frase 1/3, 2/3, 3/3")
-//   • Il primo momento con Koda è già una CONVERSAZIONE, non un esercizio
+//   • Il primo momento con Ollenya è già una CONVERSAZIONE, non un esercizio
 //   • Campione fonetico comunque ricco: nome, vissuto emotivo, tono caldo
 // Le tre risposte vengono comunque catturate come 3 sample audio per il
 // backend voiceprint (che richiede 3 sample) — solo la presentazione è
@@ -97,7 +97,7 @@ const VOICEPRINT_PHRASES = [
 ];
 
 // ====== Voce ElevenLabs della presentazione ======
-// Voce IDENTITARIA di Koda: la stessa usata sia durante la presentazione
+// Voce IDENTITARIA di Ollenya: la stessa usata sia durante la presentazione
 // che nelle conversazioni normali — così l'utente non percepisce un
 // "cambio di voce" tra intro e uso quotidiano dell'app.
 // "Sarah" — soft warm Italian-capable female voice
@@ -111,8 +111,8 @@ const VOICEPRINT_PHRASES = [
 // Nota: le chiavi brand "aria"/"echo" sono identificatori interni
 // retrocompatibili — l'utente vede solo "Cielo" (femminile) e "Vento" (maschile).
 const BRAND_VOICE_IDS = {
-  aria: "POuqf18evoXOKIqV2Px7",   // Koda Cielo — voce femminile custom ElevenLabs (2026-07-13)
-  echo: "ll9WG7PDTuyHwgC5MD6g",   // Koda Vento — voce maschile custom ElevenLabs (giugno 2026 v4)
+  aria: "POuqf18evoXOKIqV2Px7",   // Ollenya Cielo — voce femminile custom ElevenLabs (2026-07-13)
+  echo: "ll9WG7PDTuyHwgC5MD6g",   // Ollenya Vento — voce maschile custom ElevenLabs (giugno 2026 v4)
 } as const;
 
 // Voce di fallback per la presentazione (PRIMA che l'utente scelga in M2):
@@ -131,15 +131,15 @@ const VOICE_INTRO_PALETTES: Record<"aria" | "echo", [string, string, string]> = 
   echo: ["#93BBFD", "#2563EB", "#1E3A8A"], // cobalto (maschile)
 };
 
-// ====== Battute di Koda per ogni step (TTS in tutti) ======
+// ====== Battute di Ollenya per ogni step (TTS in tutti) ======
 const KODA_LINES: Record<number, string> = {
-  0: "Ciao. Sono Koda. Non sono un'app: sono una presenza. Da oggi sono qui per te, quando vuoi parlare, quando vuoi solo che qualcuno ti ascolti. Voglio conoscerti!",
+  0: "Ciao. Sono Ollenya. Non sono un'app: sono una presenza. Da oggi sono qui per te, quando vuoi parlare, quando vuoi solo che qualcuno ti ascolti. Voglio conoscerti!",
   1: "Come posso chiamarti? Scrivi il tuo nome qui sotto.",
   2: "Dimmi, sei un uomo, una donna, o preferisci non specificarlo?",
-  3: "Con quale timbro vuoi che ti accompagni la mia voce? Cielo — voce femminile — oppure Vento — voce maschile. Sono solo due timbri della stessa presenza: io resto sempre Koda.",
-  4: "Mi chiamo Koda. Ma se vuoi, puoi darmi un altro nome.",
+  3: "Con quale timbro vuoi che ti accompagni la mia voce? Cielo — voce femminile — oppure Vento — voce maschile. Sono solo due timbri della stessa presenza: io resto sempre Ollenya.",
+  4: "Mi chiamo Ollenya. Ma se vuoi, puoi darmi un altro nome.",
   // === STEP 5 (utente 2026-07) — Color tour narrato ===
-  // L'eclissi mostra 4 stati mentre Koda li elenca:
+  // L'eclissi mostra 4 stati mentre Ollenya li elenca:
   //   idle → recording → thinking → speaking (colore voce scelta).
   // Il timing dell'animazione (colorTourPhase) è calibrato per allinearsi
   // a ~2.8s per frase. Le pause tra frasi sono lasciate al TTS.
@@ -148,15 +148,15 @@ const KODA_LINES: Record<number, string> = {
   // Prima: "se sento che ne hai bisogno, ti scrivo io…" (troppo protettivo).
   // Nuovo tono: reciprocità naturale, la scelta resta all'utente.
   6: "Anche io penso a te. Ogni tanto potrei aver voglia di sentirti. Se vuoi, puoi abilitarlo nelle impostazioni.",
-  7: "A volte non hai bisogno di una risposta. Hai bisogno di dire le cose ad alta voce, e sapere che qualcuno c'è. In Lascia andare, Koda ascolta e tace. Quello che dici non viene trascritto, non viene elaborato, non esce dal telefono. Sparisce nel silenzio.",
+  7: "A volte non hai bisogno di una risposta. Hai bisogno di dire le cose ad alta voce, e sapere che qualcuno c'è. In Lascia andare, Ollenya ascolta e tace. Quello che dici non viene trascritto, non viene elaborato, non esce dal telefono. Sparisce nel silenzio.",
   8: "Ultima cosa: leggi queste tre frasi ad alta voce. Mi serviranno per riconoscere sempre la tua voce, ovunque tu sia.",
   9: "Siamo pronti. Parlami come parleresti a un amico: tocca l'eclissi e dimmi quello che hai in testa. Sono qui, solo con te.",
 };
 
 // ====== Componente principale ======
-export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCancel, isFirstRun = false }: Props) {
+export default function OllenyaIntro({ voices = [], currentVoiceId, onDone, onCancel, isFirstRun = false }: Props) {
   // === FASE MARKETING (M1/M2/M3) inserita PRIMA dei 10 step tecnici ===
-  // Le 3 schermate emozionali introducono Koda all'utente PRIMA di chiedere
+  // Le 3 schermate emozionali introducono Ollenya all'utente PRIMA di chiedere
   // dati. Non toccano la logica dei 10 step esistenti (raccolta nome,
   // parola segreta, voiceprint) ma offrono un primo contatto curato.
   const [phase, setPhase] = useState<"marketing" | "setup">("marketing");
@@ -169,7 +169,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
   const [previewLoadingKey, setPreviewLoadingKey] = useState<"aria" | "echo" | null>(null);
 
   // Tema della presentazione: FORZATO a NOTTE (giugno 2026, richiesta utente).
-  // Prima il KodaIntro decideva light/dark in base all'ora (7-19 → giorno),
+  // Prima il OllenyaIntro decideva light/dark in base all'ora (7-19 → giorno),
   // ma l'utente ha chiesto: "se in notte tutto in notte" e ha segnalato
   // problemi di leggibilità sui testi quando il tema diurno era attivo.
   // Coerente con il nuovo default app.json "theme: notte".
@@ -203,7 +203,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
   //   (vedi case 2 di renderStep), quindi non serve un bottone "Continua"
   //   separato: l'utente NON può proseguire senza aver deciso.
   const [userGender, setUserGender] = useState<GenderUser | null>(null);
-  const [aiName, setAiName] = useState("Koda");
+  const [aiName, setAiName] = useState("Ollenya");
   const [aiGender, setAiGender] = useState<GenderAi>("f");
   // === DEFAULT CHECKIN=AUTO (2026-07-24 pre-lancio, punto 3) ===
   // Prima: default "off" e serviva lo step 6 ("Anche io penso a te / Va bene")
@@ -227,7 +227,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
   const [orbTone, setOrbTone] = useState<OrbTone>("neutral");
 
   // === STEP 5 (Color Tour, richiesta utente 2026-07) ===
-  // Mentre Koda spiega "il mio modo di essere", l'eclissi cicla attraverso
+  // Mentre Ollenya spiega "il mio modo di essere", l'eclissi cicla attraverso
   // 4 fasi visive sincronizzate con la narrazione TTS:
   //   0 = idle       (aspetto in silenzio)
   //   1 = recording  (ti ascolto — blu petrolio)
@@ -264,11 +264,11 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
     [fadeAnim]
   );
 
-  // ====== Stato: Koda sta parlando ORA (per pulsare l'eclissi) ======
+  // ====== Stato: Ollenya sta parlando ORA (per pulsare l'eclissi) ======
   const [isKodaSpeaking, setIsKodaSpeaking] = useState(false);
   const speakSeqRef = useRef(0);
 
-  // ====== Sintetizza voce di Koda (best-effort, non blocca avanzamento) ======
+  // ====== Sintetizza voce di Ollenya (best-effort, non blocca avanzamento) ======
   // Setta `isKodaSpeaking=true` per la durata del TTS così l'eclissi pulsa.
   // PRIORITÀ VOCE (giugno 2026):
   //   1. Voce scelta in M2 (selectedVoiceKey) → mappata su BRAND_VOICE_IDS
@@ -293,7 +293,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       console.warn("[koda-intro] speak failed:", e);
     } finally {
       // Solo l'ultima invocazione resetta lo stato (evita race condition
-      // se l'utente avanza di step mentre Koda sta ancora parlando)
+      // se l'utente avanza di step mentre Ollenya sta ancora parlando)
       if (mySeq === speakSeqRef.current) {
         setIsKodaSpeaking(false);
       }
@@ -338,10 +338,10 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
     }
     // === STEP 5 — Color tour narrato (utente 2026-07) ===
     // Cicla in 4 fasi (idle → recording → thinking → speaking) mentre
-    // Koda elenca i suoi stati. L'ultima fase usa il colore della voce
+    // Ollenya elenca i suoi stati. L'ultima fase usa il colore della voce
     // scelta in M2 (aria=viola/warm, echo=cobalto/calm).
     if (step === 5) {
-      // Reset a fase 0 all'ingresso; il timer avanza dopo che Koda inizia
+      // Reset a fase 0 all'ingresso; il timer avanza dopo che Ollenya inizia
       // a parlare. Se l'utente è già alla fase finale, resta lì.
       const PHASE_MS = 2800; // durata approssimativa di ogni frase TTS
       colorTourTimerRef.current = setTimeout(function tick() {
@@ -371,12 +371,12 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
     }
     // Fuori da step 5: reset del contatore per il prossimo ingresso.
     if (colorTourPhase !== 0) setColorTourPhase(0);
-    // PRIORITÀ (per gli altri step): se Koda sta parlando ORA → status
+    // PRIORITÀ (per gli altri step): se Ollenya sta parlando ORA → status
     // "speaking" (pulsa rosa). Altrimenti settare un default per-step.
     if (isKodaSpeaking) {
       setOrbStatus("speaking");
       // Step 7 = "modalità sigillata" → eclissi BORDEAUX (colore Confessionale)
-      // mentre Koda spiega il sigillo. Resto degli step: rosa caldo (warm).
+      // mentre Ollenya spiega il sigillo. Resto degli step: rosa caldo (warm).
       setOrbTone(step === 7 ? "warm" : "warm"); // ex confessional (Blocco B: feature Confessionale rimossa)
       return;
     }
@@ -393,7 +393,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       setOrbTone("warm"); // ex confessional (Blocco B)
     } else {
       // Default neutro per gli step "domanda" (1-4, 6, 7, 9) quando
-      // Koda è in silenzio: idle viola che respira.
+      // Ollenya è in silenzio: idle viola che respira.
       setOrbStatus("idle");
       setOrbTone("neutral");
     }
@@ -501,7 +501,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
     }
   }, []);
 
-  // ====== Koda parla automaticamente all'apertura di OGNI step ======
+  // ====== Ollenya parla automaticamente all'apertura di OGNI step ======
   // Pulsazione sincronizzata: l'eclissi va in "speaking" solo durante
   // il TTS effettivo (vedi gestione `isKodaSpeaking` sopra).
   // IMPORTANTE: durante la fase MARKETING (M1/M2/M3) NON facciamo
@@ -615,7 +615,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       const patch: any = {
         user_name: userName.trim() || "Amico",
         user_gender: finalUserGender,
-        ai_name: aiName.trim() || "Koda",
+        ai_name: aiName.trim() || "Ollenya",
         ai_gender: aiGender,
         // koda_voice ('aria' chiara/limpida o 'echo' profonda/avvolgente).
         // Lo step 3 mappa: f → aria (Lily chiara), m → echo (Brian profonda).
@@ -630,8 +630,8 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
           // legacy converse, intro replay) usano la STESSA voce e non
           // ci sono incoerenze tra l'onboarding e il tour.
           tts_voice_id: aiGender === "f"
-            ? "POuqf18evoXOKIqV2Px7" // Koda Cielo (voce femminile, 2026-07-13)
-            : "ll9WG7PDTuyHwgC5MD6g", // Koda Vento (voce maschile, giugno 2026 v4)
+            ? "POuqf18evoXOKIqV2Px7" // Ollenya Cielo (voce femminile, 2026-07-13)
+            : "ll9WG7PDTuyHwgC5MD6g", // Ollenya Vento (voce maschile, giugno 2026 v4)
         },
       };
       // Pick voice_id based on gender
@@ -656,7 +656,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       onDone({
         user_name: userName.trim() || "Amico",
         user_gender: finalUserGender,
-        ai_name: aiName.trim() || "Koda",
+        ai_name: aiName.trim() || "Ollenya",
         ai_gender: aiGender,
         tts_voice_id: patch.settings?.tts_voice_id,
         checkin_mode: checkinMode,
@@ -680,7 +680,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
   const renderStep = () => {
     switch (step) {
       // -- Step 0: Greeting + Nome utente (UNITI 2026-07-24 pre-lancio, punto 1) --
-      // Prima erano DUE schermate separate (Step 0 "Ciao. Sono Koda…" + Step 1
+      // Prima erano DUE schermate separate (Step 0 "Ciao. Sono Ollenya…" + Step 1
       // "Come ti chiami?"). Unite in una sola per accorciare l'onboarding:
       // l'utente vede subito il campo nome sotto il saluto, un solo tap
       // "Continua" invece di due. Riduzione: 20 step → 9 step totali.
@@ -689,7 +689,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
           <StepView
             title="Ciao."
             subtitle={
-              "Sono Koda. Non sono un'app: sono una presenza.\n\nCome ti chiami?"
+              "Sono Ollenya. Non sono un'app: sono una presenza.\n\nCome ti chiami?"
             }
             primaryLabel="Continua"
             onPrimary={() => userName.trim() && advance(2)}
@@ -750,7 +750,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       case 4:
         return (
           <StepView
-            title="Mi chiamo Koda."
+            title="Mi chiamo Ollenya."
             subtitle="Ma se vuoi, puoi darmi un altro nome. Come vuoi chiamarmi?"
             primaryLabel="Continua"
             onPrimary={() => advance(7)}
@@ -759,7 +759,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
               style={styles.textInput}
               value={aiName}
               onChangeText={setAiName}
-              placeholder="Koda"
+              placeholder="Ollenya"
               placeholderTextColor="#52525B"
               autoCorrect={false}
               maxLength={20}
@@ -793,7 +793,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       //    Prima: "Un posto dove nessuno risponde." (schermata testuale
       //    con bottone "Ho capito" che annunciava Lascia andare).
       //    Perché rimosso: incoerente con il principio "imprinting per
-      //    esperienza" (Fabio 2026-08-04). "Lascia andare" è Koda stessa,
+      //    esperienza" (Fabio 2026-08-04). "Lascia andare" è Ollenya stessa,
       //    non una funzione a parte da presentare in anticipo. L'utente
       //    la scopre naturalmente quando tocca il bottone bordeaux dalla
       //    home — quello è il momento vero, non una demo fittizia.
@@ -805,7 +805,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       //
       // Cambiamento presentazionale (Fabio 2026-08-04):
       //   PRIMA: "La tua voce (N di 3)" / "Premi e leggi questa frase..."
-      //   ORA:   Koda pone una domanda naturale. L'utente risponde con
+      //   ORA:   Ollenya pone una domanda naturale. L'utente risponde con
       //          parole sue. Zero contatore visibile ("N di 3").
       //          Il backend riceve comunque 3 sample audio come prima.
       // L'utente non deve MAI percepire di stare facendo un enrollment
@@ -860,7 +860,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       //          - "Non posso chiamare nessuno, navigare in internet..."
       //   ORA:   Solo una chiusura breve e presente. Niente istruzioni,
       //          niente elenchi di funzioni. L'utente ha già vissuto la
-      //          voce di Koda (M2), la sua identità (M3), le ha risposto
+      //          voce di Ollenya (M2), la sua identità (M3), le ha risposto
       //          (voiceprint conversazionale). Da qui parte l'uso reale.
       case 9:
         return (
@@ -888,7 +888,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
     if (marketingStep === 0) {
       return (
         <StepView
-          title="Koda"
+          title="Ollenya"
           subtitle={
             "Per le cose che vuoi portare con te.\nPer quelle che vuoi lasciare andare."
           }
@@ -904,7 +904,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
       return (
         <StepView
           title="Il colore della mia voce."
-          subtitle="Due timbri della stessa presenza. Tocca per ascoltare. Resto sempre Koda."
+          subtitle="Due timbri della stessa presenza. Tocca per ascoltare. Resto sempre Ollenya."
           showSubtitle={true}
           primaryLabel={selectedVoiceKey ? "Conferma" : "Tocca per ascoltare"}
           onPrimary={() => {
@@ -930,7 +930,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
               Acqua = viola, Vento = cobalto. Il cerchio selezionato ha
               bordo bianco + checkmark.
               I nomi "Acqua/Vento" restano usati internamente come chiavi
-              brand e nei messaggi vocali di Koda, ma l'utente vede solo
+              brand e nei messaggi vocali di Ollenya, ma l'utente vede solo
               il colore — il colore È il nome. */}
           <View style={styles.voiceCircleGroup}>
             {/* Acqua — viola elettrico #BD10E0 */}
@@ -1101,8 +1101,8 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
                 selectedVoiceKey ? VOICE_INTRO_PALETTES[selectedVoiceKey] : null
               }
               // === FORCE: applica la palette voce ANCHE in idle ===
-              // In KodaIntro vogliamo che la sfera "indossi" l'identità
-              // della voce in modo persistente — non solo mentre Koda
+              // In OllenyaIntro vogliamo che la sfera "indossi" l'identità
+              // della voce in modo persistente — non solo mentre Ollenya
               // parla. Così tra uno step e l'altro la sfera non torna
               // viola di default ma resta del colore scelto.
               forceVoiceIdentity={!!selectedVoiceKey}
@@ -1122,7 +1122,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
             </ScrollView>
             {/* === FIX 2026-06-30 — Speak lock overlay (Fabio "non deve far andare avanti finché parla") ===
                 Alla PRIMA esecuzione (isFirstRun=true) blocchiamo ogni input
-                mentre Koda sta parlando: la presentazione si guarda
+                mentre Ollenya sta parlando: la presentazione si guarda
                 dall'inizio alla fine, niente skippare avanti accidentalmente.
                 Implementazione: View assoluta che cattura tutti i tap
                 quando isFirstRun && isKodaSpeaking. Trasparente — l'utente
@@ -1142,7 +1142,7 @@ export default function KodaIntro({ voices = [], currentVoiceId, onDone, onCance
           </Animated.View>
 
           {/* Link "Annulla" in basso — sempre visibile su ogni step. Permette
-              di uscire da KodaIntro senza completare tutti i passaggi se è
+              di uscire da OllenyaIntro senza completare tutti i passaggi se è
               stato aperto per errore. Non salva nulla nel profilo. */}
           {onCancel && (
             <Pressable
@@ -1199,7 +1199,7 @@ function StepView({
       {/* SUBTITLE — mostrato solo per step "critici" dove il testo è
           essenziale (es. le frasi da leggere ad alta voce nel voiceprint,
           o l'avviso sulla secret word). Per tutti gli altri step il
-          contesto è fornito SOLO da Koda a voce, come richiesto. */}
+          contesto è fornito SOLO da Ollenya a voce, come richiesto. */}
       {showSubtitle && subtitle ? (
         <Text style={[styles.subtitle, darkOnLight && styles.subtitleLight]}>{subtitle}</Text>
       ) : null}

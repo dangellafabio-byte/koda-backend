@@ -1,5 +1,5 @@
 /**
- * HeartVoiceReveal.tsx — Il reveal della voce di Koda (Fabio 2026-08-22).
+ * HeartVoiceReveal.tsx — Il reveal della voce di Ollenya (Fabio 2026-08-22).
  *
  * Fase C del piano onboarding V3: dopo che l'utente ha vissuto la prima
  * sessione di Lascia Andare per almeno 60s (con silenzio 15s continuo O
@@ -349,7 +349,7 @@ export default function HeartVoiceReveal() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    // Sfondo Koda-blu profondo (coerente con LA + Intro)
+    // Sfondo Ollenya-blu profondo (coerente con LA + Intro)
     backgroundColor: "#0F0F1A",
   },
   centerContainer: {
@@ -371,7 +371,7 @@ const styles = StyleSheet.create({
     width: "100%",
     paddingVertical: 16,
     borderRadius: 999,
-    backgroundColor: "#D4B896", // champagne (identità Koda)
+    backgroundColor: "#D4B896", // champagne (identità Ollenya)
     alignItems: "center",
   },
   primaryCtaText: {

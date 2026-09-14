@@ -344,7 +344,7 @@ export default function PaywallScreen() {
             <Text style={[styles.title, { color: theme.text }]}>
               {isPostDemo
                 ? "Il cuore resta sempre tuo,\ngratis. La voce, se vuoi,\nè Premium."
-                : "Il primo incontro è gratuito.\nSe vuoi continuare, Koda è qui."}
+                : "Il primo incontro è gratuito.\nSe vuoi continuare, Ollenya è qui."}
             </Text>
           </View>
 
@@ -463,7 +463,7 @@ export default function PaywallScreen() {
               color: loading || !waiverAccepted ? theme.textDim : theme.bg,
             },
           ]}>
-            {loading ? "Apertura pagamento…" : `Resta con Koda — ${selected.price}${selected.priceUnit}`}
+            {loading ? "Apertura pagamento…" : `Resta con Ollenya — ${selected.price}${selected.priceUnit}`}
           </Text>
         </Pressable>
         <Text style={[styles.disclaim, { color: theme.textDim }]}>

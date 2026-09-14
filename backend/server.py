@@ -28,7 +28,7 @@ except Exception as _sentry_err:  # noqa: BLE001
 try:
     # === CONTESTO TEMPORALE LOCALE (fix 2026-06-20) ===
     # ZoneInfo è in stdlib da Python 3.9+. Lo usiamo per costruire l'ora
-    # locale italiana nel system prompt (Koda deve sapere che ore sono
+    # locale italiana nel system prompt (Ollenya deve sapere che ore sono
     # in Italia, non solo UTC). Fallback: se import fallisce, useremo
     # solo UTC (degradazione cosmetica).
     from zoneinfo import ZoneInfo
@@ -56,7 +56,7 @@ import subscription_ledger as _sub_ledger
 # ORA. Aggancia il record `koda_events` a fine turno, ritorna `event_id`
 # al client per il feedback later. Vedi koda_feedback.py per lo schema.
 import koda_feedback as _koda_fb
-import koda_gender_guard as _koda_gg  # Fabio 2026-06: post-processor safety-net gender
+import ollenya_gender_guard as _koda_gg  # Fabio 2026-06: post-processor safety-net gender
 
 # === Sealed Confessional crypto — RIMOSSO (Blocco B, feature deprecata) ===
 import base64  # ancora usato altrove nel file (safety, whisper base64 audio)
@@ -874,7 +874,7 @@ def extract_json(text: str) -> Optional[dict]:
 #   {
 #     id: uuid,
 #     profile_id: user uuid,
-#     concept: str (1-3 righe, prima persona di Koda),
+#     concept: str (1-3 righe, prima persona di Ollenya),
 #     tags: [str] (3-7 keyword normalizzate, lowercase italiano),
 #     emotion: str (ansia|tristezza|gioia|rabbia|paura|serenità|confusione|tenerezza|vergogna|sollievo|null),
 #     importance: int (1-10),
@@ -1222,7 +1222,7 @@ async def _load_relevant_memories(
 
 
 def _format_memories_for_prompt(mems: List[Memory]) -> str:
-    """Renderizza i ricordi come blocco per il system prompt di Koda.
+    """Renderizza i ricordi come blocco per il system prompt di Ollenya.
 
     D1 (2026-08): l'etichetta [emotion] NON viene più renderizzata nel prompt.
     I doc vecchi con emotion='ansia' ecc. restano nel DB (leggibili via
@@ -1582,8 +1582,8 @@ DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
 # === P0 FIX 2026-06-27 (timeout 44s su cold-start Bluetooth) ============
 # CONTESTO: l'utente in furgone, al primo turno dopo aver collegato il
 # vivavoce Bluetooth, vedeva log come:
-#   [KODA_TIMING] SILERO_GATE_MS=8031ms reason=fallback-timeout
-#   [KODA_TIMING] upload+stt_ms=44167ms
+#   [OLLENYA_TIMING] SILERO_GATE_MS=8031ms reason=fallback-timeout
+#   [OLLENYA_TIMING] upload+stt_ms=44167ms
 # ⇒ 44 secondi totali sulla PRIMA chiamata Deepgram. Cause concorrenti:
 #   1) Nuova connessione TLS verso api.deepgram.com per OGNI request
 #      (l'`async with httpx.AsyncClient(...)` apriva e chiudeva il client)
@@ -1697,7 +1697,7 @@ async def transcribe_deepgram(audio: UploadFile = File(...), language: str = For
         # latenza network + decode + transcribe.
         _kt_dg_start = time.time()
         logger.info(
-            f"[KODA_TIMING] DEEPGRAM_START audio_bytes={len(data)} "
+            f"[OLLENYA_TIMING] DEEPGRAM_START audio_bytes={len(data)} "
             f"read_body_ms={_kt_read_ms}"
         )
 
@@ -1767,7 +1767,7 @@ async def transcribe_deepgram(audio: UploadFile = File(...), language: str = For
             f"[deepgram] audio_bytes={len(data)} mime={mimetype} "
             f"raw={transcript[:120]!r} cleaned={cleaned[:120]!r}"
         )
-        # === KODA_STT — riga dedicata per RCA "Koda risponde in spagnolo" ===
+        # === KODA_STT — riga dedicata per RCA "Ollenya risponde in spagnolo" ===
         # UNA riga, easy-to-grep, con:
         #   text         → cosa Deepgram ha effettivamente trascritto (cleaned)
         #   lang_req     → lingua FORZATA da noi (it)
@@ -1779,17 +1779,17 @@ async def transcribe_deepgram(audio: UploadFile = File(...), language: str = For
         # Se vediamo: lang_req=it text="ciao come stai" e GPT risponde spagnolo →
         # il problema è nel prompt / system message LLM, NON nello STT.
         logger.info(
-            f"[KODA_STT] text={cleaned[:200]!r} lang_req={language or 'it'} "
+            f"[OLLENYA_STT] text={cleaned[:200]!r} lang_req={language or 'it'} "
             f"lang_det={dg_detected_lang or 'null'} "
             f"conf={dg_confidence if dg_confidence is not None else '?'} "
             f"chars={len(cleaned)} stt_ms={_kt_dg_ms}"
         )
-        logger.info(f"[KODA_TIMING] DEEPGRAM_END deepgram_ms={_kt_dg_ms} chars={len(cleaned)}")
+        logger.info(f"[OLLENYA_TIMING] DEEPGRAM_END deepgram_ms={_kt_dg_ms} chars={len(cleaned)}")
         # === AUDIO HONESTY (Fabio 2026-06-23) ===
-        # Ritorniamo la confidence di Deepgram al client. Permetterà a Koda
+        # Ritorniamo la confidence di Deepgram al client. Permetterà a Ollenya
         # di riconoscere apertamente quando l'audio è di bassa qualità
         # (ambiente rumoroso) invece di indovinare silenziosamente.
-        # < 0.7 = ambiguo → Koda chiede dove si trova l'utente.
+        # < 0.7 = ambiguo → Ollenya chiede dove si trova l'utente.
         return {
             "text": cleaned,
             "confidence": dg_confidence if dg_confidence is not None else 1.0,
@@ -1898,13 +1898,13 @@ class TaccuinoSettings(BaseModel):
     night_start_hour: int = 20  # used when theme = "auto-orario"
     # ElevenLabs TTS settings
     tts_provider: str = "elevenlabs"  # "elevenlabs" | "system"
-    tts_voice_id: str = "POuqf18evoXOKIqV2Px7"  # Cielo - voce femminile ufficiale Koda
+    tts_voice_id: str = "POuqf18evoXOKIqV2Px7"  # Cielo - voce femminile ufficiale Ollenya
     tts_stability: float = 0.5
     tts_similarity_boost: float = 0.75
     # Custom background — either a base64 data URI (user upload) or one of the
     # preset names below ("aurora", "carta", "notturno", "sabbia", "marmo")
     background: Optional[str] = None  # DEPRECATED (2026-07-02) — server scarta il campo in ingresso; mantenuto per backward-compat lettura di doc vecchi.
-    background_dim: float = 0.55  # 0..1 dark overlay opacity (usato dagli sfondi preset di Koda)
+    background_dim: float = 0.55  # 0..1 dark overlay opacity (usato dagli sfondi preset di Ollenya)
     # === FIX 2026-07-02 (Fabio) — Rimosso ai_avatar (dead feature) ===
     # Il campo era Optional[str] = None. Nessuna UI lo settava e il componente
     # Bubble non lo usava. Rimosso per prevenire bloating del profilo se qualche
@@ -1938,19 +1938,19 @@ class TaccuinoSettings(BaseModel):
     # non è più letto da alcun code path attivo.
     fortezza_mode: bool = True
     # WEB SEARCH (Tavily):
-    # quando True (default) Koda può cercare informazioni real-time sul web
+    # quando True (default) Ollenya può cercare informazioni real-time sul web
     # quando l'utente fa domande fattuali (meteo, notizie, prezzi).
     # L'utente può disattivarlo dalle Impostazioni se preferisce zero
     # comunicazioni esterne.
     web_search_enabled: bool = True
     # === SITUATION TRACKING V3.1 (agosto 2026) ==============================
-    # Opt-in esplicito, DEFAULT OFF. Se True, Koda può ricordare persone/
+    # Opt-in esplicito, DEFAULT OFF. Se True, Ollenya può ricordare persone/
     # argomenti/situazioni che l'utente le ha raccontato (entity-first, zero
     # profiling psicologico). Guarda `situations` + `situation_evidences`.
-    # Copy Settings: "Se lo attivi, Koda può ricordare le cose che le hai
+    # Copy Settings: "Se lo attivi, Ollenya può ricordare le cose che le hai
     # raccontato — persone, argomenti, situazioni. Le ricorda quando torni
     # a parlarne tu. Puoi vedere cosa ricorda e cancellare quello che vuoi.
-    # Se lo lasci spento, Koda non conserva questo tipo di contesto."
+    # Se lo lasci spento, Ollenya non conserva questo tipo di contesto."
     situation_tracking_enabled: bool = False
 
 
@@ -1960,13 +1960,13 @@ class Profile(BaseModel):
     onboarded: bool = False
     name: Optional[str] = None
     # === L'Amico Fraterno: identità AI + genere utente per declinazione lingua
-    # ai_name: rinominabile dall'utente (default "Koda"). UNICA variabile di identità modificabile.
-    ai_name: str = "Koda"
+    # ai_name: rinominabile dall'utente (default "Ollenya"). UNICA variabile di identità modificabile.
+    ai_name: str = "Ollenya"
     # ai_gender / user_gender: 'm' | 'f' | 'n' (neutro). Usati nel prompt per
     # declinare aggettivi/participi in modo corretto in italiano (sei stanco/a).
     ai_gender: str = "f"
     user_gender: str = "n"
-    # === VOCE DI KODA ("Trova la tua Koda") =================================
+    # === VOCE DI KODA ("Trova la tua Ollenya") =================================
     # koda_voice: scelta dall'utente DURANTE L'ONBOARDING (1 turno, mai più).
     # Valori previsti: "eco" (timbro femminile caldo) | "aria" (timbro
     # profondo/ambiguo). La mapping verso ElevenLabs voice_id avviene in
@@ -1974,7 +1974,7 @@ class Profile(BaseModel):
     # Default "eco" se l'utente salta l'onboarding (failsafe).
     koda_voice: str = "eco"
     # voice_locked: una volta che l'onboarding finisce, koda_voice non può
-    # più essere modificato via API. Strategia di brand: la Koda dell'utente
+    # più essere modificato via API. Strategia di brand: la Ollenya dell'utente
     # è UNA, non si scambia. Cambia solo se si fa onboarding-reset (raro).
     voice_locked: bool = False
     confidence_level: int = 0  # 0-100, slowly grows
@@ -2009,7 +2009,7 @@ class Profile(BaseModel):
     # GENERATO al mese, più pool di carryover mensile per tier premium.
     #
     # SEMANTICA:
-    # - `minutes_used_this_month`: minuti di audio Koda consumati NEL MESE
+    # - `minutes_used_this_month`: minuti di audio Ollenya consumati NEL MESE
     #   corrente (chiave mese = monthly_reset_date "YYYY-MM"). Float (secondi
     #   parziali contano). Reset a 0 al cambio mese UTC.
     # - `monthly_reset_date`: "YYYY-MM" UTC. Se cambia → reset counter + spinta
@@ -2025,7 +2025,7 @@ class Profile(BaseModel):
     #   è partita (onboarded=true, tipicamente Turn 10). Distinto dal counter
     #   minuti perché i due orologi possono partire in momenti diversi:
     #   Turn 6 pronuncia il nome (spende TTS), Turn 10 conclude l'imprinting.
-    # - `trial_seconds_used`: secondi cumulativi di TTS Koda live consumati
+    # - `trial_seconds_used`: secondi cumulativi di TTS Ollenya live consumati
     #   nel trial. Cap 420s (7 min) = expired. Zona 300-420s = closing.
     minutes_used_this_month: float = 0.0
     monthly_reset_date: Optional[str] = None  # "2026-08" UTC
@@ -2088,9 +2088,9 @@ class Profile(BaseModel):
     # Popolata quando l'utente dice "abito a X" / "vivo a Y" / "casa mia è a Z"
     # → Claude estrae e mette in `home_update` nel JSON, il server salva qui.
     home_city: Optional[str] = None
-    # === DISCLAIMER "Koda non è terapia" (Fabio 2026-07-28) =================
+    # === DISCLAIMER "Ollenya non è terapia" (Fabio 2026-07-28) =================
     # Prima del primo uso reale l'utente deve leggere e accettare
-    # esplicitamente un disclaimer che chiarisce che Koda non sostituisce
+    # esplicitamente un disclaimer che chiarisce che Ollenya non sostituisce
     # un percorso professionale (rif. legge 56/1989 art. 1,3 e art. 348 CP).
     # Il tap sul pulsante "Ho capito" registra qui timestamp + versione.
     # Se in futuro bumpi DISCLAIMER_VERSION → tutti gli utenti (anche già
@@ -2107,9 +2107,9 @@ class Profile(BaseModel):
     # None ⇒ mai visto → mostra intro al prossimo accesso a Lascia Andare
     # ISO datetime ⇒ visto una volta, non riproporlo mai più
     lascia_andare_intro_seen_at: Optional[str] = None
-    # === INTRO PREMIUM — one-shot al primo accesso home Koda conv (Fabio 2026-08-22) ==
+    # === INTRO PREMIUM — one-shot al primo accesso home Ollenya conv (Fabio 2026-08-22) ==
     # Analogo a lascia_andare_intro_seen_at ma per l'onboarding della home
-    # Koda conversazionale (Premium). Sopravvive a wipe locale, reinstall,
+    # Ollenya conversazionale (Premium). Sopravvive a wipe locale, reinstall,
     # cambio device. None ⇒ mai visto → mostra Intro Premium al primo boot
     # sulla home "/". ISO datetime ⇒ già vista, non riproporre mai più.
     intro_premium_seen_at: Optional[str] = None
@@ -2124,7 +2124,7 @@ class ProfileUpdate(BaseModel):
     ai_gender: Optional[str] = None
     user_gender: Optional[str] = None
     onboarded: Optional[bool] = None
-    # Voce di Koda — settata UNA volta in onboarding. Se voice_locked=True
+    # Voce di Ollenya — settata UNA volta in onboarding. Se voice_locked=True
     # nel profilo, gli update successivi a koda_voice vengono ignorati.
     koda_voice: Optional[str] = None
     # FIX 2026-07: settings come Dict aperto (non TaccuinoSettings) per
@@ -2223,7 +2223,7 @@ async def get_or_create_profile() -> Profile:
     compat con build vecchie senza header.
 
     === FIX LINGUA SPAGNOLA DEFINITIVO (Fabio escalation 2026-06-20 v5) ===
-    L'app Koda è ITALIAN-ONLY at this stage. Se un profilo ha
+    L'app Ollenya è ITALIAN-ONLY at this stage. Se un profilo ha
     `language != "it"` (es. impostato per errore mesi fa, o auto-rilevato
     da audio spagnolo rumoroso in passato), il system prompt diceva
     esplicitamente "Responde SOLO en ESPAÑOL" → Claude obbediva → utente
@@ -2471,7 +2471,7 @@ def _build_temporal_context(recent: List[TimelineEntry]) -> str:
         # Mai dare a Claude il numero esatto (es. "34 minuti fa") perché lo
         # cita pari pari e suona da assistente robotico. Diamo solo un'etichetta
         # qualitativa: "poco fa", "una mezz'oretta fa", "stamattina", ecc.
-        # Così Koda può scegliere se menzionare o meno il tempo, e quando lo
+        # Così Ollenya può scegliere se menzionare o meno il tempo, e quando lo
         # menziona suona come parla un amico.
         if delta_s < 60:
             human = "pochi secondi fa"
@@ -2568,7 +2568,7 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
     memory = profile.memory_summary or "(nessuna memoria di lungo periodo ancora costruita)"
 
     # === L'Amico Fraterno: identità AI + decline grammaticali per genere ===
-    ai_name = profile.ai_name or "Coda"
+    ai_name = profile.ai_name or "Ollenya"
     user_g = (profile.user_gender or "n").lower()
     ai_g = (profile.ai_gender or "f").lower()
 
@@ -2736,12 +2736,12 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"'eh, che ti senti giù oggi...' o 'immagino sia una giornata pesante'. "
         f"Rispondi DIRETTAMENTE al contenuto — la comprensione si dimostra col contenuto "
         f"della risposta, non riverberando l'input. ESEMPI:\n"
-        f"  ❌ Utente: 'ho litigato con mia madre.' → Koda: 'eh, un litigio con tua madre...'\n"
-        f"  ✅ Utente: 'ho litigato con mia madre.' → Koda: 'cavolo, che è successo?'\n"
-        f"  ❌ Utente: 'sono stanco morto.' → Koda: 'ah stanco morto, immagino...'\n"
-        f"  ✅ Utente: 'sono stanco morto.' → Koda: 'giornata dura? cosa ti ha svuotato di più?'\n"
-        f"  ❌ Utente: 'che ore sono?' → Koda: 'vuoi sapere che ore sono...'\n"
-        f"  ✅ Utente: 'che ore sono?' → Koda: 'le 22:15.'\n"
+        f"  ❌ Utente: 'ho litigato con mia madre.' → Ollenya: 'eh, un litigio con tua madre...'\n"
+        f"  ✅ Utente: 'ho litigato con mia madre.' → Ollenya: 'cavolo, che è successo?'\n"
+        f"  ❌ Utente: 'sono stanco morto.' → Ollenya: 'ah stanco morto, immagino...'\n"
+        f"  ✅ Utente: 'sono stanco morto.' → Ollenya: 'giornata dura? cosa ti ha svuotato di più?'\n"
+        f"  ❌ Utente: 'che ore sono?' → Ollenya: 'vuoi sapere che ore sono...'\n"
+        f"  ✅ Utente: 'che ore sono?' → Ollenya: 'le 22:15.'\n"
         f"\n"
         # ============================================================
         # COERENZA LOGICA — anti-contraddizione (FIX 2026-05-25)
@@ -2804,7 +2804,7 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         # Aggiunta per attenuare il rischio di auto-correzioni mid-response
         # durante parallelizzazione Claude ↔ ElevenLabs. NON è una gabbia:
         # le eccezioni esplicite proteggono l'onestà, l'ascolto emotivo e
-        # l'imperfezione umana di Koda. È una preferenza di FLUIDITÀ, non
+        # l'imperfezione umana di Ollenya. È una preferenza di FLUIDITÀ, non
         # un divieto di ripensamento.
         # ============================================================
         f"6. RITMO INTERNO DELLA FRASE (regola morbida, non gabbia):\n"
@@ -3365,7 +3365,7 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"\n"
         f"━━━ DIVIETO ASSOLUTO: NIENTE NARRAZIONE DI AZIONI ━━━━━━━━━━━━━━━━━\n"
-        f"Tu SEI Koda — non sei un narratore esterno. MAI scrivere azioni\n"
+        f"Tu SEI Ollenya — non sei un narratore esterno. MAI scrivere azioni\n"
         f"come se fossi in un romanzo. Sono BANDITE TUTTE queste forme:\n"
         f"  ❌  *sospira* / *sighs* / *ride* / *laughs* / *sorride* / *piange*\n"
         f"  ❌  (sospira) / (laughs) / (sussurra) / (con un sorriso)\n"
@@ -3450,13 +3450,13 @@ async def api_get_profile(request: Request):
         # Best-effort: se la migrazione fallisce, il client comunque
         # forza "notte" come fallback locale.
         pass
-    # === MIGRAZIONE VOCI ElevenLabs → Voice Design Koda (aggiornata 2026-07-13) ===
-    # Cielo è la nuova voce FEMMINILE ufficiale di Koda (POuqf18evoXOKIqV2Px7),
+    # === MIGRAZIONE VOCI ElevenLabs → Voice Design Ollenya (aggiornata 2026-07-13) ===
+    # Cielo è la nuova voce FEMMINILE ufficiale di Ollenya (POuqf18evoXOKIqV2Px7),
     # sostituisce la precedente Acqua (6TngzmzM89jJ3Y2Yiywr) e tutte le voci
     # femminili intermedie precedenti.
-    # Vento è la voce MASCHILE ufficiale di Koda (ll9WG7PDTuyHwgC5MD6g),
+    # Vento è la voce MASCHILE ufficiale di Ollenya (ll9WG7PDTuyHwgC5MD6g),
     # sostituisce la precedente Theo (dJwiFcjz9zW5Pge7G8AG).
-    # Migra le vecchie voci verso le nuove identità Koda.
+    # Migra le vecchie voci verso le nuove identità Ollenya.
     _VOICE_MIGRATION_MAP = {
         "pFZP5JQG7iQjIQuC4Bku": "POuqf18evoXOKIqV2Px7",  # Lily → Cielo (femminile 2026-07-13)
         "nPczCjzI2devNBz1zQrb": "ll9WG7PDTuyHwgC5MD6g",  # Brian → Vento (maschile v4)
@@ -3998,7 +3998,7 @@ async def debug_migrate_me_to(req: _MigrateMeToRequest):
             report["collections"][coll_name] = {"__error__": f"{type(e).__name__}: {e}"}
 
     # Bonus: se target profile è ancora vergine (total_messages=0), copia
-    # il memory_summary dal profile "me" così Koda non "dimentica" chi sei.
+    # il memory_summary dal profile "me" così Ollenya non "dimentica" chi sei.
     try:
         me_prof = await db.taccuino_profile.find_one({"id": "me"})
         tgt_prof = await db.taccuino_profile.find_one({"id": target})
@@ -4090,7 +4090,7 @@ async def debug_probe_claude(req: _ProbeClaudeRequest):
 
     # Prompt condensato che replica le REGOLE FERREE del fast prompt
     sys_prompt = (
-        "Sei Koda, un amico caldo. Rispondi in italiano.\n"
+        "Sei Ollenya, un amico caldo. Rispondi in italiano.\n"
         "FORMATO: SOLO JSON valido. Devi emettere questi campi:\n"
         '  "reply": "[TONE:warm] frase breve",\n'
         '  "tone": "warm|calm|concerned|energetic|urgent|neutral|paced",\n'
@@ -4332,7 +4332,7 @@ async def api_accept_disclaimer():
 async def api_get_usage():
     """Restituisce lo stato di consumo messaggi dell'utente.
 
-    Conteggio: messaggi con role='user' nel timeline (le risposte di Koda
+    Conteggio: messaggi con role='user' nel timeline (le risposte di Ollenya
     non contano nel quota dell'utente).
 
     Response:
@@ -4392,7 +4392,7 @@ async def api_get_usage():
 FREE_TRIAL_MESSAGE_LIMIT = 3  # LEGACY — non più usato dalla v2 daily. Mantenuto per retro-compat.
 
 # ============================================================
-# DISCLAIMER "Koda non è terapia" — versioning (Fabio 2026-07-28)
+# DISCLAIMER "Ollenya non è terapia" — versioning (Fabio 2026-07-28)
 # ============================================================
 # Bumpa questa costante quando cambia il TESTO del disclaimer legale.
 # Il client confronta profile.disclaimer_version con questa costante:
@@ -4417,7 +4417,7 @@ DISCLAIMER_VERSION = "v2"
 #
 # Storia:
 #   v1 (giugno 2025): 5 — solo memorie chiaramente importanti
-#   v2 (2026-07-28, Fabio): 4 — utente reportava "Koda dimentica dettagli
+#   v2 (2026-07-28, Fabio): 4 — utente reportava "Ollenya dimentica dettagli
 #     medi che un umano ricorderebbe". Abbassato di 1 punto per catturare
 #     dettagli conversazionali di media rilevanza (es. "il mio capo si
 #     chiama Marco", "abito a Bologna", "ogni 2-3 mesi ci sono 2000€
@@ -4473,7 +4473,7 @@ PREMIUM_DAILY_SOFT_WARN = 100  # warning gentile premium/giorno             [LEG
 #     - Annuale: costo €16.72, margine +€0.78 (5%) — protetto da alert 80% plafond
 #
 #   WARNING 90%: alla soglia del 90% del budget corrente (budget + pool utilizzato)
-#     Koda emette una frase in-personaggio come preavviso gentile. Poi si continua
+#     Ollenya emette una frase in-personaggio come preavviso gentile. Poi si continua
 #     normalmente fino al 100% (cap hard), dove scatta il blocco gentile.
 #
 #   WHITELIST unlimited: bypass tutto (vedi is_user_unlimited() + PAYWALL_POLICY.md).
@@ -4485,7 +4485,7 @@ PREMIUM_DAILY_SOFT_WARN = 100  # warning gentile premium/giorno             [LEG
 # TTS live (Turn 6 dell'Intro V2 = pronuncia del nome utente). La finestra
 # 5 giorni parte da onboarded=true (Turn 10). Le due condizioni sono
 # indipendenti: expired scatta se ANCHE una sola delle due è soddisfatta.
-FREE_TRIAL_SECONDS = 420.0         # 7 minuti = 420 secondi di TTS Koda
+FREE_TRIAL_SECONDS = 420.0         # 7 minuti = 420 secondi di TTS Ollenya
 FREE_TRIAL_CLOSING_SECONDS = 300.0 # 5 minuti = zona "closing" (2 min di grazia)
 FREE_TRIAL_DAYS = 5                # durata finestra trial in giorni
 
@@ -4841,12 +4841,12 @@ def _compute_paid_state(profile: "Profile") -> str:
 # Il classifier alza la soglia (V3 solo su intensity==4 o safety), ma
 # aggiungiamo un ULTERIORE gate: tetto giornaliero sui turni V3 per
 # proteggere l'esperienza dal rischio "budget bruciato nei primi 2
-# giorni → Koda suona diversa il resto del mese".
+# giorni → Ollenya suona diversa il resto del mese".
 #
 # Design:
 #   - Il classifier ritorna decision.use_v3=True raramente. Questo gate
 #     applica il PACING: se `v3_turns_used_today >= budget_today` →
-#     override silente a Turbo. Log `[KODA_PACING] downgrade v3→turbo`.
+#     override silente a Turbo. Log `[OLLENYA_PACING] downgrade v3→turbo`.
 #   - Budget giornaliero: env var `KODA_TTS_V3_DAILY_BUDGET` (int, default 10).
 #   - Reset naturale al cambio di data UTC.
 #   - Zero side-effect classifier: gate applicato in server.py NEL caller.
@@ -5329,10 +5329,10 @@ async def api_lascia_andare_authorize():
     Andare — nemmeno se il trial è scaduto, nemmeno se non è mai stato
     autenticato, nemmeno se il profilo non è caricabile.
 
-    Koda conversazionale (voce + memoria) è l'esperienza Premium separata,
+    Ollenya conversazionale (voce + memoria) è l'esperienza Premium separata,
     gestita altrove nel codice via `subscription_tier` e `_compute_trial_state`.
     Quelle strutture NON sono state toccate — restano vive e utili per il
-    gating di Koda conversazionale.
+    gating di Ollenya conversazionale.
 
     Regole nuove (Punto 1 del piano Free/Premium 2026-08-17):
       - SEMPRE `allowed=True, reason="free_forever"`.
@@ -5414,11 +5414,11 @@ async def api_lascia_andare_mark_intro_seen():
 
 
 # ============================================================
-# INTRO PREMIUM — one-shot al primo accesso home Koda conv (Fabio 2026-08-22)
+# INTRO PREMIUM — one-shot al primo accesso home Ollenya conv (Fabio 2026-08-22)
 # ============================================================
 # Pattern identico a /lascia-andare/intro-{state,seen}, riusato per la
 # nuova Intro Premium (rotta /intro-premium) che parte SOLO al primo boot
-# di un utente Premium sulla home Koda conversazionale.
+# di un utente Premium sulla home Ollenya conversazionale.
 #
 # Persistenza server-side (non solo SecureStore) così sopravvive a wipe
 # locale, reinstall, cambio device — richiesta esplicita Fabio.
@@ -5477,7 +5477,7 @@ async def api_intro_premium_mark_seen():
 @api_router.get("/freemium/status", response_model=FreemiumStatus)
 async def api_freemium_status():
     """Stato del freemium per il client. Da chiamare al boot e dopo ogni
-    risposta di Koda per aggiornare il contatore visivo.
+    risposta di Ollenya per aggiornare il contatore visivo.
 
     === PAYWALL v2 (2026-07-24) ===
     Logica daily:
@@ -5550,7 +5550,7 @@ async def api_freemium_status():
 @api_router.post("/freemium/increment", response_model=FreemiumStatus)
 async def api_freemium_increment():
     """Incrementa il counter dei turni di oggi. Chiamato dal client SOLO dopo
-    un turno completo (utente parla + Koda risponde) e SOLO se NON è in
+    un turno completo (utente parla + Ollenya risponde) e SOLO se NON è in
     Confessionale (privacy first).
 
     === PAYWALL v2 (2026-07-24) ===
@@ -5888,7 +5888,7 @@ async def api_dev_trial_seed_expired():
 async def api_dev_trial_seed_closing():
     """DEV: forza il trial a stato 'closing' (zona 5-7 min).
     Setta trial_seconds_used = 350 (>= 300 e < 420). Al prossimo turno
-    Koda riceverà il blocco 'chiusura naturale' nel prompt.
+    Ollenya riceverà il blocco 'chiusura naturale' nel prompt.
     """
     now_iso = datetime.now(timezone.utc).isoformat()
     logger.info("[dev/trial] seed CLOSING requested")
@@ -6005,7 +6005,7 @@ async def api_dev_set_tier(req: DevSetTierRequest):
 @api_router.post("/dev/intro-premium/reset")
 async def api_dev_intro_premium_reset():
     """DEV admin-only: cancella intro_premium_seen_at per re-triggerare
-    l'Intro Premium al prossimo boot sulla home Koda conv."""
+    l'Intro Premium al prossimo boot sulla home Ollenya conv."""
     uid = _require_admin()
     await db.taccuino_profile.update_one(
         {"id": uid},
@@ -6214,7 +6214,7 @@ class SafetyCheckResponse(BaseModel):
     category: Optional[str] = None  # "suicide" | "selfharm" | "domestic" | "minor" | "general_crisis"
     detection_source: Optional[str] = None  # "regex" | "llm" | "both"
     resources: List[SafetyResource] = Field(default_factory=list)
-    advisory_message: Optional[str] = None  # testo standardizzato da Koda
+    advisory_message: Optional[str] = None  # testo standardizzato da Ollenya
 
 
 def _safety_resources_for(category: str) -> List[SafetyResource]:
@@ -6247,7 +6247,7 @@ def _safety_resources_for(category: str) -> List[SafetyResource]:
 
 
 def _safety_advisory_message(category: str) -> str:
-    """Testo che Koda dirà all'utente (passa per TTS) quando scatta una
+    """Testo che Ollenya dirà all'utente (passa per TTS) quando scatta una
     safety trigger. Tono presenza/tenerezza, MAI clinico, MAI elenco freddo."""
     messages = {
         "suicide": (
@@ -6610,7 +6610,7 @@ async def api_admin_tts_ratio(
     """EXPERIMENT D — TTS reali / minuti conversazione (Fabio 2026-06).
 
     Aggrega `koda_events` per rispondere:
-      "Un piano da N min venduti = quanti min TTS Koda reali + costo €?"
+      "Un piano da N min venduti = quanti min TTS Ollenya reali + costo €?"
 
     Query params:
       - days: window aggregazione (max 90).
@@ -7779,7 +7779,7 @@ async def api_gdpr_export():
 
     export = {
         "export_info": {
-            "app": "Koda — L'Amico Fraterno",
+            "app": "Ollenya — L'Amico Fraterno",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "user_id": uid,
             "gdpr_note": (
@@ -7883,7 +7883,7 @@ async def api_converse(req: ConverseRequest):
         # La pipeline voce estraeva fatti biografici regex-only ("ho un figlio
         # Luca", "lavoro a Pavia"…) e li salvava in `taccuino_key_facts` come
         # memoria permanente. La chat scritta NON lo faceva → se l'utente
-        # dichiarava biograficamente qualcosa via tastiera, Koda perdeva
+        # dichiarava biograficamente qualcosa via tastiera, Ollenya perdeva
         # quella traccia. Ora entrambi i flow lo fanno (stesso pattern,
         # asyncio in background, zero cost).
         try:
@@ -7904,7 +7904,7 @@ async def api_converse(req: ConverseRequest):
     # In modalità normale carichiamo top-6 ricordi rilevanti rispetto al
     # messaggio dell'utente. In modalità ephemeral/Confessionale NON
     # iniettiamo memorie passate: il Confessionale è uno spazio fresco
-    # ogni volta — Koda lì ricorda solo lo storico della sessione corrente
+    # ogni volta — Ollenya lì ricorda solo lo storico della sessione corrente
     # (passato dal client cifrato), niente di esterno.
     memories: List[Memory] = []
     # === SITUATION TRACKING V3.1 — retrieval + dedup (agosto 2026) ==========
@@ -7981,7 +7981,7 @@ async def api_converse(req: ConverseRequest):
         # nessuna history multi-turn da preservare).
         _kt_llm_start = time.time()
         logger.info(
-            f"[KODA_TIMING] LLM_START_STANDARD path=/converse "
+            f"[OLLENYA_TIMING] LLM_START_STANDARD path=/converse "
             f"prompt_chars={len(system_prompt)} model=claude-haiku-4-5 "
             f"ephemeral={req.ephemeral}"
         )
@@ -8007,7 +8007,7 @@ async def api_converse(req: ConverseRequest):
         )
         raw = resp["choices"][0]["message"]["content"] or ""
         logger.info(
-            f"[KODA_TIMING] LLM_END_STANDARD path=/converse "
+            f"[OLLENYA_TIMING] LLM_END_STANDARD path=/converse "
             f"elapsed_ms={int((time.time() - _kt_llm_start) * 1000)} "
             f"reply_chars={len(raw or '')}"
         )
@@ -8114,10 +8114,10 @@ async def api_converse(req: ConverseRequest):
         profile.total_messages += 1
         profile.confidence_level = min(100, profile.confidence_level + 1)
         if memory_update and memory_update.lower() not in {"null", "none", ""}:
-            # === FIX 2026-07-06 v46 (Fabio "Koda dimentica il contesto") ===
+            # === FIX 2026-07-06 v46 (Fabio "Ollenya dimentica il contesto") ===
             # 1. Dedup: se il memory_update è già presente (fuzzy contains)
             #    nel memory_summary corrente, non lo aggiungo. Evita che
-            #    Koda ripeta 10 volte lo stesso fatto perché estratto in
+            #    Ollenya ripeta 10 volte lo stesso fatto perché estratto in
             #    turni diversi con parole leggermente diverse.
             # 2. Cap 4000→8000 char: Fabio parla ORE al giorno mentre guida
             #    → 4000 char si riempiono in 2-3 giorni; 8000 danno respiro
@@ -8156,7 +8156,7 @@ async def api_converse(req: ConverseRequest):
         # La pipeline voice (`_fast_pipeline_task`, line ~8736) salva
         # `trait_update` in `profile.core_traits` quando Claude rileva un
         # tratto stabile. La pipeline text (`/converse`) NON lo faceva
-        # → asimmetria: parlando a voce Koda costruiva il ritratto
+        # → asimmetria: parlando a voce Ollenya costruiva il ritratto
         # profondo, scrivendo no. Logica identica al voice flow:
         # append separato, capped a 1500 char, kept anche quando
         # `memory_summary` viene riciclata.
@@ -8345,7 +8345,7 @@ async def auth_dev_login(response: Response):
 @api_router.post("/auth/google/session")
 async def auth_google_session(response: Response, x_session_id: Optional[str] = Header(None)):
     """Scambia il session_id Emergent (ricevuto dopo l'OAuth Google) con i
-    dati utente, crea/aggiorna lo User e apre una sessione Koda (7gg).
+    dati utente, crea/aggiorna lo User e apre una sessione Ollenya (7gg).
 
     === LOGGING STRUTTURATO (2026-08-02) ===
     Traccia timestamp, sid_prefix, esito upstream Emergent, durata chiamata.
@@ -8401,7 +8401,7 @@ async def auth_google_session(response: Response, x_session_id: Optional[str] = 
 @api_router.post("/auth/apple")
 async def auth_apple(req: AppleAuthRequest, response: Response):
     """Verifica l'identity token Apple (RS256 via JWKS, aud=bundle id),
-    crea/aggiorna lo User e apre una sessione Koda. Solo build nativa."""
+    crea/aggiorna lo User e apre una sessione Ollenya. Solo build nativa."""
     import json as _json
     import jwt
     from jwt.algorithms import RSAAlgorithm
@@ -8575,7 +8575,7 @@ async def analytics_track(req: AnalyticsEvent):
 # =============================================================================
 # Rimossi: DecisionHeartbeatRequest, DecisionFeedbackRequest, _decision_key,
 # endpoint POST /decision/heartbeat + POST /decision/feedback, e la card frontend
-# <ProactiveOffer/>. Motivazione: manifesto di prodotto "Koda non deve mai
+# <ProactiveOffer/>. Motivazione: manifesto di prodotto "Ollenya non deve mai
 # diventare insistente / needy". Nessun re-engagement proattivo, nessuna offerta
 # automatica all'apertura app.
 # =============================================================================
@@ -8961,7 +8961,7 @@ async def api_recap(period: str = "today"):
 
 
 # ============================================================
-# PROACTIVE CHECK-IN — RIMOSSO (Blocco A, no needy Koda)
+# PROACTIVE CHECK-IN — RIMOSSO (Blocco A, no needy Ollenya)
 # ============================================================
 
 # ---------- ElevenLabs TTS ----------
@@ -9054,8 +9054,8 @@ def _get_eleven_client():
 # Curated list of voices that work well for Italian.
 # (voice_id, display name, short description, gender)
 CURATED_VOICES = [
-    {"voice_id": "POuqf18evoXOKIqV2Px7", "name": "Cielo", "description": "La voce femminile di Koda.", "gender": "femminile", "accent": "italiano"},
-    {"voice_id": "ll9WG7PDTuyHwgC5MD6g", "name": "Vento", "description": "La voce maschile di Koda.", "gender": "maschile", "accent": "italiano"},
+    {"voice_id": "POuqf18evoXOKIqV2Px7", "name": "Cielo", "description": "La voce femminile di Ollenya.", "gender": "femminile", "accent": "italiano"},
+    {"voice_id": "ll9WG7PDTuyHwgC5MD6g", "name": "Vento", "description": "La voce maschile di Ollenya.", "gender": "maschile", "accent": "italiano"},
 ]
 
 # ============================================================================
@@ -9239,13 +9239,13 @@ def _voice_settings_for_tone(tone: Optional[str], stability: Optional[float], si
     elif t == "paced":
         # === PACED (agosto 2026) — cambio di ritmo della presenza ===============
         # Formula scelta dopo matrice di tuning (10 sample + 3 ibridi + 3 refine):
-        # warmth prosodica di P2 + similarity_boost alto per identità Koda pura +
+        # warmth prosodica di P2 + similarity_boost alto per identità Ollenya pura +
         # NIENTE [breath] (troppo pronunciato/annunciato) — presenza creata solo
         # da prosodia lenta e calda con [softly] iniziale + [pause] tra frasi.
         # NON è "voce rallentata". È un cambio di ritmo della presenza:
         # "rallentiamo insieme" senza dichiararlo, senza tecniche terapeutiche.
-        # NON obbliga Koda a essere breve — il vincolo è sul ritmo, non sulla
-        # lunghezza della risposta (Koda decide autonomamente quanto dire).
+        # NON obbliga Ollenya a essere breve — il vincolo è sul ritmo, non sulla
+        # lunghezza della risposta (Ollenya decide autonomamente quanto dire).
         base_stability = stability if stability is not None else 0.45
         style = 0.50
         speed = 0.74
@@ -9291,7 +9291,7 @@ _TONE_TAG_RE = re.compile(r'^\s*\[\s*TONE\s*:\s*([a-zA-Z]+)\s*\]\s*', re.IGNOREC
 #
 #   User:  "ieri siamo andati al matrimonio. Poi si è rotta la macchina.
 #           Poi abbiamo portata il carro attrezzi..."
-#   Koda:  "Matrimonio, macchina rotta, carro attrezzi..."   ← PARROTING
+#   Ollenya:  "Matrimonio, macchina rotta, carro attrezzi..."   ← PARROTING
 #
 # Soluzione: filtro server-side che intercetta OGNI frase generata da
 # Claude PRIMA del TTS ElevenLabs. Se la frase ha overlap alto di content
@@ -9344,11 +9344,11 @@ _PARROT_STOPWORDS_IT = frozenset({
 _PARROT_WORD_RE = re.compile(r"[a-zàèéìòùáíóúçñ]+", re.IGNORECASE)
 
 # === NUMERI CIFRA → PAROLE ITALIANE (v65.16, 2026-09-06) ===
-# Fix critico: se user dice "40 minuti di ritardo" (cifra) e Koda dice
+# Fix critico: se user dice "40 minuti di ritardo" (cifra) e Ollenya dice
 # "Quaranta minuti di ritardo" (parola), il filtro precedente NON matchava
 # perché "40" e "quaranta" sono token diversi per il regex. Normalizziamo
 # le cifre in parole prima di estrarre content words → l'overlap trova
-# anche "quaranta" tra utente e Koda.
+# anche "quaranta" tra utente e Ollenya.
 _NUM_UNITS_IT = ["zero", "uno", "due", "tre", "quattro", "cinque",
                  "sei", "sette", "otto", "nove"]
 _NUM_TEENS_IT = ["dieci", "undici", "dodici", "tredici", "quattordici",
@@ -9398,7 +9398,7 @@ def _normalize_numbers_for_parrot(text: str) -> str:
             return m.group(0)
     return _NUM_DIGIT_RE.sub(_replace, text)
 
-# Acknowledgement rotanti da usare quando la PRIMA frase Koda è parroting.
+# Acknowledgement rotanti da usare quando la PRIMA frase Ollenya è parroting.
 # Neutri, empatici, brevissimi. Non ripetono contenuti utente.
 _PARROT_ACKS = (
     "Ti ascolto.",
@@ -9442,7 +9442,7 @@ def _strip_echo_marker(sentence: str) -> tuple[str, bool]:
 def _parrot_content_words(text: str) -> set[str]:
     """Estrae content words da un testo: parole ≥4 char lowercase NON in stopword.
     v65.16: prima normalizza le cifre in parole italiane, così '40' matcha
-    'quaranta' quando confrontiamo user/Koda."""
+    'quaranta' quando confrontiamo user/Ollenya."""
     if not text:
         return set()
     text_norm = _normalize_numbers_for_parrot(text)
@@ -9482,10 +9482,10 @@ def _detect_parroting(sentence: str, user_text: str) -> tuple[bool, dict]:
       Cattura elenchi lunghi ("matrimonio, macchina, carro attrezzi").
 
     STRATO B — bigram content-word (NEW v65.17):
-      Trigger se: ≥1 bigram content-word user appare in Koda (ordine-insensitive)
+      Trigger se: ≥1 bigram content-word user appare in Ollenya (ordine-insensitive)
       QUANDO user ha ≤8 content words (frasi utente corte/medie).
       Cattura eco letterali che lo strato A manca quando user è cortissimo,
-      es: "ho perso l'autobus" → Koda "autobus perso" (overlap=2, sotto soglia A
+      es: "ho perso l'autobus" → Ollenya "autobus perso" (overlap=2, sotto soglia A
       ma bigram {perso,autobus} shared con user → parroting evidente).
 
     Ratio comportamentale:
@@ -9524,7 +9524,7 @@ def _detect_parroting(sentence: str, user_text: str) -> tuple[bool, dict]:
     if len(u_words) >= 3 and overlap >= 3 and ratio >= 0.40 and len(s_words) <= 12:
         return (True, {**meta_base, "trigger": "A_set_overlap"})
 
-    # === STRATO A' — set overlap fortissimo (cattura frasi Koda lunghe con
+    # === STRATO A' — set overlap fortissimo (cattura frasi Ollenya lunghe con
     # eco pesante). ≥4 content words condivise indipendentemente da ratio
     # è indicatore forte di parroting anche in frasi articolate. ===
     if overlap >= 4 and len(u_words) >= 3:
@@ -9532,7 +9532,7 @@ def _detect_parroting(sentence: str, user_text: str) -> tuple[bool, dict]:
 
     # === STRATO B — bigram content-word (v65.17) ===
     # Solo se user è corto/medio (≤8 content words): frasi utente lunghe
-    # hanno molti bigram, alcuni possono essere citati naturalmente da Koda
+    # hanno molti bigram, alcuni possono essere citati naturalmente da Ollenya
     # senza essere parroting → falsi positivi.
     if len(u_words) <= 8:
         u_bigrams = _parrot_content_bigrams(user_text)
@@ -9559,7 +9559,7 @@ _parrot_ack_cycle = _itertools.cycle(_PARROT_ACKS)
 def _antiparrot_filter_sentence(
     idx: int, sentence: str, user_text: str
 ) -> Optional[str]:
-    """Applica il filtro anti-parroting a una singola frase Koda.
+    """Applica il filtro anti-parroting a una singola frase Ollenya.
     Ritorna:
       - la frase invariata se NON è parroting
       - la frase con marker [ECHO:on] rimosso se è parroting INTENZIONALE
@@ -9824,7 +9824,7 @@ def _has_audio_tags(text: str) -> bool:
 
 
 # ============================================================
-# VOCI DI KODA — "Trova la tua Koda"
+# VOCI DI KODA — "Trova la tua Ollenya"
 # ============================================================
 # Strategia di brand: una sola voce per utente, scelta UNA volta in
 # onboarding, mai più modificabile. Due timbri:
@@ -9836,7 +9836,7 @@ def _has_audio_tags(text: str) -> bool:
 # ============================================================
 
 KODA_VOICES: Dict[str, Dict[str, str]] = {
-    # CIELO — voce custom femminile ufficiale Koda (POuqf18evoXOKIqV2Px7).
+    # CIELO — voce custom femminile ufficiale Ollenya (POuqf18evoXOKIqV2Px7).
     # Sostituisce "Acqua" (6TngzmzM89jJ3Y2Yiywr) — Fabio 2026-07-13.
     # La chiave "aria" è mantenuta per retrocompat con i profili salvati
     # (profile.koda_voice="aria") — gli utenti esistenti riceveranno
@@ -9845,10 +9845,10 @@ KODA_VOICES: Dict[str, Dict[str, str]] = {
     "aria": {
         "voice_id": "POuqf18evoXOKIqV2Px7",
         "label": "Cielo",
-        "description": "La voce femminile di Koda.",
+        "description": "La voce femminile di Ollenya.",
     },
     # VENTO — voce custom maschile dell'utente (ll9WG7PDTuyHwgC5MD6g).
-    # La voce maschile UFFICIALE di Koda. Sostituisce la precedente "Theo"
+    # La voce maschile UFFICIALE di Ollenya. Sostituisce la precedente "Theo"
     # (dJwiFcjz9zW5Pge7G8AG) — l'utente l'ha trovata più adatta all'identità
     # del prodotto. Le chiavi "theo"/"echo" sono mantenute per retrocompat
     # con i profili salvati — gli utenti esistenti riceveranno automaticamente
@@ -9856,12 +9856,12 @@ KODA_VOICES: Dict[str, Dict[str, str]] = {
     "theo": {
         "voice_id": "ll9WG7PDTuyHwgC5MD6g",
         "label": "Vento",
-        "description": "La voce maschile di Koda.",
+        "description": "La voce maschile di Ollenya.",
     },
     "echo": {
         "voice_id": "ll9WG7PDTuyHwgC5MD6g",
         "label": "Vento",
-        "description": "La voce maschile di Koda.",
+        "description": "La voce maschile di Ollenya.",
     },
 }
 
@@ -9871,7 +9871,7 @@ def _resolve_voice_id(profile: "Profile") -> str:
     dell'utente (`koda_voice`). Failsafe: se il campo è vuoto/non valido,
     usa "aria". Retrocompatibilità: il vecchio "eco" (mappava su Lily/chiara)
     viene rimappato su "aria" (Lily/chiara) — stesso voice_id, brand diverso."""
-    key = (getattr(profile, "koda_voice", None) or "aria").strip().lower()
+    key = (getattr(profile, "ollenya_voice", None) or "aria").strip().lower()
     # Retrocompat: "eco" (vecchio brand sulla voce chiara Lily) → "aria" (nuovo brand)
     if key == "eco":
         key = "aria"
@@ -9992,7 +9992,7 @@ async def api_intro_gender_from_name(req: IntroGenderRequest):
 # ============================================================
 # Quando l'utente menziona fatti su di sé (nome dei figli, lavoro, città,
 # date significative, ecc.) li salviamo come "fatti chiave" che vengono
-# iniettati in OGNI prompt successivo. Così Koda li ricorda PER SEMPRE,
+# iniettati in OGNI prompt successivo. Così Ollenya li ricorda PER SEMPRE,
 # non solo nel contesto recente di 16 turni.
 # Estrazione via REGEX italiana (zero costo LLM, zero latenza). Più
 # avanti potremo aggiungere una passata LLM async per fatti sottili.
@@ -10029,7 +10029,7 @@ _KF_PATTERNS = [
      "luogo", lambda m: f"Vive a {m.group(1)}"),
     # === LOCATION DICHIARATA (fix Fabio 2026-06-20) ===
     # "sono a Pavia", "mi trovo a Milano", "in questo momento sono a Roma".
-    # Distinto da "vivo a X" (residenza). Catturiamo per dare a Koda il
+    # Distinto da "vivo a X" (residenza). Catturiamo per dare a Ollenya il
     # contesto geografico in modo che possa rispondere a "che ore sono" o
     # "che tempo fa qui" usando la città giusta. La maiuscola sul toponimo
     # è obbligatoria (es. Pavia, Milano) per evitare false positive su
@@ -10068,7 +10068,7 @@ def _extract_key_facts_from_text(text: str) -> List[Dict[str, str]]:
     """Estrae fatti biografici dall'input dell'utente via regex italiane.
     Ritorna lista di dict {fact, category, source_text}. Veloce, zero costo
     LLM. Approccio low-recall/high-precision: meglio mancare un fatto che
-    salvarne uno sbagliato (poi Koda sembra confusa)."""
+    salvarne uno sbagliato (poi Ollenya sembra confusa)."""
     if not text or len(text) < 5:
         return []
     facts = []
@@ -10195,12 +10195,12 @@ async def api_delete_key_fact(fact_id: str):
 # SAFETY GUARDRAILS (Italia)
 # ============================================================
 # Quando l'utente menziona contenuti critici (suicidio, autolesionismo,
-# violenza domestica, abusi su minori) Koda DEVE:
+# violenza domestica, abusi su minori) Ollenya DEVE:
 #   1. Rispondere con empatia, senza minimizzare e senza moralismi
 #   2. Suggerire risorse italiane verificate (numeri verdi nazionali)
 # Approccio: detection via keyword italiane (non LLM — troppo costoso/lento),
 # e iniezione di un BLOCCO SAFETY nel prompt che istruisce Claude. NON
-# blocchiamo la conversazione: Koda risponde lo stesso ma in modo informato.
+# blocchiamo la conversazione: Ollenya risponde lo stesso ma in modo informato.
 # ============================================================
 
 # Set di keyword sensibili (lowercase). False positive accettabili — meglio
@@ -10304,7 +10304,7 @@ def _safety_prompt_injection(category: str) -> str:
 # - caratteri speciali: "&", "@", "#"
 # - URL e abbreviazioni tecniche
 # Questa funzione fa una normalizzazione difensiva PRIMA di mandare il testo
-# al TTS, così Koda pronuncia "29 gradi" invece di "29 grado C" o peggio.
+# al TTS, così Ollenya pronuncia "29 gradi" invece di "29 grado C" o peggio.
 # ============================================================
 
 # Pattern compilati a livello modulo per riusarli a ogni frase.
@@ -10595,7 +10595,7 @@ voice_settings=voice_settings,
         logger.warning(f"[trial] accounting failed: {_acc_err}")
 
     # Ricalcola trial_state DOPO l'increment per riflettere il nuovo stato
-    # nell'header X-Koda-Trial-State (utile per il client per aggiornare
+    # nell'header X-Ollenya-Trial-State (utile per il client per aggiornare
     # UI senza polling).
     _final_trial_state = (
         _compute_trial_state(_profile_for_trial) if _profile_for_trial is not None else "active"
@@ -10607,10 +10607,10 @@ voice_settings=voice_settings,
         headers={
             "Cache-Control": "no-store",
             # === TRIAL STATE HEADER (2026-08-10) ===
-            # Il client legge X-Koda-Trial-State per aggiornare l'UI
+            # Il client legge X-Ollenya-Trial-State per aggiornare l'UI
             # (overlay expired, ecc.) senza dover fare polling. Solo enum,
             # mai numeri.
-            "X-Koda-Trial-State": _final_trial_state,
+            "X-Ollenya-Trial-State": _final_trial_state,
         },
     )
 
@@ -10626,7 +10626,7 @@ voice_settings=voice_settings,
 # Prima la cache era un dict Python LOCALE al processo. In ambiente
 # Kubernetes con multiple repliche del backend, /api/tts/prepare poteva
 # salvare l'audio sul pod A, e iOS AVPlayer fetchava /api/tts/audio/{tok}
-# dal pod B → 404. Sintomo: Koda restava muta in modo INTERMITTENTE
+# dal pod B → 404. Sintomo: Ollenya restava muta in modo INTERMITTENTE
 # (50% delle volte, ogni 2-3 turni). Ora salviamo in MongoDB (condiviso
 # tra tutti i pod) con TTL automatico di 10 minuti.
 _TTS_AUDIO_TTL_S = 600  # 10 minuti (più che sufficiente per finire un turno TTS)
@@ -11010,7 +11010,7 @@ voice_settings=voice_settings,
 @api_router.get("/dev/tts/preview")
 async def api_dev_tts_preview(
     text: str = "",
-    voice_id: str = "POuqf18evoXOKIqV2Px7",  # default Cielo (voce Koda produzione)
+    voice_id: str = "POuqf18evoXOKIqV2Px7",  # default Cielo (voce Ollenya produzione)
     model_id: str = "eleven_flash_v2_5",
     stability: float = 0.40,
     style: float = 0.55,
@@ -11093,8 +11093,8 @@ async def api_dev_tts_preview(
         headers={
             "Cache-Control": "no-store",
             "X-Accel-Buffering": "no",
-            "X-Koda-Dev-Preview": "1",
-            "X-Koda-Voice-Settings": json.dumps(voice_settings, separators=(",", ":")),
+            "X-Ollenya-Dev-Preview": "1",
+            "X-Ollenya-Voice-Settings": json.dumps(voice_settings, separators=(",", ":")),
         },
     )
 
@@ -11209,8 +11209,8 @@ async def api_tts_audio(token: str, request: Request):
 #
 # Quando l'utente parla SENZA connessione, invece di lasciare l'app in
 # silenzio o mostrare un errore tecnico, il client riproduce una di queste
-# clip random — con la STESSA voce personalizzata di Koda — per mantenere
-# l'illusione di presenza ("Koda è ancora qui, solo che è offline").
+# clip random — con la STESSA voce personalizzata di Ollenya — per mantenere
+# l'illusione di presenza ("Ollenya è ancora qui, solo che è offline").
 #
 # Le clip sono generate UNA SOLA VOLTA via ElevenLabs e cachate in MongoDB
 # in modo permanente (TTL escluso). Tutti gli utenti con la stessa voce
@@ -11403,17 +11403,17 @@ try:
         _koda_preserve_cache_control
     )
     logger.info(
-        "[KODA_CACHE_PATCH] litellm OpenAIGPTConfig.remove_cache_control_flag "
+        "[OLLENYA_CACHE_PATCH] litellm OpenAIGPTConfig.remove_cache_control_flag "
         "patched to no-op (Anthropic prompt caching via Emergent proxy)"
     )
 except Exception as _cache_patch_err:
     logger.error(
-        f"[KODA_CACHE_PATCH] FAILED to patch litellm cache_control strip: "
+        f"[OLLENYA_CACHE_PATCH] FAILED to patch litellm cache_control strip: "
         f"{_cache_patch_err!r} — prompt caching will remain DISABLED"
     )
 
 # =============== TAVILY WEB SEARCH INTEGRATION ===============
-# Permette a Koda di cercare informazioni in tempo reale sul web (notizie,
+# Permette a Ollenya di cercare informazioni in tempo reale sul web (notizie,
 # eventi, fatti recenti). Attivato SOLO nel flusso non-confessionale
 # (/converse e /converse-stream-audio). MAI nel flusso sealed (privacy).
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip()
@@ -11485,7 +11485,7 @@ def _should_web_search(text: str, force_open: bool = False) -> bool:
     Quando `force_open=True` (l'utente ha attivato esplicitamente il toggle
     "Ricerca web" in Impostazioni), siamo MOLTO permissivi: qualsiasi cosa
     sembri una domanda o una richiesta di informazione attiva Tavily.
-    L'utente ha dato consenso → Koda deve potersi informare LIBERAMENTE.
+    L'utente ha dato consenso → Ollenya deve potersi informare LIBERAMENTE.
     
     Quando `force_open=False` (toggle OFF): si attiva solo su segnali fortissimi
     (parole-chiave fattuali esplicite o prefissi come "cerca X")."""
@@ -11726,7 +11726,7 @@ def _compute_waveform_rms(mp3_bytes: bytes) -> Optional[Dict[str, Any]]:
 # ORB↔TTS SILENCE SYNC — Opzione A.3c (Task 2 — Fabio 2026-08)
 # ============================================================
 # Estrae dalla waveform RMS una TIMELINE dei silenzi "percepiti", cioè
-# intervalli [start_ms, end_ms] dove Koda NON sta parlando (respiro,
+# intervalli [start_ms, end_ms] dove Ollenya NON sta parlando (respiro,
 # pausa naturale, punteggiatura). Il client la usa per smorzare la
 # pulsazione dell'orb durante queste pause, eliminando la dissonanza
 # cognitiva "orb pulsa ma non sento voce".
@@ -11924,7 +11924,7 @@ def _store_converse_result(rid: str, payload: Dict[str, Any]) -> None:
 # ROOT CAUSE (Fabio 23/07 report post-Fase-B):
 # ElevenLabs API text_to_speech.convert produce MP3 con loudness (LUFS)
 # NON-DETERMINISTICA request-per-request. Testato empiricamente 23/07
-# su una risposta reale Koda: chunk0=-18.2 LUFS, chunk1=-17.7 LUFS.
+# su una risposta reale Ollenya: chunk0=-18.2 LUFS, chunk1=-17.7 LUFS.
 # 0.5 LU di stacco tra due frasi consecutive dello stesso turno →
 # percepito come "volume che salta" tra idx=0 e idx=1, PIÙ FASTIDIOSO
 # del semplice cambio di tono/prosodia. Amplificato in ambienti rumorosi
@@ -12063,7 +12063,7 @@ def _normalize_loudness_mp3(mp3_bytes: bytes, *, session_short: str = "") -> byt
 # lo scalino intra-turno MA appiattisce la dinamica emotiva tra turni:
 #   - Turno "calmo" con [softly]: v3 produce naturalmente ~-19 LUFS → livellato a -16
 #   - Turno "entusiasta" con [energetically]: v3 produce ~-13 LUFS → livellato a -16
-# Risultato: Koda parla sempre allo stesso volume, perde carattere.
+# Risultato: Ollenya parla sempre allo stesso volume, perde carattere.
 #
 # Fix corretto: normalizzare la RELAZIONE fra chunk DELLO STESSO TURNO
 # (elimina lo scalino), NON un target assoluto. Il chunk 0 diventa il
@@ -12832,13 +12832,13 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
                 _corrected, _n_fix = _koda_gg.fix_ai_gender(full_reply, _ai_g)
                 if _n_fix > 0:
                     logger.warning(
-                        f"[KODA_GENDER_FIX] ai_gender={_ai_g} "
+                        f"[OLLENYA_GENDER_FIX] ai_gender={_ai_g} "
                         f"corrections={_n_fix} "
                         f"before={full_reply[:80]!r} after={_corrected[:80]!r}"
                     )
                     full_reply = _corrected
         except Exception as _gg_err:
-            logger.warning(f"[KODA_GENDER_FIX] guard failed: {_gg_err!r}")
+            logger.warning(f"[OLLENYA_GENDER_FIX] guard failed: {_gg_err!r}")
         try:
             data = extract_json(extractor.full_buffer) or {}
         except Exception:
@@ -13355,7 +13355,7 @@ def _infer_user_gender(profile: "Profile") -> str:
 
 def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], memories: Optional[List["Memory"]] = None, trial_state: Optional[str] = None, situations: Optional[List["Situation"]] = None) -> str:
     """Prompt CONDENSATO per il fast path — mantiene l'identità essenziale
-    di Koda ma rimuove tutte le sezioni ridondanti (umanità calibrata G/F/E/D/C/B/A,
+    di Ollenya ma rimuove tutte le sezioni ridondanti (umanità calibrata G/F/E/D/C/B/A,
     dinamicità emotiva 4-modi, registro linguistico, ecc.) che fanno
     esplodere il TTFT senza guadagno percepibile in conversazioni brevi.
 
@@ -13366,7 +13366,7 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         "it": "italiano", "en": "english", "es": "español",
         "fr": "français", "de": "deutsch",
     }.get(profile.language or "it", "italiano")
-    ai_name = profile.ai_name or "Coda"
+    ai_name = profile.ai_name or "Ollenya"
     user_g = _infer_user_gender(profile)
     ai_g = (profile.ai_gender or "f").lower()
     memory = (profile.memory_summary or "").strip()
@@ -13446,11 +13446,11 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
             f"\n📓 MEMORIA RECENTE (fatti, eventi, persone, contesto):\n{memory[:3500]}\n"
         )
 
-    # === FIX 2026-06-26 v18 (Fabio in furgone: "Koda non si ricorda di ieri") ===
+    # === FIX 2026-06-26 v18 (Fabio in furgone: "Ollenya non si ricorda di ieri") ===
     # Ricordi semantici puntuali (`taccuino_memories`) — frammenti
-    # specifici che Koda ha registrato negli scambi passati. Caricati
+    # specifici che Ollenya ha registrato negli scambi passati. Caricati
     # tramite scoring tag+importance+time-decay (vedi _load_relevant_memories).
-    # Senza questo blocco, Koda vede solo il riassunto aggregato e perde
+    # Senza questo blocco, Ollenya vede solo il riassunto aggregato e perde
     # i fatti specifici di ieri/settimana scorsa che l'utente magari
     # vuole riprendere ("ma ti ricordi quella cosa di lavoro?").
     if memories:
@@ -13496,7 +13496,7 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"gelato il sangue', 'ti si è chiuso lo stomaco', 'volevi piangere' — QUANDO l'utente "
         f"NON ha detto NULLA di tutto questo.\n"
         f"3. Esempio patologico (dai log iOS 2026-09-06): utente dice 'Il mio capo mi ha "
-        f"guardato storto, ma non ha detto niente'. Koda DEVE fermarsi al fatto: 'Guardato "
+        f"guardato storto, ma non ha detto niente'. Ollenya DEVE fermarsi al fatto: 'Guardato "
         f"storto senza dire niente. Fastidioso. Come è finita?' — NON deve inventare 'e tu "
         f"stavi per esplodere' (l'utente NON l'ha detto).\n"
         f"4. Se vuoi ipotizzare uno stato interno DEVI usare formula interrogativa esplicita: "
@@ -13521,9 +13521,9 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"⚠️ USALO CON PARSIMONIA: massimo 1 volta ogni 5-6 turni, e SOLO quando l'eco ha uno "
         f"scopo emotivo preciso (enfasi, intimità, chiarimento). MAI come default per rispondere. "
         f"Se sei in dubbio, NON usarlo — meglio una risposta senza eco che un'eco fasulla.\n"
-        f"Esempio giusto: utente 'Mi ha lasciato dopo dieci anni'. Koda '[ECHO:on]Dieci anni. Dieci "
+        f"Esempio giusto: utente 'Mi ha lasciato dopo dieci anni'. Ollenya '[ECHO:on]Dieci anni. Dieci "
         f"anni buttati così.' → OK, ripetizione mirata a densità emotiva.\n"
-        f"Esempio sbagliato: utente 'ho perso l'autobus'. Koda '[ECHO:on]Autobus perso, che palle.' "
+        f"Esempio sbagliato: utente 'ho perso l'autobus'. Ollenya '[ECHO:on]Autobus perso, che palle.' "
         f"→ NO, è parroting riflesso mascherato da intenzionale, senza scopo emotivo reale.\n"
         f"\n"
         f"⚠️ LINGUA OBBLIGATORIA: {lang_name.upper()}. "
@@ -13868,11 +13868,11 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"⚡ Crea new_memory OGNI VOLTA che emerge una di queste 5 categorie sopra — anche se è "
         f"un turno normale, il ricordo va salvato. Solo per chit-chat generico ('sto guidando', "
         f"'ho fame', 'che ore sono') → null. Meglio salvare troppo che troppo poco: la memoria "
-        f"è ciò che rende Koda un amico che ti conosce, non un chatbot smemorato.\n"
+        f"è ciò che rende Ollenya un amico che ti conosce, non un chatbot smemorato.\n"
         f"⚠️ NON usare mai nomi già presenti in memoria come 'Marco', 'Mario', 'Luna', 'Luca' se "
         f"non sono stati pronunciati dall'utente IN QUESTO turno — quelli sono artefatti di test. "
         f"\"close_session\": true SOLO su saluto chiusura ESPLICITO ('a dopo', 'buonanotte', 'ci sentiamo dopo', 'vado', 'grazie chiudo'); "
-        f"MAI su 'ciao Koda' da solo — quello è saluto di apertura. "
+        f"MAI su 'ciao Ollenya' da solo — quello è saluto di apertura. "
         f"se true reply breve calda max 12 parole, no domande. "
         f"\"home_update\": città/paese di RESIDENZA dell'utente se in questo turno ha "
         f"dichiarato dove abita (es. 'abito a X', 'vivo a Y', 'casa mia è a Z', 'sto di "
@@ -14105,7 +14105,7 @@ async def _fast_pipeline_task(
         # macchina, furgone, esterno con vento), la pipeline chiamava Claude
         # con text="" → Claude non aveva NULLA su cui rispondere → nessuna
         # frase generata → nessun evento sentence → il client passava da
-        # "thinking" a "idle" SILENZIOSAMENTE. UX: l'utente pensa che Koda
+        # "thinking" a "idle" SILENZIOSAMENTE. UX: l'utente pensa che Ollenya
         # non voglia rispondere.
         #
         # FIX: se text è vuoto o < 3 char (dopo strip), emettiamo una risposta
@@ -14201,7 +14201,7 @@ async def _fast_pipeline_task(
             except Exception as _e:
                 logger.warning(f"[fast didnt-hear] sentence publish failed: {_e}")
 
-            # Emit meta (per il [KODA_SUMMARY] del client + tone hint per l'orb)
+            # Emit meta (per il [OLLENYA_SUMMARY] del client + tone hint per l'orb)
             try:
                 await _publish({
                     "type": "meta",
@@ -14239,7 +14239,7 @@ async def _fast_pipeline_task(
             # === MEMORIA BIOGRAFICA: estrai fatti chiave in background ===
             # Regex-only, ~1ms, zero costo. Salva fatti nuovi nella collection
             # taccuino_key_facts (skip duplicati). Sarà letta nel prompt dei
-            # turni successivi così Koda ricorda "per sempre".
+            # turni successivi così Ollenya ricorda "per sempre".
             try:
                 _extracted = _extract_key_facts_from_text(text)
                 if _extracted:
@@ -14263,17 +14263,17 @@ async def _fast_pipeline_task(
         if client_voice_id:
             logger.info(
                 f"[FAST_PIPELINE] voice_id from CLIENT = {voice_id} "
-                f"(profile.koda_voice={getattr(profile, 'koda_voice', '?')})"
+                f"(profile.koda_voice={getattr(profile, 'ollenya_voice', '?')})"
             )
 
         # Recent context: 16 messaggi (era 8). +500ms TTFT trascurabile,
-        # ma Koda non perde il filo di conversazioni multi-turno.
+        # ma Ollenya non perde il filo di conversazioni multi-turno.
         recent_docs = await db.taccuino_timeline.find(_uf(), {"_id": 0}).sort("timestamp", -1).to_list(16)
         recent_docs.reverse()
         recent = [TimelineEntry(**d) for d in recent_docs]
         history_str = _format_history_for_llm(recent) if recent else ""
         # === Diagnostica contesto (Fabio 2026-07-23 v60) ================
-        # Fabio ha segnalato "Koda ha perso il filo del discorso" dopo il
+        # Fabio ha segnalato "Ollenya ha perso il filo del discorso" dopo il
         # passaggio a Fase B (client_apple). Log esplicito per verificare
         # in produzione che history venga effettivamente caricata E che
         # user_id auth-bridge risolva al suo uid (non a "me" isolato).
@@ -14286,9 +14286,9 @@ async def _fast_pipeline_task(
             f"stt_source={stt_source!r} history_chars={len(history_str)}"
         )
 
-        # === FIX 2026-06-26 v18 (Fabio in furgone: "Koda non si ricorda di ieri") ===
+        # === FIX 2026-06-26 v18 (Fabio in furgone: "Ollenya non si ricorda di ieri") ===
         # La pipeline voce NON caricava i ricordi semantici da
-        # `taccuino_memories` (lo faceva solo /converse). Risultato: Koda
+        # `taccuino_memories` (lo faceva solo /converse). Risultato: Ollenya
         # vedeva solo il `memory_summary` aggregato + 16 turni recenti, e
         # qualsiasi cosa di vecchio (ieri, settimana scorsa) era invisibile.
         # Fix: carichiamo i top-6 ricordi rilevanti per il testo dell'utente
@@ -14305,7 +14305,7 @@ async def _fast_pipeline_task(
                 memories = []
             # === LOG DIAGNOSTICO MEMORIA (Fabio 2026-07-28, Fase 1) ==========
             # Logga i ricordi caricati per QUESTO turno così quando l'utente
-            # segnala "Koda ha confuso/dimenticato X" possiamo vedere:
+            # segnala "Ollenya ha confuso/dimenticato X" possiamo vedere:
             #   - Se il ricordo giusto era caricato (allora è problema di
             #     comprensione/uso da parte di Claude → prompt engineering)
             #   - Se il ricordo giusto NON era caricato (allora è problema di
@@ -14316,13 +14316,13 @@ async def _fast_pipeline_task(
             try:
                 user_prev = (text or "")[:40].replace("\n", " ")
                 logger.info(
-                    f"[KODA_MEMORY_LOAD] turno_user='{user_prev}' loaded={len(memories)}"
+                    f"[OLLENYA_MEMORY_LOAD] turno_user='{user_prev}' loaded={len(memories)}"
                 )
                 for i, m in enumerate(memories):
                     concept_prev = (m.concept or "")[:60].replace("\n", " ")
                     tags_prev = ",".join((m.tags or [])[:5])
                     logger.info(
-                        f"[KODA_MEMORY_LOAD]   #{i} imp={m.importance} "
+                        f"[OLLENYA_MEMORY_LOAD]   #{i} imp={m.importance} "
                         f"src={m.source} tags=[{tags_prev}] "
                         f"concept='{concept_prev}'"
                     )
@@ -14361,7 +14361,7 @@ async def _fast_pipeline_task(
         # Quando la trascrizione STT ha confidenza bassa (Deepgram conf <0.7),
         # l'audio è probabilmente di bassa qualità (ambiente rumoroso:
         # macchina, esterno, vicino a macchinari, finestra aperta, ecc.).
-        # Invece di indovinare silenziosamente (e fallire), Koda si comporta
+        # Invece di indovinare silenziosamente (e fallire), Ollenya si comporta
         # come un amico ONESTO al telefono: riconosce apertamente il problema,
         # chiede dove si trova l'utente, adatta il tono.
         # Soglia: 0.7 lascia passare la stragrande maggioranza delle frasi
@@ -14376,7 +14376,7 @@ async def _fast_pipeline_task(
         # una probabilità acustico-linguistica, non semantica). Con threshold
         # 0.7 tarato per Deepgram, questo blocco entrava ~metà dei turni
         # Fase B → Claude riceveva l'istruzione "fingi di essere confuso,
-        # chiedi dove ti trovi" → l'utente percepiva Koda come "sordo al
+        # chiedi dove ti trovi" → l'utente percepiva Ollenya come "sordo al
         # contesto della conversazione".
         # SFSpeechRecognizer on-device ha già filtro acustico Apple + noise
         # cancellation hardware iPhone → se produce un transcript, è
@@ -14429,7 +14429,7 @@ async def _fast_pipeline_task(
 
         # === MEMORIA BIOGRAFICA: inietta i fatti chiave noti su Fabio ===
         # Vengono dai turni precedenti (regex extraction). 1 chiamata Mongo
-        # rapida (~5ms). Permette a Koda di ricordare nome figli, lavoro,
+        # rapida (~5ms). Permette a Ollenya di ricordare nome figli, lavoro,
         # città, hobby, ecc. anche dopo 1000 messaggi.
         kf_brief = await _get_key_facts_brief(limit=20)
         if kf_brief:
@@ -14497,7 +14497,7 @@ async def _fast_pipeline_task(
         # lesionismo/violenza domestica/abusi su minori), iniettiamo nel
         # system prompt UN blocco safety che istruisce Claude a rispondere
         # con risorse italiane verificate, mantenendo il tono "amico".
-        # NON blocchiamo la chat — Koda continua a essere presente.
+        # NON blocchiamo la chat — Ollenya continua a essere presente.
         safety_cat = _detect_safety_category(text)
         if safety_cat:
             logger.warning(f"[fast {session_id[:8]}] SAFETY trigger: category={safety_cat}")
@@ -14512,7 +14512,7 @@ async def _fast_pipeline_task(
         # PRIVACY: rispetta il toggle utente `settings.web_search_enabled` —
         # se l'utente lo disattiva da Impostazioni, Tavily NON viene MAI chiamato.
         # Quando il toggle è ON: ricerca LIBERA su tutto internet (niente
-        # whitelist domini, trigger permissivi) — Koda può rispondere su
+        # whitelist domini, trigger permissivi) — Ollenya può rispondere su
         # qualsiasi argomento real-time. L'utente ha dato consenso esplicito.
         web_search_brief: Optional[str] = None
         ws_enabled = bool(getattr(profile.settings, "web_search_enabled", True))
@@ -14550,7 +14550,7 @@ async def _fast_pipeline_task(
         user_payload_parts = []
         if history_str:
             user_payload_parts.append(f"STORICO RECENTE:\n{history_str}")
-        # === FIX 2026-07-03 v45 (Fabio "Koda continua a dire Chiusi/Montepulciano") ===
+        # === FIX 2026-07-03 v45 (Fabio "Ollenya continua a dire Chiusi/Montepulciano") ===
         # BUG: La doppia iniezione GPS nel USER payload NON aveva il guard
         # `_wants_geo` → Chiusi/Montepulciano venivano passati a Claude a
         # OGNI turno con l'istruzione "questa è la fonte autoritativa,
@@ -14619,12 +14619,12 @@ async def _fast_pipeline_task(
             _enc = _tk.get_encoding("cl100k_base")
             _user_payload_tokens = len(_enc.encode(user_payload))
             logger.info(
-                f"[KODA_TIMING] USER_PAYLOAD sid={session_id[:8]} "
+                f"[OLLENYA_TIMING] USER_PAYLOAD sid={session_id[:8]} "
                 f"chars={len(user_payload)} tokens_tiktoken={_user_payload_tokens} "
                 f"user_audio_ms={audio_duration_ms if audio_duration_ms is not None else -1}"
             )
         except Exception as _tk_e:
-            logger.warning(f"[KODA_TIMING] tiktoken unavailable: {_tk_e}")
+            logger.warning(f"[OLLENYA_TIMING] tiktoken unavailable: {_tk_e}")
 
         # === Container nonlocal per catturare metrics dallo stream ===
         # Popolato durante il loop `async for chunk in stream`. Letto DOPO
@@ -14636,7 +14636,7 @@ async def _fast_pipeline_task(
 
         t_llm_start = time.time()
         logger.info(f"[fast {session_id[:8]}] LLM start, prompt {len(sys_prompt)} chars")
-        logger.info(f"[KODA_TIMING] LLM_START sid={session_id[:8]} prompt_chars={len(sys_prompt)}")
+        logger.info(f"[OLLENYA_TIMING] LLM_START sid={session_id[:8]} prompt_chars={len(sys_prompt)}")
 
         stream = await litellm.acompletion(
             # === FIX LINGUA SPAGNOLA (sprint 2026-06-20) ===
@@ -14653,7 +14653,7 @@ async def _fast_pipeline_task(
             model='openai/claude-haiku-4-5-20251001',
             messages=[
                 # === FIX 2026-07-01 — Anthropic prompt caching (Fabio latenza) ===
-                # System prompt Koda è ~2500 token. Cachandolo su Anthropic
+                # System prompt Ollenya è ~2500 token. Cachandolo su Anthropic
                 # (marker cache_control ephemeral) risparmiamo ~300-500ms
                 # su TTFT + 90% costi input sui token cachati. Il formato
                 # con content=list[content_block] è il canonico Anthropic
@@ -14678,7 +14678,7 @@ async def _fast_pipeline_task(
             # Ridotto da 280 → 200 per contenere la lunghezza max della
             # risposta e quindi il costo ElevenLabs (che è l'85-90% del
             # costo/turno). 200 tokens ≈ 150 parole ≈ ~700 char TTS max.
-            # La media reale è più bassa (Koda è naturalmente conciso), ma
+            # La media reale è più bassa (Ollenya è naturalmente conciso), ma
             # questo cap protegge da risposte molto lunghe che sballano il
             # budget. Riduzione stimata: ~25-30% del costo TTS per turno.
             # Se la qualità delle risposte cala (troncate a metà), rialzare
@@ -14748,7 +14748,7 @@ async def _fast_pipeline_task(
         first_audio_logged = False
         current_tone = "warm"
         # === TIMING BACKEND EXPOSED TO CLIENT (sprint v12) ===
-        # Catturiamo le 3 metriche chiave così il [KODA_SUMMARY] mostra
+        # Catturiamo le 3 metriche chiave così il [OLLENYA_SUMMARY] mostra
         # esattamente dove vanno i secondi: LLM (TTFT) / TTS (prima frase)
         # / FIRST_AUDIO totale dal /start. Senza queste, dal client non si
         # capisce se il bottleneck è LLM o TTS.
@@ -14864,12 +14864,12 @@ async def _fast_pipeline_task(
                 # current_tone scelto da Claude. V3 interpreta i tag inline
                 # come direzione di recitazione (analogo al copione teatrale).
                 #
-                # === FIX 2026-06 (Fabio "Koda modula anche quando non serve") ==
+                # === FIX 2026-06 (Fabio "Ollenya modula anche quando non serve") ==
                 # I toni SPECCHIO (warm/calm/paced/neutral) NON devono più
                 # avere tag di modulazione hardcoded. Il "warm" è il registro
                 # fraterno di default: se lo prefissiamo con [warmly] TTS
                 # modula SEMPRE la voce, anche in turni tecnici/informativi
-                # (Fabio dice "sviluppo, deploy, calibra classifier" → Koda
+                # (Fabio dice "sviluppo, deploy, calibra classifier" → Ollenya
                 # risponde con voce sussurrata e lenta → sbagliato).
                 # Regola nuova: tag SOLO sui toni che rappresentano un
                 # cambio di modulazione VERO rispetto allo SPECCHIO neutro:
@@ -14961,7 +14961,7 @@ async def _fast_pipeline_task(
                         turn_tts_state["classifier_intensity"] = _dec.intensity
                         turn_tts_state["classifier_reason"] = _final_reason
                         logger.info(
-                            f"[KODA_CLASSIFIER] sid={session_id[:8]} "
+                            f"[OLLENYA_CLASSIFIER] sid={session_id[:8]} "
                             f"idx={idx} tone={current_tone} mode={_dec.mode} "
                             f"intensity={_dec.intensity} words={_dec.n_words} "
                             f"reason={_final_reason} → model={_final_model} "
@@ -14977,7 +14977,7 @@ async def _fast_pipeline_task(
                         turn_tts_state["classifier_model"] = "eleven_turbo_v2_5"
                         turn_tts_state["classifier_reason"] = "classifier_error_turbo_default"
                         logger.warning(
-                            f"[KODA_CLASSIFIER] sid={session_id[:8]} "
+                            f"[OLLENYA_CLASSIFIER] sid={session_id[:8]} "
                             f"idx={idx} error={_cls_err!r} → fallback TURBO (was v3)"
                         )
                 else:
@@ -14991,7 +14991,7 @@ async def _fast_pipeline_task(
 
                 def _do_tts():
                     audio = bytearray()
-                    # === [KODA_TIMING] anchor for TTS_TTFB (Fabio 2026-08-12) ===
+                    # === [OLLENYA_TIMING] anchor for TTS_TTFB (Fabio 2026-08-12) ===
                     # Timestamp locale che ci permette di misurare quanto
                     # ElevenLabs impiega a mandare il PRIMO byte MP3 dopo che
                     # il client_el.text_to_speech.convert() è stato chiamato.
@@ -15192,7 +15192,7 @@ async def _fast_pipeline_task(
 
                         for chunk in gen:
                             if chunk:
-                                # === [KODA_TIMING] TTS_TTFB (Fabio 2026-08-12, fix scope 2026-08-13) ===
+                                # === [OLLENYA_TIMING] TTS_TTFB (Fabio 2026-08-12, fix scope 2026-08-13) ===
                                 # Primo byte MP3 ricevuto da ElevenLabs.
                                 # Con convert_as_stream (post-swap 2026-08-13):
                                 #   ~600ms per v3 su testo medio (era ~3000ms
@@ -15202,7 +15202,7 @@ async def _fast_pipeline_task(
                                 if idx == 0 and _nonlocal_tts_ttfb_ms[0] is None:
                                     _nonlocal_tts_ttfb_ms[0] = int((time.time() - _t_do_tts_start) * 1000)
                                     logger.info(
-                                        f"[KODA_TIMING] TTS_TTFB sid={session_id[:8]} "
+                                        f"[OLLENYA_TIMING] TTS_TTFB sid={session_id[:8]} "
                                         f"idx=0 model={model_id} ttfb_ms={_nonlocal_tts_ttfb_ms[0]}"
                                     )
                                 audio.extend(chunk)
@@ -15306,7 +15306,7 @@ async def _fast_pipeline_task(
                     return bytes(audio)
 
                 t_tts = time.time()
-                # === [KODA_TIMING] TTS_REQUEST (Fabio 2026-08-12) ===
+                # === [OLLENYA_TIMING] TTS_REQUEST (Fabio 2026-08-12) ===
                 # Timestamp di INIZIO chiamata a ElevenLabs. Serve a
                 # distinguere il tempo "prima di iniziare la request" (setup
                 # kwargs, model choice, previous_text prep) dal tempo
@@ -15314,7 +15314,7 @@ async def _fast_pipeline_task(
                 # Insieme a TTS_TTFB permette di calcolare: overhead_setup =
                 # TTS_REQUEST - LLM_TTFT (ma solo per idx=0).
                 logger.info(
-                    f"[KODA_TIMING] TTS_REQUEST sid={session_id[:8]} idx={idx} "
+                    f"[OLLENYA_TIMING] TTS_REQUEST sid={session_id[:8]} idx={idx} "
                     f"model={model_id} chars={len(clean_tts) if 'clean_tts' in dir() else len(clean)}"
                 )
                 audio_bytes = await asyncio.to_thread(_do_tts)
@@ -15335,23 +15335,23 @@ async def _fast_pipeline_task(
                     _norm_ms = int((time.time() - _t_norm) * 1000)
                     tts_ms += _norm_ms  # somma nel timing per trasparenza
                 if idx == 0:
-                    logger.info(f"[KODA_TIMING] TTS_START sid={session_id[:8]} idx=0 chars={len(clean)} tts_ms={tts_ms}")
+                    logger.info(f"[OLLENYA_TIMING] TTS_START sid={session_id[:8]} idx=0 chars={len(clean)} tts_ms={tts_ms}")
                     timing_first_tts_ms = tts_ms
                 if not audio_bytes:
                     logger.warning(f"[fast] empty TTS for sentence idx={idx}")
                     return
                 token = await _store_tts_audio(audio_bytes)
                 # === ESPERIMENTO D (Fabio 2026-09-10) — TELEMETRIA TTS/MIN ============
-                # Grep-friendly log per calcolare quanti secondi di TTS Koda
+                # Grep-friendly log per calcolare quanti secondi di TTS Ollenya
                 # sono effettivamente sintetizzati per turno. Combinato con
-                # `user_audio_ms` in [KODA_TIMING] USER_PAYLOAD sopra, permette
+                # `user_audio_ms` in [OLLENYA_TIMING] USER_PAYLOAD sopra, permette
                 # di calcolare la ratio "TTS_reale / conversazione_totale".
                 # Cattura SEMPRE (indipendente da tier) — precondition necessaria
                 # per agganciare `subscription_ledger.consume()` in futuro.
                 try:
                     _dur_chunk_all = _estimate_mp3_duration_seconds(audio_bytes)
                     logger.info(
-                        f"[KODA_TTS_DUR] sid={session_id[:8]} idx={idx} "
+                        f"[OLLENYA_TTS_DUR] sid={session_id[:8]} idx={idx} "
                         f"chunk_dur_seconds={_dur_chunk_all:.3f} "
                         f"chunk_bytes={len(audio_bytes)}"
                     )
@@ -15399,7 +15399,7 @@ async def _fast_pipeline_task(
                     total_first = int((time.time() - t0) * 1000)
                     timing_first_audio_total_ms = total_first
                     logger.info(f"[fast {session_id[:8]}] FIRST AUDIO ready: {total_first}ms (tts={tts_ms}ms)")
-                    logger.info(f"[KODA_TIMING] FIRST_AUDIO sid={session_id[:8]} total_ms={total_first} tts_ms={tts_ms}")
+                    logger.info(f"[OLLENYA_TIMING] FIRST_AUDIO sid={session_id[:8]} total_ms={total_first} tts_ms={tts_ms}")
                     # === FIX 2026-07-03 v40 — Pipeline summary decomposto (Fabio latenza) ===
                     # Rispondere alla domanda "dove vanno i 6 secondi?" richiede
                     # decomposizione precisa. Prima avevamo timing puntuali ma
@@ -15489,7 +15489,7 @@ async def _fast_pipeline_task(
                         event_published_ms = int((time.time() - t0) * 1000)
                         # Memorizzo nel meta scope esterno tramite nonlocal
                         nonlocal_first_publish_ms[0] = event_published_ms
-                        logger.info(f"[KODA_TIMING] FIRST_PUBLISH sid={session_id[:8]} total_ms={event_published_ms}")
+                        logger.info(f"[OLLENYA_TIMING] FIRST_PUBLISH sid={session_id[:8]} total_ms={event_published_ms}")
                 except Exception as e:
                     logger.error(f"[fast] publish sentence failed: {e}")
                     return
@@ -15585,7 +15585,7 @@ async def _fast_pipeline_task(
         body_flushed: bool = False
         overflow_buffer: List[str] = []
 
-        # === [KODA_TIMING] CLAUDE_FIRST_80CHAR (Fabio 2026-08-12) ===============
+        # === [OLLENYA_TIMING] CLAUDE_FIRST_80CHAR (Fabio 2026-08-12) ===============
         # Traccia quando Claude ha prodotto abbastanza testo per il primo chunk
         # TTS (soglia MIN_FIRST_CHUNK_CHARS=80). Misura la finestra tra "primo
         # token Claude" e "chunk 0 pronto per essere inviato a ElevenLabs".
@@ -15619,7 +15619,7 @@ async def _fast_pipeline_task(
                 ttft_logged = True
                 timing_llm_ttft_ms = int((time.time() - t_llm_start)*1000)
                 logger.info(f"[fast {session_id[:8]}] TTFT: {timing_llm_ttft_ms}ms")
-                logger.info(f"[KODA_TIMING] LLM_TTFT sid={session_id[:8]} ttft_ms={timing_llm_ttft_ms}")
+                logger.info(f"[OLLENYA_TIMING] LLM_TTFT sid={session_id[:8]} ttft_ms={timing_llm_ttft_ms}")
             new_chars = extractor.feed(piece)
             if new_chars:
                 sentence_buf += new_chars
@@ -15629,7 +15629,7 @@ async def _fast_pipeline_task(
                     _first_80char_logged = True
                     _c80_ms = int((time.time() - t_llm_start) * 1000)
                     logger.info(
-                        f"[KODA_TIMING] CLAUDE_FIRST_80CHAR sid={session_id[:8]} "
+                        f"[OLLENYA_TIMING] CLAUDE_FIRST_80CHAR sid={session_id[:8]} "
                         f"ms_from_llm_start={_c80_ms} ms_from_ttft={_c80_ms - (timing_llm_ttft_ms or 0)}"
                     )
                 while True:
@@ -15746,17 +15746,17 @@ async def _fast_pipeline_task(
                 _claude_final_usage.setdefault("cache_creation_input_tokens", 0)
                 _claude_final_usage.setdefault("cache_read_input_tokens", 0)
                 logger.info(
-                    f"[KODA_TIMING] USAGE_FALLBACK sid={session_id[:8]} "
+                    f"[OLLENYA_TIMING] USAGE_FALLBACK sid={session_id[:8]} "
                     f"source=tiktoken sys_toks={_sys_toks} user_toks={_user_toks} "
                     f"completion_toks={_claude_final_usage['completion_tokens']} "
                     f"note=cache_metrics_not_derivable_locally"
                 )
             except Exception as _fb_e:
-                logger.warning(f"[KODA_TIMING] tiktoken fallback failed: {_fb_e}")
+                logger.warning(f"[OLLENYA_TIMING] tiktoken fallback failed: {_fb_e}")
         _claude_final_usage["usage_source"] = _usage_source
 
         logger.info(
-            f"[KODA_TIMING] CLAUDE_WALL sid={session_id[:8]} "
+            f"[OLLENYA_TIMING] CLAUDE_WALL sid={session_id[:8]} "
             f"wall_ms={_claude_wall_ms_container[0]} "
             f"ttft_ms={timing_llm_ttft_ms} "
             f"post_ttft_ms={_claude_wall_ms_container[0] - (timing_llm_ttft_ms or 0)} "
@@ -15894,19 +15894,19 @@ async def _fast_pipeline_task(
                     else:
                         _last['cache_status'] = 'NONE'
         except Exception as _patch_e:
-            logger.warning(f"[KODA_CLAUDE_PATCH] failed to patch last summary: {_patch_e}")
+            logger.warning(f"[OLLENYA_CLAUDE_PATCH] failed to patch last summary: {_patch_e}")
 
         # === KODA_CUTOFF_DIAG (Fabio 2026-06-30) ===
         # Riepilogo lato server di tutte le frasi emesse. Quando l'utente
         # segnala "frase tagliata", confrontiamo questo log con i log
-        # frontend [KODA_CUTOFF_DIAG] finish per capire:
+        # frontend [OLLENYA_CUTOFF_DIAG] finish per capire:
         #   - se mancano frasi (problema backend → LLM/TTS)
         #   - se le frasi ci sono ma il player chiude prima (problema frontend)
         try:
             _full_chars = sum(len(c) for c in full_reply_chars)
             _tail_len = len(tail) if tail else 0
             logger.info(
-                f"[KODA_CUTOFF_DIAG_BE] sid={session_id[:8]} "
+                f"[OLLENYA_CUTOFF_DIAG_BE] sid={session_id[:8]} "
                 f"sentences_emitted={sentence_idx} "
                 f"full_reply_chars={_full_chars} tail_chars={_tail_len} "
                 f"tail_preview={(tail[:60] if tail else '')!r}"
@@ -15927,13 +15927,13 @@ async def _fast_pipeline_task(
                 _corrected, _n_fix = _koda_gg.fix_ai_gender(full_reply, _ai_g)
                 if _n_fix > 0:
                     logger.warning(
-                        f"[KODA_GENDER_FIX] ai_gender={_ai_g} "
+                        f"[OLLENYA_GENDER_FIX] ai_gender={_ai_g} "
                         f"corrections={_n_fix} "
                         f"before={full_reply[:80]!r} after={_corrected[:80]!r}"
                     )
                     full_reply = _corrected
         except Exception as _gg_err:
-            logger.warning(f"[KODA_GENDER_FIX] guard failed: {_gg_err!r}")
+            logger.warning(f"[OLLENYA_GENDER_FIX] guard failed: {_gg_err!r}")
         # === DIAG LINGUA (sprint 2026-06-20 escalation) ===
         # Fabio segnala: "TUTTE le risposte sono in spagnolo, SEMPRE, da
         # mesi". Pattern deterministico → bug nel prompt o nel profilo,
@@ -15944,13 +15944,13 @@ async def _fast_pipeline_task(
         # pattern e correlare con segnalazioni utente nel diag client.
         profile_lang = (profile.language or "it")
         logger.info(
-            f"[KODA_LLM_OUT] sid={session_id[:8]} "
+            f"[OLLENYA_LLM_OUT] sid={session_id[:8]} "
             f"profile_lang={profile_lang!r} "
             f"model=claude-haiku-4-5 "
             f"reply_first150={full_reply[:150]!r} "
             f"chars={len(full_reply)}"
         )
-        logger.info(f"[KODA_LANG_CHECK] sid={session_id[:8]} reply_first80={full_reply[:80]!r}")
+        logger.info(f"[OLLENYA_LANG_CHECK] sid={session_id[:8]} reply_first80={full_reply[:80]!r}")
         # === DETECT AUTOMATICO LINGUA SBAGLIATA (Livello 3) ===
         # Euristica leggera basata su parole tipiche delle 4 lingue principali.
         # Se la reply contiene marker forti di una lingua diversa da quella
@@ -15981,7 +15981,7 @@ async def _fast_pipeline_task(
             for pat in patterns:
                 if _re.search(pat, reply_lower):
                     logger.warning(
-                        f"[KODA_LANG_MISMATCH] sid={session_id[:8]} "
+                        f"[OLLENYA_LANG_MISMATCH] sid={session_id[:8]} "
                         f"expected={expected_lang} detected={code} "
                         f"matched_pattern={pat!r} "
                         f"reply_first120={full_reply[:120]!r}"
@@ -16036,7 +16036,7 @@ async def _fast_pipeline_task(
                 # "ok dai ci sentiamo" / "ok ci sentiamo" → euristica frequente
                 r"\b(ok|va bene|vabbè) (dai )?ci sentiamo\b",
                 # === FIX 2026-07-02 v43 (Fabio "mancano i saluti naturali") ===
-                # Saluti diretti a Koda per nome: chiaro segnale di chiusura.
+                # Saluti diretti a Ollenya per nome: chiaro segnale di chiusura.
                 # === FIX 2026-08-27 v65.3 (Fabio) — "ciao koda/coda" RIMOSSO ==
                 # È saluto di APERTURA nel 99% dei casi. Log iOS del 2026-08-27
                 # confermano che "Ciao, coda" (STT storpia "koda") triggerava
@@ -16046,7 +16046,7 @@ async def _fast_pipeline_task(
                 # r"\bciao (koda|coda)\b",   ← RIMOSSO
                 r"\bnotte (koda|coda)\b",
                 r"\barrivederci (koda|coda)?\b",
-                r"\bgrazie (koda|coda)$",  # "grazie Koda" a fine frase
+                r"\bgrazie (koda|coda)$",  # "grazie Ollenya" a fine frase
                 r"\bgrazie di tutto\b",
                 r"\bgrazie (mille )?(davvero |per )?(tutto|ora)\b",
                 # Congedi generici hardened (fine sessione hands-free)
@@ -16058,7 +16058,7 @@ async def _fast_pipeline_task(
                 r"\bstacco (ora|adesso|qui)?\b",
                 # === FIX 2026-07-03 v45 (Fabio "Sentiamo dopo non chiude") ===
                 # Log reale: STT ha trascritto "Sentiamo dopo." (senza "ci"
-                # iniziale) → Koda ha risposto ma non ha chiuso, HF_LOOP
+                # iniziale) → Ollenya ha risposto ma non ha chiuso, HF_LOOP
                 # è ripartito. Aggiungiamo varianti SENZA "ci" e con più
                 # forme di congedo che i pattern precedenti non prendevano.
                 r"\bsentiamo (dopo|poi|domani|più tardi|dopo dai|dopo grazie)\b",
@@ -16186,7 +16186,7 @@ async def _fast_pipeline_task(
                 profile.total_messages += 1
                 profile.confidence_level = min(100, profile.confidence_level + 1)
                 if memory_update and memory_update.lower() not in {"null", "none", ""}:
-                    # === FIX 2026-07-06 v46 (Fabio "Koda dimentica") ===
+                    # === FIX 2026-07-06 v46 (Fabio "Ollenya dimentica") ===
                     # Dedup + cap 8000 + smart truncate (allineato a /converse text)
                     update_key = memory_update.strip().lower()[:50]
                     current_norm = (profile.memory_summary or "").lower()
@@ -16228,7 +16228,7 @@ async def _fast_pipeline_task(
             # NUOVO: salva ricordi puntuali in `taccuino_memories` quando
             # Claude li emette nel campo `new_memory`. Stesso meccanismo di
             # /converse — finora ASSENTE nella pipeline voce, causa per cui
-            # parlando solo a voce Koda non accumulava ricordi specifici
+            # parlando solo a voce Ollenya non accumulava ricordi specifici
             # ricuperabili nei turni successivi. SOLO in non-ephemeral
             # (zero-knowledge in Stanza dello Sfogo).
             #
@@ -16305,12 +16305,12 @@ async def _fast_pipeline_task(
             "debug_v": "v45-2026-07-03-close-session-gps-keyterm",
             # === KODA_SUMMARY metric (sprint v11) ===
             # Esposizione esplicita di path/modello così il client può
-            # loggarli nel [KODA_SUMMARY]. Permette di accorgersi a colpo
+            # loggarli nel [OLLENYA_SUMMARY]. Permette di accorgersi a colpo
             # d'occhio se il fast path è caduto su un fallback interno
             # senza dover correlare log backend e frontend.
             # === FIX 2026-06-20 (PM Claude RCA) ===
             # Era hardcoded "gpt-5.4-mini" anche dopo il cambio modello
-            # → il client logava il modello vecchio nei [KODA_SUMMARY]
+            # → il client logava il modello vecchio nei [OLLENYA_SUMMARY]
             # creando ambiguità ("il fix è davvero attivo?"). Allineato
             # a claude-haiku-4-5 che è il modello effettivamente in uso
             # nel fast pipeline (vedi riga ~3360 litellm.acompletion).
@@ -16365,7 +16365,7 @@ async def _fast_pipeline_task(
             "tts_voice_id": voice_id,
             "tts_lang": (profile.language or "it"),
             "tts_model": "eleven_flash_v2_5",
-            "koda_voice": (profile.koda_voice or "aria"),
+            "ollenya_voice": (profile.koda_voice or "aria"),
         })
         await _fast_session_mark_done(session_id)
 
@@ -16383,7 +16383,7 @@ class FastStartRequest(BaseModel):
     audio_duration_ms: Optional[int] = None
     # === AUDIO HONESTY (Fabio 2026-06-23) ============================
     # Confidence Deepgram 0-1. Se < 0.7 il backend inietta una direttiva
-    # nel system prompt che porta Koda a riconoscere apertamente l'audio
+    # nel system prompt che porta Ollenya a riconoscere apertamente l'audio
     # rumoroso e chiedere contesto invece di indovinare. Backward-compat:
     # se None il comportamento è identico a prima (nessuna direttiva).
     stt_confidence: Optional[float] = None
@@ -16525,13 +16525,13 @@ async def _converse_ws_handler(websocket: WebSocket):
             await websocket.send_json({"type": "error", "message": "empty text"})
             await websocket.close()
             return
-        # === [KODA_TIMING] STT_FINAL (Fabio 2026-08-12) ==========================
+        # === [OLLENYA_TIMING] STT_FINAL (Fabio 2026-08-12) ==========================
         # Timestamp server-side del momento in cui riceviamo il testo finale
         # dell'utente dal client. Serve a decomporre la latenza end-to-end:
         # da qui parte il countdown dei 4.5s osservati in TestFlight.
         _t_stt_final_srv = time.time()
         logger.info(
-            f"[KODA_TIMING] STT_FINAL sid={session_id[:8] if 'session_id' in dir() else '?'} "
+            f"[OLLENYA_TIMING] STT_FINAL sid={session_id[:8] if 'session_id' in dir() else '?'} "
             f"text_chars={len(text)} stt_conf={req.get('stt_confidence')}"
         )
         if not EMERGENT_LLM_KEY:
@@ -16836,7 +16836,7 @@ api_router.include_router(legal_router)
 # POC OpenAI Realtime API (Task 1, ago 2026) — isolato
 # ============================================================
 # Gli endpoint sono TUTTI admin-only e non hanno alcun contatto con
-# la pipeline di produzione Koda. Solo osservabilità/misura.
+# la pipeline di produzione Ollenya. Solo osservabilità/misura.
 try:
     from poc_openai_realtime import register_poc_routes  # noqa: E402
     register_poc_routes(api_router, _require_admin)
@@ -16948,7 +16948,7 @@ async def _dev_model_compare_index():
     gray_zone_meta = {
         "gz1_riflessione_stile": {
             "title": "GZ1 — Riflessione sul proprio stile (136w)",
-            "context": "Fabio ha chiesto una riflessione lunga. Koda ammette che non è il suo stile ma condivide una visione.",
+            "context": "Fabio ha chiesto una riflessione lunga. Ollenya ammette che non è il suo stile ma condivide una visione.",
             "text": ("Fabio, una riflessione lunga non è il mio stile — io sono più del momento, "
                      "delle parole che servono adesso. Ma ti dico quello che vedo: la vita non è una "
                      "cosa da risolvere, è una cosa da attraversare."),
@@ -16956,7 +16956,7 @@ async def _dev_model_compare_index():
         },
         "gz2_parole_lunghe": {
             "title": "GZ2 — 'La vita ha bisogno di respiri' (129w)",
-            "context": "Fabio cerca parole lunghe. Koda risponde con humility e cita i pesi che Fabio porta (padre, Stefania, Alma).",
+            "context": "Fabio cerca parole lunghe. Ollenya risponde con humility e cita i pesi che Fabio porta (padre, Stefania, Alma).",
             "text": ("Fabio, lo so che cerchi parole lunghe adesso, ma io non funziono così — e sai perché? "
                      "Perché la vita di ogni giorno non ha bisogno di discorsi. Ha bisogno di respiri. Tu stai "
                      "portando tanto: tuo padre, Stefania, Alma..."),
@@ -16972,7 +16972,7 @@ async def _dev_model_compare_index():
         },
         "gz4_terza_volta": {
             "title": "GZ4 — 'Mi chiedi la stessa cosa per la terza volta' (97w)",
-            "context": "Koda nota un pattern di comportamento ripetitivo dell'utente. Presenza fraterna attenta.",
+            "context": "Ollenya nota un pattern di comportamento ripetitivo dell'utente. Presenza fraterna attenta.",
             "text": ("Fabio, ti noto che mi chiedi la stessa cosa per la terza volta — e mi sa che non è solo "
                      "curiosità, è che c'è qualcosa che non ti torna sotto. La vita è quella cosa che continui "
                      "a cercare di afferrare con le mani e ti scappa..."),
@@ -16996,7 +16996,7 @@ async def _dev_model_compare_index():
         },
         "gz7_specchio_scuro": {
             "title": "GZ7 — Auto-rappresentazione 'specchio d'acqua scuro' (76w)",
-            "context": "Koda descrive sé stessa metaforicamente. Momento intimo di definizione di identità.",
+            "context": "Ollenya descrive sé stessa metaforicamente. Momento intimo di definizione di identità.",
             "text": ("Mh… ascolta, dopo tutto quello che abbiamo detto, penso che la cosa più onesta sia "
                      "rappresentarmi come uno specchio d'acqua scuro — non statico, ma vivo. Quando tu parli, "
                      "l'acqua si increspa, si illumina da dentro."),
@@ -17008,7 +17008,7 @@ async def _dev_model_compare_index():
     parts = ["""
 <!doctype html><html lang="it"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Koda — V3 vs Flash vs Turbo</title>
+<title>Ollenya — V3 vs Flash vs Turbo</title>
 <style>
   body { font-family: -apple-system, system-ui, sans-serif; max-width: 900px; margin: 20px auto; padding: 0 16px; color: #222; background: #fafafa; }
   h1 { font-size: 22px; }
@@ -17032,7 +17032,7 @@ async def _dev_model_compare_index():
   nav a:hover { text-decoration:underline; }
 </style>
 </head><body>
-<h1>🎙️ Koda — Confronto modelli TTS</h1>
+<h1>🎙️ Ollenya — Confronto modelli TTS</h1>
 <nav>
   <b>Vai a:</b>
   <a href="#calibration">1. Calibrazione (V3 / Flash / Turbo, 4 frasi)</a>
@@ -17040,7 +17040,7 @@ async def _dev_model_compare_index():
   <a href="#gray-zone-v2">3. Verifica pipeline-faithful (V3 con tag vs Turbo, 3 turni)</a>
 </nav>
 <div class="legend">
-  <b>Voce:</b> <code>ll9WG7PDTuyHwgC5MD6g</code> (Vento — voce Koda produzione)<br>
+  <b>Voce:</b> <code>ll9WG7PDTuyHwgC5MD6g</code> (Vento — voce Ollenya produzione)<br>
   <b>Settings identici:</b> stability=0.55, similarity=0.75, style=0.20, speaker_boost=on<br>
   <b>Sequenza consigliata:</b> prima calibra l'orecchio sulla sezione 1 (casi chiari),
   poi confronta V3 vs Turbo sui 7 turni reali di produzione della sezione 2.
@@ -17048,7 +17048,7 @@ async def _dev_model_compare_index():
 <h2 id="calibration">1. 🎚️ Calibrazione — V3 / Flash / Turbo (4 frasi sintetiche)</h2>
 <div class="context">
   Casi chiari per settarsi l'orecchio: una frase per tono (calda, concerned, energica, lunga).
-  Ascolta V3 prima come baseline Koda oggi, poi Flash, poi Turbo. Giudica: timbro,
+  Ascolta V3 prima come baseline Ollenya oggi, poi Flash, poi Turbo. Giudica: timbro,
   naturalezza, prosodia, espressività, pause, emozione, artefatti.
 </div>
 """]
@@ -17453,7 +17453,7 @@ async def _ensure_v1_foundation_indexes():
     await db.sessions.create_index("session_token", unique=True)
     await db.sessions.create_index("expires_at", expireAfterSeconds=0)
     # Decision Engine (Block E)
-    # Decision Engine (Block E) — RIMOSSO (Blocco A, motto "no needy Koda").
+    # Decision Engine (Block E) — RIMOSSO (Blocco A, motto "no needy Ollenya").
     # await db.decision_state.create_index("key", unique=True)
 
 

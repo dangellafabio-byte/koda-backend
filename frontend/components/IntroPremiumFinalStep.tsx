@@ -100,7 +100,7 @@ export default function IntroPremiumFinalStep({ onComplete }: Props) {
       //   - shouldRouteThroughEarpiece:false
       //   - volume=1.0 doppio (creazione + post-load)
       //   - polling isLoaded fino a 2s (createAudioPlayer è async internamente)
-      //   - logging strutturato [KODA_INTRO_FINAL] per diag buffer Fabio
+      //   - logging strutturato [OLLENYA_INTRO_FINAL] per diag buffer Fabio
       await setAudioModeAsync({
         allowsRecording: false,
         playsInSilentMode: true,
@@ -116,9 +116,9 @@ export default function IntroPremiumFinalStep({ onComplete }: Props) {
       try {
         if (typeof setIsAudioActiveAsync === "function") {
           await setIsAudioActiveAsync(true);
-          console.log(`[KODA_INTRO_FINAL] setIsAudioActiveAsync(true) OK`);
+          console.log(`[OLLENYA_INTRO_FINAL] setIsAudioActiveAsync(true) OK`);
         }
-      } catch (e) { console.warn(`[KODA_INTRO_FINAL] setIsAudioActiveAsync failed:`, e); }
+      } catch (e) { console.warn(`[OLLENYA_INTRO_FINAL] setIsAudioActiveAsync failed:`, e); }
     } catch (e) {
       console.warn(`${TAG} setAudioModeAsync failed:`, e);
     }
@@ -141,7 +141,7 @@ export default function IntroPremiumFinalStep({ onComplete }: Props) {
       try { (player as any).volume = 1.0; } catch {}
       player.play();
       console.log(
-        `[KODA_INTRO_FINAL] closing clip started platform=${Platform.OS} ` +
+        `[OLLENYA_INTRO_FINAL] closing clip started platform=${Platform.OS} ` +
         `isLoaded=${(player as any).isLoaded} volume=${(player as any).volume} ` +
         `playing=${(player as any).playing ?? '?'} status=${(player as any).status ?? '?'}`
       );
@@ -154,18 +154,18 @@ export default function IntroPremiumFinalStep({ onComplete }: Props) {
             const playing = (player as any).playing;
             if (playing !== true) {
               console.warn(
-                `[KODA_INTRO_FINAL] Android double-play triggered: ` +
+                `[OLLENYA_INTRO_FINAL] Android double-play triggered: ` +
                 `playing=${playing} isLoaded=${(player as any).isLoaded}`
               );
               try { player.play(); } catch (e) { console.warn(`${TAG} double-play failed:`, e); }
             } else {
-              console.log(`[KODA_INTRO_FINAL] Android watchdog OK — playing confirmed`);
+              console.log(`[OLLENYA_INTRO_FINAL] Android watchdog OK — playing confirmed`);
             }
           } catch (e) { console.warn(`${TAG} watchdog exception:`, e); }
         }, 500);
       }
     } catch (e) {
-      console.warn(`[KODA_INTRO_FINAL] closing clip failed:`, e);
+      console.warn(`[OLLENYA_INTRO_FINAL] closing clip failed:`, e);
     }
   }, []);
 

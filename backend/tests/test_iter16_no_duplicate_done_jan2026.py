@@ -255,7 +255,7 @@ class TestRegressionProfileAuth:
         assert r.status_code == 200, f"status={r.status_code} body={r.text[:300]}"
         d = r.json()
         assert d.get("name") == "Fabio", f"name={d.get('name')!r}"
-        assert d.get("koda_voice") == "aria", f"koda_voice={d.get('koda_voice')!r}"
+        assert d.get("ollenya_voice") == "aria", f"koda_voice={d.get('ollenya_voice')!r}"
         tm = d.get("total_messages")
         assert isinstance(tm, int) and tm >= 634, (
             f"total_messages={tm!r} — expected ≥634"

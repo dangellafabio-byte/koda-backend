@@ -4,7 +4,7 @@ Scopo:
    Verificare se l'uso dell'endpoint ElevenLabs WS `stream-input` in
    combinazione con lo streaming Claude porta la metrica
    `user_final → first_playable_audio` sotto i 2s (target 1.5s)
-   mantenendo la qualità/naturalezza della voce Koda.
+   mantenendo la qualità/naturalezza della voce Ollenya.
 
 Come funziona:
    1. Simula user_final settando t=0 al momento della prima chiamata Claude.
@@ -43,9 +43,9 @@ load_dotenv('/app/backend/.env')
 # === Config ==================================================================
 EMERGENT_LLM_KEY = os.environ['EMERGENT_LLM_KEY']
 ELEVENLABS_API_KEY = os.environ['ELEVENLABS_API_KEY']
-VOICE_ID = "POuqf18evoXOKIqV2Px7"  # Cielo — voce Koda produzione
+VOICE_ID = "POuqf18evoXOKIqV2Px7"  # Cielo — voce Ollenya produzione
 MODEL_ID = "eleven_flash_v2_5"     # POC Opzione Y (Fabio 2026-08-14): V3 non supportato da WS stream-input.
-                                   # Flash NON è voce Koda produzione — test diagnostico solo per
+                                   # Flash NON è voce Ollenya produzione — test diagnostico solo per
                                    # isolare "endpoint vs modello" nel budget latenza.
 OUTPUT_FORMAT = "mp3_44100_128"    # stesso formato produzione (post-revert-B)
 API_BASE = 'https://integrations.emergentagent.com/llm'
@@ -71,16 +71,16 @@ def compute_lufs(pcm: np.ndarray, sr: int) -> float:
     return float(m.integrated_loudness(pcm.astype(np.float32) / 32768.0))
 
 
-# === Build realistic Koda system prompt ====================================
+# === Build realistic Ollenya system prompt ====================================
 def build_system_prompt() -> str:
     """Uses the REAL fast pipeline prompt builder from server.py.
     Realistic Fabio profile so we're testing under real conditions."""
     from server import _build_fast_system_prompt, Profile
     p = Profile(
-        id="poc-fabio", name="Fabio", language="it", ai_name="Koda",
+        id="poc-fabio", name="Fabio", language="it", ai_name="Ollenya",
         ai_gender="f", user_gender="m", tts_voice_id=VOICE_ID,
         memory_summary=("Fabio è un imprenditore italiano che sta costruendo "
-                        "Koda, un compagno vocale AI. Ama la naturalezza, "
+                        "Ollenya, un compagno vocale AI. Ama la naturalezza, "
                         "odia le voci fake."),
         core_traits="Analitico, esigente, empatico verso il prodotto.",
     )
@@ -88,11 +88,11 @@ def build_system_prompt() -> str:
 
 
 # === Test cases ==============================================================
-# Simulano ciò che un user reale direbbe a Koda, con risposte attese di
+# Simulano ciò che un user reale direbbe a Ollenya, con risposte attese di
 # lunghezze diverse (breve/media/lunga) per verificare comportamento sotto
 # vari carichi.
 TEST_CASES = [
-    ("BREVE",  "Ciao Koda, mi senti?"),
+    ("BREVE",  "Ciao Ollenya, mi senti?"),
     ("MEDIA",  "Ho avuto una giornata pesante. Puoi dirmi qualcosa che mi tranquillizzi?"),
     ("LUNGA",  "Sto lavorando a un progetto complesso da mesi. Ho paura di aver perso la direzione. Cosa mi consigli di fare quando mi sento così?"),
 ]

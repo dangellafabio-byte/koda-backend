@@ -2,7 +2,7 @@
 
 Sceglie tra ElevenLabs V3 (baseline espressiva, TTFA ~500-650ms) e
 Turbo v2.5 (candidato veloce, TTFA ~250ms) sulla base del testo che
-Koda ha appena prodotto — senza modifiche al prompt e senza LLM in
+Ollenya ha appena prodotto — senza modifiche al prompt e senza LLM in
 cascata. Solo regole leggere basate sui segnali già presenti (tone,
 MODE §9, marker linguistici).
 
@@ -53,7 +53,7 @@ _RE_SDRAMM = re.compile(
     re.I,
 )
 
-# ADMIT_FAULT: humility esplicita, ammissione errore di Koda.
+# ADMIT_FAULT: humility esplicita, ammissione errore di Ollenya.
 _RE_ADMIT = re.compile(
     r"\b(mi (?:spiace|dispiace) (?:davvero|molto|tanto|Fabio|Marco)|"
     r"ho sbagliat[oa]|è stata una mia|una mia cazzata|"
@@ -196,7 +196,7 @@ def _detect_intensity(text: str, tone: Optional[str], mode: str) -> int:
 # ---------------------------- API pubblica -----------------------------------
 def classify(text: str, tone: Optional[str]) -> ClassifierDecision:
     """
-    Classifica un testo Koda e sceglie il modello TTS.
+    Classifica un testo Ollenya e sceglie il modello TTS.
 
     Args:
         text:  Il testo della risposta (o del chunk 0 aggressive) — può
@@ -222,7 +222,7 @@ def classify(text: str, tone: Optional[str]) -> ClassifierDecision:
             - gioia forte, humility esplicita, warmth normale → Turbo
 
     Motivazione business:
-        V3 diventa un'ECCEZIONE strutturale. Il rischio "Koda suona diversa
+        V3 diventa un'ECCEZIONE strutturale. Il rischio "Ollenya suona diversa
         dopo che il budget V3 giornaliero è finito" si mitiga perché V3
         parte già rara di default. Cost cut atteso: ~55-60% turni V3 → Turbo.
 

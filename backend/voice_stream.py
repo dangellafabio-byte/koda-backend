@@ -94,7 +94,7 @@ DEEPGRAM_LIVE_URL = "wss://api.deepgram.com/v1/listen"
 # Il container Emergent NON ha ffmpeg installato via apt. Usiamo il binario
 # static incluso nel package imageio-ffmpeg (già installato come dipendenza
 # transitive). Senza questo, convert_aac_to_pcm16 fallisce silenziosamente
-# e Deepgram non riceve mai audio → nessun stt_final → Koda non risponde.
+# e Deepgram non riceve mai audio → nessun stt_final → Ollenya non risponde.
 # Questo era il vero motivo per cui Build #5 catturava i chunk ma non
 # riceveva trascrizioni.
 try:
@@ -190,7 +190,7 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
                 language="it",
                 # === FIX 2026-07-02 v43 — Prompt generico italiano ===
                 # NOTA IMPORTANTE (Fabio 2026-07-02): il prompt DEVE restare
-                # GENERICO. Koda è un'app per chiunque parli italiano — non
+                # GENERICO. Ollenya è un'app per chiunque parli italiano — non
                 # per un utente specifico. Il prompt aiuta il modello a
                 # riconoscere l'italiano quotidiano naturale, NON a boostare
                 # keyword di un dominio specifico. Se in futuro serve gergo
@@ -495,9 +495,9 @@ DG_PARAMS = {
     "filler_words": "false",
     "punctuate": "true",
     # === FIX 2026-06-25 v10 (post-Build #9 home test) ===
-    # In casa silenziosa Deepgram trascriveva "Ciao Cosa" invece di "Ciao Koda"
+    # In casa silenziosa Deepgram trascriveva "Ciao Cosa" invece di "Ciao Ollenya"
     # (e talvolta "Coda"/"Goda"). Nova-3 supporta keyterm prompting (plain
-    # string, NO intensifier suffix). Boostiamo il nome "Koda" così che la
+    # string, NO intensifier suffix). Boostiamo il nome "Ollenya" così che la
     # rete neurale lo preferisca alle parole foneticamente vicine.
     # === FIX 2026-07-03 v45 (Fabio "STT dice metri invece di chilometri") ===
     # Log reale in CarPlay: DG trascrive "400 metri" quando Fabio dice
@@ -507,7 +507,7 @@ DG_PARAMS = {
     # + parole del dominio Fabio (autista/furgone). QS builder in
     # `connect()` emette un `keyterm=X` per ogni elemento della lista.
     "keyterm": [
-        "Koda",
+        "Ollenya",
         # Unità di misura (cutoff "metri/chilometri" #1 problema Fabio)
         "chilometri", "kilometri", "chilometro", "chilometraggio",
         "minuti", "minuto", "secondi", "ora", "ore",
@@ -537,7 +537,7 @@ def dg_params_for_route(
     IMPORTANTE (bugfix iter12): Deepgram Live impone un MINIMO HARD di
     1000ms su `utterance_end_ms`. Valori inferiori causano HTTP 400
     "server rejected WebSocket connection" e la WS non si apre → nessun
-    STT → Koda non risponde. Manteniamo quindi utterance_end_ms>=1000
+    STT → Ollenya non risponde. Manteniamo quindi utterance_end_ms>=1000
     per TUTTE le route e variamo SOLO `endpointing` (minimo ~10ms
     documentato, quindi valori come 150-350 sono tutti validi).
 
@@ -737,7 +737,7 @@ try:
     _VOICE_BANDPASS_SOS = _build_voice_bandpass_sos(16000)
     _BANDPASS_AVAILABLE = True
 except Exception as _e:  # pragma: no cover - scipy/numpy dovrebbero esistere
-    logger.warning(f"[KODA_BANDPASS] scipy/numpy import failed: {_e}")
+    logger.warning(f"[OLLENYA_BANDPASS] scipy/numpy import failed: {_e}")
     _np = None  # type: ignore[assignment]
     _VOICE_BANDPASS_SOS = None
     _BANDPASS_AVAILABLE = False
@@ -760,7 +760,7 @@ def apply_voice_bandpass(pcm: bytes) -> bytes:
         out = _np.clip(filtered * 32768.0, -32768, 32767).astype(_np.int16)
         return out.tobytes()
     except Exception as _e:  # pragma: no cover - safety
-        logger.warning(f"[KODA_BANDPASS] filter failed: {_e}")
+        logger.warning(f"[OLLENYA_BANDPASS] filter failed: {_e}")
         return pcm
 
 
@@ -794,10 +794,10 @@ def apply_bluetooth_gain(
         amplified = _audioop.mul(pcm, 2, gain)
         return amplified, gain
     except _audioop.error as _e:  # pragma: no cover - overflow rarissimo
-        logger.warning(f"[KODA_PCM_GAIN] audioop.mul failed: {_e}")
+        logger.warning(f"[OLLENYA_PCM_GAIN] audioop.mul failed: {_e}")
         return pcm, 1.0
     except Exception as _e:  # pragma: no cover - safety net
-        logger.warning(f"[KODA_PCM_GAIN] unexpected: {_e}")
+        logger.warning(f"[OLLENYA_PCM_GAIN] unexpected: {_e}")
         return pcm, 1.0
 
 
@@ -1157,7 +1157,7 @@ async def voice_stream_handler(
                 f"[KODA_CLIENT_AUDIO_MODE sess={short_id}] {qp_short}"
             )
     except Exception as _e_qp:
-        logger.debug(f"[KODA_CLIENT_AUDIO_MODE] query_params read failed: {_e_qp}")
+        logger.debug(f"[OLLENYA_CLIENT_AUDIO_MODE] query_params read failed: {_e_qp}")
 
     dg: Optional[DeepgramLiveSession] = None
     client_alive = True
@@ -1238,7 +1238,7 @@ async def voice_stream_handler(
     # === v60.2 plumb (Fabio 2026-07-18) — Audio diag → client ============
     # Raccogliamo probe (una volta) + RMS dB (ultimi N chunk) per rispedirli
     # al client incastrati nell'evento stt_final. Quando l'utente scarica
-    # il diag Koda, vedrà dati tipo: [DIAG sr=16000 rms=-42/-38/-41 route=bt]
+    # il diag Ollenya, vedrà dati tipo: [DIAG sr=16000 rms=-42/-38/-41 route=bt]
     # senza dover andare nel dashboard Emergent per i log backend.
     session_audio_diag: dict = {
         "probe": None,      # es. "aac/16000/1ch/32000"
@@ -1594,7 +1594,7 @@ async def voice_stream_handler(
                     speech_final = bool(evt.get("speech_final", False))
                     conf = alt.get("confidence")
                     # === FIX 2026-06-29 — conf=0 fallback ===
-                    # Su utterance brevi (es. "Koda mi senti?") o un po'
+                    # Su utterance brevi (es. "Ollenya mi senti?") o un po'
                     # rumorose, Deepgram Nova-3 a volte emette
                     # confidence=0.0 al livello top dell'alternative anche
                     # se le word singole hanno confidence valida (es. 0.97).
@@ -1657,7 +1657,7 @@ async def voice_stream_handler(
                         # ogni speech_final con testo vuoto (accade in ambiente
                         # rumoroso: Deepgram endpoint-a la voce ma non riesce
                         # a decodificarla). Risultato: client "thinking → idle"
-                        # senza feedback → utente pensa che Koda non voglia
+                        # senza feedback → utente pensa che Ollenya non voglia
                         # rispondere. Ora triggeriamo la pipeline anche con
                         # testo vuoto — `_fast_pipeline_task` intercetta empty
                         # e ritorna un canned reply "Non ti ho sentito bene,
@@ -1819,8 +1819,8 @@ async def voice_stream_handler(
             # === v60.2 plumb — Diag audio inline nell'stt_final ============
             # Quando la trascrizione è vuota/fallita, prependiamo un marker
             # "[DIAG probe=... rms=... peak=... route=...]" al testo così
-            # nel diag Koda del client apparirà nel log del client:
-            #   [KODA_STREAM_CLIENT] stt_final text=[DIAG probe=aac/16000/1ch/32000 rms=-42.1,-38.5 route=bluetooth]...
+            # nel diag Ollenya del client apparirà nel log del client:
+            #   [OLLENYA_STREAM_CLIENT] stt_final text=[DIAG probe=aac/16000/1ch/32000 rms=-42.1,-38.5 route=bluetooth]...
             # Se la trascrizione ha testo utile, NON tocchiamo — il diag
             # marker apparirebbe come rumore. Lo aggiungiamo SOLO su empty.
             _text_out = transcript_used
@@ -2153,7 +2153,7 @@ async def voice_stream_handler(
                                 f"idx={chunks_received} rms_db={_rms_db_pre:.1f} peak_db={_peak_db_pre:.1f}"
                             )
                     except Exception as _e_pre:
-                        logger.warning(f"[KODA_PCM_STATS_PREFILTER] calc failed: {_e_pre}")
+                        logger.warning(f"[OLLENYA_PCM_STATS_PREFILTER] calc failed: {_e_pre}")
 
                     # === FIX 2026-07-18 v60 (Fabio "CarPlay silenzioso") ===
                     # D — PCM stats logging. Il PCM decodificato dovrebbe
@@ -2196,7 +2196,7 @@ async def voice_stream_handler(
                             if session_audio_diag["route"] is None:
                                 session_audio_diag["route"] = audio_route
                     except Exception as _e:
-                        logger.warning(f"[KODA_PCM_STATS] calc failed: {_e}")
+                        logger.warning(f"[OLLENYA_PCM_STATS] calc failed: {_e}")
 
                     # Probe input format ONE-SHOT (solo primo chunk della sessione)
                     if chunks_received == 1:
@@ -2236,7 +2236,7 @@ async def voice_stream_handler(
                             except Exception:
                                 pass
                         except Exception as _e:
-                            logger.warning(f"[KODA_INPUT_PROBE] ffprobe failed: {_e}")
+                            logger.warning(f"[OLLENYA_INPUT_PROBE] ffprobe failed: {_e}")
 
                     # === VOICEPRINT GATE (2026-07-14, Iter 2) ===
                     # Se il profilo utente ha un voiceprint enrolled, calcoliamo
@@ -2325,7 +2325,7 @@ async def voice_stream_handler(
                         # asyncio.sleep(2.0) e poi break → WS chiusa PRIMA che
                         # la pipeline LLM+TTS (Claude + ElevenLabs, tipicamente
                         # 3-5s) potesse emettere sentence + audio + done →
-                        # Koda non rispondeva mai al tap-to-stop.
+                        # Ollenya non rispondeva mai al tap-to-stop.
                         #
                         # NUOVO: dopo finalize aspettiamo (a) che la pipeline
                         # parta entro 3s, (b) che finisca entro 25s. Se DG non
@@ -2411,7 +2411,7 @@ async def voice_stream_handler(
         # `done` (perché speech_final Deepgram non è mai arrivato E il
         # buffer PCM era vuoto/troppo piccolo per fallback Whisper), il
         # client resta appeso 25s e poi vede WS chiudersi senza risposta.
-        # UX: Koda va "thinking → idle" senza dire niente.
+        # UX: Ollenya va "thinking → idle" senza dire niente.
         # RIMEDIO: se il client è ancora connesso e non abbiamo emesso
         # né `done` né errore, mandiamo un `done` esplicito così il
         # client esce dallo stato "thinking" e riparte pulito.

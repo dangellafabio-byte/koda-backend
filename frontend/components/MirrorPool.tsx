@@ -1,9 +1,9 @@
 /**
  * MirrorPool — "Specchio d'acqua scuro e vivo" (richiesta utente 2026-06).
  *
- * Alternativa all'eclissi come avatar centrale di Koda.
+ * Alternativa all'eclissi come avatar centrale di Ollenya.
  * Concept: pozza d'acqua scura e riflettente. A riposo respira appena.
- * Quando l'utente parla, la superficie si increspa. Quando Koda parla,
+ * Quando l'utente parla, la superficie si increspa. Quando Ollenya parla,
  * l'acqua si illumina dall'interno con la tinta del tone.
  *
  * Layer (dal basso all'alto):
@@ -86,7 +86,7 @@ export default function MirrorPool({
     return () => loop.stop();
   }, [surface]);
 
-  // === Luminescenza: si accende quando Koda parla / utente parla ===
+  // === Luminescenza: si accende quando Ollenya parla / utente parla ===
   const glow = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     const target = status === "speaking" || status === "recording" ? 1 : 0;
@@ -225,7 +225,7 @@ export default function MirrorPool({
               <Stop offset="70%" stopColor={reflectColor} stopOpacity="0.4" />
               <Stop offset="100%" stopColor={reflectColor} stopOpacity="0" />
             </RadialGradient>
-            {/* Luminescenza interna: si accende quando Koda parla */}
+            {/* Luminescenza interna: si accende quando Ollenya parla */}
             <RadialGradient id="glow" cx="50%" cy="50%" rx="40%" ry="40%" fx="50%" fy="50%">
               <Stop offset="0%" stopColor={reflectColor} stopOpacity="0.85" />
               <Stop offset="60%" stopColor={reflectColor} stopOpacity="0.25" />

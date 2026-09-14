@@ -3,7 +3,7 @@
  * expired (budget 7 min esaurito o finestra 5 giorni scaduta).
  *
  * Design principles (spec Fabio 2026-08-10):
- *   - Compare SOLO dopo che l'ultimo TTS di Koda è finito (didJustFinish
+ *   - Compare SOLO dopo che l'ultimo TTS di Ollenya è finito (didJustFinish
  *     del player). Il TrialWatcher gestisce questo timing via polling —
  *     il primo poll che rileva "expired" arriva dopo la generazione TTS,
  *     quindi il turno di congedo è già completato acusticamente.
@@ -127,7 +127,7 @@ export default function TrialExpiredOverlay({ visible, onDismiss, devOverride, o
               },
             ]}
           >
-            Se vuoi continuare a parlare con Koda, puoi scegliere un piano.
+            Se vuoi continuare a parlare con Ollenya, puoi scegliere un piano.
           </Text>
 
           <Pressable
@@ -140,7 +140,7 @@ export default function TrialExpiredOverlay({ visible, onDismiss, devOverride, o
               },
             ]}
             accessibilityRole="button"
-            accessibilityLabel="Vedi i piani per continuare con Koda"
+            accessibilityLabel="Vedi i piani per continuare con Ollenya"
           >
             <Text
               style={[

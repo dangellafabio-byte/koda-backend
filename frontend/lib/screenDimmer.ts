@@ -45,7 +45,7 @@ import { Platform } from "react-native";
 // Il costo è trascurabile (~1 log ogni 35s + touch events).
 const DBG = true;
 function log(...args: any[]) {
-  if (DBG) console.log("[KODA_DIMMER]", ...args);
+  if (DBG) console.log("[OLLENYA_DIMMER]", ...args);
 }
 
 // ============================================================================
@@ -76,7 +76,7 @@ let fadeTimer: ReturnType<typeof setInterval> | null = null;
 //   1. startWatching viene chiamato (state passa a "watching")
 //   2. Il timer di 35s viene resettato di continuo da noteInteraction
 //   3. Il timer scatta ma triggerDim viene skippato per qualche motivo
-// Log filtrabile con grep "[KODA_DIMMER] heartbeat"
+// Log filtrabile con grep "[OLLENYA_DIMMER] heartbeat"
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let lastInteractionAtMs: number = 0;
 let idleTimerArmedAtMs: number = 0;
@@ -214,7 +214,7 @@ export async function startWatching(): Promise<void> {
   // Web: expo-brightness non è supportato. No-op silenzioso.
   if (Platform.OS === "web") return;
   if (state !== "off") {
-    // Già watching: NO-OP totale. Il cambio di stato di Koda (recording
+    // Già watching: NO-OP totale. Il cambio di stato di Ollenya (recording
     // → thinking → speaking) NON deve resettare il timer di inattività.
     log(`startWatching skipped — already state=${state}`);
     return;

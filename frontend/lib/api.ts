@@ -50,7 +50,7 @@ export type TimelineEntry = {
   // === FEEDBACK LOOP (Fabio 2026-09-11) ===
   // Capability token opaco ricevuto in meta.event_id a fine turno.
   // Presente SOLO su entry role="ai" recenti (RAM-only, non persistito
-  // in DB locale). Il long-press sulla bolla lo passa a KodaFeedbackMenu
+  // in DB locale). Il long-press sulla bolla lo passa a OllenyaFeedbackMenu
   // → POST /api/feedback. Zero user_id nel flusso.
   event_id?: string | null;
 };
@@ -71,7 +71,7 @@ export type ProfileSettings = {
   conversation_mode?: boolean;
   hands_free?: boolean;             // True hands-free continuous listening (default true)
   background?: string | null;       // DEPRECATED (2026-07-02) — mantenuto solo per backward-compat retention type. Server scarta il campo in ingresso.
-  background_dim?: number;          // 0..1 dark overlay opacity (usato dagli sfondi PRESET di Koda)
+  background_dim?: number;          // 0..1 dark overlay opacity (usato dagli sfondi PRESET di Ollenya)
   // === FIX 2026-07-02 (Fabio) — Rimosso ai_avatar (dead feature) ===
   // Nessuna UI lo settava, il componente Bubble non lo usava. Rimosso
   // per evitare bloating del profilo se in futuro qualche client
@@ -232,10 +232,10 @@ export const api = {
     try {
       // Import dinamico per non pesare sul cold start
       const SS = await import("expo-secure-store");
-      const flag = await SS.getItemAsync("koda_dev_force_free_tier");
+      const flag = await SS.getItemAsync("ollenya_dev_force_free_tier");
       if (flag === "1" || flag === "true") {
         qs = "?force_free=1";
-        console.warn("[KODA_DEV] getProfile with force_free=1 (SecureStore flag active)");
+        console.warn("[OLLENYA_DEV] getProfile with force_free=1 (SecureStore flag active)");
       }
     } catch {}
     return jsonReq<Profile>(`/profile${qs}`);
@@ -312,7 +312,7 @@ export const api = {
   listVoices: () =>
     jsonReq<{ voices: VoiceOption[]; enabled: boolean }>("/voices"),
 
-  /** generateCheckin — RIMOSSO (Blocco A, no needy Koda). L'endpoint
+  /** generateCheckin — RIMOSSO (Blocco A, no needy Ollenya). L'endpoint
    *  /checkin/generate non esiste più nel backend. */
 
   /** Confessionale API — RIMOSSO (Blocco B, feature deprecata).
@@ -492,7 +492,7 @@ export const api = {
 
   // === FREEMIUM "BLINDATO" 3 messaggi (giugno 2026) ==========================
   /** Stato corrente del freemium counter. Chiamato al boot e dopo ogni
-   * risposta di Koda per aggiornare il contatore visivo (3 → 2 → 1 → 0). */
+   * risposta di Ollenya per aggiornare il contatore visivo (3 → 2 → 1 → 0). */
   freemiumStatus: () => jsonReq<FreemiumStatus>("/freemium/status"),
 
   /** === TRIAL STATE (2026-08-10, aggiornato 2026-08-11 con dev_override) ===
@@ -526,7 +526,7 @@ export const api = {
       { method: "POST" }
     ),
 
-  /** === INTRO PREMIUM — one-shot al primo boot home Koda conv (2026-08-22) ===
+  /** === INTRO PREMIUM — one-shot al primo boot home Ollenya conv (2026-08-22) ===
    * Persistenza server-side, sopravvive a reinstall/cambio device. */
   getIntroPremiumState: () =>
     jsonReq<{ seen: boolean; seen_at?: string | null }>("/intro-premium/state"),
@@ -605,7 +605,7 @@ export const api = {
     jsonReq<any>("/dev/trial/inspect"),
 
   /** Incrementa il counter messaggi gratis. Da chiamare DOPO un turno
-   * completo (utente + Koda), MA SOLO se NON in Confessionale. */
+   * completo (utente + Ollenya), MA SOLO se NON in Confessionale. */
   freemiumIncrement: () =>
     jsonReq<FreemiumStatus>("/freemium/increment", { method: "POST" }),
 
@@ -647,8 +647,8 @@ export const api = {
 
   /** confessionalDistill — RIMOSSO (Blocco B, endpoint /confessional/distill cancellato). */
 
-  // === DISCLAIMER "Koda non è terapia" (Fabio 2026-07-28) ==================
-  // Wrapper per l'overlay onboarding che chiarisce che Koda non sostituisce
+  // === DISCLAIMER "Ollenya non è terapia" (Fabio 2026-07-28) ==================
+  // Wrapper per l'overlay onboarding che chiarisce che Ollenya non sostituisce
   // un percorso professionale. `getDisclaimerStatus()` viene chiamato al
   // boot dell'app per capire se mostrare l'overlay blocking;
   // `acceptDisclaimer()` viene chiamato al tap "Ho capito" per registrare

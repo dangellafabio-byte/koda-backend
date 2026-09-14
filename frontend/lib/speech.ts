@@ -74,11 +74,11 @@ export async function prewarmAudio(): Promise<void> {
       allowsRecording: false,
       playsInSilentMode: true,
       interruptionMode: "duckOthers",
-      // === FIX 2026-07-08 (Fabio "Koda continua a parlare a schermo bloccato") ===
+      // === FIX 2026-07-08 (Fabio "Ollenya continua a parlare a schermo bloccato") ===
       // shouldPlayInBackground=true su tutte le chiamate playback così iOS
       // NON sospende AVAudioSession quando schermo bloccato / app in background.
       // Combinato con UIBackgroundModes=["audio"] nell'Info.plist (già in app.json),
-      // Koda continua a suonare la risposta TTS anche in macchina con telefono
+      // Ollenya continua a suonare la risposta TTS anche in macchina con telefono
       // in tasca / schermo spento.
       shouldPlayInBackground: true,
       shouldRouteThroughEarpiece: false,
@@ -165,7 +165,7 @@ export async function unlockSpeech(): Promise<void> {
 // Gateare i log diagnostici aggiunti durante il debug del bug P0 Android.
 // Default false: log puliti. Si attiva via EXPO_PUBLIC_KODA_DEBUG_VERBOSE=true
 // in .env per troubleshooting futuri.
-const KODA_DEBUG_VERBOSE =
+const OLLENYA_DEBUG_VERBOSE =
   process.env.EXPO_PUBLIC_KODA_DEBUG_VERBOSE === "true";
 
 // ---------- Utility: stop everything ----------
@@ -173,13 +173,13 @@ function stopAllPlayback(caller?: string) {
   // === FIX 2026-06-28 v34 — Trace WHO calls stopAllPlayback ===
   // Loggato SOLO in modalità debug verbose. In produzione resta silente
   // (bug P0 risolto, log lasciato come strumento per debugging futuri).
-  if (KODA_DEBUG_VERBOSE) {
+  if (OLLENYA_DEBUG_VERBOSE) {
     try {
       const stack = new Error().stack || "";
       const lines = stack.split("\n").slice(1, 4).map((s) => s.trim().slice(0, 80));
       const hadAbort = !!currentAbort;
       console.log(
-        `[KODA_TTS_STOP] stopAllPlayback called caller=${caller ?? "?"} ` +
+        `[OLLENYA_TTS_STOP] stopAllPlayback called caller=${caller ?? "?"} ` +
           `hadAbort=${hadAbort} hadPlayer=${!!currentPlayer} ` +
           `speakingNow=${speakingNow} | stack=${lines.join(" ← ")}`
       );
@@ -226,7 +226,7 @@ function stopAllPlayback(caller?: string) {
     // Su Android, `expo-audio.pause()` non sempre interrompe immediatamente
     // il playback: il buffer audio interno può continuare a riprodurre per
     // alcuni secondi anche dopo pause(), e remove() a volte tarda. Risultato:
-    // l'utente tappa l'orb per fermare Koda, la UI passa a "idle" ma la voce
+    // l'utente tappa l'orb per fermare Ollenya, la UI passa a "idle" ma la voce
     // continua. Fix aggressivo: muta il volume e fa seekTo(0) PRIMA di
     // remove() — combo che forza Android a smettere subito di emettere audio.
     if (Platform.OS === "android") {
@@ -350,9 +350,9 @@ function prewarmPlaybackSession(): Promise<void> {
         shouldRouteThroughEarpiece: false,
       });
       await setIsAudioActiveAsync(true);
-      console.log(`[KODA_TTS_PREWARM] completed in ${Date.now() - tStart}ms`);
+      console.log(`[OLLENYA_TTS_PREWARM] completed in ${Date.now() - tStart}ms`);
     } catch (e) {
-      console.log(`[KODA_TTS_PREWARM] failed (non-blocking):`, e);
+      console.log(`[OLLENYA_TTS_PREWARM] failed (non-blocking):`, e);
     }
   })();
   return prewarmPromise;
@@ -412,20 +412,20 @@ async function playElevenLabsNativeFromUrl(
       const timer = setTimeout(() => {
         if (resolved) return;
         resolved = true;
-        console.log(`[KODA_TTS_PLAY] cycle_step=${label} TIMEOUT after ${ms}ms`);
+        console.log(`[OLLENYA_TTS_PLAY] cycle_step=${label} TIMEOUT after ${ms}ms`);
         resolve();
       }, ms);
       p.then(() => {
         if (resolved) return;
         resolved = true;
         clearTimeout(timer);
-        console.log(`[KODA_TTS_PLAY] cycle_step=${label} ok ms=${Date.now() - tStart}`);
+        console.log(`[OLLENYA_TTS_PLAY] cycle_step=${label} ok ms=${Date.now() - tStart}`);
         resolve();
       }).catch((e) => {
         if (resolved) return;
         resolved = true;
         clearTimeout(timer);
-        console.log(`[KODA_TTS_PLAY] cycle_step=${label} ERROR ms=${Date.now() - tStart} err=${String(e?.message || e).slice(0, 60)}`);
+        console.log(`[OLLENYA_TTS_PLAY] cycle_step=${label} ERROR ms=${Date.now() - tStart} err=${String(e?.message || e).slice(0, 60)}`);
         resolve();
       });
     });
@@ -444,7 +444,7 @@ async function playElevenLabsNativeFromUrl(
     if (prew) {
       const tWait = Date.now();
       await prew;
-      console.log(`[KODA_TTS_PLAY] cycle_step=prewarm_consumed ms=${Date.now() - tWait}`);
+      console.log(`[OLLENYA_TTS_PLAY] cycle_step=prewarm_consumed ms=${Date.now() - tWait}`);
     } else {
       // === KODA v54 LATENCY FIX ===
       // Rimosso setIsActive(false) → setActive(true) ciclo che aggiungeva ~700ms
@@ -537,7 +537,7 @@ async function playElevenLabsNativeFromUrl(
         ? (expectedDurSec - knownDurationSec)
         : null;
       console.log(
-        `[KODA_CUTOFF_DIAG] finish label=${diagLabel} reason=${reason} ok=${ok} ` +
+        `[OLLENYA_CUTOFF_DIAG] finish label=${diagLabel} reason=${reason} ok=${ok} ` +
         `pos=${lastPositionSec.toFixed(2)}s ` +
         `dur=${knownDurationSec !== null ? knownDurationSec.toFixed(2) : "?"}s ` +
         `expected_dur=${expectedDurSec > 0 ? expectedDurSec.toFixed(2) : "?"}s ` +
@@ -573,7 +573,7 @@ async function playElevenLabsNativeFromUrl(
       player = createAudioPlayer(audioUrl, { updateInterval: 250 });
       currentPlayer = player;
       // === FIX 2026-06-28 v32 — Android volume + diag ===
-      // Su Android (Xiaomi/HyperOS), l'utente segnala che `[KODA_TTS_PLAY]`
+      // Su Android (Xiaomi/HyperOS), l'utente segnala che `[OLLENYA_TTS_PLAY]`
       // gira nei log ma NESSUN audio esce dallo speaker. Cause possibili:
       //   1) Il volume del player non è impostato (default 0 su alcune build)
       //   2) Router audio bloccato in MODE_IN_COMMUNICATION dopo recording
@@ -605,7 +605,7 @@ async function playElevenLabsNativeFromUrl(
             shouldRouteThroughEarpiece: false,
           }).catch(() => {});
         } catch {}
-        console.log(`[KODA_TTS_PLAY] android_audio_mode_forced playback`);
+        console.log(`[OLLENYA_TTS_PLAY] android_audio_mode_forced playback`);
 
         // === FIX 2026-07-26 v64.1 — AudioFocus re-acquire per preview standalone ===
         //
@@ -635,7 +635,7 @@ async function playElevenLabsNativeFromUrl(
           const AudioMod: any = require("expo-audio");
           if (typeof AudioMod.setIsAudioActiveAsync === "function") {
             AudioMod.setIsAudioActiveAsync(true).catch(() => {});
-            console.log(`[KODA_TTS_PLAY] android_audio_focus_reacquired (v64.1 preview fix)`);
+            console.log(`[OLLENYA_TTS_PLAY] android_audio_focus_reacquired (v64.1 preview fix)`);
           }
         } catch {}
       }
@@ -657,7 +657,7 @@ async function playElevenLabsNativeFromUrl(
             firstSoundFired = true;
             everPlayed = true;
             console.log(
-              `[KODA_TTS_PLAY] android_first_loaded playing=${!!status.playing} ` +
+              `[OLLENYA_TTS_PLAY] android_first_loaded playing=${!!status.playing} ` +
                 `pos=${pos.toFixed(2)} dur=${dur ?? "?"} — firing onAudioStart`
             );
             try { onAudioStart?.(); } catch (e) { console.warn("[speech] onAudioStart cb threw:", e); }
@@ -669,7 +669,7 @@ async function playElevenLabsNativeFromUrl(
             // Permette di correlare nei log diag bytes vs durata reale.
             if (dur && !knownDurationLogged) {
               knownDurationLogged = true;
-              console.log(`[KODA_TTS_PLAY] mp3_duration=${dur.toFixed(2)}s (pos=${pos.toFixed(2)})`);
+              console.log(`[OLLENYA_TTS_PLAY] mp3_duration=${dur.toFixed(2)}s (pos=${pos.toFixed(2)})`);
               knownDurationSec = dur;
             }
           }
@@ -701,7 +701,7 @@ async function playElevenLabsNativeFromUrl(
           // watcher possa entrare in azione.
           if (dur && pos > 0 && pos >= dur - 0.25) {
             console.log(
-              `[KODA_TTS_PLAY] duration_complete pos=${pos.toFixed(2)} ` +
+              `[OLLENYA_TTS_PLAY] duration_complete pos=${pos.toFixed(2)} ` +
                 `dur=${dur.toFixed(2)} — finishing gracefully`
             );
             finish(true, "duration_complete");
@@ -737,7 +737,7 @@ async function playElevenLabsNativeFromUrl(
           // Log con prefisso KODA_TTS_STALL così è visibile nel diag log
           // dell'utente (i log [speech] sono filtrati).
           console.log(
-            `[KODA_TTS_STALL] stalled ${stalled}ms after pos=${lastPositionSec.toFixed(2)}s ` +
+            `[OLLENYA_TTS_STALL] stalled ${stalled}ms after pos=${lastPositionSec.toFixed(2)}s ` +
               `dur=${knownDurationSec ? knownDurationSec.toFixed(2) : "?"}s — forcing finish`
           );
           finish(true, "stall_30s");
@@ -925,7 +925,7 @@ export type FastConverseMeta = {
   /**
    * === CLOSE SESSION (fix regressione 2026-06-20) ===
    * Backend imposta `true` quando l'utente saluta per chiudere
-   * ("ci sentiamo dopo", "a dopo", "ciao Koda", "buonanotte", ecc.).
+   * ("ci sentiamo dopo", "a dopo", "ciao Ollenya", "buonanotte", ecc.).
    * Il client DEVE smettere di ascoltare dopo aver suonato la reply
    * finale, altrimenti continua in loop ("non ti sento, parla pure").
    */
@@ -1015,7 +1015,7 @@ export async function fastConverse(
     recordingDurationMs?: number;
     // === AUDIO HONESTY (Fabio 2026-06-23) ============================
     // Confidence Deepgram 0-1 della trascrizione. Se < 0.7 il backend
-    // inietta una direttiva nel prompt che rende Koda onesto sull'audio
+    // inietta una direttiva nel prompt che rende Ollenya onesto sull'audio
     // rumoroso (chiede dove si trova l'utente). Default: undefined →
     // comportamento storico identico, nessuna regressione.
     sttConfidence?: number;
@@ -1087,7 +1087,7 @@ export async function fastConverse(
     const status = errMsg ? `err=${errMsg.slice(0, 40)}` : "ok";
     const recMs = opts.recordingDurationMs;
     console.log(
-      `[KODA_SUMMARY] model=${summaryModel} path=${summaryPath} ` +
+      `[OLLENYA_SUMMARY] model=${summaryModel} path=${summaryPath} ` +
         `total=${total}ms recording_ms=${recMs ?? "?"} ` +
         `transcript_chars=${text.length} ` +
         `llm_ttft=${summaryLlmTtftMs ?? "?"}ms ` +
@@ -1107,7 +1107,7 @@ export async function fastConverse(
     //   first_audio - first_play        = ritardo "player.play() → primo frame audio"
     //                                       (se grande: AVPlayer buffering MP3 dal CDN)
     console.log(
-      `[KODA_POLL_SUMMARY] polls=${pollReqCount} empty=${pollEmptyCount} ` +
+      `[OLLENYA_POLL_SUMMARY] polls=${pollReqCount} empty=${pollEmptyCount} ` +
         `err=${pollErrorCount} poll_wait=${pollTotalWaitMs}ms ` +
         `first_sentence=${ms(tFirstSentenceEvent)}ms ` +
         `first_play=${ms(tFirstPlayStart)}ms`
@@ -1193,7 +1193,7 @@ export async function fastConverse(
           pollTotalWaitMs += _pollDur;
           if (!r.ok) {
             pollErrorCount++;
-            console.log(`[KODA_POLL] req=${pollReqCount} status=${r.status} dur=${_pollDur}ms cursor=${cursor} t=${Date.now() - t0}ms`);
+            console.log(`[OLLENYA_POLL] req=${pollReqCount} status=${r.status} dur=${_pollDur}ms cursor=${cursor} t=${Date.now() - t0}ms`);
             pollError = `poll ${r.status}`;
             pollingDone = true;
             notifyTokenWait();
@@ -1202,7 +1202,7 @@ export async function fastConverse(
           const data = await r.json();
           const evts: any[] = data?.events || [];
           if (evts.length === 0) pollEmptyCount++;
-          console.log(`[KODA_POLL] req=${pollReqCount} status=200 dur=${_pollDur}ms cursor=${cursor}→${data?.next} events=${evts.length} done=${!!data?.done} t=${Date.now() - t0}ms`);
+          console.log(`[OLLENYA_POLL] req=${pollReqCount} status=200 dur=${_pollDur}ms cursor=${cursor}→${data?.next} events=${evts.length} done=${!!data?.done} t=${Date.now() - t0}ms`);
           cursor = typeof data?.next === "number" ? data.next : cursor + evts.length;
           for (const ev of evts) {
             if (ev?.type === "sentence" && ev.token) {
@@ -1249,7 +1249,7 @@ export async function fastConverse(
                 typeof ev.tts_voice_id === "string"
               ) {
                 console.log(
-                  `[KODA_LLM_OUT_CLIENT] profile_lang=${ev.profile_lang ?? "?"} ` +
+                  `[OLLENYA_LLM_OUT_CLIENT] profile_lang=${ev.profile_lang ?? "?"} ` +
                   `koda_voice=${ev.koda_voice ?? "?"} ` +
                   `tts_voice_id=${(ev.tts_voice_id ?? "?").toString().slice(0, 12)}... ` +
                   `tts_lang=${ev.tts_lang ?? "?"} ` +
@@ -1268,7 +1268,7 @@ export async function fastConverse(
                 close_session: !!ev.close_session,
               };
               if (ev.close_session) {
-                console.log("[KODA_CLOSE_SESSION] backend requested session end");
+                console.log("[OLLENYA_CLOSE_SESSION] backend requested session end");
               }
               try { opts.onMeta?.(meta); } catch {}
             } else if (ev?.type === "waveform_update") {
@@ -1304,7 +1304,7 @@ export async function fastConverse(
             break;
           }
           pollErrorCount++;
-          console.log(`[KODA_POLL] req=${pollReqCount} status=NETERR dur=${_pollDur}ms cursor=${cursor} err=${String(e?.message || e).slice(0, 60)} t=${Date.now() - t0}ms`);
+          console.log(`[OLLENYA_POLL] req=${pollReqCount} status=NETERR dur=${_pollDur}ms cursor=${cursor} err=${String(e?.message || e).slice(0, 60)} t=${Date.now() - t0}ms`);
           // Transient network error — short backoff then retry.
           await new Promise((res) => setTimeout(res, 250));
         }
@@ -1324,7 +1324,7 @@ export async function fastConverse(
         // (utile per separare "ho ricevuto evento" da "ho chiamato play()").
         if (tFirstPlayStart === null) {
           tFirstPlayStart = Date.now();
-          console.log(`[KODA_POLL] first_play_kick t=${Date.now() - t0}ms (sentence_recv→play=${tFirstSentenceEvent ? Date.now() - tFirstSentenceEvent : "?"}ms)`);
+          console.log(`[OLLENYA_POLL] first_play_kick t=${Date.now() - t0}ms (sentence_recv→play=${tFirstSentenceEvent ? Date.now() - tFirstSentenceEvent : "?"}ms)`);
         }
         const fireStart = !firstAudioFired
           ? () => {
@@ -1459,7 +1459,7 @@ async function _writeMp3ToFile(bytes: Uint8Array, idx: number): Promise<string |
   try {
     const dir = (FileSystem as any).cacheDirectory;
     if (!dir) {
-      console.log(`[KODA_TTS_WRITE] #${idx} no_dir → null`);
+      console.log(`[OLLENYA_TTS_WRITE] #${idx} no_dir → null`);
       return null;
     }
     const path = `${dir}koda_ws_${Date.now()}_${idx}.mp3`;
@@ -1467,7 +1467,7 @@ async function _writeMp3ToFile(bytes: Uint8Array, idx: number): Promise<string |
     const b64 = _bytesToBase64(bytes);
     const t2 = Date.now();
     console.log(
-      `[KODA_TTS_WRITE] #${idx} b64_done bytes=${bytes.byteLength} ` +
+      `[OLLENYA_TTS_WRITE] #${idx} b64_done bytes=${bytes.byteLength} ` +
         `b64_len=${b64.length} ms=${t2 - t1}`
     );
     // Timeout wrapper di 2.5s sulla scrittura iOS
@@ -1480,7 +1480,7 @@ async function _writeMp3ToFile(bytes: Uint8Array, idx: number): Promise<string |
         });
         return path;
       } catch (e) {
-        console.warn(`[KODA_TTS_WRITE] #${idx} writeAsString error:`, e);
+        console.warn(`[OLLENYA_TTS_WRITE] #${idx} writeAsString error:`, e);
         return null;
       }
     })();
@@ -1500,7 +1500,7 @@ async function _writeMp3ToFile(bytes: Uint8Array, idx: number): Promise<string |
         timeoutHandle = setTimeout(() => {
           timedOut = true;
           console.log(
-            `[KODA_TTS_WRITE] #${idx} TIMEOUT after 2500ms — falling back`
+            `[OLLENYA_TTS_WRITE] #${idx} TIMEOUT after 2500ms — falling back`
           );
           resolve(null);
         }, 2500);
@@ -1518,7 +1518,7 @@ async function _writeMp3ToFile(bytes: Uint8Array, idx: number): Promise<string |
       return null;
     }
     console.log(
-      `[KODA_TTS_WRITE] #${idx} write_ok ms=${Date.now() - tStart} path_tail=${path.slice(-30)}`
+      `[OLLENYA_TTS_WRITE] #${idx} write_ok ms=${Date.now() - tStart} path_tail=${path.slice(-30)}`
     );
     return result;
   } catch (e) {
@@ -1539,7 +1539,7 @@ async function _playMp3FromMemoryFallback(
   try {
     const b64 = _bytesToBase64(bytes);
     const dataUri = `data:audio/mpeg;base64,${b64}`;
-    console.log(`[KODA_TTS_PLAY] fallback data-uri len=${dataUri.length}`);
+    console.log(`[OLLENYA_TTS_PLAY] fallback data-uri len=${dataUri.length}`);
     return await playElevenLabsNativeFromUrl(dataUri, onStart, playOpts);
   } catch (e) {
     console.warn("[ws] memory fallback playback failed:", e);
@@ -2129,7 +2129,7 @@ export async function voiceStreamConverse(opts: {
         pendingByIdx.delete(nextExpectedIdx);
         sentenceQueue.push(drained);
         console.log(
-          `[KODA_CUTOFF_DIAG] reorder_drain idx=${drained.i} bytes=${drained.bytes.byteLength} ` +
+          `[OLLENYA_CUTOFF_DIAG] reorder_drain idx=${drained.i} bytes=${drained.bytes.byteLength} ` +
             `nextExpected=${nextExpectedIdx + 1}`
         );
         nextExpectedIdx += 1;
@@ -2137,12 +2137,12 @@ export async function voiceStreamConverse(opts: {
     } else if (item.i > nextExpectedIdx) {
       pendingByIdx.set(item.i, item);
       console.log(
-        `[KODA_CUTOFF_DIAG] reorder_buffer idx=${item.i} bytes=${item.bytes.byteLength} ` +
+        `[OLLENYA_CUTOFF_DIAG] reorder_buffer idx=${item.i} bytes=${item.bytes.byteLength} ` +
           `waiting_for=${nextExpectedIdx} pending_count=${pendingByIdx.size}`
       );
     } else {
       console.warn(
-        `[KODA_CUTOFF_DIAG] reorder_drop_duplicate idx=${item.i} nextExpected=${nextExpectedIdx}`
+        `[OLLENYA_CUTOFF_DIAG] reorder_drop_duplicate idx=${item.i} nextExpected=${nextExpectedIdx}`
       );
     }
   };
@@ -2194,31 +2194,31 @@ export async function voiceStreamConverse(opts: {
         sttEngine =
           Platform.OS === "ios" ? "apple_sfspeechrecognizer" : "google_speechrecognizer";
         console.log(
-          `[KODA_STT_SOURCE] engine=${sttEngine} platform=${Platform.OS} ondev=true`
+          `[OLLENYA_STT_SOURCE] engine=${sttEngine} platform=${Platform.OS} ondev=true`
         );
       } else {
         console.log(
-          `[KODA_STT_SOURCE] engine=deepgram (fallback, native unsupported: ${support.reason})`
+          `[OLLENYA_STT_SOURCE] engine=deepgram (fallback, native unsupported: ${support.reason})`
         );
       }
     } catch (e: any) {
       console.log(
-        `[KODA_STT_SOURCE] engine=deepgram (fallback, native probe failed: ${e?.message || e})`
+        `[OLLENYA_STT_SOURCE] engine=deepgram (fallback, native probe failed: ${e?.message || e})`
       );
     }
   } else {
-    console.log(`[KODA_STT_SOURCE] engine=deepgram (feature flag off)`);
+    console.log(`[OLLENYA_STT_SOURCE] engine=deepgram (feature flag off)`);
   }
 
   const session = new SessionCtor({
     onReady: (sessionId: string) => {
-      console.log(`[KODA_STREAM_CLIENT] ready sess=${sessionId.slice(0, 8)}`);
+      console.log(`[OLLENYA_STREAM_CLIENT] ready sess=${sessionId.slice(0, 8)}`);
     },
     // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
     // Forward al caller quando il mic REALE è partito (Native STT:
     // dopo ExpoSpeechRecognitionModule.start() OK).
     onRecognitionActive: () => {
-      console.log(`[KODA_STREAM_CLIENT] mic really active (recognition started)`);
+      console.log(`[OLLENYA_STREAM_CLIENT] mic really active (recognition started)`);
       try { opts.onRecognitionActive?.(); } catch {}
     },
     onInterim: (_text: string, _isFinal: boolean) => {
@@ -2289,9 +2289,9 @@ export async function voiceStreamConverse(opts: {
       // === TEST BINARIO 2026-06-28 v35 (proposto da utente) ========
       // ============================================================
       // OBIETTIVO: isolare il problema in 2 categorie nette.
-      //   - Se [KODA_BYPASS] suona davvero → bug nella logica del
+      //   - Se [OLLENYA_BYPASS] suona davvero → bug nella logica del
       //     player loop (queue/abort/skipCycle/tailBuffer/ecc.)
-      //   - Se [KODA_BYPASS] NON suona → bug in expo-audio /
+      //   - Se [OLLENYA_BYPASS] NON suona → bug in expo-audio /
       //     audio session / speaker routing Android
       //
       // Cosa fa: alla PRIMA sentence ricevuta (i=0) su Android,
@@ -2303,12 +2303,12 @@ export async function voiceStreamConverse(opts: {
       // Logging granulare di OGNI step così da fermare il primo
       // punto di fallimento se c'è.
       // ============================================================
-      if (header.i === 0 && Platform.OS === "android" && KODA_DEBUG_VERBOSE && !bypassAttempted) {
+      if (header.i === 0 && Platform.OS === "android" && OLLENYA_DEBUG_VERBOSE && !bypassAttempted) {
         bypassAttempted = true;
         const bytesCopy = new Uint8Array(u8); // copia per evitare race con queue
         (async () => {
           const t0 = Date.now();
-          console.log(`[KODA_BYPASS] start bytes=${bytesCopy.byteLength}`);
+          console.log(`[OLLENYA_BYPASS] start bytes=${bytesCopy.byteLength}`);
           try {
             try {
               await setAudioModeAsync({
@@ -2319,28 +2319,28 @@ export async function voiceStreamConverse(opts: {
                 shouldPlayInBackground: true,
                 shouldRouteThroughEarpiece: false,
               });
-              console.log(`[KODA_BYPASS] audio_mode_set ms=${Date.now() - t0}`);
+              console.log(`[OLLENYA_BYPASS] audio_mode_set ms=${Date.now() - t0}`);
             } catch (e: any) {
-              console.log(`[KODA_BYPASS] audio_mode FAILED: ${e?.message || e}`);
+              console.log(`[OLLENYA_BYPASS] audio_mode FAILED: ${e?.message || e}`);
             }
             // 1) write bytes
             const dir = (FileSystem as any).cacheDirectory;
             if (!dir) {
-              console.log(`[KODA_BYPASS] FAIL no_cache_dir`);
+              console.log(`[OLLENYA_BYPASS] FAIL no_cache_dir`);
               return;
             }
             const path = `${dir}koda_bypass_${Date.now()}.mp3`;
             const b64 = _bytesToBase64(bytesCopy);
-            console.log(`[KODA_BYPASS] b64_ready len=${b64.length} ms=${Date.now() - t0}`);
+            console.log(`[OLLENYA_BYPASS] b64_ready len=${b64.length} ms=${Date.now() - t0}`);
             await (FileSystem as any).writeAsStringAsync(path, b64, {
               encoding: (FileSystem as any).EncodingType?.Base64 ?? "base64",
             });
-            console.log(`[KODA_BYPASS] file_written ms=${Date.now() - t0} path_tail=${path.slice(-30)}`);
+            console.log(`[OLLENYA_BYPASS] file_written ms=${Date.now() - t0} path_tail=${path.slice(-30)}`);
             // 2) create isolated player
             const p: any = createAudioPlayer(path, { updateInterval: 250 });
             try { p.volume = 1.0; } catch {}
             try { p.setVolume?.(1.0); } catch {}
-            console.log(`[KODA_BYPASS] player_created ms=${Date.now() - t0}`);
+            console.log(`[OLLENYA_BYPASS] player_created ms=${Date.now() - t0}`);
             // 3) status listener
             let firedOnce = false;
             const sub = p.addListener("playbackStatusUpdate", (st: any) => {
@@ -2348,30 +2348,30 @@ export async function voiceStreamConverse(opts: {
               if (!firedOnce) {
                 firedOnce = true;
                 console.log(
-                  `[KODA_BYPASS] first_status loaded=${!!st.isLoaded} ` +
+                  `[OLLENYA_BYPASS] first_status loaded=${!!st.isLoaded} ` +
                     `playing=${!!st.playing} pos=${(st.currentTime || 0).toFixed(2)} ` +
                     `dur=${st.duration?.toFixed?.(2) ?? "?"} ms=${Date.now() - t0}`
                 );
               }
               if (st.didJustFinish) {
-                console.log(`[KODA_BYPASS] didJustFinish total_ms=${Date.now() - t0}`);
+                console.log(`[OLLENYA_BYPASS] didJustFinish total_ms=${Date.now() - t0}`);
               }
             });
             // 4) play
             try {
               p.play();
-              console.log(`[KODA_BYPASS] play_called ms=${Date.now() - t0}`);
+              console.log(`[OLLENYA_BYPASS] play_called ms=${Date.now() - t0}`);
             } catch (e: any) {
-              console.log(`[KODA_BYPASS] play_threw: ${e?.message || e}`);
+              console.log(`[OLLENYA_BYPASS] play_threw: ${e?.message || e}`);
             }
             // 5) cleanup dopo 12s (sufficiente per file da 22KB → ~3-4s di audio)
             setTimeout(() => {
               try { sub?.remove?.(); } catch {}
               try { p?.remove?.(); } catch {}
-              console.log(`[KODA_BYPASS] cleanup total_ms=${Date.now() - t0}`);
+              console.log(`[OLLENYA_BYPASS] cleanup total_ms=${Date.now() - t0}`);
             }, 12000);
           } catch (e: any) {
-            console.log(`[KODA_BYPASS] OUTER_FAIL: ${e?.message || e}`);
+            console.log(`[OLLENYA_BYPASS] OUTER_FAIL: ${e?.message || e}`);
           }
         })();
       }
@@ -2387,7 +2387,7 @@ export async function voiceStreamConverse(opts: {
         // questo onMeta dal path Deepgram/HTTP ma ha dimenticato di
         // propagare `close_session`. Effetto: la logica backend di
         // "chiusura automatica su saluti di commiato" (ci sentiamo
-        // dopo, buonanotte, arrivederci Koda, vado a letto, ...)
+        // dopo, buonanotte, arrivederci Ollenya, vado a letto, ...)
         // funzionava perfettamente MA il flag veniva scartato prima
         // di raggiungere index.tsx → l'app restava attiva in loop
         // registrazione anche dopo che l'utente aveva chiuso.
@@ -2409,7 +2409,7 @@ export async function voiceStreamConverse(opts: {
           pendingByIdx.delete(k);
           sentenceQueue.push(it);
           console.warn(
-            `[KODA_CUTOFF_DIAG] reorder_flush_on_done idx=${it.i} ` +
+            `[OLLENYA_CUTOFF_DIAG] reorder_flush_on_done idx=${it.i} ` +
               `bytes=${it.bytes.byteLength} nextExpected_was=${nextExpectedIdx}`
           );
         }
@@ -2427,7 +2427,7 @@ export async function voiceStreamConverse(opts: {
       // status torna idle, e HF_LOOP può ripartire per un nuovo tentativo
       // (comportamento simile a iPhone "non ti ho sentito" → retry).
       if (msg === "no_speech") {
-        console.log("[KODA_STREAM_CLIENT] no_speech from client — graceful close (no error)");
+        console.log("[OLLENYA_STREAM_CLIENT] no_speech from client — graceful close (no error)");
         pipelineDone = true;
         notify();
         return;
@@ -2477,7 +2477,7 @@ export async function voiceStreamConverse(opts: {
       try { await refreshWithTimeout; } catch {}
       const geoElapsed = Date.now() - geoT0;
       if (geoElapsed > 300) {
-        console.log(`[KODA_GEO] refresh SLOW: ${geoElapsed}ms (cap 3500ms; expected <100ms cache-hit)`);
+        console.log(`[OLLENYA_GEO] refresh SLOW: ${geoElapsed}ms (cap 3500ms; expected <100ms cache-hit)`);
       }
       const cached = geo.getCachedLocation?.();
       if (cached && cached.city) {
@@ -2485,13 +2485,13 @@ export async function voiceStreamConverse(opts: {
         locRegion = cached.region;
         locCountry = cached.country;
         console.log(
-          `[KODA_GEO] voiceStreamConverse → injecting ${locCity} (${locRegion || "?"}, ${locCountry || "?"})`
+          `[OLLENYA_GEO] voiceStreamConverse → injecting ${locCity} (${locRegion || "?"}, ${locCountry || "?"})`
         );
       } else {
-        console.log(`[KODA_GEO] voiceStreamConverse → no cached location (Koda non saprà la città)`);
+        console.log(`[OLLENYA_GEO] voiceStreamConverse → no cached location (Ollenya non saprà la città)`);
       }
     } catch (e: any) {
-      console.log(`[KODA_GEO] voiceStreamConverse cache read failed: ${e?.message || e}`);
+      console.log(`[OLLENYA_GEO] voiceStreamConverse cache read failed: ${e?.message || e}`);
     }
 
     // === FIX 2026-07-10 (Fabio "tap-stop ignorato durante WS opening") ===
@@ -2534,22 +2534,22 @@ export async function voiceStreamConverse(opts: {
   let isFirstSentence = true;
   let sentenceCounter = 0;
   const tStreamStart = Date.now();
-  if (KODA_DEBUG_VERBOSE) {
-    console.log(`[KODA_TTS_LOOP] enter player loop aborted=${ac.signal.aborted} pipelineDone=${pipelineDone}`);
+  if (OLLENYA_DEBUG_VERBOSE) {
+    console.log(`[OLLENYA_TTS_LOOP] enter player loop aborted=${ac.signal.aborted} pipelineDone=${pipelineDone}`);
   }
   try {
     while (!ac.signal.aborted) {
       if (sentenceQueue.length === 0) {
         if (pipelineDone || pipelineError) {
-          if (KODA_DEBUG_VERBOSE) {
-            console.log(`[KODA_TTS_LOOP] exit (queue empty, done=${pipelineDone} err=${pipelineError})`);
+          if (OLLENYA_DEBUG_VERBOSE) {
+            console.log(`[OLLENYA_TTS_LOOP] exit (queue empty, done=${pipelineDone} err=${pipelineError})`);
           }
           break;
         }
         await waitForToken();
-        if (KODA_DEBUG_VERBOSE) {
+        if (OLLENYA_DEBUG_VERBOSE) {
           console.log(
-            `[KODA_TTS_LOOP] waitForToken returned queue=${sentenceQueue.length} ` +
+            `[OLLENYA_TTS_LOOP] waitForToken returned queue=${sentenceQueue.length} ` +
               `aborted=${ac.signal.aborted} done=${pipelineDone} err=${pipelineError}`
           );
         }
@@ -2609,12 +2609,12 @@ export async function voiceStreamConverse(opts: {
         } catch {}
       };
       console.log(
-        `[KODA_TTS_PLAY] sent #${sIdx} arrived t+${tArrival - tStreamStart}ms ` +
+        `[OLLENYA_TTS_PLAY] sent #${sIdx} arrived t+${tArrival - tStreamStart}ms ` +
           `bytes=${item.bytes.byteLength} queue_after=${sentenceQueue.length} ` +
           `first=${isFirstSentence}`
       );
       console.log(
-        `[KODA_CUTOFF_DIAG] sent_play_start label=stream#${sIdx} ` +
+        `[OLLENYA_CUTOFF_DIAG] sent_play_start label=stream#${sIdx} ` +
           `tts_idx=${item.i} bytes=${item.bytes.byteLength} queue_after=${sentenceQueue.length}`
       );
       // === FIX 2026-06-26 v14 (vero root cause): wait inter-frase ===
@@ -2640,10 +2640,10 @@ export async function voiceStreamConverse(opts: {
       // frase precedente, che può bloccarsi 30s sullo stall watcher
       // se il player è stato rimosso esternamente da SpeechMod.stop()).
       // Senza questo check, la prossima frase partirebbe lo stesso →
-      // "voce fantasma di Koda" 30s dopo che l'utente credeva di aver
+      // "voce fantasma di Ollenya" 30s dopo che l'utente credeva di aver
       // silenziato tutto. Esci dal loop subito.
       if (ac.signal.aborted) {
-        console.log(`[KODA_TTS_PLAY] sent #${sIdx} aborted before write — exit loop`);
+        console.log(`[OLLENYA_TTS_PLAY] sent #${sIdx} aborted before write — exit loop`);
         break;
       }
       try {
@@ -2663,7 +2663,7 @@ export async function voiceStreamConverse(opts: {
           // Se l'utente ha tappato l'hard-stop mentre _writeMp3ToFile era
           // in corso, NON avviamo nuovi player. Esci dal loop.
           if (ac.signal.aborted) {
-            console.log(`[KODA_TTS_PLAY] sent #${sIdx} aborted before play — exit loop`);
+            console.log(`[OLLENYA_TTS_PLAY] sent #${sIdx} aborted before play — exit loop`);
             break;
           }
           if (!path) {
@@ -2672,12 +2672,12 @@ export async function voiceStreamConverse(opts: {
             // fallito. Invece di saltare la frase (che lascia l'UI appesa
             // in "speaking" per sempre), proviamo a riprodurre direttamente
             // da memoria via data URI. Più lento ma robusto al hang FS.
-            console.log(`[KODA_TTS_PLAY] sent #${sIdx} write_failed → fallback memory playback`);
+            console.log(`[OLLENYA_TTS_PLAY] sent #${sIdx} write_failed → fallback memory playback`);
             const tPlayStart = Date.now();
             await _playMp3FromMemoryFallback(item.bytes, fireStart, playOpts);
             const playMs = Date.now() - tPlayStart;
             console.log(
-              `[KODA_TTS_PLAY] sent #${sIdx} done(fallback) play_ms=${playMs} ` +
+              `[OLLENYA_TTS_PLAY] sent #${sIdx} done(fallback) play_ms=${playMs} ` +
                 `total=${Date.now() - tArrival}ms`
             );
           } else {
@@ -2685,7 +2685,7 @@ export async function voiceStreamConverse(opts: {
             await playElevenLabsNativeFromUrl(path, fireStart, playOpts);
             const playMs = Date.now() - tPlayStart;
             console.log(
-              `[KODA_TTS_PLAY] sent #${sIdx} done write_ms=${writeMs} ` +
+              `[OLLENYA_TTS_PLAY] sent #${sIdx} done write_ms=${writeMs} ` +
                 `play_ms=${playMs} total=${Date.now() - tArrival}ms`
             );
           }

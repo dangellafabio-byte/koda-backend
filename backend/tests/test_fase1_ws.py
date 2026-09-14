@@ -1,5 +1,5 @@
 """
-Fase 1 — Streaming WebSocket Pipeline tests for L'Amico Fraterno (Koda) backend.
+Fase 1 — Streaming WebSocket Pipeline tests for L'Amico Fraterno (Ollenya) backend.
 
 Covers:
   - WS happy path (/api/converse-ws)

@@ -166,7 +166,7 @@ export default function Orb({
   // === Speaking: rhythmic pulse ===
   // 2026-06 #3: SOSTITUITO il loop sinusoidale con un driver REATTIVO
   // che segue l'envelope RMS della voce TTS frase per frase. Risultato:
-  // l'orb pulsa in sincrono con sillabe, accenti, cadenze reali di Koda
+  // l'orb pulsa in sincrono con sillabe, accenti, cadenze reali di Ollenya
   // anziché con un'onda artificiale fissa. Fallback al loop classico se
   // il waveform non è disponibile (es. ElevenLabs spento → expo-speech).
   useEffect(() => {

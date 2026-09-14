@@ -1,8 +1,8 @@
-"""POC — Confronto V3 vs Flash v2.5 vs Turbo v2.5 sulla STESSA voce Koda.
+"""POC — Confronto V3 vs Flash v2.5 vs Turbo v2.5 sulla STESSA voce Ollenya.
 
 Scopo:
     Verificare se Flash v2.5 o Turbo v2.5, usati sulla stessa voce_id di
-    Koda produzione (Vento, ll9WG7PDTuyHwgC5MD6g), portano TTFA < 2s
+    Ollenya produzione (Vento, ll9WG7PDTuyHwgC5MD6g), portano TTFA < 2s
     mantenendo l'identità/naturalezza percepita rispetto a V3.
 
 Protocollo (Fabio 2026-08-14):
@@ -28,7 +28,7 @@ from elevenlabs.client import ElevenLabs
 from elevenlabs.types.voice_settings import VoiceSettings
 
 ELEVENLABS_API_KEY = os.environ['ELEVENLABS_API_KEY']
-VOICE_ID = "ll9WG7PDTuyHwgC5MD6g"  # Vento (maschile) — voce Koda produzione dell'utente
+VOICE_ID = "ll9WG7PDTuyHwgC5MD6g"  # Vento (maschile) — voce Ollenya produzione dell'utente
 OUTPUT_FORMAT = "mp3_44100_128"
 
 # === Voice settings — identici dove semanticamente equivalenti ===============
@@ -217,7 +217,7 @@ def main():
     # Save JSON
     out = {
         "voice_id": VOICE_ID,
-        "voice_id_note": "ll9WG7PDTuyHwgC5MD6g = Vento (maschile) — voce Koda produzione utente Fabio",
+        "voice_id_note": "ll9WG7PDTuyHwgC5MD6g = Vento (maschile) — voce Ollenya produzione utente Fabio",
         "output_format": OUTPUT_FORMAT,
         "voice_settings_used": {
             "stability": BASE_VOICE_SETTINGS.stability,

@@ -228,7 +228,7 @@ export default function BlindTestScreen() {
         <Text style={styles.title}>Blind Test Cielo</Text>
         <Text style={styles.subtitle}>
           Ci servono 10-15 minuti del tuo tempo per valutare due versioni
-          della voce di Koda. Non ti diremo quale è quale — vogliamo il tuo
+          della voce di Ollenya. Non ti diremo quale è quale — vogliamo il tuo
           giudizio onesto.
         </Text>
         <View style={styles.card}>
@@ -299,7 +299,7 @@ export default function BlindTestScreen() {
         <Text style={styles.title}>Grazie</Text>
         <Text style={[styles.subtitle, { textAlign: "center", marginTop: 16 }]}>
           Hai completato il blind test.{"\n"}Il tuo feedback ci aiuta a decidere
-          la voce definitiva di Koda.
+          la voce definitiva di Ollenya.
         </Text>
       </View>
     );
@@ -392,7 +392,7 @@ export default function BlindTestScreen() {
 
       {/* PREFERENZA */}
       <View style={styles.prefCard}>
-        <Text style={styles.prefLabel}>Quale preferisci per Koda?</Text>
+        <Text style={styles.prefLabel}>Quale preferisci per Ollenya?</Text>
         <View style={styles.prefRow}>
           {(["A", "B", "TIE"] as const).map((v) => (
             <TouchableOpacity

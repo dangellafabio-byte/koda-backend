@@ -1,5 +1,5 @@
 """
-Backend regression suite for Koda — Jan 2026 iteration 9.
+Backend regression suite for Ollenya — Jan 2026 iteration 9.
 
 Scope (per main agent request):
   1. POST /api/converse (text chat) — happy path + persistence
@@ -168,7 +168,7 @@ class TestConverseStandard:
         user_name = "Mario"
         dog_name = "Luna"
         text_payload = (
-            f"Ciao Koda, sono {user_name} e ho un cane di nome {dog_name}"
+            f"Ciao Ollenya, sono {user_name} e ho un cane di nome {dog_name}"
         )
 
         sess = _session(standard_uid)

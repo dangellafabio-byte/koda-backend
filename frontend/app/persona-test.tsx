@@ -3,7 +3,7 @@
  *
  * Elenca gli 11 turni di test conversazionale in fase AMICHEVOLE
  * (confidence_level=35) generati offline via /api/converse e TTS Cielo.
- * Ogni riga mostra prompt utente, risposta Koda, e un pulsante Play che
+ * Ogni riga mostra prompt utente, risposta Ollenya, e un pulsante Play che
  * riproduce l'MP3 (voce Cielo) generato per quella risposta.
  *
  * Scopo: permettere l'ascolto reale delle 11 risposte con la stessa voce
@@ -240,7 +240,7 @@ export default function PersonaTestScreen() {
               </View>
               <Text style={styles.promptLabel}>Utente</Text>
               <Text style={styles.promptText}>{row.prompt}</Text>
-              <Text style={styles.responseLabel}>Koda</Text>
+              <Text style={styles.responseLabel}>Ollenya</Text>
               <Text style={styles.responseText}>{row.response}</Text>
               <TouchableOpacity
                 style={[styles.playBtn, active && styles.playBtnActive]}

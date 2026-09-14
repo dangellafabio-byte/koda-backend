@@ -1,7 +1,7 @@
 /**
- * Geolocation helper per Koda — fix Fabio 2026-06-20
+ * Geolocation helper per Ollenya — fix Fabio 2026-06-20
  * ──────────────────────────────────────────────────────────────────────
- * Obiettivo: dare a Koda il contesto della città dell'utente all'avvio
+ * Obiettivo: dare a Ollenya il contesto della città dell'utente all'avvio
  * dell'app, in modo che possa rispondere a "che ore sono qui?", "che
  * tempo fa?", "che si fa stasera?" con la città giusta.
  *
@@ -40,7 +40,7 @@ export type GeolocationResult =
 // Conserva l'ultima posizione recuperata con successo da
 // fetchLocationOnce / refreshLocationSilent. Letto direttamente dal
 // flusso vocale (`voiceStreamConverse`) per iniettare la città nel
-// payload WebSocket di OGNI turno → Koda sa sempre dove sei senza
+// payload WebSocket di OGNI turno → Ollenya sa sempre dove sei senza
 // passare per database / multi-tenancy. Approccio "usa quello che hai".
 // =============================================================
 export type CachedLocation = {
@@ -70,7 +70,7 @@ function _setCachedLocation(r: { city: string; region?: string; country?: string
     fetchedAt: Date.now(),
   };
   console.log(
-    `[KODA_GEO] cache updated → ${r.city} (${r.region || "?"}, ${r.country || "?"})`
+    `[OLLENYA_GEO] cache updated → ${r.city} (${r.region || "?"}, ${r.country || "?"})`
   );
 }
 
@@ -130,13 +130,13 @@ export async function refreshLocationSilent(): Promise<boolean> {
       const cacheMs = Date.now() - cacheT0;
       if (pos) {
         console.log(
-          `[KODA_GEO] cache hit lastKnown (${cacheMs}ms, age=${
+          `[OLLENYA_GEO] cache hit lastKnown (${cacheMs}ms, age=${
             pos.timestamp ? Math.round((Date.now() - pos.timestamp) / 1000) : "?"
           }s)`
         );
       }
     } catch (e: any) {
-      console.log(`[KODA_GEO] lastKnown error (non-fatal): ${e?.message || e}`);
+      console.log(`[OLLENYA_GEO] lastKnown error (non-fatal): ${e?.message || e}`);
       pos = null;
     }
 
@@ -154,12 +154,12 @@ export async function refreshLocationSilent(): Promise<boolean> {
         ]);
         const liveMs = Date.now() - liveT0;
         if (pos) {
-          console.log(`[KODA_GEO] live fix ok (${liveMs}ms)`);
+          console.log(`[OLLENYA_GEO] live fix ok (${liveMs}ms)`);
         } else {
-          console.log(`[KODA_GEO] live fix timeout after ${liveMs}ms — no location this turn`);
+          console.log(`[OLLENYA_GEO] live fix timeout after ${liveMs}ms — no location this turn`);
         }
       } catch (e: any) {
-        console.log(`[KODA_GEO] live fix error: ${e?.message || e}`);
+        console.log(`[OLLENYA_GEO] live fix error: ${e?.message || e}`);
         pos = null;
       }
     }
@@ -191,7 +191,7 @@ export async function refreshLocationSilent(): Promise<boolean> {
     });
     return true;
   } catch (e: any) {
-    console.log(`[KODA_GEO] refreshLocationSilent error: ${e?.message || String(e)}`);
+    console.log(`[OLLENYA_GEO] refreshLocationSilent error: ${e?.message || String(e)}`);
     return false;
   }
 }
@@ -214,7 +214,7 @@ export async function checkLocationPermission(): Promise<{
       status: res.status,
     };
   } catch (e: any) {
-    console.log(`[KODA_GEO] checkPermission error: ${e?.message || String(e)}`);
+    console.log(`[OLLENYA_GEO] checkPermission error: ${e?.message || String(e)}`);
     return {
       granted: false,
       canAskAgain: true,
@@ -229,7 +229,7 @@ export async function checkLocationPermission(): Promise<{
  *
  * Ritorna un GeolocationResult che il chiamante può loggare per
  * diagnostica ma non serve gestirlo: il backend è autosufficiente
- * (se la chiamata non arriva, Koda usa solo i fact dichiarati a voce).
+ * (se la chiamata non arriva, Ollenya usa solo i fact dichiarati a voce).
  */
 export async function fetchLocationOnce(opts?: {
   forceRequest?: boolean; // true = chiede permessi anche se mai concessi prima
@@ -277,7 +277,7 @@ export async function fetchLocationOnce(opts?: {
       });
       if (pos) {
         console.log(
-          `[KODA_GEO] fetchLocationOnce cache hit lastKnown (age=${
+          `[OLLENYA_GEO] fetchLocationOnce cache hit lastKnown (age=${
             pos.timestamp
               ? Math.round((Date.now() - pos.timestamp) / 1000)
               : "?"
@@ -300,9 +300,9 @@ export async function fetchLocationOnce(opts?: {
           new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
         ]);
         if (pos) {
-          console.log(`[KODA_GEO] fetchLocationOnce live fix ok`);
+          console.log(`[OLLENYA_GEO] fetchLocationOnce live fix ok`);
         } else {
-          console.log(`[KODA_GEO] fetchLocationOnce live fix timeout 5s`);
+          console.log(`[OLLENYA_GEO] fetchLocationOnce live fix timeout 5s`);
         }
       } catch {
         pos = null;
@@ -348,7 +348,7 @@ export async function fetchLocationOnce(opts?: {
     // console.log) → bug invisibile. Adesso loggamo TUTTI gli step con
     // console.log così sono visibili nel diag e capiamo dove si rompe.
     console.log(
-      `[KODA_GEO] POST /api/profile/location-context starting → city=${city} region=${place.region || "?"}`
+      `[OLLENYA_GEO] POST /api/profile/location-context starting → city=${city} region=${place.region || "?"}`
     );
     let postOk = false;
     let postError: string | null = null;
@@ -363,14 +363,14 @@ export async function fetchLocationOnce(opts?: {
         });
         postOk = !!resp?.ok;
         console.log(
-          `[KODA_GEO] POST /api/profile/location-context OK (attempt ${attempt}) → ok=${resp?.ok} fact="${resp?.fact || "?"}"`
+          `[OLLENYA_GEO] POST /api/profile/location-context OK (attempt ${attempt}) → ok=${resp?.ok} fact="${resp?.fact || "?"}"`
         );
         postError = null;
         break; // successo → esci dal retry loop
       } catch (e: any) {
         postError = e?.message || String(e);
         console.log(
-          `[KODA_GEO] POST /api/profile/location-context FAILED (attempt ${attempt}/3) → ${postError}`
+          `[OLLENYA_GEO] POST /api/profile/location-context FAILED (attempt ${attempt}/3) → ${postError}`
         );
         if (attempt < 3) {
           await new Promise((r) => setTimeout(r, attempt * 1500));
@@ -379,7 +379,7 @@ export async function fetchLocationOnce(opts?: {
     }
 
     console.log(
-      `[KODA_GEO] location resolved: ${city} (${place.region || "?"}, ${place.country || "?"}) postOk=${postOk}`
+      `[OLLENYA_GEO] location resolved: ${city} (${place.region || "?"}, ${place.country || "?"}) postOk=${postOk}`
     );
     // === FIX 2026-06-29 — popola la cache in-memory letta dal flusso vocale ===
     _setCachedLocation({
@@ -396,7 +396,7 @@ export async function fetchLocationOnce(opts?: {
       ...(postError ? { postError } : {}),
     } as GeolocationResult & { postError?: string };
   } catch (e: any) {
-    console.log(`[KODA_GEO] fetchLocationOnce ERROR (outer): ${e?.message || String(e)}`);
+    console.log(`[OLLENYA_GEO] fetchLocationOnce ERROR (outer): ${e?.message || String(e)}`);
     return { ok: false, reason: "error", message: e?.message || String(e) };
   }
 }

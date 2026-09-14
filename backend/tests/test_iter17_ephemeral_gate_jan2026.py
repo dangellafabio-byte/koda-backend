@@ -142,7 +142,7 @@ class TestProfileFabioStable:
         assert r.status_code == 200, r.text[:300]
         d = r.json()
         assert d.get("name") == "Fabio"
-        assert d.get("koda_voice") == "aria"
+        assert d.get("ollenya_voice") == "aria"
         assert isinstance(d.get("total_messages"), int) and d["total_messages"] >= 634
         assert d.get("voice_locked") is True
         assert d.get("onboarded") is True
@@ -158,7 +158,7 @@ class TestProfileFabioStable:
             assert r.status_code == 200, f"call {i} status={r.status_code}"
             d = r.json()
             snapshots.append(
-                (d.get("name"), d.get("koda_voice"),
+                (d.get("name"), d.get("ollenya_voice"),
                  d.get("total_messages"), d.get("voice_locked"),
                  d.get("onboarded"))
             )
@@ -227,7 +227,7 @@ class TestEphemeralGateNoTimelineWrites:
     when the client starts the WS session with ephemeral=true, the entire
     pipeline (transcript, LLM reply, TTS) may execute BUT nothing must be
     written to db.taccuino_timeline (neither user nor AI entries) — otherwise
-    Koda leaks confidential content. Fix locations:
+    Ollenya leaks confidential content. Fix locations:
       - server.py:9057-9063  user entry insert gated by `if not ephemeral`
       - server.py:10012-10016 AI entry insert gated by `if not ephemeral`
     Also memory_summary/core_traits/home_city updates and _save_memory are

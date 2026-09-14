@@ -38,7 +38,7 @@ if not EMERGENT_LLM_KEY:
 
 # === Prompt di test (identico allo script originale) ================
 _SYS_BASE = (
-    "Sei Koda, un compagno AI empatico e attento. Rispondi sempre in "
+    "Sei Ollenya, un compagno AI empatico e attento. Rispondi sempre in "
     "italiano. Sii breve, caldo, presente. Non offrire consigli non "
     "richiesti. Rispecchia il sentimento dell'utente prima di rispondere. "
     "Se l'utente racconta un dolore, resta con lui senza correre a "
@@ -48,7 +48,7 @@ _SYS_BASE = (
     "Il tuo scopo è la presenza, non l'informazione. "
 )
 SYS_PROMPT = _SYS_BASE * 15
-USER_MSG = "Ciao Koda, oggi mi sento un po' stanco."
+USER_MSG = "Ciao Ollenya, oggi mi sento un po' stanco."
 
 # === Cattura HTTP body grezzo via monkey-patch httpx ==================
 _captured: Dict[str, Any] = {"body": None, "headers": None, "url": None}

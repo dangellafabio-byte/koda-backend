@@ -8,7 +8,7 @@
  * Soglie:
  *   ≥85% → banner giallo "Attenzione: hai usato l'85% dei minuti di questo mese"
  *   ≥95% → banner rosso  "Restano pochi minuti — considera un top-up +30 min"
- *   ≥100% → banner viola "Minuti finiti — Koda continua in chat scritta"
+ *   ≥100% → banner viola "Minuti finiti — Ollenya continua in chat scritta"
  *
  * Il banner:
  *   - È persistente per sessione (dismissible via tap X, ma riappare al reload)
@@ -121,7 +121,7 @@ export default function MinutesWarningBanner({
     body = `Solo ${Math.round(minutesLeft)} minuti di voce. Considera un top-up +30 min o continua in chat scritta.`;
   } else {
     title = "Minuti voce esauriti";
-    body = "Koda resta a tua disposizione in chat scritta, sempre illimitata. Ricarica con +30 min quando vuoi.";
+    body = "Ollenya resta a tua disposizione in chat scritta, sempre illimitata. Ricarica con +30 min quando vuoi.";
   }
 
   const handleDismiss = () => {

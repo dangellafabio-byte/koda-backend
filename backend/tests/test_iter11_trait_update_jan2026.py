@@ -384,7 +384,7 @@ class TestConverseTraitUpdateParity:
 
             r = await self._do_request(
                 srv.app, "POST", "/api/converse", uid,
-                json={"text": "Ciao Koda, come stai?"},
+                json={"text": "Ciao Ollenya, come stai?"},
             )
             assert r.status_code == 200, r.text
             body = r.json()
@@ -468,7 +468,7 @@ class TestConverseLiveRegression:
         try:
             r = sess.post(
                 f"{BASE_URL}/api/converse",
-                json={"text": "Ciao Koda, sono un nuovo utente, come stai oggi?"},
+                json={"text": "Ciao Ollenya, sono un nuovo utente, come stai oggi?"},
                 timeout=TIMEOUT_LLM,
             )
         except requests.exceptions.RequestException as e:

@@ -19,7 +19,7 @@
  *   - Movimento estremamente fluido, lento, continuo, no scatti, no pause,
  *     no quattro posizioni distinte.
  *   - Verde = stesso #34D399 già in uso oggi per hands-free attivo.
- *   - Concetto visivo: "Koda è ferma, l'automatismo scorre".
+ *   - Concetto visivo: "Ollenya è ferma, l'automatismo scorre".
  *
  * Implementazione:
  *   - Svg con tre layer:

@@ -5,7 +5,7 @@
  *
  * Contesto:
  * Il router condizionale in app/index.tsx decide se un utente free viene
- * rediretto a /lascia-andare o se un utente Premium resta su Koda conv.
+ * rediretto a /lascia-andare o se un utente Premium resta su Ollenya conv.
  * Il ref locale al componente <Taccuino> non basta perché non sopravvive
  * al re-mount della Home page (causato da TrialWatcher polling, AuthProvider
  * refresh, ripristino da background). Serve una memoria a livello di
@@ -61,7 +61,7 @@ export function getLastDecidedProfileId(): string | null {
 // === PUNTO 2 (Fabio 2026-08-20) — SKIP SPLASH ON REMOUNT ===================
 // Il `showSplash` in app/index.tsx parte di default a `true` → al re-mount
 // della Home (ad es. dopo che il free user esce da Lascia Andare via X)
-// il KodaSplash da 10s riparte, sembrando "l'app che boota di nuovo".
+// il OllenyaSplash da 10s riparte, sembrando "l'app che boota di nuovo".
 // Con questo flag, dopo il primo splash della sessione, i mount successivi
 // della Home partono già con `showSplash=false` → transizione fluida.
 //
@@ -80,7 +80,7 @@ export function getLastDecidedProfileId(): string | null {
 const SPLASH_TTL_MS = 5 * 60 * 1000; // 5 minuti
 let _sessionSplashShownAt = 0;
 
-/** Restituisce true se il KodaSplash è già stato mostrato in questa
+/** Restituisce true se il OllenyaSplash è già stato mostrato in questa
  *  sessione app di RECENTE (< SPLASH_TTL_MS). La Home lo legge al mount
  *  per decidere lo stato iniziale di `showSplash`. */
 export function getSessionHasShownSplash(): boolean {
@@ -90,7 +90,7 @@ export function getSessionHasShownSplash(): boolean {
 
 /** Marca il splash come "già mostrato" ORA. Chiamato quando
  *  `setShowSplash(false)` viene invocato (naturalmente al termine del
- *  KodaSplash da 10s, o via skip-splash-after-intro). */
+ *  OllenyaSplash da 10s, o via skip-splash-after-intro). */
 export function markSessionSplashShown(): void {
   _sessionSplashShownAt = Date.now();
 }
@@ -98,7 +98,7 @@ export function markSessionSplashShown(): void {
 /** Azzera lo stato del router. Chiamato da lib/auth.tsx:signOut() così
  *  la sessione successiva ridecide fresh, senza residui della precedente.
  *  Azzera anche il flag splash: un nuovo utente merita di rivedere
- *  l'ingresso identitario dell'app (KodaSplash) al primo boot. */
+ *  l'ingresso identitario dell'app (OllenyaSplash) al primo boot. */
 export function resetRouterGlobalState(): void {
   _lastDecidedKey = null;
   _sessionSplashShownAt = 0;
@@ -119,7 +119,7 @@ export function resetLastDecidedKey(): void {
 // Bug fatale iOS: mid-conversazione, un poll di /api/profile poteva
 // restituire tier=free (transient DB failure / cache poison) → il router
 // KODA_ROUTER faceva `router.replace('/lascia-andare')` sovrascrivendo
-// la UI attiva della voce durante il turno di Koda. L'utente vedeva
+// la UI attiva della voce durante il turno di Ollenya. L'utente vedeva
 // due schermate overlappate e il flusso vocale si interrompeva.
 //
 // Difesa: mentre `convActive === true` (utente in sessione hands-free

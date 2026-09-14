@@ -1,17 +1,17 @@
 /**
- * perfDiag.ts — Utility di profiling performance per Koda.
+ * perfDiag.ts — Utility di profiling performance per Ollenya.
  *
  * Attivazione: EXPO_PUBLIC_KODA_PERF_DIAG=1 nel .env
  * (o via build flag). Se disattivato, tutti gli hook sono no-op → zero
  * overhead in produzione.
  *
  * Metriche esposte:
- *   [KODA_PERF_FPS]              framerate reale ogni 2s
- *   [KODA_PERF_ROOT]             render count e tempi del root MainRoot
- *   [KODA_PERF_TIMELINE_BUBBLE]  render count delle Bubble (timeline chat)
- *   [KODA_PERF_TIMELINE_LIST]    render count della FlashList
- *   [KODA_PERF_SETTINGS]         render count del SettingsModal
- *   [KODA_PERF_ANIM_ECLIPSE]     stato animazioni EclipseOrb
+ *   [OLLENYA_PERF_FPS]              framerate reale ogni 2s
+ *   [OLLENYA_PERF_ROOT]             render count e tempi del root MainRoot
+ *   [OLLENYA_PERF_TIMELINE_BUBBLE]  render count delle Bubble (timeline chat)
+ *   [OLLENYA_PERF_TIMELINE_LIST]    render count della FlashList
+ *   [OLLENYA_PERF_SETTINGS]         render count del SettingsModal
+ *   [OLLENYA_PERF_ANIM_ECLIPSE]     stato animazioni EclipseOrb
  *
  * DISCLAIMER: v64.14 (2026-07-31, Fabio). Uso diagnostico temporaneo per
  * isolare la lentezza scroll su Android Xiaomi. Da rimuovere dopo aver
@@ -94,7 +94,7 @@ function fpsTick() {
     const fps = (fpsFrames / elapsed) * 1000;
     const dropped = Math.max(0, Math.round(((60 - fps) / 60) * (fpsFrames)));
     console.log(
-      `[KODA_PERF_FPS] fps=${fps.toFixed(1)} frames=${fpsFrames} dropped≈${dropped} window=${(elapsed / 1000).toFixed(1)}s`,
+      `[OLLENYA_PERF_FPS] fps=${fps.toFixed(1)} frames=${fpsFrames} dropped≈${dropped} window=${(elapsed / 1000).toFixed(1)}s`,
     );
     fpsFrames = 0;
     fpsWindowStart = now;
@@ -108,7 +108,7 @@ export function startFpsMonitor(): void {
   fpsWindowStart = performance.now();
   fpsFrames = 0;
   fpsRafHandle = requestAnimationFrame(fpsTick);
-  console.log("[KODA_PERF_FPS] monitor started (target 60fps)");
+  console.log("[OLLENYA_PERF_FPS] monitor started (target 60fps)");
 }
 
 export function stopFpsMonitor(): void {

@@ -7,7 +7,7 @@ import { api, API_BASE } from "./api";
 import { setAuthTokenMem } from "./authToken";
 import { resetRouterGlobalState } from "./routerGlobalState";
 
-const TOKEN_KEY = "koda_session_token";
+const TOKEN_KEY = "ollenya_session_token";
 const EMERGENT_AUTH_URL = "https://auth.emergentagent.com/";
 
 // === FIX 2026-08-21 (Fabio, dev-login broken) ===
@@ -88,11 +88,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const msg = String(e?.message || "");
       const is401 = msg.includes("HTTP 401") || msg.includes("401:");
       if (is401) {
-        console.log("[KODA_AUTH] authMe → 401, wiping token");
+        console.log("[OLLENYA_AUTH] authMe → 401, wiping token");
         await persistToken(null);
         setUser(null);
       } else {
-        console.log(`[KODA_AUTH] authMe transient error (token preserved): ${msg}`);
+        console.log(`[OLLENYA_AUTH] authMe transient error (token preserved): ${msg}`);
         // NON wipare il token. Non settiamo user finché non riusciamo a
         // validarlo, ma al prossimo refresh (o boot) proveremo di nuovo.
         setUser(null);
@@ -137,7 +137,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const authUrl = `${EMERGENT_AUTH_URL}?redirect=${encodeURIComponent(redirect)}`;
 
     // === FIX 2026-08-02 v65 — WARM-UP BACKEND (Fabio, dopo bug Ivan/Martina) ===
-    // Sveglia il backend Koda PRIMA di aprire il WebBrowser Google, così
+    // Sveglia il backend Ollenya PRIMA di aprire il WebBrowser Google, così
     // quando l'utente completa il login su Google e siamo pronti a chiamare
     // /api/auth/google/session, il backend è già caldo (nessun cold start
     // che manda in timeout la finestra critica dopo il redirect).
@@ -148,8 +148,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const warmupCtl = new AbortController();
       const warmupTimer = setTimeout(() => warmupCtl.abort(), 3000);
       fetch(`${API_BASE}/health`, { signal: warmupCtl.signal })
-        .then(() => console.log("[KODA_AUTH_G] warmup OK"))
-        .catch((e) => console.log(`[KODA_AUTH_G] warmup skip: ${e?.message || e}`))
+        .then(() => console.log("[OLLENYA_AUTH_G] warmup OK"))
+        .catch((e) => console.log(`[OLLENYA_AUTH_G] warmup skip: ${e?.message || e}`))
         .finally(() => clearTimeout(warmupTimer));
     } catch {}
 
@@ -161,27 +161,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // upstream Emergent. L'utente non vede nulla: se il retry ha successo,
     // procede come se il primo tentativo fosse riuscito.
     const _attemptGoogleFlow = async (attemptIdx: number): Promise<void> => {
-      console.log(`[KODA_AUTH_G] start attempt=${attemptIdx + 1} redirect=${redirect}`);
+      console.log(`[OLLENYA_AUTH_G] start attempt=${attemptIdx + 1} redirect=${redirect}`);
       const result = await WebBrowser.openAuthSessionAsync(authUrl, redirect);
-      console.log(`[KODA_AUTH_G] attempt=${attemptIdx + 1} result.type=${result.type} url=${(result as any).url || "-"}`);
+      console.log(`[OLLENYA_AUTH_G] attempt=${attemptIdx + 1} result.type=${result.type} url=${(result as any).url || "-"}`);
 
       if (result.type === "success" && result.url) {
         const frag = result.url.split("#")[1] || result.url.split("?")[1] || "";
         const sid = new URLSearchParams(frag).get("session_id");
-        console.log(`[KODA_AUTH_G] sid=${sid ? sid.slice(0, 8) + "..." : "null"}`);
+        console.log(`[OLLENYA_AUTH_G] sid=${sid ? sid.slice(0, 8) + "..." : "null"}`);
         if (!sid) {
           throw new Error("google no session_id in redirect url");
         }
         try {
           const res = await api.authGoogleSession(sid);
-          console.log(`[KODA_AUTH_G] backend OK email=${res.email}`);
+          console.log(`[OLLENYA_AUTH_G] backend OK email=${res.email}`);
           await persistToken(res.session_token);
           await refresh();
           return;
         } catch (backendErr: any) {
           // Errore backend (502, timeout, ecc.) — retry candidate se al primo giro
           if (attemptIdx === 0) {
-            console.log(`[KODA_AUTH_G] backend error, will retry silently: ${backendErr?.message || backendErr}`);
+            console.log(`[OLLENYA_AUTH_G] backend error, will retry silently: ${backendErr?.message || backendErr}`);
             await new Promise((r) => setTimeout(r, 2000));
             return _attemptGoogleFlow(1);
           }
@@ -191,7 +191,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       // type=cancel/dismiss/locked → retry candidate se al primo giro
       if ((result.type === "cancel" || result.type === "dismiss") && attemptIdx === 0) {
-        console.log(`[KODA_AUTH_G] type=${result.type} at first attempt — retry silently after 2s`);
+        console.log(`[OLLENYA_AUTH_G] type=${result.type} at first attempt — retry silently after 2s`);
         await new Promise((r) => setTimeout(r, 2000));
         return _attemptGoogleFlow(1);
       }
@@ -202,7 +202,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await _attemptGoogleFlow(0);
     } catch (e: any) {
-      console.log(`[KODA_AUTH_G] ERROR (all attempts exhausted): ${e?.message || e}`);
+      console.log(`[OLLENYA_AUTH_G] ERROR (all attempts exhausted): ${e?.message || e}`);
       throw e;
     }
   }, [refresh]);
@@ -213,7 +213,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // === DIAG 2026-07-16 (utente: "sono entrato una volta, ora non più") ===
     // Log dettagliato di ogni step Apple.
     try {
-      console.log(`[KODA_AUTH_A] start`);
+      console.log(`[OLLENYA_AUTH_A] start`);
       const cred = await AppleAuthentication.signInAsync({
         requestedScopes: [
           AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
@@ -221,7 +221,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         ],
       });
       const hasToken = !!cred.identityToken;
-      console.log(`[KODA_AUTH_A] cred received hasToken=${hasToken} email=${cred.email ? "yes" : "no"} name=${cred.fullName ? "yes" : "no"}`);
+      console.log(`[OLLENYA_AUTH_A] cred received hasToken=${hasToken} email=${cred.email ? "yes" : "no"} name=${cred.fullName ? "yes" : "no"}`);
       if (!hasToken) {
         throw new Error("apple identityToken missing");
       }
@@ -229,11 +229,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         ? `${cred.fullName.givenName || ""} ${cred.fullName.familyName || ""}`.trim()
         : undefined;
       const res = await api.authApple(cred.identityToken || "", cred.email || undefined, fullName);
-      console.log(`[KODA_AUTH_A] backend OK email=${res.email}`);
+      console.log(`[OLLENYA_AUTH_A] backend OK email=${res.email}`);
       await persistToken(res.session_token);
       await refresh();
     } catch (e: any) {
-      console.log(`[KODA_AUTH_A] ERROR: ${e?.code || ""} ${e?.message || e}`);
+      console.log(`[OLLENYA_AUTH_A] ERROR: ${e?.code || ""} ${e?.message || e}`);
       throw e;
     }
   }, [refresh]);

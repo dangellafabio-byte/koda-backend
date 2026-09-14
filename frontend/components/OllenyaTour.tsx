@@ -1,5 +1,5 @@
 /**
- * KodaTour — guided tour in stile premium (giugno 2026 v6).
+ * OllenyaTour — guided tour in stile premium (giugno 2026 v6).
  *
  * Filosofia design:
  *  - L'interfaccia resta VISIBILE (niente più overlay nero al 55%).
@@ -55,7 +55,7 @@ interface Props {
 function extractTitleAndDesc(step: TourStep): { title: string; desc: string } {
   // === FIX 2026-07 (utente) — supporto label VUOTA (banner nascosto) ===
   // Se lo step passa `label: ""` esplicitamente, NON estrarre un titolo
-  // dallo speech e NON ricadere sul default "Koda". Restituisci titolo
+  // dallo speech e NON ricadere sul default "Ollenya". Restituisci titolo
   // vuoto: il render della card salta completamente il banner indicatore
   // in cima, come richiesto per "Eccomi" e "Ecco, è tutto".
   const hasExplicitEmptyLabel =
@@ -75,14 +75,14 @@ function extractTitleAndDesc(step: TourStep): { title: string; desc: string } {
   if (m) {
     return { title: m[1].replace(/[.!?…]+$/, "").trim(), desc: m[2].trim() };
   }
-  return { title: step.label || "Koda", desc: s };
+  return { title: step.label || "Ollenya", desc: s };
 }
 
 const CARD_W = 280;
 const CARD_VPAD = 16;
 const SPOTLIGHT_INSET = -10; // glow estende oltre il bounding box
 
-export default function KodaTour({
+export default function OllenyaTour({
   steps,
   onComplete,
   onPageChange,
@@ -176,7 +176,7 @@ export default function KodaTour({
           voiceId: voiceId || undefined,
         });
       } catch (e) {
-        console.warn("[KodaTour] speak error:", e);
+        console.warn("[OllenyaTour] speak error:", e);
       }
     })();
 

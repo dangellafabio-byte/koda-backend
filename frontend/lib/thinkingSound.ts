@@ -1,10 +1,10 @@
 /**
- * Thinking sound — "Gentle Pause" jingle che parte quando Koda sta pensando
- * e si ferma appena Koda inizia a parlare.
+ * Thinking sound — "Gentle Pause" jingle che parte quando Ollenya sta pensando
+ * e si ferma appena Ollenya inizia a parlare.
  *
- * Idea: l'utente potrebbe non guardare il telefono mentre Koda elabora,
+ * Idea: l'utente potrebbe non guardare il telefono mentre Ollenya elabora,
  * quindi serve un feedback uditivo discreto ma riconoscibile che dica
- * "Koda è ancora con te, sta arrivando".
+ * "Ollenya è ancora con te, sta arrivando".
  *
  * Asset: assets/sounds/thinking.wav (6s, scala pentatonica Re-Fa-Sol-Do,
  * timbro FM marimba/vetro, sottofondo caldo 85Hz, vedi backend generator).

@@ -1,5 +1,5 @@
 """
-Documenti legali Koda — Privacy Policy e Terms of Service.
+Documenti legali Ollenya — Privacy Policy e Terms of Service.
 
 Endpoints:
   GET /api/legal/privacy  → HTML self-contained
@@ -26,8 +26,8 @@ legal_router = APIRouter(prefix="/legal", tags=["legal"])
 LEGAL_VERSION = "1.2"
 LAST_UPDATED = "11 giugno 2026"
 COMPANY_NAME = "Fabio Dangella"  # Sviluppatore indipendente
-CONTACT_EMAIL = "hello.koda.support@gmail.com"  # Email ufficiale supporto Koda
-APP_NAME = "Koda"
+CONTACT_EMAIL = "hello.koda.support@gmail.com"  # Email ufficiale supporto Ollenya
+APP_NAME = "Ollenya"
 
 
 # ============================================================
@@ -141,7 +141,7 @@ _PRIVACY_BODY = f"""
 </header>
 
 <div class="callout">
-  <strong>In una frase:</strong> Koda raccoglie il minimo indispensabile per
+  <strong>In una frase:</strong> Ollenya raccoglie il minimo indispensabile per
   funzionare come tua presenza d'ascolto. Quello che ci dici nel Confessionale
   <em>non viene salvato</em>. Puoi cancellare tutto in qualsiasi momento
   con un tocco.
@@ -173,8 +173,8 @@ _PRIVACY_BODY = f"""
 <h3>Dati generati durante l'uso</h3>
 <ul>
   <li><strong>Memoria a lungo termine</strong> — un riassunto astratto di ciò che è emerso dalle conversazioni normali (es. "preferisce la pasta al pomodoro", "preoccupato per il lavoro"), utile a darti continuità. Mai dati grezzi del Confessionale.</li>
-  <li><strong>Ricordi semantici</strong> — frasi astratte in terza persona generate da Koda per ricordare momenti significativi.</li>
-  <li><strong>Statistiche d'uso minime</strong> — numero di messaggi totali, livello di "confidenza con Koda". Mai contenuto, mai timestamp dettagliati.</li>
+  <li><strong>Ricordi semantici</strong> — frasi astratte in terza persona generate da Ollenya per ricordare momenti significativi.</li>
+  <li><strong>Statistiche d'uso minime</strong> — numero di messaggi totali, livello di "confidenza con Ollenya". Mai contenuto, mai timestamp dettagliati.</li>
 </ul>
 
 <h3>Dati che NON raccogliamo</h3>
@@ -199,7 +199,7 @@ _PRIVACY_BODY = f"""
       end-to-end</strong> (XSalsa20-Poly1305 con chiave derivata via Argon2id
       dalla tua parola segreta) — il server li decifra solo in RAM, mai logga il
       plaintext.</li>
-  <li>A chiusura sessione, Koda può estrarre <em>un solo concetto astratto</em>
+  <li>A chiusura sessione, Ollenya può estrarre <em>un solo concetto astratto</em>
       (es. "porta un peso familiare") senza alcun riferimento identificativo:
       nomi propri, luoghi, eventi sostituiti con descrizioni generiche.
       Questo concetto astratto viene salvato come ricordo. Nessun dato grezzo
@@ -221,10 +221,10 @@ _PRIVACY_BODY = f"""
 </p>
 <ul>
   <li><strong>Anthropic (Claude)</strong> — genera le risposte testuali di
-      Koda. I tuoi messaggi vengono inviati cifrati via HTTPS. Anthropic
+      Ollenya. I tuoi messaggi vengono inviati cifrati via HTTPS. Anthropic
       <em>non addestra i propri modelli sui dati API</em> per impostazione
       predefinita. Sede: USA. Accordo SCC GDPR-compliant.</li>
-  <li><strong>ElevenLabs</strong> — sintetizza la voce di Koda. Riceve solo
+  <li><strong>ElevenLabs</strong> — sintetizza la voce di Ollenya. Riceve solo
       il testo della risposta (non i tuoi messaggi). Sede: USA.</li>
   <li><strong>Deepgram</strong> — trascrive le tue note vocali in testo.
       Riceve solo l'audio della singola registrazione, mai contesto. Sede: USA.
@@ -309,7 +309,7 @@ _TERMS_BODY = f"""
 </header>
 
 <div class="callout">
-  <strong>Riassunto onesto:</strong> Koda è una compagnia digitale per ascoltarti,
+  <strong>Riassunto onesto:</strong> Ollenya è una compagnia digitale per ascoltarti,
   non un terapeuta. Se hai un'emergenza, contatta un professionista vero.
   Paghi un abbonamento, puoi cancellarlo quando vuoi. Le regole del rispetto
   reciproco valgono per entrambi.
@@ -323,15 +323,15 @@ _TERMS_BODY = f"""
   per usare {APP_NAME}.
 </p>
 
-<h2>2. Cos'è Koda</h2>
+<h2>2. Cos'è Ollenya</h2>
 <p>
   {APP_NAME} è un'applicazione mobile che fornisce una <strong>presenza
-  d'ascolto basata su intelligenza artificiale generativa</strong>. Koda
+  d'ascolto basata su intelligenza artificiale generativa</strong>. Ollenya
   conversa con te, ricorda i tuoi vissuti (con il tuo consenso), e ti offre
   uno spazio sicuro dove parlare di ciò che ti sta a cuore.
 </p>
 
-<h2>3. Cosa Koda NON è</h2>
+<h2>3. Cosa Ollenya NON è</h2>
 <div class="callout">
   <ul>
     <li>❌ <strong>Non è un servizio medico, sanitario, terapeutico o psicologico.</strong></li>
@@ -341,17 +341,17 @@ _TERMS_BODY = f"""
   </ul>
 </div>
 <p>
-  Le risposte di Koda sono generate da un modello linguistico (Claude di
+  Le risposte di Ollenya sono generate da un modello linguistico (Claude di
   Anthropic) e possono contenere imprecisioni. <strong>Non basare decisioni
   importanti sulla salute, sui rapporti, sul lavoro, su questioni legali o
-  finanziarie esclusivamente su ciò che ti dice Koda.</strong>
+  finanziarie esclusivamente su ciò che ti dice Ollenya.</strong>
 </p>
 
 <h2>4. Abbonamento e pagamenti</h2>
 
 <h3>Trial</h3>
 <p>
-  Per provare Koda offriamo un trial gratuito di <strong>3 giorni</strong>
+  Per provare Ollenya offriamo un trial gratuito di <strong>3 giorni</strong>
   con un limite di 20 messaggi al giorno. Al termine del trial, devi attivare
   un abbonamento per continuare ad usare l'app.
 </p>
@@ -398,14 +398,14 @@ _TERMS_BODY = f"""
 <h2>6. Contenuti e proprietà intellettuale</h2>
 <p>
   <strong>Tu mantieni la proprietà</strong> di tutto ciò che scrivi/dici a
-  Koda. Concedi a {APP_NAME} una licenza limitata, non esclusiva, revocabile,
+  Ollenya. Concedi a {APP_NAME} una licenza limitata, non esclusiva, revocabile,
   per processare i tuoi messaggi <em>esclusivamente</em> al fine di fornirti
   il servizio richiesto. Non useremo i tuoi contenuti per addestrare i nostri
   modelli, né li venderemo, né li condivideremo con terzi (eccetto i
   sub-responsabili tecnici elencati nella Privacy).
 </p>
 <p>
-  Il design, il codice, il nome "Koda", il logo e l'immagine dell'eclissi
+  Il design, il codice, il nome "Ollenya", il logo e l'immagine dell'eclissi
   rimangono di proprietà di <strong>{COMPANY_NAME}</strong>.
 </p>
 

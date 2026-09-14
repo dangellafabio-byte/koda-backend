@@ -1,8 +1,8 @@
 /**
- * KodaSetupV2 — Guscio del nuovo onboarding SETUP → INCONTRO.
+ * OllenyaSetupV2 — Guscio del nuovo onboarding SETUP → INCONTRO.
  *
  * SCOPO: costruire e collegare il nuovo flusso Setup, SENZA modificare
- * l'Intro V2 già validata (KodaIntroConversational.tsx). Questo componente
+ * l'Intro V2 già validata (OllenyaIntroConversational.tsx). Questo componente
  * termina con una dissolvenza verso `/intro-v2`, che eredita tutto il
  * comportamento esistente (turno 0/1 "Ciao", copione, voce, orb, timing).
  *
@@ -71,7 +71,7 @@ import { useAuth } from "../lib/auth";
 // file per essere sostituibili senza toccare il resto della logica.
 const DISCLAIMER_TITLE = "Prima di iniziare";
 const DISCLAIMER_BODY_1 =
-  "Koda è una presenza con cui puoi parlare, non un terapeuta e non sostituisce un professionista. Puoi usarla per parlare, sfogarti, mettere ordine nei pensieri o semplicemente stare un po' in compagnia.";
+  "Ollenya è una presenza con cui puoi parlare, non un terapeuta e non sostituisce un professionista. Puoi usarla per parlare, sfogarti, mettere ordine nei pensieri o semplicemente stare un po' in compagnia.";
 const DISCLAIMER_BODY_2 =
   "Se stai vivendo un'emergenza o hai bisogno di assistenza professionale, rivolgiti ai servizi appropriati.";
 const DISCLAIMER_CTA = "Continua";
@@ -87,7 +87,7 @@ const MIC_PRE_CTA = "";   // rimosso — mic auto-requested al mount dello step
 
 const MIC_DENIED_TITLE = "Va bene lo stesso";
 const MIC_DENIED_BODY =
-  "Senza microfono non puoi parlare a voce con Koda, ma puoi comunque scrivergli. La chat scritta è sempre disponibile.";
+  "Senza microfono non puoi parlare a voce con Ollenya, ma puoi comunque scrivergli. La chat scritta è sempre disponibile.";
 const MIC_DENIED_RETRY_CTA = "Riprova";
 const MIC_DENIED_SETTINGS_CTA = "Apri Impostazioni";
 const MIC_DENIED_TEXT_ONLY_CTA = "Continua solo con la chat scritta";
@@ -112,7 +112,7 @@ type Step = "disclaimer" | "email" | "mic_pre" | "mic_denied" | "fading";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export default function KodaSetupV2() {
+export default function OllenyaSetupV2() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const auth = useAuth() as { user?: { email?: string } | null };
@@ -219,7 +219,7 @@ export default function KodaSetupV2() {
     track(EV_MIC_DENIED_TEXT_ONLY, {});
     try {
       // 1. Marca profilo come completato (nessun voice, gender default 'n')
-      //    NB: user_gender resta null — Koda non lo chiede più a monte se
+      //    NB: user_gender resta null — Ollenya non lo chiede più a monte se
       //    l'utente sceglie chat-only. Ai_gender=f (Cielo) resta default
       //    per coerenza col resto del prodotto.
       await api.updateProfile({
@@ -235,11 +235,11 @@ export default function KodaSetupV2() {
     }
     try {
       // 2. Flag "intro completed" per bypass splash + evitare re-onboarding
-      await SecureStore.setItemAsync("koda_intro_completed_at", String(Date.now()));
+      await SecureStore.setItemAsync("ollenya_intro_completed_at", String(Date.now()));
       // 3. Flag "text-only mode" — la chat può leggerlo per capire se
       //    mostrare o meno il pulsante voce (Home / LA). Non usato subito,
       //    ma preparato per una futura scelta UX.
-      await SecureStore.setItemAsync("koda_text_only_mode", "1");
+      await SecureStore.setItemAsync("ollenya_text_only_mode", "1");
     } catch (e) {
       console.warn("[SetupV2] text-only secure-store failed:", String(e).slice(0, 120));
     }

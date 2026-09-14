@@ -44,7 +44,7 @@ let _nativeReady = false;
 //     officially mark "speech started" — eliminates single pops/short TV bursts.
 //   - METER_POLL_MS: how often we sample the microphone meter
 //
-// === FIX 2026-05-22 (root cause "Koda non sente") ===
+// === FIX 2026-05-22 (root cause "Ollenya non sente") ===
 // Prima la soglia era a -22 dBFS: TROPPO ALTA. Una persona che parla a
 // distanza naturale dal telefono produce in media -28 / -32 dBFS. A -22
 // l'audio veniva catturato ma classificato come "silenzio" → nessuna
@@ -63,7 +63,7 @@ let _nativeReady = false;
 //   - Motore/AC/musica bassa: -30 / -25 dBFS → SOTTO -28 (la maggior
 //     parte del tempo) → silenzio rilevato correttamente.
 // Hysteresis di 8 dB tra silence e speech (era già nel codice).
-// === RAFFINAMENTO 2026-06 (caso "Koda mi taglia mentre parlo in macchina") ===
+// === RAFFINAMENTO 2026-06 (caso "Ollenya mi taglia mentre parlo in macchina") ===
 // L'utente in auto si lamentava di TAGLI PREMATURI: dopo qualche
 // secondo, durante una pausa naturale (quando rifletti, fai "ehm…",
 // prendi fiato), il VAD dichiarava silenzio e tagliava la frase.
@@ -504,7 +504,7 @@ export async function startRecording(): Promise<Recorder> {
     const fmt =
       (initStatus as any).extension ?? (preset as any)?.extension ?? "?";
     console.log(
-      `[KODA_REC_CTX] preset=${preset_kind} sample_rate=${sr} channels=${ch} ` +
+      `[OLLENYA_REC_CTX] preset=${preset_kind} sample_rate=${sr} channels=${ch} ` +
         `bit_rate=${bd} format=${fmt} ` +
         `ios_voice_processing=expected_voiceChat ` +
         `expected_data_source=Voice ` +
@@ -512,7 +512,7 @@ export async function startRecording(): Promise<Recorder> {
     );
   } catch (e) {
     try {
-      console.log(`[KODA_REC_CTX] log_failed: ${String(e).slice(0, 120)}`);
+      console.log(`[OLLENYA_REC_CTX] log_failed: ${String(e).slice(0, 120)}`);
     } catch {}
   }
 
@@ -591,7 +591,7 @@ export async function startRecording(): Promise<Recorder> {
         // Soglie effettive: durante CALIB sono ancora i default statici,
         // dopo CALIB possono essere aggiornate (modalità adattiva).
         console.log(
-          `[KODA_VAD_TRACE] t=${tRel}ms db=${db.toFixed(1)} ` +
+          `[OLLENYA_VAD_TRACE] t=${tRel}ms db=${db.toFixed(1)} ` +
             `phase=${phase} ` +
             `sp_th=${speechThresholdEff.toFixed(1)} ` +
             `su_th=${sustainedThresholdEff.toFixed(1)} ` +
@@ -604,7 +604,7 @@ export async function startRecording(): Promise<Recorder> {
       if (now - startedAt > HARD_CAP_MS) {
         vadStopped = true;
         console.log(
-          `[KODA_VAD_CAP] HARD_CAP raggiunto a t=${now - startedAt}ms ` +
+          `[OLLENYA_VAD_CAP] HARD_CAP raggiunto a t=${now - startedAt}ms ` +
             `(cap=${HARD_CAP_MS}ms) — chiusura forzata. ` +
             `phase=${speechStartFired ? "SPEECH" : "PRESPEECH"} ` +
             `calib=${calibrationDone ? "done" : "in-progress"}`
@@ -645,18 +645,18 @@ export async function startRecording(): Promise<Recorder> {
             // Troppo rumoroso: probabilmente utente STA GIÀ parlando.
             // Non ci fidiamo della misura → usa statiche (baseline noto).
             adaptiveMode = false;
-            console.log(`[KODA_VAD_CALIB] floor=${noiseFloor.toFixed(1)}dB n=${calibrationSamples.length} mode=static-safety-abort speech=${speechThresholdEff} silence=${silenceThresholdEff} sustained=${sustainedThresholdEff}`);
+            console.log(`[OLLENYA_VAD_CALIB] floor=${noiseFloor.toFixed(1)}dB n=${calibrationSamples.length} mode=static-safety-abort speech=${speechThresholdEff} silence=${silenceThresholdEff} sustained=${sustainedThresholdEff}`);
           } else if (noiseFloor > ADAPTIVE_TRIGGER_DB) {
             // Ambiente rumoroso (es. furgone, auto, traffico): attiva adattivo.
             adaptiveMode = true;
             silenceThresholdEff = Math.min(noiseFloor + ADAPTIVE_OFFSET_DB, ADAPTIVE_CAP_SILENCE_DB);
             speechThresholdEff = silenceThresholdEff - ADAPTIVE_HYSTERESIS_DB;
             sustainedThresholdEff = Math.min(silenceThresholdEff + ADAPTIVE_HYSTERESIS_DB, ADAPTIVE_CAP_SUSTAINED_DB);
-            console.log(`[KODA_VAD_CALIB] floor=${noiseFloor.toFixed(1)}dB n=${calibrationSamples.length} mode=adaptive speech=${speechThresholdEff} silence=${silenceThresholdEff} sustained=${sustainedThresholdEff}`);
+            console.log(`[OLLENYA_VAD_CALIB] floor=${noiseFloor.toFixed(1)}dB n=${calibrationSamples.length} mode=adaptive speech=${speechThresholdEff} silence=${silenceThresholdEff} sustained=${sustainedThresholdEff}`);
           } else {
             // Ambiente silenzioso (-38 dBFS o inferiore): le statiche funzionano.
             adaptiveMode = false;
-            console.log(`[KODA_VAD_CALIB] floor=${noiseFloor.toFixed(1)}dB n=${calibrationSamples.length} mode=static-quiet speech=${speechThresholdEff} silence=${silenceThresholdEff} sustained=${sustainedThresholdEff}`);
+            console.log(`[OLLENYA_VAD_CALIB] floor=${noiseFloor.toFixed(1)}dB n=${calibrationSamples.length} mode=static-quiet speech=${speechThresholdEff} silence=${silenceThresholdEff} sustained=${sustainedThresholdEff}`);
           }
         }
         // Durante calibration, non avviare la macchina a stati voce/silenzio
@@ -711,12 +711,12 @@ export async function startRecording(): Promise<Recorder> {
       // Prima questo catch era SILENZIOSO ({}). Ha occultato per giorni
       // un `ReferenceError: adaptiveMode is not defined` causato da una
       // variabile non dichiarata (ora fixato). Logghiamo l'errore col
-      // prefisso [KODA_VAD_ERR] così il diag panel lo catturerà.
+      // prefisso [OLLENYA_VAD_ERR] così il diag panel lo catturerà.
       // Pass-through perché metering può fallire brevemente durante
       // state transitions, e non vogliamo crashare l'app.
       try {
         const msg = e instanceof Error ? e.message : String(e);
-        console.log(`[KODA_VAD_ERR] interval frame error: ${msg.slice(0, 200)}`);
+        console.log(`[OLLENYA_VAD_ERR] interval frame error: ${msg.slice(0, 200)}`);
       } catch {}
     }
   }, METER_POLL_MS);

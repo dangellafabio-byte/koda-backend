@@ -5,8 +5,8 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { View, StyleSheet, Platform, AppState, AppStateStatus } from "react-native";
 // === BLOCCO A (2026-08-25) — `lib/notifications` RIMOSSO ==================
-// Koda non manda più notifiche schedulate né settimanali. Il modulo stub è
-// stato eliminato per rendere esplicito nel codice l'impegno "no needy Koda".
+// Ollenya non manda più notifiche schedulate né settimanali. Il modulo stub è
+// stato eliminato per rendere esplicito nel codice l'impegno "no needy Ollenya".
 // Se serve reintrodurre notifiche in futuro, ripristinare da git v64.x.
 import { ThemeProvider, useTheme, ThemeName } from "../lib/theme";
 import { api } from "../lib/api";
@@ -16,7 +16,7 @@ import { AuthProvider, useAuth } from "../lib/auth";
 import LoginScreen from "../components/LoginScreen";
 // === Route pubbliche (Fabio 2026-09-10) ===================================
 // `/blind-test` è accessibile ai tester esterni tramite link diretto, senza
-// account Koda. Bypass `AuthGate` per questa specifica route.
+// account Ollenya. Bypass `AuthGate` per questa specifica route.
 // `/vad-test` è una pagina diagnostica interna, mantenuta pubblica per
 // permettere il test rapido su device Samsung senza flow login.
 const PUBLIC_ROUTES = new Set(["/blind-test", "/vad-test"]);
@@ -93,7 +93,7 @@ function RootLayout() {
   // === DARK MODE DEFAULT AL PRIMO AVVIO (richiesta utente 2026-07) ===
   // Prima usavamo "sistema" (segue iOS): se il telefono era in light mode
   // l'utente vedeva l'app in chiaro al primo boot, spesso sgradevole per
-  // un'esperienza notturna/emotiva come Koda. Ora forziamo NOTTE come
+  // un'esperienza notturna/emotiva come Ollenya. Ora forziamo NOTTE come
   // default finché l'utente non sceglie esplicitamente un altro tema
   // dalle Impostazioni. Se profile.settings.theme è già settato in cache
   // o su server, viene rispettato.
@@ -120,7 +120,7 @@ function RootLayout() {
     // OTA vecchi: abbiamo bumped expo.version → nuovo runtimeVersion.
 
     // Pre-warm iOS/Android audio session BEFORE first TTS plays.
-    // Fixes "Koda silent in first intro steps" bug on fresh native build.
+    // Fixes "Ollenya silent in first intro steps" bug on fresh native build.
     prewarmAudio().catch(() => {});
 
     if (Platform.OS !== "web") {

@@ -1,7 +1,7 @@
 """
 subscription_ledger.py
 =======================
-Ledger a slot FIFO per il freemium di Koda.
+Ledger a slot FIFO per il freemium di Ollenya.
 
 Design principles (approvato da Fabio 2026-08-14):
 - Ciclo mobile: mesi calcolati dalla data di acquisto (NOT calendar month).
@@ -34,7 +34,7 @@ from dateutil.relativedelta import relativedelta
 
 
 # =============================================================================
-# Costanti per tier — SOURCE OF TRUTH per pricing/quote Koda 2026-08
+# Costanti per tier — SOURCE OF TRUTH per pricing/quote Ollenya 2026-08
 # =============================================================================
 # Approvate da Fabio 2026-08-14. Modificare qui, non in server.py.
 

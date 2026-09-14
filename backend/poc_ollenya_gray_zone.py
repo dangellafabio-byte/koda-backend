@@ -9,11 +9,11 @@ Contesto:
 
 Test:
     Generare gli STESSI 7 testi reali di produzione con V3 e Turbo (14 file
-    totali) sulla voce Vento (voce Koda maschile utente), e confrontarli in
+    totali) sulla voce Vento (voce Ollenya maschile utente), e confrontarli in
     A/B sulla pagina web dedicata. Se Turbo regge → classificatore v0 pronto,
     zona grigia non è un problema. Se Turbo non regge → 1 sola feature mirata.
 
-Nessuna modifica al prompt Koda. Nessuna modifica alla produzione.
+Nessuna modifica al prompt Ollenya. Nessuna modifica alla produzione.
 """
 import os
 import time
@@ -28,7 +28,7 @@ from elevenlabs.client import ElevenLabs
 from elevenlabs.types.voice_settings import VoiceSettings
 
 ELEVENLABS_API_KEY = os.environ['ELEVENLABS_API_KEY']
-VOICE_ID = "ll9WG7PDTuyHwgC5MD6g"  # Vento — voce Koda maschile
+VOICE_ID = "ll9WG7PDTuyHwgC5MD6g"  # Vento — voce Ollenya maschile
 OUTPUT_FORMAT = "mp3_44100_128"
 
 # Stessi voice settings usati nel primo test A/B/C — coerenza per calibrazione orecchio

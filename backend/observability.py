@@ -1,5 +1,5 @@
 """
-observability.py — Inizializzazione Sentry per il backend Koda (FastAPI on Railway)
+observability.py — Inizializzazione Sentry per il backend Ollenya (FastAPI on Railway)
 
 Region: EU (Frankfurt) — enforced dal DSN dell'organizzazione EU.
 Sample rates: errori 100%, performance 20% (aligned col frontend).
@@ -35,7 +35,7 @@ _SENSITIVE_KEY_PATTERNS = [
     "message_text",
     "sentence",
     "content",
-    "koda_reply",
+    "ollenya_reply",
     "user_input",
     "prompt",
     "system_prompt",
@@ -156,7 +156,7 @@ _sentry_initialized = False
 
 def init_sentry() -> bool:
     """
-    Inizializza Sentry per il backend FastAPI di Koda.
+    Inizializza Sentry per il backend FastAPI di Ollenya.
     Idempotente: safe chiamare più volte.
     Ritorna True se inizializzato con successo, False altrimenti.
     """
@@ -258,16 +258,16 @@ def capture_koda_exception(
     category: Optional[str] = None,
     **extra: Any,
 ) -> None:
-    """Cattura eccezione con contesto Koda-specific (safe, viene comunque scrubbato)."""
+    """Cattura eccezione con contesto Ollenya-specific (safe, viene comunque scrubbato)."""
     if not _sentry_initialized:
         return
     try:
         import sentry_sdk
         with sentry_sdk.push_scope() as scope:
             if category:
-                scope.set_tag("koda_error_category", category)
+                scope.set_tag("ollenya_error_category", category)
             if extra:
-                scope.set_context("koda_context", extra)
+                scope.set_context("ollenya_context", extra)
             sentry_sdk.capture_exception(exc)
     except Exception:  # noqa: BLE001
         pass

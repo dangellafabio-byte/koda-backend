@@ -58,7 +58,7 @@ import { getAuthToken } from "./authToken";
 // 1) HyperOS Privacy Indicator pulsa ogni 2s (flash visivo confermato
 //    dal video utente del 28-06)
 // 2) micro-buchi audio tra i chunk → Deepgram non riesce a fare
-//    endpointing pulito → mai stt_final → Koda non risponde su Android
+//    endpointing pulito → mai stt_final → Ollenya non risponde su Android
 // Su iPhone non succede perché iOS mantiene la AudioSession warm tra
 // prepare/stop. Raddoppiando i chunk:
 //   • cicli mic da ogni 2s → ogni 3.5s (flash dimezzato)
@@ -202,7 +202,7 @@ function buildStreamingPreset() {
       // il bitrate AAC a ~32 kbps. In ambiente rumoroso (furgone, vento,
       // strada) la compressione spinta toglie dettagli alle alte frequenze
       // → Deepgram fatica a distinguere consonanti simili (s/f, t/d, p/b)
-      // → trascrizioni "garbled" / Koda fraintende. Su iPhone gli stessi
+      // → trascrizioni "garbled" / Ollenya fraintende. Su iPhone gli stessi
       // 32 kbps + processing hardware AVAudioSession bastano (Fabio
       // conferma: "iPhone mi sente bene"). Alziamo SOLO su Android a
       // 64 kbps: +12 KB/sec di banda (banale su 4G), qualità sensibilmente
@@ -282,7 +282,7 @@ export async function detectAudioRouteDetailed(): Promise<AudioRouteInfo> {
       await probe.prepareToRecordAsync(preset);
     } catch (e: any) {
       console.log(
-        `[KODA_STREAM_CLIENT] detectAudioRoute: prepare failed: ${e?.message || e}`
+        `[OLLENYA_STREAM_CLIENT] detectAudioRoute: prepare failed: ${e?.message || e}`
       );
       return { route: "unknown", deviceKind: "unknown", deviceType: "", deviceName: "" };
     }
@@ -294,7 +294,7 @@ export async function detectAudioRouteDetailed(): Promise<AudioRouteInfo> {
       inputName = String(cur?.name || "");
     } catch (e: any) {
       console.log(
-        `[KODA_STREAM_CLIENT] detectAudioRoute: getCurrentInput failed: ${e?.message || e}`
+        `[OLLENYA_STREAM_CLIENT] detectAudioRoute: getCurrentInput failed: ${e?.message || e}`
       );
     }
     try { await probe.stop(); } catch {}
@@ -303,7 +303,7 @@ export async function detectAudioRouteDetailed(): Promise<AudioRouteInfo> {
     const nameLC = inputName.toLowerCase();
     const s = `${typeLC} ${nameLC}`;
     console.log(
-      `[KODA_STREAM_CLIENT] detectAudioRoute: type="${inputType}" name="${inputName}"`
+      `[OLLENYA_STREAM_CLIENT] detectAudioRoute: type="${inputType}" name="${inputName}"`
     );
 
     // Classificazione route (retrocompatibile)
@@ -342,7 +342,7 @@ export async function detectAudioRouteDetailed(): Promise<AudioRouteInfo> {
     return { route, deviceKind, deviceType: inputType, deviceName: inputName };
   } catch (e: any) {
     console.log(
-      `[KODA_STREAM_CLIENT] detectAudioRoute: crashed → unknown: ${e?.message || e}`
+      `[OLLENYA_STREAM_CLIENT] detectAudioRoute: crashed → unknown: ${e?.message || e}`
     );
     return { route: "unknown", deviceKind: "unknown", deviceType: "", deviceName: "" };
   }
@@ -388,7 +388,7 @@ export class VoiceStreamSession {
   // dentro un setTimeout(CHUNK_DURATION_MS) per registrare il chunk
   // corrente. Senza interrompere quel timer, il loop continua a girare
   // fino al completamento del chunk → fino a 3000ms di latenza
-  // percepita dall'utente fra "smetto di parlare" e "Koda inizia a
+  // percepita dall'utente fra "smetto di parlare" e "Ollenya inizia a
   // pensare/parlare". Salviamo qui il canceller del wait corrente.
   private chunkWaitCancel: (() => void) | null = null;
 
@@ -402,7 +402,7 @@ export class VoiceStreamSession {
     if (this.chunkWaitCancel) {
       const cancel = this.chunkWaitCancel;
       this.chunkWaitCancel = null;
-      console.log(`[KODA_STREAM_CLIENT] chunk wait cancelled — ${reason}`);
+      console.log(`[OLLENYA_STREAM_CLIENT] chunk wait cancelled — ${reason}`);
       try { cancel(); } catch {}
     }
   }
@@ -438,7 +438,7 @@ export class VoiceStreamSession {
     this.notifiedUpperOnClose = false;
 
     // === FIX 2026-07-03 v38 — AudioSession mode PRIMA di detectAudioRoute ===
-    // BUG RESIDUO da v37: dopo che Koda ha finito di parlare al turno N,
+    // BUG RESIDUO da v37: dopo che Ollenya ha finito di parlare al turno N,
     // playElevenLabsNativeFromUrl (speech.ts) lascia AVAudioSession in
     // playback mode (allowsRecording:false, così TTS suona forte anche
     // in silenzioso). Al turno N+1, session.start() chiamava PRIMA
@@ -463,11 +463,11 @@ export class VoiceStreamSession {
         shouldRouteThroughEarpiece: false,
       });
       console.log(
-        `[KODA_STREAM_CLIENT] start(): setAudioModeAsync(record) OK before detectAudioRoute`
+        `[OLLENYA_STREAM_CLIENT] start(): setAudioModeAsync(record) OK before detectAudioRoute`
       );
     } catch (e: any) {
       console.log(
-        `[KODA_STREAM_CLIENT] start(): setAudioModeAsync FAILED: ${e?.message || e}`
+        `[OLLENYA_STREAM_CLIENT] start(): setAudioModeAsync FAILED: ${e?.message || e}`
       );
     }
 
@@ -492,11 +492,11 @@ export class VoiceStreamSession {
       audioRoute = routeInfo.route;
       audioDeviceKind = routeInfo.deviceKind;
       console.log(
-        `[KODA_STREAM_CLIENT] audio_route detected → ${audioRoute} | device kind → ${audioDeviceKind}`
+        `[OLLENYA_STREAM_CLIENT] audio_route detected → ${audioRoute} | device kind → ${audioDeviceKind}`
       );
     } catch (e: any) {
       console.log(
-        `[KODA_STREAM_CLIENT] audio_route detection crashed: ${e?.message || e}`
+        `[OLLENYA_STREAM_CLIENT] audio_route detection crashed: ${e?.message || e}`
       );
     }
     // Salva per eventuale reconnect
@@ -506,7 +506,7 @@ export class VoiceStreamSession {
     // 1) Apri WS
     const url = buildWsUrl();
     console.log(
-      `[KODA_STREAM_CLIENT] opening WS → ${url} loc=${opts?.locationCity || "<none>"} route=${audioRoute}`
+      `[OLLENYA_STREAM_CLIENT] opening WS → ${url} loc=${opts?.locationCity || "<none>"} route=${audioRoute}`
     );
     await this.openWs(url);
 
@@ -532,7 +532,7 @@ export class VoiceStreamSession {
     // pipeline sul poco audio che magari abbiamo già inviato.
     if (this.stopRequested) {
       console.log(
-        `[KODA_STREAM_CLIENT] start(): stopRequested=true dopo openWs → aborting chunkLoop startup`
+        `[OLLENYA_STREAM_CLIENT] start(): stopRequested=true dopo openWs → aborting chunkLoop startup`
       );
       // Manda comunque {type:"end"} così se DG ha già ricevuto qualcosa,
       // il server finalizza la pipeline invece di andare in idle timeout.
@@ -549,7 +549,7 @@ export class VoiceStreamSession {
     //    arrivato mentre eravamo in setup.
     if (this.stopRequested) {
       console.log(
-        `[KODA_STREAM_CLIENT] start(): stopRequested=true prima di chunkLoop → abort`
+        `[OLLENYA_STREAM_CLIENT] start(): stopRequested=true prima di chunkLoop → abort`
       );
       try { this.sendJson({ type: "end" }); } catch {}
       return;
@@ -561,7 +561,7 @@ export class VoiceStreamSession {
     // come legittimi stop. Simmetrico a voiceClientStt.ts::startRecognition.
     try { this.callbacks.onRecognitionActive?.(); } catch {}
     this.chunkLoop().catch((e) => {
-      console.warn(`[KODA_STREAM_CLIENT] chunk loop crashed: ${e}`);
+      console.warn(`[OLLENYA_STREAM_CLIENT] chunk loop crashed: ${e}`);
       this.callbacks.onError?.(String(e?.message || e));
     });
   }
@@ -597,7 +597,7 @@ export class VoiceStreamSession {
     setTimeout(() => {
       if (!this.doneReceived) {
         console.log(
-          `[KODA_STREAM_CLIENT] stop() safety timeout — no 'done' received in 40s, force closing WS`
+          `[OLLENYA_STREAM_CLIENT] stop() safety timeout — no 'done' received in 40s, force closing WS`
         );
         this.stopKeepalive();
         this.forceCloseWs();
@@ -613,7 +613,7 @@ export class VoiceStreamSession {
    *  non viene mai elaborato da Claude né letto da ElevenLabs).
    *  Usato per "tap fisico per silenziare tutto quando entra qualcuno". */
   async abort(): Promise<void> {
-    console.log(`[KODA_STREAM_CLIENT] abort() — user hard stop`);
+    console.log(`[OLLENYA_STREAM_CLIENT] abort() — user hard stop`);
     this.stopRequested = true;
     this.finalCloseRequested = true;
     this.chunkLoopActive = false;
@@ -663,13 +663,13 @@ export class VoiceStreamSession {
     if (this.stopRequested || this.finalCloseRequested) return false;
     if (this.reconnectAttempts >= MAX_WS_RECONNECTS) {
       console.log(
-        `[KODA_STREAM_CLIENT] reconnect: max attempts (${MAX_WS_RECONNECTS}) raggiunti, abort`
+        `[OLLENYA_STREAM_CLIENT] reconnect: max attempts (${MAX_WS_RECONNECTS}) raggiunti, abort`
       );
       return false;
     }
     this.reconnectAttempts++;
     console.log(
-      `[KODA_STREAM_CLIENT] reconnecting WS (tentativo ${this.reconnectAttempts}/${MAX_WS_RECONNECTS}) dopo ${RECONNECT_BACKOFF_MS}ms...`
+      `[OLLENYA_STREAM_CLIENT] reconnecting WS (tentativo ${this.reconnectAttempts}/${MAX_WS_RECONNECTS}) dopo ${RECONNECT_BACKOFF_MS}ms...`
     );
     await new Promise((r) => setTimeout(r, RECONNECT_BACKOFF_MS));
     try {
@@ -685,11 +685,11 @@ export class VoiceStreamSession {
         location_country: this.lastStartOpts.locationCountry || undefined,
       });
       this.startKeepalive();
-      console.log(`[KODA_STREAM_CLIENT] WS reconnesso con successo`);
+      console.log(`[OLLENYA_STREAM_CLIENT] WS reconnesso con successo`);
       return true;
     } catch (e: any) {
       console.log(
-        `[KODA_STREAM_CLIENT] reconnect fallito: ${e?.message || e}`
+        `[OLLENYA_STREAM_CLIENT] reconnect fallito: ${e?.message || e}`
       );
       return false;
     }
@@ -710,16 +710,16 @@ export class VoiceStreamSession {
 
       ws.onopen = () => {
         clearTimeout(timeout);
-        console.log(`[KODA_STREAM_CLIENT] WS opened in ${Date.now() - this.startedAt}ms`);
+        console.log(`[OLLENYA_STREAM_CLIENT] WS opened in ${Date.now() - this.startedAt}ms`);
         resolve();
       };
 
       ws.onerror = (e: any) => {
-        console.warn(`[KODA_STREAM_CLIENT] WS error: ${e?.message || e}`);
+        console.warn(`[OLLENYA_STREAM_CLIENT] WS error: ${e?.message || e}`);
       };
 
       ws.onclose = (e) => {
-        console.log(`[KODA_STREAM_CLIENT] WS closed code=${e.code} reason=${e.reason}`);
+        console.log(`[OLLENYA_STREAM_CLIENT] WS closed code=${e.code} reason=${e.reason}`);
         this.stopKeepalive();
 
         // === FIX 2026-06-25 v8 (post-Build #7 Turno 2 UI bloccata) ===
@@ -737,7 +737,7 @@ export class VoiceStreamSession {
           const reason = this.stopRequested
             ? "ws-closed-no-transcript-after-stop"
             : `ws-closed-unexpected-code-${e.code}`;
-          console.log(`[KODA_STREAM_CLIENT] notifying upper layer of close: ${reason}`);
+          console.log(`[OLLENYA_STREAM_CLIENT] notifying upper layer of close: ${reason}`);
           this.callbacks.onError?.(reason);
         }
 
@@ -758,7 +758,7 @@ export class VoiceStreamSession {
         const evt = JSON.parse(data);
         this.handleJsonEvent(evt);
       } catch (e) {
-        console.warn(`[KODA_STREAM_CLIENT] bad JSON: ${e}`);
+        console.warn(`[OLLENYA_STREAM_CLIENT] bad JSON: ${e}`);
       }
     } else {
       // binary frame: deve seguire un sentence header
@@ -767,7 +767,7 @@ export class VoiceStreamSession {
         // o un frame fuori ordine. Logghiamo per visibilità ma non
         // facciamo nulla — il loop continua sulla prossima sentence.
         console.warn(
-          `[KODA_STREAM_CLIENT] binary frame received without pending header — dropped ` +
+          `[OLLENYA_STREAM_CLIENT] binary frame received without pending header — dropped ` +
             `(type=${typeof data} ctor=${(data as any)?.constructor?.name || "?"})`
         );
         return;
@@ -780,7 +780,7 @@ export class VoiceStreamSession {
       // FALSE anche se `data` È un ArrayBuffer (problema noto di realm
       // mismatch tra istanze ArrayBuffer del JS bridge e quelle di
       // V8/Hermes). Risultato: il frame audio veniva scartato silenziosamente
-      // → niente onSentence → niente KODA_TTS_PLAY → niente voce di Koda.
+      // → niente onSentence → niente KODA_TTS_PLAY → niente voce di Ollenya.
       // Su iPhone funziona perché il bridge JS usa la stessa istanza
       // di ArrayBuffer.
       // FIX: invece di un singolo instanceof, proviamo IN CASCATA tutti
@@ -788,7 +788,7 @@ export class VoiceStreamSession {
       // e logghiamo cosa abbiamo trovato per diagnostica futura.
       const ctorName = (data as any)?.constructor?.name || "?";
       console.log(
-        `[KODA_STREAM_CLIENT] binary frame received ` +
+        `[OLLENYA_STREAM_CLIENT] binary frame received ` +
           `ctor=${ctorName} byteLength=${(data as any)?.byteLength ?? (data as any)?.size ?? "?"} ` +
           `header_i=${header.i}`
       );
@@ -797,7 +797,7 @@ export class VoiceStreamSession {
         try {
           this.callbacks.onSentence?.(header, buf);
         } catch (e) {
-          console.warn(`[KODA_STREAM_CLIENT] onSentence callback error: ${e}`);
+          console.warn(`[OLLENYA_STREAM_CLIENT] onSentence callback error: ${e}`);
         }
       };
 
@@ -828,7 +828,7 @@ export class VoiceStreamSession {
         // Caso 5: Blob (browser/web) — converti via .arrayBuffer()
         if (typeof (data as any)?.arrayBuffer === "function") {
           (data as any).arrayBuffer().then((buf: ArrayBuffer) => dispatch(buf))
-            .catch((e: any) => console.warn(`[KODA_STREAM_CLIENT] Blob.arrayBuffer() failed: ${e}`));
+            .catch((e: any) => console.warn(`[OLLENYA_STREAM_CLIENT] Blob.arrayBuffer() failed: ${e}`));
           return;
         }
         // Caso 6: ultima istanza — array di numeri (vecchio bridge RN)
@@ -838,11 +838,11 @@ export class VoiceStreamSession {
         }
         // Nessun caso: scartiamo MA logghiamo bene
         console.warn(
-          `[KODA_STREAM_CLIENT] UNHANDLED binary frame type — dropped ` +
+          `[OLLENYA_STREAM_CLIENT] UNHANDLED binary frame type — dropped ` +
             `ctor=${ctorName} keys=${Object.keys(data || {}).slice(0, 5).join(",")}`
         );
       } catch (e) {
-        console.warn(`[KODA_STREAM_CLIENT] binary dispatch error: ${e}`);
+        console.warn(`[OLLENYA_STREAM_CLIENT] binary dispatch error: ${e}`);
       }
     }
   }
@@ -851,13 +851,13 @@ export class VoiceStreamSession {
     const type = evt?.type;
     if (type === "ready") {
       this.sessionId = evt.session_id || null;
-      console.log(`[KODA_STREAM_CLIENT] ready sess=${this.sessionId?.slice(0, 8)}`);
+      console.log(`[OLLENYA_STREAM_CLIENT] ready sess=${this.sessionId?.slice(0, 8)}`);
       this.callbacks.onReady?.(this.sessionId || "");
     } else if (type === "stt_interim") {
       this.callbacks.onInterim?.(evt.text || "", !!evt.is_final);
     } else if (type === "stt_final") {
       console.log(
-        `[KODA_STREAM_CLIENT] stt_final text=${(evt.text || "").slice(0, 60)}... ` +
+        `[OLLENYA_STREAM_CLIENT] stt_final text=${(evt.text || "").slice(0, 60)}... ` +
           `conf=${evt.confidence} dur=${evt.audio_duration_ms}ms`
       );
       this.callbacks.onFinal?.(
@@ -873,14 +873,14 @@ export class VoiceStreamSession {
       // === FIX 2026-06-29 P1 — Anticipatory chunk stop ===
       // Interrompi il timer del chunk in corso (altrimenti il loop resta
       // dentro setTimeout(3000ms) fino al completamento → fino a 3s di
-      // latenza percepita prima che Koda inizi a parlare).
+      // latenza percepita prima che Ollenya inizi a parlare).
       this.cancelChunkWait("stt_final received");
       this.stopKeepalive();
       this.safeStopRecorder().catch(() => {});
     } else if (type === "sentence") {
       // Salva header → il prossimo binary frame conterrà l'audio
       console.log(
-        `[KODA_STREAM_CLIENT] sentence_header i=${evt.i} ` +
+        `[OLLENYA_STREAM_CLIENT] sentence_header i=${evt.i} ` +
           `text="${(evt.text || "").slice(0, 40)}" bytes=${evt.audio_bytes}`
       );
       this.pendingSentenceHeader = {
@@ -922,7 +922,7 @@ export class VoiceStreamSession {
         console.warn(`[SPEECH_TIMELINE_CLIENT] onSpeechTimeline callback error: ${e}`);
       }
     } else if (type === "done") {
-      console.log(`[KODA_STREAM_CLIENT] done`);
+      console.log(`[OLLENYA_STREAM_CLIENT] done`);
       this.doneReceived = true;
       this.finalCloseRequested = true;
       this.notifiedUpperOnClose = true; // onDone notifica upper layer
@@ -930,28 +930,28 @@ export class VoiceStreamSession {
       this.callbacks.onDone?.();
       this.forceCloseWs();
     } else if (type === "error") {
-      console.warn(`[KODA_STREAM_CLIENT] server error: ${evt.message}`);
+      console.warn(`[OLLENYA_STREAM_CLIENT] server error: ${evt.message}`);
       this.callbacks.onError?.(evt.message || "server error");
     }
   }
 
   /** Loop principale: registra chunk da CHUNK_DURATION_MS, manda via WS, ripeti. */
   private async chunkLoop() {
-    console.log(`[KODA_STREAM_CLIENT] chunkLoop ENTER`);
+    console.log(`[OLLENYA_STREAM_CLIENT] chunkLoop ENTER`);
     // Permessi (idempotente)
     try {
       const perm = await AudioModule.requestRecordingPermissionsAsync();
       console.log(
-        `[KODA_STREAM_CLIENT] mic perm granted=${perm?.granted} status=${perm?.status}`
+        `[OLLENYA_STREAM_CLIENT] mic perm granted=${perm?.granted} status=${perm?.status}`
       );
     } catch (e: any) {
-      console.warn(`[KODA_STREAM_CLIENT] perm request failed: ${e?.message || e}`);
+      console.warn(`[OLLENYA_STREAM_CLIENT] perm request failed: ${e?.message || e}`);
     }
 
     // === FIX 2026-06-25 v9 (post-Build #8 Prova 2 disaster) ===
     // RIPRISTINATA la chiamata setAudioModeAsync({allowsRecording:true})
     // PRIMA di costruire il recorder. La rimozione in v8 era sbagliata:
-    // dopo un TTS playback (es. risposta di Koda nel turno precedente),
+    // dopo un TTS playback (es. risposta di Ollenya nel turno precedente),
     // playElevenLabsNativeFromUrl mette l'audio session in playback mode
     // (allowsRecording:false) e prewarmMic() da solo NON basta a forzare
     // iOS a tornare in record mode al turno successivo. Risultato:
@@ -971,9 +971,9 @@ export class VoiceStreamSession {
         shouldPlayInBackground: false,
         shouldRouteThroughEarpiece: false,
       });
-      console.log(`[KODA_STREAM_CLIENT] setAudioModeAsync(allowsRecording=true) OK`);
+      console.log(`[OLLENYA_STREAM_CLIENT] setAudioModeAsync(allowsRecording=true) OK`);
     } catch (e: any) {
-      console.log(`[KODA_STREAM_CLIENT] setAudioModeAsync FAILED: ${e?.message || e}`);
+      console.log(`[OLLENYA_STREAM_CLIENT] setAudioModeAsync FAILED: ${e?.message || e}`);
     }
 
     // === FIX 2026-06-24 v3 ===
@@ -1000,18 +1000,18 @@ export class VoiceStreamSession {
           ? (preset as any).android?.bitRate
           : (preset as any).ios?.bitRate;
       console.log(
-        `[KODA_STT_BITRATE_CHECK] platform=${Platform.OS} bitrate=${_bitrate} ` +
+        `[OLLENYA_STT_BITRATE_CHECK] platform=${Platform.OS} bitrate=${_bitrate} ` +
           `sampleRate=${(preset as any).android?.sampleRate ?? (preset as any).ios?.sampleRate} ` +
           `expected_android=64000 expected_ios=32000`
       );
     } catch {}
     try {
-      console.log(`[KODA_STREAM_CLIENT] constructing single recorder...`);
+      console.log(`[OLLENYA_STREAM_CLIENT] constructing single recorder...`);
       recorder = new (AudioModule as any).AudioRecorder({});
       this.recorder = recorder;
     } catch (e: any) {
       console.log(
-        `[KODA_STREAM_CLIENT] recorder construct failed: ${e?.message || e}`
+        `[OLLENYA_STREAM_CLIENT] recorder construct failed: ${e?.message || e}`
       );
       this.callbacks.onError?.(`mic-init-failed: ${e?.message || e}`);
       this.recorder = null;
@@ -1055,7 +1055,7 @@ export class VoiceStreamSession {
         : STREAM_HARD_CAP_MS_CHAT;
       if (Date.now() - this.startedAt > hardCapMs) {
         console.log(
-          `[KODA_STREAM_CLIENT] hard-cap ${hardCapMs}ms raggiunto ` +
+          `[OLLENYA_STREAM_CLIENT] hard-cap ${hardCapMs}ms raggiunto ` +
             `(mode=${this.lastStartOpts.ephemeral ? "sfogo" : "chat"}) — ` +
             `chiusura controllata input audio (mantengo WS aperta per TTS)`
         );
@@ -1067,11 +1067,11 @@ export class VoiceStreamSession {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         // === FIX 2026-06-25 v7: tenta reconnect invece di uscire ===
         console.log(
-          `[KODA_STREAM_CLIENT] WS non più OPEN — tento reconnect...`
+          `[OLLENYA_STREAM_CLIENT] WS non più OPEN — tento reconnect...`
         );
         const reconnected = await this.reconnectIfNeeded();
         if (!reconnected) {
-          console.log(`[KODA_STREAM_CLIENT] reconnect non disponibile — esco dal loop`);
+          console.log(`[OLLENYA_STREAM_CLIENT] reconnect non disponibile — esco dal loop`);
           break;
         }
         // Continua il loop con la nuova WS
@@ -1109,33 +1109,33 @@ export class VoiceStreamSession {
             });
             if (verbose) {
               console.log(
-                `[KODA_STREAM_CLIENT] chunk #${cIdx} pre-prepare session refresh OK`
+                `[OLLENYA_STREAM_CLIENT] chunk #${cIdx} pre-prepare session refresh OK`
               );
             }
           } catch (e: any) {
             console.log(
-              `[KODA_STREAM_CLIENT] chunk #${cIdx} pre-prepare refresh failed: ${e?.message || e}`
+              `[OLLENYA_STREAM_CLIENT] chunk #${cIdx} pre-prepare refresh failed: ${e?.message || e}`
             );
           }
         }
         // FIX v4: PRE-PREPARE prima di ogni record (riusabilità v54)
-        if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} prepare...`);
+        if (verbose) console.log(`[OLLENYA_STREAM_CLIENT] chunk #${cIdx} prepare...`);
         const t_prep = Date.now();
         await recorder.prepareToRecordAsync(preset);
         // Prepare OK → reset contatore fallimenti consecutivi
         consecutivePrepareFailures = 0;
         if (verbose)
           console.log(
-            `[KODA_STREAM_CLIENT] chunk #${cIdx} prepare OK in ${Date.now() - t_prep}ms`
+            `[OLLENYA_STREAM_CLIENT] chunk #${cIdx} prepare OK in ${Date.now() - t_prep}ms`
           );
 
-        if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} record()...`);
+        if (verbose) console.log(`[OLLENYA_STREAM_CLIENT] chunk #${cIdx} record()...`);
         const t_record_started = Date.now();
         recorder.record();
 
         if (verbose)
           console.log(
-            `[KODA_STREAM_CLIENT] chunk #${cIdx} recording, wait ${CHUNK_DURATION_MS}ms...`
+            `[OLLENYA_STREAM_CLIENT] chunk #${cIdx} recording, wait ${CHUNK_DURATION_MS}ms...`
           );
 
         // === FIX 2026-06-29 P1 — Cancellable wait ===
@@ -1167,13 +1167,13 @@ export class VoiceStreamSession {
           const elapsed = Date.now() - t_record_started;
           const saved = CHUNK_DURATION_MS - elapsed;
           console.log(
-            `[KODA_STREAM_CLIENT] chunk #${cIdx} anticipatory exit ` +
+            `[OLLENYA_STREAM_CLIENT] chunk #${cIdx} anticipatory exit ` +
               `(elapsed=${elapsed}ms, saved=~${saved > 0 ? saved : 0}ms latency)`
           );
           break;
         }
 
-        if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} stop...`);
+        if (verbose) console.log(`[OLLENYA_STREAM_CLIENT] chunk #${cIdx} stop...`);
 
         await recorder.stop();
         const t_stop = Date.now();
@@ -1185,12 +1185,12 @@ export class VoiceStreamSession {
           const directUri = recorder.uri || null;
           uri = statusUrl || directUri;
         } catch {}
-        if (verbose) console.log(`[KODA_STREAM_CLIENT] chunk #${cIdx} uri=${uri ? "OK" : "NULL"}`);
+        if (verbose) console.log(`[OLLENYA_STREAM_CLIENT] chunk #${cIdx} uri=${uri ? "OK" : "NULL"}`);
         if (!uri) {
           // Uso console.log invece di console.warn — diagLogger ora cattura
           // entrambi ma per uniformità lasciamo log
           console.log(
-            `[KODA_STREAM_CLIENT] chunk #${cIdx}: no URI — skipping`
+            `[OLLENYA_STREAM_CLIENT] chunk #${cIdx}: no URI — skipping`
           );
           continue;
         }
@@ -1218,13 +1218,13 @@ export class VoiceStreamSession {
         // ANOMALY così è grep-abile nel diag.
         if (recDurMs < CHUNK_DURATION_MS * 0.8) {
           console.log(
-            `[KODA_STREAM_CLIENT_ANOMALY] chunk #${this.chunkIdx} ` +
+            `[OLLENYA_STREAM_CLIENT_ANOMALY] chunk #${this.chunkIdx} ` +
               `duration_short=${recDurMs}ms target=${CHUNK_DURATION_MS}ms ` +
               `bytes=${bytes.byteLength} — possible mic interruption`
           );
         }
         console.log(
-          `[KODA_STREAM_CLIENT_CHUNK] idx=${this.chunkIdx} ` +
+          `[OLLENYA_STREAM_CLIENT_CHUNK] idx=${this.chunkIdx} ` +
             `size=${bytes.byteLength}B ` +
             `record_dur=${recDurMs}ms ` +
             `read=${t_read - t_stop}ms ` +
@@ -1261,14 +1261,14 @@ export class VoiceStreamSession {
           /RecordingDisabledException/i.test(errMsg) ||
           /Recording not allowed/i.test(errMsg);
         console.log(
-          `[KODA_STREAM_CLIENT] chunk #${cIdx} ERROR: ${e?.message || e} | ` +
+          `[OLLENYA_STREAM_CLIENT] chunk #${cIdx} ERROR: ${e?.message || e} | ` +
             `stack: ${String(e?.stack || "").split("\n").slice(0, 3).join(" | ")}`
         );
 
         if (isPrepareFail) {
           consecutivePrepareFailures += 1;
           console.log(
-            `[KODA_STREAM_CLIENT] prepareToRecordAsync failure ` +
+            `[OLLENYA_STREAM_CLIENT] prepareToRecordAsync failure ` +
               `#${consecutivePrepareFailures}/${MAX_CONSECUTIVE_PREPARE_FAILURES}`
           );
 
@@ -1276,7 +1276,7 @@ export class VoiceStreamSession {
           // deactivate + riattiva. A volte iOS "sblocca" la session così.
           if (consecutivePrepareFailures === 2) {
             try {
-              console.log(`[KODA_STREAM_CLIENT] attempting AVAudioSession reset (cycle)...`);
+              console.log(`[OLLENYA_STREAM_CLIENT] attempting AVAudioSession reset (cycle)...`);
               // === FIX 2026-07-03 v38 — Reset con SET COMPLETO di parametri ===
               // Prima chiamava solo sma({allowsRecording:false}) e poi
               // sma({allowsRecording:true}) — troppo minimalista: iOS
@@ -1303,10 +1303,10 @@ export class VoiceStreamSession {
                 shouldPlayInBackground: false,
                 shouldRouteThroughEarpiece: false,
               } as any);
-              console.log(`[KODA_STREAM_CLIENT] AVAudioSession reset done (full params)`);
+              console.log(`[OLLENYA_STREAM_CLIENT] AVAudioSession reset done (full params)`);
             } catch (resetErr) {
               console.log(
-                `[KODA_STREAM_CLIENT] AVAudioSession reset failed: ${String(resetErr)}`
+                `[OLLENYA_STREAM_CLIENT] AVAudioSession reset failed: ${String(resetErr)}`
               );
             }
           }
@@ -1317,7 +1317,7 @@ export class VoiceStreamSession {
           if (consecutivePrepareFailures >= MAX_CONSECUTIVE_PREPARE_FAILURES) {
             const reason = "prepare-failures-cap-560557684";
             console.log(
-              `[KODA_STREAM_CLIENT] BAIL OUT — ${consecutivePrepareFailures} ` +
+              `[OLLENYA_STREAM_CLIENT] BAIL OUT — ${consecutivePrepareFailures} ` +
                 `prepare failures consecutive: chiudo sessione e notifico upper (${reason})`
             );
             this.chunkLoopActive = false;
@@ -1343,7 +1343,7 @@ export class VoiceStreamSession {
 
     // === CLEANUP FINALE ===
     console.log(
-      `[KODA_STREAM_CLIENT] chunk loop ending — chunks=${this.chunkIdx} ` +
+      `[OLLENYA_STREAM_CLIENT] chunk loop ending — chunks=${this.chunkIdx} ` +
         `dur=${Date.now() - this.startedAt}ms ` +
         `(active=${this.chunkLoopActive} stopReq=${this.stopRequested})`
     );
@@ -1351,7 +1351,7 @@ export class VoiceStreamSession {
     try { await recorder.stop(); } catch {}
     try { recorder.release?.(); } catch {}
     this.recorder = null;
-    console.log(`[KODA_STREAM_CLIENT] chunk loop fully cleaned up`);
+    console.log(`[OLLENYA_STREAM_CLIENT] chunk loop fully cleaned up`);
   }
 
   private async safeStopRecorder() {

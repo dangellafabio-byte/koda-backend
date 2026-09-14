@@ -2,7 +2,7 @@
 Iter 15 — WS /api/voice/stream synthetic `done` emit regression tests.
 
 Context (from review_request Jan 2026):
-Italian user Fabio on Koda voice app reported voice pipeline bug:
+Italian user Fabio on Ollenya voice app reported voice pipeline bug:
 'thinking → idle → ws-closed-no-transcript-after-stop'.
 Root cause: after user taps stop, if Deepgram never emitted speech_final AND
 PCM buffer was empty/tiny, the cleanup block closed the WS *without* emitting
@@ -215,7 +215,7 @@ class TestRegressionProfileAuth:
         assert r.status_code == 200, f"status={r.status_code} body={r.text[:300]}"
         d = r.json()
         assert d.get("name") == "Fabio", f"name={d.get('name')!r}"
-        assert d.get("koda_voice") == "aria", f"koda_voice={d.get('koda_voice')!r}"
+        assert d.get("ollenya_voice") == "aria", f"koda_voice={d.get('ollenya_voice')!r}"
         # total_messages may have grown since the earlier snapshot of 634 —
         # accept any value ≥ 634 as valid (no reset to 0/empty profile).
         tm = d.get("total_messages")

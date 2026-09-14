@@ -82,7 +82,7 @@ _STOPWORDS_IT = frozenset([
     # Numeri scritti
     "uno", "una", "due", "tre", "quattro", "cinque", "sei", "sette", "otto",
     "nove", "dieci", "cento", "mille",
-    # Interazione con Koda
+    # Interazione con Ollenya
     "koda", "coda", "grazie", "prego", "scusa", "scusami", "ciao", "buongiorno",
     "buonasera", "buonanotte", "salve",
 ])

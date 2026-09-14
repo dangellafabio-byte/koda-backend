@@ -50,7 +50,7 @@ async def setup_test_user(db) -> None:
                 "user_id": TEST_USER_ID,
                 "email": "persona_test@koda.local",
                 "name": "Fabio",
-                "koda_voice": "Cielo",
+                "ollenya_voice": "Cielo",
                 "confidence_level": CONFIDENCE_TARGET,
                 "onboarded": True,
                 "interactions": 30,  # basta per essere "familiar"

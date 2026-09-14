@@ -2,11 +2,11 @@
  * Offline Clips — "Sono qui, ma limitato"
  *
  * Modulo che gestisce le 3 clip audio pre-generate da ElevenLabs (server-side)
- * con la voce personalizzata di Koda. Le clip sono scaricate al boot (quando
+ * con la voce personalizzata di Ollenya. Le clip sono scaricate al boot (quando
  * online), cachate localmente in FileSystem.documentDirectory, e riprodotte
  * quando l'utente prova a parlare senza connessione.
  *
- * Obiettivo: NON spezzare l'illusione di presenza. Koda non scompare quando
+ * Obiettivo: NON spezzare l'illusione di presenza. Ollenya non scompare quando
  * cade la rete — risponde con la sua voce per dire "sono qui, ma offline".
  *
  * Architettura:

@@ -73,8 +73,8 @@ class TestTask3DevTTSPreview:
         )
         assert r.status_code == 200, r.text[:500]
         assert r.headers.get("content-type", "").startswith("audio/mpeg"), r.headers
-        assert "X-Koda-Voice-Settings" in r.headers, list(r.headers.keys())
-        vs = json.loads(r.headers["X-Koda-Voice-Settings"])
+        assert "X-Ollenya-Voice-Settings" in r.headers, list(r.headers.keys())
+        vs = json.loads(r.headers["X-Ollenya-Voice-Settings"])
         assert vs["stability"] == 0.4
         # Body should be a valid MP3-ish payload of decent length
         body = r.content
@@ -91,7 +91,7 @@ class TestTask3DevTTSPreview:
             timeout=30,
         )
         assert r.status_code == 200, r.text[:300]
-        vs = json.loads(r.headers["X-Koda-Voice-Settings"])
+        vs = json.loads(r.headers["X-Ollenya-Voice-Settings"])
         assert vs["stability"] == 1.0
         assert len(r.content) > 5000
 
@@ -203,7 +203,7 @@ class TestTask1POCOpenAIRealtime:
 
     def test_text_turn_happy_path(self, api):
         payload = {
-            "prompt": "Ciao Koda, come stai?",
+            "prompt": "Ciao Ollenya, come stai?",
             "model": "gpt-realtime-2.1-mini",
             "voice": "marin",
             "instructions_variant": "warm_koda",

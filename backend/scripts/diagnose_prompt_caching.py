@@ -51,7 +51,7 @@ API_BASE = "https://integrations.emergentagent.com/llm"
 # Minimo Anthropic per ephemeral caching su Haiku = 2048 token.
 # Usiamo un system prompt ripetuto per superare la soglia (~3000 token).
 _SYS_BASE = (
-    "Sei Koda, un compagno AI empatico e attento. Rispondi sempre in "
+    "Sei Ollenya, un compagno AI empatico e attento. Rispondi sempre in "
     "italiano. Sii breve, caldo, presente. Non offrire consigli non "
     "richiesti. Rispecchia il sentimento dell'utente prima di rispondere. "
     "Se l'utente racconta un dolore, resta con lui senza correre a "
@@ -62,7 +62,7 @@ _SYS_BASE = (
 )
 SYS_PROMPT = _SYS_BASE * 15  # ~3000 token, sopra la soglia Haiku (2048)
 
-USER_MSG = "Ciao Koda, oggi mi sento un po' stanco."
+USER_MSG = "Ciao Ollenya, oggi mi sento un po' stanco."
 
 # === Cattura HTTP body grezzo tramite callback litellm =================
 _captured: Dict[str, Any] = {"body": None, "headers": None, "url": None}
@@ -252,7 +252,7 @@ async def main():
         print("   NON è un HIT. Anomalia nella cache TTL o nel proxy.")
     else:
         print("✅ CACHING FUNZIONA sul path diagnostico. Il problema è specifico")
-        print("   del payload di produzione (system prompt Koda), non del path.")
+        print("   del payload di produzione (system prompt Ollenya), non del path.")
 
     print(f"\nDati completi salvati in: {out_path}")
 

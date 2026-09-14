@@ -1,5 +1,5 @@
 /**
- * === "Vedi cosa Koda ricorda" (Situation Tracking Viewer, Fabio 2026-08-22) ===
+ * === "Vedi cosa Ollenya ricorda" (Situation Tracking Viewer, Fabio 2026-08-22) ===
  *
  * Schermata GDPR-compliant per il Situation Tracking V3.1.
  * Rispetta le invarianti core del design (spec Fabio, agosto 2026):
@@ -11,7 +11,7 @@
  *     invito a riattivare (nessuna lista fantasma).
  *   • Wipe completo idempotente: bottone "Cancella tutto" chiede
  *     conferma e chiama /api/situations/wipe (funziona anche se opt-in OFF).
- *   • Azioni granulari: mute (Koda non ne parla più), archive (nascosta
+ *   • Azioni granulari: mute (Ollenya non ne parla più), archive (nascosta
  *     dalla vista principale ma non cancellata), delete (hard delete
  *     situation + evidences).
  *   • Dettaglio: tap su una situation apre bottom sheet con le ultime
@@ -179,7 +179,7 @@ export default function SituationsScreen() {
 
   const wipeAll = useCallback(() => {
     Alert.alert(
-      "Cancellare tutto ciò che Koda ricorda?",
+      "Cancellare tutto ciò che Ollenya ricorda?",
       "Cancellerà tutte le voci e tutte le evidenze. Non si può annullare.",
       [
         { text: "Annulla", style: "cancel" },
@@ -216,13 +216,13 @@ export default function SituationsScreen() {
         >
           <Ionicons name="chevron-back" size={26} color="rgba(226,232,240,0.9)" />
         </TouchableOpacity>
-        <Text style={styles.title}>Cosa Koda ricorda</Text>
+        <Text style={styles.title}>Cosa Ollenya ricorda</Text>
         <View style={styles.backBtn} />
       </View>
 
       {/* Descrizione GDPR — sempre visibile */}
       <Text style={styles.subtitle}>
-        Qui vedi le cose che Koda ha memorizzato dalle vostre conversazioni.
+        Qui vedi le cose che Ollenya ha memorizzato dalle vostre conversazioni.
         Niente valutazioni psicologiche, niente giudizi — solo un elenco di
         persone, argomenti e situazioni che sono emersi. Puoi silenziare,
         archiviare o cancellare quello che vuoi.
@@ -275,10 +275,10 @@ export default function SituationsScreen() {
             size={38}
             color="rgba(226,232,240,0.4)"
           />
-          <Text style={styles.emptyTitle}>Al momento Koda non ricorda niente</Text>
+          <Text style={styles.emptyTitle}>Al momento Ollenya non ricorda niente</Text>
           <Text style={styles.emptyBody}>
             Il tracciamento è spento. Puoi attivarlo dalle Impostazioni
-            (voce “Cosa Koda ricorda”). Finché resta spento, questa lista
+            (voce “Cosa Ollenya ricorda”). Finché resta spento, questa lista
             resta vuota e nessuna nuova informazione viene salvata.
           </Text>
         </View>

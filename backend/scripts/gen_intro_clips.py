@@ -104,7 +104,7 @@ def verify_reveal_clip():
 CLIPS_TO_GENERATE = [
     # (filename, text)
     ("intro_v3_saluto-cielo.mp3",
-     "Ciao, piacere di conoscerti… io sono Koda, e tu?"),
+     "Ciao, piacere di conoscerti… io sono Ollenya, e tu?"),
     ("intro_v3_parte_di_me-cielo.mp3",
      "Voglio farti conoscere una parte di me."),
     ("la_cuore-cielo.mp3",

@@ -95,7 +95,7 @@ export default function SettingsWalletStack({
   cards,
   onClose,
   title = "Impostazioni",
-  subtitle = "Personalizza Koda come vuoi",
+  subtitle = "Personalizza Ollenya come vuoi",
   hint = "Tocca una scheda per aprirla.",
   version,
   buildTag,
@@ -178,7 +178,7 @@ export default function SettingsWalletStack({
 
       {/* === FOOTER VERSION — sempre visibile in fondo, sopra safe-bottom.
           Tap 5 volte sulla versione = Dev Menu (per admin/whitelist).
-          Utenti normali vedono solo "Koda v1.0.263" pulito. */}
+          Utenti normali vedono solo "Ollenya v1.0.263" pulito. */}
       {version ? (
         <View style={styles.footerWrap}>
           <TouchableOpacity
@@ -187,7 +187,7 @@ export default function SettingsWalletStack({
             testID="settings-wallet-version-tap"
             hitSlop={{ top: 8, bottom: 8, left: 20, right: 20 }}
           >
-            <Text style={styles.footerVersion}>Koda v{version}</Text>
+            <Text style={styles.footerVersion}>Ollenya v{version}</Text>
           </TouchableOpacity>
           {buildTag ? (
             <Text style={styles.footerBuildTag}>{buildTag}</Text>

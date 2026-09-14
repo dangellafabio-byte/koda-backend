@@ -1,7 +1,7 @@
 /**
  * SafetyAlert — Overlay che appare quando /api/safety/check restituisce
  * risk_detected=true. Mostra:
- *   - Messaggio di Koda (advisory, presente/empatico)
+ *   - Messaggio di Ollenya (advisory, presente/empatico)
  *   - Lista numeri ufficiali italiani con bottoni "Chiama"
  *   - Bottone "Continuiamo qui" per chiudere e tornare alla chat
  *
@@ -68,7 +68,7 @@ export default function SafetyAlert({ visible, result, onClose }: Props) {
 
           <Text style={[styles.heading, { color: theme.text }]}>Ti ascolto.</Text>
 
-          {/* Messaggio di Koda */}
+          {/* Messaggio di Ollenya */}
           {result.advisory_message ? (
             <Text style={[styles.advisory, { color: theme.text }]}>{result.advisory_message}</Text>
           ) : null}

@@ -1,10 +1,10 @@
 /**
- * KodaIntroConversational.tsx — V2 (2026-08-06, Fabio)
+ * OllenyaIntroConversational.tsx — V2 (2026-08-06, Fabio)
  *
- * Onboarding conversazionale unificato secondo il "Koda Presence System"
+ * Onboarding conversazionale unificato secondo il "Ollenya Presence System"
  * (vedi /app/memory/KODA_PRESENCE_SYSTEM.md).
  *
- * Principio: Koda non cerca di sembrare umana. Cerca di essere presente.
+ * Principio: Ollenya non cerca di sembrare umana. Cerca di essere presente.
  * Ogni pausa è una partitura, ogni transizione ha inerzia.
  *
  * ==== SEQUENZA COMPLETA ====
@@ -17,13 +17,13 @@
  *  [500ms — PAUSA DI ACCOGLIENZA: il nome è stato ricevuto]
  *  4. Cielo (runtime TTS): "[Nome]." (con tone: warm)
  *  [700ms — lasciar risuonare il nome]
- *  5. Cielo:  "Io sono Koda."
+ *  5. Cielo:  "Io sono Ollenya."
  *  [1000ms — passaggio a tono relazionale]
  *  6. Cielo:  "Grazie di essere qui."
  *  [900ms — respiro prima della domanda aperta]
  *  7. Cielo:  "Da dove ti va di cominciare?"
  *  8. [utente parla liberamente — STT con retry]
- *  9. [Koda LLM risposta LIVE: /api/converse → /api/tts → play — l'onboarding
+ *  9. [Ollenya LLM risposta LIVE: /api/converse → /api/tts → play — l'onboarding
  *      si dissolve nella conversazione reale]
  *  10. [save profilo + transizione fade lunga alla home]
  *
@@ -37,10 +37,10 @@
  *
  * ==== BUG FIX INCLUSI (2026-08-06) ====
  *   • Audio session routing corretto: speaker attivo anche senza cuffie
- *   • STT retry automatico su silenzio: Koda continua ad ascoltare finché
+ *   • STT retry automatico su silenzio: Ollenya continua ad ascoltare finché
  *     l'utente non parla davvero (fino a maxMs del turno)
  *
- * Route: /intro-v2 (isolata per testing su TestFlight; il vecchio KodaIntro
+ * Route: /intro-v2 (isolata per testing su TestFlight; il vecchio OllenyaIntro
  * resta live sulla home finché V2 non è validato).
  */
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
@@ -95,8 +95,8 @@ const CIELO_CLIPS = {
 const CIELO_CLIP_EXPECTED_TEXT: Record<keyof typeof CIELO_CLIPS, string> = {
   ciao: "Ciao.",
   come_ti_chiami: "Come ti chiami?",
-  presentazione_koda: "Io sono Koda. Grazie di essere qui. Da dove ti va di cominciare?",
-  io_sono_koda: "Io sono Koda.",
+  presentazione_koda: "Io sono Ollenya. Grazie di essere qui. Da dove ti va di cominciare?",
+  io_sono_koda: "Io sono Ollenya.",
   grazie_di_essere_qui: "Grazie di essere qui.",
   da_dove_cominciare: "Da dove ti va di cominciare?",
 };
@@ -129,35 +129,35 @@ type Turn =
 // La sequenza — ogni pausa ha un'intenzione (vedi documento Presence System §6)
 //
 // REGOLA IDLE (2026-08-06 rev.3): l'orb NON deve MAI tornare a idle durante
-// l'intro tranne all'apertura. Tra due frasi di Koda: orb resta in "speaking"
-// (Koda prende fiato, non "si spegne"). Dopo che l'utente parla: orb va in
-// "thinking" (Koda accoglie/riflette). Idle = solo il primissimo momento
-// prima che Koda parli per la prima volta.
+// l'intro tranne all'apertura. Tra due frasi di Ollenya: orb resta in "speaking"
+// (Ollenya prende fiato, non "si spegne"). Dopo che l'utente parla: orb va in
+// "thinking" (Ollenya accoglie/riflette). Idle = solo il primissimo momento
+// prima che Ollenya parli per la prima volta.
 const CONVERSATION: Turn[] = [
   // #0 — apertura silenziosa: UNICO idle di tutto il flusso
   { kind: "silence", ms: 1500, label: "apertura", orbState: "idle" },
   // #1
   { kind: "speak", clipKey: "ciao" },
-  // #2 — respiro tra saluto e prima domanda: Koda NON torna idle,
+  // #2 — respiro tra saluto e prima domanda: Ollenya NON torna idle,
   //      resta "speaking" (sta prendendo fiato, non si spegne)
   { kind: "silence", ms: 1500, label: "respiro", orbState: "speaking" },
   // #3
   { kind: "speak", clipKey: "come_ti_chiami" },
   // #4 — utente parla: nessuna pausa prima, direttamente recording
   { kind: "listen", purpose: "capture_name", maxMs: 45000, showLabel: true },
-  // #5 — ACCOGLIENZA: Koda riflette sul nome, NON idle → thinking.
+  // #5 — ACCOGLIENZA: Ollenya riflette sul nome, NON idle → thinking.
   //      In BACKGROUND parte il gender lookup silenzioso.
   { kind: "silence", ms: 900, label: "accoglienza", orbState: "thinking" },
   // #6 — "[Nome]." runtime, tone: warm
   { kind: "runtime_tts_name" },
-  // #7 — risonanza: Koda resta speaking, non torna idle
+  // #7 — risonanza: Ollenya resta speaking, non torna idle
   { kind: "silence", ms: 1500, label: "risonanza", orbState: "speaking" },
   // #8 — PRESENTAZIONE UNIFICATA (fix 2026-08-07 iter.7)
-  //     Prima erano 3 clip separate ("Io sono Koda." + silence 1800 +
+  //     Prima erano 3 clip separate ("Io sono Ollenya." + silence 1800 +
   //     "Grazie di essere qui." + silence 1500 + "Da dove ti va di
   //     cominciare?") — l'utente sentiva 3 stacchi netti mentre l'orb
   //     restava sempre viola/speaking, quindi risultava innaturale.
-  //     Ora un'unica clip continua: "Io sono Koda. Grazie di essere qui.
+  //     Ora un'unica clip continua: "Io sono Ollenya. Grazie di essere qui.
   //     Da dove ti va di cominciare?" (4.0s totali, con micro-pause
   //     naturali interne gestite da TTS).
   { kind: "speak", clipKey: "presentazione_koda" },
@@ -300,7 +300,7 @@ const { width: WINDOW_WIDTH } = Dimensions.get("window");
 // Stessa formula della home (index.tsx riga 5071)
 const ORB_SIZE = Math.min(WINDOW_WIDTH * 0.78, 360);
 
-export default function KodaIntroConversational() {
+export default function OllenyaIntroConversational() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const theme = useTheme();
@@ -321,7 +321,7 @@ export default function KodaIntroConversational() {
   // di 1500ms. Vedi doSaveAndEnd() più sotto per i dettagli.
   // NB: la vecchia Opzione D (phase="free_talk" in-place con voiceStreamConverse
   // loop) è stata rimossa il 2026-08-10 — surrogato non coerente con la vera
-  // esperienza Koda che vive solo nel monolite index.tsx.
+  // esperienza Ollenya che vive solo nel monolite index.tsx.
 
   // Traccia se i micro-label sono già stati mostrati (first-time only)
   const shownLabels = useRef<Set<string>>(new Set());
@@ -715,7 +715,7 @@ export default function KodaIntroConversational() {
   }, [advance, userName]);
 
   // ==================== SAVE & END ====================
-  // 2026-08-10 (Opzione B, Fabio): la "Koda vera" vive solo dentro
+  // 2026-08-10 (Opzione B, Fabio): la "Ollenya vera" vive solo dentro
   // index.tsx (Home). L'Intro V2 non può replicarla senza refactoring del
   // monolite (verifica tecnica precedente). Portiamo quindi l'utente
   // nella Home vera con una transizione morbida:
@@ -745,13 +745,13 @@ export default function KodaIntroConversational() {
     if (!mountedRef.current) return;
     // === SKIP-SPLASH FLAG (2026-08-11, Fabio) ===
     // Scriviamo un timestamp che index.tsx leggerà al mount per decidere se
-    // saltare il KodaSplash da 10s. Il timestamp (invece di un semplice "1")
+    // saltare il OllenyaSplash da 10s. Il timestamp (invece di un semplice "1")
     // permette a index.tsx di ignorare il flag se troppo vecchio — così un
     // eventuale flag "appeso" (crash tra fine Intro e boot) non causerà un
     // salto splash indebito settimane dopo. Comunque cancellato al primo
     // boot successivo indipendentemente dall'esito (vedi handler in index.tsx).
     try {
-      await SecureStore.setItemAsync("koda_intro_completed_at", String(Date.now()));
+      await SecureStore.setItemAsync("ollenya_intro_completed_at", String(Date.now()));
     } catch (e) {
       console.warn(`[${TAG}] set intro_completed_at flag failed:`, e);
     }
@@ -793,7 +793,7 @@ export default function KodaIntroConversational() {
     switch (currentTurn.kind) {
       case "silence": {
         // orbState opzionale — default "idle" per compat, ma nella sequenza V2
-        // TUTTI i silence tra due speak sono orbState="speaking" (Koda non
+        // TUTTI i silence tra due speak sono orbState="speaking" (Ollenya non
         // torna idle tra frase e frase). Idle solo all'apertura.
         try {
           console.log(`[${TAG} DIAG] silence label="${currentTurn.label ?? ""}" ms=${currentTurn.ms} orbState=${currentTurn.orbState ?? "idle"}`);
@@ -1050,7 +1050,7 @@ export default function KodaIntroConversational() {
   // ==================== POST-INTRO TRANSITION ====================
   // (2026-08-10, Opzione B) La transizione dall'Intro V2 alla Home vera
   // avviene interamente dentro `doSaveAndEnd()` — vedi sopra. Nessun free-talk
-  // loop qui: la vera Koda vive in index.tsx, l'Intro V2 la introduce e poi
+  // loop qui: la vera Ollenya vive in index.tsx, l'Intro V2 la introduce e poi
   // le cede il palco con un crossfade morbido.
 
   // Mount/unmount + fade-in iniziale della schermata + breathe loop

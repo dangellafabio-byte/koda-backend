@@ -61,7 +61,7 @@ export default function DiagnosticsScreen() {
       const txt = formatDiagEventsForExport(events);
       await Share.share({
         message: txt,
-        title: "Koda diag log",
+        title: "Ollenya diag log",
       });
     } catch (e) {
       Alert.alert("Errore condivisione", String(e));
@@ -117,7 +117,7 @@ export default function DiagnosticsScreen() {
       >
         {events.length === 0 ? (
           <Text style={styles.emptyText}>
-            Nessun evento nel diario.{"\n\n"}Riproduci il problema che vuoi segnalarci (parla con Koda, prova la funzione che non va), poi torna qui e tocca "Condividi" per inviarci il diario.
+            Nessun evento nel diario.{"\n\n"}Riproduci il problema che vuoi segnalarci (parla con Ollenya, prova la funzione che non va), poi torna qui e tocca "Condividi" per inviarci il diario.
           </Text>
         ) : (
           events.map((ev, i) => (

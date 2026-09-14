@@ -8,7 +8,7 @@
  *   volta. Il flag di persistenza è server-side (Mongo) → sopravvive
  *   a reinstall/cambio device.
  *
- *   Tono coerente con Koda: caldo, non didattico, non "clicca qui per
+ *   Tono coerente con Ollenya: caldo, non didattico, non "clicca qui per
  *   info". Come se glielo dicesse un amico prima di lasciarti solo con
  *   te stesso.
  *
@@ -81,7 +81,7 @@ export default function LasciaAndareIntroModal({ visible, onContinue, onCancel }
             </Text>
 
             <Text style={[styles.paragraph, { color: theme.textMuted }]}>
-              Koda non ti risponde. Non ti ascolta nemmeno — nessuno
+              Ollenya non ti risponde. Non ti ascolta nemmeno — nessuno
               ascolta. Non c&apos;è trascrizione, niente resta sul telefono,
               niente arriva a un server. Solo il piccolo respiro luminoso
               ti fa compagnia mentre parli.

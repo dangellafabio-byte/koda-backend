@@ -1,12 +1,12 @@
 /**
- * Koda — Theme system.
+ * Ollenya — Theme system.
  *
  * === DECISIONE 2026-08-04 (Fabio, dati alla mano) ===
  * Rimosso il light mode. Motivazione:
  *   • 65-95% utenti smartphone preferiscono dark mode (fonti multiple 2026)
  *   • Sera/notte la preferenza sale a 87-91%
- *   • Koda è usato prevalentemente sera/notte (uso emotivo, sfogo)
- *   • Stima: 80-90%+ degli utenti reali Koda avrebbe scelto dark comunque
+ *   • Ollenya è usato prevalentemente sera/notte (uso emotivo, sfogo)
+ *   • Stima: 80-90%+ degli utenti reali Ollenya avrebbe scelto dark comunque
  * → Il light mode era un investimento a bassa resa e alta superficie di bug.
  *
  * Ora esiste UN SOLO tema: notte. `normalizeThemeName` rimappa qualsiasi
@@ -70,7 +70,7 @@ const NOTTE: Palette = {
   label: "Scuro",
   emoji: "🌙",
   isDark: true,
-  // Indaco notturno neon — signature Koda.
+  // Indaco notturno neon — signature Ollenya.
   bg: "#1F1A36",
   surface: "#2A2347",
   surfaceAlt: "rgba(255,255,255,0.06)",

@@ -4,13 +4,13 @@ EXPERIMENT D — TTS reali per minuto di conversazione
 
 Analizza i log del backend (Emergent pod o Railway) per calcolare:
 
-  - Secondi di TTS Koda REALMENTE sintetizzati per turno
+  - Secondi di TTS Ollenya REALMENTE sintetizzati per turno
   - Millisecondi di parlato UTENTE per turno
   - Ratio "TTS_koda_seconds / (user_audio_seconds + tts_koda_seconds)"
 
 Log necessari (grep-friendly, aggiunti a server.py 2026-09-10):
-  - `[KODA_TIMING] USER_PAYLOAD sid=... user_audio_ms=<int>`
-  - `[KODA_TTS_DUR] sid=... idx=... chunk_dur_seconds=<float>`
+  - `[OLLENYA_TIMING] USER_PAYLOAD sid=... user_audio_ms=<int>`
+  - `[OLLENYA_TTS_DUR] sid=... idx=... chunk_dur_seconds=<float>`
 
 Uso locale (Emergent pod):
   python scripts/analyze_experiment_d.py /var/log/supervisor/backend.err.log
@@ -19,7 +19,7 @@ Uso su Railway (via CLI o dashboard):
   railway logs --json | python scripts/analyze_experiment_d.py -
 
 Output: statistiche aggregate per rispondere alla domanda:
-  "230 minuti di piano venduti = quanti minuti effettivi di TTS Koda?"
+  "230 minuti di piano venduti = quanti minuti effettivi di TTS Ollenya?"
 """
 
 import sys
@@ -79,7 +79,7 @@ def report(agg):
         return
 
     print("=" * 80)
-    print("EXPERIMENT D — TTS reali per conversazione Koda")
+    print("EXPERIMENT D — TTS reali per conversazione Ollenya")
     print("=" * 80)
     print()
     print(f"{'sid':<12} {'turni':<7} {'user_s':<10} {'tts_s':<10} "
@@ -123,12 +123,12 @@ def report(agg):
     print("=" * 80)
     print(f"Conversazione totale osservata : {grand_total_s:.1f}s "
           f"({grand_total_s/60:.2f} min)")
-    print(f"TTS Koda sintetizzato          : {total_tts_seconds:.1f}s "
+    print(f"TTS Ollenya sintetizzato          : {total_tts_seconds:.1f}s "
           f"({total_tts_seconds/60:.2f} min)")
     print(f"Utente parlato                 : {total_user_s:.1f}s "
           f"({total_user_s/60:.2f} min)")
     print()
-    print(f"→ Per ogni MINUTO di conversazione, TTS Koda sintetizzato: "
+    print(f"→ Per ogni MINUTO di conversazione, TTS Ollenya sintetizzato: "
           f"{grand_ratio*60:.1f}s ({grand_ratio*100:.1f}%)")
     print()
     if grand_ratio > 0 and total_tts_seconds > 0:

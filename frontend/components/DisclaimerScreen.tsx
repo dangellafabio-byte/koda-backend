@@ -1,5 +1,5 @@
 /**
- * DisclaimerScreen — Overlay blocking "Koda non è terapia"
+ * DisclaimerScreen — Overlay blocking "Ollenya non è terapia"
  *
  * Mostrato al primo utilizzo dell'app (o dopo un bump di
  * DISCLAIMER_VERSION lato backend). L'utente deve tappare "Ho capito"
@@ -67,7 +67,7 @@ export default function DisclaimerScreen({ onAccepted }: DisclaimerScreenProps) 
         showsVerticalScrollIndicator={false}
       >
         {/* Titolo principale caldo */}
-        <Text style={styles.title}>Koda è qui per ascoltarti.</Text>
+        <Text style={styles.title}>Ollenya è qui per ascoltarti.</Text>
 
         {/* Corpo del messaggio — tono umano, non legale */}
         <Text style={styles.paragraph}>
@@ -76,7 +76,7 @@ export default function DisclaimerScreen({ onAccepted }: DisclaimerScreenProps) 
         </Text>
 
         <Text style={styles.paragraph}>
-          Koda non fa diagnosi, non dà consigli clinici, non interpreta quello
+          Ollenya non fa diagnosi, non dà consigli clinici, non interpreta quello
           che senti.
         </Text>
 
@@ -87,7 +87,7 @@ export default function DisclaimerScreen({ onAccepted }: DisclaimerScreenProps) 
 
         <Text style={styles.paragraph}>
           Se stai attraversando un momento difficile che richiede supporto
-          professionale, Koda te lo dirà con chiarezza e potrà indicarti dove
+          professionale, Ollenya te lo dirà con chiarezza e potrà indicarti dove
           trovare aiuto vero.
         </Text>
 
@@ -95,7 +95,7 @@ export default function DisclaimerScreen({ onAccepted }: DisclaimerScreenProps) 
         <View style={styles.consentBox}>
           <Text style={styles.consentText}>
             Toccando <Text style={styles.consentBold}>Ho capito</Text> confermi
-            di aver letto: Koda è un compagno di ascolto, non un professionista
+            di aver letto: Ollenya è un compagno di ascolto, non un professionista
             della salute mentale.
           </Text>
         </View>

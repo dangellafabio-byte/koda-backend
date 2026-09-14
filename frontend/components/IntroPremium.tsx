@@ -209,7 +209,7 @@ export default function IntroPremium() {
       try { (player as any).volume = 1.0; } catch {}
       player.play();
       console.log(
-        `[KODA_INTRO_PREMIUM] clip started platform=${Platform.OS} ` +
+        `[OLLENYA_INTRO_PREMIUM] clip started platform=${Platform.OS} ` +
         `isLoaded=${(player as any).isLoaded} volume=${(player as any).volume} ` +
         `playing=${(player as any).playing ?? '?'} status=${(player as any).status ?? '?'}`
       );
@@ -224,12 +224,12 @@ export default function IntroPremium() {
             const playing = (player as any).playing;
             if (playing !== true) {
               console.warn(
-                `[KODA_INTRO_PREMIUM] Android double-play triggered: ` +
+                `[OLLENYA_INTRO_PREMIUM] Android double-play triggered: ` +
                 `playing=${playing} isLoaded=${(player as any).isLoaded}`
               );
               try { player.play(); } catch (e) { console.warn(`${TAG} double-play failed:`, e); }
             } else {
-              console.log(`[KODA_INTRO_PREMIUM] Android watchdog OK — playing confirmed`);
+              console.log(`[OLLENYA_INTRO_PREMIUM] Android watchdog OK — playing confirmed`);
             }
           } catch (e) { console.warn(`${TAG} watchdog exception:`, e); }
         }, 500);

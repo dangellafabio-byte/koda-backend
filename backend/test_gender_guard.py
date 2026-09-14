@@ -1,6 +1,6 @@
 """Unit test per koda_gender_guard (Fabio 2026-06)."""
 import unittest
-from koda_gender_guard import fix_ai_gender
+from ollenya_gender_guard import fix_ai_gender
 
 
 class TestGenderGuard(unittest.TestCase):

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Koda",
+    "name": "Ollenya",
     "slug": "lamico-fraterno",
     "version": "1.0.126",
     "orientation": "portrait",
@@ -15,9 +15,9 @@
       "bundleIdentifier": "com.dangella.koda",
       "buildNumber": "25",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Per ascoltare la tua voce e parlare con Koda",
+        "NSMicrophoneUsageDescription": "Per ascoltare la tua voce e parlare con Ollenya",
         "NSPhotoLibraryUsageDescription": "Per scegliere immagini di sfondo personalizzate",
-        "NSSpeechRecognitionUsageDescription": "Per trascrivere quello che dici a Koda",
+        "NSSpeechRecognitionUsageDescription": "Per trascrivere quello che dici a Ollenya",
         "NSLocationWhenInUseUsageDescription": "Sapere la tua città per risposte più contestuali",
         "ITSAppUsesNonExemptEncryption": false,
         "UIBackgroundModes": [
@@ -68,7 +68,7 @@
       [
         "expo-audio",
         {
-          "microphonePermission": "Per ascoltare la tua voce e parlare con Koda"
+          "microphonePermission": "Per ascoltare la tua voce e parlare con Ollenya"
         }
       ],
       [
@@ -81,8 +81,8 @@
       [
         "expo-speech-recognition",
         {
-          "microphonePermission": "Koda ascolta la tua voce per rispondere.",
-          "speechRecognitionPermission": "Per trascrivere quello che dici a Koda.",
+          "microphonePermission": "Ollenya ascolta la tua voce per rispondere.",
+          "speechRecognitionPermission": "Per trascrivere quello che dici a Ollenya.",
           "androidSpeechServicePackages": [
             "com.google.android.googlequicksearchbox"
           ]

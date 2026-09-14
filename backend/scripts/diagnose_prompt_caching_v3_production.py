@@ -52,7 +52,7 @@ _profile = Profile(
         "Persona diretta, tecnicamente competente, ex-sviluppatore. "
         "Fa domande precise e pretende risposte precise. Bassa tolleranza "
         "per pleasantries e vaghezza. Predilige comunicazione asciutta e "
-        "orientata ai fatti. Sta costruendo Koda come progetto principale "
+        "orientata ai fatti. Sta costruendo Ollenya come progetto principale "
         "e ha investito mesi nell'app. Empatia calibrata, no toni terapeutici."
     ),
     memory_summary=(

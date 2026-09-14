@@ -5,7 +5,7 @@
  *   Plan C (Fabio escalation 2026-06-20 v8).
  *   La VAD volumetrica in voice.ts decide "c'è voce" basandosi solo
  *   sull'RMS del microfono. Nel furgone col motore acceso, l'RMS è
- *   alto a prescindere → falsi positivi → Koda risponde a rumore di
+ *   alto a prescindere → falsi positivi → Ollenya risponde a rumore di
  *   strada/clacson/motore → spreca Deepgram + Claude + ElevenLabs +
  *   l'attenzione dell'utente.
  *
@@ -60,7 +60,7 @@ export type GateDecision = {
     | "fallback-long-audio";
   /** dettaglio numerico da Silero se la chiamata è riuscita. */
   probe: SileroProbeResult | null;
-  /** millisecondi totali del round-trip (per [KODA_TIMING]). */
+  /** millisecondi totali del round-trip (per [OLLENYA_TIMING]). */
   latency_ms: number;
 };
 
@@ -210,7 +210,7 @@ export async function checkHasSpeech(opts: CheckOpts): Promise<GateDecision> {
 
 /**
  * Helper di log uniformato — emette una riga grep-abile su /diagnostics.
- * Esempio: [KODA_VAD_GATE] decision=PASS ratio=0.62 prob_max=0.99 latency=180ms reason=silero-confirmed
+ * Esempio: [OLLENYA_VAD_GATE] decision=PASS ratio=0.62 prob_max=0.99 latency=180ms reason=silero-confirmed
  */
 export function logGateDecision(dec: GateDecision): void {
   const decision = dec.hasSpeech ? "PASS" : "BLOCK";
@@ -218,6 +218,6 @@ export function logGateDecision(dec: GateDecision): void {
   const probMax = dec.probe?.speech_prob_max?.toFixed(3) ?? "n/a";
   const segs = dec.probe?.segments?.length ?? 0;
   console.log(
-    `[KODA_VAD_GATE] decision=${decision} ratio=${ratio} prob_max=${probMax} segments=${segs} latency=${dec.latency_ms}ms reason=${dec.reason} (platform=${Platform.OS})`
+    `[OLLENYA_VAD_GATE] decision=${decision} ratio=${ratio} prob_max=${probMax} segments=${segs} latency=${dec.latency_ms}ms reason=${dec.reason} (platform=${Platform.OS})`
   );
 }

@@ -149,7 +149,7 @@ def test_ws_voice_stream_handshake_with_full_start_frame_then_end():
                 "lang": "it",
                 "profile_lang": "it",
                 "user_id": uid,
-                "ai_name": "Koda",
+                "ai_name": "Ollenya",
                 "tts_voice_id": "6TngzmzM89jJ3Y2Yiywr",
                 "ephemeral": False,
                 "container": "aac",

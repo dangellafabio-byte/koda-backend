@@ -39,7 +39,7 @@ import Svg, { Defs, RadialGradient, Stop, Circle } from "react-native-svg";
 // transizione di status. Fix applicata in app/index.tsx (keep-awake
 // stabile per l'intera sessione con debounce sul release).
 // Qui riabilitiamo il breath cycle IDENTICO a iOS.
-const KODA_BREATH_DIAGNOSTIC_DISABLE_ANDROID = false;
+const OLLENYA_BREATH_DIAGNOSTIC_DISABLE_ANDROID = false;
 
 export type OrbStatus = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 export type OrbTone =
@@ -72,7 +72,7 @@ type Props = {
    *  TONE_PALETTES.warm/concerned/etc durante lo speaking. */
   speakingPaletteOverride?: [string, string, string] | null;
   /** Se true, la `speakingPaletteOverride` viene applicata anche durante
-   *  "idle" — non solo "speaking". Utile in KodaIntro per dare alla
+   *  "idle" — non solo "speaking". Utile in OllenyaIntro per dare alla
    *  sfera l'identità della voce scelta in modo persistente.
    *  Default: false (mantiene il comportamento del main flow). */
   forceVoiceIdentity?: boolean;
@@ -80,7 +80,7 @@ type Props = {
    *  Se `speechActive === false` durante `status="speaking"`, la
    *  pulsazione sillabica si smorza automaticamente su un valore
    *  basso e regolare, così l'orb non "pulsa a vuoto" durante i
-   *  respiri/pause naturali di Koda. Default `true` = comportamento
+   *  respiri/pause naturali di Ollenya. Default `true` = comportamento
    *  attuale invariato. Cambiabile in tempo reale: alla prossima
    *  chiamata di step() (max ~250ms dopo) il nuovo stato è già in
    *  effetto. Nessun reset di fase quando torna a true. */
@@ -98,7 +98,7 @@ type Props = {
 // menta soft per coerenza con NeonBorder.idle e per dare un chiaro segnale
 // visivo di "pronta, in attesa".
 const TONE_PALETTES: Record<OrbTone, [string, string, string]> = {
-  // Viola elettrico — Koda PARLA (matcha NeonBorder "speaking")
+  // Viola elettrico — Ollenya PARLA (matcha NeonBorder "speaking")
   warm: ["#E9D5FF", "#BD10E0", "#7E22CE"],
   // Blu notte — serenità, mare profondo, respiro lungo
   calm: ["#93C5FD", "#3B82F6", "#1E3A8A"],
@@ -111,7 +111,7 @@ const TONE_PALETTES: Record<OrbTone, [string, string, string]> = {
   // === NEUTRAL IDLE (2026-05-23 update) ===
   // Champagne caldo / sabbia dorata. Prima era #7DD3C0 (verde menta) ma
   // troppo simile al tiffany del recording → l'utente non distingueva
-  // a colpo d'occhio se Koda stava in idle o stava ascoltando.
+  // a colpo d'occhio se Ollenya stava in idle o stava ascoltando.
   // Champagne caldo ↔ tiffany freddo = contrasto caldo/freddo massimo,
   // impossibile confonderli a un metro di distanza.
   //   bright (rim)  #F5E6CC  crema pallida
@@ -148,7 +148,7 @@ export default function EclipseOrb({
   // Il disco centrale nero È l'identità dell'orb (eclissi = disco scuro
   // + alone luminoso), NON un dettaglio che si inverte tra dark/light.
   // Precedente logica "negativo fotografico" (disco perlato in light)
-  // ROLLBACKATA: perdeva l'elemento più riconoscibile di Koda e faceva
+  // ROLLBACKATA: perdeva l'elemento più riconoscibile di Ollenya e faceva
   // sembrare l'orb un sole che brilla, non un'eclissi.
   // Ora cambia SOLO il colore del cielo attorno (theme.bg da indaco a
   // azzurro); disco e alone restano identici in entrambi i mode.
@@ -169,7 +169,7 @@ export default function EclipseOrb({
     if (status === "speaking" && speakingPaletteOverride) {
       return speakingPaletteOverride;
     }
-    // === FORCE VOICE IDENTITY (KodaIntro 2026-06) ===
+    // === FORCE VOICE IDENTITY (OllenyaIntro 2026-06) ===
     // Quando il chiamante chiede esplicitamente di "indossare" l'identità
     // della voce anche fuori dallo speaking (es. in idle durante l'intro),
     // applichiamo la palette voce anche qui. Non incluso recording/thinking
@@ -259,7 +259,7 @@ export default function EclipseOrb({
     // Se disabilitato per test (Android only, per verificare bagliore
     // schermo Honor/Huawei), non avviare il loop e lascia breath a 0.
     // iOS: sempre attivo. Rimuovere questa gate dopo il test.
-    if (KODA_BREATH_DIAGNOSTIC_DISABLE_ANDROID) {
+    if (OLLENYA_BREATH_DIAGNOSTIC_DISABLE_ANDROID) {
       console.log(
         "[EclipseOrb] BREATH DISABLED (test diagnostico v63.9 — verifica flash Honor/Huawei)"
       );
@@ -341,7 +341,7 @@ export default function EclipseOrb({
         let intensity: number;
         let duration: number;
         // === ORB SILENCE SYNC (Task 2, Fabio 2026-08) ===
-        // Se il server ci ha detto che ora Koda sta facendo una pausa
+        // Se il server ci ha detto che ora Ollenya sta facendo una pausa
         // (respiro/silenzio ≥180ms dal RMS parsing), smorziamo la
         // pulsazione a un valore quasi-piatto per la durata dello
         // step corrente. Al prossimo step, se il silenzio è finito

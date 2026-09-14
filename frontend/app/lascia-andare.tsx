@@ -4,7 +4,7 @@
  * Concept (Fabio, 2026-07-16):
  *   L'utente entra, lo schermo diventa nero, solo l'orb è visibile.
  *   L'utente parla liberamente. L'orb pulsa mentre sente la voce
- *   (feedback visivo di ascolto). Koda NON risponde — né voce né testo.
+ *   (feedback visivo di ascolto). Ollenya NON risponde — né voce né testo.
  *   Zero trascrizione, zero Claude, zero ElevenLabs, zero rete.
  *   Solo il VAD locale sul dispositivo rileva quando l'utente parla.
  *   Quando l'utente esce, zero traccia rimane né sul server né sul telefono.
@@ -95,7 +95,7 @@ export default function LasciaAndareScreen() {
   const insets = useSafeAreaInsets();
   // === VOICE PARAM (2026-07-27) — presenza vocale in apertura/chiusura ===
   //
-  // La schermata riceve la voce Koda scelta dall'utente come route param
+  // La schermata riceve la voce Ollenya scelta dall'utente come route param
   // (es. router.push("/lascia-andare?voice=aria")). Serve per riprodurre
   // due brevi frasi pre-registrate:
   //   - Apertura: "Prenditi il tuo tempo."
@@ -123,7 +123,7 @@ export default function LasciaAndareScreen() {
   //   Nella stanza "Lascia Andare" (sfogo), l'orb appariva statico e
   //   color sabbia (stato "idle") su tutti i device (Huawei, Xiaomi,
   //   iPhone). Doveva invece pulsare visibilmente per comunicare
-  //   "Koda ti sta ascoltando incondizionatamente".
+  //   "Ollenya ti sta ascoltando incondizionatamente".
   //
   // ROOT CAUSE:
   //   Il VAD partiva da "idle" e passava a "recording" solo se il dB
@@ -169,21 +169,21 @@ export default function LasciaAndareScreen() {
         const flag = await SecureStore.getItemAsync("intro_v3_completed_at");
         if (cancelled) return;
         if (!flag) {
-          console.log(`[KODA_LA_GATE] intro_v3_completed_at ASSENTE → redirect a /intro-v3`);
+          console.log(`[OLLENYA_LA_GATE] intro_v3_completed_at ASSENTE → redirect a /intro-v3`);
           setIntroGate("redirecting");
           try {
             router.replace("/intro-v3");
           } catch (e) {
-            console.warn(`[KODA_LA_GATE] router.replace failed:`, e);
+            console.warn(`[OLLENYA_LA_GATE] router.replace failed:`, e);
             // Fallback: se il router fallisce, permetti comunque LA
             setIntroGate("authorized");
           }
           return;
         }
-        console.log(`[KODA_LA_GATE] intro_v3_completed_at presente → LA authorized`);
+        console.log(`[OLLENYA_LA_GATE] intro_v3_completed_at presente → LA authorized`);
         setIntroGate("authorized");
       } catch (e) {
-        console.warn(`[KODA_LA_GATE] SecureStore read failed (proceed with LA):`, e);
+        console.warn(`[OLLENYA_LA_GATE] SecureStore read failed (proceed with LA):`, e);
         if (!cancelled) setIntroGate("authorized");
       }
     })();
@@ -210,7 +210,7 @@ export default function LasciaAndareScreen() {
   // orfani nella cacheDirectory più vecchi di 5 minuti.
   //
   // Vincoli difensivi:
-  //   - Solo `.m4a` (i `.mp3` in cache sono TTS di Koda conv, non nostri —
+  //   - Solo `.m4a` (i `.mp3` in cache sono TTS di Ollenya conv, non nostri —
   //     vedi lib/speech.ts:1465 `koda_ws_{ts}_{idx}.mp3` — NON toccarli)
   //   - Solo file con mtime > 5 minuti fa (se qualcuno è ancora attivo
   //     lasciamo stare, il cleanup runtime lo prenderà a session end)
@@ -227,7 +227,7 @@ export default function LasciaAndareScreen() {
     // il nuovo codice — evita l'ambiguità che ha causato la confusione
     // sul buildtag il 2026-08-20.
     console.log(
-      "[KODA_LA_MOUNT] lascia-andare screen mounted — fixes=P3v2+P5+P7+P1b+P2 " +
+      "[OLLENYA_LA_MOUNT] lascia-andare screen mounted — fixes=P3v2+P5+P7+P1b+P2 " +
         `defaultAuthorized=allowed cleanupPrefix=KODA_LA_CLEANUP orbReactive=meterDb ` +
         `voiceGlow=0.65-1.00@180/500ms dbBoost→EclipseOrb(internal) splashSkipOnRemount=on`
     );
@@ -237,7 +237,7 @@ export default function LasciaAndareScreen() {
       try {
         const dir = (FileSystem as any).cacheDirectory as string | null;
         if (!dir) {
-          console.log("[KODA_LA_CLEANUP] cacheDirectory unavailable — skip");
+          console.log("[OLLENYA_LA_CLEANUP] cacheDirectory unavailable — skip");
           return;
         }
         const entries = await FileSystem.readDirectoryAsync(dir);
@@ -249,7 +249,7 @@ export default function LasciaAndareScreen() {
         for (const name of entries) {
           if (cancelled) return;
           // Whitelist estensione: solo .m4a (audio recorder Lascia Andare).
-          // Escludiamo esplicitamente qualsiasi `koda_ws_*.mp3` (TTS Koda conv)
+          // Escludiamo esplicitamente qualsiasi `koda_ws_*.mp3` (TTS Ollenya conv)
           // e `koda_offline_*.mp3` (clip offline preload).
           if (!name.toLowerCase().endsWith(".m4a")) {
             skipped++;
@@ -272,15 +272,15 @@ export default function LasciaAndareScreen() {
             deleted++;
           } catch (e) {
             // Silenzioso: se un singolo file fallisce, andiamo avanti
-            console.log(`[KODA_LA_CLEANUP] skip ${name}: ${e}`);
+            console.log(`[OLLENYA_LA_CLEANUP] skip ${name}: ${e}`);
           }
         }
         console.log(
-          `[KODA_LA_CLEANUP] preemptive m4a orphans: deleted=${deleted} skipped=${skipped}`
+          `[OLLENYA_LA_CLEANUP] preemptive m4a orphans: deleted=${deleted} skipped=${skipped}`
         );
       } catch (e) {
         // readDirectoryAsync può fallire su alcuni device — non blocchiamo
-        console.log(`[KODA_LA_CLEANUP] scan failed (non-fatal): ${e}`);
+        console.log(`[OLLENYA_LA_CLEANUP] scan failed (non-fatal): ${e}`);
       }
     })();
     return () => {
@@ -373,7 +373,7 @@ export default function LasciaAndareScreen() {
   const triggerHeartReveal = useCallback(() => {
     if (revealTriggeredRef.current) return;
     revealTriggeredRef.current = true;
-    console.log(`[KODA_LA_REVEAL] trigger heart-voice-reveal after ${((Date.now() - sessionStartedAtRef.current) / 1000).toFixed(1)}s`);
+    console.log(`[OLLENYA_LA_REVEAL] trigger heart-voice-reveal after ${((Date.now() - sessionStartedAtRef.current) / 1000).toFixed(1)}s`);
     if (revealWatcherRef.current) {
       clearInterval(revealWatcherRef.current);
       revealWatcherRef.current = null;
@@ -398,7 +398,7 @@ export default function LasciaAndareScreen() {
         try {
           router.replace("/heart-voice-reveal");
         } catch (e) {
-          console.warn("[KODA_LA_REVEAL] navigation failed:", e);
+          console.warn("[OLLENYA_LA_REVEAL] navigation failed:", e);
         }
       });
     });
@@ -629,7 +629,7 @@ export default function LasciaAndareScreen() {
       Date.now() - ((globalThis as any).__kodaLaLastLogTs || 0) > 1000
     ) {
       console.log(
-        `[KODA_LA_ORB] meterDb=${meterDb.toFixed(1)} target=${targetScale.toFixed(3)} ` +
+        `[OLLENYA_LA_ORB] meterDb=${meterDb.toFixed(1)} target=${targetScale.toFixed(3)} ` +
           `dur=${duration}ms silence=${meterDb < SILENCE_DB ? "Y" : "N"}`
       );
       (globalThis as any).__kodaLaLastLogDb = meterDb;
@@ -854,7 +854,7 @@ export default function LasciaAndareScreen() {
               (lastLoggedDb !== null && Math.abs(db - lastLoggedDb) > 15)
             ) {
               console.log(
-                `[KODA_LA_VAD] meter=${db.toFixed(1)}dB threshold=${SPEECH_DB}dB active=${db > SPEECH_DB ? "Y" : "N"} isRecording=${st.isRecording}`
+                `[OLLENYA_LA_VAD] meter=${db.toFixed(1)}dB threshold=${SPEECH_DB}dB active=${db > SPEECH_DB ? "Y" : "N"} isRecording=${st.isRecording}`
               );
               lastLoggedDb = db;
             }
@@ -978,7 +978,7 @@ export default function LasciaAndareScreen() {
     // lasciato andare." PRIMA che l'orb inizi a scomparire. Sequenza
     // cerimoniale richiesta dall'utente (Opzione B):
     //   1) La stanza resta visibile e l'orb continua il suo respiro
-    //   2) Koda pronuncia la frase di chiusura (~1.5s) dallo SPEAKER
+    //   2) Ollenya pronuncia la frase di chiusura (~1.5s) dallo SPEAKER
     //   3) SOLO al termine del playback parte l'animazione di uscita
     //
     // Se il playback fallisce o timeouta (safety 5s nel modulo helper),
@@ -1021,7 +1021,7 @@ export default function LasciaAndareScreen() {
     await teardown();
 
     // === FIX BUG "Free reach Home" (Fabio 2026-08-24) =========================
-    // Spec: un utente Free non deve MAI raggiungere la Home (Koda conv).
+    // Spec: un utente Free non deve MAI raggiungere la Home (Ollenya conv).
     // PRIMA: `router.canGoBack() ? back() : replace("/")` — in entrambi i
     // rami il Free finiva alla Home Premium (via back stack o replace).
     // ADESSO: leggiamo il tier dalla cache profilo locale (zero network,
@@ -1084,11 +1084,11 @@ export default function LasciaAndareScreen() {
             tier === "annual" ||
             tier === "unlimited";
           if (isPaid) {
-            console.log(`[KODA_LA_PILL] hidden — user is Premium (${tier})`);
+            console.log(`[OLLENYA_LA_PILL] hidden — user is Premium (${tier})`);
             return;
           }
         } catch (e) {
-          console.warn("[KODA_LA_PILL] tier read failed, defaulting to show:", e);
+          console.warn("[OLLENYA_LA_PILL] tier read failed, defaulting to show:", e);
         }
 
         // Gate 2 — Intro completata (comportamento pre-esistente)
@@ -1114,7 +1114,7 @@ export default function LasciaAndareScreen() {
   }, [isFirstBoot]);
 
   const onPillTap = useCallback(async () => {
-    console.log(`[KODA_LA_PILL] tap Parla con Koda`);
+    console.log(`[OLLENYA_LA_PILL] tap Parla con Ollenya`);
     // === FIX 2026-09-11 (Fabio — no paywall/demo per Premium) ================
     // Prima di questo fix, il pill mandava SEMPRE a /microdemo o /paywall,
     // ignorando il tier dell'utente. Sintomo: Fabio (Premium) vedeva la
@@ -1130,7 +1130,7 @@ export default function LasciaAndareScreen() {
         tier === "annual" ||
         tier === "unlimited";
       if (isPaid) {
-        console.log(`[KODA_LA_PILL] Premium (${tier}) → chat piena`);
+        console.log(`[OLLENYA_LA_PILL] Premium (${tier}) → chat piena`);
         // Premium: se la LA è stata aperta DALLA chat (Home), torna
         // indietro per non impilare due Home nello stack. Altrimenti
         // replace a "/".
@@ -1142,7 +1142,7 @@ export default function LasciaAndareScreen() {
         return;
       }
     } catch (e) {
-      console.warn(`[KODA_LA_PILL] tier read failed, fallback Free flow:`, e);
+      console.warn(`[OLLENYA_LA_PILL] tier read failed, fallback Free flow:`, e);
     }
 
     // Utente Free: flusso originale con rate-limit microdemo
@@ -1150,21 +1150,21 @@ export default function LasciaAndareScreen() {
       const lastAtStr = await SecureStore.getItemAsync("microdemo_last_at");
       const lastAt = lastAtStr ? parseInt(lastAtStr, 10) : 0;
       // === RATE-LIMIT ALLINEATO A MICRODEMO (Fabio 2026-06) ===================
-      // Alzato da 24h→72h in coerenza con MicroDemoKoda.tsx. Se cambi qua,
+      // Alzato da 24h→72h in coerenza con MicroDemoOllenya.tsx. Se cambi qua,
       // cambia anche là (o meglio: estrai in una costante condivisa).
       const RATE_LIMIT_MS = 72 * 60 * 60 * 1000;
       const now = Date.now();
       if (lastAt && now - lastAt < RATE_LIMIT_MS) {
         // Fuori rate-limit → paywall diretto
-        console.log(`[KODA_LA_PILL] Free rate-limited → paywall`);
+        console.log(`[OLLENYA_LA_PILL] Free rate-limited → paywall`);
         router.push("/paywall?variant=post-demo");
         return;
       }
       // Ok → naviga alla demo
-      console.log(`[KODA_LA_PILL] Free → /microdemo`);
+      console.log(`[OLLENYA_LA_PILL] Free → /microdemo`);
       router.push("/microdemo");
     } catch (e) {
-      console.warn(`[KODA_LA_PILL] tap handler failed:`, e);
+      console.warn(`[OLLENYA_LA_PILL] tap handler failed:`, e);
     }
   }, [router]);
 
@@ -1178,11 +1178,11 @@ export default function LasciaAndareScreen() {
     if (isFirstBoot && !revealTriggeredRef.current) {
       const elapsed = Date.now() - sessionStartedAtRef.current;
       if (elapsed >= MIN_SESSION_MS) {
-        console.log(`[KODA_LA_REVEAL] X tapped after ${(elapsed / 1000).toFixed(1)}s → trigger reveal`);
+        console.log(`[OLLENYA_LA_REVEAL] X tapped after ${(elapsed / 1000).toFixed(1)}s → trigger reveal`);
         triggerHeartReveal();
         return;
       }
-      console.log(`[KODA_LA_REVEAL] X tapped early (${(elapsed / 1000).toFixed(1)}s < 60s) → normal exit`);
+      console.log(`[OLLENYA_LA_REVEAL] X tapped early (${(elapsed / 1000).toFixed(1)}s < 60s) → normal exit`);
     }
     handleExit();
   }, [isFirstBoot, triggerHeartReveal, handleExit]);
@@ -1209,7 +1209,7 @@ export default function LasciaAndareScreen() {
           text: "Sì, riavvia",
           style: "destructive",
           onPress: async () => {
-            console.log(`[KODA_LA_RESET] intro V3 reset triggered by user`);
+            console.log(`[OLLENYA_LA_RESET] intro V3 reset triggered by user`);
             try {
               await Promise.all([
                 SecureStore.deleteItemAsync("intro_v3_completed_at"),
@@ -1217,12 +1217,12 @@ export default function LasciaAndareScreen() {
                 SecureStore.deleteItemAsync("microdemo_last_at"),
                 SecureStore.deleteItemAsync("user_display_name"),
                 // Anche il flag V1 (superato) per completezza
-                SecureStore.deleteItemAsync("koda_intro_seen"),
-                SecureStore.deleteItemAsync("koda_intro_completed_at"),
+                SecureStore.deleteItemAsync("ollenya_intro_seen"),
+                SecureStore.deleteItemAsync("ollenya_intro_completed_at"),
               ]);
-              console.log(`[KODA_LA_RESET] flags cleared, navigating to /intro-v3`);
+              console.log(`[OLLENYA_LA_RESET] flags cleared, navigating to /intro-v3`);
             } catch (e) {
-              console.warn(`[KODA_LA_RESET] SecureStore clear failed (procedo comunque):`, e);
+              console.warn(`[OLLENYA_LA_RESET] SecureStore clear failed (procedo comunque):`, e);
             }
             // Fade-out morbido → naviga
             exitingRef.current = true;
@@ -1236,7 +1236,7 @@ export default function LasciaAndareScreen() {
               try {
                 router.replace("/intro-v3");
               } catch (e) {
-                console.warn(`[KODA_LA_RESET] router.replace failed:`, e);
+                console.warn(`[OLLENYA_LA_RESET] router.replace failed:`, e);
               }
             });
           },
@@ -1258,14 +1258,14 @@ export default function LasciaAndareScreen() {
     sessionStartedAtRef.current = Date.now();
     lastSpeechAtRef.current = Date.now();
     revealTriggeredRef.current = false;
-    console.log(`[KODA_LA_REVEAL] watcher started (firstBoot=1, min=${MIN_SESSION_MS}ms, silence=${SILENCE_FOR_REVEAL_MS}ms, hardTimeout=${HARD_TIMEOUT_MS}ms)`);
+    console.log(`[OLLENYA_LA_REVEAL] watcher started (firstBoot=1, min=${MIN_SESSION_MS}ms, silence=${SILENCE_FOR_REVEAL_MS}ms, hardTimeout=${HARD_TIMEOUT_MS}ms)`);
     revealWatcherRef.current = setInterval(() => {
       if (revealTriggeredRef.current) return;
       const now = Date.now();
       const sessionElapsed = now - sessionStartedAtRef.current;
       const silenceElapsed = now - lastSpeechAtRef.current;
       if (sessionElapsed >= MIN_SESSION_MS && silenceElapsed >= SILENCE_FOR_REVEAL_MS) {
-        console.log(`[KODA_LA_REVEAL] silence trigger — session=${(sessionElapsed / 1000).toFixed(1)}s silence=${(silenceElapsed / 1000).toFixed(1)}s`);
+        console.log(`[OLLENYA_LA_REVEAL] silence trigger — session=${(sessionElapsed / 1000).toFixed(1)}s silence=${(silenceElapsed / 1000).toFixed(1)}s`);
         triggerHeartReveal();
         return;
       }
@@ -1275,7 +1275,7 @@ export default function LasciaAndareScreen() {
       // il reveal comunque. Garantisce che l'utente non resti bloccato
       // in Lascia Andare indefinitamente in ambienti rumorosi.
       if (sessionElapsed >= HARD_TIMEOUT_MS) {
-        console.log(`[KODA_LA_REVEAL] hard-timeout trigger — session=${(sessionElapsed / 1000).toFixed(1)}s (VAD-independent fallback, silenceElapsed=${(silenceElapsed / 1000).toFixed(1)}s)`);
+        console.log(`[OLLENYA_LA_REVEAL] hard-timeout trigger — session=${(sessionElapsed / 1000).toFixed(1)}s (VAD-independent fallback, silenceElapsed=${(silenceElapsed / 1000).toFixed(1)}s)`);
         triggerHeartReveal();
       }
     }, 500);
@@ -1409,7 +1409,7 @@ export default function LasciaAndareScreen() {
         )}
       </Animated.View>
 
-      {/* Pill "Parla con Koda" — visibile solo dai boot ≥ 2 (fase F piano V3).
+      {/* Pill "Parla con Ollenya" — visibile solo dai boot ≥ 2 (fase F piano V3).
           Semi-trasparente, sopra il hint, fade-in a 3s. Non è aggressiva:
           l'utente può ignorarla e restare in LA all'infinito. Tap → demo
           se rate-limit ok, altrimenti paywall. */}
@@ -1429,7 +1429,7 @@ export default function LasciaAndareScreen() {
             style={styles.pillBtn}
             hitSlop={12}
             accessibilityRole="button"
-            accessibilityLabel="Parla con Koda"
+            accessibilityLabel="Parla con Ollenya"
             testID="la-pill-parla-con-koda"
           >
             <Ionicons
@@ -1438,7 +1438,7 @@ export default function LasciaAndareScreen() {
               color="rgba(255,255,255,0.7)"
               style={{ marginRight: 8 }}
             />
-            <Text style={styles.pillText}>Parla con Koda</Text>
+            <Text style={styles.pillText}>Parla con Ollenya</Text>
           </TouchableOpacity>
         </Animated.View>
       )}
@@ -1472,7 +1472,7 @@ const styles = StyleSheet.create({
     // Page 0, ma Fabio ha giustamente richiesto orb PIXEL-CENTRATO in tutte
     // le modalità → il flex-center basta e avanza per centrare al centro
     // esatto dello schermo (H/2). L'omologa modifica è applicata anche a
-    // Home Page 0, KodaIntroV3, HeartVoiceReveal, IntroPremium.
+    // Home Page 0, OllenyaIntroV3, HeartVoiceReveal, IntroPremium.
     paddingTop: 0,
   },
   hintBox: {

@@ -83,7 +83,7 @@ export default function LoginScreen() {
     <View style={[styles.root, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 32 }]}>
       <View style={styles.center}>
         <View style={styles.orb} />
-        <Text style={styles.brand}>Koda</Text>
+        <Text style={styles.brand}>Ollenya</Text>
         <Text style={styles.tagline}>Per le cose che vuoi portare con te.{"\n"}Per quelle che vuoi lasciare andare.</Text>
       </View>
 
@@ -150,7 +150,7 @@ export default function LoginScreen() {
           </TouchableOpacity>
         ) : null}
 
-        <Text style={styles.legal}>Accedendo accetti i Termini e la Privacy Policy di Koda.</Text>
+        <Text style={styles.legal}>Accedendo accetti i Termini e la Privacy Policy di Ollenya.</Text>
       </View>
     </View>
   );

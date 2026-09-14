@@ -9,7 +9,7 @@
  *    blocca l'orb centrale né il flow di conversazione). Il layer è
  *    pointer-events="none" quindi NON intercetta i tap sull'app.
  *  • Testo caldo, non allarmista: "Sei fuori linea. Le parole restano
- *    con te — Koda ti risponderà quando torni." Coerente con Koda:
+ *    con te — Ollenya ti risponderà quando torni." Coerente con Ollenya:
  *    la rete che manca non è "errore", è momento di attesa.
  *  • Auto-rientra (scompare) appena la rete torna disponibile.
  *  • Zero background polling, zero fetch, zero timer periodici — usa
@@ -110,13 +110,13 @@ export default function OfflineOverlay() {
       ]}
       accessible={visible}
       accessibilityRole="alert"
-      accessibilityLabel="Sei fuori linea. Koda ti risponderà quando torni online."
+      accessibilityLabel="Sei fuori linea. Ollenya ti risponderà quando torni online."
       testID="offline-overlay"
     >
       <View style={styles.pill}>
         <View style={styles.dot} />
         <Text style={styles.text} numberOfLines={2}>
-          Sei fuori linea. Le parole restano con te — Koda ti risponderà quando torni.
+          Sei fuori linea. Le parole restano con te — Ollenya ti risponderà quando torni.
         </Text>
       </View>
     </Animated.View>
@@ -136,7 +136,7 @@ const styles = StyleSheet.create({
   pill: {
     flexDirection: "row",
     alignItems: "center",
-    // Cassa scura semi-trasparente, coerente col tema notturno di Koda.
+    // Cassa scura semi-trasparente, coerente col tema notturno di Ollenya.
     // Bordo tenue per staccare da qualsiasi background (funziona sia
     // su tema notte che tema giorno / cielo / bosco / ciliegia).
     backgroundColor: "rgba(20, 20, 24, 0.92)",

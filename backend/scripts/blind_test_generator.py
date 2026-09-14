@@ -127,7 +127,7 @@ async def generate_v3_reference(phrase: dict, out_path: Path) -> float:
     client = ElevenLabs(api_key=api_key)
 
     # === VOICE SETTINGS COERENTI CON PRODUCTION (server.py:_voice_settings_for_tone default) ===
-    # Il pre-test DEVE riflettere la voce che l'utente sente in Koda live.
+    # Il pre-test DEVE riflettere la voce che l'utente sente in Ollenya live.
     # Cambiare parametri qui = testare un motore che NON è quello che arriverà
     # all'utente → falsa il gate.
     from elevenlabs import VoiceSettings

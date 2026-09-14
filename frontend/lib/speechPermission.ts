@@ -5,8 +5,8 @@
  * ⚠️  UNICO entry point per QUALUNQUE richiesta di permesso Speech
  * Recognition/Microfono in tutta l'app. Riusato da:
  *   - IntroPremium (Passo 3.5)
- *   - Home Koda conv (tap orb, toggle hands-free)
- *   - KodaIntroV3 (setup vocale)
+ *   - Home Ollenya conv (tap orb, toggle hands-free)
+ *   - OllenyaIntroV3 (setup vocale)
  *
  * Testo del pre-prompt IDENTICO ovunque per coerenza rituale — se lo
  * cambi qui, cambia in un solo posto per tutta l'app.

@@ -55,7 +55,7 @@ const firstBootProvaloClip = require("../assets/sounds/intro/la_provalo-cielo.mp
 // ============================================================================
 // La UI e il backend usano "aria" (Cielo, femminile) e "theo" (Vento,
 // maschile) come chiavi canoniche (vedi app/index.tsx VOICE_ID_TO_KODA_VOICE
-// e KodaIntro.tsx). Accettiamo anche gli alias storici "cielo"/"vento"/"echo"
+// e OllenyaIntro.tsx). Accettiamo anche gli alias storici "cielo"/"vento"/"echo"
 // per robustezza. Fallback a Cielo se voce non riconosciuta o assente.
 export type LasciaAndareVoice = "aria" | "theo" | "cielo" | "vento" | "echo" | string | null | undefined;
 
@@ -134,7 +134,7 @@ function playAndWait(source: number, timeoutMs: number = 5000): Promise<void> {
         });
       } catch {}
 
-      // Volume pieno (voce di Koda deve essere ben udibile)
+      // Volume pieno (voce di Ollenya deve essere ben udibile)
       try {
         // @ts-ignore
         if (typeof player.volume === "number") {

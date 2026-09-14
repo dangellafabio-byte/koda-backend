@@ -9,8 +9,8 @@
  * File-based routing Expo, wrapper passthrough al componente.
  */
 import React from "react";
-import KodaIntroV3 from "../components/KodaIntroV3";
+import OllenyaIntroV3 from "../components/OllenyaIntroV3";
 
 export default function IntroV3Screen() {
-  return <KodaIntroV3 />;
+  return <OllenyaIntroV3 />;
 }

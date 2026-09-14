@@ -1,11 +1,11 @@
 /**
  * /intro-v2 — Route isolata per testing dell'onboarding conversazionale.
  * File-based routing Expo. Il wrapper è solo una passthrough al componente.
- * Il vecchio KodaIntro resta live sulla home finché il nuovo non è pronto.
+ * Il vecchio OllenyaIntro resta live sulla home finché il nuovo non è pronto.
  */
 import React from "react";
-import KodaIntroConversational from "../components/KodaIntroConversational";
+import OllenyaIntroConversational from "../components/OllenyaIntroConversational";
 
 export default function IntroV2Screen() {
-  return <KodaIntroConversational />;
+  return <OllenyaIntroConversational />;
 }

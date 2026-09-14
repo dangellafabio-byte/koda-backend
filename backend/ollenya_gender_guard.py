@@ -7,7 +7,7 @@ noto per scivolare al maschile generico ("sono contento" invece di
 
 Questo modulo è l'ULTIMA linea di difesa: dopo che Claude ha generato la
 risposta, scansiona il testo e corregge SOLO gli aggettivi/participi
-che Koda usa SU SE STESSA (`sono contento` → `sono contenta` se
+che Ollenya usa SU SE STESSA (`sono contento` → `sono contenta` se
 ai_gender="f"). Non tocca gli aggettivi rivolti all'utente (quelli
 dipendono da `user_gender` e sono più difficili da inferire senza
 contesto sintattico completo).
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # Ogni voce è (regex-pattern, replacement-if-f, replacement-if-m)
 # ============================================================
 
-# Aggettivi/participi che DI SICURO si riferiscono a Koda quando preceduti
+# Aggettivi/participi che DI SICURO si riferiscono a Ollenya quando preceduti
 # da "sono ", "mi sento ", "non sono ", "mi sono ", "sarei ", "eccomi qua sono ".
 # Ordine: forma maschile → femminile e viceversa.
 #
@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 #   contento, curioso, pronto, sicuro, tranquillo, stato, sentito, riuscito,
 #   felice (non ha forma di genere → escluso), stanco, sereno.
 #
-# NB: usiamo lookbehind per garantire che si tratti di Koda che parla di sé.
+# NB: usiamo lookbehind per garantire che si tratti di Ollenya che parla di sé.
 _SELF_CONTEXT_ALTERNATIVES = (
     r"sono",              # "sono X"
     r"mi\s+sento",        # "mi sento X"
@@ -62,7 +62,7 @@ _SELF_CONTEXT_ALTERNATIVES = (
     r"eccomi\s+qua\s+sono",  # rara ma nel prompt
 )
 
-# Coppie MASCHILE ↔ FEMMINILE per aggettivi/participi che Koda usa su sé
+# Coppie MASCHILE ↔ FEMMINILE per aggettivi/participi che Ollenya usa su sé
 # stessa. Ogni tupla: (masc, fem).
 _SELF_ADJ_PAIRS = [
     ("contento", "contenta"),
@@ -145,10 +145,10 @@ def _preserve_case(original: str, replacement: str) -> str:
 
 
 def fix_ai_gender(text: str, ai_gender: str) -> Tuple[str, int]:
-    """Corregge il genere degli aggettivi che Koda usa su se stessa.
+    """Corregge il genere degli aggettivi che Ollenya usa su se stessa.
 
     Args:
-        text: risposta di Koda (post-stripping audio tags).
+        text: risposta di Ollenya (post-stripping audio tags).
         ai_gender: "f" | "m" | "n" (neutro → no-op).
 
     Returns:

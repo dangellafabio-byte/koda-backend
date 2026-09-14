@@ -8,7 +8,7 @@
  *   Blocco E: EXPORT (scarica JSON completo via expo-sharing / Web download)
  *
  * Filosofia:
- *   • L'utente ha diritto di sapere COSA Koda ricorda e di cancellarlo.
+ *   • L'utente ha diritto di sapere COSA Ollenya ricorda e di cancellarlo.
  *   • Nessun profiling psicologico: solo il testo del concept + i tag.
  *   • Design parallelo a /situations (stessa palette dark, stesse pillole).
  *   • Link discreto a /situations per l'inventario delle entità aggregate.
@@ -143,7 +143,7 @@ export default function MemoriesScreen() {
   const wipeAll = useCallback(() => {
     Alert.alert(
       "Cancellare TUTTI i ricordi?",
-      "Koda dimenticherà tutto quello che ha imparato da voi. Questa azione è irreversibile.",
+      "Ollenya dimenticherà tutto quello che ha imparato da voi. Questa azione è irreversibile.",
       [
         { text: "Annulla", style: "cancel" },
         {
@@ -194,7 +194,7 @@ export default function MemoriesScreen() {
     try {
       const payload = {
         exported_at: new Date().toISOString(),
-        app: "Koda",
+        app: "Ollenya",
         source: "memories",
         count: items.length,
         memories: items,
@@ -221,14 +221,14 @@ export default function MemoriesScreen() {
         if (canShare) {
           await Sharing.shareAsync(fileUri, {
             mimeType: "application/json",
-            dialogTitle: "Esporta ricordi di Koda",
+            dialogTitle: "Esporta ricordi di Ollenya",
             UTI: "public.json",
           });
         } else {
           // Fallback: RN Share con testo (senza attachment)
           await Share.share({
             message: json.slice(0, 4000),
-            title: "Ricordi di Koda",
+            title: "Ricordi di Ollenya",
           });
         }
       }
@@ -273,7 +273,7 @@ export default function MemoriesScreen() {
 
       {/* Descrizione GDPR */}
       <Text style={styles.subtitle}>
-        Qui trovi tutto quello che Koda ricorda di voi due — frasi che ha estratto
+        Qui trovi tutto quello che Ollenya ricorda di voi due — frasi che ha estratto
         dai vostri scambi. Sono tuoi: puoi esportarli, cancellarne uno singolo,
         oppure cancellarli tutti in un colpo solo.
       </Text>
@@ -345,7 +345,7 @@ export default function MemoriesScreen() {
           />
           <Text style={styles.emptyTitle}>Nessun ricordo, ancora.</Text>
           <Text style={styles.emptyBody}>
-            Man mano che parlate, Koda comincerà a ricordare le cose che ti
+            Man mano che parlate, Ollenya comincerà a ricordare le cose che ti
             stanno a cuore. Compariranno qui.
           </Text>
           <TouchableOpacity

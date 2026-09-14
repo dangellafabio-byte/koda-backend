@@ -73,7 +73,7 @@ import * as Updates from "expo-updates";
 //   file di riferimento interno per debug/log, ma non è più renderizzato.
 // === BLOCCO A (2026-08-25) — notifications & ProactiveOffer RIMOSSI =====
 // I moduli `lib/notifications` e `components/ProactiveOffer` sono stati
-// eliminati per rispettare il manifesto "no needy Koda". Non riabilitare
+// eliminati per rispettare il manifesto "no needy Ollenya". Non riabilitare
 // senza riscrivere UX contract nel PRD.
 // import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
 import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
@@ -82,16 +82,16 @@ import AppIcon from "../lib/AppIcon";
 import Orb, { OrbTone } from "../components/Orb";
 import EclipseOrb from "../components/EclipseOrb";
 import MirrorPool from "../components/MirrorPool";
-// V1 KodaIntro import RIMOSSO (Fabio 2026-08-22): la V1 non ha più path
-// di ingresso — il file KodaIntro.tsx resta in vita come dead code, non
+// V1 OllenyaIntro import RIMOSSO (Fabio 2026-08-22): la V1 non ha più path
+// di ingresso — il file OllenyaIntro.tsx resta in vita come dead code, non
 // va toccato ma nessuno lo importa più.
-// import KodaIntro, { KodaIntroResult } from "../components/KodaIntro";
+// import OllenyaIntro, { KodaIntroResult } from "../components/OllenyaIntro";
 // Type alias per KodaIntroResult mantenuto perché ancora referenziato da
 // dismissColorIntro(result?: KodaIntroResult) — non più chiamato, ma
 // tipo utile per non spezzare la firma legacy.
 type KodaIntroResult = { launch_tour?: boolean };
-import KodaSplash from "../components/KodaSplash";
-import KodaTour, { TourStep } from "../components/KodaTour";
+import OllenyaSplash from "../components/OllenyaSplash";
+import OllenyaTour, { TourStep } from "../components/OllenyaTour";
 import DisclaimerScreen from "../components/DisclaimerScreen";
 import * as ScreenDimmer from "../lib/screenDimmer";
 import * as SecureStore from "expo-secure-store";
@@ -103,7 +103,7 @@ import RadialGlow from "../components/RadialGlow";
 import InfoModal from "../components/InfoModal";
 import SafetyAlert from "../components/SafetyAlert";
 import FreemiumCounter from "../components/FreemiumCounter";
-import { KodaFeedbackMenu } from "../components/KodaFeedbackMenu";
+import { OllenyaFeedbackMenu } from "../components/OllenyaFeedbackMenu";
 // import ProactiveOffer from "../components/ProactiveOffer";  // Blocco A: rimosso
 import {
   loadBorderCalibration,
@@ -214,7 +214,7 @@ const NAMED_COLORS: Record<string, string> = {
 // Solo "speaking" cambia colore in base alla voce.
 const VOICE_ID_ACQUA = "6TngzmzM89jJ3Y2Yiywr";
 const VOICE_ID_VENTO = "ll9WG7PDTuyHwgC5MD6g";
-const VOICE_ID_CIELO = "POuqf18evoXOKIqV2Px7"; // 2026-07-13: nuova voce femminile ufficiale Koda
+const VOICE_ID_CIELO = "POuqf18evoXOKIqV2Px7"; // 2026-07-13: nuova voce femminile ufficiale Ollenya
 
 const VOICE_SPEAKING_COLORS: Record<string, string> = {
   [VOICE_ID_ACQUA]: "#BD10E0", // viola elettrico (default storico)
@@ -343,7 +343,7 @@ function detectCloseSessionClientSide(text: string | null | undefined): boolean 
   // "ciao coda come stai" o "grazie coda mi hai aiutato tanto")
   const ambiguousPatterns: RegExp[] = [
     // === FIX 2026-08-27 v65.3 — "ciao koda/coda" NON è più commiato (Fabio) ==
-    // "Ciao Koda" è un SALUTO DI APERTURA nel 99% dei casi. Prima del fix,
+    // "Ciao Ollenya" è un SALUTO DI APERTURA nel 99% dei casi. Prima del fix,
     // dire "Ciao, coda" (STT storpia "koda") triggerava close_session=true
     // → HF loop bloccato al primo turno. Rimosso dal set commiato: se
     // qualcuno vuole davvero chiudere dice "buonanotte" / "ci sentiamo dopo"
@@ -406,12 +406,12 @@ export default function Taccuino() {
   >("empty");
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   // === FEEDBACK LOOP STATE (Fabio 2026-09-11) ===
-  // Il long-press su una bolla AI setta l'event_id qui → KodaFeedbackMenu
+  // Il long-press su una bolla AI setta l'event_id qui → OllenyaFeedbackMenu
   // si apre. null → menu chiuso. Non persistito: sopravvive solo alla
   // sessione app corrente.
   const [feedbackEventId, setFeedbackEventId] = useState<string | null>(null);
   // === FEEDBACK MENU — reference alla entry attiva ===
-  // Necessario per passare `bubbleText` e `onDelete` a KodaFeedbackMenu
+  // Necessario per passare `bubbleText` e `onDelete` a OllenyaFeedbackMenu
   // (le voci Copia/Elimina lavorano sulla bolla su cui l'utente ha fatto
   // long-press, non su una qualsiasi).
   const [feedbackEntry, setFeedbackEntry] = useState<TimelineEntry | null>(null);
@@ -449,7 +449,7 @@ export default function Taccuino() {
   >("loading");
   const [status, _setStatusRaw] = useState<Status>("idle");
   // === ORB SILENCE SYNC (Task 2 — Fabio 2026-08) ===
-  // Toggle in tempo reale che segue i silenzi RMS della TTS di Koda.
+  // Toggle in tempo reale che segue i silenzi RMS della TTS di Ollenya.
   // `true` = sta parlando davvero → orb pulsa normale.
   // `false` = silenzio percepito (respiro/pausa) → orb smorza la pulsazione.
   // Fallback: se il server non manda `speech_timeline` questo resta `true`
@@ -460,14 +460,14 @@ export default function Taccuino() {
   // timestamp + caller. Cruciale per diagnosticare il bug Android
   // "l'orb torna a idle subito senza mai mostrare thinking/speaking".
   // Il log esce nel formato:
-  //   [KODA_STATUS] prev=recording → next=idle caller=finally:voiceStreamConverse t+12345ms
+  //   [OLLENYA_STATUS] prev=recording → next=idle caller=finally:voiceStreamConverse t+12345ms
   // Permette di vedere ESATTAMENTE chi mette idle prematuro.
   const statusTraceStartRef = useRef<number>(Date.now());
   const statusRef = useRef<Status>("idle");
   // === Debug verbose flag (post-debug 2026-06-28) ===
   // Default false: log puliti. Si attiva via EXPO_PUBLIC_KODA_DEBUG_VERBOSE=true
   // in .env per troubleshooting (necessita rebuild).
-  const KODA_DEBUG_VERBOSE =
+  const OLLENYA_DEBUG_VERBOSE =
     process.env.EXPO_PUBLIC_KODA_DEBUG_VERBOSE === "true";
   const setStatus = useCallback((next: Status, caller?: string) => {
     const prev = statusRef.current;
@@ -476,24 +476,24 @@ export default function Taccuino() {
         // Stack trace: 1 riga in produzione, 4 righe in debug verbose.
         const stack = new Error().stack || "";
         const lines = stack.split("\n")
-          .slice(1, KODA_DEBUG_VERBOSE ? 6 : 3)
+          .slice(1, OLLENYA_DEBUG_VERBOSE ? 6 : 3)
           .map((s) => s.trim().slice(0, 100))
           .filter((s) => s.length > 0);
         const tag = caller || (
-          KODA_DEBUG_VERBOSE
+          OLLENYA_DEBUG_VERBOSE
             ? lines.slice(0, 4).join(" ← ")
             : (lines[1] || lines[0] || "?")
         );
         console.log(
-          `[KODA_STATUS] ${prev} → ${next} t+${Date.now() - statusTraceStartRef.current}ms caller=${tag}`
+          `[OLLENYA_STATUS] ${prev} → ${next} t+${Date.now() - statusTraceStartRef.current}ms caller=${tag}`
         );
       } catch {}
     }
     statusRef.current = next;
     _setStatusRaw(next);
-  }, [KODA_DEBUG_VERBOSE]);
+  }, [OLLENYA_DEBUG_VERBOSE]);
 
-  // === ORB SILENCE SYNC — reset speechActive quando Koda smette di
+  // === ORB SILENCE SYNC — reset speechActive quando Ollenya smette di
   // parlare. Se il turno finisce a metà (per errore/interrupt/close),
   // vogliamo comunque tornare all'orb "attivo" così il prossimo turno
   // parta pulito, non con una pulsazione smorzata residua.
@@ -511,19 +511,19 @@ export default function Taccuino() {
   // Se NON vediamo questa riga, l'APK è stantio o la build non ha
   // inglobato l'ultimo commit.
   //
-  // 🚨 IMPORTANTE (Fabio 2026-07-29): la costante KODA_BUILD_SHORT_TAG viene
+  // 🚨 IMPORTANTE (Fabio 2026-07-29): la costante OLLENYA_BUILD_SHORT_TAG viene
   // usata SIA nel console.log SIA nel display in Impostazioni (~riga 6552).
   // In passato c'era una stringa hardcoded separata in Impostazioni che
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v65.38-splash-tiffany-plateau-miniorb";
-  const KODA_BUILD_DATE = "2026-09-06";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v65.40-rebrand-fase2a-complete";
+  const OLLENYA_BUILD_DATE = "2026-09-06";
   useEffect(() => {
     console.log(
-      `[KODA_BUILDTAG] ${KODA_BUILD_SHORT_TAG} v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=${KODA_BUILD_DATE} ` +
-        `verbose=${KODA_DEBUG_VERBOSE} ` +
-        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_CACHE_FIRST_V63_7,TTS_AUDIOFOCUS_CYCLE_V63_8_FIX_C1,PRE_STT_AUDIOFOCUS_CYCLE_V63_9_FIX_C2,BREATH_REENABLED_V64_0,TAP_TO_RESET_UNIFIED_V64_0,ANDROID_MIC_WATCHDOG_V64_0,ANDROID_STT_PRE_ABORT_V64_0,KEEP_AWAKE_STABLE_SESSION_V64_0,NEONBORDER_SLOW_ANDROID_V64_1,ANDROID_CONTINUOUS_NO_BEEP_V64_1,ANDROID_SILENCE_TIMEOUT_LONGER_V64_1,ANDROID_NOSPEECH_GRACEFUL_V64_1,PREVIEW_AUDIO_FOCUS_REACQUIRE_V64_1,INTRO_VOICE_PREVIEW_FOCUS_V64_1,LASCIA_ANDARE_ORB_ALWAYS_RECORDING_V64_2,VOICE_ID_KODA_VOICE_SYNC_V64_2,DISCLAIMER_OVERLAY_V64_5,SCREEN_DIMMER_V2_FIX_V64_6,NOSPEECH_BACKOFF_V64_7,NEONBORDER_STATIC_V64_10,NEONBORDER_NO_ELEVATION_V64_11,NEONBORDER_DYNAMIC_RADIUS_V64_11,DIAGNOSTICS_SAFEAREA_XIAOMI_V64_12,NEONBORDER_INSTANT_COLOR_SYNC_V64_13,BUBBLE_MEMO_V64_14,PERF_DIAG_V64_14,SCROLLPEEK_REF_FIX_V64_15,RADIALGLOW_OFF_ANDROID_V64_16,RADIALGLOW_NO_PULSE_V64_17${KODA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
+      `[OLLENYA_BUILDTAG] ${OLLENYA_BUILD_SHORT_TAG} v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=${OLLENYA_BUILD_DATE} ` +
+        `verbose=${OLLENYA_DEBUG_VERBOSE} ` +
+        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_CACHE_FIRST_V63_7,TTS_AUDIOFOCUS_CYCLE_V63_8_FIX_C1,PRE_STT_AUDIOFOCUS_CYCLE_V63_9_FIX_C2,BREATH_REENABLED_V64_0,TAP_TO_RESET_UNIFIED_V64_0,ANDROID_MIC_WATCHDOG_V64_0,ANDROID_STT_PRE_ABORT_V64_0,KEEP_AWAKE_STABLE_SESSION_V64_0,NEONBORDER_SLOW_ANDROID_V64_1,ANDROID_CONTINUOUS_NO_BEEP_V64_1,ANDROID_SILENCE_TIMEOUT_LONGER_V64_1,ANDROID_NOSPEECH_GRACEFUL_V64_1,PREVIEW_AUDIO_FOCUS_REACQUIRE_V64_1,INTRO_VOICE_PREVIEW_FOCUS_V64_1,LASCIA_ANDARE_ORB_ALWAYS_RECORDING_V64_2,VOICE_ID_KODA_VOICE_SYNC_V64_2,DISCLAIMER_OVERLAY_V64_5,SCREEN_DIMMER_V2_FIX_V64_6,NOSPEECH_BACKOFF_V64_7,NEONBORDER_STATIC_V64_10,NEONBORDER_NO_ELEVATION_V64_11,NEONBORDER_DYNAMIC_RADIUS_V64_11,DIAGNOSTICS_SAFEAREA_XIAOMI_V64_12,NEONBORDER_INSTANT_COLOR_SYNC_V64_13,BUBBLE_MEMO_V64_14,PERF_DIAG_V64_14,SCROLLPEEK_REF_FIX_V64_15,RADIALGLOW_OFF_ANDROID_V64_16,RADIALGLOW_NO_PULSE_V64_17${OLLENYA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
     );
   }, []);
 
@@ -575,8 +575,8 @@ export default function Taccuino() {
   const [textInput, setTextInput] = useState("");
   const [showOnboarding, setShowOnboarding] = useState(false);
   // === KODA INTRO ===
-  // Presentazione conversazionale di Koda al primo avvio. Sostituisce
-  // sia il vecchio onboarding modale che il tutorial colori. Koda si
+  // Presentazione conversazionale di Ollenya al primo avvio. Sostituisce
+  // sia il vecchio onboarding modale che il tutorial colori. Ollenya si
   // presenta in prima persona, chiede tutte le info che gli servono
   // (nome, gender, voce, check-in, parola segreta, voiceprint) e poi
   // si congeda. Persistito in SecureStore con `koda_intro_seen=1`.
@@ -592,7 +592,7 @@ export default function Taccuino() {
   // Splash screen all'apertura (4 sec) per mascherare la latenza di boot e
   // dare un'identità visiva forte: eclissi che respira colori + nome AI.
   // === PUNTO 2 (Fabio 2026-08-20) — SKIP SPLASH ON REMOUNT ===============
-  // Il default `true` mostrava KodaSplash ad ogni mount della Home. Con il
+  // Il default `true` mostrava OllenyaSplash ad ogni mount della Home. Con il
   // router condizionale Free→LA (Punto 3), la Home viene ri-montata quando
   // il free user esce da Lascia Andare via X → lo splash ripartiva creando
   // l'impressione di un secondo boot. Ora leggiamo dal modulo globale se il
@@ -605,17 +605,17 @@ export default function Taccuino() {
     (async () => {
       // === SKIP-SPLASH-AFTER-INTRO (2026-08-11, Fabio) ===
       // Se l'utente arriva dall'Intro V2 (che ha appena vissuto 10 minuti di
-      // esperienza identitaria), skippa il KodaSplash da 10s per non
+      // esperienza identitaria), skippa il OllenyaSplash da 10s per non
       // interrompere la continuità. Il flag è un timestamp con TTL 60s:
       // se troppo vecchio (crash tra fine intro e boot, o normale apertura
       // dopo giorni), viene ignorato. In OGNI caso il flag viene cancellato
       // qui, così non può restare appeso oltre il primo boot successivo.
       try {
-        const raw = await SecureStore.getItemAsync("koda_intro_completed_at");
+        const raw = await SecureStore.getItemAsync("ollenya_intro_completed_at");
         if (raw) {
           // Cancella SEMPRE (anche se ignoriamo poi il valore): garanzia
           // one-shot che sopravvive a qualsiasi race/crash.
-          try { await SecureStore.deleteItemAsync("koda_intro_completed_at"); } catch {}
+          try { await SecureStore.deleteItemAsync("ollenya_intro_completed_at"); } catch {}
           const ts = parseInt(raw, 10);
           if (!Number.isNaN(ts) && Date.now() - ts < 60_000) {
             if (!cancelled) {
@@ -627,18 +627,18 @@ export default function Taccuino() {
       } catch {
         // safe fallback: splash normale
       }
-      // === FIX 2026-08-27 v65.4 — V1 KodaIntro DEAD, force showColorIntro=false ===
+      // === FIX 2026-08-27 v65.4 — V1 OllenyaIntro DEAD, force showColorIntro=false ===
       // La V1 è stata rimossa dal render (riga 7271). Nessuno setta più
       // `koda_intro_seen=1`, quindi al boot su fresh install/reinstall/reset
       // `showColorIntro` restava `true` per sempre → la guardia HF_LOOP
       // (riga ~2560) bloccava l'hands-free ad ogni turno su iOS. Confermato
       // dai log iOS di Fabio (2026-08-27):
-      //   [KODA_HF_GUARD] blocked: showColorIntro=true
+      //   [OLLENYA_HF_GUARD] blocked: showColorIntro=true
       // Forziamo sempre `false` e scriviamo "1" in SecureStore per pulizia
       // idempotente (così anche gli altri check che leggono la chiave
       // — se ne restano — non falliscono).
       try {
-        await SecureStore.setItemAsync("koda_intro_seen", "1");
+        await SecureStore.setItemAsync("ollenya_intro_seen", "1");
       } catch {}
       if (!cancelled) setShowColorIntro(false);
       // Carica le voci ElevenLabs disponibili per la scelta automatica
@@ -672,9 +672,9 @@ export default function Taccuino() {
   const [activationPulseDone, setActivationPulseDone] = useState(false);
 
   // === TOUR GUIDATO (spotlight) ===
-  // Si attiva dopo che KodaIntro termina (campo `launch_tour: true` nel
+  // Si attiva dopo che OllenyaIntro termina (campo `launch_tour: true` nel
   // result). Mostra un overlay scuro sopra la home con un anello luminoso
-  // attorno a ciascun elemento UI, mentre Koda parla a voce spiegando
+  // attorno a ciascun elemento UI, mentre Ollenya parla a voce spiegando
   // cosa fa. Auto-avanzamento al termine di ogni voce.
   const [tourActive, setTourActive] = useState(false);
 
@@ -694,13 +694,13 @@ export default function Taccuino() {
   // === Tour step tracker (giugno 2026, round 5) ===
   // Sappiamo quale step del tour è attivo per sincronizzare gli
   // overlay nella pagina di lettura (messaggi finti + simulazione
-  // tieni-premuto) col narrato di Koda.
+  // tieni-premuto) col narrato di Ollenya.
   const [tourCurrentStep, setTourCurrentStep] = useState<{ idx: number; label?: string; page?: string } | null>(null);
   const tourDims = useWindowDimensions();
   // Mirror del tourActive in ref — serve per leggere il valore aggiornato
   // dentro setTimeout/closure che sono stati schedulati PRIMA che il tour
   // partisse (es. l'auto-mic-open timeout da 450ms): senza questo controllo
-  // il mic si apriva nel gap tra "KodaIntro chiusa" e "tourActive=true".
+  // il mic si apriva nel gap tra "OllenyaIntro chiusa" e "tourActive=true".
   const tourActiveRef = useRef(false);
   useEffect(() => { tourActiveRef.current = tourActive; }, [tourActive]);
 
@@ -771,7 +771,7 @@ export default function Taccuino() {
     // === FIX ECLISSI CENTRATA (Fabio 2026-08-24) =========================
     // Prima: H * 0.46 (46% dall'alto) → fallback per il coach-mark quando
     // measureRef fallisce. Ora l'orb reale è centrato a H/2 esatto → il
-    // fallback deve rispecchiarlo per non spostare il KodaTour label.
+    // fallback deve rispecchiarlo per non spostare il OllenyaTour label.
     const orbCY = H / 2;
     const [hf, conf, menu, orb, hint] = await Promise.all([
       measureRef(handsFreeBtnRef),
@@ -821,9 +821,9 @@ export default function Taccuino() {
         rect: orbRect,
         // === LABEL VUOTA (utente 2026-07) ===
         // Il "banner indicatore" al top della card tour (che mostrava
-        // "Eclissi") è stato rimosso su richiesta: quando Koda dice
+        // "Eclissi") è stato rimosso su richiesta: quando Ollenya dice
         // "Eccomi. Toccami per parlarti" non serve un titolo aggiuntivo
-        // — la voce e la sfera bastano. KodaTour salta il render del
+        // — la voce e la sfera bastano. OllenyaTour salta il render del
         // titolo se label è stringa vuota.
         label: "",
         shape: "circle",
@@ -874,13 +874,13 @@ export default function Taccuino() {
   }, [tourDims.width, tourDims.height, insets.top, insets.bottom, profile?.user_name, measureRef]);
 
   // === MIC OFF DURANTE INTRO/TOUR ===
-  // Se KodaIntro o il Tour si aprono mentre il mic era attivo (hands-free),
+  // Se OllenyaIntro o il Tour si aprono mentre il mic era attivo (hands-free),
   // chiudi immediatamente il mic per liberare la sessione audio. Senza
-  // questo, l'AVAudioSession resta in "recording" e blocca il TTS di Koda
+  // questo, l'AVAudioSession resta in "recording" e blocca il TTS di Ollenya
   // (la voce non parte durante l'intro).
   useEffect(() => {
     // === CLEANUP 2026-08-27 v65.9 (Fabio) ===
-    // showColorIntro rimosso dal check: la V1 KodaIntro è dead code (vedi
+    // showColorIntro rimosso dal check: la V1 OllenyaIntro è dead code (vedi
     // riga 7288+), showColorIntro non può più diventare true (tutti i
     // setter puntano a false). Guardia residua tolta.
     const intruderActive = tourActive || showOnboarding;
@@ -901,20 +901,20 @@ export default function Taccuino() {
   const dismissColorIntro = useCallback(async (result?: KodaIntroResult) => {
     setShowColorIntro(false);
     try {
-      await SecureStore.setItemAsync("koda_intro_seen", "1");
+      await SecureStore.setItemAsync("ollenya_intro_seen", "1");
     } catch {}
-    // Refresh profile dopo che Koda ha salvato i dati
+    // Refresh profile dopo che Ollenya ha salvato i dati
     try {
       const p = await api.getProfile();
       setProfile(p);
     } catch {}
-    // Se Koda ha appena chiuso con "lancia tour", apri il tour visivo
+    // Se Ollenya ha appena chiuso con "lancia tour", apri il tour visivo
     // invece di mostrare il banner di conferma.
     if (result?.launch_tour) {
       // Costruzione step DOPO che il profilo è stato aggiornato (così il
       // nome utente nel testo del tour è quello giusto).
       // DELAY AUMENTATO da 250ms a 600ms (giugno 2026): su iOS native
-      // TestFlight il KodaIntro modal impiega ~400ms a fare unmount + il
+      // TestFlight il OllenyaIntro modal impiega ~400ms a fare unmount + il
       // layout della UI principale necessita di un altro frame per
       // stabilizzarsi. Con 250ms i measureInWindow tornavano coordinate
       // sballate → highlights del tour decentrati.
@@ -931,7 +931,7 @@ export default function Taccuino() {
   // showSavedBanner è definita sotto ma è stable (useCallback []), OK.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buildTourSteps]);
-  /** Riapri la presentazione di Koda (back-door: tap sull'icona ⋯ in alto a destra). */
+  /** Riapri la presentazione di Ollenya (back-door: tap sull'icona ⋯ in alto a destra). */
   /** V1 reopenKodaIntro RIMOSSO (Fabio 2026-08-22).
    *  La V1 non è più raggiungibile da alcun path. Il pulsante nelle
    *  Impostazioni è stato sostituito con "Rivedi Intro Premium" (admin-only). */
@@ -951,20 +951,20 @@ export default function Taccuino() {
     }
   }, []);
   // Banner "Configurazione salvata ✓" — mostrato per ~4 secondi quando
-  // l'utente completa (o ri-completa) KodaIntro. Conferma visiva che le
+  // l'utente completa (o ri-completa) OllenyaIntro. Conferma visiva che le
   // modifiche al profilo sono state registrate. Sparisce automaticamente.
   const [savedBannerVisible, setSavedBannerVisible] = useState(false);
   const showSavedBanner = useCallback(() => {
     setSavedBannerVisible(true);
     setTimeout(() => setSavedBannerVisible(false), 4000);
   }, []);
-  /** Esci da KodaIntro senza salvare nulla (tap su X).
+  /** Esci da OllenyaIntro senza salvare nulla (tap su X).
    *  Marca comunque `koda_intro_seen=1` così al prossimo avvio non riappare. */
   const cancelKodaIntro = useCallback(async () => {
     try { SpeechMod.stop(); } catch {}
     setShowColorIntro(false);
     try {
-      await SecureStore.setItemAsync("koda_intro_seen", "1");
+      await SecureStore.setItemAsync("ollenya_intro_seen", "1");
     } catch {}
   }, []);
   const [showSettings, setShowSettings] = useState(false);
@@ -985,7 +985,7 @@ export default function Taccuino() {
   }, []);
   // === AUDIO PREWARM iOS/Android (2026-08-02, Fabio "primo istante magico") ===
   // Al mount della home, configuriamo la audio session iOS in modo che il
-  // primo TTS di Koda non paghi i 100-200ms di setup iniziale. Impatta
+  // primo TTS di Ollenya non paghi i 100-200ms di setup iniziale. Impatta
   // direttamente la percezione delle "prime 3-5 parole" — quelle che
   // devono stregare l'utente. Idempotente, no-op se già configurato altrove.
   useEffect(() => {
@@ -1046,7 +1046,7 @@ export default function Taccuino() {
   // === ROUTER PRIMO BOOT V3 (Fabio 2026-08-22) ================================
   // Al primissimo boot dell'app (nessun `intro_v3_completed_at` in SecureStore),
   // reindirizza a `/intro-v3` PRIMA di qualsiasi altra logica routing (free/paid).
-  // Dopo il completamento della sequenza narrativa (KodaIntroV3 → doSaveAndHandoff),
+  // Dopo il completamento della sequenza narrativa (OllenyaIntroV3 → doSaveAndHandoff),
   // il flag viene scritto e questo redirect non scatta più → l'utente atterra
   // sempre a /lascia-andare via il router free/premium sotto.
   //
@@ -1114,7 +1114,7 @@ export default function Taccuino() {
     ) {
       hasRedirectedIntroV3Ref.current = false;
       lastV3DecidedKeyRef.current = null;
-      console.log(`[KODA_ROUTER_V3] tier changed in-session → re-evaluate`);
+      console.log(`[OLLENYA_ROUTER_V3] tier changed in-session → re-evaluate`);
     }
     if (hasRedirectedIntroV3Ref.current) return;
     if (isPaidV3) {
@@ -1127,28 +1127,28 @@ export default function Taccuino() {
         // rivedrà V3 (design intenzionale: paga → salta rituale ingresso).
         SecureStore.setItemAsync("intro_v3_completed_at", String(Date.now())).catch(() => {});
       } catch {}
-      console.log(`[KODA_ROUTER_V3] paid user (tier=${tierV3}) → skip V3, mark completed`);
+      console.log(`[OLLENYA_ROUTER_V3] paid user (tier=${tierV3}) → skip V3, mark completed`);
       return;
     }
     hasRedirectedIntroV3Ref.current = true;
     lastV3DecidedKeyRef.current = currentKey;
-    console.log(`[KODA_ROUTER_V3] fresh install (intro_v3_completed_at=absent) → replace to /intro-v3`);
+    console.log(`[OLLENYA_ROUTER_V3] fresh install (intro_v3_completed_at=absent) → replace to /intro-v3`);
     try {
-      // Nasconde il vecchio KodaIntro V1 modal (superato dalla nuova architettura V3)
+      // Nasconde il vecchio OllenyaIntro V1 modal (superato dalla nuova architettura V3)
       setShowColorIntro(false);
       router.replace("/intro-v3");
     } catch (e) {
-      console.warn("[KODA_ROUTER_V3] replace to /intro-v3 failed:", e);
+      console.warn("[OLLENYA_ROUTER_V3] replace to /intro-v3 failed:", e);
     }
   }, [introV3State, profile, profileHydrated, disclaimerState, showSplash, pathname, router]);
 
   // === ROUTER CONDIZIONALE FREE/PREMIUM (Punto 3, Fabio 2026-08-17) ==========
   // Nuova architettura Free/Premium:
   //   - Free (nessun abbonamento) → Lascia Andare è la landing di default,
-  //     è il CUORE del prodotto. Al primo mount della home Koda conv, se il
+  //     è il CUORE del prodotto. Al primo mount della home Ollenya conv, se il
   //     profilo non ha un tier paid, redirigiamo verso /lascia-andare.
   //   - Premium (subscription_tier ∈ monthly/bimonthly/annual/unlimited) →
-  //     restano su Koda conversazionale (comportamento attuale, zero attrito).
+  //     restano su Ollenya conversazionale (comportamento attuale, zero attrito).
   //
   // === TRIPLA DIFESA CONTRO IL LOOP DI REDIRECT (fix 2026-08-17 v2) ==========
   // Il primo tentativo (v64.20) usava solo un `useRef` locale. Fabio ha
@@ -1171,11 +1171,11 @@ export default function Taccuino() {
   //   - Non redirigiamo finché il disclaimer legale è "blocking" o "loading"
   //   - Non redirigiamo finché il profilo non è caricato
   //   - Non redirigiamo se lo splash è ancora visibile
-  //   - Non redirigiamo se KodaIntro è attivo (primo lancio: la presentazione
+  //   - Non redirigiamo se OllenyaIntro è attivo (primo lancio: la presentazione
   //     ha priorità sull'atterraggio Lascia Andare)
   //
   // NON tocchiamo il trial state / subscription_tier machinery: quelli
-  // servono per gating Koda conversazionale.
+  // servono per gating Ollenya conversazionale.
   // === Nota 2026-08-21 (Fabio) ===
   // `pathname` è già dichiarato sopra (fix TDZ) — qui non lo ridichiariamo.
   const hasRedirectedFreeUserRef = useRef<boolean>(false);
@@ -1211,7 +1211,7 @@ export default function Taccuino() {
     if (disclaimerState !== "accepted") return;
     if (showSplash) return;
     // === CLEANUP 2026-08-27 v65.9 — guardia showColorIntro rimossa =========
-    // V1 KodaIntro dead code (~riga 7288). showColorIntro non diventa mai
+    // V1 OllenyaIntro dead code (~riga 7288). showColorIntro non diventa mai
     // true, guardia inutile.
     // === GUARD V3 (Fabio 2026-08-22) ===
     // Se stiamo ancora controllando o serve introdurre l'utente al Cuore,
@@ -1238,7 +1238,7 @@ export default function Taccuino() {
     // si chiude naturalmente (convActive=false → cambio dep → re-run).
     if (isConvVoiceActive() && !isPaid) {
       console.log(
-        `[KODA_ROUTER] convActive=true → DEFER decision (tier=${tier || "none"}, ` +
+        `[OLLENYA_ROUTER] convActive=true → DEFER decision (tier=${tier || "none"}, ` +
         `pid=${currentProfileId ? currentProfileId.slice(0, 8) : "null"}). ` +
         `Router non farà replace durante sessione voce attiva.`
       );
@@ -1253,7 +1253,7 @@ export default function Taccuino() {
     // corretto e il router ridecide con dati stabili.
     if (!isPaid && isPaidTierRecent(60_000)) {
       console.warn(
-        `[KODA_ROUTER] SUSPICIOUS DOWNGRADE (tier=${tier || "none"} ma paid<60s fa) ` +
+        `[OLLENYA_ROUTER] SUSPICIOUS DOWNGRADE (tier=${tier || "none"} ma paid<60s fa) ` +
         `→ DEFER + trigger refresh profilo. Non tocco la route.`
       );
       // Trigger fetch profile ri-verifica (fire-and-forget). Se il backend
@@ -1266,7 +1266,7 @@ export default function Taccuino() {
             setProfile(p);
           }
         } catch (e) {
-          console.warn("[KODA_ROUTER] grace-period refetch failed:", e);
+          console.warn("[OLLENYA_ROUTER] grace-period refetch failed:", e);
         }
       })();
       return;
@@ -1284,7 +1284,7 @@ export default function Taccuino() {
       const prevKey = lastFreePremiumDecidedKeyRef.current;
       hasRedirectedFreeUserRef.current = false;
       lastFreePremiumDecidedKeyRef.current = null;
-      console.log(`[KODA_ROUTER] tier changed in-session → re-evaluate (was ${prevKey}, now ${currentKey})`);
+      console.log(`[OLLENYA_ROUTER] tier changed in-session → re-evaluate (was ${prevKey}, now ${currentKey})`);
     }
 
     // B) Guard intra-mount: se abbiamo già preso una decisione in questo
@@ -1308,26 +1308,26 @@ export default function Taccuino() {
     markRouterDecided(currentProfileId, tier);
 
     if (isPaid) {
-      console.log(`[KODA_ROUTER] paid user (tier=${tier}, pid=${currentProfileId}) → stay on Koda conversazionale`);
+      console.log(`[OLLENYA_ROUTER] paid user (tier=${tier}, pid=${currentProfileId}) → stay on Ollenya conversazionale`);
       return;
     }
 
     // Free user: redirect a Lascia Andare (landing di default nel nuovo modello)
-    console.log(`[KODA_ROUTER] free user (tier=${tier || "none"}, pid=${currentProfileId}) → replace to /lascia-andare`);
+    console.log(`[OLLENYA_ROUTER] free user (tier=${tier || "none"}, pid=${currentProfileId}) → replace to /lascia-andare`);
     try {
-      // Preferisco replace a push così back non riporta sulla home Koda conv
+      // Preferisco replace a push così back non riporta sulla home Ollenya conv
       // (che è UI Premium — free user non deve vederla come landing).
       // La navigazione volontaria alla home resta comunque possibile in futuro
-      // via CTA "Parla con Koda" che aprirà il paywall (Punto 5+6 del piano).
+      // via CTA "Parla con Ollenya" che aprirà il paywall (Punto 5+6 del piano).
       router.replace("/lascia-andare");
     } catch (e) {
-      console.warn("[KODA_ROUTER] replace to /lascia-andare failed:", e);
+      console.warn("[OLLENYA_ROUTER] replace to /lascia-andare failed:", e);
     }
   }, [profile, profileHydrated, disclaimerState, showSplash, showColorIntro, router, pathname, introV3State]);
 
 
   // === ROUTER INTRO PREMIUM (Fabio 2026-08-22) ==============================
-  // Al PRIMO boot di un utente Premium sulla home Koda conv "/", reindirizza
+  // Al PRIMO boot di un utente Premium sulla home Ollenya conv "/", reindirizza
   // a /intro-premium (nuova esperienza: voce + 3 coach-mark). Persistenza
   // ibrida: SecureStore (istantaneo) + backend (sopravvive a reinstall).
   //
@@ -1376,7 +1376,7 @@ export default function Taccuino() {
             return;
           }
         } catch (e) {
-          console.warn("[KODA_ROUTER_INTRO_PREMIUM] state fetch failed:", e);
+          console.warn("[OLLENYA_ROUTER_INTRO_PREMIUM] state fetch failed:", e);
           // Fail-closed: se il backend non risponde al boot, NON forziamo
           // l'intro (rischio di riproporla a chi l'ha già vista). L'utente
           // la vedrà al prossimo boot con backend raggiungibile.
@@ -1425,7 +1425,7 @@ export default function Taccuino() {
       tier === "unlimited";
     if (!isPaid) return;
     // === CLEANUP 2026-08-27 v65.9 — guardia showColorIntro rimossa =========
-    // V1 KodaIntro dead code; showColorIntro non diventa mai true.
+    // V1 OllenyaIntro dead code; showColorIntro non diventa mai true.
 
     // Keyed invalidation coerente con router V3.
     const currentKey = `${(profile as any)?.id || "none"}:${tier ?? "free"}`;
@@ -1435,19 +1435,19 @@ export default function Taccuino() {
     ) {
       hasRedirectedIntroPremiumRef.current = false;
       lastIntroPremiumDecidedKeyRef.current = null;
-      console.log(`[KODA_ROUTER_INTRO_PREMIUM] tier changed in-session → re-evaluate`);
+      console.log(`[OLLENYA_ROUTER_INTRO_PREMIUM] tier changed in-session → re-evaluate`);
     }
     if (hasRedirectedIntroPremiumRef.current) return;
 
     hasRedirectedIntroPremiumRef.current = true;
     lastIntroPremiumDecidedKeyRef.current = currentKey;
     console.log(
-      `[KODA_ROUTER_INTRO_PREMIUM] first paid boot → replace to /intro-premium`
+      `[OLLENYA_ROUTER_INTRO_PREMIUM] first paid boot → replace to /intro-premium`
     );
     try {
       router.replace("/intro-premium");
     } catch (e) {
-      console.warn("[KODA_ROUTER_INTRO_PREMIUM] replace failed:", e);
+      console.warn("[OLLENYA_ROUTER_INTRO_PREMIUM] replace failed:", e);
     }
   }, [
     introPremiumState,
@@ -1482,8 +1482,8 @@ export default function Taccuino() {
   // Se poi la fetch al backend riesce, sovrascrive con la risposta server
   // (consente di aggiungere nuove voci in futuro senza ricompilare il client).
   const _DEFAULT_VOICES: VoiceOption[] = [
-    { voice_id: "POuqf18evoXOKIqV2Px7", name: "Cielo", description: "La voce femminile di Koda.", gender: "femminile" as any, accent: "italiano" } as any,
-    { voice_id: "ll9WG7PDTuyHwgC5MD6g", name: "Vento", description: "La voce maschile di Koda.", gender: "maschile" as any, accent: "italiano" } as any,
+    { voice_id: "POuqf18evoXOKIqV2Px7", name: "Cielo", description: "La voce femminile di Ollenya.", gender: "femminile" as any, accent: "italiano" } as any,
+    { voice_id: "ll9WG7PDTuyHwgC5MD6g", name: "Vento", description: "La voce maschile di Ollenya.", gender: "maschile" as any, accent: "italiano" } as any,
   ];
   const [voices, setVoices] = useState<VoiceOption[]>(_DEFAULT_VOICES);
   const [voicesEnabled, setVoicesEnabled] = useState(true);
@@ -1528,7 +1528,7 @@ export default function Taccuino() {
   const listenBannerTimerRef = useRef<any>(null);
 
   // === CLOSE SESSION PAUSE (fix regressione 2026-06-20) ===
-  // Quando l'utente saluta per chiudere ("ci sentiamo dopo", "ciao Koda",
+  // Quando l'utente saluta per chiudere ("ci sentiamo dopo", "ciao Ollenya",
   // "buonanotte"…) il backend imposta `close_session=true` nel meta event.
   // Il client DEVE smettere di ascoltare automaticamente per NON entrare
   // nel loop "non ti sento, parla pure" anche dopo che l'utente se n'è
@@ -1638,18 +1638,18 @@ export default function Taccuino() {
   const lastStartTalkAtRef = useRef<number>(0);
   // === RECORDING DURATION TRACKING (sprint giugno 2026 v11) ===
   // Catturiamo il timestamp di avvio recording così possiamo includerlo
-  // nel [KODA_SUMMARY] come recording_duration_ms. Permette di distinguere
+  // nel [OLLENYA_SUMMARY] come recording_duration_ms. Permette di distinguere
   // a colpo d'occhio: A) registrazione troppo breve (utente non parla
   // abbastanza prima della chiusura VAD); B) pipeline lenta (recording
   // ok ma backend impiega tempo). Senza questa metrica devi correlare
-  // [KODA_TIMING] VOICE_END con [KODA_SUMMARY] = laborioso.
+  // [OLLENYA_TIMING] VOICE_END con [OLLENYA_SUMMARY] = laborioso.
   const recordingStartedAtRef = useRef<number | null>(null);
   const lastRecordingDurationMsRef = useRef<number | null>(null);
   // === AUDIO HONESTY (Fabio 2026-06-23) ============================
   // Confidence Deepgram dell'ULTIMA trascrizione completata. Viene
   // propagata al backend nella chiamata /converse-fast/start (vedi
   // SpeechMod.fastConverse(..., sttConfidence: ...)). Se < 0.7 il
-  // backend inietterà una direttiva nel prompt → Koda si comporta
+  // backend inietterà una direttiva nel prompt → Ollenya si comporta
   // come amico onesto: riconosce l'audio rumoroso, chiede contesto.
   const lastSttConfidenceRef = useRef<number | null>(null);
   const scrollRef = useRef<FlashList<any>>(null);
@@ -1686,7 +1686,7 @@ export default function Taccuino() {
   // Use window width with sensible fallback (Dimensions.get) for first render
   const windowWidth = dimensions.width || Dimensions.get("window").width || 390;
   // === INTRO PREMIUM — FASE FINALE (handoff da /intro-premium) =============
-  // Quando l'utente arriva sulla home Koda conv con query param
+  // Quando l'utente arriva sulla home Ollenya conv con query param
   // ?intro=writing_final, montiamo l'overlay <IntroPremiumFinalStep>
   // sopra la Page 1 (reading) e chiudiamo la sequenza con la clip audio
   // di chiusura Cielo + doppio mark-seen.
@@ -1789,8 +1789,8 @@ export default function Taccuino() {
           if (p.settings?.tts_voice_id) {
             setDefaultVoiceId(p.settings.tts_voice_id);
             // === SYNC ai_gender ← voce (2026-07-24 pre-lancio) ===
-            // Rimosso il selettore esplicito "Koda è…" dalle Impostazioni:
-            // il genere grammaticale di Koda è determinato univocamente
+            // Rimosso il selettore esplicito "Ollenya è…" dalle Impostazioni:
+            // il genere grammaticale di Ollenya è determinato univocamente
             // dalla voce scelta. Se il profilo ha ai_gender desincronizzato
             // (edge case: profilo migrato o cambio voce lato server), lo
             // riallineiamo silenziosamente qui al boot.
@@ -1838,9 +1838,9 @@ export default function Taccuino() {
               try {
                 const { fetchLocationOnce } = await import("../lib/geolocation");
                 const res = await fetchLocationOnce();
-                console.log(`[KODA_GEO] boot result: ${JSON.stringify(res).slice(0, 200)}`);
+                console.log(`[OLLENYA_GEO] boot result: ${JSON.stringify(res).slice(0, 200)}`);
               } catch (e) {
-                console.warn("[KODA_GEO] boot fetch failed:", e);
+                console.warn("[OLLENYA_GEO] boot fetch failed:", e);
               }
             })();
           }
@@ -1956,16 +1956,16 @@ export default function Taccuino() {
       // === FIX 2026-06-28 v33 — Logging AppState ===
       // Verbose (default OFF): log dettagliato con status, userInteracted, decisione.
       // Conciso (default ON): solo cambio + skip/handled.
-      if (KODA_DEBUG_VERBOSE) {
+      if (OLLENYA_DEBUG_VERBOSE) {
         console.log(
-          `[KODA_APPSTATE] next=${next} streaming=${streamingAlive} ` +
+          `[OLLENYA_APPSTATE] next=${next} streaming=${streamingAlive} ` +
             `recorder=${recorderAlive} status=${statusRef.current} ` +
             `userInteracted=${userInteractedRef.current} ` +
             `=> ${sessionActive ? "skipped (session alive)" : "handled"}`
         );
       } else if (sessionActive) {
         // In produzione: solo i casi di skip (utili per capire flicker)
-        console.log(`[KODA_APPSTATE] next=${next} skipped (session alive)`);
+        console.log(`[OLLENYA_APPSTATE] next=${next} skipped (session alive)`);
       }
       if (sessionActive) {
         return;
@@ -2010,11 +2010,11 @@ export default function Taccuino() {
               } as any);
             } catch {}
             console.log(
-              `[KODA_APPSTATE] AudioSession released (background/inactive)`
+              `[OLLENYA_APPSTATE] AudioSession released (background/inactive)`
             );
           } catch (e: any) {
             console.log(
-              `[KODA_APPSTATE] AudioSession release failed: ${e?.message || e}`
+              `[OLLENYA_APPSTATE] AudioSession release failed: ${e?.message || e}`
             );
           }
         })();
@@ -2037,7 +2037,7 @@ export default function Taccuino() {
         setStatus("idle");
         // === Fabio 2026-06 iter 6 — SPLASH ON LONG-RESUME =====================
         // Se l'app torna foreground e il TTL splash è scaduto (>5 min),
-        // il getter torna false → mostriamo il KodaSplash. Sensazione app
+        // il getter torna false → mostriamo il OllenyaSplash. Sensazione app
         // fresca all'utente che ha rilasciato la app da tempo. Se resume
         // rapido (<5 min), skippa (nessun disturbo).
         if (!getSessionHasShownSplash()) {
@@ -2083,7 +2083,7 @@ export default function Taccuino() {
   // Modalità conversazione), forziamo questi 3 valori a TRUE al boot.
   // Motivo: prima si "spegnevano" da soli (default backend false, oppure
   // reset memoria li portava a false) → utente vedeva l'app sembrare
-  // rotta perché AI non rispondeva, Koda muta, hands-free off.
+  // rotta perché AI non rispondeva, Ollenya muta, hands-free off.
   // Adesso sono SEMPRE TRUE: l'utente non può più sbagliare.
   useEffect(() => {
     if (!profile?.id) return;
@@ -2203,7 +2203,7 @@ export default function Taccuino() {
     keepAwakeReleaseTimerRef.current = setTimeout(() => {
       try {
         deactivateKeepAwake(TAG);
-        console.log("[KODA_WAKELOCK] released after 60s idle debounce");
+        console.log("[OLLENYA_WAKELOCK] released after 60s idle debounce");
       } catch {}
       keepAwakeReleaseTimerRef.current = null;
     }, 60_000);
@@ -2254,13 +2254,13 @@ export default function Taccuino() {
     // un bug ma il comportamento voluto.
     if (convActive) {
       console.log(
-        `[KODA_DIMMER] convActive=true → startWatching ` +
+        `[OLLENYA_DIMMER] convActive=true → startWatching ` +
           `(conversationOn=${conversationOn}, status=${status})`
       );
       ScreenDimmer.startWatching().catch(() => {});
     } else {
       console.log(
-        `[KODA_DIMMER] convActive=false → stopWatching ` +
+        `[OLLENYA_DIMMER] convActive=false → stopWatching ` +
           `(conversationOn=${conversationOn}, status=${status})`
       );
       ScreenDimmer.stopWatching().catch(() => {});
@@ -2331,7 +2331,7 @@ export default function Taccuino() {
   // Le funzioni erano definite ma nessun bottone UI le chiamava. Il campo
   // settings.ai_avatar era vuoto per tutti i profili in DB e il componente
   // Bubble riceveva la prop `aiAvatar` senza mai usarla internamente.
-  // Se in futuro serve un avatar per Koda: NON salvare base64 nel profilo
+  // Se in futuro serve un avatar per Ollenya: NON salvare base64 nel profilo
   // (stesso problema del background). Usare asset locale + selettore preset.
 
   const setBubbleColor = async (key: string) => {
@@ -2357,17 +2357,17 @@ export default function Taccuino() {
 
   // === FIX 2026-07-02 (Fabio) — Rimossa feature "sfondo custom da galleria" ===
   // saveBackground / pickBackgroundFromGallery erano dead code (bottone UI
-  // già rimosso). Ora gli sfondi sono solo i preset di Koda. Se in futuro
+  // già rimosso). Ora gli sfondi sono solo i preset di Ollenya. Se in futuro
   // servisse riabilitare custom background: NON salvare base64 dentro
   // profile.settings (esplode il DB). Usare invece asset locale o upload
   // separato in blob storage.
 
   const sendTestNotification = async () => {
     // === BLOCCO A (2026-08-25) — notifiche RIMOSSE ===
-    // Koda non manda più notifiche di prova. Se qualcuno preme un bottone
+    // Ollenya non manda più notifiche di prova. Se qualcuno preme un bottone
     // ancora aggrappato a questa fn (non dovrebbe esistere), mostriamo un
     // messaggio soft senza fallire.
-    setError("Notifiche disabilitate — Koda non ti scrive mai per primo.");
+    setError("Notifiche disabilitate — Ollenya non ti scrive mai per primo.");
     setTimeout(() => setError(null), 4000);
   };
 
@@ -2527,10 +2527,10 @@ export default function Taccuino() {
   }, [status]);
 
   // === THINKING SOUND (richiesta utente 2026-06) =====================
-  // Quando Koda sta elaborando (transcribing/thinking) parte il jingle
+  // Quando Ollenya sta elaborando (transcribing/thinking) parte il jingle
   // "Gentle Pause": 4 note morbide pentatoniche con sottofondo caldo.
   // Utile se l'utente non sta guardando il telefono (altra app, schermo
-  // bloccato). Si ferma appena Koda inizia a parlare o torna idle.
+  // bloccato). Si ferma appena Ollenya inizia a parlare o torna idle.
   //
   // RICHIESTA 2026-06 (#7) v2: in MODALITÀ SCRITTURA l'utente NON vuole
   // sentire alcun suono. Il problema era che `inputMode` può essere
@@ -2555,7 +2555,7 @@ export default function Taccuino() {
   const speakIfEnabled = useCallback(
     async (text: string, tone: TimelineEntry["tone"], opts?: { fromText?: boolean }) => {
       // === FIX #5 STATUS STUCK ON THINKING (2026-06-22 v6) ===
-      // Bug: dopo che Koda ha terminato la risposta, status restava su
+      // Bug: dopo che Ollenya ha terminato la risposta, status restava su
       // "thinking" → TypingDots continuavano a pulsare → dopo 25s il
       // watchdog faceva apparire un finto errore "Si è bloccato".
       // Causa: nei due early-return sotto (fromText o voice_response off)
@@ -2607,7 +2607,7 @@ export default function Taccuino() {
       try {
         if (a.type === "schedule_notification" && a.when_iso) {
           // === BLOCCO A (2026-08-25) — schedule_notification IGNORATO ===
-          // Koda non schedula più notifiche. Se Claude genera ancora una
+          // Ollenya non schedula più notifiche. Se Claude genera ancora una
           // action di questo tipo (residuo di prompt), la ignoriamo
           // silenziosamente. Non facciamo error UI: non è un fallimento.
           continue;
@@ -2641,7 +2641,7 @@ export default function Taccuino() {
             // eventuali risposte cached di Claude.
           } else if (key === "notifications" && typeof value === "boolean") {
             // === BLOCCO A (2026-08-25) — comando vocale "notifiche" IGNORATO ===
-            // Koda non ha più notifiche schedulate. Il comando vocale
+            // Ollenya non ha più notifiche schedulate. Il comando vocale
             // viene ignorato silenziosamente per backward-compat.
             continue;
           } else if (key === "checkin_morning" && typeof value === "string") {
@@ -2652,7 +2652,7 @@ export default function Taccuino() {
             patch.settings = { ...(profile?.settings || {}), summary_freq: value };
           } else if (key === "theme" && typeof value === "string") {
             // === TEMA UNICO (2026-08-04) ===
-            // Koda ora è dark-only. Qualsiasi comando vocale "cambia tema
+            // Ollenya ora è dark-only. Qualsiasi comando vocale "cambia tema
             // in X" viene ignorato lato UI — salviamo comunque "notte" nel
             // profilo per idempotenza. Il ThemeProvider ha setThemeName
             // come no-op, ma manteniamo la chiamata per compatibilità.
@@ -2717,7 +2717,7 @@ export default function Taccuino() {
   // da solo dopo 800ms di silenzio.
   //
   // GUARDIE per NON aprire il mic:
-  //   - modale di onboarding/KodaIntro/SealSetup aperto
+  //   - modale di onboarding/OllenyaIntro/SealSetup aperto
   //   - input_mode forzato a "text"
   //   - confessionale in attesa di sblocco
   //   - registratore già attivo
@@ -2725,14 +2725,14 @@ export default function Taccuino() {
   useEffect(() => {
     // === FIX 2026-06-27 v18 (diag hands-free Android) ===
     // L'utente Xiaomi ha riportato che dopo aver pubblicato i fix di oggi,
-    // hands-free NON auto-restarta dopo una risposta di Koda — bisogna
+    // hands-free NON auto-restarta dopo una risposta di Ollenya — bisogna
     // tappare ogni volta. Il diag log mostra gap di 5-8s fra "session ref
     // cleared" e "audio prep done", contro i ~450ms attesi.
     // Aggiungiamo log per OGNI guardia che blocca: al prossimo test
     // sappiamo subito quale flag sta impedendo il restart su Android.
     // Prefisso unico KODA_HF_GUARD così è facilmente filtrabile nel diag.
     if (!handsFree) {
-      if (status === "idle") console.log("[KODA_HF_GUARD] blocked: handsFree=false");
+      if (status === "idle") console.log("[OLLENYA_HF_GUARD] blocked: handsFree=false");
       return;
     }
     // === FIRST-TAP GATE ===
@@ -2741,27 +2741,27 @@ export default function Taccuino() {
     // tutta una serie di problemi di sessione audio iOS al cold-start
     // / ritorno dal background. Vedi commenti su `userInteractedRef`.
     if (!userInteractedRef.current) {
-      if (status === "idle") console.log("[KODA_HF_GUARD] blocked: userInteractedRef=false (first-tap gate)");
+      if (status === "idle") console.log("[OLLENYA_HF_GUARD] blocked: userInteractedRef=false (first-tap gate)");
       return;
     }
     if (status !== "idle") return;
     if (!profile) {
-      console.log("[KODA_HF_GUARD] blocked: profile=null");
+      console.log("[OLLENYA_HF_GUARD] blocked: profile=null");
       return;
     }
     // === CLOSE SESSION PAUSE (fix regressione 2026-06-20) ===
     // L'utente ha appena salutato per chiudere ("ci sentiamo dopo", "ciao
-    // Koda"…). Il backend ha settato close_session=true e il client lo ha
+    // Ollenya"…). Il backend ha settato close_session=true e il client lo ha
     // catturato. NON riaccendere il mic automaticamente. L'utente deve
     // tappare esplicitamente l'orb per riprendere. Senza questa guardia
     // il loop hands-free riapriva il mic dopo 450ms e poi mostrava
     // "non ti sento" anche se l'utente era già andato via.
     if (closeSessionPauseRef.current) {
-      console.log("[KODA_HF_GUARD] blocked: closeSessionPause=true (waiting for user tap)");
+      console.log("[OLLENYA_HF_GUARD] blocked: closeSessionPause=true (waiting for user tap)");
       return;
     }
     if (showOnboarding) {
-      console.log("[KODA_HF_GUARD] blocked: showOnboarding=true");
+      console.log("[OLLENYA_HF_GUARD] blocked: showOnboarding=true");
       return;
     }
     // === FIX 2026-08-27 v65.4 — showColorIntro guard TRULY REMOVED (Fabio) ==
@@ -2774,19 +2774,19 @@ export default function Taccuino() {
     // eventuali intro futuri verrà gestito dal loro componente.
     // (Nessuna guardia showColorIntro qui.)
     if (tourActive) {
-      console.log("[KODA_HF_GUARD] blocked: tourActive=true");
+      console.log("[OLLENYA_HF_GUARD] blocked: tourActive=true");
       return;
     }
     if (showSettings) {
-      console.log("[KODA_HF_GUARD] blocked: showSettings=true");
+      console.log("[OLLENYA_HF_GUARD] blocked: showSettings=true");
       return;
     }
     if (profile.settings?.input_mode === "text") {
-      console.log("[KODA_HF_GUARD] blocked: input_mode=text");
+      console.log("[OLLENYA_HF_GUARD] blocked: input_mode=text");
       return;
     }
     if (recRef.current) {
-      console.log("[KODA_HF_GUARD] blocked: recRef.current is non-null (recorder still alive?)");
+      console.log("[OLLENYA_HF_GUARD] blocked: recRef.current is non-null (recorder still alive?)");
       return;
     }
     // === FIX 2026-06-28 v26 — guard su streamingSessionRef ===
@@ -2794,7 +2794,7 @@ export default function Taccuino() {
     // questo check, mentre una sessione streaming era attiva l'useEffect
     // poteva firare e aprire una SECONDA WebSocket in parallelo → cascata.
     if (streamingSessionRef.current) {
-      console.log("[KODA_HF_GUARD] blocked: streamingSessionRef.current is non-null (stream already active)");
+      console.log("[OLLENYA_HF_GUARD] blocked: streamingSessionRef.current is non-null (stream already active)");
       return;
     }
     // === NO-SPEECH BACKOFF LOGIC (Fabio 2026-07-29) =========================
@@ -2810,7 +2810,7 @@ export default function Taccuino() {
       if (noSpeechCountRef.current >= MAX_NO_SPEECH_ATTEMPTS) {
         // Soglia raggiunta: pausiamo il loop, serve tap dell'utente
         console.log(
-          `[KODA_HF_BACKOFF_NOSPEECH] ${noSpeechCountRef.current} no_speech consecutivi → STOP loop (richiede tap utente)`
+          `[OLLENYA_HF_BACKOFF_NOSPEECH] ${noSpeechCountRef.current} no_speech consecutivi → STOP loop (richiede tap utente)`
         );
         setCloseSessionPause(true);
         closeSessionPauseRef.current = true;
@@ -2821,34 +2821,34 @@ export default function Taccuino() {
       scheduleDelayMs =
         NO_SPEECH_BACKOFF_DELAYS_MS[noSpeechCountRef.current - 1] ?? 5000;
       console.log(
-        `[KODA_HF_BACKOFF_NOSPEECH] no_speech #${noSpeechCountRef.current}/${MAX_NO_SPEECH_ATTEMPTS} → riapri fra ${scheduleDelayMs}ms`
+        `[OLLENYA_HF_BACKOFF_NOSPEECH] no_speech #${noSpeechCountRef.current}/${MAX_NO_SPEECH_ATTEMPTS} → riapri fra ${scheduleDelayMs}ms`
       );
     }
 
     // Tutte le guardie superate — schedula il restart.
-    console.log(`[KODA_HF_LOOP] all guards passed — scheduling startTalkInternal in ${scheduleDelayMs}ms`);
+    console.log(`[OLLENYA_HF_LOOP] all guards passed — scheduling startTalkInternal in ${scheduleDelayMs}ms`);
     // breve pausa di respiro per evitare di registrare la coda del TTS
     // e per dare al sistema audio iOS il tempo di switchare la sessione.
     const t = setTimeout(() => {
       if (!handsFreeRef.current) {
-        console.log("[KODA_HF_LOOP] aborted in timeout: handsFreeRef=false");
+        console.log("[OLLENYA_HF_LOOP] aborted in timeout: handsFreeRef=false");
         return;
       }
       if (recRef.current) {
-        console.log("[KODA_HF_LOOP] aborted in timeout: recRef became non-null");
+        console.log("[OLLENYA_HF_LOOP] aborted in timeout: recRef became non-null");
         return;
       }
       // CRITICAL: re-check tourActive in closure. Senza questo, nel piccolo
-      // gap fra "KodaIntro chiusa" e "tourActive=true" il setTimeout era
+      // gap fra "OllenyaIntro chiusa" e "tourActive=true" il setTimeout era
       // già stato schedulato e apriva il mic durante il tour.
       if (tourActiveRef.current) {
-        console.log("[KODA_HF_LOOP] aborted in timeout: tourActiveRef=true");
+        console.log("[OLLENYA_HF_LOOP] aborted in timeout: tourActiveRef=true");
         return;
       }
-      console.log("[KODA_HF_LOOP] firing startTalkInternal(true)");
+      console.log("[OLLENYA_HF_LOOP] firing startTalkInternal(true)");
       // Re-check status in closure
       startTalkInternal(true).catch((e) => {
-        console.log(`[KODA_HF_LOOP] startTalkInternal threw: ${e?.message || e}`);
+        console.log(`[OLLENYA_HF_LOOP] startTalkInternal threw: ${e?.message || e}`);
       });
     }, scheduleDelayMs);
     return () => clearTimeout(t);
@@ -2864,7 +2864,7 @@ export default function Taccuino() {
   //      un prodotto che si presenta come "amico attento".
   //   2) Microfono attivo (recording/processing) → il back lascerebbe il
   //      registratore aperto in background o in stato corrotto.
-  //   3) Koda sta parlando (speaking) → il TTS continua mentre l'utente
+  //   3) Ollenya sta parlando (speaking) → il TTS continua mentre l'utente
   //      pensa di aver chiuso l'app.
   // Inoltre, intercettiamo i modali aperti (Impostazioni, Onboarding,
   // SealSetup, ConfessionalIntro, Tour) e li chiudiamo invece di uscire.
@@ -2909,7 +2909,7 @@ export default function Taccuino() {
         return true;
       }
 
-      // --- Tier 4: Koda sta parlando (TTS playback) ---
+      // --- Tier 4: Ollenya sta parlando (TTS playback) ---
       // Back = fermala con grazia, ma resta nell'app.
       if (status === "speaking") {
         try { SpeechMod.stop(); } catch {}
@@ -2938,9 +2938,9 @@ export default function Taccuino() {
       traceStart();
       traceMark("sendText:enter");
       // FIX 2026-07: se l'utente sta SCRIVENDO (input da tastiera),
-      // Koda risponde anche lei SOLO IN TESTO — niente TTS.
+      // Ollenya risponde anche lei SOLO IN TESTO — niente TTS.
       // Motivo: se l'utente scrive, è probabile in contesto pubblico/notte
-      // dove non può/vuole parlare ad alta voce → Koda fa lo stesso.
+      // dove non può/vuole parlare ad alta voce → Ollenya fa lo stesso.
       const fromText = !!opts?.fromText;
       const txt = text.trim();
       if (!txt) return;
@@ -3034,7 +3034,7 @@ export default function Taccuino() {
                 watchdogTriggered = true;
                 try { SpeechMod.stop(); } catch {}
                 setStatus("idle");
-                setError("Koda ci sta mettendo troppo. Riprova tra un attimo.");
+                setError("Ollenya ci sta mettendo troppo. Riprova tra un attimo.");
                 setTimeout(() => setError(null), 4000);
               }
             }, 25000);
@@ -3104,7 +3104,7 @@ export default function Taccuino() {
                         }
                         // === CLOSE SESSION (path WS — fix 2026-06-20) ===
                         if (meta.close_session) {
-                          console.log("[KODA_CLOSE_SESSION] (ws) meta.close_session=true → pausing hands-free loop");
+                          console.log("[OLLENYA_CLOSE_SESSION] (ws) meta.close_session=true → pausing hands-free loop");
                           setCloseSessionPause(true);
                           closeSessionPauseRef.current = true;
                         }
@@ -3160,7 +3160,7 @@ export default function Taccuino() {
                     // valuta `closeSessionPauseRef` non riaccenderà il mic.
                     // L'utente dovrà tappare l'orb per riprendere.
                     if (meta.close_session) {
-                      console.log("[KODA_CLOSE_SESSION] meta.close_session=true → pausing hands-free loop");
+                      console.log("[OLLENYA_CLOSE_SESSION] meta.close_session=true → pausing hands-free loop");
                       setCloseSessionPause(true);
                       closeSessionPauseRef.current = true;
                     }
@@ -3240,7 +3240,7 @@ export default function Taccuino() {
         //      per sessione — vedi lib/quotaExhaustedAudio.ts)
         //   2. Attiva la sessione "quota exhausted" → prossimi turni voce
         //      bloccati automaticamente
-        //   3. Mostra il messaggio Koda in timeline come AI entry sintetica
+        //   3. Mostra il messaggio Ollenya in timeline come AI entry sintetica
         //      così l'utente ha ANCHE la controparte scritta
         //   4. NON mostra Alert modal — il banner viola in home + audio
         //      bastano
@@ -3421,7 +3421,7 @@ export default function Taccuino() {
     // qui in caso il chiamante salti il debounce. Sintomo visto nei log:
     // 6+ sessioni WS in apertura allo stesso ms con showSettings=true.
     if (streamingSessionRef.current) {
-      console.log("[KODA_STREAM_GUARD] startTalkStreaming aborted: session already active");
+      console.log("[OLLENYA_STREAM_GUARD] startTalkStreaming aborted: session already active");
       return;
     }
     setError(null);
@@ -3443,9 +3443,9 @@ export default function Taccuino() {
       if (Platform.OS !== "web") {
         await prewarmMic();
       }
-      console.log(`[KODA_STREAM_CLIENT] audio prep done (via prewarmMic)`);
+      console.log(`[OLLENYA_STREAM_CLIENT] audio prep done (via prewarmMic)`);
     } catch (e) {
-      console.warn(`[KODA_STREAM_CLIENT] audio prep failed: ${e}`);
+      console.warn(`[OLLENYA_STREAM_CLIENT] audio prep failed: ${e}`);
     }
 
     // Placeholder optimistic (verrà aggiornato quando arriva stt_final)
@@ -3495,7 +3495,7 @@ export default function Taccuino() {
           // i tap sull'orb finché onRecognitionActive non arriva.
           micReallyActiveRef.current = false;
           console.log(
-            `[KODA_STREAM_CLIENT] session ref ${s ? "stored" : "cleared"}`
+            `[OLLENYA_STREAM_CLIENT] session ref ${s ? "stored" : "cleared"}`
           );
           // === FIX 2026-07-11 v52 — TAP_STOP EARLY consumption ===
           // Se l'utente ha premuto tap-stop DURANTE la fase async pre-WS
@@ -3507,7 +3507,7 @@ export default function Taccuino() {
           if (s && pendingTapStopRef.current) {
             pendingTapStopRef.current = false;
             console.log(
-              `[KODA_STREAM_CLIENT] pendingTapStopRef consumed → calling s.stop() now`
+              `[OLLENYA_STREAM_CLIENT] pendingTapStopRef consumed → calling s.stop() now`
             );
             try {
               if (typeof s.stop === "function") {
@@ -3524,7 +3524,7 @@ export default function Taccuino() {
         // === FIX 2026-07-24 v63.5 (Fix B) — mic really active ===
         onRecognitionActive: () => {
           micReallyActiveRef.current = true;
-          console.log(`[KODA_MIC_GATE] mic really active — tap-stop now allowed`);
+          console.log(`[OLLENYA_MIC_GATE] mic really active — tap-stop now allowed`);
         },
         onUserFinal: (userText: string, conf: number | null, _dur: number | null) => {
           // === FIX 2026-06-25 v8 ===
@@ -3541,7 +3541,7 @@ export default function Taccuino() {
           // eventuali no_speech ripartono dal delay più corto (450ms).
           turnHadSpeechRef.current = true;
           if (noSpeechCountRef.current > 0) {
-            console.log(`[KODA_HF_BACKOFF_NOSPEECH] user parlato → reset counter (era ${noSpeechCountRef.current})`);
+            console.log(`[OLLENYA_HF_BACKOFF_NOSPEECH] user parlato → reset counter (era ${noSpeechCountRef.current})`);
             noSpeechCountRef.current = 0;
           }
           // Aggiorna la bolla utente col testo trascritto reale.
@@ -3553,7 +3553,7 @@ export default function Taccuino() {
           if (typeof conf === "number") {
             lastSttConfidenceRef.current = conf;
             console.log(
-              `[KODA_STREAM_CLIENT] user_final conf=${conf.toFixed(3)} text=${JSON.stringify(userText)}`
+              `[OLLENYA_STREAM_CLIENT] user_final conf=${conf.toFixed(3)} text=${JSON.stringify(userText)}`
             );
           }
           // === FIX 2026-07-03 v45 CLIENT-SIDE close_session heuristic ===
@@ -3563,7 +3563,7 @@ export default function Taccuino() {
           // Questo funziona sempre appena c'è il testo trascritto.
           if (detectCloseSessionClientSide(userText)) {
             console.log(
-              `[KODA_CLOSE_SESSION] (client heuristic) matched → pausing HF loop | text=${JSON.stringify(userText)}`
+              `[OLLENYA_CLOSE_SESSION] (client heuristic) matched → pausing HF loop | text=${JSON.stringify(userText)}`
             );
             setCloseSessionPause(true);
             closeSessionPauseRef.current = true;
@@ -3587,7 +3587,7 @@ export default function Taccuino() {
               runActions(meta.actions as any[]);
             }
             if (meta.close_session) {
-              console.log("[KODA_CLOSE_SESSION] (stream) meta.close_session=true → pausing hands-free loop");
+              console.log("[OLLENYA_CLOSE_SESSION] (stream) meta.close_session=true → pausing hands-free loop");
               setCloseSessionPause(true);
               closeSessionPauseRef.current = true;
             }
@@ -3605,9 +3605,9 @@ export default function Taccuino() {
         // === FIX 2026-07-14 v56 — Backoff HF loop su WS failures consecutivi ===
         wsFailureCountRef.current += 1;
         const failN = wsFailureCountRef.current;
-        console.log(`[KODA_HF_BACKOFF] WS failure #${failN}/${WS_FAIL_THRESHOLD} (err=${result.error})`);
+        console.log(`[OLLENYA_HF_BACKOFF] WS failure #${failN}/${WS_FAIL_THRESHOLD} (err=${result.error})`);
         if (failN >= WS_FAIL_THRESHOLD) {
-          console.log(`[KODA_HF_BACKOFF] threshold reached → pausing HF loop, waiting for user tap`);
+          console.log(`[OLLENYA_HF_BACKOFF] threshold reached → pausing HF loop, waiting for user tap`);
           setCloseSessionPause(true);
           closeSessionPauseRef.current = true;
           setError("Connessione persa. Tocca il cerchio per riprovare.");
@@ -3619,7 +3619,7 @@ export default function Taccuino() {
       } else {
         // Successo → azzera il counter dei fallimenti consecutivi
         if (wsFailureCountRef.current > 0) {
-          console.log(`[KODA_HF_BACKOFF] resetting counter (was ${wsFailureCountRef.current})`);
+          console.log(`[OLLENYA_HF_BACKOFF] resetting counter (was ${wsFailureCountRef.current})`);
           wsFailureCountRef.current = 0;
         }
       }
@@ -3633,7 +3633,7 @@ export default function Taccuino() {
       // Azzeriamo esplicitamente streamingSessionRef.current. Prima veniva
       // pulito SOLO su tap-reset (riga ~4042) o back-button (~2676), MAI
       // sulla chiusura naturale del turno. Risultato: dopo la risposta di
-      // Koda, il ref restava puntato alla sessione WS morta e la guardia
+      // Ollenya, il ref restava puntato alla sessione WS morta e la guardia
       // dell'HF_LOOP (`if (streamingSessionRef.current) return`) bloccava
       // il restart automatico → l'utente doveva tappare l'orb ogni volta,
       // vanificando l'hands-free. La sessione a questo punto è già chiusa
@@ -3645,7 +3645,7 @@ export default function Taccuino() {
       // dovrà re-triggerare onRecognitionActive per riautorizzare i tap.
       micReallyActiveRef.current = false;
       // === FIX 2026-06-28 v26 (P0 cascata WebSocket — log diag iPhone/Android) ===
-      // Il vecchio re-trigger esplicito [KODA_HF_EXPLICIT] è stato RIMOSSO.
+      // Il vecchio re-trigger esplicito [OLLENYA_HF_EXPLICIT] è stato RIMOSSO.
       // Causava una CASCATA ESPONENZIALE di sessioni WebSocket:
       //   1. Sessione finisce → finally → setTimeout(500ms) re-trigger
       //   2. Nessun controllo su showSettings, streamingSessionRef, o stato
@@ -3654,7 +3654,7 @@ export default function Taccuino() {
       //      utente in Settings, voice change), finally rifira → cascata
       //   4. Ogni iterazione: N sessioni → N finally → N retrigger → 2N sess.
       // Risultato osservato nei log: 6+ WebSocket aperte allo stesso ms.
-      // Soluzione: AFFIDIAMOCI ESCLUSIVAMENTE all'useEffect [KODA_HF_LOOP],
+      // Soluzione: AFFIDIAMOCI ESCLUSIVAMENTE all'useEffect [OLLENYA_HF_LOOP],
       // che ha tutti i guard corretti (showSettings, showColorIntro,
       // tourActive, sealUnlocking, streamingSessionRef, recRef, ecc.) e
       // viene triggerato automaticamente quando status → idle.
@@ -3675,11 +3675,11 @@ export default function Taccuino() {
     try {
       const perm = await ensureSpeechPermission();
       if (!perm.granted) {
-        console.log(`[KODA_STT_PERM] startTalk blocked: path=${perm.path}`);
+        console.log(`[OLLENYA_STT_PERM] startTalk blocked: path=${perm.path}`);
         return;
       }
     } catch (e) {
-      console.warn("[KODA_STT_PERM] ensureSpeechPermission threw:", e);
+      console.warn("[OLLENYA_STT_PERM] ensureSpeechPermission threw:", e);
       // Fail-open: se l'helper esplode non blocchiamo l'utente
     }
 
@@ -3694,7 +3694,7 @@ export default function Taccuino() {
     const now = Date.now();
     const sinceLast = now - lastStartTalkAtRef.current;
     if (sinceLast < 800) {
-      console.log(`[KODA_HF_LOCK] startTalkInternal debounced (${sinceLast}ms since last call) — duplicate trigger blocked`);
+      console.log(`[OLLENYA_HF_LOCK] startTalkInternal debounced (${sinceLast}ms since last call) — duplicate trigger blocked`);
       return;
     }
     lastStartTalkAtRef.current = now;
@@ -3719,7 +3719,7 @@ export default function Taccuino() {
     // catch è la difesa decisiva contro la cascata di WS osservata nei log
     // (6+ sessioni aperte allo stesso millisecondo).
     if (streamingSessionRef.current) {
-      console.log("[KODA_HF_LOCK] startTalkInternal blocked: streamingSessionRef.current is non-null (stream active)");
+      console.log("[OLLENYA_HF_LOCK] startTalkInternal blocked: streamingSessionRef.current is non-null (stream active)");
       return;
     }
 
@@ -3730,7 +3730,7 @@ export default function Taccuino() {
     // L'utente ha verificato sperimentalmente che `EXPO_PUBLIC_USE_WS_VOICE_STREAM=true`
     // nel .env NON arriva al bundle Android via OTA update (anche dopo
     // disinstalla + reinstall). Diag log Android mostra ancora il vecchio
-    // path: [KODA_VAD_TRACE], [KODA_REC_CTX], [KODA_POLL], con metering
+    // path: [OLLENYA_VAD_TRACE], [OLLENYA_REC_CTX], [OLLENYA_POLL], con metering
     // db=-100 costante (bug Xiaomi MIUI) → hands-free non chiude mai.
     // Su iPhone invece l'env arriva correttamente e WS streaming funziona.
     // Soluzione pragmatica: hardcoded a true. Il flag env resta letto per
@@ -3742,7 +3742,7 @@ export default function Taccuino() {
     // Log esplicito così nel prossimo diag log Android possiamo verificare
     // se il fallback hardcoded sta funzionando. Se vedi questa riga col
     // valore true significa che il nuovo bundle è arrivato sul device.
-    console.log(`[KODA_FLAG] useVoiceStream=${useVoiceStream} (env="${process.env.EXPO_PUBLIC_USE_WS_VOICE_STREAM ?? "<missing>"}", platform=${Platform.OS})`);
+    console.log(`[OLLENYA_FLAG] useVoiceStream=${useVoiceStream} (env="${process.env.EXPO_PUBLIC_USE_WS_VOICE_STREAM ?? "<missing>"}", platform=${Platform.OS})`);
     if (useVoiceStream && Platform.OS !== "web") {
       return startTalkStreaming();
     }
@@ -3878,7 +3878,7 @@ export default function Taccuino() {
     if (!current) return;
     // === RECORDING DURATION (sprint v11) ===
     // Capture duration at the EXACT moment of stop, before any async work.
-    // Used by [KODA_SUMMARY] downstream.
+    // Used by [OLLENYA_SUMMARY] downstream.
     if (recordingStartedAtRef.current !== null) {
       lastRecordingDurationMsRef.current = Date.now() - recordingStartedAtRef.current;
       recordingStartedAtRef.current = null;
@@ -3981,7 +3981,7 @@ export default function Taccuino() {
             latency_ms: 0,
           };
       logGateDecision(gate);
-      console.log(`[KODA_TIMING] SILERO_GATE_MS=${Date.now() - _kt_gate_start}`);
+      console.log(`[OLLENYA_TIMING] SILERO_GATE_MS=${Date.now() - _kt_gate_start}`);
 
       if (!gate.hasSpeech) {
         // Silero certifica: era rumore di sottofondo, non voce. Non
@@ -3989,7 +3989,7 @@ export default function Taccuino() {
         // semplicemente rilanciamo il listen (hands-free) o usciamo
         // (manual mode). Same path della guardia client-side "no audio".
         console.log(
-          `[KODA_VAD_GATE] BLOCKED — ratio=${gate.probe?.speech_ratio.toFixed(3)} ` +
+          `[OLLENYA_VAD_GATE] BLOCKED — ratio=${gate.probe?.speech_ratio.toFixed(3)} ` +
           `(threshold=0.15). Skipping STT/LLM/TTS.`
         );
         if (convActiveRef.current) {
@@ -4027,7 +4027,7 @@ export default function Taccuino() {
       // Prima di tentare STT/LLM, verifico se siamo offline. Se sì, NON
       // chiamiamo Deepgram (fallirebbe con un timeout di 30s), ma riproduco
       // una delle 3 clip offline pre-cachate. Mantiene l'illusione di
-      // presenza: Koda non scompare, dice "sono qui, ma offline".
+      // presenza: Ollenya non scompare, dice "sono qui, ma offline".
       //
       // ANTI-LOOP (Claude PM feedback 2026-06-20): dopo
       // MAX_OFFLINE_CLIPS_IN_ROW clip consecutive senza che la rete sia
@@ -4052,7 +4052,7 @@ export default function Taccuino() {
             console.log("[OfflineClips] no cached clips — exiting hands-free with banner");
             setConvActive(false);
             offlineClipsInRowRef.current = 0;
-            setError("Niente connessione — Koda è offline. Riprova quando torni online.");
+            setError("Niente connessione — Ollenya è offline. Riprova quando torni online.");
             setTimeout(() => setError(null), 4500);
             return;
           }
@@ -4093,7 +4093,7 @@ export default function Taccuino() {
       // === KODA TIMING (ChatGPT sprint giugno 2026) ===
       // Marker temporale per misurare upload + Deepgram. Lo log usa
       // performance.now() per precisione sub-millisecondo. Stampato come
-      // "[KODA_TIMING] LABEL Xms" così è grep-abile sui log device.
+      // "[OLLENYA_TIMING] LABEL Xms" così è grep-abile sui log device.
       const _kt_upload_start = Date.now();
       // === P0 FIX 2026-06-27: log dimensione audio per correlare upload lenti ===
       // Permette di capire se i 44s erano dovuti a un file grande su 4G ballerino
@@ -4111,7 +4111,7 @@ export default function Taccuino() {
           }
         }
       } catch {}
-      console.log(`[KODA_TIMING] UPLOAD_START @${_kt_upload_start} audio_bytes=${_kt_audio_bytes}`);
+      console.log(`[OLLENYA_TIMING] UPLOAD_START @${_kt_upload_start} audio_bytes=${_kt_audio_bytes}`);
       // Fase 4 Step 1: usiamo Deepgram Nova-3 (più veloce e accurato di Whisper).
       // Fallback automatico a /transcribe (Whisper) se Deepgram fallisce.
       // === P0 FIX 2026-06-27 (timeout 44s su cold-start Bluetooth) ===
@@ -4149,7 +4149,7 @@ export default function Taccuino() {
         clearTimeout(_stt_timer);
       }
       const _kt_deepgram_done = Date.now();
-      console.log(`[KODA_TIMING] UPLOAD_END+DEEPGRAM_END @${_kt_deepgram_done} (upload+stt_ms=${_kt_deepgram_done - _kt_upload_start})`);
+      console.log(`[OLLENYA_TIMING] UPLOAD_END+DEEPGRAM_END @${_kt_deepgram_done} (upload+stt_ms=${_kt_deepgram_done - _kt_upload_start})`);
       if (!r.ok) {
         console.warn(`[transcribe] Deepgram failed (${r.status}), fallback to Whisper`);
         // Ricreo FormData perché il body è già stato consumato
@@ -4172,7 +4172,7 @@ export default function Taccuino() {
       // === AUDIO HONESTY (Fabio 2026-06-23) =====================
       // Catturiamo la confidence Deepgram per propagarla al backend nella
       // chiamata /converse-fast/start. Se < 0.7 il backend inietterà una
-      // direttiva nel system prompt → Koda riconosce apertamente l'audio
+      // direttiva nel system prompt → Ollenya riconosce apertamente l'audio
       // rumoroso e chiede dove si trova l'utente invece di indovinare.
       const _stt_confidence: number | null =
         typeof data?.confidence === "number" ? data.confidence : null;
@@ -4180,14 +4180,14 @@ export default function Taccuino() {
       if (_stt_confidence !== null) {
         console.log(`[AUDIO_HONESTY_CLIENT] stt_confidence=${_stt_confidence.toFixed(3)}`);
       }
-      // === KODA_STT CLIENT LOG (sprint giugno 2026 — RCA "Koda parla spagnolo") ===
-      // Il backend logga [KODA_STT] con text+lang+confidence, MA quei log
+      // === KODA_STT CLIENT LOG (sprint giugno 2026 — RCA "Ollenya parla spagnolo") ===
+      // Il backend logga [OLLENYA_STT] con text+lang+confidence, MA quei log
       // sono Python (server-side) e l'utente non li vede su /diagnostics.
       // Qui logghiamo lo stesso text lato client così è copiabile dal
       // pannello diagnostics dell'app. Se vediamo:
-      //   [KODA_STT_CLIENT] text="hola como estas" → Deepgram sbaglia foneticamente
-      //   [KODA_STT_CLIENT] text="ciao come stai" → STT OK, problema nel prompt LLM
-      console.log(`[KODA_STT_CLIENT] text=${JSON.stringify(txt)} chars=${txt.length}`);
+      //   [OLLENYA_STT_CLIENT] text="hola como estas" → Deepgram sbaglia foneticamente
+      //   [OLLENYA_STT_CLIENT] text="ciao come stai" → STT OK, problema nel prompt LLM
+      console.log(`[OLLENYA_STT_CLIENT] text=${JSON.stringify(txt)} chars=${txt.length}`);
       const cls = classifyTranscript(txt);
       if (cls !== "ok") {
         // === DIAGNOSTIC LOG (fix 2026-06 cold-start) ===
@@ -4300,7 +4300,7 @@ export default function Taccuino() {
     if (Date.now() < swallowNextBigButtonTapUntilRef.current) {
       swallowNextBigButtonTapUntilRef.current = 0; // consuma la window
       console.log(
-        `[KODA_TAP_RESET] SWALLOW first-tap — screen was dim, restore-only (no hard-stop)`
+        `[OLLENYA_TAP_RESET] SWALLOW first-tap — screen was dim, restore-only (no hard-stop)`
       );
       return;
     }
@@ -4316,7 +4316,7 @@ export default function Taccuino() {
     //
     // COMPORTAMENTO PRECEDENTE (v63.5+):
     //   • Tap durante `recording` → session.stop() (graceful, invia "end"
-    //     al server e aspetta la risposta di Koda).
+    //     al server e aspetta la risposta di Ollenya).
     //   • Tap durante `speaking/thinking/transcribing` → HARD_STOP (kill
     //     tutto → idle).
     //
@@ -4341,7 +4341,7 @@ export default function Taccuino() {
     // La logica di kill è la stessa del vecchio HARD_STOP (abort WS,
     // stop recorder, stop TTS, ecc.), applicata a TUTTI gli stati.
     if (status !== "idle") {
-      console.log(`[KODA_TAP_RESET] tap → hard stop | state=${status} convActive=${convActiveRef.current} micActive=${micReallyActiveRef.current}`);
+      console.log(`[OLLENYA_TAP_RESET] tap → hard stop | state=${status} convActive=${convActiveRef.current} micActive=${micReallyActiveRef.current}`);
       // 1) Abort streaming session (chiude WS HARD, niente "end" → niente pipeline server-side)
       if (streamingSessionRef.current) {
         const s = streamingSessionRef.current as any;
@@ -4400,10 +4400,10 @@ export default function Taccuino() {
             const Audio: any = require("expo-audio");
             if (typeof Audio.setIsAudioActiveAsync === "function") {
               await Audio.setIsAudioActiveAsync(false);
-              console.log(`[KODA_TAP_RESET] audio session deactivated — next tap will re-activate clean`);
+              console.log(`[OLLENYA_TAP_RESET] audio session deactivated — next tap will re-activate clean`);
             }
           } catch (e: any) {
-            console.log(`[KODA_TAP_RESET] setIsAudioActiveAsync(false) failed: ${e?.message || e}`);
+            console.log(`[OLLENYA_TAP_RESET] setIsAudioActiveAsync(false) failed: ${e?.message || e}`);
           }
         })();
       }
@@ -4415,12 +4415,12 @@ export default function Taccuino() {
     // eventuale pausa close-session, e parte la registrazione.
     if (conversationOn) setConvActive(true);
     if (closeSessionPauseRef.current) {
-      console.log("[KODA_CLOSE_SESSION] user tapped — resuming hands-free loop");
+      console.log("[OLLENYA_CLOSE_SESSION] user tapped — resuming hands-free loop");
       setCloseSessionPause(false);
       closeSessionPauseRef.current = false;
       // === FIX 2026-07-14 v56 — reset backoff counter on manual tap ===
       if (wsFailureCountRef.current > 0) {
-        console.log(`[KODA_HF_BACKOFF] user tap → reset WS failure counter (was ${wsFailureCountRef.current})`);
+        console.log(`[OLLENYA_HF_BACKOFF] user tap → reset WS failure counter (was ${wsFailureCountRef.current})`);
         wsFailureCountRef.current = 0;
       }
     }
@@ -4438,12 +4438,12 @@ export default function Taccuino() {
   // Effetto: silenzio totale immediato — abort WS senza processing,
   // stop TTS, disattiva conversation mode, blocca hands-free loop.
   // Use case: l'utente è nel furgone, entra qualcuno, deve far sparire
-  // tutto SUBITO senza che Koda risponda a quello che ha appena detto.
+  // tutto SUBITO senza che Ollenya risponda a quello che ha appena detto.
   // Il tap breve invece è il "walkie-talkie stop" (chiama session.stop()).
   const onBigButtonLongPress = () => {
     userInteractedRef.current = true;
     if (status === "idle") return;
-    console.log(`[KODA_HARD_STOP] long-press kill-switch state=${status}`);
+    console.log(`[OLLENYA_HARD_STOP] long-press kill-switch state=${status}`);
     if (streamingSessionRef.current) {
       const s = streamingSessionRef.current as any;
       streamingSessionRef.current = null;
@@ -4500,7 +4500,7 @@ export default function Taccuino() {
     if (!txt.trim()) return;
     setTextInput("");
     Keyboard.dismiss();
-    // FIX 2026-07: marca come "from text" → Koda risponde SOLO in testo,
+    // FIX 2026-07: marca come "from text" → Ollenya risponde SOLO in testo,
     // niente TTS. Coerente con l'azione dell'utente che ha scelto di scrivere.
     sendText(txt, { fromText: true });
   };
@@ -4552,7 +4552,7 @@ export default function Taccuino() {
 
   // === DEV MENU QA — 5 tap sul numero versione (Fabio 2026-06) ============
   // Attivazione nascosta agli utenti finali. Testabile senza terminale.
-  // Uso: apri Impostazioni → scroll fino a "Koda v..." → 5 tap veloci
+  // Uso: apri Impostazioni → scroll fino a "Ollenya v..." → 5 tap veloci
   // (entro 3s) → si apre Alert QA con 3 azioni distruttive/di test.
   // Il contatore si azzera dopo 3s di inattività così un utente che tocca
   // per caso il footer non entra mai nel Dev Menu.
@@ -4591,8 +4591,8 @@ export default function Taccuino() {
             try {
               // 2. Reset SecureStore locale
               await SecureStore.deleteItemAsync("microdemo_last_at").catch(() => {});
-              await SecureStore.deleteItemAsync("koda_intro_completed_at").catch(() => {});
-              await SecureStore.deleteItemAsync("koda_text_only_mode").catch(() => {});
+              await SecureStore.deleteItemAsync("ollenya_intro_completed_at").catch(() => {});
+              await SecureStore.deleteItemAsync("ollenya_text_only_mode").catch(() => {});
               await SecureStore.deleteItemAsync("intro_v3_completed_at").catch(() => {});
             } catch (e) {
               console.warn("[DevMenu] SecureStore cleanup failed:", String(e).slice(0, 120));
@@ -4783,10 +4783,10 @@ export default function Taccuino() {
       // === SPEC 2026-08-22 (Fabio) — RESET COMPLETO INCLUDE FLAG SECURESTORE ==
       // Il DELETE /api/profile azzera solo Mongo. Ma la nuova architettura V3
       // usa flag SecureStore LOCALI ("intro_v3_completed_at",
-      // "heart_reveal_dismissed_at", "microdemo_last_at", "koda_intro_seen",
+      // "heart_reveal_dismissed_at", "microdemo_last_at", "ollenya_intro_seen",
       // "user_display_name") per gating della prima esperienza. Se non li
       // azzeriamo qui, dopo "Cancella tutta la memoria" l'utente NON rivede
-      // la sequenza di primo utilizzo (Koda che si presenta, cuore, provalo,
+      // la sequenza di primo utilizzo (Ollenya che si presenta, cuore, provalo,
       // reveal). Cancelliamo TUTTI i flag della prima esperienza prima di
       // ricaricare il profilo, così il router V3 riparte da zero.
       try {
@@ -4799,7 +4799,7 @@ export default function Taccuino() {
           SecureStore.deleteItemAsync("intro_premium_seen_at").catch(() => {}),
           SecureStore.deleteItemAsync("heart_reveal_dismissed_at").catch(() => {}),
           SecureStore.deleteItemAsync("microdemo_last_at").catch(() => {}),
-          SecureStore.deleteItemAsync("koda_intro_seen").catch(() => {}),
+          SecureStore.deleteItemAsync("ollenya_intro_seen").catch(() => {}),
           SecureStore.deleteItemAsync("user_display_name").catch(() => {}),
         ]);
         const p = await api.getProfile();
@@ -4820,7 +4820,7 @@ export default function Taccuino() {
         // ma con race condition: `showColorIntro` legge `koda_intro_seen=null`
         // → setta `true` PRIMA che il router V3 abbia passato tutte le sue
         // 3 guard asincrone (profile, disclaimer, splash). Il return early
-        // di riga 6655 `if (showColorIntro === true) return <KodaIntro/>`
+        // di riga 6655 `if (showColorIntro === true) return <OllenyaIntro/>`
         // scatta → l'utente vede V1 al posto di V3.
         //
         // SOLUZIONE: forziamo lo stato locale ATOMICAMENTE prima di
@@ -4910,7 +4910,7 @@ export default function Taccuino() {
         if (await Sharing.isAvailableAsync()) {
           await Sharing.shareAsync(fileUri, {
             mimeType: "application/json",
-            dialogTitle: "I tuoi dati Koda",
+            dialogTitle: "I tuoi dati Ollenya",
           });
         } else {
           Alert.alert("Export pronto", `File salvato: ${filename}`);
@@ -5000,7 +5000,7 @@ export default function Taccuino() {
   }, []);
 
   // === Proactive Check-in scheduling ===========================
-  // BLOCCO A (2026-08-25): RIMOSSO. Koda non schedula più check-in
+  // BLOCCO A (2026-08-25): RIMOSSO. Ollenya non schedula più check-in
   // proattivi. Il vecchio useEffect chiamava cancelAllCheckins / scheduleCheckin
   // dal modulo `lib/notifications` (ora rimosso) e generava messaggi via
   // /api/checkin/generate (endpoint rimosso). Nessun sostituto.
@@ -5049,7 +5049,7 @@ export default function Taccuino() {
 
     // === DIAG v64.2 — log traccia completa cambio voce ===
     console.log(
-      `[KODA_VOICE_CHANGE] user picked voice_id=${voiceId} → mapped koda_voice=${kodaVoice || "UNMAPPED"} | ` +
+      `[OLLENYA_VOICE_CHANGE] user picked voice_id=${voiceId} → mapped koda_voice=${kodaVoice || "UNMAPPED"} | ` +
       `current_profile: koda_voice=${(profile as any)?.koda_voice ?? "?"} tts_voice_id=${profile.settings?.tts_voice_id ?? "?"}`
     );
 
@@ -5085,19 +5085,19 @@ export default function Taccuino() {
         ...(kodaVoice ? { koda_voice: kodaVoice } : {}),
       };
       console.log(
-        `[KODA_VOICE_CHANGE] PUT /profile body=${JSON.stringify({
+        `[OLLENYA_VOICE_CHANGE] PUT /profile body=${JSON.stringify({
           tts_voice_id: updateBody.settings?.tts_voice_id,
           koda_voice: updateBody.koda_voice ?? null,
         })}`
       );
       const resp: any = await api.updateProfile(updateBody);
       console.log(
-        `[KODA_VOICE_CHANGE] PUT /profile OK — server returned: ` +
+        `[OLLENYA_VOICE_CHANGE] PUT /profile OK — server returned: ` +
         `koda_voice=${resp?.koda_voice ?? "?"} tts_voice_id=${resp?.settings?.tts_voice_id ?? "?"} ai_gender=${resp?.ai_gender ?? "?"}`
       );
     } catch (e: any) {
       console.log(
-        `[KODA_VOICE_CHANGE] PUT /profile FAILED: ${e?.message || String(e)}`
+        `[OLLENYA_VOICE_CHANGE] PUT /profile FAILED: ${e?.message || String(e)}`
       );
     }
   };
@@ -5453,16 +5453,16 @@ export default function Taccuino() {
       key: "behavior",
       icon: "💬",
       title: "Comportamento",
-      description: "Decidi cosa può fare Koda e come gestisce le informazioni.",
+      description: "Decidi cosa può fare Ollenya e come gestisce le informazioni.",
       count: 3,
       body: (
         <>
             {/* === RICERCA WEB (Tavily) — toggle privacy ====================
                 Quando attivo: se l'utente fa domande fattuali (meteo, notizie,
-                prezzi), Koda esegue una ricerca su fonti italiane certificate
+                prezzi), Ollenya esegue una ricerca su fonti italiane certificate
                 (ANSA, Repubblica, Corriere, Wikipedia, meteo.it, ecc.) PRIMA
                 di rispondere. Solo la query corrente viene inviata, nessun
-                dato personale. Quando OFF: Koda usa SOLO la sua conoscenza
+                dato personale. Quando OFF: Ollenya usa SOLO la sua conoscenza
                 statica, nessuna comunicazione esterna oltre l'LLM. MAI
                 attivo nel Confessionale a prescindere dal toggle. */}
             <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8, marginTop: 14 }]}>
@@ -5470,7 +5470,7 @@ export default function Taccuino() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.settingLabel}>🌐 Ricerca web</Text>
                   <Text style={styles.settingHint}>
-                    Permetti a Koda di consultare fonti certificate (ANSA,
+                    Permetti a Ollenya di consultare fonti certificate (ANSA,
                     Repubblica, Wikipedia, meteo.it…) per meteo, notizie e fatti
                     recenti. In Lascia andare resta sempre spento.
                   </Text>
@@ -5496,18 +5496,18 @@ export default function Taccuino() {
                 deve essere fattuale, senza dark pattern, senza pressione
                 a lasciarlo attivo. Niente "profila la tua persona": SOLO
                 "ricorda le cose che tu le racconti, quando torni a
-                parlarne tu". Il viewer per vedere/cancellare cosa Koda
+                parlarne tu". Il viewer per vedere/cancellare cosa Ollenya
                 ricorda verrà aggiunto in un secondo momento — per ora,
                 se l'utente vuole ripulire tutto, c'è comunque il reset
                 completo nella sezione admin. */}
             <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8, marginTop: 14 }]}>
               <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.settingLabel}>🧭 Cosa Koda ricorda</Text>
+                  <Text style={styles.settingLabel}>🧭 Cosa Ollenya ricorda</Text>
                   <Text style={styles.settingHint}>
-                    Se lo attivi, Koda può ricordare le cose che le hai
+                    Se lo attivi, Ollenya può ricordare le cose che le hai
                     raccontato — persone, argomenti, situazioni. Le ricorda
-                    quando torni a parlarne tu. Se lo lasci spento, Koda
+                    quando torni a parlarne tu. Se lo lasci spento, Ollenya
                     non conserva questo tipo di contesto.
                   </Text>
                 </View>
@@ -5525,7 +5525,7 @@ export default function Taccuino() {
                   thumbColor="#fff"
                 />
               </View>
-              {/* === Vedi cosa Koda ricorda — link viewer (v65.8 Fabio) =======
+              {/* === Vedi cosa Ollenya ricorda — link viewer (v65.8 Fabio) =======
                   Il viewer /situations esisteva già ma non era accessibile
                   dall'UI. Ora c'è un CTA chiaro sotto il toggle: se attivo
                   → naviga; se disattivato → messaggio "Attiva prima il
@@ -5536,7 +5536,7 @@ export default function Taccuino() {
                   if (!enabled) {
                     Alert.alert(
                       "Memoria disattivata",
-                      "Attiva prima il toggle qui sopra per vedere cosa Koda ricorda.",
+                      "Attiva prima il toggle qui sopra per vedere cosa Ollenya ricorda.",
                     );
                     return;
                   }
@@ -5557,7 +5557,7 @@ export default function Taccuino() {
                 }}
                 testID="see-memory-btn"
               >
-                <Text style={[styles.settingLabel, { fontSize: 14 }]}>📖 Vedi cosa Koda ricorda</Text>
+                <Text style={[styles.settingLabel, { fontSize: 14 }]}>📖 Vedi cosa Ollenya ricorda</Text>
                 <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
               </TouchableOpacity>
             </View>
@@ -5566,12 +5566,12 @@ export default function Taccuino() {
         </>
       ),
     },
-    // Card 3: Voce di Koda
+    // Card 3: Voce di Ollenya
     {
       key: "voice",
       icon: "🎙️",
-      title: "Voce di Koda",
-      description: "La voce di Koda: scegli quella con cui vuoi sentirla parlare.",
+      title: "Voce di Ollenya",
+      description: "La voce di Ollenya: scegli quella con cui vuoi sentirla parlare.",
       count: 1,
       body: (
         <>
@@ -5580,19 +5580,19 @@ export default function Taccuino() {
                 Era presente un doppio header "Voce dell'assistente" + hint
                 "Tocca per selezionare. Premi ▶ per ascoltare un'anteprima."
                 seguito dall'indicatore Confidenza e poi da un altro header
-                "🎙️ Scegli la voce di Koda" + il nuovo selettore a cerchi.
+                "🎙️ Scegli la voce di Ollenya" + il nuovo selettore a cerchi.
                 Risultato: l'utente vedeva il vecchio titolo + testo, dava
                 per scontato che la UI fosse quella, e il selettore a cerchi
                 colorati restava fuori schermo. Adesso resta solo il nuovo
                 header sopra i cerchi (a ~50 righe sotto). */}
 
             {/* === INDICATORE CONFIDENZA (richiesta utente 2026-06, opt B) ===
-                Read-only. Mostra al volo a che fase relazionale è Koda.
+                Read-only. Mostra al volo a che fase relazionale è Ollenya.
                 Cresce di +1 ad ogni messaggio fuori dalla Stanza dello Sfogo.
                 0-10 = appena conosciuti, 100 = confidenza totale. */}
             <View style={styles.confidenceRow} testID="confidence-indicator">
               <Text style={styles.confidenceLabel}>
-                💞 Confidenza con Koda — {profile?.confidence_level ?? 0}/100 ({((): string => {
+                💞 Confidenza con Ollenya — {profile?.confidence_level ?? 0}/100 ({((): string => {
                   const lv = profile?.confidence_level ?? 0;
                   if (lv >= 100) return "totale";
                   if (lv >= 61) return "amici stretti";
@@ -5620,7 +5620,7 @@ export default function Taccuino() {
                   la lista come senza titolo. Aggiungiamo un sotto-titolo
                   chiaro qui sopra le card delle voci. */}
               <Text style={[styles.settingsSubtitle, { marginTop: 4, marginBottom: 6 }]}>
-                🎙️ Scegli la voce di Koda
+                🎙️ Scegli la voce di Ollenya
               </Text>
               {/* === NUOVO SELETTORE VOCI (2026-06) ===
                   Niente più nomi né etichette: ogni voce È il suo colore.
@@ -5628,7 +5628,7 @@ export default function Taccuino() {
                   + selezione automatica. Il cerchio selezionato ha un anello
                   bianco e una checkmark sottile. */}
               {/* === FIX 2026-06-30 — Lock selettore voce durante stati attivi ===
-                  Se l'utente cambia voce mentre Koda sta registrando,
+                  Se l'utente cambia voce mentre Ollenya sta registrando,
                   pensando o parlando, la sessione streaming si scontra con
                   la nuova voce → stato corrotto / freeze. Blocchiamo i
                   bottoni quando status !== "idle" e mostriamo un hint
@@ -5717,7 +5717,7 @@ export default function Taccuino() {
       key: "border",
       icon: "📱",
       title: "Schermo",
-      description: "Adatta il bordo colorato di Koda al tuo telefono.",
+      description: "Adatta il bordo colorato di Ollenya al tuo telefono.",
       count: 1,
       body: (
         <>
@@ -5835,7 +5835,7 @@ export default function Taccuino() {
                 Quando attivo: al boot dell'app il client chiede il
                 permesso location (UNA volta) e fa una getCurrentPosition
                 + reverse-geocode → invia la città al backend come key_fact
-                di categoria "luogo_geo". Permette a Koda di rispondere
+                di categoria "luogo_geo". Permette a Ollenya di rispondere
                 a "che ore sono qui?" o "che tempo fa?" usando la città
                 giusta.
                 Default OFF — l'utente abilita esplicitamente per privacy.
@@ -5845,7 +5845,7 @@ export default function Taccuino() {
               <View style={{ flex: 1, paddingRight: 12 }}>
                 <Text style={styles.settingLabel}>📍 Condividi la mia città</Text>
                 <Text style={styles.settingHint}>
-                  Una volta sola all'avvio. Koda saprà solo la città (es. Pavia),
+                  Una volta sola all'avvio. Ollenya saprà solo la città (es. Pavia),
                   non la posizione esatta. Serve per risposte tipo "che ore sono
                   qui?". Tutto resta locale.
                 </Text>
@@ -5869,22 +5869,22 @@ export default function Taccuino() {
                       const { fetchLocationOnce } = await import("../lib/geolocation");
                       const res = await fetchLocationOnce({ forceRequest: true });
                       if (res.ok) {
-                        console.log(`[KODA_GEO] location attivata: ${res.city}`);
+                        console.log(`[OLLENYA_GEO] location attivata: ${res.city}`);
                       } else if (res.reason === "blocked") {
                         // Mostriamo un alert con bottone "Apri Impostazioni"
                         Alert.alert(
                           "Permesso bloccato",
-                          "Per condividere la città devi abilitare la posizione di Koda nelle Impostazioni del telefono.",
+                          "Per condividere la città devi abilitare la posizione di Ollenya nelle Impostazioni del telefono.",
                           [
                             { text: "Annulla", style: "cancel" },
                             { text: "Apri Impostazioni", onPress: () => Linking.openSettings() },
                           ]
                         );
                       } else if (res.reason === "denied") {
-                        console.log("[KODA_GEO] permesso negato");
+                        console.log("[OLLENYA_GEO] permesso negato");
                       }
                     } catch (e) {
-                      console.warn("[KODA_GEO] fetchLocationOnce error:", e);
+                      console.warn("[OLLENYA_GEO] fetchLocationOnce error:", e);
                     }
                   }
                 }}
@@ -5928,13 +5928,13 @@ export default function Taccuino() {
       key: "memory",
       icon: "🤍",
       title: "I miei ricordi",
-      description: "Cosa Koda ricorda di te. Cancella o rivedi quando vuoi.",
+      description: "Cosa Ollenya ricorda di te. Cancella o rivedi quando vuoi.",
       count: 3,
       body: (
         <>
             {/* === I MIEI RICORDI (Blocco C/D/E, Fabio 2026-08-25) ===
                 UI unificata GDPR-compliant per vedere, esportare (JSON) e
-                cancellare i ricordi che Koda ha estratto dagli scambi.
+                cancellare i ricordi che Ollenya ha estratto dagli scambi.
                 Sempre visibile — è un DIRITTO dell'utente, non feature admin. */}
             <TouchableOpacity
               style={[styles.settingRow, { paddingVertical: 14 }]}
@@ -5947,14 +5947,14 @@ export default function Taccuino() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.settingLabel}>🤍 I miei ricordi</Text>
                 <Text style={styles.settingHint}>
-                  Vedi, esporta o cancella quello che Koda ha memorizzato di te.
+                  Vedi, esporta o cancella quello che Ollenya ha memorizzato di te.
                 </Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
             </TouchableOpacity>
 
             {/* === RIVEDI INTRO PREMIUM (admin-only, Fabio 2026-08-22) ===
-                Sostituisce il vecchio "Rivedi presentazione di Koda" che
+                Sostituisce il vecchio "Rivedi presentazione di Ollenya" che
                 puntava alla V1 (ora deprecata, nessun path di ingresso).
                 Visibile SOLO all'admin: rischio di alterare il flag
                 "vista una sola volta" se un utente normale lo tocca. */}
@@ -5991,16 +5991,16 @@ export default function Taccuino() {
                 onPress={async () => {
                   try {
                     const SS = await import("expo-secure-store");
-                    const cur = await SS.getItemAsync("koda_dev_force_free_tier");
+                    const cur = await SS.getItemAsync("ollenya_dev_force_free_tier");
                     const isOn = cur === "1" || cur === "true";
                     if (isOn) {
-                      await SS.deleteItemAsync("koda_dev_force_free_tier");
+                      await SS.deleteItemAsync("ollenya_dev_force_free_tier");
                       Alert.alert(
                         "Test Intro Free disattivato",
                         "Torni al tier normale (unlimited). Riavvia l'app per far ripartire il router.",
                       );
                     } else {
-                      await SS.setItemAsync("koda_dev_force_free_tier", "1");
+                      await SS.setItemAsync("ollenya_dev_force_free_tier", "1");
                       Alert.alert(
                         "Test Intro Free ATTIVATO",
                         "Al prossimo getProfile() il backend restituirà tier=None → router ti porterà su /lascia-andare (Intro Free). Riavvia l'app.",
@@ -6029,7 +6029,7 @@ export default function Taccuino() {
       key: "tour",
       icon: "🔄",
       title: "Rivedi il tour",
-      description: "Riguarda l'introduzione con Koda.",
+      description: "Riguarda l'introduzione con Ollenya.",
       count: 1,
       body: (
         <>
@@ -6085,7 +6085,7 @@ export default function Taccuino() {
                 l'utente tocca, mostriamo un Alert "In arrivo — contatta
                 hello@koda.app". Prima della pubblicazione pubblica su App
                 Store questi devono essere sostituiti con URL veri
-                (raccomandato: pagina esterna su dominio Koda + Linking).
+                (raccomandato: pagina esterna su dominio Ollenya + Linking).
                 RESTA COMUNQUE UN BLOCCANTE DI LANCIO, non risolto. */}
             <View style={styles.divider} />
             <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>⚖️ Informazioni legali</Text>
@@ -6190,7 +6190,7 @@ export default function Taccuino() {
             <TouchableOpacity
               onPress={() => {
                 Alert.alert(
-                  "Uscire da Koda?",
+                  "Uscire da Ollenya?",
                   "La tua memoria resta al sicuro. Puoi rientrare quando vuoi con la stessa email.",
                   [
                     { text: "Annulla", style: "cancel" },
@@ -6233,7 +6233,7 @@ export default function Taccuino() {
               onPress={() => {
                 Alert.alert(
                   "Elimina il tuo account",
-                  "Cancellerai per SEMPRE il tuo profilo, tutta la memoria di Koda su di te, le sessioni attive e ogni traccia sul server. Non si può annullare.",
+                  "Cancellerai per SEMPRE il tuo profilo, tutta la memoria di Ollenya su di te, le sessioni attive e ogni traccia sul server. Non si può annullare.",
                   [
                     { text: "Annulla", style: "cancel" },
                     {
@@ -6307,8 +6307,8 @@ export default function Taccuino() {
         <>
             {/* === AIUTO / SEGNALA UN PROBLEMA (2026-07-24 pre-lancio) ===
                 Reframing del vecchio bottone "Diagnostica" — stessa funzione
-                tecnica sotto (raccolta log [KODA_VAD] [KODA_TIMING]
-                [KODA_SUMMARY] + copia/condividi) ma presentata in modo
+                tecnica sotto (raccolta log [OLLENYA_VAD] [OLLENYA_TIMING]
+                [OLLENYA_SUMMARY] + copia/condividi) ma presentata in modo
                 comprensibile per l'utente finale. Così anche dopo il lancio
                 continuiamo a ricevere diagnosi utili dagli utenti reali
                 che incontrano un problema. */}
@@ -6376,7 +6376,7 @@ export default function Taccuino() {
           L'overlay in basso a sinistra (HOME orb y=... h=... cY=...)
           serviva a calibrare la posizione dell'orb rispetto a /intro-v2.
           Rimosso ora che layout è stabile. */}
-      {/* Banner di conferma salvataggio — appare per ~4s dopo che KodaIntro
+      {/* Banner di conferma salvataggio — appare per ~4s dopo che OllenyaIntro
           si chiude, così l'utente capisce che le modifiche sono andate a
           buon fine. Posizionato in alto, sopra il flusso normale. */}
       {savedBannerVisible && (
@@ -6513,7 +6513,7 @@ export default function Taccuino() {
             // body con: Purchases.purchaseProduct("koda_topup_30min_249").
             Alert.alert(
               "Ricarica +30 min · €2,49",
-              "Il pacchetto ricarica sarà attivo appena l'integrazione pagamenti in-app (RevenueCat) sarà pubblicata nella prossima build.\n\nNel frattempo, Koda resta a tua disposizione in chat scritta senza limiti.",
+              "Il pacchetto ricarica sarà attivo appena l'integrazione pagamenti in-app (RevenueCat) sarà pubblicata nella prossima build.\n\nNel frattempo, Ollenya resta a tua disposizione in chat scritta senza limiti.",
               [{ text: "OK" }]
             );
           }}
@@ -6544,7 +6544,7 @@ export default function Taccuino() {
               // al nuovo screen /lascia-andare.
               //
               // === 2026-07-27 — Presenza vocale in apertura/chiusura ===
-              // Passiamo la voce Koda scelta dall'utente come route param
+              // Passiamo la voce Ollenya scelta dall'utente come route param
               // così la Stanza sa quale file audio pre-registrato
               // riprodurre ("Prenditi il tuo tempo" all'apertura,
               // "Grazie per averlo lasciato andare" alla chiusura).
@@ -6619,12 +6619,12 @@ export default function Taccuino() {
           </TouchableOpacity>
         </View>
         {/* Slot destro: icona "tre puntini" — apre le IMPOSTAZIONI complete.
-            Prima apriva direttamente la presentazione KodaIntro, ma l'utente
+            Prima apriva direttamente la presentazione OllenyaIntro, ma l'utente
             non aveva alcun modo di raggiungere il menu Impostazioni (tema,
             voce, notifiche, ecc.) → comportamento controintuitivo: chi tappa
             i tre puntini si aspetta un menu di opzioni, non una presentazione.
             Da Impostazioni si può comunque rivedere la presentazione (link in
-            fondo) e cambiare voce (nuova riga "Voce di Koda"). */}
+            fondo) e cambiare voce (nuova riga "Voce di Ollenya"). */}
         {/* Settings button moved to top row (2026-06).
             Riga 1 = side icons vicino al clock; Riga 2 = Confessionale. */}
       </View>
@@ -6743,7 +6743,7 @@ export default function Taccuino() {
                       status={status}
                       speechActive={speechActive}
                       // === IDLE = SEMPRE NEUTRAL (verde menta) ===
-                      // Prima rimaneva ciclamino/urgente quando Koda era idle
+                      // Prima rimaneva ciclamino/urgente quando Ollenya era idle
                       // dopo aver dato una risposta "urgent" → l'utente credeva
                       // che fosse bloccata in thinking. Ora a riposo è SEMPRE
                       // verde menta = "pronta, ti ascolto".
@@ -7233,7 +7233,7 @@ export default function Taccuino() {
                 cards={settingsCards}
                 onClose={() => closeSettings()}
                 version={Constants.expoConfig?.version || "1.0.1"}
-                buildTag={isAdmin ? KODA_BUILD_SHORT_TAG : undefined}
+                buildTag={isAdmin ? OLLENYA_BUILD_SHORT_TAG : undefined}
                 runtimeInfo={isAdmin ? `rt:${Constants.expoConfig?.runtimeVersion || "?"} · vc:${Constants.expoConfig?.android?.versionCode ?? Constants.expoConfig?.ios?.buildNumber ?? "?"}` : undefined}
                 onVersionTap={handleDevMenuTap}
               />
@@ -7312,7 +7312,7 @@ export default function Taccuino() {
           (stringa) faceva cadere il modal sul default `#1F1F1F` E
           `textOnBubble` era nero se la bolla era ambra → testo nero su
           sfondo nero = invisibile. Ora sfondo scuro + testo chiaro fissi. */}
-      <KodaFeedbackMenu
+      <OllenyaFeedbackMenu
         eventId={feedbackEventId}
         visibleOverride={feedbackReadOnly}
         bubbleText={feedbackEntry?.text}
@@ -7405,7 +7405,7 @@ export default function Taccuino() {
 
       {/* === SAFETY ALERT (giugno 2026) ====================================
           Si apre quando /api/safety/check rileva risk_detected=true.
-          Mostra l'advisory di Koda + numeri italiani ufficiali cliccabili. */}
+          Mostra l'advisory di Ollenya + numeri italiani ufficiali cliccabili. */}
       <SafetyAlert
         visible={safetyVisible}
         result={safetyResult}
@@ -7425,7 +7425,7 @@ export default function Taccuino() {
   // Maschera la latenza di boot e dà identità visiva all'app.
   if (showSplash) {
     return (
-      <KodaSplash
+      <OllenyaSplash
         aiName={profile?.ai_name || null}
         duration={12000}
         onComplete={() => {
@@ -7435,13 +7435,13 @@ export default function Taccuino() {
       />
     );
   }
-  // === V1 KodaIntro RIMOSSA (Fabio 2026-08-22) ==============================
+  // === V1 OllenyaIntro RIMOSSA (Fabio 2026-08-22) ==============================
   // Il return early che renderizzava V1 quando showColorIntro=true è stato
   // rimosso. La V1 non ha più path di ingresso — vedi Level B della spec
-  // Intro Premium v2. Il file components/KodaIntro.tsx resta in vita come
+  // Intro Premium v2. Il file components/OllenyaIntro.tsx resta in vita come
   // dead code (non toccato per policy "V1 non si tocca") ma nessuno lo
   // importa più.
-  //   if (showColorIntro === true) return <KodaIntro ... />;   ← RIMOSSO
+  //   if (showColorIntro === true) return <OllenyaIntro ... />;   ← RIMOSSO
   // Overlay bordeaux globale quando il confessionale è ATTIVO.
   // Tinge fortemente tutto lo sfondo (~40% di alpha) così l'utente capisce
   // a colpo d'occhio di trovarsi in modalità confessionale, anche durante
@@ -7490,7 +7490,7 @@ export default function Taccuino() {
   // (#8B5CF6) appare ripetutamente "senza far niente" — probabilmente
   // perché Android killa l'app in background più aggressivamente
   // di iOS e ad ogni "cold start" il pulse parte di nuovo.
-  // Disabilitato per stabilità visiva. La marca dell'identità Koda
+  // Disabilitato per stabilità visiva. La marca dell'identità Ollenya
   // viene già comunicata dal NeonBorder champagne perenne in idle.
   // Se si vuole riabilitare: rimettere il blocco originale qui sotto.
   const activationPulseEl: React.ReactNode = null;
@@ -7505,20 +7505,20 @@ export default function Taccuino() {
   // Stesso pattern del confessionalTint: variabile JSX da renderizzare in
   // tutti i rami finali (custom image / preset gradient / plain).
   const tourOverlay = tourActive ? (
-    <KodaTour
+    <OllenyaTour
       steps={tourSteps}
       onStepChange={(idx, step) => {
         setTourCurrentStep(step ? { idx, label: step.label, page: step.page } : null);
       }}
       // === FIX VOCE COERENTE TOUR (richiesta utente giugno 2026) ===
-      // Prima usavamo solo tts_voice_id (campo legacy che KodaIntro NON
+      // Prima usavamo solo tts_voice_id (campo legacy che OllenyaIntro NON
       // popola). Ora preferisco la mappatura da koda_voice (campo nuovo,
       // popolato in onboarding con "aria" o "echo") → ElevenLabs ID.
       // Fallback a tts_voice_id se koda_voice mancante.
       voiceId={(() => {
         const k = ((profile?.settings as any)?.koda_voice || "").toLowerCase();
-        if (k === "aria" || k === "eco") return "6TngzmzM89jJ3Y2Yiywr"; // Koda Acqua (femminile, giugno 2026 v4)
-        if (k === "echo" || k === "theo") return "ll9WG7PDTuyHwgC5MD6g"; // Koda Vento (maschile, giugno 2026 v4)
+        if (k === "aria" || k === "eco") return "6TngzmzM89jJ3Y2Yiywr"; // Ollenya Acqua (femminile, giugno 2026 v4)
+        if (k === "echo" || k === "theo") return "ll9WG7PDTuyHwgC5MD6g"; // Ollenya Vento (maschile, giugno 2026 v4)
         return (profile?.settings as any)?.tts_voice_id || "6TngzmzM89jJ3Y2Yiywr";
       })()}
       onPageChange={(page) => {
@@ -7623,7 +7623,7 @@ export default function Taccuino() {
         <View style={disclaimerRetryStyles.wrap}>
           <Text style={disclaimerRetryStyles.title}>Connessione richiesta</Text>
           <Text style={disclaimerRetryStyles.body}>
-            Al primo avvio Koda deve verificare online il disclaimer legale
+            Al primo avvio Ollenya deve verificare online il disclaimer legale
             obbligatorio. La rete non risponde.{"\n\n"}
             Controlla la connessione e riprova.
           </Text>
@@ -7699,9 +7699,9 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
 
 // Map of preset bubble accent colors. User can pick one in Settings, or use
 // any custom hex via the same field.
-// Il preset "eclissi" è il colore IDENTITARIO di Koda: lo stesso viola che
+// Il preset "eclissi" è il colore IDENTITARIO di Ollenya: lo stesso viola che
 // l'orb assume in stato idle/neutral (TONE_PALETTES.neutral in EclipseOrb).
-// Vedere la bubble di Koda in viola identitario + l'orb in viola = unicità.
+// Vedere la bubble di Ollenya in viola identitario + l'orb in viola = unicità.
 const BUBBLE_PRESETS: Record<string, { name: string; color: string; soft: string }> = {
   eclissi:      { name: "Eclissi",     color: "#8B5CF6", soft: "rgba(139,92,246,0.18)" },
   viola:        { name: "Viola",       color: "#7C3AED", soft: "rgba(124,58,237,0.18)" },
@@ -7715,7 +7715,7 @@ function resolveBubbleColors(
   bubbleColor: string | undefined
 ): { color: string; soft: string } {
   // Default IDENTITARIO: il viola "eclissi" — esattamente il viola idle/
-  // neutral dell'EclipseOrb. Bubble di Koda e orb si parlano visivamente.
+  // neutral dell'EclipseOrb. Bubble di Ollenya e orb si parlano visivamente.
   const key = bubbleColor || "eclissi";
   if (BUBBLE_PRESETS[key]) return BUBBLE_PRESETS[key];
   // Custom hex: derive a soft variant
@@ -7869,7 +7869,7 @@ function BubbleImpl({
   //
   // Normale:
   //   - utente → theme.userBubble (colore "tuo" definito dal tema)
-  //   - Koda   → bubbleAccent.color (colore impostato in Impostazioni)
+  //   - Ollenya   → bubbleAccent.color (colore impostato in Impostazioni)
   const isConfessional = false; // feature Confessionale rimossa (Blocco B)
   // AI:
   const aiBg = bubbleStyle === "solid" ? bubbleAccent.color : bubbleAccent.color + "66";
@@ -7946,8 +7946,8 @@ function BubbleImpl({
       ]}
     >
       {/* AIAvatar rimosso definitivamente (richiesta utente 2026-06): in
-          text-mode l'avatar mini-orb di fianco ai messaggi di Koda non
-          serve. Bilanciamento puro: messaggi Koda flush-left, messaggi
+          text-mode l'avatar mini-orb di fianco ai messaggi di Ollenya non
+          serve. Bilanciamento puro: messaggi Ollenya flush-left, messaggi
           utente flush-right, simmetria perfetta. */}
       <View style={{ maxWidth: "82%" }}>
         {isUser ? (

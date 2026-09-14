@@ -183,7 +183,7 @@ export default function SubscriptionStatus({ profile }: { profile: Profile | nul
         {Math.round(totalRemaining)} min disponibili · {Math.round(baseUsed)} usati questo mese
       </Text>
       <Text style={styles.textNote}>
-        La chat scritta con Koda è sempre disponibile, anche senza minuti voce.
+        La chat scritta con Ollenya è sempre disponibile, anche senza minuti voce.
       </Text>
     </View>
   );

@@ -2,14 +2,14 @@
  * audioReactivity.ts — bridge tra TTS playback e l'orb
  *
  * Architettura "orb reattivo" (richiesta utente 2026-06 #3):
- *   1) Backend estrae l'envelope RMS dall'mp3 di Koda (~16 valori/sec).
+ *   1) Backend estrae l'envelope RMS dall'mp3 di Ollenya (~16 valori/sec).
  *   2) Lo invia al frontend insieme al token audio della frase.
  *   3) Quando il player audio inizia a riprodurre quella frase, registriamo
  *      qui il waveform + tempo di inizio.
  *   4) L'orb (in components/Orb.tsx) si sottoscrive e ogni frame legge il
  *      valore corrente del waveform interpolato dalla posizione del
  *      currentTime nell'audio → pulsa in sincrono con sillabe e accenti
- *      reali della voce di Koda.
+ *      reali della voce di Ollenya.
  *
  * Soluzione singleton (modulo-level state + listeners) per evitare prop
  * drilling e mantenere il componente Orb agnostico al ciclo TTS.
