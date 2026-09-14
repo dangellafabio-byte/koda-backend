@@ -5716,7 +5716,8 @@ async def api_admin_rebrand_migration(admin_token: Optional[str] = None):
 
     Auth: stessa logica di `/admin/last-errors` (token via env o admin cookie).
 
-    Esempio: curl -X POST 'https://<host>/api/admin/rebrand-migration?admin_token=<KODA_ADMIN_TOKEN>'
+    Esempio (terminale): curl -X POST '<host>/api/admin/rebrand-migration?admin_token=<TOKEN>'
+    Alternativa mobile: aprire in browser `<host>/api/admin/rebrand-migration-ui?admin_token=<TOKEN>`
     """
     expected = os.environ.get("KODA_ADMIN_TOKEN", "").strip()
     is_env_auth = bool(expected) and admin_token == expected
@@ -5739,6 +5740,146 @@ async def api_admin_rebrand_migration(admin_token: Optional[str] = None):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"migration_failed: {e}") from e
+
+
+@app.get("/api/admin/rebrand-migration-ui", response_class=_HTMLResponse)
+async def api_admin_rebrand_migration_ui(admin_token: Optional[str] = None):
+    """Pagina web mobile-friendly per eseguire la migration dal browser
+    (Safari iOS / Chrome Android) con un tap, senza dover costruire
+    richieste HTTP a mano.
+
+    Uso: aprire in browser
+      https://<host>/api/admin/rebrand-migration-ui?admin_token=<TOKEN>
+
+    La pagina mostra un pulsante grande "Esegui migration" che, al tap,
+    fa fetch POST all'endpoint reale e visualizza il risultato JSON in
+    una card sotto. Nessuna dipendenza esterna, nessun CDN. Zero JS
+    framework — solo vanilla + fetch.
+    """
+    token_js = (admin_token or "").replace("'", "").replace('"', "").replace("<", "").replace(">", "").strip()
+    # Il token viene iniettato nel JS come stringa già sanitizzata (rimossi
+    # caratteri di quoting/HTML). NON è un rischio XSS perché la pagina è
+    # servita SOLO al richiedente (nessun log persistente né render lato db).
+    html = """<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Ollenya · Rebrand Migration</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: #06060A;
+    color: #F5E9DA;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 20px;
+    min-height: 100vh;
+  }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 8px; color: #F5E9DA; }
+  .sub { color: rgba(230,215,190,0.7); font-size: 14px; margin: 0 0 32px; text-align: center; letter-spacing: 1px; }
+  button {
+    background: linear-gradient(135deg, #D4B896, #8B6F4E);
+    color: #06060A;
+    border: 0;
+    padding: 18px 42px;
+    font-size: 17px;
+    font-weight: 700;
+    border-radius: 14px;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    box-shadow: 0 8px 24px rgba(212,184,150,0.25);
+    -webkit-appearance: none;
+    min-width: 240px;
+  }
+  button:active { transform: scale(0.97); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .result {
+    margin-top: 28px;
+    padding: 18px 20px;
+    border-radius: 12px;
+    border: 1px solid rgba(212,184,150,0.3);
+    background: rgba(212,184,150,0.06);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 13px;
+    max-width: 100%;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+    color: #F5E9DA;
+    display: none;
+    line-height: 1.5;
+  }
+  .result.ok { border-color: rgba(94,234,212,0.5); background: rgba(94,234,212,0.08); }
+  .result.err { border-color: rgba(244,114,182,0.5); background: rgba(244,114,182,0.08); }
+  .spinner {
+    width: 22px; height: 22px;
+    border: 2.5px solid rgba(212,184,150,0.25);
+    border-top-color: #D4B896;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .brand { color: rgba(212,184,150,0.6); font-size: 11px; letter-spacing: 3px; margin-bottom: 40px; }
+</style>
+</head>
+<body>
+  <div class="brand">OLLENYA · ADMIN</div>
+  <h1>Rebrand DB Migration</h1>
+  <div class="sub">ai_name: Koda → Ollenya (idempotente)</div>
+
+  <button id="btn" onclick="runMigration()">Esegui migration</button>
+
+  <div id="result" class="result"></div>
+
+<script>
+  const TOKEN = "__TOKEN__";
+  const btn = document.getElementById('btn');
+  const out = document.getElementById('result');
+
+  async function runMigration() {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>In corso…';
+    out.style.display = 'none';
+    out.className = 'result';
+
+    try {
+      const url = '/api/admin/rebrand-migration?admin_token=' + encodeURIComponent(TOKEN);
+      const res = await fetch(url, { method: 'POST' });
+      const data = await res.json();
+
+      out.style.display = 'block';
+      out.textContent = JSON.stringify(data, null, 2);
+
+      if (res.ok && data.ok) {
+        out.classList.add('ok');
+        btn.textContent = 'Completato ✓';
+        btn.style.background = 'linear-gradient(135deg,#5EEAD4,#14B8A6)';
+      } else {
+        out.classList.add('err');
+        btn.disabled = false;
+        btn.textContent = 'Riprova';
+      }
+    } catch (e) {
+      out.style.display = 'block';
+      out.classList.add('err');
+      out.textContent = 'ERRORE DI RETE:\\n' + (e && e.message ? e.message : String(e));
+      btn.disabled = false;
+      btn.textContent = 'Riprova';
+    }
+  }
+</script>
+</body>
+</html>
+"""
+    html = html.replace("__TOKEN__", token_js)
+    return html
 
 
 @api_router.get("/admin/whoami", response_model=AdminWhoAmIResponse)
