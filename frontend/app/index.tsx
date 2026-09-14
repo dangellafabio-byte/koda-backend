@@ -517,7 +517,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v65.42-splash-serif-champagne-icon-final";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v65.43-remove-tour-menu";
   const OLLENYA_BUILD_DATE = "2026-09-06";
   useEffect(() => {
     console.log(
@@ -6024,53 +6024,7 @@ export default function Taccuino() {
         </>
       ),
     },
-    // Card 7: Rivedi il tour
-    {
-      key: "tour",
-      icon: "🔄",
-      title: "Rivedi il tour",
-      description: "Riguarda l'introduzione con Ollenya.",
-      count: 1,
-      body: (
-        <>
-            {/* === RIVEDI IL TOUR (2026-07-24 pre-lancio, punto 1) ===
-                Il tour visivo 9-step NON parte più automaticamente al primo
-                avvio (era troppo pesante per un pubblico TikTok: 20 step
-                totali obbligatori). Ora è opt-in da qui: l'utente lo lancia
-                quando ha voglia di capire l'app, oppure lo ignora e scopre
-                tutto usando. Stesso codice di build/launch del percorso
-                automatico originale, solo triggerato on-demand. */}
-            <TouchableOpacity
-              style={[styles.settingRow, { paddingVertical: 14 }]}
-              onPress={async () => {
-                setShowSettings(false);
-                // Piccolo delay per dare tempo al modale Impostazioni di
-                // chiudersi prima di misurare la UI reale (stesso motivo
-                // del delay 600ms nel percorso automatico post-onboarding).
-                setTimeout(async () => {
-                  try {
-                    const steps = await buildTourSteps();
-                    setTourSteps(steps);
-                    setTourActive(true);
-                  } catch (e) {
-                    console.warn("[tour-replay] buildTourSteps failed:", e);
-                  }
-                }, 350);
-              }}
-              testID="replay-tour-btn"
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>🧭 Rivedi il tour</Text>
-                <Text style={styles.settingHint}>
-                  Ti mostro con dei suggerimenti come usare l&apos;eclissi, la scrittura, il Confessionale e Lascia andare.
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
-            </TouchableOpacity>
-        </>
-      ),
-    },
-    // Card 8: Legale
+    // Card 7: Legale
     {
       key: "legal",
       icon: "⚖️",
