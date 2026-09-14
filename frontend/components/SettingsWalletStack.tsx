@@ -42,7 +42,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useTheme } from "../lib/theme";
+import { useTheme, type Palette } from "../lib/theme";
 
 export type SettingsCard = {
   key: string;
@@ -80,7 +80,7 @@ export default function SettingsWalletStack({
   runtimeInfo,
   onVersionTap,
 }: Props) {
-  const theme = useTheme();
+  const { theme } = useTheme();
   const insets = useSafeAreaInsets();
 
   // Card espansa (una alla volta per pulizia visiva)
@@ -174,7 +174,7 @@ type CardProps = {
   card: SettingsCard;
   isExpanded: boolean;
   onTap: () => void;
-  theme: ReturnType<typeof useTheme>;
+  theme: Palette;
   styles: ReturnType<typeof makeStyles>;
   onLayoutY: (y: number) => void;
 };
@@ -252,11 +252,13 @@ function RolodexCard({ card, isExpanded, onTap, theme, styles, onLayoutY }: Card
 }
 
 // === Styles ===
-function makeStyles(theme: ReturnType<typeof useTheme>, insets: { top: number; bottom: number; left: number; right: number }) {
+function makeStyles(theme: Palette, insets: { top: number; bottom: number; left: number; right: number }) {
   return StyleSheet.create({
     root: {
       flex: 1,
-      backgroundColor: theme.bg,
+      // Fallback esplicito: se il theme è undefined per qualunque motivo,
+      // il root NON deve mai diventare bianco su Android. #1F1A36 = notte bg.
+      backgroundColor: theme?.bg || "#1F1A36",
     },
     headerBar: {
       flexDirection: "row",

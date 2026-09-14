@@ -36,6 +36,7 @@ import { FlashList } from "@shopify/flash-list";
 import LatencyOverlay from "../components/LatencyOverlay";
 import { traceStart, traceMark } from "../lib/latencyTracer";
 import * as ImagePicker from "expo-image-picker";
+import * as WebBrowser from "expo-web-browser";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { LinearGradient } from "expo-linear-gradient";
 import {
@@ -517,7 +518,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v65.47-rolodex-vertical";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v65.48-fix-android-white";
   const OLLENYA_BUILD_DATE = "2026-09-06";
   useEffect(() => {
     console.log(
@@ -6033,24 +6034,24 @@ export default function Taccuino() {
       count: 2,
       body: (
         <>
-            {/* === INFORMAZIONI LEGALI 2026-08-27 v65.8 (Fabio, Apple 5.1.1v) =
-                Placeholder cliccabili per Privacy Policy e Termini di
-                Servizio. I documenti reali NON esistono ancora — quando
-                l'utente tocca, mostriamo un Alert "In arrivo — contatta
-                hello@koda.app". Prima della pubblicazione pubblica su App
-                Store questi devono essere sostituiti con URL veri
-                (raccomandato: pagina esterna su dominio Ollenya + Linking).
-                RESTA COMUNQUE UN BLOCCANTE DI LANCIO, non risolto. */}
+            {/* === INFORMAZIONI LEGALI 2026-06 v65.48 (Fabio) ================
+                Link diretti al backend (/api/legal/privacy e /api/legal/terms
+                servono le pagine HTML pubbliche). Aperti in in-app browser
+                via expo-web-browser (App Store 5.1.1 compliant).
+                =============================================================== */}
             <View style={styles.divider} />
             <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>⚖️ Informazioni legali</Text>
 
             <TouchableOpacity
-              onPress={() => {
-                Alert.alert(
-                  "Privacy Policy",
-                  "In arrivo. Per informazioni sulla privacy scrivi a hello@koda.app.",
-                  [{ text: "OK", style: "default" }],
-                );
+              onPress={async () => {
+                try {
+                  await WebBrowser.openBrowserAsync(`${BACKEND}/api/legal/privacy`, {
+                    dismissButtonStyle: "close",
+                    presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
+                  });
+                } catch (e) {
+                  Alert.alert("Privacy Policy", "Impossibile aprire la pagina. Riprova più tardi.");
+                }
               }}
               style={{
                 flexDirection: "row",
@@ -6068,18 +6069,21 @@ export default function Taccuino() {
             >
               <View style={{ flex: 1 }}>
                 <Text style={styles.settingLabel}>📄 Privacy Policy</Text>
-                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>In arrivo — hello@koda.app</Text>
+                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>Apri il documento completo</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={() => {
-                Alert.alert(
-                  "Termini di Servizio",
-                  "In arrivo. Per informazioni sui termini scrivi a hello@koda.app.",
-                  [{ text: "OK", style: "default" }],
-                );
+              onPress={async () => {
+                try {
+                  await WebBrowser.openBrowserAsync(`${BACKEND}/api/legal/terms`, {
+                    dismissButtonStyle: "close",
+                    presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
+                  });
+                } catch (e) {
+                  Alert.alert("Termini di Servizio", "Impossibile aprire la pagina. Riprova più tardi.");
+                }
               }}
               style={{
                 flexDirection: "row",
@@ -6097,7 +6101,7 @@ export default function Taccuino() {
             >
               <View style={{ flex: 1 }}>
                 <Text style={styles.settingLabel}>📜 Termini di Servizio</Text>
-                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>In arrivo — hello@koda.app</Text>
+                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>Apri il documento completo</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
             </TouchableOpacity>
