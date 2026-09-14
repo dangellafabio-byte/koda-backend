@@ -5705,6 +5705,42 @@ async def api_admin_last_steps(limit: int = 30, admin_token: Optional[str] = Non
     return {"count": len(items), "steps": items}
 
 
+@api_router.post("/admin/rebrand-migration")
+async def api_admin_rebrand_migration(admin_token: Optional[str] = None):
+    """DEV admin-only ON-DEMAND: forza la migration `ai_name: "Koda" → "Ollenya"`
+    su tutti i profili. Idempotente: sicuro chiamarlo N volte.
+
+    Serve quando il codice è stato aggiornato ma il backend NON è stato
+    ancora ridistribuito (es. su Railway) — così Fabio può correggere il
+    DB di produzione senza aspettare il redeploy.
+
+    Auth: stessa logica di `/admin/last-errors` (token via env o admin cookie).
+
+    Esempio: curl -X POST 'https://<host>/api/admin/rebrand-migration?admin_token=<KODA_ADMIN_TOKEN>'
+    """
+    expected = os.environ.get("KODA_ADMIN_TOKEN", "").strip()
+    is_env_auth = bool(expected) and admin_token == expected
+    if not is_env_auth:
+        _require_admin()
+    try:
+        result = await db.taccuino_profile.update_many(
+            {"ai_name": "Koda"},
+            {"$set": {"ai_name": "Ollenya"}},
+        )
+        return {
+            "ok": True,
+            "matched": result.matched_count,
+            "modified": result.modified_count,
+            "detail": (
+                f"{result.modified_count} profili aggiornati (ai_name Koda → Ollenya)"
+                if result.modified_count > 0
+                else "nessun profilo legacy 'Koda' trovato (già migrato)"
+            ),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"migration_failed: {e}") from e
+
+
 @api_router.get("/admin/whoami", response_model=AdminWhoAmIResponse)
 async def api_admin_whoami():
     """Il frontend chiama questo endpoint al boot per capire se mostrare
@@ -17290,6 +17326,28 @@ async def startup_db_client():
         logger.info("[startup] unlimited_users whitelist ready")
     except Exception as e:
         logger.warning(f"[startup] unlimited_users seed failed: {e}")
+
+    # === REBRAND KODA → OLLENYA (2026-06 Fabio, one-shot idempotente) ======
+    # Al rebrand del brand da "Koda" a "Ollenya", i profili utente esistenti
+    # avevano `ai_name = "Koda"` (default vecchio) salvato in DB. Questo
+    # migration aggiorna in blocco tutti i profili con `ai_name == "Koda"` a
+    # `ai_name = "Ollenya"`. Idempotente: dopo il primo run non ha effetto.
+    # Rispetta le personalizzazioni utente (chi ha rinominato la sua AI
+    # "Luna", "Marco", ecc. NON viene toccato — solo chi ha il default vecchio).
+    try:
+        migration_result = await db.taccuino_profile.update_many(
+            {"ai_name": "Koda"},
+            {"$set": {"ai_name": "Ollenya"}},
+        )
+        if migration_result.modified_count > 0:
+            logger.info(
+                f"[startup] rebrand migration: {migration_result.modified_count} "
+                f"profili ai_name 'Koda' → 'Ollenya'"
+            )
+        else:
+            logger.info("[startup] rebrand migration: no legacy 'Koda' profiles found")
+    except Exception as e:
+        logger.warning(f"[startup] rebrand migration failed: {e}")
     # Block B — fondazione dati V1 (users/conversations/messages + TTL effimeri)
     try:
         await _ensure_v1_foundation_indexes()

@@ -77,7 +77,15 @@ function OrbCircle({
   );
 }
 
-export default function OllenyaSplash({ aiName, duration = 10000, onComplete }: Props) {
+export default function OllenyaSplash({ aiName: _aiName, duration = 10000, onComplete }: Props) {
+  // === BRAND-LOCK v65.41 (Fabio 2026-06 fix) ==============================
+  // Il splash è il LOGO DEL BRAND. Deve sempre mostrare "Ollenya"
+  // indipendentemente dal nome AI personalizzato dell'utente. In precedenza
+  // usavamo `aiName || "Ollenya"` come fallback, ma questo produceva "Koda"
+  // sul device di Fabio perché aveva salvato `ai_name = "Koda"` nel profilo
+  // prima del rebrand. Il nome AI personalizzato appartiene alla chat,
+  // non al brand.
+  void _aiName; // esplicitamente ignorato — riservato per future personalizzazioni
   const { width } = Dimensions.get("window");
   const orbSize = Math.min(width * 0.78, 340);
   const miniOrbSize = 38;
@@ -159,7 +167,8 @@ export default function OllenyaSplash({ aiName, duration = 10000, onComplete }: 
   };
 
   // === Nome AI: fallback al nome brand "Ollenya" se non impostato =========
-  const rawName = (aiName?.trim() || "Ollenya").trim();
+  // === Nome del brand: hardcoded "Ollenya" (mai dinamico) =================
+  const rawName = "Ollenya";
   // Split wordmark: cerca la PRIMA "o" case-insensitive.
   // Per "Ollenya" → prefix="", suffix="llenya" → la mini-eclissi va PRIMA
   // e il suffisso "llenya" dopo. Wordmark: [🌑]llenya
