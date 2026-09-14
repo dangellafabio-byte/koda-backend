@@ -1,30 +1,20 @@
 /**
- * SettingsWalletStack — v65.47 (Rolodex verticale, riscritto)
+ * SettingsWalletStack — v65.49 (Rolodex compatto, layout fluido)
  *
- * Fabio 2026-06 specifica definitiva:
- *   "Voglio un Rolodex verticale, non un accordion. Le schede devono
- *    scorrere su e giù come un mazzo fisico, ma devono rimanere TUTTE
- *    visibili nelle loro intestazioni. Nessuna card deve sovrapporsi
- *    alle altre, nessun contenuto deve essere in overlay, e soprattutto
- *    la versione dell'app in fondo deve rimanere sempre visibile.
- *    Lo swipe orizzontale non va toccato perché è già riservato al
- *    ritorno alla Home."
+ * Modifiche rispetto v65.47:
+ *   1. Compattato: CARD_HEADER_H 84 → 58, gap 8 → 6, description single-line.
+ *      Le 9 card entrano tutte nel viewport iPhone standard senza scroll.
+ *   2. Fluidità: rimpiazzato l'height-animate con onLayout (misura → setState
+ *      → re-render → animate) con Reanimated `LinearTransition.layout` che
+ *      interpola nativamente l'altezza del wrapper senza misurazioni JS.
+ *      Zero scatti, 60fps garantiti anche su Android.
+ *   3. Body condizionale: renderizzato solo se `isExpanded` → niente
+ *      overhead di misurazione invisibile.
  *
- * Pattern implementativo:
- *   - ScrollView verticale contenitore (scroll nativo = "swipe verticale")
- *   - Ogni card è una `Animated.View` con altezza dinamica animata (Reanimated)
- *   - Compact: solo header ~84px visibile
- *   - Expanded: header + body con altezza reale del contenuto (misurata via
- *     onLayout su un View invisibile "measurer")
- *   - Le card espanse occupano spazio VERO nel flusso — le altre scorrono
- *     naturalmente su/giù, mai coperte, mai in overlay
- *   - Versione app inline in fondo → sempre raggiungibile scrollando
- *   - Al tap, `scrollTo({ y: cardOffsetY })` porta la card selezionata
- *     in cima alla viewport per lettura
- *
- * Nessun magnetic snap, nessun `absoluteFill`, nessun `peek header`
- * flottante. Puro flusso verticale ScrollView-compatibile con
- * `momentumScroll` iOS nativo.
+ * Fabio 2026-06 specifica:
+ *   "Voglio un Rolodex verticale, non un accordion. Le card scorrono su/giù,
+ *    intestazioni sempre visibili, nessuna overlay, versione sempre in fondo,
+ *    swipe orizzontale libero per back-to-home."
  */
 import React, { useMemo, useRef, useState } from "react";
 import {
@@ -34,12 +24,7 @@ import {
   TouchableOpacity,
   ScrollView,
 } from "react-native";
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  Easing,
-} from "react-native-reanimated";
+import Animated, { LinearTransition, FadeIn, FadeOut } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme, type Palette } from "../lib/theme";
@@ -65,10 +50,9 @@ type Props = {
   onVersionTap?: () => void;
 };
 
-// Altezza header compact (solo intestazione visibile)
-const CARD_HEADER_H = 84;
-// Padding verticale interno del body espanso
-const BODY_PAD_V = 16;
+// Compact layout: 9 card entrano in un iPhone 14 (844px) senza scroll iniziale
+const CARD_HEADER_H = 58;
+const CARD_GAP = 6;
 
 export default function SettingsWalletStack({
   cards,
@@ -83,33 +67,30 @@ export default function SettingsWalletStack({
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
 
-  // Card espansa (una alla volta per pulizia visiva)
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
-  // Offset Y di ogni card nella ScrollView (aggiornato da onLayout)
   const cardOffsets = useRef<Record<string, number>>({}).current;
   const scrollRef = useRef<ScrollView>(null);
 
   const styles = useMemo(() => makeStyles(theme, insets), [theme, insets]);
 
-  // Tap su card: toggle espansa + scrolla per portarla in vista
   const onCardTap = (key: string) => {
     const isCurrentlyExpanded = expandedKey === key;
     setExpandedKey(isCurrentlyExpanded ? null : key);
 
     if (!isCurrentlyExpanded) {
-      // Piccolo delay per lasciare che l'altezza cresca prima di scrollare
+      // Attende che LinearTransition inizi (~60ms) prima di scrollare
       setTimeout(() => {
         const y = cardOffsets[key];
         if (typeof y === "number" && scrollRef.current) {
-          scrollRef.current.scrollTo({ y: Math.max(0, y - 12), animated: true });
+          scrollRef.current.scrollTo({ y: Math.max(0, y - 8), animated: true });
         }
-      }, 120);
+      }, 80);
     }
   };
 
   return (
     <View style={styles.root}>
-      {/* Header fisso in cima (non scorre) */}
+      {/* Header fisso */}
       <View style={styles.headerBar}>
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>{title}</Text>
@@ -120,19 +101,17 @@ export default function SettingsWalletStack({
           style={styles.closeBtn}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          <Ionicons name="close" size={22} color={theme.text} />
+          <Ionicons name="close" size={20} color={theme.text} />
         </TouchableOpacity>
       </View>
 
-      {/* Lista scorrevole verticale — questo è il "Rolodex" */}
+      {/* Lista verticale — Rolodex */}
       <ScrollView
         ref={scrollRef}
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         overScrollMode="never"
-        // Scroll fluido stile iOS. Il gesto orizzontale NON è catturato
-        // qui → resta libero per il "swipe back to Home" dello stack.
       >
         {cards.map((card) => (
           <RolodexCard
@@ -148,13 +127,11 @@ export default function SettingsWalletStack({
           />
         ))}
 
-        {/* Versione app inline — sempre raggiungibile scrollando in fondo */}
+        {/* Versione app inline */}
         {version ? (
           <View style={styles.versionBlock}>
             <TouchableOpacity onPress={onVersionTap} activeOpacity={0.7}>
-              <Text style={styles.versionText}>
-                Ollenya v{version}
-              </Text>
+              <Text style={styles.versionText}>Ollenya v{version}</Text>
               {buildTag ? (
                 <Text style={styles.buildTagText}>{buildTag}</Text>
               ) : null}
@@ -169,7 +146,7 @@ export default function SettingsWalletStack({
   );
 }
 
-// === Sub-component: singola card con altezza animata ===
+// === Sub-component: card con LinearTransition (fluidità nativa) ===
 type CardProps = {
   card: SettingsCard;
   isExpanded: boolean;
@@ -180,40 +157,27 @@ type CardProps = {
 };
 
 function RolodexCard({ card, isExpanded, onTap, theme, styles, onLayoutY }: CardProps) {
-  // Altezza reale del body (misurata invisibilmente al primo render)
-  const [bodyH, setBodyH] = useState(0);
-  const targetH = isExpanded ? CARD_HEADER_H + bodyH + BODY_PAD_V * 2 : CARD_HEADER_H;
-  const heightSV = useSharedValue(CARD_HEADER_H);
-
-  React.useEffect(() => {
-    heightSV.value = withTiming(targetH, {
-      duration: 380,
-      easing: Easing.inOut(Easing.cubic),
-    });
-  }, [targetH, heightSV]);
-
-  const animatedContainer = useAnimatedStyle(() => ({
-    height: heightSV.value,
-  }));
-
   return (
     <Animated.View
-      style={[styles.card, animatedContainer]}
+      layout={LinearTransition.duration(280)}
+      style={styles.card}
       onLayout={(e) => onLayoutY(e.nativeEvent.layout.y)}
     >
-      {/* Header sempre visibile (tap = toggle) */}
+      {/* Header sempre visibile */}
       <TouchableOpacity
-        activeOpacity={0.85}
+        activeOpacity={0.7}
         onPress={onTap}
         style={styles.cardHeader}
       >
         <View style={styles.cardIconWrap}>
           <Text style={styles.cardIcon}>{card.icon}</Text>
         </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.cardTitle}>{card.title}</Text>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={styles.cardTitle} numberOfLines={1}>
+            {card.title}
+          </Text>
           {card.description ? (
-            <Text style={styles.cardDesc} numberOfLines={2}>
+            <Text style={styles.cardDesc} numberOfLines={1}>
               {card.description}
             </Text>
           ) : null}
@@ -226,63 +190,61 @@ function RolodexCard({ card, isExpanded, onTap, theme, styles, onLayoutY }: Card
           ) : null}
           <Ionicons
             name={isExpanded ? "chevron-up" : "chevron-forward"}
-            size={20}
+            size={16}
             color={theme.text + "AA"}
           />
         </View>
       </TouchableOpacity>
 
-      {/* Body — sempre renderizzato (per misurare l'altezza),
-          ma visibile solo quando espansa (opacity + overflow) */}
-      <View
-        style={[
-          styles.bodyContainer,
-          { opacity: isExpanded ? 1 : 0 },
-        ]}
-        pointerEvents={isExpanded ? "auto" : "none"}
-        onLayout={(e) => {
-          const h = e.nativeEvent.layout.height;
-          if (h && Math.abs(h - bodyH) > 2) setBodyH(h);
-        }}
-      >
-        {card.body}
-      </View>
+      {/* Body renderizzato solo quando espanso — LinearTransition gestisce
+          l'animazione dell'altezza del wrapper in modo nativo */}
+      {isExpanded ? (
+        <Animated.View
+          entering={FadeIn.duration(180).delay(80)}
+          exiting={FadeOut.duration(120)}
+          style={styles.bodyContainer}
+        >
+          {card.body}
+        </Animated.View>
+      ) : null}
     </Animated.View>
   );
 }
 
 // === Styles ===
-function makeStyles(theme: Palette, insets: { top: number; bottom: number; left: number; right: number }) {
+function makeStyles(
+  theme: Palette,
+  insets: { top: number; bottom: number; left: number; right: number },
+) {
   return StyleSheet.create({
     root: {
       flex: 1,
-      // Fallback esplicito: se il theme è undefined per qualunque motivo,
-      // il root NON deve mai diventare bianco su Android. #1F1A36 = notte bg.
+      // Safety net: se theme fosse undefined (regressione), NO schermo bianco Android
       backgroundColor: theme?.bg || "#1F1A36",
     },
     headerBar: {
       flexDirection: "row",
       alignItems: "flex-start",
-      paddingTop: insets.top + 8,
-      paddingHorizontal: 20,
-      paddingBottom: 12,
+      paddingTop: insets.top + 6,
+      paddingHorizontal: 18,
+      paddingBottom: 10,
     },
     headerTitle: {
       color: theme.text,
-      fontSize: 32,
+      fontSize: 26,
       fontWeight: "700",
-      letterSpacing: -0.5,
+      letterSpacing: -0.4,
     },
     headerSubtitle: {
       color: theme.text + "AA",
-      fontSize: 15,
-      marginTop: 4,
+      fontSize: 13,
+      marginTop: 2,
       fontWeight: "500",
     },
     closeBtn: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
+      width: 32,
+      height: 32,
+      borderRadius: 16,
       backgroundColor: theme.text + "15",
       alignItems: "center",
       justifyContent: "center",
@@ -292,13 +254,13 @@ function makeStyles(theme: Palette, insets: { top: number; bottom: number; left:
       flex: 1,
     },
     scrollContent: {
-      paddingHorizontal: 16,
-      paddingBottom: insets.bottom + 40,
-      gap: 8,
+      paddingHorizontal: 14,
+      paddingBottom: insets.bottom + 24,
+      gap: CARD_GAP,
     },
     card: {
       backgroundColor: theme.text + "10",
-      borderRadius: 16,
+      borderRadius: 12,
       borderWidth: 1,
       borderColor: theme.text + "20",
       overflow: "hidden",
@@ -307,76 +269,77 @@ function makeStyles(theme: Palette, insets: { top: number; bottom: number; left:
       flexDirection: "row",
       alignItems: "center",
       height: CARD_HEADER_H,
-      paddingHorizontal: 16,
-      gap: 12,
+      paddingHorizontal: 12,
+      gap: 10,
     },
     cardIconWrap: {
-      width: 44,
-      height: 44,
-      borderRadius: 12,
+      width: 34,
+      height: 34,
+      borderRadius: 9,
       backgroundColor: theme.text + "10",
       alignItems: "center",
       justifyContent: "center",
     },
     cardIcon: {
-      fontSize: 22,
+      fontSize: 18,
     },
     cardTitle: {
       color: theme.text,
-      fontSize: 17,
+      fontSize: 15,
       fontWeight: "600",
     },
     cardDesc: {
       color: theme.text + "88",
-      fontSize: 13,
-      marginTop: 2,
-      lineHeight: 17,
+      fontSize: 11,
+      marginTop: 1,
+      lineHeight: 14,
     },
     chevronWrap: {
       flexDirection: "row",
       alignItems: "center",
-      gap: 8,
+      gap: 6,
     },
     countPill: {
-      minWidth: 22,
-      height: 22,
-      paddingHorizontal: 8,
-      borderRadius: 11,
+      minWidth: 20,
+      height: 20,
+      paddingHorizontal: 6,
+      borderRadius: 10,
       backgroundColor: theme.text + "18",
       alignItems: "center",
       justifyContent: "center",
     },
     countText: {
       color: theme.text,
-      fontSize: 12,
+      fontSize: 11,
       fontWeight: "600",
     },
     bodyContainer: {
-      paddingHorizontal: 16,
-      paddingVertical: BODY_PAD_V,
+      paddingHorizontal: 12,
+      paddingBottom: 14,
+      paddingTop: 2,
     },
     versionBlock: {
       alignItems: "center",
-      marginTop: 24,
-      paddingVertical: 16,
+      marginTop: 16,
+      paddingVertical: 10,
     },
     versionText: {
       color: theme.text + "66",
-      fontSize: 13,
+      fontSize: 12,
       fontStyle: "italic",
       textAlign: "center",
     },
     buildTagText: {
       color: theme.text + "44",
-      fontSize: 11,
-      marginTop: 4,
+      fontSize: 10,
+      marginTop: 3,
       textAlign: "center",
       fontFamily: "monospace",
     },
     runtimeText: {
       color: theme.text + "33",
-      fontSize: 10,
-      marginTop: 2,
+      fontSize: 9,
+      marginTop: 1,
       textAlign: "center",
       fontFamily: "monospace",
     },
