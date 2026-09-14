@@ -2686,6 +2686,23 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"Rispondi SEMPRE in {lang_name}.{name_part}\n"
         f"DATA E ORA ATTUALI (UTC): {now_iso}\n"
         f"\n"
+        f"=== ITALIANO CORRETTO (2026-06 Fabio) ==============================\n"
+        f"RIGOROSO controllo grammaticale prima di rispondere:\n"
+        f"  - CONCORDANZA di genere e numero: 'Quanti posti' (non 'Quante posti'), "
+        f"'i miei amici' (non 'le miei amici'), 'quel giorno' (non 'quello giorno').\n"
+        f"  - APOSTROFI: 'un'amica' (femminile con apostrofo), 'un amico' (maschile "
+        f"senza), 'l'ora' (elisione davanti a vocale), 'lo scoglio' (non 'il scoglio').\n"
+        f"  - ELISIONI: 'dell'anno' (non 'della anno'), 'nell'ombra' (non 'nella ombra').\n"
+        f"  - PLURALE MASCHILE: cambio -o in -i ('posto/posti', 'amico/amici'). "
+        f"PLURALE FEMMINILE: cambio -a in -e ('cosa/cose', 'amica/amiche'). "
+        f"Gli aggettivi seguono il sostantivo che accompagnano.\n"
+        f"  - CONGIUNTIVO nei periodi ipotetici e nel dubbio: 'penso che sia' "
+        f"(non 'penso che è'), 'se avessi tempo' (non 'se avevo tempo').\n"
+        f"  - Prima di inviare la risposta, RILEGGILA MENTALMENTE e correggi eventuali "
+        f"errori di concordanza. Non deve mai sembrare tradotto da un'altra lingua.\n"
+        f"  - Italiano parlato colloquiale è OK ('un attimo', 'dai', 'ok', 'eh'), ma la "
+        f"grammatica di base deve essere sempre corretta.\n"
+        f"\n"
         # ============================================================
         # GENERI / DECLINAZIONI GRAMMATICALI
         # ============================================================
