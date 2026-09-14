@@ -517,7 +517,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const KODA_BUILD_SHORT_TAG = "build-v65.37-splash-wordmark-iconic";
+  const KODA_BUILD_SHORT_TAG = "build-v65.38-splash-tiffany-plateau-miniorb";
   const KODA_BUILD_DATE = "2026-09-06";
   useEffect(() => {
     console.log(
@@ -7427,7 +7427,7 @@ export default function Taccuino() {
     return (
       <KodaSplash
         aiName={profile?.ai_name || null}
-        duration={10000}
+        duration={12000}
         onComplete={() => {
           setShowSplash(false);
           markSessionSplashShown(); // Punto 2: al termine naturale, marca come mostrato per la sessione

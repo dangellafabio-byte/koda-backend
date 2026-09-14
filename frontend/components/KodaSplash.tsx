@@ -1,15 +1,28 @@
 /**
  * KodaSplash — splash screen evocativo all'apertura dell'app.
  *
- * === RESTORE v65.35 (Fabio 2026-06 fix) ==================================
- * L'agente precedente aveva salvato per errore uno screenshot della chat
- * come asset splash (splash_koda_eclipse.webp). Rimosso. Il splash torna
- * ad essere composto interamente da elementi nativi (SVG + Text), così:
- *  1. Zero asset immagine → nessun rischio di regressione da asset sbagliato
- *  2. Il glow attorno all'eclissi cambia colore ciclicamente (4 palette
- *     cross-fade viola → petrolio → ciclamino → rosa) come voluto
- *  3. Testi "Koda / SEMPRE CON TE / ASCOLTA • PARLA • SENTITI MEGLIO" +
- *     curva orizzonte, progress bar e footer "QUALCOSA DI BELLO TI ASPETTA"
+ * === v65.38 (Fabio 2026-06 fix Tiffany + wordmark iconico) ================
+ *
+ * Fix 1 — Tiffany ripristinato tra le 4 palette.
+ *   La v65.37 aveva sostituito il Tiffany (#5EEAD4 blu petrolio) con un
+ *   secondo viola. Ora il ciclo torna a: viola → Tiffany → ciclamino → rosa.
+ *
+ * Fix 2 — Plateau per ogni palette.
+ *   opacityFor era triangolare: picco istantaneo poi calando subito → il
+ *   colore era "visibile" solo per un attimo. Ora ogni palette ha:
+ *     - 0.2 unità di fade-in
+ *     - 0.6 unità di piena opacità (plateau)
+ *     - 0.2 unità di fade-out
+ *   Con duration 12s / 4 palette → 3s per colore → ~1.8s di piena visibilità.
+ *
+ * Fix 3 — Wordmark "Koda" con mini-eclissi al posto della prima "o".
+ *   Compone "K" + <mini-eclissi SVG> + "da" in row. La mini-eclissi
+ *   segue lo stesso ciclo di colori del grande orb → coerenza visiva.
+ *
+ * Fix 4 — Layout semplificato al reference di Fabio.
+ *   Rimossi: verbi ASCOLTA/PARLA/SENTITI MEGLIO, curva orizzonte,
+ *   progress bar, footer "QUALCOSA DI BELLO TI ASPETTA".
+ *   Restano: eclissi grande, Koda wordmark, "Sempre con te".
  */
 import React, { useEffect, useRef } from "react";
 import {
@@ -20,9 +33,8 @@ import {
   Easing,
   Pressable,
   Dimensions,
-  Platform,
 } from "react-native";
-import Svg, { Defs, RadialGradient, Stop, Circle, Path } from "react-native-svg";
+import Svg, { Defs, RadialGradient, Stop, Circle } from "react-native-svg";
 
 interface Props {
   aiName?: string | null;
@@ -30,26 +42,30 @@ interface Props {
   onComplete: () => void;
 }
 
-// 4 palette identitarie, percorse in loop con cross-fade fluido.
-// [alone luminoso, tinta media, tinta scura] per RadialGradient dell'eclissi.
+// 4 palette identitarie in ciclo. [alone, tinta media, tinta scura].
+// Ordine: viola → Tiffany/petrolio → ciclamino → rosa caldo.
 const PALETTES: [string, string, string][] = [
   ["#C4B5FD", "#8B5CF6", "#7C3AED"], // viola/lavanda (default)
-  ["#A78BFA", "#7C3AED", "#5B21B6"], // viola profondo
+  ["#5EEAD4", "#14B8A6", "#0F766E"], // Tiffany / blu petrolio
   ["#F9A8D4", "#EC4899", "#BE185D"], // ciclamino
   ["#FBCFE8", "#F472B6", "#DB2777"], // rosa caldo
 ];
 
-// Sub-component: cerchio con gradient di una sola palette, statico.
-// Renderizza l'ECLISSI completa:
-//  1) alone esterno (radial gradient palette) — la corona luminosa
-//  2) disco nero centrale (il "buco" dell'eclissi)
-//  3) rim light (anello sottile di luce sul bordo del disco)
-function OrbCircle({ palette, size }: { palette: [string, string, string]; size: number }) {
+// Sub-component: eclissi con anello luminoso + disco nero centrale.
+// `discRatio` regola quanto è "grande" il buco nero (1 = tutto nero,
+// 0 = solo alone). Per l'orb grande: 0.58. Per la mini-o: 0.78 (anello sottile).
+function OrbCircle({
+  palette,
+  size,
+  discRatio = 0.58,
+}: {
+  palette: [string, string, string];
+  size: number;
+  discRatio?: number;
+}) {
   const r = size / 2;
-  const gradId = `g_${palette[0].slice(1)}_${palette[1].slice(1)}`;
-  // Disco nero centrale al 52% del raggio totale → eclissi "ad anello"
-  // con corona luminosa più larga (come nel reference di Fabio).
-  const discR = r * 0.52;
+  const gradId = `g_${palette[0].slice(1)}_${palette[1].slice(1)}_${Math.round(discRatio * 100)}`;
+  const discR = r * discRatio;
   return (
     <Svg width={size} height={size}>
       <Defs>
@@ -59,44 +75,45 @@ function OrbCircle({ palette, size }: { palette: [string, string, string]; size:
           <Stop offset="100%" stopColor={palette[2]} stopOpacity={0} />
         </RadialGradient>
       </Defs>
-      {/* 1) Alone luminoso esterno — la CORONA dell'eclissi */}
+      {/* Alone luminoso — la corona dell'eclissi */}
       <Circle cx={r} cy={r} r={r * 0.95} fill={`url(#${gradId})`} />
-      {/* 2) Disco nero centrale — il vero "buco" dell'eclissi */}
+      {/* Disco nero centrale */}
       <Circle cx={r} cy={r} r={discR} fill="#06060A" />
-      {/* 3) Rim light — anello sottile luminoso attorno al disco */}
+      {/* Rim light — bordo luminoso sottile attorno al disco */}
       <Circle
         cx={r}
         cy={r}
         r={discR}
         fill="none"
         stroke={palette[0]}
-        strokeWidth={2}
-        opacity={0.9}
+        strokeWidth={Math.max(1.5, size * 0.012)}
+        opacity={0.95}
       />
     </Svg>
   );
 }
 
-export default function KodaSplash({ aiName, duration = 10000, onComplete }: Props) {
-  const { width, height } = Dimensions.get("window");
-  const orbSize = Math.min(width * 0.85, 380);
+export default function KodaSplash({ aiName, duration = 12000, onComplete }: Props) {
+  const { width } = Dimensions.get("window");
+  const orbSize = Math.min(width * 0.78, 340);
+  // Mini-eclissi al posto della "o": ~48% dell'altezza del testo (fontSize 72).
+  const miniOrbSize = 38;
 
   const fade = useRef(new Animated.Value(0)).current;
   const orbFade = useRef(new Animated.Value(0)).current;
   const textFade = useRef(new Animated.Value(0)).current;
-  const barProgress = useRef(new Animated.Value(0)).current;
   const completedRef = useRef(false);
 
-  // === CROSS-FADE CONTINUO v4 (fix "stacco tra colore e colore") ===
-  // 4 cerchi SEMPRE montati, un solo Animated.Value `prog` che corre
-  // 0→4 in loop lineare; l'opacity di ogni cerchio è un'interpolazione
-  // triangolare ciclica. Nessun reset, nessun set-state nel loop = nessuno
-  // stacco possibile, per costruzione.
+  // === CROSS-FADE con PLATEAU (fix "Tiffany non visibile") ==================
+  // prog: 0 → N in loop lineare. Ogni palette k è visibile con plateau
+  // durante il segmento [k, k+1].
   const prog = useRef(new Animated.Value(0)).current;
 
-  const segmentMs = Math.max(2200, Math.floor(duration / PALETTES.length));
+  // Per assicurare che tutte le palette abbiano tempo di essere PIENE,
+  // il segment deve durare abbastanza. Con duration=12s e N=4 → 3s per colore.
+  const segmentMs = Math.max(2500, Math.floor(duration / PALETTES.length));
 
-  // === Fade-in scaglionato ===
+  // === Fade-in iniziale ===
   useEffect(() => {
     Animated.timing(fade, { toValue: 1, duration: 250, useNativeDriver: true }).start();
     Animated.timing(orbFade, {
@@ -111,16 +128,9 @@ export default function KodaSplash({ aiName, duration = 10000, onComplete }: Pro
       delay: 900,
       useNativeDriver: true,
     }).start();
-    // Progress bar: si riempie in `duration` totale (linear)
-    Animated.timing(barProgress, {
-      toValue: 1,
-      duration,
-      easing: Easing.linear,
-      useNativeDriver: false, // width animation
-    }).start();
-  }, [fade, orbFade, textFade, barProgress, duration]);
+  }, [fade, orbFade, textFade]);
 
-  // === Loop continuo del progresso palette (0 → 4, ciclico) ===
+  // === Loop del progresso palette ===
   useEffect(() => {
     const loop = Animated.loop(
       Animated.timing(prog, {
@@ -134,33 +144,29 @@ export default function KodaSplash({ aiName, duration = 10000, onComplete }: Pro
     return () => loop.stop();
   }, [prog, segmentMs]);
 
-  // Opacity triangolare ciclica per il cerchio k: picco 1 quando prog === k,
-  // scende a 0 verso i vicini. Il cerchio 0 ha anche il picco al wrap (=N)
-  // così il riavvio del loop è otticamente invisibile.
+  // === Opacity con PLATEAU per ogni palette ================================
+  // Fade-in 0.2 unità → plateau 0.6 unità → fade-out 0.2 unità → OFF 3 unità.
+  // Somma ciclica = 4 unità = N segmenti = 1 giro completo.
+  // Per k=0: doppio picco (inizio + wrap) per fluidità del loop.
   const N = PALETTES.length;
   const opacityFor = (k: number) => {
+    const fw = 0.2; // fade width
     if (k === 0) {
+      // ON da [0, 1-fw] con fade-out fino a 1, poi OFF fino a N-fw,
+      // fade-in fino a N. Il wrap N → 0 chiude senza stacco.
       return prog.interpolate({
-        inputRange: [0, 1, N - 1, N],
-        outputRange: [1, 0, 0, 1],
+        inputRange: [0, 1 - fw, 1, N - 1, N - fw, N],
+        outputRange: [1, 1, 0, 0, 1, 1],
       });
     }
-    const inputRange: number[] = [];
-    const outputRange: number[] = [];
-    if (k - 1 > 0) {
-      inputRange.push(0);
-      outputRange.push(0);
-    }
-    inputRange.push(k - 1, k);
-    outputRange.push(0, 1);
-    if (k + 1 < N) {
-      inputRange.push(k + 1, N);
-      outputRange.push(0, 0);
-    } else {
-      inputRange.push(N);
-      outputRange.push(0);
-    }
-    return prog.interpolate({ inputRange, outputRange });
+    const start = k - fw;
+    const on1 = k;
+    const on2 = k + 1 - fw;
+    const off = k + 1;
+    return prog.interpolate({
+      inputRange: [0, start, on1, on2, off, N],
+      outputRange: [0, 0, 1, 1, 0, 0],
+    });
   };
 
   // === Fade-out finale ===
@@ -187,27 +193,27 @@ export default function KodaSplash({ aiName, duration = 10000, onComplete }: Pro
     }).start(() => onComplete());
   };
 
-  const displayName = (aiName?.trim() || "Koda").trim();
-
-  // Progress bar width: 0% → 100% in `duration` ms
-  const barWidthPct = barProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: ["0%", "100%"],
-  });
+  const rawName = (aiName?.trim() || "Koda").trim();
+  // Split wordmark: cerca la PRIMA "o" case-insensitive.
+  const oIdx = rawName.toLowerCase().indexOf("o");
+  const hasO = oIdx >= 0;
+  const prefix = hasO ? rawName.slice(0, oIdx) : rawName;
+  const suffix = hasO ? rawName.slice(oIdx + 1) : "";
 
   return (
     <Animated.View style={[styles.root, { opacity: fade }]} pointerEvents="auto">
       <Pressable style={StyleSheet.absoluteFill} onPress={handleSkip}>
-        {/* === ECLISSI centrale — 4 cerchi cross-fade continuo ================
-            La corona luminosa cambia tinta in loop tra 4 palette senza mai
-            avere un frame di stacco (opacità triangolari cicliche). Il disco
-            nero centrale è disegnato dentro OrbCircle stesso. */}
-        <View style={[styles.orbWrap, { top: height * 0.14 }]}>
+        <View style={styles.centerCol}>
+          {/* === ECLISSI GRANDE — 4 palette cross-fade con plateau ==========
+              Corona luminosa che cambia colore ciclicamente: viola →
+              Tiffany → ciclamino → rosa. Ogni colore ha ~1.8s di piena
+              visibilità grazie al plateau nella opacityFor. */}
           <Animated.View
             style={{
               opacity: orbFade,
               width: orbSize,
               height: orbSize,
+              marginBottom: 44,
             }}
           >
             {PALETTES.map((p, k) => (
@@ -215,88 +221,50 @@ export default function KodaSplash({ aiName, duration = 10000, onComplete }: Pro
                 key={p[1]}
                 style={[StyleSheet.absoluteFill, { opacity: opacityFor(k) }]}
               >
-                <OrbCircle palette={p} size={orbSize} />
+                <OrbCircle palette={p} size={orbSize} discRatio={0.58} />
               </Animated.View>
             ))}
           </Animated.View>
-        </View>
 
-        {/* === TESTO CENTRALE — WORDMARK Koda iconico ====================
-            3 layer sovrapposti + swash SVG sotto per identità distintiva:
-              L1  outer glow (rosa, blur forte)
-              L2  mid glow (lavanda)
-              L3  testo principale (serif italic)
-              L4  swash SVG (curva sottile sotto il wordmark)
-            Font: Baskerville su iOS, serif su Android — entrambi hanno
-            un carattere elegante e "editoriale" che si stacca dal system
-            sans-serif della UI, rendendo il nome un logo. */}
-        <Animated.View
-          style={[
-            styles.textBlock,
-            { top: height * 0.14 + orbSize + 34, opacity: textFade },
-          ]}
-        >
-          <View style={styles.nameWrap}>
-            {/* L1 — outer rosa glow */}
-            <Text style={[styles.name, styles.nameGlowOuter]} allowFontScaling={false}>
-              {displayName}
+          {/* === WORDMARK "Koda" con MINI-ECLISSI al posto della prima "o" =
+              Row: "K" + <mini-eclissi 4-palette> + "da"
+              Il mini-orb usa la stessa `opacityFor` → cambia colore in
+              sincrono con l'orb grande. Attorno al wordmark: layer glow
+              rosa/lavanda per l'aura luminosa. */}
+          <Animated.View style={[styles.wordmarkRow, { opacity: textFade }]}>
+            {/* Glow layer (esteso, dietro) */}
+            <Text style={[styles.name, styles.nameGlow]} allowFontScaling={false}>
+              {rawName}
             </Text>
-            {/* L2 — mid lavanda glow */}
-            <Text style={[styles.name, styles.nameGlowMid]} allowFontScaling={false}>
-              {displayName}
-            </Text>
-            {/* L3 — testo principale (top) */}
+            {/* Prefix "K" */}
             <Text style={[styles.name, styles.nameTop]} allowFontScaling={false}>
-              {displayName}
+              {prefix}
             </Text>
-            {/* L4 — swash curvo sotto il wordmark */}
-            <Svg
-              width={220}
-              height={18}
-              viewBox="0 0 220 18"
-              style={styles.swash}
-            >
-              <Path
-                d="M4 10 Q 60 2, 110 8 T 216 10"
-                stroke="rgba(196,181,253,0.75)"
-                strokeWidth={1.4}
-                fill="none"
-                strokeLinecap="round"
-              />
-            </Svg>
-          </View>
-          <Text style={styles.tagline}>SEMPRE CON TE</Text>
-        </Animated.View>
+            {hasO ? (
+              <View style={styles.miniOrbWrap}>
+                {PALETTES.map((p, k) => (
+                  <Animated.View
+                    key={`mini_${p[1]}`}
+                    style={[StyleSheet.absoluteFill, { opacity: opacityFor(k) }]}
+                  >
+                    <OrbCircle palette={p} size={miniOrbSize} discRatio={0.78} />
+                  </Animated.View>
+                ))}
+              </View>
+            ) : null}
+            {/* Suffix "da" */}
+            <Text style={[styles.name, styles.nameTop]} allowFontScaling={false}>
+              {suffix}
+            </Text>
+          </Animated.View>
 
-        {/* === TRE VERBI ================================================== */}
-        <Animated.View
-          style={[
-            styles.verbsBlock,
-            { top: height * 0.14 + orbSize + 190, opacity: textFade },
-          ]}
-        >
-          <Text style={styles.verb}>ASCOLTA</Text>
-          <View style={styles.dotSep} />
-          <Text style={styles.verb}>PARLA</Text>
-          <View style={styles.dotSep} />
-          <Text style={styles.verb}>SENTITI MEGLIO</Text>
-        </Animated.View>
-
-        {/* === CURVA ORIZZONTE + PROGRESS + FOOTER ======================== */}
-        <View style={styles.bottomStack}>
-          {/* Curva orizzonte glow: un'ellisse molto larga con bordo alto
-              luminoso, tagliata dall'ovale della viewport. Effetto "pianeta". */}
-          <View style={styles.horizonWrap}>
-            <View style={styles.horizonGlow} />
-          </View>
-
-          {/* Progress bar minimale: 0→100% in `duration` ms */}
-          <View style={styles.progressTrack}>
-            <Animated.View style={[styles.progressFill, { width: barWidthPct }]} />
-          </View>
-
-          {/* Footer wistful */}
-          <Text style={styles.footerText}>QUALCOSA DI BELLO TI ASPETTA</Text>
+          {/* === SOTTOTITOLO ============================================== */}
+          <Animated.Text
+            style={[styles.tagline, { opacity: textFade }]}
+            allowFontScaling={false}
+          >
+            Sempre con te
+          </Animated.Text>
         </View>
       </Pressable>
     </Animated.View>
@@ -313,150 +281,60 @@ const styles = StyleSheet.create({
     backgroundColor: "#06060A",
     zIndex: 9999,
     elevation: 9999,
-  },
-  // Contenitore assoluto dell'eclissi — centrata orizzontalmente,
-  // posizione verticale calcolata rispetto all'altezza schermo.
-  orbWrap: {
-    position: "absolute",
-    left: 0,
-    right: 0,
     alignItems: "center",
     justifyContent: "center",
   },
-  textBlock: {
-    position: "absolute",
-    left: 0,
-    right: 0,
+  centerCol: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 32,
   },
+  // Wordmark row: "K" + mini-eclissi + "da"
+  wordmarkRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  // Testo principale del wordmark (sans-serif system bold)
   name: {
-    fontSize: 68,
-    fontWeight: "700",
-    letterSpacing: 2,
+    color: "#F5E9F3",
+    fontSize: 72,
+    fontWeight: "800",
+    letterSpacing: 1,
     textAlign: "center",
-    // Font "editoriale" — Baskerville iOS / serif Android. Dà al wordmark
-    // un carattere di logo (non "text system"), pur restando leggibile.
-    fontFamily: Platform.select({
-      ios: "Baskerville",
-      android: "serif",
-      default: "serif",
-    }),
-    fontStyle: "italic",
     includeFontPadding: false,
   },
-  nameWrap: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingBottom: 14,
-  },
-  // Layer 1: outer glow rosa carico. textShadow molto largo, opacity bassa.
-  nameGlowOuter: {
+  // Glow layer dietro il wordmark — assoluto, allargato tramite blur pesante
+  nameGlow: {
     position: "absolute",
-    color: "rgba(244,114,182,0.55)",
-    textShadowColor: "rgba(244,114,182,0.9)",
+    color: "rgba(196,181,253,0.35)",
+    textShadowColor: "rgba(196,181,253,0.85)",
     textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 40,
+    textShadowRadius: 28,
+    // Copre l'intero wordmark: prefix + o placeholder + suffix
+    left: 0,
+    right: 0,
+    textAlign: "center",
   },
-  // Layer 2: mid glow lavanda. Più definito, meno soft.
-  nameGlowMid: {
-    position: "absolute",
-    color: "rgba(196,181,253,0.75)",
-    textShadowColor: "rgba(196,181,253,0.9)",
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 22,
-  },
-  // Layer 3: top layer nitido — bianco caldo con leggero shadow rosa.
+  // Testo principale sopra (nitido, bianco caldo con soft glow)
   nameTop: {
-    color: "#F8E9F3",
-    textShadowColor: "rgba(244,114,182,0.5)",
+    textShadowColor: "rgba(244,114,182,0.45)",
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 10,
   },
-  // Swash SVG: curva sottile sotto il wordmark, richiama la curva orizzonte
-  // in fondo. Piccolo segno grafico che rende il logo "firmato".
-  swash: {
-    position: "absolute",
-    bottom: -2,
-    alignSelf: "center",
+  // Contenitore assoluto per la mini-eclissi che sostituisce la "o"
+  miniOrbWrap: {
+    width: 38,
+    height: 38,
+    marginHorizontal: 2,
   },
   tagline: {
-    marginTop: 14,
-    color: "rgba(245,230,240,0.75)",
-    fontSize: 15,
-    letterSpacing: 6,
-    textAlign: "center",
-    fontWeight: "500",
-  },
-  verbsBlock: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "row",
-    gap: 12,
-  },
-  verb: {
-    color: "rgba(230,215,235,0.85)",
-    fontSize: 12,
+    color: "rgba(230,220,235,0.7)",
+    fontSize: 18,
     letterSpacing: 3,
-    fontWeight: "500",
-  },
-  dotSep: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "rgba(244,114,182,0.7)",
-  },
-  // Stack in fondo: curva + progress + footer
-  bottomStack: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 40,
-    alignItems: "center",
-    justifyContent: "flex-end",
-  },
-  // Curva orizzonte: rettangolo con top border luminoso e forte
-  // border-radius orizzontale → simula la curvatura del "pianeta".
-  horizonWrap: {
-    width: "150%",
-    height: 80,
-    overflow: "hidden",
-    marginBottom: 30,
-    alignItems: "center",
-  },
-  horizonGlow: {
-    width: "100%",
-    height: 200,
-    borderRadius: 1000,
-    borderTopWidth: 1.5,
-    borderTopColor: "rgba(196,181,253,0.55)",
-    // Alone soft della curva
-    shadowColor: "#C4B5FD",
-    shadowOpacity: 0.6,
-    shadowRadius: 40,
-    shadowOffset: { width: 0, height: -20 },
-  },
-  progressTrack: {
-    width: 140,
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: "rgba(255,255,255,0.08)",
-    overflow: "hidden",
-    marginBottom: 18,
-  },
-  progressFill: {
-    height: "100%",
-    backgroundColor: "rgba(196,181,253,0.85)",
-    borderRadius: 2,
-  },
-  footerText: {
-    color: "rgba(230,215,235,0.7)",
-    fontSize: 11,
-    letterSpacing: 3,
-    fontWeight: "500",
+    fontWeight: "400",
     textAlign: "center",
   },
 });
