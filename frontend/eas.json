@@ -64,7 +64,7 @@
   "submit": {
     "production": {
       "ios": {
-        "//NOTE": "ascAppId stale (era 6771510634 per com.dangella.koda). Nuova App Store Connect app da creare manualmente per com.dangella.ollenya. Vedi handoff summary.",
+        "ascAppId": "6812500497",
         "appleTeamId": "L8BJUZ3YB5",
         "ascApiKeyPath": "/root/.private/AuthKey_6FD96TSHNG.p8",
         "ascApiKeyId": "6FD96TSHNG",
