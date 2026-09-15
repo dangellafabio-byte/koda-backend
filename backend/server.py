@@ -51,6 +51,7 @@ from fastapi.responses import Response
 # La wiring qui sotto (`_consume_paid_seconds`, `_compute_paid_state`,
 # `_ensure_ledger`) collega il ledger al pipeline TTS reale.
 import subscription_ledger as _sub_ledger
+import free_tier_gate as _free_gate
 # === KODA FEEDBACK LOOP (Fabio 2026-09-11) ================================
 # Privacy-by-design: nessun user_id, nessun testo, timestamp a risoluzione
 # ORA. Aggancia il record `koda_events` a fine turno, ritorna `event_id`
@@ -2075,6 +2076,22 @@ class Profile(BaseModel):
     #   }
     # None → mai inizializzato. Reset automatico quando date_iso cambia.
     daily_v3_state: Optional[Dict[str, Any]] = None
+    # === FREE TIER STATE v65.53 (Fabio 2026-06) ============================
+    # Contatore per-utente dei turni chat scritta Free.
+    # Schema:
+    #   {
+    #     "period_start_iso": "2026-06-13T09:00:00+00:00",
+    #     "turns_used": 3,
+    #     "last_reset_at_iso": "2026-06-13T09:00:00+00:00"
+    #   }
+    # None → mai iniziato. Reset atomico quando now >= period_start + period_hours.
+    # NON viene mai modificato dal client — solo dal gate server-side in /converse.
+    free_chat_state: Optional[Dict[str, Any]] = None
+    # === FREE STATUS (computed, non persistito) v65.53 ====================
+    # Payload live per il client: turns_used, turns_remaining, countdown_it.
+    # Popolato SOLO nel `/api/profile` response, MAI scritto su Mongo.
+    # Default None → il client non lo mostra (utente paid o gate disabled).
+    free_status: Optional[Dict[str, Any]] = None
     settings: TaccuinoSettings = Field(default_factory=TaccuinoSettings)
     # Personalizzazioni stilistiche (palette colori blob, avatar, ecc.)
     # Salvato come dict aperto per consentire estensioni future senza migrazioni.
@@ -3619,6 +3636,20 @@ async def api_get_profile(request: Request):
     # URL /api/profile/background nel payload di risposta. Il codice
     # rimosso costruiva `scheme://host/api/profile/background?v=hash` da
     # un data URI base64. Ora obsoleto.
+
+    # === FREE STATUS ENRICHMENT v65.53 (Fabio 2026-06) ====================
+    # Popoliamo `p.free_status` con turns_used, remaining, countdown_it.
+    # Solo se l'utente NON è paid → il client mostra il badge in Home Free.
+    try:
+        _tier_pf = getattr(p, "subscription_tier", None)
+        _is_paid_pf = _tier_pf in ("monthly", "bimonthly", "annual", "unlimited")
+        if not _is_paid_pf:
+            _fcfg = await _free_gate.get_free_config(db)
+            _state_pf = getattr(p, "free_chat_state", None)
+            p.free_status = _free_gate.compute_free_status(_state_pf, _fcfg)
+    except Exception as _fe:
+        logger.warning(f"[profile/free-status] failed: {_fe}")
+
     return p
 
 
@@ -5938,6 +5969,87 @@ async def api_admin_unlimited_list():
     return entries
 
 
+# =====================================================================
+# FREE CONFIG ADMIN v65.53 (Fabio 2026-06)
+# =====================================================================
+# Modifica live dei parametri del Free tier senza restart né rebuild.
+# GET  → ritorna config attuale (Mongo + fallback env).
+# POST → aggiorna la config (upsert singleton). Restart backend NON
+#         richiesto. La prossima richiesta di /api/converse leggerà i
+#         nuovi valori.
+# Protetto da `_require_admin()` come tutti gli endpoint admin.
+
+class FreeConfigResponse(BaseModel):
+    turns_per_period: int
+    period_hours: int
+    max_response_tokens: int
+    gate_enabled: bool
+    source: str  # "mongo" | "env_fallback"
+    updated_at_iso: Optional[str] = None
+
+class FreeConfigUpdateRequest(BaseModel):
+    turns_per_period: Optional[int] = None
+    period_hours: Optional[int] = None
+    max_response_tokens: Optional[int] = None
+    gate_enabled: Optional[bool] = None
+
+
+@api_router.get("/admin/free-config", response_model=FreeConfigResponse)
+async def api_admin_free_config_get(admin_token: Optional[str] = None):
+    """Legge config Free corrente. Include il campo `source` per capire
+    se sta rispondendo da Mongo o da fallback env.
+    Auth: come `/admin/last-errors` — bearer via `?admin_token=` o
+    session admin cookie."""
+    expected = os.environ.get("KODA_ADMIN_TOKEN", "").strip()
+    if not (expected and admin_token == expected):
+        _require_admin()
+    cfg = await _free_gate.get_free_config(db)
+    try:
+        doc = await db["free_config"].find_one({"_id": "singleton"})
+    except Exception:
+        doc = None
+    return FreeConfigResponse(
+        turns_per_period=int(cfg["turns_per_period"]),
+        period_hours=int(cfg["period_hours"]),
+        max_response_tokens=int(cfg["max_response_tokens"]),
+        gate_enabled=bool(cfg["gate_enabled"]),
+        source="mongo" if doc else "env_fallback",
+        updated_at_iso=(doc or {}).get("updated_at_iso"),
+    )
+
+
+@api_router.post("/admin/free-config", response_model=FreeConfigResponse)
+async def api_admin_free_config_update(req: FreeConfigUpdateRequest, admin_token: Optional[str] = None):
+    """Aggiorna config Free. Solo i campi passati vengono modificati.
+    Ritorna la config effettiva dopo l'update.
+    Auth: bearer via `?admin_token=` (comodo per curl) o session admin.
+    ESEMPIO cURL:
+      curl -X POST "https://<host>/api/admin/free-config?admin_token=$KODA_ADMIN_TOKEN" \\
+           -H "Content-Type: application/json" \\
+           -d '{"turns_per_period": 7, "period_hours": 48}'
+    """
+    expected = os.environ.get("KODA_ADMIN_TOKEN", "").strip()
+    if not (expected and admin_token == expected):
+        _require_admin()
+    patch = {k: v for k, v in req.dict().items() if v is not None}
+    if not patch:
+        raise HTTPException(status_code=400, detail="empty_patch")
+    updated = await _free_gate.set_free_config(db, patch)
+    try:
+        doc = await db["free_config"].find_one({"_id": "singleton"})
+    except Exception:
+        doc = None
+    logger.info(f"[admin/free-config] updated by admin, patch={patch}")
+    return FreeConfigResponse(
+        turns_per_period=int(updated["turns_per_period"]),
+        period_hours=int(updated["period_hours"]),
+        max_response_tokens=int(updated["max_response_tokens"]),
+        gate_enabled=bool(updated["gate_enabled"]),
+        source="mongo" if doc else "env_fallback",
+        updated_at_iso=(doc or {}).get("updated_at_iso"),
+    )
+
+
 @api_router.post("/admin/unlimited/add", response_model=AdminUnlimitedEntry)
 async def api_admin_unlimited_add(req: AdminUnlimitedAddRequest):
     """Aggiunge un'email alla whitelist. Idempotente: se già presente,
@@ -8055,6 +8167,57 @@ async def api_converse(req: ConverseRequest):
                 },
             )
 
+    # === FREE TIER GATE v65.53 (Fabio 2026-06) ===========================
+    # Applicabile SOLO se: chat testuale (not voice) + non-ephemeral +
+    # utente NON paid (tier is None/free). Voce, MicroDemo, Confessionale
+    # e Premium bypassano il gate.
+    # Se il gate ammette il turno → increment atomico PRIMA della chiamata
+    # LLM. Se la LLM fallisce dopo, chiamiamo rollback compensativo.
+    # Il flag `_free_gate_consumed` è settato solo se il turno è stato
+    # effettivamente consumato → serve al rollback.
+    _free_gate_consumed = False
+    _free_max_tokens_override: Optional[int] = None
+    if (
+        not req.ephemeral
+        and not req.is_voice_turn
+        and getattr(profile, "id", None)
+    ):
+        _tier_now = getattr(profile, "subscription_tier", None)
+        _is_paid_now = _tier_now in ("monthly", "bimonthly", "annual", "unlimited")
+        if not _is_paid_now:
+            _free_cfg = await _free_gate.get_free_config(db)
+            _ok, _reason, _state = await _free_gate.check_and_increment_free_turn(
+                db, profile.id, _free_cfg,
+            )
+            if _reason == "quota_exhausted":
+                _status = _free_gate.compute_free_status(_state, _free_cfg)
+                _name_for_msg = (getattr(profile, "name", None) or "").strip()
+                _greeting = f"Per questo periodo ci fermiamo qui{', ' + _name_for_msg if _name_for_msg else ''}."
+                _countdown = _status.get("countdown_it") or "tra poco"
+                raise HTTPException(
+                    status_code=402,
+                    detail={
+                        "error": "free_limit_exhausted",
+                        "message": f"{_greeting} Torno a scriverti {_countdown}.",
+                        "greeting": _greeting,
+                        "countdown_it": _countdown,
+                        "free_status": _status,
+                    },
+                )
+            if _ok and _reason == "ok":
+                _free_gate_consumed = True
+                # Passa il max_tokens al modello: 250 token ≈ 900-1100 char.
+                _free_max_tokens_override = int(_free_cfg.get("max_response_tokens", 250))
+                logger.info(
+                    f"[free_gate] turn consumed user={profile.id[:8]} state={_state} "
+                    f"max_tokens={_free_max_tokens_override}"
+                )
+            elif _reason == "gate_disabled":
+                logger.info(f"[free_gate] disabled (kill-switch), passthrough user={profile.id[:8]}")
+            elif _reason == "error":
+                # Fail-open: se il gate ha problemi Mongo, non blocchiamo l'utente
+                logger.warning(f"[free_gate] error state, allowing user={profile.id[:8]}")
+
     if not profile.settings.ai_enabled:
         # AI disabled — store user message only with a stub AI reply
         user_entry = TimelineEntry(role="user", text=text, audio_duration_ms=req.audio_duration_ms)
@@ -8196,17 +8359,24 @@ async def api_converse(req: ConverseRequest):
             ],
             api_key=EMERGENT_LLM_KEY,
             api_base='https://integrations.emergentagent.com/llm',
-            max_tokens=800,
+            max_tokens=_free_max_tokens_override if _free_max_tokens_override else 800,
             timeout=25,
         )
         raw = resp["choices"][0]["message"]["content"] or ""
         logger.info(
             f"[OLLENYA_TIMING] LLM_END_STANDARD path=/converse "
             f"elapsed_ms={int((time.time() - _kt_llm_start) * 1000)} "
-            f"reply_chars={len(raw or '')}"
+            f"reply_chars={len(raw or '')} "
+            f"max_tokens_used={_free_max_tokens_override if _free_max_tokens_override else 800}"
         )
     except Exception as e:
         logger.error(f"LLM converse error: {e}")
+        # === FREE GATE ROLLBACK — richiesta fallita non consuma turno ===
+        if _free_gate_consumed and getattr(profile, "id", None):
+            try:
+                await _free_gate.rollback_free_turn(db, profile.id)
+            except Exception as _rbe:
+                logger.warning(f"[free_gate] rollback exception: {_rbe}")
         raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")
 
     data = extract_json(raw or "") or {}

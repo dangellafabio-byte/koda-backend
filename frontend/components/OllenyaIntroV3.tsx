@@ -130,11 +130,16 @@ const CONVERSATION_V3: Turn[] = [
   },
   // #4 — v65.51: mini-listen per catturare "sì / no".
   { kind: "listen_confirm", maxMs: 7000 },
-  // #5 — v65.51: clip di transizione anch'essa TTS runtime per coerenza
-  // e per proteggersi da eventuali future incoerenze del file MP3.
+  // #5 — v65.53 (Fabio, spec Free tier): due frasi di orientamento finale
+  // che presentano ESPLICITAMENTE i due spazi al primo boot. Prima la chat
+  // (funzione principale), poi Lascia Andare (spazio complementare). Non
+  // commerciale. Anche questa TTS runtime per coerenza con #1 (evita audio
+  // Koda residuo).
   {
     kind: "speak_dynamic",
-    getText: () => "Voglio farti conoscere una parte di me.",
+    getText: () =>
+      "Quando vuoi che ti risponda davvero, apri la chat con me dall'alto: hai 5 messaggi ogni 3 giorni. " +
+      "E se ti serve solo scrivere, senza risposta, c'è anche Lascia Andare, sempre lì per te.",
   },
   // #6 — flag intro V3 completata + handoff verso Lascia Andare (salva name)
   { kind: "save_and_handoff" },

@@ -53,6 +53,8 @@ import {
   Tone,
 } from "../lib/api";
 import { ensureSpeechPermission } from "../lib/speechPermission";
+import { useLiveCountdown } from "../lib/freeCountdown";
+import FreeLimitOverlay from "../components/FreeLimitOverlay";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { checkHasSpeech, logGateDecision } from "../lib/silenceGate";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId, preloadFillerPool } from "../lib/speech";
@@ -518,7 +520,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v65.52-fix-koda-audio-intro";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v65.53-free-tier-complete";
   const OLLENYA_BUILD_DATE = "2026-09-06";
   useEffect(() => {
     console.log(
@@ -1019,6 +1021,19 @@ export default function Taccuino() {
   const confessionalMode = false as const;
   const confessionalExiting = false as const;
   const [error, setError] = useState<string | null>(null);
+  // === FREE LIMIT OVERLAY v65.53 (Fabio 2026-06) ==========================
+  // Comparsa al 402 free_limit_exhausted. Il countdown si aggiorna live
+  // via `useLiveCountdown(periodEndsAtIso)`.
+  const [freeLimitOverlay, setFreeLimitOverlay] = useState<{
+    visible: boolean;
+    greeting: string;
+    countdown: string;
+    periodEndsAtIso: string | null;
+  }>({ visible: false, greeting: "", countdown: "", periodEndsAtIso: null });
+  // === HOME TAB v65.53 — "ollenya" (chat) vs "lascia_andare" (sfogo) =====
+  // Free users vedono entrambe le tab nell'header; Premium vede solo
+  // "ollenya" (Lascia Andare accessibile via bottone separato).
+  const [homeTab, setHomeTab] = useState<"ollenya" | "lascia_andare">("ollenya");
   const [recapText, setRecapText] = useState<string | null>(null);
   const [showRecap, setShowRecap] = useState(false);
 
@@ -1313,17 +1328,15 @@ export default function Taccuino() {
       return;
     }
 
-    // Free user: redirect a Lascia Andare (landing di default nel nuovo modello)
-    console.log(`[OLLENYA_ROUTER] free user (tier=${tier || "none"}, pid=${currentProfileId}) → replace to /lascia-andare`);
-    try {
-      // Preferisco replace a push così back non riporta sulla home Ollenya conv
-      // (che è UI Premium — free user non deve vederla come landing).
-      // La navigazione volontaria alla home resta comunque possibile in futuro
-      // via CTA "Parla con Ollenya" che aprirà il paywall (Punto 5+6 del piano).
-      router.replace("/lascia-andare");
-    } catch (e) {
-      console.warn("[OLLENYA_ROUTER] replace to /lascia-andare failed:", e);
-    }
+    // === FREE TIER LANDING v65.53 (Fabio 2026-06) =========================
+    // NUOVO MODELLO: Free users atterrano su Home `/` (con tab "Ollenya" +
+    // "Lascia Andare"). NIENTE redirect automatico a /lascia-andare.
+    // Il gate 5 turni ogni 3 giorni è imposto server-side; il client mostra
+    // il badge contatore e gestisce il 402 free_limit_exhausted.
+    // Se l'utente vuole solo sfogarsi senza risposta, tocca la tab
+    // "Lascia Andare" dall'header.
+    console.log(`[OLLENYA_ROUTER] free user (tier=${tier || "none"}, pid=${currentProfileId}) → stay on Home (tab Ollenya di default)`);
+    return;
   }, [profile, profileHydrated, disclaimerState, showSplash, showColorIntro, router, pathname, introV3State]);
 
 
@@ -3277,6 +3290,42 @@ export default function Taccuino() {
           setStatus("idle");
           return;
         }
+        // === FREE LIMIT EXHAUSTED v65.53 (Fabio 2026-06) ==================
+        // 5 turni Free consumati nel periodo. Il backend ritorna 402 con:
+        //   { error: "free_limit_exhausted", message, greeting, countdown_it, free_status }
+        // Il client:
+        //   1. Rimuove il messaggio ottimistico (non ancora inviato → non
+        //      accreditato)
+        //   2. Mostra overlay elegante con countdown live + CTA Premium
+        //   3. Aggiorna il profile.free_status dal payload
+        try {
+          const errStr = String(e || "");
+          const isFreeLimitErr =
+            errStr.includes("free_limit_exhausted") || errStr.includes('"402"') || errStr.includes("HTTP 402");
+          if (isFreeLimitErr) {
+            // Prova a fare parse del detail dal messaggio d'errore
+            let detail: any = null;
+            try {
+              const m = errStr.match(/\{[\s\S]*\}/);
+              if (m) detail = JSON.parse(m[0]);
+              if (detail && detail.detail) detail = detail.detail;
+            } catch {}
+            console.log(`[free_gate] limit exhausted → show overlay`, detail);
+            setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
+            // Aggiorna free_status dal payload se disponibile
+            if (detail?.free_status && profile) {
+              setProfile({ ...profile, free_status: detail.free_status });
+            }
+            setFreeLimitOverlay({
+              visible: true,
+              greeting: detail?.greeting || "Per questo periodo ci fermiamo qui.",
+              countdown: detail?.countdown_it || "tra poco",
+              periodEndsAtIso: detail?.free_status?.period_ends_at_iso || null,
+            });
+            setStatus("idle");
+            return;
+          }
+        } catch {}
         if (msg.includes("Parola Segreta")) {
           setError("Parola Segreta non sbloccata. Tocca il lucchetto per riprovare.");
         } else {
@@ -6444,6 +6493,85 @@ export default function Taccuino() {
         >
           <HandsFreeOrb active={handsFree} size={26} />
         </TouchableOpacity>
+
+        {/* === TAB PILL FREE v65.53 (Fabio 2026-06) ============================
+            Solo per utenti Free: pill al centro dell'header con due segmenti
+            "Ollenya" (chat) / "Lascia Andare" (sfogo). Tap "Lascia Andare"
+            → naviga a /lascia-andare. Tap "Ollenya" → resta su Home.
+            Premium NON vede la pill (accesso Lascia Andare tramite bottone
+            dedicato in altri punti dell'app).
+            ============================================================ */}
+        {(() => {
+          const tier = (profile as any)?.subscription_tier;
+          const isPaidHeader = tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
+          if (isPaidHeader) return null;
+          const fs = (profile as any)?.free_status || null;
+          const remaining = fs?.turns_remaining ?? fs?.turns_limit ?? 5;
+          const limit = fs?.turns_limit ?? 5;
+          const cd = fs?.countdown_it || null;
+          return (
+            <View style={{ alignItems: "center", gap: 4 }}>
+              <View style={{
+                flexDirection: "row",
+                alignItems: "center",
+                backgroundColor: (theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)"),
+                borderRadius: 999,
+                padding: 3,
+                gap: 2,
+              }} testID="home-tab-pill">
+                <TouchableOpacity
+                  onPress={() => setHomeTab("ollenya")}
+                  style={{
+                    paddingHorizontal: 12,
+                    paddingVertical: 6,
+                    borderRadius: 999,
+                    backgroundColor: homeTab === "ollenya" ? (theme.isDark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.12)") : "transparent",
+                  }}
+                  testID="tab-ollenya"
+                >
+                  <Text style={{
+                    fontSize: 12,
+                    fontWeight: homeTab === "ollenya" ? "600" : "500",
+                    color: theme.isDark ? "rgba(255,255,255,0.92)" : "rgba(0,0,0,0.85)",
+                  }}>Ollenya</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => {
+                    setHomeTab("lascia_andare");
+                    setTimeout(() => { try { router.push("/lascia-andare"); } catch {} }, 40);
+                  }}
+                  style={{
+                    paddingHorizontal: 12,
+                    paddingVertical: 6,
+                    borderRadius: 999,
+                    backgroundColor: "transparent",
+                  }}
+                  testID="tab-la"
+                >
+                  <Text style={{
+                    fontSize: 12,
+                    fontWeight: "500",
+                    color: theme.isDark ? "rgba(255,255,255,0.65)" : "rgba(0,0,0,0.65)",
+                  }}>Lascia Andare</Text>
+                </TouchableOpacity>
+              </View>
+              {/* Contatore Free: "5 messaggi gratuiti · tornano tra 3 giorni".
+                  Testo esplicito richiesto dalla spec Fabio 2026-06. */}
+              {homeTab === "ollenya" && fs ? (
+                <Text style={{
+                  fontSize: 10.5,
+                  color: theme.isDark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.55)",
+                  textAlign: "center",
+                }} testID="free-counter-badge">
+                  {remaining === limit
+                    ? `${limit} messaggi gratuiti${cd ? ` · si resettano ${cd}` : ""}`
+                    : `${remaining}/${limit} messaggi rimasti${cd ? ` · tornano ${cd}` : ""}`}
+                </Text>
+              ) : null}
+            </View>
+          );
+        })()}
+
         {/* Slot destro: Menu impostazioni. Pulsante audio Modalità Telefono
             rimosso nel rollback 2026-07-13 (regressioni STT). */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
@@ -7562,6 +7690,27 @@ export default function Taccuino() {
       {neonBorderEl}
       {activationPulseEl}
       {tourOverlay}
+
+      {/* === FREE LIMIT OVERLAY v65.53 (Fabio 2026-06) =====================
+          Compare quando /api/converse ritorna 402 free_limit_exhausted.
+          Testo: "Per questo periodo ci fermiamo qui, {nome}. Torno a
+          scriverti {countdown}." Il countdown è LIVE — si aggiorna via
+          useLiveCountdown(periodEndsAtIso).
+          Due CTA: Passa al Premium (naviga a /paywall) / Va bene, aspetto.
+          Blocca l'input finché non lo chiudi.
+          =============================================================== */}
+      <FreeLimitOverlay
+        visible={freeLimitOverlay.visible}
+        greeting={freeLimitOverlay.greeting}
+        countdown={freeLimitOverlay.countdown}
+        periodEndsAtIso={freeLimitOverlay.periodEndsAtIso}
+        onDismiss={() => setFreeLimitOverlay({ visible: false, greeting: "", countdown: "", periodEndsAtIso: null })}
+        onGoPremium={() => {
+          setFreeLimitOverlay({ visible: false, greeting: "", countdown: "", periodEndsAtIso: null });
+          setTimeout(() => { try { router.push("/paywall"); } catch {} }, 40);
+        }}
+      />
+
       {!tourActive && !confessionalMode ? null : null /* Blocco A: ProactiveOffer RIMOSSO */}
       {/* === DISCLAIMER blocking overlay (Fabio 2026-07-28) ==================
           Uso il componente Modal nativo di React Native (non un semplice

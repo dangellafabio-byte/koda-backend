@@ -197,6 +197,31 @@ export default function LasciaAndareScreen() {
   // filtrano su `authorized !== "allowed"` (safety net inerte).
   const [authorized, setAuthorized] = useState<"checking" | "allowed" | "denied">("allowed");
 
+  // === LASCIA ANDARE ONBOARDING v65.53 (Fabio 2026-06) ===================
+  // Overlay first-boot che spiega ESPLICITAMENTE cosa è Lascia Andare
+  // (spazio di sfogo, NO risposta AI). Test esterno ha rivelato che gli
+  // utenti scrivono aspettando risposta → serve chiarire prima. Mostrato
+  // UNA sola volta: flag `la_onboarding_seen_at` in SecureStore.
+  const [showLaOnboarding, setShowLaOnboarding] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const seen = await SecureStore.getItemAsync("la_onboarding_seen_at");
+        if (!seen && !cancelled) setShowLaOnboarding(true);
+      } catch {
+        // silenzioso
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  const dismissLaOnboarding = useCallback(async () => {
+    setShowLaOnboarding(false);
+    try {
+      await SecureStore.setItemAsync("la_onboarding_seen_at", new Date().toISOString());
+    } catch {}
+  }, []);
+
   // === PUNTO 7 — CLEANUP PREEMPTIVO ORFANI AUDIO (Fabio 2026-08-17) ========
   // Vincolo di Fabio: "niente audio deve restare sul telefono dopo che
   // l'utente esce da Lascia Andare". Il cleanup runtime (`stopAndCleanup`)
@@ -1404,7 +1429,7 @@ export default function LasciaAndareScreen() {
           <Text style={styles.errText}>{permError}</Text>
         ) : (
           <Text style={styles.hintText}>
-            {ready ? "Nessuno ti sente. Sparisce nel silenzio." : ""}
+            {ready ? "Sfogo libero · nessuna risposta" : ""}
           </Text>
         )}
       </Animated.View>
@@ -1442,6 +1467,39 @@ export default function LasciaAndareScreen() {
           </TouchableOpacity>
         </Animated.View>
       )}
+
+      {/* === LASCIA ANDARE ONBOARDING OVERLAY v65.53 (Fabio 2026-06) =====
+          Compare SOLO al primo accesso. Chiarisce che LA è uno spazio di
+          sfogo senza risposta. Un test esterno ha rivelato che utenti
+          scrivono aspettandosi risposta AI → indispensabile chiarire.
+          Flag SecureStore `la_onboarding_seen_at` — poi mai più mostrato.
+          =========================================================== */}
+      {showLaOnboarding ? (
+        <View style={[styles.laOnboardingBackdrop, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+          <View style={styles.laOnboardingCard}>
+            <View style={styles.laOnboardingIcon}>
+              <Ionicons name="chatbubble-ellipses-outline" size={26} color="#D4B896" />
+            </View>
+            <Text style={styles.laOnboardingTitle}>Questo è Lascia Andare</Text>
+            <Text style={styles.laOnboardingText}>
+              Puoi scrivere o parlare senza filtri.
+              {"\n\n"}
+              <Text style={{ fontWeight: "600", color: "#F5E6CC" }}>
+                Ollenya non ti risponde qui.
+              </Text>
+              {"\n\n"}
+              Niente viene salvato. È uno spazio solo tuo.
+            </Text>
+            <TouchableOpacity
+              onPress={dismissLaOnboarding}
+              style={styles.laOnboardingBtn}
+              testID="la-onboarding-dismiss"
+            >
+              <Text style={styles.laOnboardingBtnText}>Ho capito</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -1452,6 +1510,62 @@ const styles = StyleSheet.create({
     backgroundColor: "#000000",
     justifyContent: "center",
     alignItems: "center",
+  },
+  // v65.53 (Fabio): overlay onboarding first-boot LA
+  laOnboardingBackdrop: {
+    position: "absolute",
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.90)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+    zIndex: 200,
+  },
+  laOnboardingCard: {
+    width: "100%",
+    maxWidth: 340,
+    borderRadius: 20,
+    backgroundColor: "rgba(31,26,54,0.98)",
+    borderWidth: 1,
+    borderColor: "rgba(212,184,150,0.22)",
+    paddingVertical: 24,
+    paddingHorizontal: 22,
+    alignItems: "center",
+  },
+  laOnboardingIcon: {
+    width: 48, height: 48,
+    borderRadius: 24,
+    backgroundColor: "rgba(212,184,150,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(212,184,150,0.28)",
+    alignItems: "center", justifyContent: "center",
+    marginBottom: 14,
+  },
+  laOnboardingTitle: {
+    color: "#F5E6CC",
+    fontSize: 18,
+    fontWeight: "600",
+    marginBottom: 14,
+    textAlign: "center",
+  },
+  laOnboardingText: {
+    color: "rgba(226,232,240,0.80)",
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: "center",
+    marginBottom: 20,
+  },
+  laOnboardingBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 36,
+    borderRadius: 12,
+    backgroundColor: "#D4B896",
+  },
+  laOnboardingBtnText: {
+    color: "#1F1A36",
+    fontSize: 15,
+    fontWeight: "700",
+    letterSpacing: 0.2,
   },
   exitBtn: {
     position: "absolute",

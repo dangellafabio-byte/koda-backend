@@ -144,6 +144,21 @@ export type Profile = {
     topup_minutes_remaining?: number;
   } | null;
   minutes_used_this_month?: number;
+  // === FREE STATUS v65.53 (Fabio 2026-06) ==============================
+  // Payload computed dal backend, presente solo se l'utente è Free.
+  // Il client lo mostra come badge in Home tab "Ollenya" (chat testuale)
+  // e per gestire il 402 free_limit_exhausted.
+  free_status?: {
+    turns_used: number;
+    turns_limit: number;
+    turns_remaining: number;
+    period_hours: number;
+    period_ends_at_iso: string | null;
+    seconds_until_reset: number;
+    hours_until_reset: number;
+    countdown_it: string | null;
+    gate_enabled: boolean;
+  } | null;
   settings: ProfileSettings;
   memory_summary: string;
   created_at: string;
