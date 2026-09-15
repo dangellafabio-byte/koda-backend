@@ -6077,6 +6077,59 @@ async def api_admin_free_config_update(req: FreeConfigUpdateRequest, admin_token
     )
 
 
+@api_router.post("/admin/flush-alerts")
+async def api_admin_flush_alerts(admin_token: Optional[str] = None, limit: int = 50):
+    """Elabora manualmente la coda `admin_alert_outbox`: invia le email
+    non ancora recapitate tramite Emergent Managed Resend, applicando il
+    rate-limit 6h/utente.
+
+    Auth: `?admin_token=$KODA_ADMIN_TOKEN` oppure session admin.
+    ESEMPIO cURL:
+      curl -X POST "https://<host>/api/admin/flush-alerts?admin_token=$KODA_ADMIN_TOKEN"
+    """
+    expected = os.environ.get("KODA_ADMIN_TOKEN", "").strip()
+    if not (expected and admin_token == expected):
+        _require_admin()
+    try:
+        from admin_email_worker import flush_outbox
+        result = await flush_outbox(db, limit=max(1, min(int(limit or 50), 200)))
+    except Exception as e:
+        logger.warning(f"[admin/flush-alerts] error: {e}")
+        raise HTTPException(status_code=500, detail=f"flush_error: {e}")
+    logger.info(f"[admin/flush-alerts] {result}")
+    return {"ok": True, **result}
+
+
+@api_router.get("/admin/outbox-preview")
+async def api_admin_outbox_preview(admin_token: Optional[str] = None, limit: int = 20):
+    """Snapshot dell'outbox admin per debug. Ritorna le ultime N righe (undelivered first)."""
+    expected = os.environ.get("KODA_ADMIN_TOKEN", "").strip()
+    if not (expected and admin_token == expected):
+        _require_admin()
+    try:
+        n = max(1, min(int(limit or 20), 200))
+        undelivered = await db.admin_alert_outbox.find(
+            {"delivered": {"$ne": True}},
+            {"html": 0, "body": 0},
+        ).sort("sent_at_iso", -1).limit(n).to_list(n)
+        delivered = await db.admin_alert_outbox.find(
+            {"delivered": True},
+            {"html": 0, "body": 0},
+        ).sort("delivered_at_iso", -1).limit(n).to_list(n)
+        for row in undelivered + delivered:
+            row["_id"] = str(row["_id"])
+        return {
+            "ok": True,
+            "undelivered_count": len(undelivered),
+            "delivered_count": len(delivered),
+            "undelivered": undelivered,
+            "delivered": delivered,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"preview_error: {e}")
+
+
+
 @api_router.post("/admin/unlimited/add", response_model=AdminUnlimitedEntry)
 async def api_admin_unlimited_add(req: AdminUnlimitedAddRequest):
     """Aggiunge un'email alla whitelist. Idempotente: se già presente,

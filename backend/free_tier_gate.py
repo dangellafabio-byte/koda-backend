@@ -531,38 +531,26 @@ async def _record_premium_hit(
 async def _send_admin_alert_email(
     db, profile_id: str, day_iso: str, consec: int, turns: int, hardcap: int, avg_30d: float,
 ) -> None:
-    """Invia email admin. Dipendenza soft: se l'invio fallisce (es. Resend
-    non configurato), logga e prosegue senza rompere il flow utente."""
-    to_addr = os.getenv("OLLENYA_ADMIN_ALERT_EMAIL", "hello.koda.support@gmail.com").strip()
-    if not to_addr:
-        return
-    subject = f"[abuse-watch] user {profile_id[:8]} near hardcap"
-    body = (
-        f"Utente Premium: {profile_id}\n"
-        f"Giorno corrente: {day_iso}\n"
-        f"Turni oggi: {turns}/{hardcap}\n"
-        f"Consecutivi ≥ 80%: {consec} giorni\n"
-        f"Media storica turni/giorno ultimi 30gg: {avg_30d:.1f}\n\n"
-        f"Interpretazione:\n"
-        f"  - Se avg_30d ≈ turns oggi → heavy user abituale (uso legittimo).\n"
-        f"  - Se avg_30d << turns oggi → pattern anomalo, possibile bot/abuso.\n"
-    )
-    # Prova via Resend/Emergent integrations se disponibile; altrimenti log-only
+    """Invia email admin via Emergent Managed Resend con rate-limit 6h/utente.
+
+    Dipendenza soft: se l'invio fallisce, logga e prosegue senza rompere il flow.
+    """
     try:
-        # Placeholder: preferisco log strutturato che non bloccante wire
-        logger.warning(
-            f"[ADMIN_ALERT_EMAIL] to={to_addr} subject={subject!r} body_lines={body.count(chr(10))}"
+        from admin_email_worker import enqueue_and_send
+        res = await enqueue_and_send(
+            db,
+            profile_id=profile_id,
+            day_iso=day_iso,
+            consec=consec,
+            turns=turns,
+            hardcap=hardcap,
+            avg_30d=avg_30d,
         )
-        # Registra un record in una collection per audit
-        await db.admin_alert_outbox.insert_one({
-            "to": to_addr,
-            "subject": subject,
-            "body": body,
-            "sent_at_iso": datetime.now(timezone.utc).isoformat(),
-            "delivered": False,  # flag flip once real Resend integration wired
-        })
+        logger.warning(
+            f"[ADMIN_ALERT_EMAIL] queued profile={profile_id[:8]} outbox={res.get('outbox_id')}"
+        )
     except Exception as e:
-        logger.warning(f"[admin_alert] outbox insert failed: {e}")
+        logger.warning(f"[admin_alert] enqueue failed: {e}")
 
 def compute_premium_status(
     profile: Dict[str, Any],
