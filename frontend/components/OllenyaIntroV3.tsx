@@ -112,25 +112,30 @@ type Turn =
 const CONVERSATION_V3: Turn[] = [
   // #0 — apertura silenziosa: UNICO idle di tutto il flusso
   { kind: "silence", ms: 1200, label: "apertura", orbState: "idle" },
-  // #1 — saluto + domanda finale: "Ciao, piacere di conoscerti… io sono Ollenya, e tu?"
-  { kind: "speak", clipKey: "intro_v3_saluto" },
-  // #2 — v65.50 (Fabio): CATTURA il nome preferito dell'utente + gender
-  // (era VAD-only, transcript scartato). Il parser accetta forme naturali:
-  // "Luca" / "sono Marco" / "chiamami Max" / "il mio nome è Anna ma chiamami Ann".
-  // Se l'utente dice "preferisco non dirlo" o simili, name resta null.
+  // #1 — v65.51 (Fabio, bug Koda residuo): saluto ora via TTS runtime,
+  // NON più MP3 pre-recorded. Il vecchio `intro_v3_saluto-cielo.mp3`
+  // conteneva ancora "io sono Koda" — l'utente lo ha segnalato.
+  // Passando a runtime TTS il testo è garantito coerente col brand
+  // corrente e modificabile senza rigenerare audio.
+  {
+    kind: "speak_dynamic",
+    getText: () => "Ciao, piacere di conoscerti… io sono Ollenya, e tu?",
+  },
+  // #2 — v65.50 (Fabio): CATTURA il nome preferito dell'utente + gender.
   { kind: "listen", maxMs: 45000, noTranscript: false },
   // #3 — v65.51 (Fabio, lawyer feedback): CONFERMA vocale del nome estratto.
-  // Solo se pendingNameConfirm è set → Ollenya dice "Posso chiamarti Marco?".
-  // Se null → turno saltato automaticamente.
   {
     kind: "speak_dynamic",
     getText: (ctx) => (ctx.userName ? `Posso chiamarti ${ctx.userName}?` : null),
   },
-  // #4 — v65.51: mini-listen per catturare "sì / no / cambia". Se yes → nome
-  // resta salvato; se no → userName azzerato; se timeout → assume yes.
+  // #4 — v65.51: mini-listen per catturare "sì / no".
   { kind: "listen_confirm", maxMs: 7000 },
-  // #5 — clip di transizione: "Voglio farti conoscere una parte di me."
-  { kind: "speak", clipKey: "intro_v3_parte_di_me" },
+  // #5 — v65.51: clip di transizione anch'essa TTS runtime per coerenza
+  // e per proteggersi da eventuali future incoerenze del file MP3.
+  {
+    kind: "speak_dynamic",
+    getText: () => "Voglio farti conoscere una parte di me.",
+  },
   // #6 — flag intro V3 completata + handoff verso Lascia Andare (salva name)
   { kind: "save_and_handoff" },
 ];
