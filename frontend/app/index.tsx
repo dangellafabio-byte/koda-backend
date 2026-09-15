@@ -520,7 +520,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v65.53-free-tier-complete";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v65.54-premium-hardcap";
   const OLLENYA_BUILD_DATE = "2026-09-06";
   useEffect(() => {
     console.log(
@@ -3302,7 +3302,9 @@ export default function Taccuino() {
           const errStr = String(e || "");
           const isFreeLimitErr =
             errStr.includes("free_limit_exhausted") || errStr.includes('"402"') || errStr.includes("HTTP 402");
-          if (isFreeLimitErr) {
+          const isPremiumHardcapErr =
+            errStr.includes("premium_daily_hardcap") || errStr.includes('"429"') || errStr.includes("HTTP 429");
+          if (isFreeLimitErr || isPremiumHardcapErr) {
             // Prova a fare parse del detail dal messaggio d'errore
             let detail: any = null;
             try {
@@ -3310,18 +3312,36 @@ export default function Taccuino() {
               if (m) detail = JSON.parse(m[0]);
               if (detail && detail.detail) detail = detail.detail;
             } catch {}
-            console.log(`[free_gate] limit exhausted → show overlay`, detail);
+            console.log(`[gate] limit exhausted (${isPremiumHardcapErr ? "premium" : "free"}) → show overlay`, detail);
             setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
-            // Aggiorna free_status dal payload se disponibile
-            if (detail?.free_status && profile) {
-              setProfile({ ...profile, free_status: detail.free_status });
+            if (isPremiumHardcapErr) {
+              // v65.54 — Premium hardcap: overlay minimalista, no CTA Premium
+              // (già Premium!), solo dismiss e countdown al reset locale.
+              const premiumStatus = detail?.premium_status || null;
+              const nameForMsg = ((profile as any)?.name || "").trim();
+              const greeting = nameForMsg
+                ? `Per oggi ci fermiamo qui, ${nameForMsg}.`
+                : "Per oggi ci fermiamo qui.";
+              setFreeLimitOverlay({
+                visible: true,
+                greeting,
+                countdown: premiumStatus?.reset_countdown_it || "tra poco",
+                // Nessun periodEndsAtIso perché è "prossima mezzanotte"
+                // — countdown statico basato sulla stringa restituita.
+                periodEndsAtIso: null,
+              });
+            } else {
+              // Aggiorna free_status dal payload se disponibile
+              if (detail?.free_status && profile) {
+                setProfile({ ...profile, free_status: detail.free_status });
+              }
+              setFreeLimitOverlay({
+                visible: true,
+                greeting: detail?.greeting || "Per questo periodo ci fermiamo qui.",
+                countdown: detail?.countdown_it || "tra poco",
+                periodEndsAtIso: detail?.free_status?.period_ends_at_iso || null,
+              });
             }
-            setFreeLimitOverlay({
-              visible: true,
-              greeting: detail?.greeting || "Per questo periodo ci fermiamo qui.",
-              countdown: detail?.countdown_it || "tra poco",
-              periodEndsAtIso: detail?.free_status?.period_ends_at_iso || null,
-            });
             setStatus("idle");
             return;
           }
@@ -7704,6 +7724,10 @@ export default function Taccuino() {
         greeting={freeLimitOverlay.greeting}
         countdown={freeLimitOverlay.countdown}
         periodEndsAtIso={freeLimitOverlay.periodEndsAtIso}
+        hidePremiumCTA={(() => {
+          const tier = (profile as any)?.subscription_tier;
+          return tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
+        })()}
         onDismiss={() => setFreeLimitOverlay({ visible: false, greeting: "", countdown: "", periodEndsAtIso: null })}
         onGoPremium={() => {
           setFreeLimitOverlay({ visible: false, greeting: "", countdown: "", periodEndsAtIso: null });

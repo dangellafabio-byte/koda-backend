@@ -44,10 +44,16 @@ def _env_bool(key: str, default: bool) -> bool:
 
 def _load_default_config() -> Dict[str, Any]:
     return {
+        # Free tier chat scritta con Ollenya
         "turns_per_period": _env_int("OLLENYA_FREE_TURNS_PER_PERIOD", 5),
         "period_hours": _env_int("OLLENYA_FREE_PERIOD_HOURS", 72),
         "max_response_tokens": _env_int("OLLENYA_FREE_MAX_RESPONSE_TOKENS", 250),
         "gate_enabled": _env_bool("OLLENYA_FREE_GATE_ENABLED", True),
+        # v65.54 — Premium chat scritta hardcap anti-abuso
+        "premium_daily_hardcap": _env_int("OLLENYA_PREMIUM_DAILY_HARDCAP", 200),
+        "premium_hardcap_enabled": _env_bool("OLLENYA_PREMIUM_HARDCAP_ENABLED", True),
+        "premium_alert_threshold_pct": _env_int("OLLENYA_PREMIUM_ALERT_THRESHOLD_PCT", 80),
+        "premium_alert_consecutive_days": _env_int("OLLENYA_PREMIUM_ALERT_CONSECUTIVE_DAYS", 3),
     }
 
 # ============================ MONGO CONFIG =================================
@@ -67,7 +73,11 @@ async def get_free_config(db) -> Dict[str, Any]:
         return fallback
 
     merged = {**fallback}
-    for k in ("turns_per_period", "period_hours", "max_response_tokens", "gate_enabled"):
+    for k in (
+        "turns_per_period", "period_hours", "max_response_tokens", "gate_enabled",
+        "premium_daily_hardcap", "premium_hardcap_enabled",
+        "premium_alert_threshold_pct", "premium_alert_consecutive_days",
+    ):
         if k in doc and doc[k] is not None:
             merged[k] = doc[k]
     return merged
@@ -75,12 +85,18 @@ async def get_free_config(db) -> Dict[str, Any]:
 async def set_free_config(db, patch: Dict[str, Any]) -> Dict[str, Any]:
     """Aggiorna config runtime. Solo i campi ammessi vengono scritti.
     Ritorna la config effettiva dopo l'update."""
-    allowed = {"turns_per_period", "period_hours", "max_response_tokens", "gate_enabled"}
+    allowed = {
+        "turns_per_period", "period_hours", "max_response_tokens", "gate_enabled",
+        # v65.54 Premium
+        "premium_daily_hardcap", "premium_hardcap_enabled",
+        "premium_alert_threshold_pct", "premium_alert_consecutive_days",
+    }
+    bool_fields = {"gate_enabled", "premium_hardcap_enabled"}
     clean: Dict[str, Any] = {}
     for k, v in patch.items():
         if k not in allowed:
             continue
-        if k == "gate_enabled":
+        if k in bool_fields:
             clean[k] = bool(v)
         else:
             try:
@@ -303,3 +319,269 @@ def format_countdown_it(seconds_remaining: int) -> str:
         f"tra {days} giorn{'o' if days == 1 else 'i'} e "
         f"{rem_hours} or{'a' if rem_hours == 1 else 'e'}"
     )
+
+# ============================ PREMIUM DAILY HARDCAP v65.54 ==============
+# Anti-abuso chat scritta Premium. 200 turni/giorno di default.
+# Reset a mezzanotte:
+#   - Utenti CON "Condividi la mia città" attivo → mezzanotte fuso locale
+#   - Altrimenti → mezzanotte Europe/Rome (default IT)
+#
+# Timezone "fossilizzato" per il periodo in corso: se l'utente toggle il
+# permesso a metà giornata, il day_iso già impostato resta valido fino
+# alla mezzanotte di quel fuso. Il fuso nuovo vale dal prossimo reset.
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except ImportError:  # pragma: no cover
+    ZoneInfo = None  # type: ignore
+
+def _tz_from_profile(profile: Dict[str, Any]) -> "ZoneInfo":
+    """Ritorna il ZoneInfo effettivo per l'utente. Fallback: Europe/Rome.
+    Legge `settings.geolocation_enabled` + `location_context.timezone` (se
+    salvato via /profile/location-context). Se permesso disattivato o dati
+    mancanti → Europe/Rome."""
+    fallback = ZoneInfo("Europe/Rome") if ZoneInfo else None
+    if not profile:
+        return fallback
+    settings = profile.get("settings") or {}
+    geo_enabled = bool(settings.get("geolocation_enabled", False))
+    if not geo_enabled:
+        return fallback
+    lc = profile.get("location_context") or {}
+    tz_name = (lc.get("timezone") or "").strip() if isinstance(lc, dict) else ""
+    if not tz_name or not ZoneInfo:
+        return fallback
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        return fallback
+
+def _local_day_iso(profile: Dict[str, Any]) -> Tuple[str, str]:
+    """Ritorna (day_iso, tz_name) del giorno locale corrente per l'utente."""
+    tz = _tz_from_profile(profile)
+    tz_name = getattr(tz, "key", "Europe/Rome") if tz else "Europe/Rome"
+    now_local = datetime.now(tz) if tz else datetime.now(timezone.utc)
+    return now_local.strftime("%Y-%m-%d"), tz_name
+
+def _seconds_until_next_midnight(profile: Dict[str, Any]) -> int:
+    """Secondi da ora al prossimo reset (mezzanotte locale utente)."""
+    tz = _tz_from_profile(profile)
+    if not tz:
+        now = datetime.now(timezone.utc)
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return int((tomorrow - now).total_seconds())
+    now_local = datetime.now(tz)
+    tomorrow_local = (now_local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return int((tomorrow_local - now_local).total_seconds())
+
+async def check_and_increment_premium_turn(
+    db,
+    profile_id: str,
+    config: Dict[str, Any],
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """Gate Premium giornaliero. Ritorna (ok, reason, state_snapshot).
+    reason ∈ {'ok', 'premium_daily_hardcap', 'gate_disabled', 'error'}."""
+    if not config.get("premium_hardcap_enabled", True):
+        return True, "gate_disabled", {}
+    hardcap = int(config["premium_daily_hardcap"])
+    try:
+        prof = await db.taccuino_profile.find_one(
+            {"id": profile_id},
+            {"premium_chat_daily_state": 1, "settings": 1, "location_context": 1, "name": 1},
+        )
+    except Exception as e:
+        logger.error(f"[premium_gate] read failed: {e}")
+        return False, "error", {}
+    if not prof:
+        return False, "error", {}
+    today_iso, tz_name = _local_day_iso(prof)
+    state = prof.get("premium_chat_daily_state") or None
+    # === Reset o primo turno del giorno ===
+    if not state or state.get("day_iso") != today_iso:
+        new_state = {
+            "day_iso": today_iso,
+            "turns_today": 1,
+            "tz_used": tz_name,
+        }
+        try:
+            await db.taccuino_profile.update_one(
+                {"id": profile_id},
+                {"$set": {"premium_chat_daily_state": new_state}},
+            )
+        except Exception as e:
+            logger.error(f"[premium_gate] reset update failed: {e}")
+            return False, "error", {}
+        logger.info(f"[premium_gate] RESET+consume user={profile_id[:8]} day={today_iso} tz={tz_name} turns=1/{hardcap}")
+        return True, "ok", new_state
+    # === Increment guardato ===
+    current = int(state.get("turns_today", 0))
+    if current >= hardcap:
+        logger.info(f"[premium_gate] HARDCAP user={profile_id[:8]} used={current}/{hardcap}")
+        # Registra hit per l'alert (senza bloccare)
+        try:
+            await _record_premium_hit(db, profile_id, today_iso, current, hardcap, config)
+        except Exception as _e:
+            logger.warning(f"[premium_gate] alert record failed: {_e}")
+        return False, "premium_daily_hardcap", state
+    try:
+        from pymongo import ReturnDocument
+        updated = await db.taccuino_profile.find_one_and_update(
+            {
+                "id": profile_id,
+                "premium_chat_daily_state.day_iso": today_iso,
+                "premium_chat_daily_state.turns_today": {"$lt": hardcap},
+            },
+            {"$inc": {"premium_chat_daily_state.turns_today": 1}},
+            projection={"premium_chat_daily_state": 1},
+            return_document=ReturnDocument.AFTER,
+        )
+    except Exception as e:
+        logger.error(f"[premium_gate] inc failed: {e}")
+        return False, "error", state
+    if not updated:
+        logger.info(f"[premium_gate] race lost user={profile_id[:8]}")
+        return False, "premium_daily_hardcap", state
+    new_state = updated.get("premium_chat_daily_state") or state
+    new_used = int(new_state.get("turns_today", current + 1))
+    # Traccia hits per alert se ≥ threshold%
+    threshold_pct = int(config.get("premium_alert_threshold_pct", 80))
+    if (new_used / hardcap) * 100 >= threshold_pct:
+        try:
+            await _record_premium_hit(db, profile_id, today_iso, new_used, hardcap, config)
+        except Exception as _e:
+            logger.warning(f"[premium_gate] alert record: {_e}")
+    logger.info(f"[premium_gate] CONSUME user={profile_id[:8]} turns={new_used}/{hardcap}")
+    return True, "ok", new_state
+
+async def rollback_premium_turn(db, profile_id: str) -> None:
+    try:
+        await db.taccuino_profile.update_one(
+            {"id": profile_id, "premium_chat_daily_state.turns_today": {"$gt": 0}},
+            {"$inc": {"premium_chat_daily_state.turns_today": -1}},
+        )
+    except Exception as e:
+        logger.warning(f"[premium_gate] rollback failed: {e}")
+
+async def _record_premium_hit(
+    db, profile_id: str, day_iso: str, turns: int, hardcap: int, config: Dict[str, Any],
+) -> None:
+    """Registra un hit ≥ threshold% per il tracking anti-abuso. Se 3 giorni
+    consecutivi al ≥ threshold%, triggera l'email admin."""
+    threshold_pct = int(config.get("premium_alert_threshold_pct", 80))
+    consec_needed = int(config.get("premium_alert_consecutive_days", 3))
+    # Upsert entry giorno corrente
+    await db.premium_hardcap_hits.update_one(
+        {"profile_id": profile_id, "day_iso": day_iso},
+        {
+            "$set": {
+                "profile_id": profile_id,
+                "day_iso": day_iso,
+                "turns": turns,
+                "hardcap": hardcap,
+                "threshold_pct_at_hit": threshold_pct,
+                "last_hit_at_iso": datetime.now(timezone.utc).isoformat(),
+            },
+            "$setOnInsert": {"first_hit_at_iso": datetime.now(timezone.utc).isoformat()},
+        },
+        upsert=True,
+    )
+    # Check consecutivi
+    today = datetime.strptime(day_iso, "%Y-%m-%d").date()
+    days_to_check = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(consec_needed)]
+    hits = await db.premium_hardcap_hits.count_documents(
+        {"profile_id": profile_id, "day_iso": {"$in": days_to_check}}
+    )
+    if hits < consec_needed:
+        return
+    # Evita spam: solo 1 alert per settimana per utente
+    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    already = await db.premium_hardcap_alerts.find_one(
+        {"profile_id": profile_id, "sent_at_iso": {"$gt": week_ago}}
+    )
+    if already:
+        return
+    # Media storica 30gg
+    since_iso = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+    pipeline = [
+        {"$match": {"profile_id": profile_id, "day_iso": {"$gte": since_iso}}},
+        {"$group": {"_id": None, "sum_turns": {"$sum": "$turns"}, "days": {"$sum": 1}}},
+    ]
+    avg = 0.0
+    try:
+        agg = await db.premium_hardcap_hits.aggregate(pipeline).to_list(1)
+        if agg:
+            avg = agg[0]["sum_turns"] / max(1, agg[0]["days"])
+    except Exception:
+        pass
+    # Registra alert
+    await db.premium_hardcap_alerts.insert_one({
+        "profile_id": profile_id,
+        "day_iso": day_iso,
+        "consecutive_days": hits,
+        "hardcap": hardcap,
+        "turns_today": turns,
+        "avg_last_30d": round(avg, 1),
+        "sent_at_iso": datetime.now(timezone.utc).isoformat(),
+    })
+    # Trigger email (best-effort, non blocca)
+    try:
+        await _send_admin_alert_email(db, profile_id, day_iso, hits, turns, hardcap, avg)
+    except Exception as e:
+        logger.warning(f"[premium_gate] email alert failed: {e}")
+
+async def _send_admin_alert_email(
+    db, profile_id: str, day_iso: str, consec: int, turns: int, hardcap: int, avg_30d: float,
+) -> None:
+    """Invia email admin. Dipendenza soft: se l'invio fallisce (es. Resend
+    non configurato), logga e prosegue senza rompere il flow utente."""
+    to_addr = os.getenv("OLLENYA_ADMIN_ALERT_EMAIL", "hello.koda.support@gmail.com").strip()
+    if not to_addr:
+        return
+    subject = f"[abuse-watch] user {profile_id[:8]} near hardcap"
+    body = (
+        f"Utente Premium: {profile_id}\n"
+        f"Giorno corrente: {day_iso}\n"
+        f"Turni oggi: {turns}/{hardcap}\n"
+        f"Consecutivi ≥ 80%: {consec} giorni\n"
+        f"Media storica turni/giorno ultimi 30gg: {avg_30d:.1f}\n\n"
+        f"Interpretazione:\n"
+        f"  - Se avg_30d ≈ turns oggi → heavy user abituale (uso legittimo).\n"
+        f"  - Se avg_30d << turns oggi → pattern anomalo, possibile bot/abuso.\n"
+    )
+    # Prova via Resend/Emergent integrations se disponibile; altrimenti log-only
+    try:
+        # Placeholder: preferisco log strutturato che non bloccante wire
+        logger.warning(
+            f"[ADMIN_ALERT_EMAIL] to={to_addr} subject={subject!r} body_lines={body.count(chr(10))}"
+        )
+        # Registra un record in una collection per audit
+        await db.admin_alert_outbox.insert_one({
+            "to": to_addr,
+            "subject": subject,
+            "body": body,
+            "sent_at_iso": datetime.now(timezone.utc).isoformat(),
+            "delivered": False,  # flag flip once real Resend integration wired
+        })
+    except Exception as e:
+        logger.warning(f"[admin_alert] outbox insert failed: {e}")
+
+def compute_premium_status(
+    profile: Dict[str, Any],
+    config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Payload live per il client Premium. Sicuro."""
+    hardcap = int(config.get("premium_daily_hardcap", 200))
+    state = profile.get("premium_chat_daily_state") if profile else None
+    today_iso, tz_name = _local_day_iso(profile or {})
+    turns_today = 0
+    if state and state.get("day_iso") == today_iso:
+        turns_today = int(state.get("turns_today", 0))
+    seconds_until_reset = _seconds_until_next_midnight(profile or {})
+    return {
+        "turns_today": turns_today,
+        "daily_hardcap": hardcap,
+        "turns_remaining": max(0, hardcap - turns_today),
+        "tz_used": tz_name,
+        "seconds_until_reset": seconds_until_reset,
+        "reset_countdown_it": format_countdown_it(seconds_until_reset),
+        "hardcap_enabled": bool(config.get("premium_hardcap_enabled", True)),
+    }

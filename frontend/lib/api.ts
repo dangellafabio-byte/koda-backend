@@ -159,6 +159,16 @@ export type Profile = {
     countdown_it: string | null;
     gate_enabled: boolean;
   } | null;
+  // v65.54 (Fabio) — Premium hardcap daily state per client
+  premium_status?: {
+    turns_today: number;
+    daily_hardcap: number;
+    turns_remaining: number;
+    tz_used: string;
+    seconds_until_reset: number;
+    reset_countdown_it: string;
+    hardcap_enabled: boolean;
+  } | null;
   settings: ProfileSettings;
   memory_summary: string;
   created_at: string;

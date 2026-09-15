@@ -2087,11 +2087,16 @@ class Profile(BaseModel):
     # None → mai iniziato. Reset atomico quando now >= period_start + period_hours.
     # NON viene mai modificato dal client — solo dal gate server-side in /converse.
     free_chat_state: Optional[Dict[str, Any]] = None
+    # === PREMIUM DAILY HARDCAP STATE v65.54 (Fabio 2026-06) ===============
+    # Contatore giornaliero chat scritta Premium. Schema:
+    #   { "day_iso": "2026-06-13", "turns_today": 47, "tz_used": "Europe/Rome" }
+    # `tz_used` è fossilizzato: cambi di permesso geo a metà giornata non
+    # ricalcolano retroattivamente il day_iso in corso.
+    premium_chat_daily_state: Optional[Dict[str, Any]] = None
     # === FREE STATUS (computed, non persistito) v65.53 ====================
-    # Payload live per il client: turns_used, turns_remaining, countdown_it.
-    # Popolato SOLO nel `/api/profile` response, MAI scritto su Mongo.
-    # Default None → il client non lo mostra (utente paid o gate disabled).
     free_status: Optional[Dict[str, Any]] = None
+    # === PREMIUM STATUS (computed, non persistito) v65.54 =================
+    premium_status: Optional[Dict[str, Any]] = None
     settings: TaccuinoSettings = Field(default_factory=TaccuinoSettings)
     # Personalizzazioni stilistiche (palette colori blob, avatar, ecc.)
     # Salvato come dict aperto per consentire estensioni future senza migrazioni.
@@ -3647,6 +3652,10 @@ async def api_get_profile(request: Request):
             _fcfg = await _free_gate.get_free_config(db)
             _state_pf = getattr(p, "free_chat_state", None)
             p.free_status = _free_gate.compute_free_status(_state_pf, _fcfg)
+        else:
+            # v65.54 — Premium user → popoliamo premium_status per il client
+            _fcfg = await _free_gate.get_free_config(db)
+            p.premium_status = _free_gate.compute_premium_status(p.dict(), _fcfg)
     except Exception as _fe:
         logger.warning(f"[profile/free-status] failed: {_fe}")
 
@@ -5984,6 +5993,11 @@ class FreeConfigResponse(BaseModel):
     period_hours: int
     max_response_tokens: int
     gate_enabled: bool
+    # v65.54 — Premium hardcap
+    premium_daily_hardcap: int
+    premium_hardcap_enabled: bool
+    premium_alert_threshold_pct: int
+    premium_alert_consecutive_days: int
     source: str  # "mongo" | "env_fallback"
     updated_at_iso: Optional[str] = None
 
@@ -5992,6 +6006,11 @@ class FreeConfigUpdateRequest(BaseModel):
     period_hours: Optional[int] = None
     max_response_tokens: Optional[int] = None
     gate_enabled: Optional[bool] = None
+    # v65.54 — Premium hardcap
+    premium_daily_hardcap: Optional[int] = None
+    premium_hardcap_enabled: Optional[bool] = None
+    premium_alert_threshold_pct: Optional[int] = None
+    premium_alert_consecutive_days: Optional[int] = None
 
 
 @api_router.get("/admin/free-config", response_model=FreeConfigResponse)
@@ -6013,6 +6032,10 @@ async def api_admin_free_config_get(admin_token: Optional[str] = None):
         period_hours=int(cfg["period_hours"]),
         max_response_tokens=int(cfg["max_response_tokens"]),
         gate_enabled=bool(cfg["gate_enabled"]),
+        premium_daily_hardcap=int(cfg.get("premium_daily_hardcap", 200)),
+        premium_hardcap_enabled=bool(cfg.get("premium_hardcap_enabled", True)),
+        premium_alert_threshold_pct=int(cfg.get("premium_alert_threshold_pct", 80)),
+        premium_alert_consecutive_days=int(cfg.get("premium_alert_consecutive_days", 3)),
         source="mongo" if doc else "env_fallback",
         updated_at_iso=(doc or {}).get("updated_at_iso"),
     )
@@ -6045,6 +6068,10 @@ async def api_admin_free_config_update(req: FreeConfigUpdateRequest, admin_token
         period_hours=int(updated["period_hours"]),
         max_response_tokens=int(updated["max_response_tokens"]),
         gate_enabled=bool(updated["gate_enabled"]),
+        premium_daily_hardcap=int(updated.get("premium_daily_hardcap", 200)),
+        premium_hardcap_enabled=bool(updated.get("premium_hardcap_enabled", True)),
+        premium_alert_threshold_pct=int(updated.get("premium_alert_threshold_pct", 80)),
+        premium_alert_consecutive_days=int(updated.get("premium_alert_consecutive_days", 3)),
         source="mongo" if doc else "env_fallback",
         updated_at_iso=(doc or {}).get("updated_at_iso"),
     )
@@ -8218,6 +8245,47 @@ async def api_converse(req: ConverseRequest):
                 # Fail-open: se il gate ha problemi Mongo, non blocchiamo l'utente
                 logger.warning(f"[free_gate] error state, allowing user={profile.id[:8]}")
 
+    # === PREMIUM DAILY HARDCAP v65.54 (Fabio 2026-06) =====================
+    # Anti-abuso chat scritta Premium: 200 turni/giorno max.
+    # Reset a mezzanotte fuso locale (o Europe/Rome se geolocation
+    # disattivata). Applicabile a TUTTI i tier paid (monthly, bimonthly,
+    # annual, unlimited). Bypassa: ephemeral, is_voice_turn.
+    _premium_gate_consumed = False
+    if (
+        not req.ephemeral
+        and not req.is_voice_turn
+        and getattr(profile, "id", None)
+    ):
+        _tier_pr = getattr(profile, "subscription_tier", None)
+        _is_paid_pr = _tier_pr in ("monthly", "bimonthly", "annual", "unlimited")
+        if _is_paid_pr:
+            _pcfg = await _free_gate.get_free_config(db)
+            _pok, _preason, _pstate = await _free_gate.check_and_increment_premium_turn(
+                db, profile.id, _pcfg,
+            )
+            if _preason == "premium_daily_hardcap":
+                _name_pr = (getattr(profile, "name", None) or "").strip()
+                _greet_pr = (
+                    f"Per oggi ci fermiamo qui{', ' + _name_pr if _name_pr else ''}. "
+                    f"Ci vediamo domani — nessuna fretta."
+                )
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "error": "premium_daily_hardcap",
+                        "message": _greet_pr,
+                        "premium_status": _free_gate.compute_premium_status(
+                            await db.taccuino_profile.find_one({"id": profile.id}) or {},
+                            _pcfg,
+                        ),
+                    },
+                )
+            if _pok and _preason == "ok":
+                _premium_gate_consumed = True
+                logger.info(f"[premium_gate] turn consumed user={profile.id[:8]}")
+            elif _preason == "error":
+                logger.warning(f"[premium_gate] error, allowing user={profile.id[:8]}")
+
     if not profile.settings.ai_enabled:
         # AI disabled — store user message only with a stub AI reply
         user_entry = TimelineEntry(role="user", text=text, audio_duration_ms=req.audio_duration_ms)
@@ -8377,6 +8445,12 @@ async def api_converse(req: ConverseRequest):
                 await _free_gate.rollback_free_turn(db, profile.id)
             except Exception as _rbe:
                 logger.warning(f"[free_gate] rollback exception: {_rbe}")
+        # === PREMIUM GATE ROLLBACK v65.54 ================================
+        if _premium_gate_consumed and getattr(profile, "id", None):
+            try:
+                await _free_gate.rollback_premium_turn(db, profile.id)
+            except Exception as _rbe:
+                logger.warning(f"[premium_gate] rollback exception: {_rbe}")
         raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")
 
     data = extract_json(raw or "") or {}

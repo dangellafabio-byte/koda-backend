@@ -31,6 +31,10 @@ type Props = {
   periodEndsAtIso: string | null;
   onDismiss: () => void;
   onGoPremium: () => void;
+  // v65.54 (Fabio): nasconde CTA "Passa al Premium" quando l'utente è già
+  // Premium ma ha toccato l'hardcap giornaliero. In quel caso l'overlay è
+  // solo un "ci vediamo domani" — non ha senso proporre un upgrade.
+  hidePremiumCTA?: boolean;
 };
 
 export default function FreeLimitOverlay({
@@ -40,6 +44,7 @@ export default function FreeLimitOverlay({
   periodEndsAtIso,
   onDismiss,
   onGoPremium,
+  hidePremiumCTA = false,
 }: Props) {
   const insets = useSafeAreaInsets();
   const liveCountdown = useLiveCountdown(periodEndsAtIso);
@@ -71,16 +76,21 @@ export default function FreeLimitOverlay({
           <Text style={styles.countdown}>Torno a scriverti {displayCountdown}.</Text>
 
           <Text style={styles.bodyText}>
-            Se vuoi continuare subito, c&apos;è il Premium — sennò ti aspetto qui,
-            senza fretta.
+            {hidePremiumCTA
+              ? "Non c'è fretta — ti aspetto qui."
+              : "Se vuoi continuare subito, c'è il Premium — sennò ti aspetto qui, senza fretta."}
           </Text>
 
-          <TouchableOpacity onPress={onGoPremium} style={styles.primaryBtn} testID="free-overlay-premium">
-            <Text style={styles.primaryText}>Passa al Premium</Text>
-          </TouchableOpacity>
+          {!hidePremiumCTA ? (
+            <TouchableOpacity onPress={onGoPremium} style={styles.primaryBtn} testID="free-overlay-premium">
+              <Text style={styles.primaryText}>Passa al Premium</Text>
+            </TouchableOpacity>
+          ) : null}
 
-          <TouchableOpacity onPress={onDismiss} style={styles.secondaryBtn} testID="free-overlay-dismiss">
-            <Text style={styles.secondaryText}>Va bene, aspetto</Text>
+          <TouchableOpacity onPress={onDismiss} style={hidePremiumCTA ? styles.primaryBtn : styles.secondaryBtn} testID="free-overlay-dismiss">
+            <Text style={hidePremiumCTA ? styles.primaryText : styles.secondaryText}>
+              {hidePremiumCTA ? "Va bene" : "Va bene, aspetto"}
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
