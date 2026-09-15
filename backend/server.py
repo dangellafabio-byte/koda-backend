@@ -8758,7 +8758,7 @@ import secrets as _secrets
 _EMERGENT_SESSION_DATA_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
 _APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
 _APPLE_ISS = "https://appleid.apple.com"
-_APPLE_AUD = "com.dangella.koda"
+_APPLE_AUD = "com.dangella.ollenya"
 _SESSION_TTL_DAYS = 7
 _apple_jwks_cache: Dict[str, Any] = {"keys": None, "fetched_at": None}
 
