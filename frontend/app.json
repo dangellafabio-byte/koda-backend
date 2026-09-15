@@ -13,7 +13,7 @@
       "supportsTablet": false,
       "usesAppleSignIn": true,
       "bundleIdentifier": "com.dangella.koda",
-      "buildNumber": "28",
+      "buildNumber": "29",
       "privacyManifests": {
         "NSPrivacyTracking": false,
         "NSPrivacyTrackingDomains": [],
@@ -87,7 +87,7 @@
     },
     "android": {
       "package": "com.dangella.koda",
-      "versionCode": 28,
+      "versionCode": 29,
       "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.RECORD_AUDIO",

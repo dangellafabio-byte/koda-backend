@@ -107,11 +107,14 @@ const CONVERSATION_V3: Turn[] = [
   { kind: "silence", ms: 1200, label: "apertura", orbState: "idle" },
   // #1 — saluto + domanda finale: "Ciao, piacere di conoscerti… io sono Ollenya, e tu?"
   { kind: "speak", clipKey: "intro_v3_saluto" },
-  // #2 — VAD-only: transcript SCARTATO. Non usiamo il contenuto della risposta.
-  { kind: "listen", maxMs: 45000, noTranscript: true },
+  // #2 — v65.50 (Fabio): CATTURA il nome preferito dell'utente + gender
+  // (era VAD-only, transcript scartato). Il parser accetta forme naturali:
+  // "Luca" / "sono Marco" / "chiamami Max" / "il mio nome è Anna ma chiamami Ann".
+  // Se l'utente dice "preferisco non dirlo" o simili, name resta null.
+  { kind: "listen", maxMs: 45000, noTranscript: false },
   // #3 — clip di transizione: "Voglio farti conoscere una parte di me."
   { kind: "speak", clipKey: "intro_v3_parte_di_me" },
-  // #4 — flag intro V3 completata + handoff verso Lascia Andare
+  // #4 — flag intro V3 completata + handoff verso Lascia Andare (salva name)
   { kind: "save_and_handoff" },
 ];
 
@@ -276,19 +279,102 @@ export default function OllenyaIntroV3() {
   );
 
   // ==================== HANDLE NAME CAPTURE ====================
+  // v65.50 (Fabio): estrazione intelligente del nome preferito da frasi
+  // naturali italiane. Non prendiamo più la prima parola (che spesso è
+  // "sono", "il", "chiamami"). Riconosciamo pattern comuni:
+  //   • "chiamami X"                 → X (priorità massima: è la PREFERENZA)
+  //   • "il mio nome è X ma chiamami Y" → Y (l'ultimo "chiamami" vince)
+  //   • "sono X" / "mi chiamo X"      → X
+  //   • "il mio nome è X"             → X
+  //   • "puoi chiamarmi X"            → X
+  //   • "Luca" (parola singola)       → Luca
+  // Opt-out: se rileva "preferisco non", "non voglio", "non importa",
+  // "in nessun modo", il nome resta null (userName rimane null → il
+  // prompt non riceve name, Ollenya userà forme neutre).
   const handleNameCaptured = useCallback(
     (rawText: string) => {
       const text = rawText.trim();
       try {
         console.log(`[${TAG} DIAG] STT rawText="${rawText}" trimmed="${text}" len=${text.length}`);
       } catch {}
-      // Prima parola pulita = nome
-      const firstWord = text.split(/\s+/)[0].replace(/[.,!?;:"']/g, "");
-      if (firstWord && firstWord.length >= 2) {
-        const capitalized = firstWord.charAt(0).toUpperCase() + firstWord.slice(1).toLowerCase();
-        console.log(`[${TAG}] captured name: "${capitalized}" (raw: "${text}")`);
+
+      // === STEP 1: opt-out esplicito ===
+      const lower = text.toLowerCase();
+      const optOutPhrases = [
+        "preferisco non",
+        "non voglio dirlo",
+        "non voglio essere chiamat",
+        "non importa",
+        "in nessun modo",
+        "nessun nome",
+        "non ti dico",
+        "prefer no",
+      ];
+      if (optOutPhrases.some((p) => lower.includes(p))) {
+        console.log(`[${TAG}] name capture: OPT-OUT detected → name stays null`);
+        advance();
+        return;
+      }
+
+      // === STEP 2: parser pattern-based con priorità sul "chiamami" ===
+      // Regex catch nome dopo pattern. Match l'ultima occorrenza per gestire
+      // "il mio nome è Marco ma chiamami Max" → prende Max.
+      // Nome accettato: 2-30 char alfabetici (accenti inclusi) + possibile apostrofo.
+      const NAME_RE = /([A-Za-zÀ-ÖØ-öø-ÿ'']{2,30})/;
+      let extracted: string | null = null;
+      let matchSource = "";
+
+      const patterns: Array<[RegExp, string]> = [
+        // PRIORITÀ MASSIMA: "chiamami/puoi chiamarmi/potresti chiamarmi X"
+        // (la preferenza esplicita batte tutto, anche il nome anagrafico)
+        [/(?:chiamami|puoi chiamarmi|potresti chiamarmi|chiamatemi|puoi darmi del)\s+(?:pure\s+|semplicemente\s+)?([A-Za-zÀ-ÖØ-öø-ÿ'']{2,30})/gi, "chiamami"],
+        // "il mio nome è X" / "il mio nome e X"
+        [/(?:il\s+mio\s+nome\s+(?:è|e'?)\s+)([A-Za-zÀ-ÖØ-öø-ÿ'']{2,30})/gi, "il mio nome è"],
+        // "mi chiamo X"
+        [/(?:mi\s+chiamo\s+)([A-Za-zÀ-ÖØ-öø-ÿ'']{2,30})/gi, "mi chiamo"],
+        // "sono X" — solo se X non è un pronome/parola comune
+        [/(?:^|\s)(?:sono|io\s+sono)\s+([A-Za-zÀ-ÖØ-öø-ÿ'']{2,30})/gi, "sono"],
+      ];
+
+      // Try patterns in priority order. Per ognuno, prendi l'ULTIMO match
+      // (matchAll) così "sono Marco ma chiamami Max" → chiamami vince perché
+      // itera prima il pattern chiamami.
+      for (const [re, src] of patterns) {
+        const matches = Array.from(text.matchAll(re));
+        if (matches.length > 0) {
+          const lastMatch = matches[matches.length - 1];
+          const candidate = lastMatch[1]?.trim();
+          if (candidate && candidate.length >= 2) {
+            // Filtro parole comuni che NON sono nomi
+            const stopwords = new Set(["il", "un", "una", "che", "chi", "cosa", "come", "pure", "poi", "qui", "qua", "solo", "molto", "troppo", "tanto", "tutto", "solo", "amico", "amica"]);
+            if (!stopwords.has(candidate.toLowerCase())) {
+              extracted = candidate;
+              matchSource = src;
+              break;
+            }
+          }
+        }
+      }
+
+      // === STEP 3: fallback "parola singola" ===
+      // Se il pattern-parser non ha trovato niente, e l'utente ha detto
+      // UNA sola parola alfabetica pulita (es. "Luca"), usala.
+      if (!extracted) {
+        const cleaned = text.replace(/[.,!?;:"']/g, "").trim();
+        const words = cleaned.split(/\s+/).filter((w) => w.length >= 2);
+        if (words.length === 1 && NAME_RE.test(words[0])) {
+          extracted = words[0];
+          matchSource = "single-word";
+        }
+      }
+
+      // === STEP 4: normalizza + salva ===
+      if (extracted && extracted.length >= 2) {
+        const capitalized =
+          extracted.charAt(0).toUpperCase() + extracted.slice(1).toLowerCase();
+        console.log(`[${TAG}] name captured: "${capitalized}" (src="${matchSource}", raw="${text}")`);
         setUserName(capitalized);
-        // Gender lookup silenzioso in background
+        // Gender lookup silenzioso in background — non blocca advance
         api.introGenderFromName(capitalized)
           .then((r) => {
             const g = r?.gender;
@@ -298,9 +384,9 @@ export default function OllenyaIntroV3() {
               console.log(`[${TAG}] gender BG lookup: ${g} (conf=${conf.toFixed(2)})`);
             }
           })
-          .catch(() => {}); // silenzioso, non blocca
+          .catch(() => {});
       } else {
-        console.log(`[${TAG}] name capture: no usable word (rawLen=${text.length})`);
+        console.log(`[${TAG}] name capture: no usable name in "${text}" → stays null`);
       }
       advance();
     },
@@ -537,16 +623,28 @@ export default function OllenyaIntroV3() {
   // intro_v3, e naviga a /lascia-andare?firstBoot=1 con fade morbido.
   const doSaveAndHandoff = useCallback(async () => {
     setOrbState("thinking");
-    // === SPEC 2026-08-21 (Fabio) — NO USER-RESPONSE PERSISTENCE ===
-    // La nuova sequenza intro V3 NON acquisisce alcuna informazione
-    // dall'utente. Il turn "listen" era solo un VAD proxy: il transcript
-    // è stato scartato. Qui manteniamo SOLO:
-    //   - onboarded=true (segna che l'utente è passato dall'intro)
-    //   - flag SecureStore.intro_v3_completed_at (router condizionale)
-    // Rimosso: name, koda_voice, ai_gender, user_gender, user_display_name.
+    // === v65.50 (Fabio) — NAME PERSISTENCE RE-ENABLED =========================
+    // La V3 ora cattura il nome preferito dell'utente (turn #2 con transcript
+    // abilitato + parser pattern-based in `handleNameCaptured`). Se estratto,
+    // lo persistiamo sul backend (`p.name`) → viene poi iniettato nel prompt
+    // Claude via `_build_system_prompt` (server.py L2614). Se il parser ha
+    // trovato anche il gender con confidence≥0.7 lo salviamo pure (aggiusta
+    // le declinazioni al maschile/femminile nel prompt italiano).
+    // Se il nome è null (opt-out o parser fallito), NON inviamo `name` →
+    // Claude userà forme neutre agnostiche.
     try {
-      await api.updateProfile({ onboarded: true });
-      console.log(`[${TAG}] profile marked onboarded (no name/gender capture — VAD-only intro)`);
+      const user_gender = userGenderRef.current;
+      const patch: any = { onboarded: true };
+      if (userName && userName.trim().length >= 2) {
+        patch.name = userName.trim();
+      }
+      if (user_gender === "m" || user_gender === "f") {
+        patch.user_gender = user_gender;
+      }
+      await api.updateProfile(patch);
+      console.log(
+        `[${TAG}] profile saved: name=${userName ?? "(null)"} user_gender=${user_gender ?? "(null)"} onboarded=true`,
+      );
     } catch (e) {
       console.warn(`[${TAG}] profile save failed (procedo comunque):`, e);
     }
@@ -572,7 +670,7 @@ export default function OllenyaIntroV3() {
         console.warn(`[${TAG}] router.replace failed:`, e);
       }
     });
-  }, [router, screenOpacity]);
+  }, [router, screenOpacity, userName]);
 
   // ==================== TURN EXECUTOR ====================
   useEffect(() => {

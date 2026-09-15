@@ -518,7 +518,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v65.49-compact-fluid";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v65.50-settings-refactor";
   const OLLENYA_BUILD_DATE = "2026-09-06";
   useEffect(() => {
     console.log(
@@ -5440,22 +5440,22 @@ export default function Taccuino() {
   // Dati per il nuovo Settings modal in stile Apple Wallet (verticale).
   // Ogni card è una sezione autonoma con controlli inline.
   const settingsCards = useMemo<SettingsCard[]>(() => [
-    // Card 1: Piano attivo (subscription status con barra minuti)
+    // Card 1: Il mio piano (subscription status con barra minuti)
     {
       key: "plan",
       icon: "💎",
-      title: "Piano attivo",
-      description: "Minuti disponibili, rinnovo e carryover.",
+      title: "Il mio piano",
+      description: "Piano attivo, minuti disponibili e rinnovo.",
       count: 1,
       body: <SubscriptionStatus profile={profile as any} />,
     },
-    // Card 2: Comportamento
+    // Card 2: Comportamento (SOLO Ricerca web — Situation Tracking spostato in Memoria v65.50)
     {
       key: "behavior",
       icon: "💬",
       title: "Comportamento",
-      description: "Decidi cosa può fare Ollenya e come gestisce le informazioni.",
-      count: 3,
+      description: "Come Ollenya si comporta durante le conversazioni.",
+      count: 1,
       body: (
         <>
             {/* === RICERCA WEB (Tavily) — toggle privacy ====================
@@ -5491,149 +5491,34 @@ export default function Taccuino() {
                 />
               </View>
             </View>
-
-            {/* === SITUATION TRACKING V3.1 (agosto 2026, Fabio) =============
-                Opt-in ESPLICITO, default OFF. Copy scelto dall'utente:
-                deve essere fattuale, senza dark pattern, senza pressione
-                a lasciarlo attivo. Niente "profila la tua persona": SOLO
-                "ricorda le cose che tu le racconti, quando torni a
-                parlarne tu". Il viewer per vedere/cancellare cosa Ollenya
-                ricorda verrà aggiunto in un secondo momento — per ora,
-                se l'utente vuole ripulire tutto, c'è comunque il reset
-                completo nella sezione admin. */}
-            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8, marginTop: 14 }]}>
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.settingLabel}>🧭 Cosa Ollenya ricorda</Text>
-                  <Text style={styles.settingHint}>
-                    Se lo attivi, Ollenya può ricordare le cose che le hai
-                    raccontato — persone, argomenti, situazioni. Le ricorda
-                    quando torni a parlarne tu. Se lo lasci spento, Ollenya
-                    non conserva questo tipo di contesto.
-                  </Text>
-                </View>
-                <Switch
-                  value={(profile?.settings as any)?.situation_tracking_enabled === true}
-                  onValueChange={async (on) => {
-                    if (!profile) return;
-                    const nextSettings = { ...profile.settings, situation_tracking_enabled: on } as any;
-                    setProfile({ ...profile, settings: nextSettings });
-                    try {
-                      await api.updateProfile({ settings: nextSettings });
-                    } catch {}
-                  }}
-                  trackColor={{ false: theme.muted + "55", true: bubbleAccent.color }}
-                  thumbColor="#fff"
-                />
-              </View>
-              {/* === Vedi cosa Ollenya ricorda — link viewer (v65.8 Fabio) =======
-                  Il viewer /situations esisteva già ma non era accessibile
-                  dall'UI. Ora c'è un CTA chiaro sotto il toggle: se attivo
-                  → naviga; se disattivato → messaggio "Attiva prima il
-                  toggle sopra per vedere". */}
-              <TouchableOpacity
-                onPress={() => {
-                  const enabled = (profile?.settings as any)?.situation_tracking_enabled === true;
-                  if (!enabled) {
-                    Alert.alert(
-                      "Memoria disattivata",
-                      "Attiva prima il toggle qui sopra per vedere cosa Ollenya ricorda.",
-                    );
-                    return;
-                  }
-                  setShowSettings(false);
-                  setTimeout(() => { try { router.push("/situations"); } catch {} }, 100);
-                }}
-                style={{
-                  marginTop: 12,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  backgroundColor: "rgba(255,255,255,0.06)",
-                  borderWidth: 1,
-                  borderColor: "rgba(255,255,255,0.14)",
-                  borderRadius: 10,
-                  paddingHorizontal: 14,
-                  paddingVertical: 12,
-                }}
-                testID="see-memory-btn"
-              >
-                <Text style={[styles.settingLabel, { fontSize: 14 }]}>📖 Vedi cosa Ollenya ricorda</Text>
-                <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.divider} />
         </>
       ),
     },
-    // Card 3: Voce di Ollenya
+    // Card 3: Voce (v65.50 Fabio — RIMOSSA barra Confidenza; label M/F al posto dei nomi Cielo/Vento)
     {
       key: "voice",
       icon: "🎙️",
-      title: "Voce di Ollenya",
-      description: "La voce di Ollenya: scegli quella con cui vuoi sentirla parlare.",
+      title: "Voce",
+      description: "Scegli la voce con cui Ollenya ti parla.",
       count: 1,
       body: (
         <>
-
-            {/* === HEADER VOCI: RIMOSSO IL VECCHIO HEADER QUI (2026-06-27 v22) ===
-                Era presente un doppio header "Voce dell'assistente" + hint
-                "Tocca per selezionare. Premi ▶ per ascoltare un'anteprima."
-                seguito dall'indicatore Confidenza e poi da un altro header
-                "🎙️ Scegli la voce di Ollenya" + il nuovo selettore a cerchi.
-                Risultato: l'utente vedeva il vecchio titolo + testo, dava
-                per scontato che la UI fosse quella, e il selettore a cerchi
-                colorati restava fuori schermo. Adesso resta solo il nuovo
-                header sopra i cerchi (a ~50 righe sotto). */}
-
-            {/* === INDICATORE CONFIDENZA (richiesta utente 2026-06, opt B) ===
-                Read-only. Mostra al volo a che fase relazionale è Ollenya.
-                Cresce di +1 ad ogni messaggio fuori dalla Stanza dello Sfogo.
-                0-10 = appena conosciuti, 100 = confidenza totale. */}
-            <View style={styles.confidenceRow} testID="confidence-indicator">
-              <Text style={styles.confidenceLabel}>
-                💞 Confidenza con Ollenya — {profile?.confidence_level ?? 0}/100 ({((): string => {
-                  const lv = profile?.confidence_level ?? 0;
-                  if (lv >= 100) return "totale";
-                  if (lv >= 61) return "amici stretti";
-                  if (lv >= 31) return "amici";
-                  if (lv >= 11) return "prendiamo confidenza";
-                  return "appena conosciuti";
-                })()})
-              </Text>
-              <View style={styles.confidenceBar}>
-                <View
-                  style={[
-                    styles.confidenceFill,
-                    { width: `${Math.min(100, Math.max(0, profile?.confidence_level ?? 0))}%` },
-                  ]}
-                />
-              </View>
-              <Text style={[styles.settingsHint, { fontSize: 13, marginTop: 4, fontStyle: "italic" }]}>
-                Cresce automaticamente man mano che parliamo. I messaggi in Lascia andare non contano.
-              </Text>
-            </View>
+            {/* === V65.50 REFACTOR (Fabio) ==============================
+                RIMOSSO: barra Confidenza (era cosmetica, cresceva sola,
+                l'utente non poteva modificarla — creava solo confusione).
+                Il confidence_level resta calcolato server-side e usato
+                internamente nel prompt (_confidence_phase); semplicemente
+                non è più esposto in UI.
+                RIMOSSI ANCHE: nomi voci ("Cielo", "Vento"). Le due voci
+                ora appaiono soltanto come "Femminile" e "Maschile"
+                (mapping automatico dal campo `gender` del backend
+                CURATED_VOICES). Il sistema tecnico resta predisposto per
+                più voice_id in futuro.
+                ========================================================= */}
             <View style={styles.voicesList}>
-              {/* === FIX TITOLO VOCI (richiesta utente giugno 2026 #5) ===
-                  Il titolo "Voce dell'assistente" era separato dalla lista
-                  dall'indicatore di Confidenza in mezzo → l'utente percepiva
-                  la lista come senza titolo. Aggiungiamo un sotto-titolo
-                  chiaro qui sopra le card delle voci. */}
               <Text style={[styles.settingsSubtitle, { marginTop: 4, marginBottom: 6 }]}>
-                🎙️ Scegli la voce di Ollenya
+                🎙️ Scegli la voce
               </Text>
-              {/* === NUOVO SELETTORE VOCI (2026-06) ===
-                  Niente più nomi né etichette: ogni voce È il suo colore.
-                  Due cerchi colorati grandi, side-by-side. Tap = preview audio
-                  + selezione automatica. Il cerchio selezionato ha un anello
-                  bianco e una checkmark sottile. */}
-              {/* === FIX 2026-06-30 — Lock selettore voce durante stati attivi ===
-                  Se l'utente cambia voce mentre Ollenya sta registrando,
-                  pensando o parlando, la sessione streaming si scontra con
-                  la nuova voce → stato corrotto / freeze. Blocchiamo i
-                  bottoni quando status !== "idle" e mostriamo un hint
-                  chiaro. */}
               {(() => {
                 const voiceLocked = status !== "idle";
                 const lockHint = (() => {
@@ -5650,6 +5535,14 @@ export default function Taccuino() {
                       return "Tocca per ascoltare";
                   }
                 })();
+                // Mappa gender backend → label italiano UI (fallback al nome
+                // originale se il backend non espone il campo gender).
+                const labelForVoice = (v: any): string => {
+                  const g = String(v?.gender || "").toLowerCase();
+                  if (g === "femminile" || g === "female" || g === "f") return "Femminile";
+                  if (g === "maschile" || g === "male" || g === "m") return "Maschile";
+                  return v?.name || "Voce";
+                };
                 return (
                   <>
                     <Text style={styles.voicePickerHint}>{lockHint}</Text>
@@ -5672,7 +5565,7 @@ export default function Taccuino() {
                             disabled={voiceLocked}
                             accessibilityState={{ disabled: voiceLocked }}
                           >
-                            {/* Glow soft attorno al cerchio (più visibile se selezionato) */}
+                            {/* Glow soft attorno al cerchio */}
                             <View
                               style={[
                                 styles.voiceCircleGlow,
@@ -5700,6 +5593,18 @@ export default function Taccuino() {
                                 <Ionicons name="checkmark" size={28} color="#FFFFFF" />
                               ) : null}
                             </View>
+                            {/* Label Femminile/Maschile (v65.50 Fabio) */}
+                            <Text
+                              style={{
+                                color: theme.text + (selected ? "FF" : "AA"),
+                                fontSize: 13,
+                                fontWeight: selected ? "600" : "500",
+                                marginTop: 6,
+                                textAlign: "center",
+                              }}
+                            >
+                              {labelForVoice(v)}
+                            </Text>
                           </TouchableOpacity>
                         );
                       })}
@@ -5708,17 +5613,15 @@ export default function Taccuino() {
                 );
               })()}
             </View>
-
-            <View style={styles.divider} />
         </>
       ),
     },
-    // Card 4: Schermo
+    // Card 4: Aspetto (rinominata da Schermo — v65.50)
     {
       key: "border",
       icon: "📱",
-      title: "Schermo",
-      description: "Adatta il bordo colorato di Ollenya al tuo telefono.",
+      title: "Aspetto",
+      description: "Adatta il bordo colorato al tuo telefono.",
       count: 1,
       body: (
         <>
@@ -5823,12 +5726,12 @@ export default function Taccuino() {
         </>
       ),
     },
-    // Card 5: Dati e Città
+    // Card 5: Privacy e dati (rinominata da Dati e Città — v65.50)
     {
-      key: "location",
-      icon: "📍",
-      title: "Dati e Città",
-      description: "Città per meteo/eventi locali. Scarica i tuoi dati (GDPR).",
+      key: "privacy_data",
+      icon: "🔒",
+      title: "Privacy e dati",
+      description: "Città per meteo/eventi. Scarica i tuoi dati (GDPR).",
       count: 2,
       body: (
         <>
@@ -5924,104 +5827,163 @@ export default function Taccuino() {
         </>
       ),
     },
-    // Card 6: I miei ricordi
+    // Card 6: Memoria (v65.50 Fabio — UNIFICATA: situation tracking + ricordi
+    // semantici + azzera memoria. Admin buttons SPOSTATI in card "test").
     {
       key: "memory",
-      icon: "🤍",
-      title: "I miei ricordi",
-      description: "Cosa Ollenya ricorda di te. Cancella o rivedi quando vuoi.",
-      count: 3,
+      icon: "🧠",
+      title: "Memoria",
+      description: "Cosa Ollenya ricorda di te.",
+      count: 4,
       body: (
         <>
-            {/* === I MIEI RICORDI (Blocco C/D/E, Fabio 2026-08-25) ===
-                UI unificata GDPR-compliant per vedere, esportare (JSON) e
-                cancellare i ricordi che Ollenya ha estratto dagli scambi.
-                Sempre visibile — è un DIRITTO dell'utente, non feature admin. */}
+            {/* === V65.50 REFACTOR — Card unificata Memoria =============
+                Racchiude sotto un unico ombrello i DUE sistemi tecnici
+                distinti (situazioni ricorrenti vs ricordi semantici), con
+                etichette chiare che li distinguono. Anche l'azione
+                distruttiva "Azzera memoria" (prima in Aiuto) è qui: è il
+                posto dove l'utente si aspetta di trovarla.
+                ========================================================= */}
+
+            {/* --- Toggle situation tracking --- */}
+            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8, marginTop: 14 }]}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingLabel}>🧭 Ollenya può ricordare le situazioni</Text>
+                  <Text style={styles.settingHint}>
+                    Se attivo, Ollenya ricorda temi e situazioni ricorrenti
+                    di cui le hai parlato. Le riprende quando torni sull'argomento.
+                  </Text>
+                </View>
+                <Switch
+                  value={(profile?.settings as any)?.situation_tracking_enabled === true}
+                  onValueChange={async (on) => {
+                    if (!profile) return;
+                    const nextSettings = { ...profile.settings, situation_tracking_enabled: on } as any;
+                    setProfile({ ...profile, settings: nextSettings });
+                    try {
+                      await api.updateProfile({ settings: nextSettings });
+                    } catch {}
+                  }}
+                  trackColor={{ false: theme.muted + "55", true: bubbleAccent.color }}
+                  thumbColor="#fff"
+                />
+              </View>
+            </View>
+
+            {/* --- Vedi situazioni --- */}
             <TouchableOpacity
-              style={[styles.settingRow, { paddingVertical: 14 }]}
+              onPress={() => {
+                const enabled = (profile?.settings as any)?.situation_tracking_enabled === true;
+                if (!enabled) {
+                  Alert.alert(
+                    "Memoria situazioni disattivata",
+                    "Attiva prima l'interruttore qui sopra per vedere le situazioni ricordate.",
+                  );
+                  return;
+                }
+                setShowSettings(false);
+                setTimeout(() => { try { router.push("/situations"); } catch {} }, 100);
+              }}
+              style={{
+                marginTop: 10,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.14)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+              }}
+              testID="see-situations-btn"
+            >
+              <Text style={[styles.settingLabel, { fontSize: 14 }]}>📖 Vedi le situazioni che Ollenya ricorda</Text>
+              <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+            </TouchableOpacity>
+
+            {/* --- Ricordi semantici (viewer /memories) --- */}
+            <TouchableOpacity
               onPress={() => {
                 setShowSettings(false);
                 setTimeout(() => { router.push("/memories"); }, 220);
               }}
+              style={{
+                marginTop: 10,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.14)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+              }}
               testID="open-memories"
             >
               <View style={{ flex: 1 }}>
-                <Text style={styles.settingLabel}>🤍 I miei ricordi</Text>
-                <Text style={styles.settingHint}>
-                  Vedi, esporta o cancella quello che Ollenya ha memorizzato di te.
+                <Text style={[styles.settingLabel, { fontSize: 14 }]}>🤍 I miei ricordi</Text>
+                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>
+                  Vedi, esporta o cancella i singoli ricordi.
                 </Text>
               </View>
-              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+              <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
             </TouchableOpacity>
 
-            {/* === RIVEDI INTRO PREMIUM (admin-only, Fabio 2026-08-22) ===
-                Sostituisce il vecchio "Rivedi presentazione di Ollenya" che
-                puntava alla V1 (ora deprecata, nessun path di ingresso).
-                Visibile SOLO all'admin: rischio di alterare il flag
-                "vista una sola volta" se un utente normale lo tocca. */}
-            {isAdmin ? (
-              <TouchableOpacity
-                style={[styles.settingRow, { paddingVertical: 14 }]}
-                onPress={() => {
-                  setShowSettings(false);
-                  setTimeout(() => { reopenIntroPremium(); }, 220);
-                }}
-                testID="reopen-intro-premium"
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.settingLabel}>💎 Rivedi Intro Premium (admin)</Text>
-                  <Text style={styles.settingHint}>
-                    Reset flag + replay della sequenza voce + 5 coach-mark.
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
-              </TouchableOpacity>
-            ) : null}
-
-            {/* === TOGGLE TEST INTRO FREE (admin-only, Fabio 2026-09-06) ===
-                Bypass del last-resort fallback whitelist: quando ATTIVO,
-                getProfile() aggiunge ?force_free=1 al GET → backend NON
-                forza `unlimited` per l'uid → router porta a /lascia-andare
-                → possibilità di testare l'Intro Free e la Lascia Andare
-                free-experience senza rimuovere l'account dalla whitelist DB.
-                Il flag è persistito in SecureStore (`koda_dev_force_free_tier`)
-                e reversibile con un tap. */}
-            {isAdmin ? (
-              <TouchableOpacity
-                style={[styles.settingRow, { paddingVertical: 14 }]}
-                onPress={async () => {
-                  try {
-                    const SS = await import("expo-secure-store");
-                    const cur = await SS.getItemAsync("ollenya_dev_force_free_tier");
-                    const isOn = cur === "1" || cur === "true";
-                    if (isOn) {
-                      await SS.deleteItemAsync("ollenya_dev_force_free_tier");
-                      Alert.alert(
-                        "Test Intro Free disattivato",
-                        "Torni al tier normale (unlimited). Riavvia l'app per far ripartire il router.",
-                      );
-                    } else {
-                      await SS.setItemAsync("ollenya_dev_force_free_tier", "1");
-                      Alert.alert(
-                        "Test Intro Free ATTIVATO",
-                        "Al prossimo getProfile() il backend restituirà tier=None → router ti porterà su /lascia-andare (Intro Free). Riavvia l'app.",
-                      );
-                    }
-                  } catch (e) {
-                    console.warn("[force-free-toggle] failed:", e);
-                  }
-                }}
-                testID="toggle-force-free"
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.settingLabel}>🧪 Test Intro Free (admin)</Text>
-                  <Text style={styles.settingHint}>
-                    Toggle bypass whitelist. Ti mostra tier=Free per testare la Lascia Andare senza toccare il DB.
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
-              </TouchableOpacity>
-            ) : null}
+            {/* --- Azzera tutta la memoria (destructive, doppia conferma) --- */}
+            <View style={styles.divider} />
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  "Azzera la memoria di Ollenya?",
+                  "Cancellerà TUTTO ciò che Ollenya ricorda di te:\n\n• i tuoi ricordi\n• le situazioni tracciate\n• la storia relazionale (timeline)\n• eventuale voiceprint\n\nL'account resta, ma Ollenya ripartirà da zero. Non si può annullare.",
+                  [
+                    { text: "Annulla", style: "cancel" },
+                    {
+                      text: "Continua",
+                      style: "destructive",
+                      onPress: () => {
+                        Alert.alert(
+                          "Ne sei sicuro?",
+                          "Ultima conferma. Se prosegui, Ollenya dimenticherà tutto.",
+                          [
+                            { text: "Annulla", style: "cancel" },
+                            {
+                              text: "Azzera memoria",
+                              style: "destructive",
+                              onPress: () => resetMemory(),
+                            },
+                          ],
+                        );
+                      },
+                    },
+                  ],
+                );
+              }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(220, 40, 40, 0.10)",
+                borderWidth: 1,
+                borderColor: "rgba(220, 40, 40, 0.35)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                marginTop: 6,
+              }}
+              testID="reset-memory-btn"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.settingLabel, { color: "#FF6B6B" }]}>🗑️ Azzera la memoria di Ollenya</Text>
+                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>
+                  Cancella ricordi, situazioni e storia relazionale. Non annullabile.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#FF6B6B" />
+            </TouchableOpacity>
         </>
       ),
     },
@@ -6254,12 +6216,12 @@ export default function Taccuino() {
         </>
       ),
     },
-    // Card 10: Aiuto
+    // Card 8: Aiuto e supporto (v65.50 — Cancella memoria SPOSTATA in card Memoria)
     {
       key: "help",
       icon: "🆘",
-      title: "Aiuto",
-      description: "Hai un problema? Segnalalo direttamente qui.",
+      title: "Aiuto e supporto",
+      description: "Segnala un problema tecnico.",
       count: 1,
       body: (
         <>
@@ -6267,9 +6229,7 @@ export default function Taccuino() {
                 Reframing del vecchio bottone "Diagnostica" — stessa funzione
                 tecnica sotto (raccolta log [OLLENYA_VAD] [OLLENYA_TIMING]
                 [OLLENYA_SUMMARY] + copia/condividi) ma presentata in modo
-                comprensibile per l'utente finale. Così anche dopo il lancio
-                continuiamo a ricevere diagnosi utili dagli utenti reali
-                che incontrano un problema. */}
+                comprensibile per l'utente finale. */}
             <TouchableOpacity
               style={{
                 marginTop: 16,
@@ -6291,42 +6251,113 @@ export default function Taccuino() {
                 <Ionicons name="help-buoy-outline" size={18} color={theme.text + "99"} />
                 <View style={{ flex: 1 }}>
                   <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500" }}>
-                    Hai un problema? Segnala
+                    Segnala un problema
                   </Text>
                   <Text style={{ color: theme.text + "66", fontSize: 11, marginTop: 2 }}>
-                    Raccoglie un piccolo diario tecnico da inviarci per capire cos&apos;è successo.
+                    Invia una segnalazione tecnica per aiutarci a capire cos&apos;è successo.
                   </Text>
                 </View>
               </View>
               <Ionicons name="chevron-forward" size={16} color={theme.text + "66"} />
             </TouchableOpacity>
-
-            {/* === RIMOSSO 2026-07-09 su richiesta utente ===
-                Il pulsante "Controlla aggiornamenti" non funzionava
-                (Updates.checkForUpdateAsync non rispondeva mai su questa
-                pipeline OTA). Rimosso completamente. Se serve ricontrollare
-                la versione bundle, il footer sotto mostra già il numero. */}
-
-            {/* === CANCELLA MEMORIA — POSIZIONE FINALE (2026-07, utente) ===
-                Posizionato subito sopra il footer bundle info per rendere
-                il gesto distruttivo l'ultimo elemento della lista. */}
-            <View style={styles.divider} />
-            <TouchableOpacity
-              onPress={resetMemory}
-              style={styles.dangerBtn}
-              testID="reset-btn"
-            >
-              <Ionicons name="trash-outline" size={16} color={theme.danger} />
-              <Text style={styles.dangerBtnText}>Cancella tutta la memoria</Text>
-            </TouchableOpacity>
-            <Text style={styles.dangerHint}>
-              Reset completo: profilo, taccuino e ogni ricordo.
-            </Text>
         </>
       ),
     },
+    // Card 10: Strumenti di test — ADMIN ONLY (v65.50 Fabio)
+    // Card intera non renderizzata se !isAdmin. Doppia protezione: frontend
+    // + backend (endpoint /api/dev/* richiedono bearer KODA_ADMIN_TOKEN).
+    ...(isAdmin ? [{
+      key: "admin_tools" as const,
+      icon: "🛠️",
+      title: "Strumenti di test",
+      description: "Solo admin. Reset intro e bypass whitelist.",
+      count: 2,
+      body: (
+        <>
+            {/* === RIVEDI INTRO PREMIUM — v65.50 spostato qui da card Memoria === */}
+            <TouchableOpacity
+              style={[styles.settingRow, { paddingVertical: 14 }]}
+              onPress={() => {
+                setShowSettings(false);
+                setTimeout(() => { reopenIntroPremium(); }, 220);
+              }}
+              testID="reopen-intro-premium"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>💎 Rivedi Intro Premium</Text>
+                <Text style={styles.settingHint}>
+                  Reset flag + replay della sequenza voce + 5 coach-mark.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+            </TouchableOpacity>
+
+            {/* === TEST INTRO FREE — v65.50 spostato qui da card Memoria === */}
+            <TouchableOpacity
+              style={[styles.settingRow, { paddingVertical: 14 }]}
+              onPress={async () => {
+                try {
+                  const SS = await import("expo-secure-store");
+                  const cur = await SS.getItemAsync("ollenya_dev_force_free_tier");
+                  const isOn = cur === "1" || cur === "true";
+                  if (isOn) {
+                    await SS.deleteItemAsync("ollenya_dev_force_free_tier");
+                    Alert.alert(
+                      "Test Intro Free disattivato",
+                      "Torni al tier normale (unlimited). Riavvia l'app per far ripartire il router.",
+                    );
+                  } else {
+                    await SS.setItemAsync("ollenya_dev_force_free_tier", "1");
+                    Alert.alert(
+                      "Test Intro Free ATTIVATO",
+                      "Al prossimo getProfile() il backend restituirà tier=None → router ti porterà su /lascia-andare (Intro Free). Riavvia l'app.",
+                    );
+                  }
+                } catch (e) {
+                  console.warn("[force-free-toggle] failed:", e);
+                }
+              }}
+              testID="toggle-force-free"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>🧪 Test Intro Free</Text>
+                <Text style={styles.settingHint}>
+                  Toggle bypass whitelist. Tier=Free per testare Lascia Andare senza toccare il DB.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+            </TouchableOpacity>
+        </>
+      ),
+    }] : []),
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [profile, isAdmin, adminBusy, status, bubbleAccent, borderCal, insets.top, theme]);
+
+  // v65.50 (Fabio): ordine definitivo card Impostazioni — enforced tramite
+  // sort stabile per chiave, così futuri edit interni ai blocchi non
+  // possono più rompere l'ordine visivo.
+  const OLLENYA_SETTINGS_ORDER = useMemo(
+    () => [
+      "plan",          // 1. Il mio piano
+      "behavior",      // 2. Comportamento
+      "voice",         // 3. Voce
+      "border",        // 4. Aspetto
+      "memory",        // 5. Memoria
+      "privacy_data",  // 6. Privacy e dati
+      "account",       // 7. Account
+      "help",          // 8. Aiuto e supporto
+      "legal",         // 9. Legale
+      "admin_tools",   // 10. Strumenti di test (solo admin)
+    ],
+    [],
+  );
+  const orderedSettingsCards = useMemo(() => {
+    const idx = (k: string) => {
+      const i = OLLENYA_SETTINGS_ORDER.indexOf(k);
+      return i === -1 ? 999 : i;
+    };
+    return [...settingsCards].sort((a, b) => idx(a.key) - idx(b.key));
+  }, [settingsCards, OLLENYA_SETTINGS_ORDER]);
 
   const screenInner = (
     <View style={[styles.screen, { backgroundColor: theme.bg }]}>
@@ -7188,7 +7219,7 @@ export default function Taccuino() {
           <View style={{ flex: 1, width: '100%' }}>
             {showSettings ? (
               <SettingsWalletStack
-                cards={settingsCards}
+                cards={orderedSettingsCards}
                 onClose={() => closeSettings()}
                 version={Constants.expoConfig?.version || "1.0.1"}
                 buildTag={isAdmin ? OLLENYA_BUILD_SHORT_TAG : undefined}
