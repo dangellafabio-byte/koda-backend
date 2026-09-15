@@ -127,7 +127,7 @@ export default function LoginScreen() {
         ) : (
           <View style={[styles.btn, styles.appleBtnDisabled]}>
             <Ionicons name="logo-apple" size={20} color="rgba(255,255,255,0.4)" />
-            <Text style={styles.appleTextDisabled}>Accedi con Apple — disponibile nell'app</Text>
+            <Text style={styles.appleTextDisabled}>Accedi con Apple — disponibile solo su iOS</Text>
           </View>
         )}
 
