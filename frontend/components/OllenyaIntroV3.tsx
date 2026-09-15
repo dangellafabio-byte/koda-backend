@@ -78,6 +78,13 @@ type Turn =
   | { kind: "silence"; ms: number; label?: string; orbState?: OrbState }
   | { kind: "speak"; clipKey: keyof typeof CIELO_CLIPS }
   | { kind: "listen"; maxMs?: number; showLabel?: boolean; noTranscript?: boolean }
+  // v65.51 (Fabio, lawyer feedback): TTS runtime con testo dinamico
+  // basato su `userName` (o altre variabili). Se `getText()` ritorna
+  // null → turno SALTATO. Usato per "Posso chiamarti Marco?".
+  | { kind: "speak_dynamic"; getText: (ctx: { userName: string | null }) => string | null }
+  // v65.51: mini-listen per catturare conferma sì/no (~7 sec).
+  // Se pendingNameConfirm è null → turno SALTATO.
+  | { kind: "listen_confirm"; maxMs?: number }
   | { kind: "save_and_handoff" };
 
 // La sequenza — ogni pausa ha un'intenzione narrativa.
@@ -112,9 +119,19 @@ const CONVERSATION_V3: Turn[] = [
   // "Luca" / "sono Marco" / "chiamami Max" / "il mio nome è Anna ma chiamami Ann".
   // Se l'utente dice "preferisco non dirlo" o simili, name resta null.
   { kind: "listen", maxMs: 45000, noTranscript: false },
-  // #3 — clip di transizione: "Voglio farti conoscere una parte di me."
+  // #3 — v65.51 (Fabio, lawyer feedback): CONFERMA vocale del nome estratto.
+  // Solo se pendingNameConfirm è set → Ollenya dice "Posso chiamarti Marco?".
+  // Se null → turno saltato automaticamente.
+  {
+    kind: "speak_dynamic",
+    getText: (ctx) => (ctx.userName ? `Posso chiamarti ${ctx.userName}?` : null),
+  },
+  // #4 — v65.51: mini-listen per catturare "sì / no / cambia". Se yes → nome
+  // resta salvato; se no → userName azzerato; se timeout → assume yes.
+  { kind: "listen_confirm", maxMs: 7000 },
+  // #5 — clip di transizione: "Voglio farti conoscere una parte di me."
   { kind: "speak", clipKey: "intro_v3_parte_di_me" },
-  // #4 — flag intro V3 completata + handoff verso Lascia Andare (salva name)
+  // #6 — flag intro V3 completata + handoff verso Lascia Andare (salva name)
   { kind: "save_and_handoff" },
 ];
 
@@ -190,7 +207,11 @@ const ORB_SIZE = Math.min(WINDOW_WIDTH * 0.78, 360);
 export default function OllenyaIntroV3() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const theme = useTheme();
+  // v65.51 (Fabio): destruttura correttamente. Prima era
+  // `const theme = useTheme()` → theme.bg = undefined → schermo bianco
+  // Android. Ora usiamo theme.bg direttamente dalla palette, con
+  // fallback esplicito nel backgroundColor più sotto.
+  const { theme } = useTheme();
   const [turnIdx, setTurnIdx] = useState(0);
   const [orbState, setOrbState] = useState<OrbState>("idle");
   const [labelText, setLabelText] = useState<string | null>(null);
@@ -198,6 +219,22 @@ export default function OllenyaIntroV3() {
   // Dati raccolti
   const [userName, setUserName] = useState<string | null>(null);
   const userGenderRef = useRef<"m" | "f" | "ambiguous" | null>(null);
+
+  // v65.51 (Fabio, lawyer feedback): Pre-prompt microfono OPTION A.
+  // Prima che parta la sequenza vocale, mostriamo overlay testuale
+  // "Prima di iniziare, mi serve poter sentire la tua voce." per 1.8s,
+  // poi richiediamo `ensureSpeechPermission()`. Solo se granted parte
+  // il turn executor. Se negato → micBlocked. Evita l'interruzione
+  // brutale del dialogo con popup nativo a metà del saluto.
+  const [micGateStatus, setMicGateStatus] = useState<"pending" | "granted" | "denied">("pending");
+  const micGateStartedRef = useRef(false);
+
+  // v65.51 (Fabio, lawyer feedback): flag di gating per il turno di
+  // conferma del nome. Quando `handleNameCaptured` estrae un nome,
+  // setta `pendingNameConfirm` con quel nome; il turn executor allora
+  // ESEGUE i turn #3 (speak_dynamic) e #4 (listen_confirm). Se resta
+  // null → skip diretto al turno "parte_di_me".
+  const [pendingNameConfirm, setPendingNameConfirm] = useState<string | null>(null);
 
   // Mic permission blocca il flusso?
   const [micBlocked, setMicBlocked] = useState(false);
@@ -374,6 +411,10 @@ export default function OllenyaIntroV3() {
           extracted.charAt(0).toUpperCase() + extracted.slice(1).toLowerCase();
         console.log(`[${TAG}] name captured: "${capitalized}" (src="${matchSource}", raw="${text}")`);
         setUserName(capitalized);
+        // v65.51 (Fabio, lawyer feedback): innesca il turno di CONFERMA
+        // vocale. Il turn executor #3 leggerà pendingNameConfirm per
+        // decidere se pronunciare "Posso chiamarti Marco?".
+        setPendingNameConfirm(capitalized);
         // Gender lookup silenzioso in background — non blocca advance
         api.introGenderFromName(capitalized)
           .then((r) => {
@@ -386,7 +427,7 @@ export default function OllenyaIntroV3() {
           })
           .catch(() => {});
       } else {
-        console.log(`[${TAG}] name capture: no usable name in "${text}" → stays null`);
+        console.log(`[${TAG}] name capture: no usable name in "${text}" → stays null (skip confirmation)`);
       }
       advance();
     },
@@ -618,6 +659,170 @@ export default function OllenyaIntroV3() {
     []
   );
 
+  // ==================== PLAY DYNAMIC TTS (v65.51) ====================
+  // Runtime TTS per testi variabili (es. conferma nome "Posso chiamarti X?").
+  // Fetcha /api/tts con la voce Cielo, decodifica in data-URI, riproduce.
+  // Callback onDone chiamata quando la clip finisce (o in fallback 12s).
+  const playDynamicTTS = useCallback(
+    async (text: string, onDone: () => void) => {
+      try {
+        const { API_BASE } = await import("../lib/api");
+        const { getAuthToken } = await import("../lib/authToken");
+        const tok = getAuthToken();
+        console.log(`[${TAG} DIAG] speak_dynamic text="${text}"`);
+        const r = await fetch(`${API_BASE}/tts`, {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            ...(tok ? { Authorization: `Bearer ${tok}` } : {}),
+          },
+          body: JSON.stringify({
+            text,
+            // Voce Cielo (femminile) — hardcoded per l'intro V3
+            voice_id: "vTgTi6iSjMPqDpAcJfju",
+            tone: "warm",
+            microdemo: true, // bypass trial enforcement (intro pre-onboarding)
+          }),
+        });
+        if (!r.ok) {
+          console.warn(`[${TAG}] tts HTTP ${r.status} → skip TTS, advance`);
+          timerRef.current = setTimeout(onDone, 400);
+          return;
+        }
+        const blob = await r.blob();
+        const dataUri = await new Promise<string | null>((resolve) => {
+          const reader = new FileReader();
+          reader.onerror = () => resolve(null);
+          reader.onloadend = () => {
+            const result = reader.result;
+            resolve(typeof result === "string" ? result : null);
+          };
+          reader.readAsDataURL(blob);
+        });
+        if (!dataUri || !mountedRef.current) {
+          timerRef.current = setTimeout(onDone, 400);
+          return;
+        }
+        await configureAudioForPlayback();
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        if (!mountedRef.current) return;
+        const player = createAudioPlayer({ uri: dataUri }, { updateInterval: 100 });
+        currentPlayerRef.current = player;
+        const onStatus = (status: { didJustFinish?: boolean }) => {
+          if (status.didJustFinish) {
+            try { player.removeListener("playbackStatusUpdate", onStatus); } catch {}
+            onDone();
+          }
+        };
+        player.addListener("playbackStatusUpdate", onStatus);
+        player.play();
+        // Safety net 12s
+        timerRef.current = setTimeout(() => {
+          console.warn(`[${TAG}] playDynamicTTS safety-net triggered`);
+          onDone();
+        }, 12000);
+      } catch (e) {
+        console.warn(`[${TAG}] playDynamicTTS failed:`, e);
+        timerRef.current = setTimeout(onDone, 400);
+      }
+    },
+    []
+  );
+
+  // ==================== LISTEN CONFIRM YES/NO (v65.51) ================
+  // Mini-listen per catturare la conferma sì/no dopo "Posso chiamarti X?".
+  // Timeout: 7s. Parsing tolerante: {sì, si, ok, certo, va bene, perfetto,
+  // giusto, corretto, esatto, yes, yeah} → yes | {no, non, sbagliato, diverso,
+  // cambia, altro, un altro} → no. Vuoto/timeout → treat as yes (safe default).
+  const parseConfirmation = useCallback((text: string): "yes" | "no" => {
+    const t = text.trim().toLowerCase();
+    if (!t) return "yes"; // timeout / silenzio → mantieni il nome
+    const noPatterns = [
+      /\bno\b/, /\bnon\b/, /sbagliat/, /divers/, /cambia/,
+      /un altro/, /altro nome/, /preferisc.* di no/, /nope/,
+    ];
+    if (noPatterns.some((re) => re.test(t))) return "no";
+    // altrimenti (yes espliciti o rumore) → mantieni
+    return "yes";
+  }, []);
+
+  const startListenConfirm = useCallback(
+    async (maxMs: number) => {
+      if (listenActiveRef.current) return;
+      listenActiveRef.current = true;
+      try {
+        const perm = await ensureSpeechPermission();
+        if (!perm.granted) {
+          listenActiveRef.current = false;
+          // Se il perm sparisce (raro), assume yes e avanza
+          console.warn(`[${TAG}] listen_confirm no perm → assume yes`);
+          advance();
+          return;
+        }
+      } catch {
+        listenActiveRef.current = false;
+        advance();
+        return;
+      }
+      let captured = "";
+      let finalized = false;
+      const finalize = () => {
+        if (finalized) return;
+        finalized = true;
+        listenActiveRef.current = false;
+        try { ExpoSpeechRecognitionModule.stop(); } catch {}
+        sttSubsRef.current.forEach((s) => { try { s.remove(); } catch {} });
+        sttSubsRef.current = [];
+        const decision = parseConfirmation(captured);
+        console.log(`[${TAG} CONFIRM] captured="${captured}" → ${decision}`);
+        if (decision === "no") {
+          // L'utente ha detto NO → cancella il nome, procedi comunque.
+          // (Il turno di conferma è opzionale: non ripetiamo la domanda.)
+          setUserName(null);
+          setPendingNameConfirm(null);
+        }
+        advance();
+      };
+      // Handlers STT
+      const s1 = ExpoSpeechRecognitionModule.addListener("result", (evt: any) => {
+        try {
+          const results = evt?.results || [];
+          if (results.length > 0) {
+            const txt = results[0]?.transcript || "";
+            if (txt) captured = txt;
+          }
+          if (evt?.isFinal) {
+            setTimeout(finalize, 100);
+          }
+        } catch {}
+      });
+      const s2 = ExpoSpeechRecognitionModule.addListener("error", () => {
+        setTimeout(finalize, 100);
+      });
+      const s3 = ExpoSpeechRecognitionModule.addListener("end", () => {
+        setTimeout(finalize, 100);
+      });
+      sttSubsRef.current = [s1, s2, s3];
+      try {
+        ExpoSpeechRecognitionModule.start({
+          lang: "it-IT",
+          interimResults: true,
+          continuous: false,
+          maxAlternatives: 1,
+          addsPunctuation: false,
+        } as any);
+      } catch (e) {
+        console.warn(`[${TAG}] listen_confirm start failed:`, e);
+        setTimeout(finalize, 200);
+        return;
+      }
+      // Timeout hardware
+      listenSafetyRef.current = setTimeout(finalize, maxMs);
+    },
+    [advance, parseConfirmation],
+  );
+
   // ==================== SAVE & HANDOFF a Lascia Andare ====================
   // Salva profilo (nome + gender se disponibile), scrive flag di completamento
   // intro_v3, e naviga a /lascia-andare?firstBoot=1 con fade morbido.
@@ -675,6 +880,12 @@ export default function OllenyaIntroV3() {
   // ==================== TURN EXECUTOR ====================
   useEffect(() => {
     if (!currentTurn) return;
+    // v65.51: gate microfono. Il turn state machine è congelato finché
+    // l'utente non concede il permesso. Fino ad allora vediamo solo
+    // l'overlay "Prima di iniziare, mi serve poter sentire la tua voce.".
+    if (micGateStatus !== "granted") {
+      return;
+    }
     cleanupCurrent();
 
     try {
@@ -715,13 +926,40 @@ export default function OllenyaIntroV3() {
         }, 250);
         break;
       }
+      case "speak_dynamic": {
+        // v65.51 (Fabio, lawyer feedback): conferma nome via TTS runtime.
+        // Se getText() ritorna null (userName null) → salta il turno.
+        const dynText = currentTurn.getText({ userName });
+        if (!dynText) {
+          console.log(`[${TAG} DIAG] speak_dynamic SKIPPED (no text) — userName=${userName}`);
+          timerRef.current = setTimeout(() => advance(), 100);
+          break;
+        }
+        setOrbState("speaking");
+        playDynamicTTS(dynText, () => advance());
+        break;
+      }
+      case "listen_confirm": {
+        // v65.51: se non c'è nome da confermare, salta.
+        if (!pendingNameConfirm) {
+          console.log(`[${TAG} DIAG] listen_confirm SKIPPED (no pending name)`);
+          timerRef.current = setTimeout(() => advance(), 100);
+          break;
+        }
+        setOrbState("listening");
+        configureAudioForRecording();
+        timerRef.current = setTimeout(() => {
+          startListenConfirm(currentTurn.maxMs ?? 7000);
+        }, 250);
+        break;
+      }
       case "save_and_handoff": {
         doSaveAndHandoff();
         break;
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [turnIdx]);
+  }, [turnIdx, micGateStatus]);
 
   // Mount/unmount + fade-in + breathe loop
   useEffect(() => {
@@ -754,6 +992,43 @@ export default function OllenyaIntroV3() {
     };
   }, [cleanupCurrent, screenOpacity, breathe]);
 
+  // v65.51 (Fabio, lawyer feedback): MIC PRE-PROMPT OPTION A ===============
+  // Prima che parta la sequenza vocale, mostriamo overlay testuale
+  // "Prima di iniziare, mi serve poter sentire la tua voce." per 1.8s,
+  // poi richiediamo `ensureSpeechPermission()`. Solo se granted parte
+  // il turn executor (turnIdx resta 0 finché micGateStatus !== "granted",
+  // e la useEffect executor bail-out sotto blocca l'avanzamento).
+  // Il popup nativo iOS/Android compare DOPO che l'utente ha visto e
+  // capito la richiesta contestuale — coerente con la Privacy Policy
+  // e con Apple 5.1.1.
+  useEffect(() => {
+    if (micGateStartedRef.current) return;
+    micGateStartedRef.current = true;
+    let cancelled = false;
+    (async () => {
+      // Lascia il tempo di leggere il pre-prompt
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+      if (cancelled || !mountedRef.current) return;
+      try {
+        const perm = await ensureSpeechPermission();
+        if (cancelled || !mountedRef.current) return;
+        if (perm.granted) {
+          console.log(`[${TAG}] mic gate: GRANTED (path=${perm.path})`);
+          setMicGateStatus("granted");
+        } else {
+          console.warn(`[${TAG}] mic gate: DENIED (path=${perm.path})`);
+          setMicGateStatus("denied");
+          setMicBlocked(true);
+        }
+      } catch (e) {
+        console.warn(`[${TAG}] mic gate ensureSpeechPermission threw:`, e);
+        // Fail-open: assume granted, il fallback dentro startListen coprirà
+        setMicGateStatus("granted");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   // Mic denied handlers
   const onOpenSettings = useCallback(() => {
     Linking.openSettings().catch(() => {});
@@ -783,7 +1058,7 @@ export default function OllenyaIntroV3() {
     <Animated.View
       style={[
         styles.root,
-        { backgroundColor: theme.bg, opacity: screenOpacity },
+        { backgroundColor: theme?.bg || "#1F1A36", opacity: screenOpacity },
       ]}
     >
       <NeonBorder
@@ -868,6 +1143,23 @@ export default function OllenyaIntroV3() {
           </View>
         </View>
       )}
+
+      {/* v65.51 (Fabio, lawyer feedback): pre-prompt microfono OPTION A.
+          Visibile finché micGateStatus === "pending". Poi il popup nativo
+          iOS/Android comparirà con contesto già stabilito dall'utente. */}
+      {micGateStatus === "pending" && !micBlocked && (
+        <View style={styles.micPromptOverlay} pointerEvents="none">
+          <View style={styles.micPromptCard}>
+            <Ionicons name="mic-outline" size={28} color="#D4B896" />
+            <Text style={styles.micPromptTitle}>
+              Prima di iniziare
+            </Text>
+            <Text style={styles.micPromptText}>
+              Mi serve poter sentire la tua voce.
+            </Text>
+          </View>
+        </View>
+      )}
     </Animated.View>
   );
 }
@@ -922,6 +1214,46 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     zIndex: 100,
     paddingHorizontal: 28,
+  },
+  // v65.51 (Fabio, lawyer feedback): pre-prompt microfono (informativo, non
+  // blocking — pointerEvents="none" nel render). Compare finché
+  // micGateStatus === "pending" e sparisce appena l'utente risponde al popup.
+  micPromptOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(15, 15, 26, 0.60)",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 90,
+    paddingHorizontal: 28,
+  },
+  micPromptCard: {
+    width: "100%",
+    maxWidth: 320,
+    paddingVertical: 22,
+    paddingHorizontal: 20,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(212,184,150,0.22)",
+    alignItems: "center",
+  },
+  micPromptTitle: {
+    color: "#F5E6CC",
+    fontSize: 15,
+    fontWeight: "600",
+    marginTop: 10,
+    letterSpacing: 0.3,
+  },
+  micPromptText: {
+    color: "rgba(226,232,240,0.85)",
+    fontSize: 15,
+    lineHeight: 21,
+    textAlign: "center",
+    marginTop: 6,
   },
   micBlockedCard: {
     width: "100%",
