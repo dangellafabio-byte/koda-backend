@@ -5094,6 +5094,7 @@ _UNLIMITED_PRESEED_EMAILS = [
     ("dangella.fabio@gmail.com", "owner (Fabio)"),
     ("wqm4r4jn7f@privaterelay.appleid.com", "owner Apple relay (Fabio)"),
     ("stefania.russo82@gmail.com", "Stefania (permanent)"),
+    ("ollenya.play.review@gmail.com", "Google Play reviewer account (permanent)"),
 ]
 
 
