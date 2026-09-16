@@ -1043,6 +1043,17 @@ export default function Taccuino() {
     setPremiumTeaserVisible(true);
     setTimeout(() => setPremiumTeaserVisible(false), 2500);
   }, []);
+  // === FREE GATE HELPER v66.1 (Fabio 2026-06-16) =============================
+  // Determina se l'utente corrente è "Free" e deve vedere gli elementi
+  // Premium (Eclissi, Hands-Free, Impostazioni) come SPENTI + tap→teaser.
+  // NOTA: il FreeOverlay full-screen precedente è stato RIMOSSO perché
+  // bloccava lo swipe-right (chat testuale) e oscurava tutta la home.
+  // Ora ogni elemento intercetta il proprio tap e applica il proprio dim.
+  const isFreeGate = useCallback((): boolean => {
+    const tier = (profile as any)?.subscription_tier;
+    const isPaid = tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
+    return !isPaid;
+  }, [profile]);
   const [recapText, setRecapText] = useState<string | null>(null);
   const [showRecap, setShowRecap] = useState(false);
 
@@ -6546,13 +6557,32 @@ export default function Taccuino() {
             visivo tramite la prop `active`. */}
         <TouchableOpacity
           ref={handsFreeBtnRef}
-          style={[styles.headerBtn, { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" }]}
-          onPress={() => setHandsFreeMode(!handsFree)}
+          style={[
+            styles.headerBtn,
+            { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" },
+            // v66.1: se Free, l'icona appare "spenta" (opacity ridotta).
+            isFreeGate() && { opacity: 0.38 },
+          ]}
+          onPress={() => {
+            // v66.1 (Fabio 2026-06-16): Free tier → paywall teaser, no toggle.
+            if (isFreeGate()) {
+              showPremiumTeaser();
+              return;
+            }
+            setHandsFreeMode(!handsFree);
+          }}
           hitSlop={20}
           testID="hands-free-toggle"
-          accessibilityLabel={handsFree ? "Modalità automatica attiva, tocca per passare a manuale" : "Modalità manuale, tocca per tornare all'automatico"}
+          accessibilityLabel={
+            isFreeGate()
+              ? "Modalità mani libere, disponibile con Premium"
+              : handsFree
+                ? "Modalità automatica attiva, tocca per passare a manuale"
+                : "Modalità manuale, tocca per tornare all'automatico"
+          }
         >
-          <HandsFreeOrb active={handsFree} size={26} />
+          {/* v66.1: Free → force active=false per rendering neutro (grigio). */}
+          <HandsFreeOrb active={isFreeGate() ? false : handsFree} size={26} />
         </TouchableOpacity>
 
         {/* === TAB PILL FREE RIMOSSA v65.55 → v65.56 =========================
@@ -6568,8 +6598,19 @@ export default function Taccuino() {
         <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
           <TouchableOpacity
             ref={menuBtnRef}
-            style={[styles.headerBtn, { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" }]}
+            style={[
+              styles.headerBtn,
+              { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" },
+              // v66.1: Free → icona spenta.
+              isFreeGate() && { opacity: 0.38 },
+            ]}
             onPress={() => {
+              // v66.1 (Fabio 2026-06-16): Free tier → paywall teaser.
+              // Impostazioni è Premium (voce/tema/memoria richiedono account attivo).
+              if (isFreeGate()) {
+                showPremiumTeaser();
+                return;
+              }
               setShowSettings(true);
               // === FIX 2026-06 — refetch profile all'apertura Impostazioni ==
               // Serve per far vedere sempre lo stato aggiornato del piano/
@@ -6583,7 +6624,7 @@ export default function Taccuino() {
             }}
             hitSlop={20}
             testID="settings-toggle"
-            accessibilityLabel="Apri impostazioni"
+            accessibilityLabel={isFreeGate() ? "Impostazioni, disponibili con Premium" : "Apri impostazioni"}
           >
             <Ionicons
               name="ellipsis-horizontal"
@@ -6759,8 +6800,23 @@ export default function Taccuino() {
               <>
                 <Pressable
                   ref={orbBtnRef}
-                  onPress={onBigButton}
-                  onLongPress={onBigButtonLongPress}
+                  onPress={() => {
+                    // v66.1 (Fabio 2026-06-16): Free tier → paywall teaser.
+                    // Voce completa (STT + LLM + TTS) è funzione Premium.
+                    // Il tap non entra in onBigButton, non parte alcun turno voce.
+                    if (isFreeGate()) {
+                      showPremiumTeaser();
+                      return;
+                    }
+                    onBigButton();
+                  }}
+                  onLongPress={() => {
+                    if (isFreeGate()) {
+                      showPremiumTeaser();
+                      return;
+                    }
+                    onBigButtonLongPress();
+                  }}
                   delayLongPress={500}
                   // === HARD STOP 2026-06-26: orb sempre tappabile ===
                   // Prima: disabled durante transcribing/thinking, ma l'utente
@@ -6773,6 +6829,8 @@ export default function Taccuino() {
                   style={({ pressed }) => [
                     { alignItems: "center", justifyContent: "center" },
                     pressed && { opacity: 0.85 },
+                    // v66.1: Free → orb visualmente "spento" (glow attenuato).
+                    isFreeGate() && { opacity: 0.38 },
                   ]}
                   testID="big-btn-voice"
                 >
@@ -6789,8 +6847,8 @@ export default function Taccuino() {
                     }}
                   >
                     <EclipseOrb
-                      status={status}
-                      speechActive={speechActive}
+                      status={isFreeGate() ? "idle" : status}
+                      speechActive={isFreeGate() ? false : speechActive}
                       // === IDLE = SEMPRE NEUTRAL (verde menta) ===
                       // Prima rimaneva ciclamino/urgente quando Ollenya era idle
                       // dopo aver dato una risposta "urgent" → l'utente credeva
@@ -7524,13 +7582,21 @@ export default function Taccuino() {
   );
   const neonBorderEl = (
     <NeonBorder
-      status={neonStatus}
+      // v66.1 (Fabio 2026-06-16): Free → bordo sempre "idle" (nessun colore
+      // di stato vocale) così il neon appare grigio/spento anche se
+      // internamente stiamo cambiando `status` per side-effect.
+      status={isFreeGate() ? "idle" : neonStatus}
       thickness={neonThickness}
       speakingColorOverride={getVoiceSpeakingColor(
         (profile?.settings as any)?.tts_voice_id
       )}
       radiusOverride={borderCal.radius ?? estimateCornerRadius(insets.top || 0, Platform.OS)}
-      idleColorOverride={borderCal.useAltIdleColor ? ALT_IDLE_COLOR : undefined}
+      idleColorOverride={
+        // v66.1: Free → bordo neutro grigio scuro, indipendente da calibrazione.
+        isFreeGate()
+          ? "rgba(120,120,130,0.28)"
+          : (borderCal.useAltIdleColor ? ALT_IDLE_COLOR : undefined)
+      }
     />
   );
 
@@ -7623,44 +7689,22 @@ export default function Taccuino() {
       {activationPulseEl}
       {tourOverlay}
 
-      {/* === FREE OVERLAY v65.56 (Fabio 2026-09) ===========================
-          Per utenti Free (non paid), overlay scuro semi-trasparente che
-          copre l'intera home eclissi. Intercetta tutti i tap (tranne il
-          pill "Lascia andare", che vive fuori da questo z-index).
-          Tap → PremiumTeaserToast + link paywall.
-          Nascosto durante intro V3, onboarding, tour, safety, LA modal.
-          Nascosto per utenti Premium (tier paid).
+      {/* === PREMIUM TEASER TOAST v66.1 (Fabio 2026-06-16) =================
+          Il vecchio FreeOverlay full-screen è stato RIMOSSO — bloccava
+          lo swipe-right verso la chat testuale e oscurava troppo la home.
+          Ora i tap su Eclissi/Hands-Free/Impostazioni sono intercettati
+          direttamente inline (vedi `isFreeGate()` sui rispettivi Pressable
+          e TouchableOpacity nel render sopra) e triggerano questo toast,
+          che resta l'unico elemento UI di questo blocco.
+          Il pill "Lascia andare" resta sempre cliccabile per Free.
           =============================================================== */}
-      {(() => {
-        const tier = (profile as any)?.subscription_tier;
-        const isPaid = tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
-        const showFreeOverlay =
-          !isPaid &&
-          introV3State === "completed" &&
-          !showOnboarding &&
-          !tourActive &&
-          !safetyVisible &&
-          !showIntroFinal &&
-          !showLasciaAndareIntro;
-        return (
-          <>
-            <FreeOverlay
-              visible={showFreeOverlay}
-              onTap={() => {
-                console.log("[free_overlay] tap intercepted → premium teaser");
-                showPremiumTeaser();
-              }}
-            />
-            <PremiumTeaserToast
-              visible={premiumTeaserVisible}
-              onPressLink={() => {
-                setPremiumTeaserVisible(false);
-                try { router.push("/paywall"); } catch {}
-              }}
-            />
-          </>
-        );
-      })()}
+      <PremiumTeaserToast
+        visible={premiumTeaserVisible}
+        onPressLink={() => {
+          setPremiumTeaserVisible(false);
+          try { router.push("/paywall"); } catch {}
+        }}
+      />
 
       {/* === FREE LIMIT OVERLAY v65.53 (Fabio 2026-06) =====================
           Compare quando /api/converse ritorna 402 free_limit_exhausted.
