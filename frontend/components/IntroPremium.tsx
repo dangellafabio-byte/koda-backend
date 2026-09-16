@@ -35,7 +35,7 @@ const CLIP_ECCOMI = require("../assets/sounds/intro/intro_premium_eccomi-cielo.m
 
 type Phase =
   | "boot" | "speaking" | "asking_permission" | "waiting_tap"
-  | "coach_orb" | "coach_hf" | "coach_la" | "coach_settings" | "coach_swipe"
+  | "coach_orb" | "coach_hf" | "coach_settings"
   | "handoff";
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -289,8 +289,7 @@ export default function IntroPremium() {
   useEffect(() => {
     if (
       phase === "coach_orb" || phase === "coach_hf" ||
-      phase === "coach_la"  || phase === "coach_settings" ||
-      phase === "coach_swipe"
+      phase === "coach_settings"
     ) {
       cardOpacity.setValue(0);
       Animated.timing(cardOpacity, { toValue: 1, duration: 280, useNativeDriver: true }).start();
@@ -300,10 +299,15 @@ export default function IntroPremium() {
   useEffect(() => {
     if (phase === "coach_hf") {
       Animated.timing(hfOpacity, { toValue: 1, duration: 400, useNativeDriver: true }).start();
-    } else if (phase === "coach_la") {
-      Animated.timing(laOpacity, { toValue: 1, duration: 400, useNativeDriver: true }).start();
     } else if (phase === "coach_settings") {
-      Animated.timing(settingsOpacity, { toValue: 1, duration: 400, useNativeDriver: true }).start();
+      // v66.0 (Fabio 2026-06): coach_la RIMOSSO — LA è già introdotta in Intro V3
+      // e la sua narrazione ("cuore di Ollenya") non deve essere ripetuta qui.
+      // Il fake-pill LA resta visibile per contesto ambiente, ma non c'è più
+      // card/ring dedicata. Il fade-in della LA avviene ora insieme a settings.
+      Animated.parallel([
+        Animated.timing(laOpacity, { toValue: 1, duration: 400, useNativeDriver: true }),
+        Animated.timing(settingsOpacity, { toValue: 1, duration: 400, useNativeDriver: true }),
+      ]).start();
     }
   }, [phase, hfOpacity, laOpacity, settingsOpacity]);
 
@@ -316,49 +320,37 @@ export default function IntroPremium() {
   }, [phase]);
 
   const advance = useCallback(() => {
+    // v66.0 (Fabio 2026-06): sequenza semplificata. Rimossi coach_la e
+    // coach_swipe — spiegazione scrittura e Lascia Andare sono già in
+    // Intro V3, non vanno ripetute all'upgrade a Premium.
     if (phase === "coach_orb") setPhase("coach_hf");
-    else if (phase === "coach_hf") setPhase("coach_la");
-    else if (phase === "coach_la") setPhase("coach_settings");
-    else if (phase === "coach_settings") setPhase("coach_swipe");
-    else if (phase === "coach_swipe") doAutoSwipeAndHandoff();
+    else if (phase === "coach_hf") setPhase("coach_settings");
+    else if (phase === "coach_settings") doAutoSwipeAndHandoff();
   }, [phase]);
 
-  // ==================== AUTO-SWIPE + HANDOFF (Fase 6/Passo Swipe) ==========
+  // ==================== HANDOFF (v66.0) ==================================
+  // v66.0 (Fabio 2026-06): rimosso l'auto-swipe dimostrativo per "scrittura"
+  // — quella feature è già introdotta in Intro V3 con write_test reale.
+  // Ora fade-out diretto → home. Marchiamo l'intro come vista sia in
+  // SecureStore (mirror locale) sia lato server (idempotente).
   const doAutoSwipeAndHandoff = useCallback(() => {
     setPhase("handoff");
-    // === FIX 2026-08-27 v65.7 — Loop /intro-premium (Fabio/Stefania) =========
-    // Prima: SecureStore.intro_premium_seen_at veniva scritto SOLO dentro
-    // IntroPremiumFinalStep.finish() (tap "Ho capito"). Ma la home router
-    // intro-premium (index.tsx ~1226) legge SecureStore al mount: se vuoto,
-    // considera l'intro "needed" e RIDIRIGE a /intro-premium PRIMA che
-    // l'overlay finale possa mostrare il tap → LOOP infinito osservato
-    // su Android in produzione da Stefania (2026-08-27).
-    // Ora scriviamo il mirror SecureStore GIÀ ORA (fine coach_swipe), così
-    // il router locale trova "seen" e non ridirige. Il backend viene
-    // marcato al tap "Ho capito" dell'overlay finale (invariato).
-    // Fallback safety: se l'utente killa l'app durante l'overlay finale,
-    // al prossimo boot il mirror locale dirà seen → nessun re-loop.
-    // Trade-off accettato: perde la clip di chiusura Cielo in caso di kill,
-    // ma non resta bloccata nell'intro.
     (async () => {
       try {
         await SecureStore.setItemAsync("intro_premium_seen_at", String(Date.now()));
-      } catch (e) { console.warn(`${TAG} early SecureStore mark failed:`, e); }
+      } catch (e) { console.warn(`${TAG} SecureStore mark failed:`, e); }
+      try {
+        const { api } = await import("../lib/api");
+        await (api as any).markIntroPremiumSeen?.();
+      } catch (e) { console.warn(`${TAG} backend mark failed:`, e); }
     })();
-    // Fade-out card (opacity già gestita da phase change)
-    // Auto-swipe: -40px sinistra, poi torna (280ms + 220ms), poi handoff
-    Animated.sequence([
-      Animated.timing(swipeX, { toValue: -40, duration: 280, easing: Easing.out(Easing.ease), useNativeDriver: true }),
-      Animated.timing(swipeX, { toValue: 0,   duration: 220, easing: Easing.in(Easing.ease),  useNativeDriver: true }),
-    ]).start(() => {
-      // Fade-out schermo poi handoff
-      Animated.timing(screenOpacity, { toValue: 0, duration: 300, useNativeDriver: true })
-        .start(() => {
-          try { router.replace("/?intro=writing_final"); }
-          catch (e) { console.warn(`${TAG} handoff router.replace failed:`, e); }
-        });
-    });
-  }, [swipeX, screenOpacity]);
+    // Fade-out schermo diretto (nessuno auto-swipe)
+    Animated.timing(screenOpacity, { toValue: 0, duration: 380, useNativeDriver: true })
+      .start(() => {
+        try { router.replace("/"); }
+        catch (e) { console.warn(`${TAG} handoff router.replace failed:`, e); }
+      });
+  }, [screenOpacity]);
 
   // ==================== RENDER CARD ====================
   const renderCard = (
@@ -484,29 +476,26 @@ export default function IntroPremium() {
           </Animated.View>
         )}
 
-        {/* Elementi UI progressivi */}
-        {(phase === "coach_hf" || phase === "coach_la" ||
-          phase === "coach_settings" || phase === "coach_swipe" ||
+        {/* Elementi UI progressivi.
+            v66.0 (Fabio 2026-06): la fake-pill "Lascia andare" appare
+            insieme al fake-settings (contesto ambiente, senza card dedicata).
+            Il fake-HF appare al phase coach_hf come prima. */}
+        {(phase === "coach_hf" || phase === "coach_settings" ||
           phase === "handoff") && renderFakeHandsFree()}
-        {(phase === "coach_la" || phase === "coach_settings" ||
-          phase === "coach_swipe" || phase === "handoff") && renderFakeLA()}
-        {(phase === "coach_settings" || phase === "coach_swipe" ||
-          phase === "handoff") && renderFakeSettings()}
+        {(phase === "coach_settings" || phase === "handoff") && renderFakeLA()}
+        {(phase === "coach_settings" || phase === "handoff") && renderFakeSettings()}
       </Animated.View>
 
       {/* Coach-mark cards (fuori dallo swipe wrapper).
           Ring/evidenziature RIMESSE (Fabio 2026-08-23): l'utente le vuole
-          per marcare visivamente quale elemento la card sta indicando. */}
+          per marcare visivamente quale elemento la card sta indicando.
+          v66.0: rimosse card coach_la e coach_swipe. */}
       {phase === "coach_orb" &&
         renderCard(RECTS.orb, "Toccami", "Il secondo tocco è per fermarmi.", true, true)}
       {phase === "coach_hf" &&
         renderCard(RECTS.hf, "Mani libere", "Se lo attivi ti ascolto in continuo. Non serve toccarmi.", true, true)}
-      {phase === "coach_la" &&
-        renderCard(RECTS.la, "Lascia andare", "Tocca per tornare al mio cuore.", false, true)}
       {phase === "coach_settings" &&
         renderCard(RECTS.settings, "Impostazioni", "Da qui cambi voce, tema, memoria.", true, true)}
-      {phase === "coach_swipe" &&
-        renderCard(null, "Scrittura", "Scorri verso sinistra per scrivermi.", false, false)}
     </Animated.View>
   );
 }

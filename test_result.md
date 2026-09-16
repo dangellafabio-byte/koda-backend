@@ -1,3 +1,39 @@
+## SESSIONE 2026-06-16 — v66.0 (Build 41): Intro V3 write_test + IntroPremium simplified + LA modal copy
+
+### 🎯 Interventi
+1. **Intro V3 — write_test (P0)**: `components/OllenyaIntroV3.tsx`
+   - Nuovo Turn kind `write_test` (targetCount=5) tra la conferma nome e l'handoff LA
+   - Overlay chat testuale minimale (bubble user/ai, TextInput, counter N/5)
+   - Ogni invio → `api.converse(text, undefined, { is_voice_turn: false })` — consuma quota Free reale
+   - Auto-advance a 5 messaggi (delay 1.4s per leggere l'ultima risposta)
+   - "Continua" appare dopo ≥1 messaggio (skip parziale)
+   - Error handling: quota exhaustion → force advance; network error → retry inline
+   - Rifrasato lo speech pre-test in "Adesso proviamola insieme…" e il closing in "Perfetto. Da ora avrai 5 messaggi ogni 3 giorni…"
+
+2. **Lascia Andare modal copy (P1)**: `app/lascia-andare.tsx`
+   - Testo aggiornato: "Non è una chat. È il tuo silenzio. Io non rispondo, non commento. Serve solo a lasciarlo uscire."
+   - Rimosso "Puoi scrivere o parlare senza filtri" (fuorviante — suggeriva chat)
+
+3. **IntroPremium semplificato (P1)**: `components/IntroPremium.tsx`
+   - RIMOSSI phase `coach_la` e `coach_swipe` — LA e scrittura sono già introdotti in Intro V3
+   - Sequenza ridotta a 3 coach-mark: `coach_orb` → `coach_hf` → `coach_settings`
+   - Handoff: fade-out diretto a `/`, marca `intro_premium_seen_at` sia in SecureStore sia via `POST /api/intro-premium/mark-seen` (rimosso query param `?intro=writing_final` → IntroPremiumFinalStep non viene più montato)
+   - Fake-pill LA e fake-settings ora fade-in insieme (contesto ambiente)
+
+4. **Build bump**: app.json v1.0.134 build 41 (Android versionCode 41).
+
+### 🔍 Verifica backend (testing_agent iter 22)
+- 6/6 endpoint pass. `intro-premium/state`, `intro-premium/mark-seen` (idempotente), `/converse`, `/freemium/status` — contract intatto.
+- Test regression riusabile: `/app/backend/tests/test_iter22_ollenya_intro_jan2026.py`.
+
+### ⚠️ Note QA
+- Il write_test consuma quota Free reale (5 msg/3 giorni). Utente completa intro = ha usato tutti i suoi 5 messaggi. Coerente con lo storytelling ("questi 5 li hai visti in azione").
+- Intro V3 richiede microfono → non testabile via web preview. QA manuale su EAS Build 41.
+- IntroPremium richiede Premium tier + boot iniziale → testabile via `POST /api/dev/set-tier` + `POST /api/dev/intro-premium/reset`.
+
+---
+
+
 ## SESSIONE 2026-08-28 — v65.13: FIX MID-SESSION TIER DOWNGRADE (P0)
 
 ### 🔴 P0 — Root cause identificata dai log iOS

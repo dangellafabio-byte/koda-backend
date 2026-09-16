@@ -1482,11 +1482,11 @@ export default function LasciaAndareScreen() {
             </View>
             <Text style={styles.laOnboardingTitle}>Questo è Lascia Andare</Text>
             <Text style={styles.laOnboardingText}>
-              Puoi scrivere o parlare senza filtri.
-              {"\n\n"}
               <Text style={{ fontWeight: "600", color: "#F5E6CC" }}>
-                Ollenya non ti risponde qui.
+                Non è una chat. È il tuo silenzio.
               </Text>
+              {"\n\n"}
+              Io non rispondo, non commento. Serve solo a lasciarlo uscire.
               {"\n\n"}
               Niente viene salvato. È uno spazio solo tuo.
             </Text>

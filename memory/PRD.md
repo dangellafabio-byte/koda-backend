@@ -1247,3 +1247,17 @@ Seed 30 eventi (20 turbo 10s+5s user, 10 flash 7s+4s user) → endpoint ritorna:
 - Eventi ANTECEDENTI al deploy non hanno `tts_seconds`/`user_audio_ms` → esclusi dal $match. La finestra utile di dati parte dal deploy.
 - Il token admin è lo stesso di `/api/admin/feedback/stats` — riuso identità.
 
+
+
+---
+
+## 2026-06-16 — v66.0 Build 41
+
+### Interventi
+- **Intro V3 write_test**: Turn interattivo "test 5 frasi" tra conferma nome e handoff LA. Overlay chat testuale con counter N/5 + "Continua" post primo messaggio. Consuma quota Free reale via `/api/converse`. Auto-advance a 5.
+- **Lascia Andare modal copy**: Aggiornato in "Non è una chat. È il tuo silenzio. Io non rispondo, non commento." (rimuove ambiguità "AI risponde").
+- **IntroPremium (Premium onboarding) semplificato**: Rimossi `coach_la` e `coach_swipe`. Sequenza a 3 coach-mark: orb → hands-free → settings. Handoff diretto a `/` con mark-seen backend.
+
+### Verifica
+- Backend testing_agent iter 22: 6/6 pass. Endpoint intro-premium/{state,mark-seen}, converse, freemium/status contract intatti.
+- QA on-device richiesta per Intro V3 (mic-gated).

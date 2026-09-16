@@ -1,0 +1,40 @@
+{
+  "summary": "Backend regression dopo modifiche puramente frontend all'Intro V3 di Ollenya (OllenyaIntroV3.tsx write_test turn, IntroPremium.tsx rimozione 2 coach phases, lascia-andare.tsx testo modale, app.json bump 1.0.134/41). Verificati i 4 endpoint chiave: GET /api/intro-premium/state, POST /api/intro-premium/mark-seen (idempotente), POST /api/converse (Free tier), GET /api/freemium/status. 6/6 pytest PASS in 7.78s (/app/backend/tests/test_iter22_ollenya_intro_jan2026.py). Contract confermato: /intro-premium/state ritorna {seen:false, seen_at:null} per profilo fresh (X-User-Id nuovo UUID); mark-seen ritorna {seen:true, seen_at:<iso>} e la seconda chiamata è idempotente (stesso seen_at); /converse restituisce 200 con {user_entry, ai_entry, profile}, user_entry.role=user text=input, ai_entry.role='ai' (NB: non 'assistant' — backend usa 'ai' per Ollenya), accetta senza errori il campo extra 'bridged_secrets' del payload frontend (Pydantic ignore extra); /freemium/status ritorna schema completo con subscription_active=false, can_send=true, paywall_required=false, e free_messages_used si incrementa dopo una /converse. Nessun cambio backend richiesto — le modifiche E1 sono pure frontend e non toccano i contract server-side. Nessun frontend testing come richiesto (intro flow gated da mic permission, QA manuale on-device).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter22_ollenya_intro_jan2026.py",
+    "/app/test_reports/pytest/iter22_ollenya_intro.xml"
+  ],
+  "action_items": [
+    "NESSUN'AZIONE backend richiesta. Le 4 API interessate dai cambi frontend rispondono coerentemente al contract dichiarato in /app/frontend/lib/api.ts. Procedere con la QA manuale on-device dell'Intro V3 write_test turn (5 messaggi liberi → POST /api/converse) e della semplificazione IntroPremium (handoff diretto a '/' dopo mark-seen).",
+    "NOTE per E1 (documentazione): il contract di /api/converse ritorna ai_entry.role='ai' non 'assistant'. Se il client frontend TS lo verifica esplicitamente, assicurarsi che il type sia 'user' | 'ai' (non 'assistant'). Vedi /app/backend/server.py TimelineEntry."
+  ],
+  "critical_code_review_comments": [
+    "server.py:2206-2222 ConverseRequest — modello Pydantic con text, audio_duration_ms, ephemeral, is_voice_turn. Il campo bridged_secrets che il client v65 invia NON è dichiarato: Pydantic (default extra='ignore') lo scarta silenziosamente → nessun 422. Se in futuro serve tracciarlo lato server, aggiungere `bridged_secrets: Optional[List[str]] = None` senza breaking change.",
+    "server.py:5488-5509 /intro-premium/state — corretto: try/except con fail-closed (seen=true) su errore backend per NON forzare l'intro su utenti che l'hanno completata. Reasonable choice.",
+    "server.py:5512-5532 /intro-premium/mark-seen — idempotenza verificata: se `intro_premium_seen_at` esiste già, ritorna il valore esistente senza sovrascrivere. Test 2a chiamata confermato stesso seen_at.",
+    "server.py:5535-5605 /freemium/status — schema completo, gestisce whitelist/24h-boost/premium-cap. Nessun impatto dai cambi frontend."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter22_ollenya_intro_jan2026.py (nuovo — 6 test, 5 classi)",
+    "/app/test_reports/pytest/iter22_ollenya_intro.xml (junit output 6/6 PASS in 7.78s)"
+  ],
+  "success_rate": {
+    "backend": "100% (6/6 pytest PASS in 7.78s)",
+    "frontend": "N/A — testing_type=backend only per richiesta E1 (intro gated da mic permission, QA manuale on-device)"
+  },
+  "seed_data_creation": "Ogni test usa un fresh_uid = UUID v4 lowercase nuovo → profilo temporaneo auto-creato da get_or_create_profile. Nessun cleanup esplicito (dati orfani innocui in taccuino_profile per uid random). Nessun impatto su dati Fabio/admin.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Regression file riutilizzabile: /app/backend/tests/test_iter22_ollenya_intro_jan2026.py (~8s, 6 test). BASE_URL è auto-risolto da EXPO_PUBLIC_BACKEND_URL in /app/frontend/.env (attualmente https://app-finder-408.preview.emergentagent.com), fallback http://localhost:8001. Header X-User-Id deve essere UUID v4 lowercase (regex _UUID_RE in server.py:634-636) — altri valori vengono downgradati a 'me' (utente shared). Per testare Free quota exhaustion serve chiamare /api/converse 5+ volte consecutive con lo stesso X-User-Id (default OLLENYA_FREE_TURNS_PER_PERIOD=5 in 72h). Nota contract: ai_entry.role='ai' NON 'assistant'. Il campo bridged_secrets nel payload frontend è extra-ignored da Pydantic (non regressione).",
+  "rca_of_issue": "N/A — nessun bug riscontrato. Task era regression di verifica post-cambi-frontend."
+}

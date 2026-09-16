@@ -38,6 +38,11 @@ import {
   Platform,
   Linking,
   Dimensions,
+  TextInput,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  ScrollView,
+  Keyboard,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -77,14 +82,18 @@ type OrbState = "idle" | "speaking" | "listening" | "thinking";
 type Turn =
   | { kind: "silence"; ms: number; label?: string; orbState?: OrbState }
   | { kind: "speak"; clipKey: keyof typeof CIELO_CLIPS }
-  | { kind: "listen"; maxMs?: number; showLabel?: boolean; noTranscript?: boolean }
-  // v65.51 (Fabio, lawyer feedback): TTS runtime con testo dinamico
+  | { kind: "listen"; maxMs?: number; showLabel?: boolean; noTranscript?: boolean }  // v65.51 (Fabio, lawyer feedback): TTS runtime con testo dinamico
   // basato su `userName` (o altre variabili). Se `getText()` ritorna
   // null → turno SALTATO. Usato per "Posso chiamarti Marco?".
   | { kind: "speak_dynamic"; getText: (ctx: { userName: string | null }) => string | null }
   // v65.51: mini-listen per catturare conferma sì/no (~7 sec).
   // Se pendingNameConfirm è null → turno SALTATO.
   | { kind: "listen_confirm"; maxMs?: number }
+  // v66.0 (Fabio 2026-06): step interattivo "prova le 5 frasi gratuite".
+  // Mostra chat overlay con input testuale + counter N/target. Ogni invio
+  // → api.converse → append reply. Al raggiungimento di `targetCount` (o
+  // tap "Continua" dopo ≥1 messaggio) → advance. Consuma quota reale.
+  | { kind: "write_test"; targetCount?: number }
   | { kind: "save_and_handoff" };
 
 // La sequenza — ogni pausa ha un'intenzione narrativa.
@@ -130,18 +139,31 @@ const CONVERSATION_V3: Turn[] = [
   },
   // #4 — v65.51: mini-listen per catturare "sì / no".
   { kind: "listen_confirm", maxMs: 7000 },
-  // #5 — v65.53 (Fabio, spec Free tier): due frasi di orientamento finale
-  // che presentano ESPLICITAMENTE i due spazi al primo boot. Prima la chat
-  // (funzione principale), poi Lascia Andare (spazio complementare). Non
-  // commerciale. Anche questa TTS runtime per coerenza con #1 (evita audio
-  // Koda residuo).
+  // #5 — v66.0 (Fabio 2026-06, spec Free tier con test interattivo):
+  // dopo la conferma del nome, introduciamo IL MOMENTO DI PROVA. La riga
+  // sostituisce il vecchio annuncio statico "hai 5 messaggi ogni 3 giorni"
+  // — ora è il preludio all'esperienza reale della chat.
   {
     kind: "speak_dynamic",
     getText: () =>
-      "Quando vuoi che ti risponda davvero, apri la chat con me dall'alto: hai 5 messaggi ogni 3 giorni. " +
-      "E se ti serve solo scrivere, senza risposta, c'è anche Lascia Andare, sempre lì per te.",
+      "Adesso proviamola insieme. Scrivimi qualcosa qui sotto — hai 5 messaggi.",
   },
-  // #6 — flag intro V3 completata + handoff verso Lascia Andare (salva name)
+  // #6 — v66.0: STEP INTERATTIVO. L'utente scrive fino a 5 messaggi reali.
+  // Ogni turno chiama api.converse → riceve la risposta di Ollenya. Quando
+  // raggiunge 5 (o tap "Continua" dopo ≥1) → advance. Consuma quota REALE
+  // (i 5 messaggi/3giorni del tier Free coincidono con questo test).
+  { kind: "write_test", targetCount: 5 },
+  // #7 — v66.0: closing dopo il test. Ricapitola: "questi 5 li hai usati,
+  // ne avrai altri 5 ogni 3 giorni. Se ti serve solo scrivere senza
+  // risposta, c'è Lascia Andare." Ponte narrativo verso LA (destinazione
+  // handoff).
+  {
+    kind: "speak_dynamic",
+    getText: () =>
+      "Perfetto. Da ora avrai 5 messaggi ogni 3 giorni. " +
+      "E se ti serve solo scrivere, senza risposta, c'è Lascia Andare, sempre lì per te.",
+  },
+  // #8 — flag intro V3 completata + handoff verso Lascia Andare (salva name)
   { kind: "save_and_handoff" },
 ];
 
@@ -248,6 +270,23 @@ export default function OllenyaIntroV3() {
 
   // Mic permission blocca il flusso?
   const [micBlocked, setMicBlocked] = useState(false);
+
+  // v66.0 (Fabio 2026-06): stato del turno WRITE_TEST (test 5 frasi gratuite).
+  // - writeMessages: log locale (non persistente) delle bolle mostrate durante
+  //   il turno. Il backend le salva già in timeline via /converse.
+  // - writeCount: numero di messaggi UTENTE inviati con successo (0..target).
+  // - writeInput: buffer del TextInput.
+  // - writeSending: gate anti double-tap durante la fetch a /converse.
+  // - writeError: stringa mostrata sotto l'input (rete/quota/etc). Nessun
+  //   modal, coerente con la palette narrativa.
+  type WriteMsg = { id: string; role: "user" | "ai"; text: string };
+  const [writeMessages, setWriteMessages] = useState<WriteMsg[]>([]);
+  const [writeCount, setWriteCount] = useState(0);
+  const [writeInput, setWriteInput] = useState("");
+  const [writeSending, setWriteSending] = useState(false);
+  const [writeError, setWriteError] = useState<string | null>(null);
+  const writeActiveRef = useRef(false);
+  const writeScrollRef = useRef<ScrollView | null>(null);
 
   const shownLabels = useRef<Set<string>>(new Set());
   const currentPlayerRef = useRef<AudioPlayer | null>(null);
@@ -887,6 +926,98 @@ export default function OllenyaIntroV3() {
     });
   }, [router, screenOpacity, userName]);
 
+  // ==================== WRITE_TEST HANDLERS (v66.0) ====================
+  // Test interattivo delle 5 frasi gratuite durante l'intro. Ogni invio
+  // chiama /api/converse (consuma quota REALE del tier Free). Al
+  // raggiungimento di `WRITE_TEST_TARGET` (o tap "Continua" dopo ≥1)
+  // → advance() al turno successivo.
+  const WRITE_TEST_TARGET = 5;
+
+  const advanceFromWriteTest = useCallback(() => {
+    if (!writeActiveRef.current) return;
+    writeActiveRef.current = false;
+    setWriteError(null);
+    console.log(`[${TAG}] write_test complete (count=${writeCount}) → advance`);
+    // Piccola pausa per lasciare che l'utente veda l'ultima risposta
+    timerRef.current = setTimeout(() => {
+      if (!mountedRef.current) return;
+      try { Keyboard.dismiss(); } catch {}
+      advance();
+    }, 400);
+  }, [writeCount, advance]);
+
+  const handleWriteSend = useCallback(async () => {
+    const text = writeInput.trim();
+    if (!text || writeSending) return;
+    if (writeCount >= WRITE_TEST_TARGET) return;
+    setWriteSending(true);
+    setWriteError(null);
+    // Ottimista: aggiungiamo subito la bolla utente
+    const userMsg: WriteMsg = {
+      id: `u-${Date.now()}`,
+      role: "user",
+      text,
+    };
+    setWriteMessages((prev) => [...prev, userMsg]);
+    setWriteInput("");
+    // Scroll to bottom
+    setTimeout(() => {
+      try { writeScrollRef.current?.scrollToEnd({ animated: true }); } catch {}
+    }, 60);
+    try {
+      const resp = await api.converse(text, undefined, { is_voice_turn: false });
+      if (!mountedRef.current) return;
+      const aiText =
+        (resp?.ai_entry as any)?.text ||
+        (resp?.ai_entry as any)?.text_clean ||
+        "";
+      const aiMsg: WriteMsg = {
+        id: `a-${Date.now()}`,
+        role: "ai",
+        text: aiText || "…",
+      };
+      setWriteMessages((prev) => [...prev, aiMsg]);
+      const newCount = writeCount + 1;
+      setWriteCount(newCount);
+      setTimeout(() => {
+        try { writeScrollRef.current?.scrollToEnd({ animated: true }); } catch {}
+      }, 60);
+      // Auto-advance al target
+      if (newCount >= WRITE_TEST_TARGET) {
+        // Diamo ~1.4s per leggere l'ultima risposta prima del handoff
+        setTimeout(() => {
+          if (!mountedRef.current) return;
+          advanceFromWriteTest();
+        }, 1400);
+      }
+    } catch (e: any) {
+      if (!mountedRef.current) return;
+      console.warn(`[${TAG}] write_test converse failed:`, e);
+      // Rollback ottimista
+      setWriteMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
+      setWriteInput(text);
+      const msg = String(e?.message || e || "");
+      if (msg.includes("429") || msg.toLowerCase().includes("quota")) {
+        setWriteError("Hai esaurito le 5 frasi. Continuiamo.");
+        // Se quota esaurita, forziamo l'avanzamento
+        setTimeout(() => {
+          if (!mountedRef.current) return;
+          advanceFromWriteTest();
+        }, 1600);
+      } else {
+        setWriteError("Riprova tra un istante.");
+      }
+    } finally {
+      if (mountedRef.current) setWriteSending(false);
+    }
+  }, [writeInput, writeSending, writeCount, advanceFromWriteTest]);
+
+  const handleWriteSkip = useCallback(() => {
+    // Skip disponibile solo dopo almeno 1 messaggio inviato
+    if (writeCount < 1) return;
+    advanceFromWriteTest();
+  }, [writeCount, advanceFromWriteTest]);
+
   // ==================== TURN EXECUTOR ====================
   useEffect(() => {
     if (!currentTurn) return;
@@ -965,6 +1096,21 @@ export default function OllenyaIntroV3() {
       }
       case "save_and_handoff": {
         doSaveAndHandoff();
+        break;
+      }
+      case "write_test": {
+        // v66.0 (Fabio 2026-06): step interattivo. Puliamo qualsiasi
+        // listener STT/audio, mettiamo l'orb in "idle" (attesa passiva
+        // mentre l'utente scrive) e apriamo il pannello. L'advance
+        // avviene ESCLUSIVAMENTE tramite advanceFromWriteTest() (auto
+        // al raggiungimento di targetCount o al tap "Continua").
+        try {
+          console.log(`[${TAG} DIAG] write_test targetCount=${currentTurn.targetCount ?? 5}`);
+        } catch {}
+        setOrbState("idle");
+        writeActiveRef.current = true;
+        // Non impostiamo alcun timer di advance: il turno rimane finché
+        // l'utente non completa (5 messaggi) o preme "Continua".
         break;
       }
     }
@@ -1170,6 +1316,126 @@ export default function OllenyaIntroV3() {
           </View>
         </View>
       )}
+
+      {/* === v66.0 (Fabio 2026-06) — WRITE_TEST OVERLAY ==========================
+          Attivo SOLO durante il turno write_test. Copre lo schermo in
+          semi-trasparenza sull'orb, presenta la chat testuale con counter
+          N/5 e un pulsante "Continua" che appare dopo il primo messaggio.
+          ==================================================================== */}
+      {currentTurn?.kind === "write_test" && micGateStatus === "granted" && !micBlocked && (
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={styles.writeTestOverlay}
+          pointerEvents="box-none"
+        >
+          <View style={[styles.writeTestBackdrop, { paddingTop: insets.top + 12 }]} pointerEvents="box-none">
+            <View style={styles.writeTestHeader}>
+              <Text style={styles.writeTestCounter}>
+                {`${Math.min(writeCount, WRITE_TEST_TARGET)} / ${WRITE_TEST_TARGET}`}
+              </Text>
+              {writeCount >= 1 && writeCount < WRITE_TEST_TARGET ? (
+                <TouchableOpacity
+                  onPress={handleWriteSkip}
+                  style={styles.writeTestContinueBtn}
+                  testID="intro-v3-write-continue"
+                >
+                  <Text style={styles.writeTestContinueText}>Continua</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            <ScrollView
+              ref={writeScrollRef}
+              style={styles.writeTestList}
+              contentContainerStyle={styles.writeTestListContent}
+              keyboardShouldPersistTaps="handled"
+            >
+              {writeMessages.length === 0 ? (
+                <View style={styles.writeTestHintWrap}>
+                  <Text style={styles.writeTestHintText}>
+                    Scrivi qui la prima cosa che ti passa per la testa.
+                  </Text>
+                </View>
+              ) : null}
+              {writeMessages.map((m) => (
+                <View
+                  key={m.id}
+                  style={[
+                    styles.writeBubbleRow,
+                    m.role === "user" ? styles.writeBubbleRowUser : styles.writeBubbleRowAi,
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.writeBubble,
+                      m.role === "user" ? styles.writeBubbleUser : styles.writeBubbleAi,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.writeBubbleText,
+                        m.role === "user" ? styles.writeBubbleTextUser : styles.writeBubbleTextAi,
+                      ]}
+                    >
+                      {m.text}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+              {writeSending ? (
+                <View style={[styles.writeBubbleRow, styles.writeBubbleRowAi]}>
+                  <View style={[styles.writeBubble, styles.writeBubbleAi]}>
+                    <ActivityIndicator color="#D4B896" size="small" />
+                  </View>
+                </View>
+              ) : null}
+            </ScrollView>
+            {writeError ? (
+              <Text style={styles.writeTestError}>{writeError}</Text>
+            ) : null}
+            <View
+              style={[
+                styles.writeTestInputRow,
+                { paddingBottom: Math.max(insets.bottom, 12) },
+              ]}
+            >
+              <TextInput
+                style={styles.writeTestInput}
+                value={writeInput}
+                onChangeText={setWriteInput}
+                placeholder="Scrivimi qualcosa…"
+                placeholderTextColor="rgba(226,232,240,0.45)"
+                editable={!writeSending && writeCount < WRITE_TEST_TARGET}
+                multiline
+                maxLength={500}
+                onSubmitEditing={handleWriteSend}
+                returnKeyType="send"
+                blurOnSubmit={false}
+                testID="intro-v3-write-input"
+              />
+              <TouchableOpacity
+                onPress={handleWriteSend}
+                disabled={!writeInput.trim() || writeSending || writeCount >= WRITE_TEST_TARGET}
+                style={[
+                  styles.writeTestSendBtn,
+                  (!writeInput.trim() || writeSending || writeCount >= WRITE_TEST_TARGET) &&
+                    styles.writeTestSendBtnDisabled,
+                ]}
+                testID="intro-v3-write-send"
+              >
+                <Ionicons
+                  name="arrow-up"
+                  size={20}
+                  color={
+                    !writeInput.trim() || writeSending || writeCount >= WRITE_TEST_TARGET
+                      ? "rgba(31,26,54,0.55)"
+                      : "#1F1A36"
+                  }
+                />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      )}
     </Animated.View>
   );
 }
@@ -1311,5 +1577,135 @@ const styles = StyleSheet.create({
   micBlockedSecondaryText: {
     color: "rgba(226,232,240,0.55)",
     fontSize: 13,
+  },
+  // === v66.0 (Fabio 2026-06) — WRITE_TEST STYLES ==============================
+  writeTestOverlay: {
+    position: "absolute",
+    top: 0, left: 0, right: 0, bottom: 0,
+    zIndex: 50,
+  },
+  writeTestBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15,12,28,0.94)",
+    paddingHorizontal: 16,
+  },
+  writeTestHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    marginBottom: 6,
+  },
+  writeTestCounter: {
+    color: "rgba(212,184,150,0.85)",
+    fontSize: 14,
+    fontWeight: "600",
+    letterSpacing: 0.5,
+  },
+  writeTestContinueBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(212,184,150,0.55)",
+    backgroundColor: "rgba(212,184,150,0.10)",
+  },
+  writeTestContinueText: {
+    color: "#F5E6CC",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  writeTestList: {
+    flex: 1,
+  },
+  writeTestListContent: {
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  writeTestHintWrap: {
+    marginTop: 24,
+    paddingHorizontal: 12,
+    alignItems: "center",
+  },
+  writeTestHintText: {
+    color: "rgba(226,232,240,0.55)",
+    fontSize: 15,
+    fontStyle: "italic",
+    textAlign: "center",
+    lineHeight: 22,
+  },
+  writeBubbleRow: {
+    marginVertical: 4,
+    flexDirection: "row",
+  },
+  writeBubbleRowUser: {
+    justifyContent: "flex-end",
+  },
+  writeBubbleRowAi: {
+    justifyContent: "flex-start",
+  },
+  writeBubble: {
+    maxWidth: "82%",
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+  },
+  writeBubbleUser: {
+    backgroundColor: "#D4B896",
+    borderTopRightRadius: 4,
+  },
+  writeBubbleAi: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(212,184,150,0.20)",
+    borderTopLeftRadius: 4,
+  },
+  writeBubbleText: {
+    fontSize: 15,
+    lineHeight: 21,
+  },
+  writeBubbleTextUser: {
+    color: "#1F1A36",
+    fontWeight: "500",
+  },
+  writeBubbleTextAi: {
+    color: "#F5E6CC",
+  },
+  writeTestError: {
+    color: "#F87171",
+    fontSize: 12,
+    textAlign: "center",
+    marginBottom: 4,
+  },
+  writeTestInputRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    paddingTop: 8,
+    gap: 8,
+  },
+  writeTestInput: {
+    flex: 1,
+    minHeight: 44,
+    maxHeight: 120,
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === "ios" ? 12 : 8,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(212,184,150,0.22)",
+    color: "#F5E6CC",
+    fontSize: 15,
+  },
+  writeTestSendBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#D4B896",
+  },
+  writeTestSendBtnDisabled: {
+    backgroundColor: "rgba(212,184,150,0.30)",
   },
 });
