@@ -55,7 +55,8 @@ import {
 import { ensureSpeechPermission } from "../lib/speechPermission";
 import { useLiveCountdown } from "../lib/freeCountdown";
 import FreeLimitOverlay from "../components/FreeLimitOverlay";
-import HomeChooser from "../components/HomeChooser";
+import FreeOverlay from "../components/FreeOverlay";
+import PremiumTeaserToast from "../components/PremiumTeaserToast";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { checkHasSpeech, logGateDecision } from "../lib/silenceGate";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId, preloadFillerPool } from "../lib/speech";
@@ -1031,20 +1032,17 @@ export default function Taccuino() {
     countdown: string;
     periodEndsAtIso: string | null;
   }>({ visible: false, greeting: "", countdown: "", periodEndsAtIso: null });
-  // === HOME TAB v65.53 — "ollenya" (chat) vs "lascia_andare" (sfogo) =====
-  // Free users vedono entrambe le tab nell'header; Premium vede solo
-  // "ollenya" (Lascia Andare accessibile via bottone separato).
-  // [v65.55+] Sostituito dal chooser iniziale: `screenMode` sotto governa
-  // la prima schermata post-intro. Il vecchio `homeTab` resta come no-op
-  // per non rompere referenze pendenti — sempre fissato a "ollenya".
+  // === HOME TAB v65.53 — kept as no-op for backcompat (v65.56 rimosso chooser) ===
   const [homeTab, setHomeTab] = useState<"ollenya" | "lascia_andare">("ollenya");
-  // === HOME CHOOSER v65.55 (sett 2026) =======================================
-  // Prima schermata post-intro presenta 2 opzioni ALLA PARI (Ollenya vs Lascia
-  // andare) senza gerarchia di default. `screenMode` governa il rendering:
-  //   - "chooser": mostra HomeChooser (default a ogni relaunch)
-  //   - "ollenya": mostra la home eclissi + chat/voce
-  // Tap card Lascia andare → router.push("/lascia-andare") — non cambia mode.
-  const [screenMode, setScreenMode] = useState<"chooser" | "ollenya">("chooser");
+  // === PREMIUM TEASER TOAST v65.56 (Fabio 2026-09) ============================
+  // Quando un utente Free tocca elementi disabilitati (eclissi, impostazioni,
+  // hands-free), mostriamo un toast breve "Questa è per la versione Premium"
+  // con link al paywall. Auto-dismiss dopo 2500ms. Non bloccante.
+  const [premiumTeaserVisible, setPremiumTeaserVisible] = useState(false);
+  const showPremiumTeaser = useCallback(() => {
+    setPremiumTeaserVisible(true);
+    setTimeout(() => setPremiumTeaserVisible(false), 2500);
+  }, []);
   const [recapText, setRecapText] = useState<string | null>(null);
   const [showRecap, setShowRecap] = useState(false);
 
@@ -6557,28 +6555,13 @@ export default function Taccuino() {
           <HandsFreeOrb active={handsFree} size={26} />
         </TouchableOpacity>
 
-        {/* === TAB PILL FREE RIMOSSA v65.55 (Fabio 2026-09) ==================
-            Sostituita dal HomeChooser iniziale a due card pari (vedi early
-            return sopra). Il chooser è la nuova "prima schermata" post-intro
-            per tutti (Free e Premium): l'utente sceglie esplicitamente tra
-            "Parla con Ollenya" e "Lascia andare" senza gerarchia di default.
-            Contatore Free è ora mostrato dentro il chooser (badge discreto
-            "N/5 messaggi in questo periodo"). Nessuna tab in header.
-
-            Al centro dell'header lasciamo solo un bottone "back to chooser"
-            (freccia indietro) che riporta l'utente alla schermata di scelta.
-            Piccolo, discreto, sempre nella stessa posizione: aiuta senza
-            invadere il layout emotivo dell'app.
+        {/* === TAB PILL FREE RIMOSSA v65.55 → v65.56 =========================
+            Il chooser è stato rimosso. La home tradizionale è ripristinata
+            per tutti. Per il tier Free l'intera home è coperta da un overlay
+            scuro (FreeOverlay sotto), con l'unico elemento attivo = pill
+            "Lascia andare". Tap su eclissi/impostazioni/hands-free →
+            PremiumTeaserToast + link paywall.
             ============================================================ */}
-        <TouchableOpacity
-          onPress={() => setScreenMode("chooser")}
-          hitSlop={12}
-          style={{ paddingHorizontal: 8, paddingVertical: 6, borderRadius: 999 }}
-          testID="back-to-chooser"
-          accessibilityLabel="Torna alla schermata di scelta"
-        >
-          <Ionicons name="chevron-back" size={22} color={theme.textMuted} />
-        </TouchableOpacity>
 
         {/* Slot destro: Menu impostazioni. Pulsante audio Modalità Telefono
             rimosso nel rollback 2026-07-13 (regressioni STT). */}
@@ -6646,14 +6629,54 @@ export default function Taccuino() {
       </View>
 
       {/* === RIGA 2: TOGGLE "LASCIA ANDARE" (centrato, più in basso) === */}
-      {/* === PILL "Lascia andare" RIMOSSA v65.55 (Fabio 2026-09) =============
-          Sostituita dal HomeChooser (early return sopra) che presenta le due
-          opzioni pari. La logica di intro progressive discovery (mostrare
-          il modal descrittivo la prima volta) è stata migrata dentro
-          l'handler `onPickLasciaAndare` del chooser (vedi wrapper poco sopra
-          l'early return). `pendingLasciaAndareVoice` e `showLasciaAndareIntro`
-          restano attivi per compatibilità con LasciaAndareIntroModal.
+      {/* === PILL "Lascia andare" v65.56 (ripristinato) =====================
+          Entry point one-tap alla stanza silenziosa. Per Free è l'UNICO
+          elemento cliccabile della home (tutto il resto è coperto da
+          FreeOverlay che intercetta i tap e mostra PremiumTeaserToast).
           ============================================================ */}
+      <View
+        style={[styles.confessionaleRow, { top: Math.max(insets.top + 100, 150) }]}
+        pointerEvents="box-none"
+      >
+        <View style={styles.headerCenter} pointerEvents="box-none">
+          <TouchableOpacity
+            ref={confessionaleBtnRef}
+            style={styles.confessionalToggle}
+            onPress={async () => {
+              const VID_TO_KV: Record<string, "aria" | "theo"> = {
+                "POuqf18evoXOKIqV2Px7": "aria",
+                "ll9WG7PDTuyHwgC5MD6g": "theo",
+              };
+              const kv =
+                ((profile as any)?.koda_voice as string | undefined) ||
+                VID_TO_KV[(profile?.settings?.tts_voice_id as string) || ""] ||
+                "aria";
+              let introSeen = true;
+              try {
+                const s = await api.getLasciaAndareIntroState();
+                introSeen = Boolean(s?.seen);
+              } catch (e) {
+                console.warn("[LasciaAndare] intro-state fetch failed, procedo:", e);
+              }
+              if (!introSeen) {
+                setPendingLasciaAndareVoice(kv);
+                setShowLasciaAndareIntro(true);
+                return;
+              }
+              try {
+                router.push(`/lascia-andare?voice=${encodeURIComponent(kv)}`);
+              } catch (e) {
+                console.warn("[LasciaAndare] navigation error:", e);
+              }
+            }}
+            hitSlop={10}
+            testID="lascia-andare-toggle"
+          >
+            <Text style={styles.confessionalToggleText}>Lascia andare</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
 
       {/* === HORIZONTAL PAGER: Voce (zen) | Lettura (timeline) ===
           Pagina 0 = SOLO la macchia centrale grande, niente testi, come
@@ -7568,81 +7591,6 @@ export default function Taccuino() {
     />
   ) : null;
 
-  // === HOME CHOOSER v65.55 — early return =====================================
-  // Se siamo in "chooser mode" e non ci sono flow modali attivi (intro V3,
-  // onboarding memoria, tour tap-to-know), mostra la prima schermata a due
-  // opzioni pari. Il chooser NON deve comparire durante:
-  //   - Intro V3 not completed (state != "completed")
-  //   - Onboarding modali attivi
-  //   - Tour "come funziono io" attivo
-  //   - Safety alert attivo (blocca tutto)
-  //   - Intro final "writing_final" attivo
-  const isPaidForChooser = (() => {
-    const tier = auth?.user?.profile?.subscription_tier;
-    return tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
-  })();
-
-  if (
-    screenMode === "chooser" &&
-    introV3State === "completed" &&
-    !showOnboarding &&
-    !tourActive &&
-    !safetyVisible &&
-    !showIntroFinal
-  ) {
-    return (
-      <HomeChooser
-        isPaid={isPaidForChooser}
-        freeStatus={
-          !isPaidForChooser && freemium
-            ? {
-                remaining: freemium.free_messages_remaining ?? 0,
-                limit: freemium.free_messages_limit ?? 5,
-                countdown_it: freeLimitOverlay.countdown || null,
-              }
-            : null
-        }
-        onPickOllenya={() => setScreenMode("ollenya")}
-        onPickLasciaAndare={async () => {
-          // === LASCIA ANDARE — logica migrata dalla vecchia pill (v65.55) ===
-          // Riproduce esattamente il flusso di apertura Lascia Andare che
-          // c'era nella pill del top-left: risoluzione voce Ollenya scelta,
-          // intro progressive discovery al primo accesso, poi navigazione.
-          const VID_TO_KV: Record<string, "aria" | "theo"> = {
-            "POuqf18evoXOKIqV2Px7": "aria",
-            "ll9WG7PDTuyHwgC5MD6g": "theo",
-          };
-          const kv =
-            ((profile as any)?.koda_voice as string | undefined) ||
-            VID_TO_KV[(profile?.settings?.tts_voice_id as string) || ""] ||
-            "aria";
-
-          // Intro progressive discovery: mostra modal descrittivo al primo
-          // accesso. Fetch server-side, in caso di errore procedi comunque.
-          let introSeen = true;
-          try {
-            const s = await api.getLasciaAndareIntroState();
-            introSeen = Boolean(s?.seen);
-          } catch (e) {
-            console.warn("[LasciaAndare] intro-state fetch failed, procedo:", e);
-          }
-
-          if (!introSeen) {
-            setPendingLasciaAndareVoice(kv);
-            setShowLasciaAndareIntro(true);
-            return;
-          }
-
-          try {
-            router.push(`/lascia-andare?voice=${encodeURIComponent(kv)}`);
-          } catch (e) {
-            console.warn("[LasciaAndare] navigation error:", e);
-          }
-        }}
-      />
-    );
-  }
-
   return (
     <View
       style={{ flex: 1 }}
@@ -7674,6 +7622,45 @@ export default function Taccuino() {
       {neonBorderEl}
       {activationPulseEl}
       {tourOverlay}
+
+      {/* === FREE OVERLAY v65.56 (Fabio 2026-09) ===========================
+          Per utenti Free (non paid), overlay scuro semi-trasparente che
+          copre l'intera home eclissi. Intercetta tutti i tap (tranne il
+          pill "Lascia andare", che vive fuori da questo z-index).
+          Tap → PremiumTeaserToast + link paywall.
+          Nascosto durante intro V3, onboarding, tour, safety, LA modal.
+          Nascosto per utenti Premium (tier paid).
+          =============================================================== */}
+      {(() => {
+        const tier = (profile as any)?.subscription_tier;
+        const isPaid = tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
+        const showFreeOverlay =
+          !isPaid &&
+          introV3State === "completed" &&
+          !showOnboarding &&
+          !tourActive &&
+          !safetyVisible &&
+          !showIntroFinal &&
+          !showLasciaAndareIntro;
+        return (
+          <>
+            <FreeOverlay
+              visible={showFreeOverlay}
+              onTap={() => {
+                console.log("[free_overlay] tap intercepted → premium teaser");
+                showPremiumTeaser();
+              }}
+            />
+            <PremiumTeaserToast
+              visible={premiumTeaserVisible}
+              onPressLink={() => {
+                setPremiumTeaserVisible(false);
+                try { router.push("/paywall"); } catch {}
+              }}
+            />
+          </>
+        );
+      })()}
 
       {/* === FREE LIMIT OVERLAY v65.53 (Fabio 2026-06) =====================
           Compare quando /api/converse ritorna 402 free_limit_exhausted.
@@ -8223,7 +8210,11 @@ const makeStyles = (t: any) => StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 14,
-    zIndex: 10,
+    // === v65.56 (Fabio 2026-09) ================================
+    // zIndex alzato a 850 per stare SOPRA il FreeOverlay (800).
+    // Il pill "Lascia andare" deve restare l'unico elemento cliccabile
+    // della home per gli utenti Free.
+    zIndex: 850,
   },
   // Banner di conferma "Configurazione salvata ✓"
   savedBanner: {
