@@ -1,0 +1,53 @@
+{
+  "summary": "Backend /api/tts endpoint verified. Endpoint itself is HEALTHY — the microdemo bypass works, the trial gate is skipped, and ElevenLabs returns real MP3 audio (~29-31 KB) when a valid voice_id is used. ROOT CAUSE of the 'Ollenya doesn't speak' bug: the frontend OllenyaIntroV3.tsx line 739 hardcodes voice_id='vTgTi6iSjMPqDpAcJfju', which does NOT exist on the ElevenLabs account tied to ELEVENLABS_API_KEY. ElevenLabs responds 404 voice_not_found; the backend re-raises as HTTP 500 with 'TTS error: status_code: 404, body: ...voice_not_found...'; the frontend playDynamicTTS sees !r.ok, prints a console warning and silently advances without playing audio. All other files in the app use voice_id='POuqf18evoXOKIqV2Px7' for the Cielo (Ollenya official female) voice — that voice_id works and returns 29,301 bytes of audio/mpeg on both localhost and the public URL.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/tts",
+        "issue": "When ElevenLabs returns 404 voice_not_found, backend re-raises as HTTP 500 with the full upstream error stringified in `detail`. Consider mapping ElevenLabs 404 to a 4xx (e.g. 422 with a structured `{error: 'voice_not_found', voice_id: ...}`) so the client can distinguish 'bad request' from 'server error'. Reference: /app/backend/server.py:11080-11082 (`ElevenLabs TTS error: ...` catch-all)."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "OllenyaIntroV3.playDynamicTTS",
+        "issue": "Hardcoded voice_id='vTgTi6iSjMPqDpAcJfju' does not exist on the ElevenLabs account. Every /api/tts call from Intro V3 fails with HTTP 500 (upstream 404 voice_not_found) and the audio is silently skipped. Must be replaced with 'POuqf18evoXOKIqV2Px7' (Cielo — the value used everywhere else in the codebase, e.g. OllenyaIntroConversational.tsx:114, MicroDemoOllenya.tsx:58, app/index.tsx:222, OllenyaIntro.tsx:114). Reference: /app/frontend/components/OllenyaIntroV3.tsx:739",
+        "testID": "n/a (audio playback bug)",
+        "priority": "CRITICAL"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Intro V3 → dynamic TTS ('Posso chiamarti X?')",
+        "issue": "playDynamicTTS receives HTTP 500 from /api/tts because of the invalid voice_id; the `if (!r.ok)` branch fires and calls onDone() after 400 ms with no audio. To the user this looks like 'Ollenya doesn't speak'.",
+        "affected_testIDs": []
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_tts_ollenya.py",
+    "/app/test_reports/pytest/tts_ollenya_results.xml"
+  ],
+  "action_items": [
+    "FIX (one-liner, frontend): /app/frontend/components/OllenyaIntroV3.tsx line 739 — change `voice_id: \"vTgTi6iSjMPqDpAcJfju\"` to `voice_id: \"POuqf18evoXOKIqV2Px7\"` (Cielo). This resolves the 'Ollenya doesn't speak' report.",
+    "Consider centralising VOICE_CIELO_ID in a single constant module (e.g. /app/frontend/lib/voices.ts) so future drift is impossible — right now the string 'POuqf18evoXOKIqV2Px7' is duplicated in 6+ files.",
+    "Optional backend hardening: in /app/backend/server.py near line 11080, catch ElevenLabs voice_not_found (404) and re-raise as HTTP 422 with structured detail `{error: 'voice_not_found', voice_id}` instead of a generic 500, so the frontend can surface a meaningful error state."
+  ],
+  "critical_code_review_comments": [
+    "Voice IDs are hardcoded string literals scattered across many components (OllenyaIntroV3, OllenyaIntroConversational, MicroDemoOllenya, OllenyaIntro, app/index.tsx). This exact pattern is what caused the reported bug — a typo/drift in one file went unnoticed. Extract to a shared const.",
+    "Frontend playDynamicTTS treats any non-2xx from /api/tts as a soft 'skip and advance' with only a console.warn. During onboarding this masks a hard configuration error — consider surfacing a visible state (label / retry) when the primary voice call fails."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_tts_ollenya.py (new — 4 local tests pass, 2 public tests skipped in pytest env but verified manually via curl)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "none",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "After main agent flips voice_id in OllenyaIntroV3.tsx:739 to 'POuqf18evoXOKIqV2Px7', re-run `pytest /app/backend/tests/test_tts_ollenya.py -v` (must stay green) and manually load /intro-v3 to confirm the two dynamic TTS moments ('Posso chiamarti X?' at turn #3) actually play audio. The endpoint itself does not need re-testing — it's healthy.",
+  "rca_of_issue": "REPRODUCTION: `curl -X POST http://localhost:8001/api/tts -H 'Content-Type: application/json' -d '{\"text\":\"Ciao, io sono Ollenya, e tu?\",\"voice_id\":\"vTgTi6iSjMPqDpAcJfju\",\"tone\":\"warm\",\"microdemo\":true}'` returns HTTP 500 with body `{\"detail\":\"TTS error: status_code: 404, body: {'detail': {'type': 'not_found', 'code': 'voice_not_found', 'message': \\\"A voice with voice_id 'vTgTi6iSjMPqDpAcJfju' was not found.\\\", 'status': 'voice_not_found', 'request_id': 'bdf1ecdea54cf8b50549b631d6bb3703'}}\"}`. Backend log line: `2026-09-16 16:43:36,479 - server - ERROR - ElevenLabs TTS error: status_code: 404, body: {'detail': {'type': 'not_found', 'code': 'voice_not_found', ...}}`. Same call with voice_id='POuqf18evoXOKIqV2Px7' returns HTTP 200, Content-Type: audio/mpeg, 31,391 bytes (localhost) / 29,301 bytes (public URL). Same call with NO voice_id (falls back to default Acqua '6TngzmzM89jJ3Y2Yiywr') also returns 200 + 31,391 bytes. Trial gate is correctly bypassed by `microdemo:true` — logs show `[tts] microdemo=true → forcing model=eleven_turbo_v2_5`. MITIGATION: change the one voice_id string in /app/frontend/components/OllenyaIntroV3.tsx:739 from 'vTgTi6iSjMPqDpAcJfju' to 'POuqf18evoXOKIqV2Px7'."
+}

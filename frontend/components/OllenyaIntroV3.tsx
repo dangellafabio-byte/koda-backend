@@ -271,6 +271,13 @@ export default function OllenyaIntroV3() {
   // Mic permission blocca il flusso?
   const [micBlocked, setMicBlocked] = useState(false);
 
+  // v66.2 (Fabio 2026-06-16): subtitle testuale durante speak_dynamic.
+  // Fallback UX se il TTS fallisce (backend down, silent mode, etc.):
+  // l'utente vede almeno cosa Ollenya "sta dicendo". Il testo appare
+  // sotto l'orb quando parte un turno speak_dynamic e si dissolve alla
+  // fine del turno o all'avvio del turno successivo.
+  const [subtitleText, setSubtitleText] = useState<string | null>(null);
+
   // v66.0 (Fabio 2026-06): stato del turno WRITE_TEST (test 5 frasi gratuite).
   // - writeMessages: log locale (non persistente) delle bolle mostrate durante
   //   il turno. Il backend le salva già in timeline via /converse.
@@ -729,7 +736,14 @@ export default function OllenyaIntroV3() {
           body: JSON.stringify({
             text,
             // Voce Cielo (femminile) — hardcoded per l'intro V3
-            voice_id: "vTgTi6iSjMPqDpAcJfju",
+            // v66.2 (Fabio 2026-06-16): FIX audio-non-parla — il voice_id
+            // precedente ("vTgTi6iSjMPqDpAcJfju") NON esiste sull'account
+            // ElevenLabs collegato → 404 voice_not_found → backend HTTP 500
+            // → playDynamicTTS silent-advance. Il vero ID di Cielo, usato
+            // in ogni altro file (OllenyaIntroConversational, MicroDemoOllenya,
+            // OllenyaIntro, app/index.tsx…), è "POuqf18evoXOKIqV2Px7".
+            // TODO drift: estrarre in una costante condivisa (lib/voices.ts).
+            voice_id: "POuqf18evoXOKIqV2Px7",
             tone: "warm",
             microdemo: true, // bypass trial enforcement (intro pre-onboarding)
           }),
@@ -1028,6 +1042,9 @@ export default function OllenyaIntroV3() {
       return;
     }
     cleanupCurrent();
+    // v66.2: reset del subtitle ad ogni nuovo turno. Solo speak_dynamic
+    // lo ripopola subito dopo. Evita subtitle "leaked" tra turni.
+    setSubtitleText(null);
 
     try {
       console.log(`[${TAG} DIAG] enter turn #${turnIdx} kind=${currentTurn.kind}`);
@@ -1077,7 +1094,15 @@ export default function OllenyaIntroV3() {
           break;
         }
         setOrbState("speaking");
-        playDynamicTTS(dynText, () => advance());
+        // v66.2: sottotitolo fallback — visibile finché il turno è attivo.
+        // Se il TTS fallisce silenziosamente, l'utente legge comunque il
+        // messaggio invece di vedere solo l'orb muto.
+        setSubtitleText(dynText);
+        playDynamicTTS(dynText, () => {
+          // Clear del subtitle 300ms dopo la fine del clip (fade-out visivo)
+          setTimeout(() => setSubtitleText(null), 300);
+          advance();
+        });
         break;
       }
       case "listen_confirm": {
@@ -1148,22 +1173,24 @@ export default function OllenyaIntroV3() {
     };
   }, [cleanupCurrent, screenOpacity, breathe]);
 
-  // v65.51 (Fabio, lawyer feedback): MIC PRE-PROMPT OPTION A ===============
-  // Prima che parta la sequenza vocale, mostriamo overlay testuale
-  // "Prima di iniziare, mi serve poter sentire la tua voce." per 1.8s,
-  // poi richiediamo `ensureSpeechPermission()`. Solo se granted parte
-  // il turn executor (turnIdx resta 0 finché micGateStatus !== "granted",
-  // e la useEffect executor bail-out sotto blocca l'avanzamento).
-  // Il popup nativo iOS/Android compare DOPO che l'utente ha visto e
-  // capito la richiesta contestuale — coerente con la Privacy Policy
-  // e con Apple 5.1.1.
+  // v66.2 (Fabio 2026-06-16): MIC GATE SEMPLIFICATO — pre-prompt RIMOSSO ====
+  // Prima: 1.8s di card "Prima di iniziare / Mi serve poter sentire la tua
+  // voce." poi popup nativo iOS/Android. Feedback utente: il card lampeggia
+  // per una frazione di secondo (specie se perm già granted da sessione
+  // precedente) e non trasmette contesto — meglio togliere del tutto.
+  // Ora: chiamiamo ensureSpeechPermission() IMMEDIATAMENTE al mount. Il
+  // popup nativo iOS mostra già l'usage description da Info.plist
+  // (NSMicrophoneUsageDescription = "Ollenya usa il microfono per ascoltare
+  // la tua voce durante le conversazioni.") che è sufficiente come contesto.
+  // Il turn executor resta gated finché micGateStatus !== "granted".
   useEffect(() => {
     if (micGateStartedRef.current) return;
     micGateStartedRef.current = true;
     let cancelled = false;
     (async () => {
-      // Lascia il tempo di leggere il pre-prompt
-      await new Promise((resolve) => setTimeout(resolve, 1800));
+      // Piccolo delay (150ms) per lasciar completare il mount del componente
+      // e la transition, così il popup nativo non appare mid-animation.
+      await new Promise((resolve) => setTimeout(resolve, 150));
       if (cancelled || !mountedRef.current) return;
       try {
         const perm = await ensureSpeechPermission();
@@ -1277,6 +1304,15 @@ export default function OllenyaIntroV3() {
               {labelText}
             </Animated.Text>
           )}
+          {/* v66.2 (Fabio 2026-06-16): sottotitolo fallback per speak_dynamic.
+              Se il TTS non parte (backend down, silent mode, etc.) l'utente
+              legge comunque il messaggio. Palette champagne, dimensione
+              leggibile. Larghezza limitata per non uscire dai margini. */}
+          {subtitleText && (
+            <Text style={styles.subtitleText}>
+              {subtitleText}
+            </Text>
+          )}
         </View>
       </View>
 
@@ -1300,22 +1336,11 @@ export default function OllenyaIntroV3() {
         </View>
       )}
 
-      {/* v65.51 (Fabio, lawyer feedback): pre-prompt microfono OPTION A.
-          Visibile finché micGateStatus === "pending". Poi il popup nativo
-          iOS/Android comparirà con contesto già stabilito dall'utente. */}
-      {micGateStatus === "pending" && !micBlocked && (
-        <View style={styles.micPromptOverlay} pointerEvents="none">
-          <View style={styles.micPromptCard}>
-            <Ionicons name="mic-outline" size={28} color="#D4B896" />
-            <Text style={styles.micPromptTitle}>
-              Prima di iniziare
-            </Text>
-            <Text style={styles.micPromptText}>
-              Mi serve poter sentire la tua voce.
-            </Text>
-          </View>
-        </View>
-      )}
+      {/* v66.2 (Fabio 2026-06-16): pre-prompt card RIMOSSO.
+          Ora chiamiamo direttamente ensureSpeechPermission() al mount:
+          il popup nativo iOS/Android mostra già l'usage description da
+          Info.plist come contesto. Il card intermedio confondeva l'utente
+          (durava una frazione di secondo se perm già granted). */}
 
       {/* === v66.0 (Fabio 2026-06) — WRITE_TEST OVERLAY ==========================
           Attivo SOLO durante il turno write_test. Copre lo schermo in
@@ -1707,5 +1732,16 @@ const styles = StyleSheet.create({
   },
   writeTestSendBtnDisabled: {
     backgroundColor: "rgba(212,184,150,0.30)",
+  },
+  // v66.2 (Fabio 2026-06-16): sottotitolo fallback speak_dynamic.
+  subtitleText: {
+    color: "#F5E6CC",
+    fontSize: 17,
+    lineHeight: 24,
+    textAlign: "center",
+    paddingHorizontal: 32,
+    marginTop: 12,
+    maxWidth: 360,
+    fontWeight: "400",
   },
 });
