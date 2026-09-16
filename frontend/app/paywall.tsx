@@ -82,11 +82,12 @@ const TOS_URL = kodaBackendHttpUrl("/api/legal/terms");
 // Testo provvisorio in attesa della formulazione finale di Francesco (legale).
 // Non modificare senza revisione legale. La versione del testo va registrata
 // insieme all'atto di acquisto per audit trail (variabile WAIVER_TEXT_VERSION).
-const WAIVER_TEXT_VERSION = "v0.1-placeholder-2026-06";
+const WAIVER_TEXT_VERSION = "v1.0-2026-09";
 const WAIVER_PLACEHOLDER_TEXT =
   "Chiedo espressamente l'attivazione immediata del servizio e riconosco che, " +
-  "una volta iniziato l'utilizzo, perderò il diritto di recesso previsto dagli " +
-  "artt. 52 e seguenti del Codice del Consumo. [Testo definitivo in revisione]";
+  "una volta iniziato l'utilizzo dei contenuti digitali, perderò il diritto di " +
+  "recesso di 14 giorni previsto dagli artt. 52 e seguenti del Codice del Consumo " +
+  "e dall'art. 16(m) della Direttiva UE 2011/83.";
 
 export default function PaywallScreen() {
   const router = useRouter();
