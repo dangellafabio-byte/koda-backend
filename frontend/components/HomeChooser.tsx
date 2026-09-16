@@ -185,7 +185,7 @@ export default function HomeChooser({
             style={[styles.cardHint, { color: theme.textDim }]}
             testID="chooser-ollenya-remaining"
           >
-            {freeStatus?.remaining}/{freeStatus?.limit} messaggi oggi
+            {freeStatus?.remaining}/{freeStatus?.limit} messaggi in questo periodo
           </Text>
         ) : null}
       </TouchableOpacity>

@@ -55,6 +55,7 @@ import {
 import { ensureSpeechPermission } from "../lib/speechPermission";
 import { useLiveCountdown } from "../lib/freeCountdown";
 import FreeLimitOverlay from "../components/FreeLimitOverlay";
+import HomeChooser from "../components/HomeChooser";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { checkHasSpeech, logGateDecision } from "../lib/silenceGate";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId, preloadFillerPool } from "../lib/speech";
@@ -1033,7 +1034,17 @@ export default function Taccuino() {
   // === HOME TAB v65.53 — "ollenya" (chat) vs "lascia_andare" (sfogo) =====
   // Free users vedono entrambe le tab nell'header; Premium vede solo
   // "ollenya" (Lascia Andare accessibile via bottone separato).
+  // [v65.55+] Sostituito dal chooser iniziale: `screenMode` sotto governa
+  // la prima schermata post-intro. Il vecchio `homeTab` resta come no-op
+  // per non rompere referenze pendenti — sempre fissato a "ollenya".
   const [homeTab, setHomeTab] = useState<"ollenya" | "lascia_andare">("ollenya");
+  // === HOME CHOOSER v65.55 (sett 2026) =======================================
+  // Prima schermata post-intro presenta 2 opzioni ALLA PARI (Ollenya vs Lascia
+  // andare) senza gerarchia di default. `screenMode` governa il rendering:
+  //   - "chooser": mostra HomeChooser (default a ogni relaunch)
+  //   - "ollenya": mostra la home eclissi + chat/voce
+  // Tap card Lascia andare → router.push("/lascia-andare") — non cambia mode.
+  const [screenMode, setScreenMode] = useState<"chooser" | "ollenya">("chooser");
   const [recapText, setRecapText] = useState<string | null>(null);
   const [showRecap, setShowRecap] = useState(false);
 
@@ -6514,83 +6525,28 @@ export default function Taccuino() {
           <HandsFreeOrb active={handsFree} size={26} />
         </TouchableOpacity>
 
-        {/* === TAB PILL FREE v65.53 (Fabio 2026-06) ============================
-            Solo per utenti Free: pill al centro dell'header con due segmenti
-            "Ollenya" (chat) / "Lascia Andare" (sfogo). Tap "Lascia Andare"
-            → naviga a /lascia-andare. Tap "Ollenya" → resta su Home.
-            Premium NON vede la pill (accesso Lascia Andare tramite bottone
-            dedicato in altri punti dell'app).
+        {/* === TAB PILL FREE RIMOSSA v65.55 (Fabio 2026-09) ==================
+            Sostituita dal HomeChooser iniziale a due card pari (vedi early
+            return sopra). Il chooser è la nuova "prima schermata" post-intro
+            per tutti (Free e Premium): l'utente sceglie esplicitamente tra
+            "Parla con Ollenya" e "Lascia andare" senza gerarchia di default.
+            Contatore Free è ora mostrato dentro il chooser (badge discreto
+            "N/5 messaggi in questo periodo"). Nessuna tab in header.
+
+            Al centro dell'header lasciamo solo un bottone "back to chooser"
+            (freccia indietro) che riporta l'utente alla schermata di scelta.
+            Piccolo, discreto, sempre nella stessa posizione: aiuta senza
+            invadere il layout emotivo dell'app.
             ============================================================ */}
-        {(() => {
-          const tier = (profile as any)?.subscription_tier;
-          const isPaidHeader = tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
-          if (isPaidHeader) return null;
-          const fs = (profile as any)?.free_status || null;
-          const remaining = fs?.turns_remaining ?? fs?.turns_limit ?? 5;
-          const limit = fs?.turns_limit ?? 5;
-          const cd = fs?.countdown_it || null;
-          return (
-            <View style={{ alignItems: "center", gap: 4 }}>
-              <View style={{
-                flexDirection: "row",
-                alignItems: "center",
-                backgroundColor: (theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)"),
-                borderRadius: 999,
-                padding: 3,
-                gap: 2,
-              }} testID="home-tab-pill">
-                <TouchableOpacity
-                  onPress={() => setHomeTab("ollenya")}
-                  style={{
-                    paddingHorizontal: 12,
-                    paddingVertical: 6,
-                    borderRadius: 999,
-                    backgroundColor: homeTab === "ollenya" ? (theme.isDark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.12)") : "transparent",
-                  }}
-                  testID="tab-ollenya"
-                >
-                  <Text style={{
-                    fontSize: 12,
-                    fontWeight: homeTab === "ollenya" ? "600" : "500",
-                    color: theme.isDark ? "rgba(255,255,255,0.92)" : "rgba(0,0,0,0.85)",
-                  }}>Ollenya</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => {
-                    setHomeTab("lascia_andare");
-                    setTimeout(() => { try { router.push("/lascia-andare"); } catch {} }, 40);
-                  }}
-                  style={{
-                    paddingHorizontal: 12,
-                    paddingVertical: 6,
-                    borderRadius: 999,
-                    backgroundColor: "transparent",
-                  }}
-                  testID="tab-la"
-                >
-                  <Text style={{
-                    fontSize: 12,
-                    fontWeight: "500",
-                    color: theme.isDark ? "rgba(255,255,255,0.65)" : "rgba(0,0,0,0.65)",
-                  }}>Lascia Andare</Text>
-                </TouchableOpacity>
-              </View>
-              {/* Contatore Free: "5 messaggi gratuiti · tornano tra 3 giorni".
-                  Testo esplicito richiesto dalla spec Fabio 2026-06. */}
-              {homeTab === "ollenya" && fs ? (
-                <Text style={{
-                  fontSize: 10.5,
-                  color: theme.isDark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.55)",
-                  textAlign: "center",
-                }} testID="free-counter-badge">
-                  {remaining === limit
-                    ? `${limit} messaggi gratuiti${cd ? ` · si resettano ${cd}` : ""}`
-                    : `${remaining}/${limit} messaggi rimasti${cd ? ` · tornano ${cd}` : ""}`}
-                </Text>
-              ) : null}
-            </View>
-          );
-        })()}
+        <TouchableOpacity
+          onPress={() => setScreenMode("chooser")}
+          hitSlop={12}
+          style={{ paddingHorizontal: 8, paddingVertical: 6, borderRadius: 999 }}
+          testID="back-to-chooser"
+          accessibilityLabel="Torna alla schermata di scelta"
+        >
+          <Ionicons name="chevron-back" size={22} color={theme.textMuted} />
+        </TouchableOpacity>
 
         {/* Slot destro: Menu impostazioni. Pulsante audio Modalità Telefono
             rimosso nel rollback 2026-07-13 (regressioni STT). */}
@@ -6658,113 +6614,14 @@ export default function Taccuino() {
       </View>
 
       {/* === RIGA 2: TOGGLE "LASCIA ANDARE" (centrato, più in basso) === */}
-      <View
-        style={[styles.confessionaleRow, { top: Math.max(insets.top + 100, 150) }]}
-        pointerEvents="box-none"
-      >
-        <View style={styles.headerCenter} pointerEvents="box-none">
-          {/* === Pill "Lascia andare" ===
-              Entry point one-tap alla stanza silenziosa. */}
-          <TouchableOpacity
-            ref={confessionaleBtnRef}
-            style={styles.confessionalToggle}
-            onPress={async () => {
-              // === LASCIA ANDARE (2026-07-17) ============================
-              // Prima: apriva il flusso "Stanza dello Sfogo" (Confessionale
-              // Zero-Knowledge con STT/LLM/TTS cifrati). Nuovo concept
-              // richiesto dall'utente: "Un posto dove nessuno risponde"
-              // — ZERO trascrizione, ZERO Claude, ZERO ElevenLabs, ZERO
-              // rete. Solo VAD locale + orb come feedback silenzioso.
-              // Il vecchio codice confessional resta dormiente in questo
-              // file (rimozione rimandata al prossimo refactor per non
-              // introdurre regressioni). Qui semplicemente navighiamo
-              // al nuovo screen /lascia-andare.
-              //
-              // === 2026-07-27 — Presenza vocale in apertura/chiusura ===
-              // Passiamo la voce Ollenya scelta dall'utente come route param
-              // così la Stanza sa quale file audio pre-registrato
-              // riprodurre ("Prenditi il tuo tempo" all'apertura,
-              // "Grazie per averlo lasciato andare" alla chiusura).
-              // Mappatura (sync con backend server.py KODA_VOICES):
-              //   POuqf18evoXOKIqV2Px7 (Cielo)  → "aria"
-              //   ll9WG7PDTuyHwgC5MD6g (Vento) → "theo"
-              // Preferiamo koda_voice se presente (fonte di verità),
-              // altrimenti derivo da tts_voice_id, altrimenti "aria" (default).
-              const VID_TO_KV: Record<string, "aria" | "theo"> = {
-                "POuqf18evoXOKIqV2Px7": "aria",
-                "ll9WG7PDTuyHwgC5MD6g": "theo",
-              };
-              const kv =
-                ((profile as any)?.koda_voice as string | undefined) ||
-                VID_TO_KV[(profile?.settings?.tts_voice_id as string) || ""] ||
-                "aria";
-
-              // === LIVELLO 1 GUARD → RIMOSSO (Punto 3, Fabio 2026-08-17) ==
-              // Ex chiamata a /api/lascia-andare/authorize prima di navigare,
-              // con Alert paywall in caso di deny. Con il Punto 1 l'endpoint
-              // ritorna sempre free_forever → il guard era un no-op che
-              // aggiungeva ~200-500ms di rete e un branch che non scattava
-              // più. Rimosso: navigazione diretta a /lascia-andare (accesso
-              // libero per tutti, sempre — è il cuore del prodotto).
-              // Nota: la logica "intro progressive discovery" (getLasciaAndare
-              // IntroState) resta perché non è un gate di autorizzazione ma
-              // un flag UX (mostra il modal di presentazione la prima volta).
-
-              // === INTRO PROGRESSIVE DISCOVERY (Fabio 2026-08-14 P1) =====
-              // Check server-side se l'utente ha già visto l'intro. Se no,
-              // mostriamo il modal descrittivo (spiega cos'è la stanza)
-              // PRIMA di navigare. Il flag è in Mongo → sopravvive a
-              // reinstall/cambio device. In caso di errore rete/fetch,
-              // NON blocchiamo l'accesso: procediamo direttamente (l'utente
-              // vedrà l'intro al prossimo tentativo se la rete torna).
-              let introSeen = true; // default optimistico: se fetch fallisce, non blocchiamo
-              try {
-                const s = await api.getLasciaAndareIntroState();
-                introSeen = Boolean(s?.seen);
-              } catch (e) {
-                console.warn("[LasciaAndare] intro-state fetch failed, procedo:", e);
-              }
-
-              if (!introSeen) {
-                setPendingLasciaAndareVoice(kv);
-                setShowLasciaAndareIntro(true);
-                return;
-              }
-
-              try {
-                router.push(`/lascia-andare?voice=${encodeURIComponent(kv)}`);
-              } catch (e) {
-                console.warn("[LasciaAndare] navigation error:", e);
-              }
-            }}
-            onLongPress={undefined}
-            hitSlop={10}
-            testID="lascia-andare-toggle"
-          >
-            <Text
-              style={[
-                styles.confessionalToggleText,
-                // === FIX 2026-06-28 v30 — bianco SEMPRE ===
-                // L'utente ha chiesto esplicitamente: pill opaca + testo
-                // bianco PIENO in ogni schermata (home + timeline) e in
-                // ogni stato. Nessun override condizionale: il bianco
-                // #FFFFFF deve restare costante.
-              ]}
-            >
-              Lascia andare
-            </Text>
-          </TouchableOpacity>
-        </View>
-        {/* Slot destro: icona "tre puntini" — apre le IMPOSTAZIONI complete.
-            Prima apriva direttamente la presentazione OllenyaIntro, ma l'utente
-            non aveva alcun modo di raggiungere il menu Impostazioni (tema,
-            voce, notifiche, ecc.) → comportamento controintuitivo: chi tappa
-            i tre puntini si aspetta un menu di opzioni, non una presentazione.
-            Da Impostazioni si può comunque rivedere la presentazione (link in
-            fondo) e cambiare voce (nuova riga "Voce di Ollenya"). */}
-        {/* Settings button moved to top row (2026-06).
-            Riga 1 = side icons vicino al clock; Riga 2 = Confessionale. */}
-      </View>
+      {/* === PILL "Lascia andare" RIMOSSA v65.55 (Fabio 2026-09) =============
+          Sostituita dal HomeChooser (early return sopra) che presenta le due
+          opzioni pari. La logica di intro progressive discovery (mostrare
+          il modal descrittivo la prima volta) è stata migrata dentro
+          l'handler `onPickLasciaAndare` del chooser (vedi wrapper poco sopra
+          l'early return). `pendingLasciaAndareVoice` e `showLasciaAndareIntro`
+          restano attivi per compatibilità con LasciaAndareIntroModal.
+          ============================================================ */}
 
       {/* === HORIZONTAL PAGER: Voce (zen) | Lettura (timeline) ===
           Pagina 0 = SOLO la macchia centrale grande, niente testi, come
@@ -7678,6 +7535,81 @@ export default function Taccuino() {
       }}
     />
   ) : null;
+
+  // === HOME CHOOSER v65.55 — early return =====================================
+  // Se siamo in "chooser mode" e non ci sono flow modali attivi (intro V3,
+  // onboarding memoria, tour tap-to-know), mostra la prima schermata a due
+  // opzioni pari. Il chooser NON deve comparire durante:
+  //   - Intro V3 not completed (state != "completed")
+  //   - Onboarding modali attivi
+  //   - Tour "come funziono io" attivo
+  //   - Safety alert attivo (blocca tutto)
+  //   - Intro final "writing_final" attivo
+  const isPaidForChooser = (() => {
+    const tier = auth?.user?.profile?.subscription_tier;
+    return tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
+  })();
+
+  if (
+    screenMode === "chooser" &&
+    introV3State === "completed" &&
+    !showOnboarding &&
+    !tourActive &&
+    !safetyVisible &&
+    !showIntroFinal
+  ) {
+    return (
+      <HomeChooser
+        isPaid={isPaidForChooser}
+        freeStatus={
+          !isPaidForChooser && freemium
+            ? {
+                remaining: freemium.free_messages_remaining ?? 0,
+                limit: freemium.free_messages_limit ?? 5,
+                countdown_it: freeLimitOverlay.countdown || null,
+              }
+            : null
+        }
+        onPickOllenya={() => setScreenMode("ollenya")}
+        onPickLasciaAndare={async () => {
+          // === LASCIA ANDARE — logica migrata dalla vecchia pill (v65.55) ===
+          // Riproduce esattamente il flusso di apertura Lascia Andare che
+          // c'era nella pill del top-left: risoluzione voce Ollenya scelta,
+          // intro progressive discovery al primo accesso, poi navigazione.
+          const VID_TO_KV: Record<string, "aria" | "theo"> = {
+            "POuqf18evoXOKIqV2Px7": "aria",
+            "ll9WG7PDTuyHwgC5MD6g": "theo",
+          };
+          const kv =
+            ((profile as any)?.koda_voice as string | undefined) ||
+            VID_TO_KV[(profile?.settings?.tts_voice_id as string) || ""] ||
+            "aria";
+
+          // Intro progressive discovery: mostra modal descrittivo al primo
+          // accesso. Fetch server-side, in caso di errore procedi comunque.
+          let introSeen = true;
+          try {
+            const s = await api.getLasciaAndareIntroState();
+            introSeen = Boolean(s?.seen);
+          } catch (e) {
+            console.warn("[LasciaAndare] intro-state fetch failed, procedo:", e);
+          }
+
+          if (!introSeen) {
+            setPendingLasciaAndareVoice(kv);
+            setShowLasciaAndareIntro(true);
+            return;
+          }
+
+          try {
+            router.push(`/lascia-andare?voice=${encodeURIComponent(kv)}`);
+          } catch (e) {
+            console.warn("[LasciaAndare] navigation error:", e);
+          }
+        }}
+      />
+    );
+  }
 
   return (
     <View
