@@ -1140,6 +1140,42 @@ async def voice_stream_handler(
     short_id = session_id[:8]
     started_at = time.time()
 
+    # === GATE VOCE = PREMIUM v65.55 (Fabio 2026-09) ============================
+    # La voce di Ollenya è funzione Premium. Un client Free che apre il WS
+    # deve essere rifiutato subito: chiudiamo la connessione con codice 4402
+    # (custom, ricalcato su HTTP 402 Payment Required) e messaggio JSON che
+    # il client può mostrare all'utente. Il gate è duplicato lato /api/converse
+    # per il flow legacy — questo copre il flow "fast" (hands-free/streaming).
+    try:
+        from server import _current_user_id, db  # type: ignore
+        _uid_gate = _current_user_id.get() if _current_user_id is not None else None
+        if _uid_gate and _uid_gate != "me":
+            _prof_gate = await db.taccuino_profile.find_one({"id": _uid_gate}, {"subscription_tier": 1})
+            _tier_gate = (_prof_gate or {}).get("subscription_tier")
+            _paid_gate = _tier_gate in ("monthly", "bimonthly", "annual", "unlimited")
+            if not _paid_gate:
+                logger.info(
+                    f"[voice_gate sess={short_id}] Free user uid={_uid_gate[:8]} tier={_tier_gate} — closing WS 4402"
+                )
+                try:
+                    await websocket.send_json({
+                        "event": "error",
+                        "error": "voice_premium_only",
+                        "message": "La voce di Ollenya è una funzione Premium. Continua in chat scritta o attiva Premium.",
+                    })
+                except Exception:
+                    pass
+                try:
+                    await websocket.close(code=4402, reason="voice_premium_only")
+                except Exception:
+                    pass
+                return
+    except Exception as _e_vgate:
+        logger.warning(f"[voice_gate sess={short_id}] tier lookup failed, fail-open: {_e_vgate}")
+        # Fail-open: se il lookup del tier fallisce (DB down, uid non risolto),
+        # NON blocchiamo l'utente — il gate lato /api/converse resta come
+        # ultimo net di sicurezza.
+
     # === v63.2 2026-07-20 — log query params dal client (piggyback
     # AVAudioSession state). Il client mobile appende ?mode=voiceChat&
     # input=BluetoothHFP&... così alla riga di accept del WS abbiamo

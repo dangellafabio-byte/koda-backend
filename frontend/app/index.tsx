@@ -1564,6 +1564,22 @@ export default function Taccuino() {
   useEffect(() => { closeSessionPauseRef.current = closeSessionPause; }, [closeSessionPause]);
   const setHandsFreeMode = useCallback(async (on: boolean) => {
     if (!profile) return;
+    // === GATE VOCE = PREMIUM v65.55 (Fabio 2026-09) =========================
+    // La voce di Ollenya è funzione Premium. Un utente Free che tenta di
+    // attivare il mani libere deve essere reindirizzato al paywall — MAI
+    // permettergli di aprire il mic (né turno voce né turno hands-free).
+    // Se spegniamo (on=false), lasciamo passare — sempre lecito. Il gate
+    // è duplicato lato backend (/api/converse voice-turn + WS voice/stream)
+    // come safety net anti-bypass.
+    if (on) {
+      const tier = (profile as any)?.subscription_tier;
+      const isPaid = tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
+      if (!isPaid) {
+        console.log("[voice_gate] Free user tried hands-free → redirect paywall");
+        try { router.push("/paywall"); } catch {}
+        return;
+      }
+    }
     // === PERMESSO SPEECH RECOGNITION (Fabio 2026-08-22) =====================
     // Se stiamo ATTIVANDO il mani libere, verifichiamo il permesso: senza,
     // l'STT non parte mai e l'utente vede solo un toggle che si accende
@@ -3259,6 +3275,22 @@ export default function Taccuino() {
       } catch (e: any) {
         const msg = String(e?.message || "");
         // === GATE MINUTI ESAURITI (Fabio 2026-06) =========================
+        // === VOICE PREMIUM ONLY v65.55 (Fabio 2026-09) ====================
+        // Se il backend risponde HTTP 402 `voice_premium_only`, l'utente è
+        // Free e ha tentato un turno voce (bypass sanitario nel raro caso
+        // in cui il gate frontend non abbia scattato — es. hands-free già
+        // attivo prima del downgrade). Reindirizziamo al paywall.
+        try {
+          const errMsg = String((e as any)?.message || "");
+          if (/voice_premium_only|La voce di Ollenya è una funzione Premium/i.test(errMsg)) {
+            console.log("[voice_gate] Free tentato voice turn → paywall");
+            setTimeline((prev) => prev.filter((entry) => entry.id !== optimistic.id));
+            setStatus("idle");
+            try { router.push("/paywall"); } catch {}
+            return;
+          }
+        } catch {}
+
         // Il backend ritorna HTTP 402 `paid_quota_exhausted` quando l'utente
         // ha finito i minuti voce. Il client:
         //   1. Riproduce il messaggio audio pre-registrato (una sola volta

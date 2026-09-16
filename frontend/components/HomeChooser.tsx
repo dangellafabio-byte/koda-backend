@@ -152,7 +152,11 @@ export default function HomeChooser({
         Come vuoi stare, adesso?
       </Text>
 
-      {/* Card 1 — Parla con Ollenya */}
+      {/* Card 1 — Ollenya
+          Tier-aware: Free ha SOLO testo, Premium ha voce+testo. Il titolo
+          e sottotitolo cambiano per non promettere ai Free una funzione
+          (voce) che non gli è disponibile — vedi struttura Free già
+          fissata: 5 messaggi/3gg SOLO scritti, la voce è leva Premium. */}
       <TouchableOpacity
         activeOpacity={0.75}
         onPress={onPickOllenya}
@@ -166,12 +170,14 @@ export default function HomeChooser({
         ]}
         testID="chooser-card-ollenya"
         accessibilityRole="button"
-        accessibilityLabel="Parla con Ollenya, voce o testo"
+        accessibilityLabel={isPaid ? "Parla con Ollenya, voce o testo" : "Scrivi con Ollenya, solo testo"}
       >
         <OllenyaGlyph size={54} />
-        <Text style={[styles.cardTitle, { color: theme.text }]}>Parla con Ollenya</Text>
+        <Text style={[styles.cardTitle, { color: theme.text }]}>
+          {isPaid ? "Parla con Ollenya" : "Scrivi con Ollenya"}
+        </Text>
         <Text style={[styles.cardSubtitle, { color: theme.textMuted }]}>
-          voce o testo, come vuoi
+          {isPaid ? "voce o testo, come vuoi" : "solo testo — voce con Premium"}
         </Text>
         {showCountdown ? (
           <Text

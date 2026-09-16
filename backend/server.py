@@ -8211,6 +8211,27 @@ async def api_converse(req: ConverseRequest):
     # è "sempre illimitata" per policy prodotto.
     # Skippiamo ephemeral (MicroDemo non consuma dal ledger reale).
     if req.is_voice_turn and not req.ephemeral:
+        # === GATE VOCE = PREMIUM v65.55 (Fabio 2026-09) ====================
+        # La voce di Ollenya è funzione Premium. Un utente Free (tier None
+        # o non tra i tier paid) che tenta un turno voce deve essere
+        # rifiutato con 402 voice_premium_only. Il gate specifico
+        # "paid_quota_exhausted" (sotto) resta per gli utenti PAID con
+        # minuti esauriti. Questo nuovo gate è per gli utenti che
+        # non hanno mai avuto Premium.
+        _tier_voice_gate = getattr(profile, "subscription_tier", None)
+        _is_paid_voice_gate = _tier_voice_gate in ("monthly", "bimonthly", "annual", "unlimited")
+        if not _is_paid_voice_gate:
+            logger.info(
+                f"[converse] voice-turn blocked (free user) user={getattr(profile, 'id', '?')[:8]} tier={_tier_voice_gate}"
+            )
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "voice_premium_only",
+                    "subscription_tier": _tier_voice_gate,
+                    "message": "La voce di Ollenya è una funzione Premium. Continua in chat scritta o attiva Premium per ascoltarla.",
+                },
+            )
         try:
             _pstate_conv = _compute_paid_state(profile)
         except Exception:
