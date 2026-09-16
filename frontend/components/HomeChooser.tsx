@@ -25,30 +25,37 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../lib/theme";
 
 // -----------------------------------------------------------------------------
-// Icona Ollenya (orb piccolo): eclisse minimale con corona luminosa
+// Icona Ollenya (orb piccolo): cerchio pieno neutro
+// Nota design: NON uso theme.primary qui — un colore saturo darebbe più peso
+// visivo alla card Ollenya rispetto alla mezzaluna grigia di Lascia andare,
+// ricreando la gerarchia che il chooser vuole evitare. Uso lo stesso grigio
+// neutro (theme.textMuted) di Lascia andare, così la differenza è SOLO di
+// forma (cerchio vs mezzaluna) — nessuna delle due domina.
 // -----------------------------------------------------------------------------
 function OllenyaGlyph({ size = 44 }: { size?: number }) {
   const { theme } = useTheme();
+  const outer = size * 0.68;
   return (
     <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
-      {/* corona esterna: alone soft — usa primarySoftBg per identità Ollenya */}
+      {/* alone tenuissimo per identità Ollenya, senza aggiungere peso */}
       <View
         style={{
           position: "absolute",
           width: size,
           height: size,
           borderRadius: size / 2,
-          backgroundColor: theme.primary,
-          opacity: 0.25,
+          backgroundColor: theme.textMuted,
+          opacity: 0.12,
         }}
       />
-      {/* corpo principale eclissi: nero pieno (blu petrolio scuro) */}
+      {/* corpo cerchio pieno neutro, stesso colore del moon glyph */}
       <View
         style={{
-          width: size * 0.68,
-          height: size * 0.68,
-          borderRadius: (size * 0.68) / 2,
-          backgroundColor: theme.primary,
+          width: outer,
+          height: outer,
+          borderRadius: outer / 2,
+          backgroundColor: theme.textMuted,
+          opacity: 0.75,
         }}
       />
     </View>
