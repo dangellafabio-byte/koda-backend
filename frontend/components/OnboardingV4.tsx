@@ -233,6 +233,18 @@ export default function OnboardingV4() {
 
   // ==== TTS runtime =========================================================
   const speak = useCallback(async (text: string, onDone: () => void) => {
+    // v66.4 (Fabio 2026-06-16, bug 4): flag idempotente + clear del safety-
+    // net timer. Prima: onStatus.didJustFinish → onDone; timer 15s scattava
+    // 12s dopo (mentre lo step successivo era già in corso) → chiamava
+    // onDone di NUOVO → doppio advance → loop di frasi ripetute osservato
+    // ("Piacere di conoscerti" e "Quando vuoi io sono qui" 2-3 volte).
+    let doneCalled = false;
+    const safeDone = () => {
+      if (doneCalled) return;
+      doneCalled = true;
+      clearTimer();
+      onDone();
+    };
     setSubtitle(text);
     setOrbStatus("speaking");
     try {
@@ -254,9 +266,8 @@ export default function OnboardingV4() {
       });
       if (!r.ok) {
         console.warn(`${TAG} tts HTTP ${r.status} → skip audio, keep subtitle`);
-        // Fallback: teniamo il subtitle a schermo per ~2.5s, poi advance
         timerRef.current = setTimeout(() => {
-          if (mountedRef.current) onDone();
+          if (mountedRef.current) safeDone();
         }, 2500);
         return;
       }
@@ -271,7 +282,7 @@ export default function OnboardingV4() {
         reader.readAsDataURL(blob);
       });
       if (!dataUri || !mountedRef.current) {
-        timerRef.current = setTimeout(() => { if (mountedRef.current) onDone(); }, 400);
+        timerRef.current = setTimeout(() => { if (mountedRef.current) safeDone(); }, 400);
         return;
       }
       await configureAudioForPlayback();
@@ -282,20 +293,24 @@ export default function OnboardingV4() {
       const onStatus = (status: { didJustFinish?: boolean }) => {
         if (status.didJustFinish) {
           try { player.removeListener("playbackStatusUpdate", onStatus); } catch {}
-          onDone();
+          safeDone();
         }
       };
       player.addListener("playbackStatusUpdate", onStatus);
       player.play();
-      // Safety net a 15s
+      // Safety net a 15s. Il flag `doneCalled` garantisce che questo timer
+      // NON possa firing un secondo advance se onStatus è già passato.
       timerRef.current = setTimeout(() => {
-        if (mountedRef.current) { console.warn(`${TAG} speak safety-net`); onDone(); }
+        if (mountedRef.current && !doneCalled) {
+          console.warn(`${TAG} speak safety-net`);
+          safeDone();
+        }
       }, 15_000);
     } catch (e) {
       console.warn(`${TAG} speak failed:`, e);
-      timerRef.current = setTimeout(() => { if (mountedRef.current) onDone(); }, 400);
+      timerRef.current = setTimeout(() => { if (mountedRef.current) safeDone(); }, 400);
     }
-  }, []);
+  }, [clearTimer]);
 
   // ==== STT ===================================================================
   // Fa partire ExpoSpeechRecognition, ascolta fino a `maxMs`, callback su
@@ -319,6 +334,10 @@ export default function OnboardingV4() {
         finalized = true;
         clearTimer();
         stopStt();
+        // v66.4 (bug 5): dopo la fine dell'ascolto, rimettiamo l'orb in
+        // "idle" così non resta il glow teal sospeso in attesa del prossimo
+        // speak. Il caller cambierà a "speaking" quando parte il TTS.
+        if (mountedRef.current) setOrbStatus("idle");
         onTranscript(text.trim());
       };
       const maxMs = opts.maxMs ?? INACTIVITY_TIMEOUT_MS;
@@ -424,16 +443,33 @@ export default function OnboardingV4() {
     if (step !== "step2_listen_name") return;
     setSubtitle(null);
     listen({ maxMs: INACTIVITY_TIMEOUT_MS }, (transcript) => {
-      // Estrazione nome semplice: prendiamo la prima parola alfa dopo eventuali
-      // "mi chiamo / sono / il mio nome è". Se vuoto, saltiamo.
-      const t = transcript.toLowerCase();
+      // v66.4 (Fabio 2026-06-16, bug 2): estrazione nome più permissiva.
+      // Rimuoviamo punteggiatura, gestiamo "mi chiamo / sono / è / piacere,
+      // sono …" e come fallback prendiamo il primo token alfabetico (2-20
+      // lettere) che NON sia una stop-word italiana. Log dettagliato per
+      // diagnosi future.
+      const raw = transcript || "";
+      const cleaned = raw.toLowerCase().replace(/[.,!?;:'"]/g, "").trim();
+      console.log(`${TAG} name transcript raw="${raw}" cleaned="${cleaned}"`);
       let name: string | null = null;
-      if (t) {
-        const m = t.match(/(?:mi chiamo|sono|il mio nome è|il mio nome e|mi puoi chiamare|chiamami|piacere|ciao)\s+([a-zà-ù]{2,20})/i);
+      if (cleaned) {
+        const m = cleaned.match(
+          /(?:mi chiamo|il mio nome è|il mio nome e|mi puoi chiamare|chiamami|piacere sono|piacere,? sono|sono|piacere ciao sono)\s+([a-zà-ù]{2,20})/i
+        );
         if (m) name = m[1];
         else {
-          const first = t.split(/\s+/).find((w) => /^[a-zà-ù]{2,20}$/i.test(w));
-          if (first) name = first;
+          const STOP = new Set([
+            "il","la","lo","gli","le","un","uno","una","mi","ti","si","ci","vi","ne",
+            "no","non","che","chi","cosa","come","ecco","di","da","in","con","su","per",
+            "tra","fra","e","ed","o","è","e","ma","ho","hai","ha","sto","sta","va","ok",
+            "ciao","salve","ehi","hey","ola","allora","io","tu","lui","lei","noi","voi",
+            "loro","questo","questa","quello","quella","quel","qui","qua","già","ancora",
+            "sempre","mai","molto","bene","male","ora","adesso","poi","pure","anche","più",
+            "meno","e","del","della","dello","al","alla","allo","dal","dalla","dallo",
+          ]);
+          for (const w of cleaned.split(/\s+/)) {
+            if (/^[a-zà-ù]{2,20}$/i.test(w) && !STOP.has(w)) { name = w; break; }
+          }
         }
         if (name) {
           name = name.charAt(0).toUpperCase() + name.slice(1);
@@ -459,6 +495,14 @@ export default function OnboardingV4() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
+  // v66.4 (Fabio 2026-06-16, bug 4): clear subtitle SUBITO su cambio step.
+  // Prima il subtitle "Piacere di conoscerti…" restava visibile sotto lo
+  // scrim "Quando vuoi io sono qui" causando l'illusione di doppie frasi.
+  // Ora ogni cambio step azzera il testo, sarà lo speak() a ripopolarlo.
+  useEffect(() => {
+    setSubtitle(null);
+  }, [step]);
+
   // Step 3 scrim → demo_write
   const advanceFromScrim = useCallback((next: Step) => {
     if (!mountedRef.current) return;
@@ -466,9 +510,13 @@ export default function OnboardingV4() {
   }, []);
 
   // Step 3 demo write state
+  // v66.4 (Fabio 2026-06-16, bug 1): mostriamo ENTRAMBI i lati (user + ai).
+  // Prima mostravamo solo writeReply → il messaggio dell'utente spariva.
+  type WriteMsg = { id: string; role: "user" | "ai"; text: string };
+  const [writeMessages, setWriteMessages] = useState<WriteMsg[]>([]);
   const [writeInput, setWriteInput] = useState("");
-  const [writeReply, setWriteReply] = useState<string | null>(null);
   const [writeSending, setWriteSending] = useState(false);
+  const [writeCompleted, setWriteCompleted] = useState(false);
   const writeStartedRef = useRef(false);
 
   useEffect(() => {
@@ -479,7 +527,7 @@ export default function OnboardingV4() {
     setOrbStatus("idle");
     // Timeout 10s per il primo input utente (poi salta se non scrive)
     timerRef.current = setTimeout(() => {
-      if (!mountedRef.current || writeReply) return;
+      if (!mountedRef.current || writeCompleted) return;
       console.log(`${TAG} step3 timeout → advance`);
       setStep("step4_scrim_voice");
     }, INACTIVITY_TIMEOUT_MS);
@@ -489,9 +537,12 @@ export default function OnboardingV4() {
 
   const handleWriteSend = useCallback(async () => {
     const text = writeInput.trim();
-    if (!text || writeSending) return;
+    if (!text || writeSending || writeCompleted) return;
     clearTimer();
     setWriteSending(true);
+    // v66.4 (bug 1): salviamo IMMEDIATAMENTE il messaggio utente nel log.
+    const userMsg: WriteMsg = { id: `u-${Date.now()}`, role: "user", text };
+    setWriteMessages((prev) => [...prev, userMsg]);
     setWriteInput("");
     try {
       const resp = await api.converse(text, undefined, { is_voice_turn: false });
@@ -500,23 +551,27 @@ export default function OnboardingV4() {
         (resp?.ai_entry as any)?.text_clean ||
         "";
       if (!mountedRef.current) return;
-      setWriteReply(aiText || "…");
+      const aiMsg: WriteMsg = { id: `a-${Date.now()}`, role: "ai", text: aiText || "…" };
+      setWriteMessages((prev) => [...prev, aiMsg]);
+      setWriteCompleted(true);
       // Dopo aver mostrato la risposta ~3s, passa allo step voce
       timerRef.current = setTimeout(() => {
         if (mountedRef.current) setStep("step4_scrim_voice");
-      }, 3000);
+      }, 3200);
     } catch (e) {
       console.warn(`${TAG} step3 converse failed:`, e);
       if (mountedRef.current) {
-        setWriteReply("Ci sarò comunque.");
+        const aiMsg: WriteMsg = { id: `a-${Date.now()}`, role: "ai", text: "Ci sarò comunque." };
+        setWriteMessages((prev) => [...prev, aiMsg]);
+        setWriteCompleted(true);
         timerRef.current = setTimeout(() => {
           if (mountedRef.current) setStep("step4_scrim_voice");
-        }, 2500);
+        }, 2800);
       }
     } finally {
       if (mountedRef.current) setWriteSending(false);
     }
-  }, [writeInput, writeSending, clearTimer]);
+  }, [writeInput, writeSending, writeCompleted, clearTimer]);
 
   // Step 4 demo voice
   const voiceStartedRef = useRef(false);
@@ -555,9 +610,12 @@ export default function OnboardingV4() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
-  // Step 5 LA demo — mic-reattivo (glow riding)
+  // Step 5 LA demo — usa il pattern REALE di Lascia Andare (v66.4, bug 6):
+  // EclipseOrb con dbBoost calcolato dal metering, così il glow reagisce
+  // dinamicamente alla voce come nella LA principale. dB range utile
+  // [-60, -20] mappato in [0, 1]. Il glow è champagne come nella LA reale.
   const laStartedRef = useRef(false);
-  const [laMeterAnim] = useState(() => new Animated.Value(0));
+  const [laMeterDb, setLaMeterDb] = useState(-60);
   const laRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const laMeterTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
@@ -575,23 +633,14 @@ export default function OnboardingV4() {
         await configureAudioForRecording();
         await laRecorder.prepareToRecordAsync();
         laRecorder.record();
-        // Loop di metering: leggiamo `metering` (dBFS) e lo mappiamo in [0..1]
+        // Loop di metering: leggiamo `metering` (dBFS) e lo passiamo in state.
         laMeterTimerRef.current = setInterval(() => {
           try {
             const status = laRecorder.getStatus();
             const db = (status as any)?.metering as number | undefined;
-            if (typeof db === "number") {
-              // dBFS tipicamente in [-60, 0]. Mappa in [0..1] con curva soft.
-              const clamped = Math.max(-60, Math.min(0, db));
-              const norm = Math.pow((clamped + 60) / 60, 2);
-              Animated.timing(laMeterAnim, {
-                toValue: norm,
-                duration: 100,
-                useNativeDriver: true,
-              }).start();
-            }
+            if (typeof db === "number") setLaMeterDb(db);
           } catch {}
-        }, 120);
+        }, 100);
       } catch (e) {
         console.warn(`${TAG} step5 recorder start failed:`, e);
       }
@@ -628,9 +677,6 @@ export default function OnboardingV4() {
 
   // ==== Render helpers ======================================================
   const breatheScale = breathe.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.05] });
-  // Glow reattivo LA: scale animata dal metering
-  const laScale = laMeterAnim.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.35] });
-  const laGlowOpacity = laMeterAnim.interpolate({ inputRange: [0, 1], outputRange: [0.45, 1] });
 
   const showOrb =
     step === "step1_speak_intro" ||
@@ -647,7 +693,12 @@ export default function OnboardingV4() {
   const currentScrim = useMemo(() => {
     switch (step) {
       case "step3_scrim_write":
-        return { text: "Quando vuoi, io sono qui.", next: "step3_demo_write" as Step, dismissMs: 3400 };
+        return {
+          text:
+            "Qui puoi scrivermi quando vuoi.\n\nLa scrittura è sempre attiva, sempre gratuita, sempre a disposizione. Uno spazio di comunicazione che non si chiude mai.\n\nQuando vuoi, io sono qui.",
+          next: "step3_demo_write" as Step,
+          dismissMs: 7200,
+        };
       case "step4_scrim_voice":
         return { text: "Questa è la mia voce. Prova a dirmi qualcosa.", next: "step4_demo_voice" as Step, dismissMs: 3600 };
       case "step5_scrim_la":
@@ -674,21 +725,31 @@ export default function OnboardingV4() {
       <StatusBar barStyle="light-content" backgroundColor="#0F0C1C" />
       <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
 
-        {/* Orb centrale — visibile in tutti gli step tranne "done" */}
+        {/* Orb centrale — visibile in tutti gli step tranne "done".
+            v66.4 (Fabio 2026-06-16, bug 7): subtitle in absolute-positioned
+            SOTTO l'orb per NON shiftare l'orb verso l'alto quando appare.
+            Prima l'orb si spostava tra speaking (con testo) e recording
+            (senza testo) di ~24px. Ora l'orb è centrato assolutamente
+            nel wrapper flex e il subtitle occupa uno slot fisso più in
+            basso, indipendente dal contenuto. */}
         {showOrb && step !== "step3_demo_write" && step !== "step5_demo_la" && (
           <View style={styles.orbWrap}>
-            <Animated.View style={{ transform: [{ scale: breatheScale }] }}>
-              <EclipseOrb
-                status={orbStatus}
-                speechActive={orbStatus === "speaking"}
-                voiceLevel={0}
-                size={ORB_SIZE}
-                tone="warm"
-              />
-            </Animated.View>
-            {subtitle ? (
-              <Text style={styles.subtitle}>{subtitle}</Text>
-            ) : null}
+            <View style={styles.orbCenter}>
+              <Animated.View style={{ transform: [{ scale: breatheScale }] }}>
+                <EclipseOrb
+                  status={orbStatus}
+                  speechActive={orbStatus === "speaking"}
+                  voiceLevel={0}
+                  size={ORB_SIZE}
+                  tone="warm"
+                />
+              </Animated.View>
+            </View>
+            <View style={styles.subtitleSlot} pointerEvents="none">
+              {subtitle ? (
+                <Text style={styles.subtitle}>{subtitle}</Text>
+              ) : null}
+            </View>
           </View>
         )}
 
@@ -703,17 +764,36 @@ export default function OnboardingV4() {
               contentContainerStyle={styles.demoWriteListContent}
               keyboardShouldPersistTaps="handled"
             >
+              {/* v66.4 (bug 1): rendering ENTRAMBI i lati (user + ai). */}
+              {writeMessages.map((m) => (
+                <View
+                  key={m.id}
+                  style={[
+                    styles.bubbleRow,
+                    m.role === "user" ? styles.bubbleRowUser : styles.bubbleRowAi,
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.bubble,
+                      m.role === "user" ? styles.bubbleUser : styles.bubbleAi,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.bubbleText,
+                        m.role === "user" ? styles.bubbleTextUser : styles.bubbleTextAi,
+                      ]}
+                    >
+                      {m.text}
+                    </Text>
+                  </View>
+                </View>
+              ))}
               {writeSending ? (
                 <View style={[styles.bubbleRow, styles.bubbleRowAi]}>
                   <View style={[styles.bubble, styles.bubbleAi]}>
                     <ActivityIndicator color="#D4B896" size="small" />
-                  </View>
-                </View>
-              ) : null}
-              {writeReply ? (
-                <View style={[styles.bubbleRow, styles.bubbleRowAi]}>
-                  <View style={[styles.bubble, styles.bubbleAi]}>
-                    <Text style={[styles.bubbleText, styles.bubbleTextAi]}>{writeReply}</Text>
                   </View>
                 </View>
               ) : null}
@@ -725,7 +805,7 @@ export default function OnboardingV4() {
                 onChangeText={setWriteInput}
                 placeholder="Scrivimi qualcosa…"
                 placeholderTextColor="rgba(226,232,240,0.45)"
-                editable={!writeSending && !writeReply}
+                editable={!writeSending && !writeCompleted}
                 multiline
                 maxLength={500}
                 returnKeyType="send"
@@ -735,10 +815,10 @@ export default function OnboardingV4() {
               />
               <TouchableOpacity
                 onPress={handleWriteSend}
-                disabled={!writeInput.trim() || writeSending || !!writeReply}
+                disabled={!writeInput.trim() || writeSending || writeCompleted}
                 style={[
                   styles.demoWriteSendBtn,
-                  (!writeInput.trim() || writeSending || !!writeReply) && styles.demoWriteSendBtnDisabled,
+                  (!writeInput.trim() || writeSending || writeCompleted) && styles.demoWriteSendBtnDisabled,
                 ]}
                 testID="onboarding-write-send"
               >
@@ -746,7 +826,7 @@ export default function OnboardingV4() {
                   name="arrow-up"
                   size={20}
                   color={
-                    !writeInput.trim() || writeSending || !!writeReply
+                    !writeInput.trim() || writeSending || writeCompleted
                       ? "rgba(31,26,54,0.55)" : "#1F1A36"
                   }
                 />
@@ -755,7 +835,10 @@ export default function OnboardingV4() {
           </KeyboardAvoidingView>
         )}
 
-        {/* Step 5 demo LA — eclissi mic-reattivo */}
+        {/* Step 5 demo LA — v66.4 (bug 6): usa EclipseOrb reale con dbBoost
+            calcolato dal metering microfonico, identico al pattern di
+            /lascia-andare. Il glow champagne pulsa dinamicamente con la
+            voce dell'utente. Nessun testo, nessuna registrazione persistente. */}
         {step === "step5_demo_la" && (
           <View style={styles.laDemoWrap}>
             <TouchableOpacity
@@ -768,13 +851,16 @@ export default function OnboardingV4() {
               <Ionicons name="close" size={28} color="rgba(245,230,204,0.75)" />
             </TouchableOpacity>
             <View style={styles.laOrbCenter}>
-              <Animated.View
-                style={[
-                  styles.laGlow,
-                  { transform: [{ scale: laScale }], opacity: laGlowOpacity },
-                ]}
+              <EclipseOrb
+                status="recording"
+                size={ORB_SIZE}
+                meterDb={laMeterDb}
+                meterThreshold={-40}
+                dbBoost={Math.max(
+                  0,
+                  Math.min(1, (Math.max(-60, Math.min(-20, laMeterDb)) + 60) / 40)
+                )}
               />
-              <View style={styles.laOrbCore} />
             </View>
           </View>
         )}
@@ -801,14 +887,28 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 24,
+    position: "relative",
+  },
+  // v66.4 (bug 7): l'orb è centrato geometricamente nel wrapper flex.
+  // Il subtitle vive in un slot separato in absolute-position sotto,
+  // così l'aggiunta/rimozione del testo NON sposta l'orb.
+  orbCenter: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  subtitleSlot: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: "18%",
+    alignItems: "center",
+    paddingHorizontal: 24,
   },
   subtitle: {
     color: "#F5E6CC",
     fontSize: 17,
     lineHeight: 24,
     textAlign: "center",
-    paddingHorizontal: 24,
-    marginTop: 32,
     maxWidth: 360,
   },
   // ==== Scrim ====
@@ -852,6 +952,7 @@ const styles = StyleSheet.create({
   },
   bubbleRow: { marginVertical: 4, flexDirection: "row" },
   bubbleRowAi: { justifyContent: "flex-start" },
+  bubbleRowUser: { justifyContent: "flex-end" },
   bubble: {
     maxWidth: "82%",
     paddingVertical: 10,
@@ -864,8 +965,13 @@ const styles = StyleSheet.create({
     borderColor: "rgba(212,184,150,0.20)",
     borderTopLeftRadius: 4,
   },
+  bubbleUser: {
+    backgroundColor: "#D4B896",
+    borderTopRightRadius: 4,
+  },
   bubbleText: { fontSize: 15, lineHeight: 21 },
   bubbleTextAi: { color: "#F5E6CC" },
+  bubbleTextUser: { color: "#1F1A36", fontWeight: "500" },
   demoWriteInputRow: {
     flexDirection: "row",
     alignItems: "flex-end",
