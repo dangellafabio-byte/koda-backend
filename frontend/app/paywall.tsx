@@ -304,13 +304,11 @@ export default function PaywallScreen() {
     }
   };
 
-  // La X è visibile SOLO quando: (a) utente non è in trial expired
-  // (visita il paywall volontariamente), OPPURE (b) è admin con
-  // dev_override attivo che sta testando. Utenti reali con trial
-  // expired NON possono chiudere — è l'enforcement voluto.
-  // In modalità post-demo la X è SEMPRE visibile (l'utente non è
-  // trial-expired, sta scegliendo volontariamente dopo la demo).
-  const showCloseButton = isPostDemo || !trialExpired || devOverride;
+  // v66.3 (Fabio 2026-06-16): il paywall è SEMPRE skippabile.
+  // Feedback utente: "paywall non obbligatorio, l'utente ci deve poter
+  // arrivare quando vuole, e uscire quando vuole". La X è quindi visibile
+  // in ogni caso — Free e Trial-Expired non differiscono in questa scelta.
+  const showCloseButton = true;
 
   const selected = PLANS.find((p) => p.id === selectedPlan)!;
 

@@ -36,6 +36,7 @@ const CLIP_ECCOMI = require("../assets/sounds/intro/intro_premium_eccomi-cielo.m
 type Phase =
   | "boot" | "speaking" | "asking_permission" | "waiting_tap"
   | "coach_orb" | "coach_hf" | "coach_settings"
+  | "final_scrim"
   | "handoff";
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -296,6 +297,17 @@ export default function IntroPremium() {
     }
   }, [phase, cardOpacity]);
 
+  // v66.3: auto-dismiss scrim finale a 6.5s (leggibile, non tedioso).
+  useEffect(() => {
+    if (phase !== "final_scrim") return;
+    const t = setTimeout(() => {
+      if (!mountedRef.current) return;
+      advance();
+    }, 6500);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
   useEffect(() => {
     if (phase === "coach_hf") {
       Animated.timing(hfOpacity, { toValue: 1, duration: 400, useNativeDriver: true }).start();
@@ -320,12 +332,14 @@ export default function IntroPremium() {
   }, [phase]);
 
   const advance = useCallback(() => {
-    // v66.0 (Fabio 2026-06): sequenza semplificata. Rimossi coach_la e
-    // coach_swipe — spiegazione scrittura e Lascia Andare sono già in
-    // Intro V3, non vanno ripetute all'upgrade a Premium.
+    // v66.3 (Fabio 2026-06-16): sequenza aggiornata.
+    // Fine coach_settings → final_scrim (frase di chiusura Premium) →
+    // handoff a home. Rimossi coach_la e coach_swipe (spiegazioni già
+    // date in OnboardingV4).
     if (phase === "coach_orb") setPhase("coach_hf");
     else if (phase === "coach_hf") setPhase("coach_settings");
-    else if (phase === "coach_settings") doAutoSwipeAndHandoff();
+    else if (phase === "coach_settings") setPhase("final_scrim");
+    else if (phase === "final_scrim") doAutoSwipeAndHandoff();
   }, [phase]);
 
   // ==================== HANDOFF (v66.0) ==================================
@@ -491,11 +505,33 @@ export default function IntroPremium() {
           per marcare visivamente quale elemento la card sta indicando.
           v66.0: rimosse card coach_la e coach_swipe. */}
       {phase === "coach_orb" &&
-        renderCard(RECTS.orb, "Toccami", "Il secondo tocco è per fermarmi.", true, true)}
+        renderCard(RECTS.orb, "Qui puoi parlarmi", "Toccami per iniziare, e ancora per fermarmi. I minuti disponibili sono nelle Impostazioni.", true, true)}
       {phase === "coach_hf" &&
         renderCard(RECTS.hf, "Mani libere", "Se lo attivi ti ascolto in continuo. Non serve toccarmi.", true, true)}
       {phase === "coach_settings" &&
         renderCard(RECTS.settings, "Impostazioni", "Da qui cambi voce, tema, memoria.", true, true)}
+
+      {/* v66.3 (Fabio 2026-06-16) — Scrim finale post-payment.
+          Ultima frase in overlay full-screen: "hai tutto quello che posso
+          darti" + frase effetto sul conoscersi meglio. Auto-dismiss dopo
+          6s, poi handoff a home. Tap in qualsiasi punto → dismiss anticipato. */}
+      {phase === "final_scrim" && (
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={advance}
+          style={styles.finalScrimOverlay}
+          testID="intro-premium-final-scrim"
+        >
+          <View style={styles.finalScrimContent}>
+            <Text style={styles.finalScrimText}>
+              Ok, adesso hai tutto quello che posso darti.
+            </Text>
+            <Text style={styles.finalScrimSubtext}>
+              Nel tempo imparerò a conoscerti, un po&apos; alla volta.
+            </Text>
+          </View>
+        </TouchableOpacity>
+      )}
     </Animated.View>
   );
 }
@@ -546,4 +582,31 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   fakeLAText: { color: "#F0F0F5", fontSize: 13.5, fontWeight: "600", letterSpacing: 0.4 },
+  // v66.3 (Fabio 2026-06-16): scrim finale post-payment
+  finalScrimOverlay: {
+    position: "absolute",
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: "rgba(15,12,28,0.94)",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 100,
+    paddingHorizontal: 32,
+  },
+  finalScrimContent: { alignItems: "center", maxWidth: 360 },
+  finalScrimText: {
+    color: "#F5E6CC",
+    fontSize: 22,
+    lineHeight: 32,
+    textAlign: "center",
+    fontWeight: "600",
+    marginBottom: 16,
+    letterSpacing: 0.3,
+  },
+  finalScrimSubtext: {
+    color: "rgba(226,232,240,0.75)",
+    fontSize: 17,
+    lineHeight: 26,
+    textAlign: "center",
+    fontStyle: "italic",
+  },
 });

@@ -1168,14 +1168,28 @@ export default function Taccuino() {
     }
     hasRedirectedIntroV3Ref.current = true;
     lastV3DecidedKeyRef.current = currentKey;
-    console.log(`[OLLENYA_ROUTER_V3] fresh install (intro_v3_completed_at=absent) → replace to /intro-v3`);
-    try {
-      // Nasconde il vecchio OllenyaIntro V1 modal (superato dalla nuova architettura V3)
-      setShowColorIntro(false);
-      router.replace("/intro-v3");
-    } catch (e) {
-      console.warn("[OLLENYA_ROUTER_V3] replace to /intro-v3 failed:", e);
-    }
+    // v66.3 (Fabio 2026-06-16): PRIMA di /intro-v3 controlliamo il consenso
+    // legale. Se assente → /legal-consent. Il route /legal-consent, al tap
+    // di "Iniziamo" (con checkbox spuntato), scrive `legal_consent_at` in
+    // SecureStore e router.replace verso /intro-v3.
+    (async () => {
+      try {
+        const legalFlag = await SecureStore.getItemAsync("legal_consent_at");
+        if (!legalFlag) {
+          console.log("[OLLENYA_ROUTER_V3] no legal_consent → /legal-consent");
+          setShowColorIntro(false);
+          router.replace("/legal-consent");
+          return;
+        }
+        console.log(`[OLLENYA_ROUTER_V3] fresh install (intro_v3_completed_at=absent) → replace to /intro-v3`);
+        setShowColorIntro(false);
+        router.replace("/intro-v3");
+      } catch (e) {
+        console.warn("[OLLENYA_ROUTER_V3] legal_consent check failed → intro-v3:", e);
+        setShowColorIntro(false);
+        try { router.replace("/intro-v3"); } catch {}
+      }
+    })();
   }, [introV3State, profile, profileHydrated, disclaimerState, showSplash, pathname, router]);
 
   // === ROUTER CONDIZIONALE FREE/PREMIUM (Punto 3, Fabio 2026-08-17) ==========

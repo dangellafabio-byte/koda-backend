@@ -1,3 +1,41 @@
+## SESSIONE 2026-06-16 — v66.3 (Build 44): Onboarding V4 completo
+
+### 🎯 Nuova sequenza onboarding (6 step spec Fabio)
+1. **`/legal-consent` (nuovo)**: disclaimer, numeri emergenza 112/Telefono Amico, checkbox UNICO. Flag `legal_consent_at` in SecureStore. Bottone "Iniziamo" disabilitato senza check.
+2. **`OnboardingV4` (nuovo componente, sostituisce OllenyaIntroV3 + AppWelcomeIntro)**:
+   - Step 1: TTS "Ciao, io sono Ollenya, sono una presenza…" + sottotitolo + richiesta mic nativa post-TTS.
+   - Step 2: STT nome (timeout 10s), poi TTS "Piacere di conoscerti, [Nome]. Voglio mostrarti come funziona."
+   - Step 3: scrim "Quando vuoi, io sono qui." → demo scrittura 1-turno (10s timeout).
+   - Step 4: scrim "Questa è la mia voce. Prova a dirmi qualcosa." → demo voce 1-turno.
+   - Step 5: scrim testo lungo LA → eclissi mic-reattivo (metering dB→scale/opacity), X per chiudere.
+   - Step 6: scrim "Perfetto, siamo arrivati alla fine…" → `router.replace("/paywall")`. Flag `intro_v3_completed_at` scritto QUI.
+3. **`IntroPremium` post-payment**: aggiunto `final_scrim` con "Ok, adesso hai tutto quello che posso darti. / Nel tempo imparerò a conoscerti, un po' alla volta." (auto-dismiss 6.5s). Coach_orb text aggiornato a "Qui puoi parlarmi. Toccami per iniziare, e ancora per fermarmi. I minuti disponibili sono nelle Impostazioni."
+4. **Paywall skippabile SEMPRE**: `showCloseButton = true` incondizionato. Spec Fabio: "paywall non obbligatorio, l'utente ci deve poter arrivare quando vuole".
+5. **Router aggiornato**: `app/index.tsx` — prima di /intro-v3 controlla `legal_consent_at`. Se assente → /legal-consent.
+
+### 🔧 Fix collaterali
+- Voce Cielo `voice_id` corretto ovunque a `POuqf18evoXOKIqV2Px7`.
+- TTS forza Turbo v2.5 via `microdemo:true` (tono coerente per tutta l'intro).
+- Timeout unificato 10s in tutti gli step interattivi (spec Fabio).
+
+### 📁 File nuovi
+- `/app/frontend/app/legal-consent.tsx`
+- `/app/frontend/components/OnboardingV4.tsx`
+
+### 📝 File modificati
+- `/app/frontend/app/intro-v3.tsx` (wrapper → OnboardingV4)
+- `/app/frontend/app/index.tsx` (router legal-consent gate)
+- `/app/frontend/components/IntroPremium.tsx` (final_scrim + coach_orb testo)
+- `/app/frontend/app/paywall.tsx` (X sempre visibile)
+- `/app/frontend/app.json` (v1.0.137 build 44)
+
+### ⚠️ QA on-device
+- Full flow non testabile via web preview (login gate + mic gate).
+- Testing agent (iter 23) ha già validato TTS backend endpoint.
+
+---
+
+
 ## SESSIONE 2026-06-16 — v66.0 (Build 41): Intro V3 write_test + IntroPremium simplified + LA modal copy
 
 ### 🎯 Interventi
