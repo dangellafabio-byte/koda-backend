@@ -32,6 +32,7 @@ import {
   Animated,
   Easing,
   Alert,
+  Dimensions,
 } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -1387,7 +1388,7 @@ export default function LasciaAndareScreen() {
         >
           <EclipseOrb
             status={status}
-            size={260}
+            size={Math.min(Dimensions.get("window").width * 0.78, 360)}
             meterDb={meterDb}
             meterThreshold={SPEECH_DB}
             /* === LASCIA ANDARE GLOW (Fabio 2026-08-22) ================

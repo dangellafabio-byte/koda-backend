@@ -66,7 +66,14 @@ const TAG = "[ONBOARDING_V4]";
 const VOICE_CIELO_ID = "POuqf18evoXOKIqV2Px7";
 const INACTIVITY_TIMEOUT_MS = 10_000;
 const { width: SCREEN_W } = Dimensions.get("window");
-const ORB_SIZE = Math.min(SCREEN_W * 0.6, 260);
+// v66.5 (Fabio 2026-06-16): eclissi DEVE essere identica alla Home per
+// tutta la sequenza intro. Home usa `Math.min(windowWidth * 0.78, 360)` →
+// stessa formula qui, così onboarding, home e /lascia-andare condividono
+// dimensione + centratura al pixel.
+const ORB_SIZE = Math.min(SCREEN_W * 0.78, 360);
+// Background app: identico al theme "notte" NOTTE.bg.
+const APP_BG = "#1F1A36";
+const METER_THRESHOLD = -35;
 
 // ==== Fasi (state machine) ==================================================
 type Step =
@@ -174,6 +181,11 @@ export default function OnboardingV4() {
   const [userName, setUserName] = useState<string | null>(null);
   const [subtitle, setSubtitle] = useState<string | null>(null);
   const [orbStatus, setOrbStatus] = useState<OrbStatus>("idle");
+  // v66.5 (Fabio 2026-06-16): metering per orb reattivo durante STT.
+  // Popolato dai volumechange events di ExpoSpeechRecognitionModule
+  // (step2_listen_name e step4_demo_voice) — passato a EclipseOrb come
+  // meterDb + dbBoost così l'orb pulsa esattamente come nella Home.
+  const [orbMeterDb, setOrbMeterDb] = useState(-60);
 
   const mountedRef = useRef(true);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -348,7 +360,10 @@ export default function OnboardingV4() {
         maxAlternatives: 1,
         addsPunctuation: true,
         requiresOnDeviceRecognition: Platform.OS === "ios",
-        volumeChangeEventOptions: { enabled: false, intervalMillis: 200 },
+        // v66.5 (Fabio 2026-06-16): metering ATTIVO. Ogni 80ms riceviamo
+        // il volume raw dell'utente e lo mappiamo in meterDb (-60..-20)
+        // per far pulsare l'EclipseOrb come nella Home.
+        volumeChangeEventOptions: { enabled: true, intervalMillis: 80 },
       };
       if (Platform.OS === "ios") {
         startOpts.iosCategory = {
@@ -392,7 +407,26 @@ export default function OnboardingV4() {
         // Se non abbiamo captured e non è ancora scaduto il timer,
         // lasciamo scadere il timer per dare all'utente 10s totali.
       });
-      sttSubsRef.current = [subResult, subError, subEnd];
+      // v66.5: metering → EclipseOrb. Il `value` viene normalizzato a
+      // dBFS-like [-60..-20]: iOS restituisce dBFS negativi (~[-60..0]),
+      // Android restituisce 0..10 → mappiamo linearmente su [-60..-20].
+      const subVolume = ExpoSpeechRecognitionModule.addListener(
+        "volumechange",
+        (evt: { value?: number }) => {
+          const raw = typeof evt?.value === "number" ? evt.value : -60;
+          let db: number;
+          if (Platform.OS === "android") {
+            // Android: value ~ 0..10, mappa linearmente in [-60..-20]
+            const clamped = Math.max(0, Math.min(10, raw));
+            db = -60 + (clamped / 10) * 40;
+          } else {
+            // iOS: value ~ dBFS negativo (-60..0). Clamp e shift.
+            db = Math.max(-60, Math.min(-20, raw));
+          }
+          setOrbMeterDb(db);
+        }
+      );
+      sttSubsRef.current = [subResult, subError, subEnd, subVolume];
       sttActiveRef.current = true;
       // Timer di safety a maxMs (10s default)
       timerRef.current = setTimeout(() => {
@@ -484,11 +518,15 @@ export default function OnboardingV4() {
   }, [step]);
 
   // Step 2b: confirm speech
+  // v66.5 (Fabio 2026-06-16): copy aggiornato. "Ciao [Nome], piacere" +
+  // "voglio mostrarti come funziono" (io, non impersonale "funziona"):
+  // Ollenya parla di SÉ, non dell'app. Se il nome non è stato capito
+  // (STT vuoto o parsing fallito), fallback generico senza refuso di plurale.
   useEffect(() => {
     if (step !== "step2_confirm") return;
     const text = userName
-      ? `Piacere di conoscerti, ${userName}. Voglio mostrarti come funziona.`
-      : "Piacere di conoscerti. Voglio mostrarti come funziona.";
+      ? `Ciao ${userName}, piacere. Voglio mostrarti come funziono.`
+      : "Piacere di conoscerti. Voglio mostrarti come funziono.";
     speak(text, () => {
       if (mountedRef.current) setStep("step3_scrim_write");
     });
@@ -525,12 +563,10 @@ export default function OnboardingV4() {
     writeStartedRef.current = true;
     setSubtitle(null);
     setOrbStatus("idle");
-    // Timeout 10s per il primo input utente (poi salta se non scrive)
-    timerRef.current = setTimeout(() => {
-      if (!mountedRef.current || writeCompleted) return;
-      console.log(`${TAG} step3 timeout → advance`);
-      setStep("step4_scrim_voice");
-    }, INACTIVITY_TIMEOUT_MS);
+    // v66.5 (Fabio 2026-06-16): step3 è OBBLIGATORIO. Rimosso il timeout
+    // di skip a 10s. L'utente DEVE scrivere e ricevere risposta prima di
+    // avanzare — la scrittura è una funzione core, non può essere skippata
+    // silenziosamente. Il campo TextInput è auto-focus per prompt implicito.
     return () => clearTimer();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
@@ -554,10 +590,12 @@ export default function OnboardingV4() {
       const aiMsg: WriteMsg = { id: `a-${Date.now()}`, role: "ai", text: aiText || "…" };
       setWriteMessages((prev) => [...prev, aiMsg]);
       setWriteCompleted(true);
-      // Dopo aver mostrato la risposta ~3s, passa allo step voce
+      // v66.5 (Fabio 2026-06-16): dopo la risposta, aspettiamo 4.5s per
+      // dare all'utente il tempo di LEGGERE bene la risposta. Prima erano
+      // 3.2s e sembrava troppo veloce.
       timerRef.current = setTimeout(() => {
         if (mountedRef.current) setStep("step4_scrim_voice");
-      }, 3200);
+      }, 4500);
     } catch (e) {
       console.warn(`${TAG} step3 converse failed:`, e);
       if (mountedRef.current) {
@@ -566,7 +604,7 @@ export default function OnboardingV4() {
         setWriteCompleted(true);
         timerRef.current = setTimeout(() => {
           if (mountedRef.current) setStep("step4_scrim_voice");
-        }, 2800);
+        }, 4000);
       }
     } finally {
       if (mountedRef.current) setWriteSending(false);
@@ -700,7 +738,16 @@ export default function OnboardingV4() {
           dismissMs: 7200,
         };
       case "step4_scrim_voice":
-        return { text: "Questa è la mia voce. Prova a dirmi qualcosa.", next: "step4_demo_voice" as Step, dismissMs: 3600 };
+        return {
+          // v66.5 (Fabio 2026-06-16): scrim voce ESTESO. La voce è la
+          // funzione principale dell'app — la frase breve precedente la
+          // sminuiva. Ora presenta la voce come esperienza reale di
+          // conversazione, mano-libera, sempre attiva mentalmente.
+          text:
+            "Adesso ti presento la mia voce.\n\nQuesta è la mia funzione principale: quando parliamo davvero, tu dici quello che senti e io ti rispondo con la mia voce, come una vera conversazione.\n\nProva ora. Dimmi qualcosa — anche solo una parola. Ti risponderò.",
+          next: "step4_demo_voice" as Step,
+          dismissMs: 9000,
+        };
       case "step5_scrim_la":
         return {
           text:
@@ -722,7 +769,7 @@ export default function OnboardingV4() {
   // ==== JSX =================================================================
   return (
     <Animated.View style={[styles.root, { opacity: rootOpacity }]}>
-      <StatusBar barStyle="light-content" backgroundColor="#0F0C1C" />
+      <StatusBar barStyle="light-content" backgroundColor={APP_BG} />
       <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
 
         {/* Orb centrale — visibile in tutti gli step tranne "done".
@@ -742,6 +789,20 @@ export default function OnboardingV4() {
                   voiceLevel={0}
                   size={ORB_SIZE}
                   tone="warm"
+                  // v66.5 (Fabio 2026-06-16): meterDb + dbBoost passati sempre
+                  // così durante recording l'orb modula come nella Home. In
+                  // stato non-recording, i valori sono neutri (-60/0) e non
+                  // influenzano il rendering.
+                  meterDb={orbStatus === "recording" ? orbMeterDb : -60}
+                  meterThreshold={METER_THRESHOLD}
+                  dbBoost={
+                    orbStatus === "recording"
+                      ? Math.max(
+                          0,
+                          Math.min(1, (Math.max(-60, Math.min(-20, orbMeterDb)) + 60) / 40)
+                        )
+                      : 0
+                  }
                 />
               </Animated.View>
             </View>
@@ -880,7 +941,7 @@ export default function OnboardingV4() {
 
 // ==== Styles ================================================================
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#0F0C1C" },
+  root: { flex: 1, backgroundColor: APP_BG },
   safe: { flex: 1 },
   orbWrap: {
     flex: 1,
@@ -915,7 +976,7 @@ const styles = StyleSheet.create({
   scrimOverlay: {
     position: "absolute",
     top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: "rgba(15,12,28,0.92)",
+    backgroundColor: "rgba(31,26,54,0.92)",
     zIndex: 100,
   },
   scrimTouch: {
@@ -1005,7 +1066,7 @@ const styles = StyleSheet.create({
   // ==== Step 5 LA demo ====
   laDemoWrap: {
     flex: 1,
-    backgroundColor: "#0A0714",
+    backgroundColor: APP_BG,
   },
   laCloseBtn: {
     position: "absolute",
