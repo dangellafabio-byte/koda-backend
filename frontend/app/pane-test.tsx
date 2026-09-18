@@ -188,24 +188,80 @@ function OctaCrystal({ color }: { color: StateColor }) {
         `L ${vb.x.toFixed(1)} ${vb.y.toFixed(1)} `;
     }
 
-    // Path per le facce triangolari — separo front (centroidZ < 0, verso
-    // camera) da back (centroidZ >= 0, dietro) per applicare opacità
-    // diverse: le facce anteriori sono più luminose (viste in diretta),
-    // le posteriori più tenui (viste per rifrazione). Questo dà la
-    // percezione di profondità 3D senza ray-tracing.
-    let facesFrontD = "";
-    let facesBackD = "";
+    // === FACCE — separo in 3 bucket per luminosità (fake lighting) ========
+    // Simuliamo una sorgente luce da alto-sinistra-avanti (normale L = -0.5,-0.5,-0.7).
+    // Per ogni faccia calcoliamo la normale ruotata e il dot product con L.
+    // Le facce che "riflettono" verso la camera → BRIGHT, quelle laterali →
+    // MEDIUM, quelle dietro → DARK. Concateno i path di ogni bucket in un
+    // unico stringa e li disegno con 3 AnimatedPath a opacità fissa diverse.
+    let facesBrightD = "";
+    let facesMediumD = "";
+    let facesDarkD = "";
+    let facesRimD = ""; // faccia più luminosa: highlight lucido bianco
+
+    // Direzione luce (normalizzata approssimativamente)
+    const LX = -0.5, LY = -0.4, LZ = -0.75;
+
+    // Trovo la faccia più luminosa per il rim highlight
+    let maxBright = -Infinity;
+    let brightestFaceD = "";
+
     for (let i = 0; i < OCTA_FACES.length; i++) {
-      const [a, b, c] = OCTA_FACES[i];
-      const va = projected[a], vb = projected[b], vc = projected[c];
-      const zCentroid = (va.z + vb.z + vc.z) / 3;
+      const [ia, ib, ic] = OCTA_FACES[i];
+      // Vertici in coordinate 3D già ruotate (le riprendo dal local rotato)
+      const [ax, ay0, az] = OCTA_VERTS[ia];
+      const [bx, by0, bz] = OCTA_VERTS[ib];
+      const [cx3, cy3, cz3] = OCTA_VERTS[ic];
+      // Riapplico rotazione (necessario perché serve normale in world space)
+      const rotP = (x: number, y: number, z: number) => {
+        const x1 = x * cy + z * sy;
+        const y1 = y;
+        const z1 = -x * sy + z * cy;
+        return [x1, y1 * cx - z1 * sx, y1 * sx + z1 * cx];
+      };
+      const A = rotP(ax, ay0, az);
+      const B = rotP(bx, by0, bz);
+      const C = rotP(cx3, cy3, cz3);
+      // Normale = (B-A) × (C-A)
+      const e1x = B[0] - A[0], e1y = B[1] - A[1], e1z = B[2] - A[2];
+      const e2x = C[0] - A[0], e2y = C[1] - A[1], e2z = C[2] - A[2];
+      const nx = e1y * e2z - e1z * e2y;
+      const ny = e1z * e2x - e1x * e2z;
+      const nz = e1x * e2y - e1y * e2x;
+      const nlen = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      const nnx = nx / nlen, nny = ny / nlen, nnz = nz / nlen;
+      // Dot product con la direzione luce (rovesciata: quanto la faccia riflette
+      // verso la luce). Range [-1, 1] → mappo a [0, 1].
+      const dot = nnx * LX + nny * LY + nnz * LZ;
+      const bright = Math.max(0, dot); // solo facce esposte
+
+      // Solo facce anteriori (centroidZ < 0.1) contribuiscono al render
+      // (le altre sono nascoste dietro le anteriori — SVG non fa depth-test
+      // ma il layering visivo funziona bene se le disegniamo in ordine)
+      const va = projected[ia], vb = projected[ib], vc = projected[ic];
+      const centroidZ = (va.z + vb.z + vc.z) / 3;
+
       const seg =
         `M ${va.x.toFixed(1)} ${va.y.toFixed(1)} ` +
         `L ${vb.x.toFixed(1)} ${vb.y.toFixed(1)} ` +
         `L ${vc.x.toFixed(1)} ${vc.y.toFixed(1)} Z `;
-      if (zCentroid < 0) facesFrontD += seg;
-      else facesBackD += seg;
+
+      if (centroidZ < 0.1) {
+        // Faccia visibile (davanti)
+        if (bright > 0.55) facesBrightD += seg;
+        else if (bright > 0.20) facesMediumD += seg;
+        else facesDarkD += seg;
+
+        if (bright > maxBright) {
+          maxBright = bright;
+          brightestFaceD = seg;
+        }
+      } else {
+        // Faccia posteriore — sempre in bucket "dark" (rifrazione)
+        facesDarkD += seg;
+      }
     }
+    facesRimD = brightestFaceD;
 
     // Path per i "puntini luminosi" ai 6 vertici — cerchi disegnati come
     // sub-path con M + due archi. Raggio proporzionale alla vicinanza camera
@@ -229,12 +285,14 @@ function OctaCrystal({ color }: { color: StateColor }) {
         `a ${rCore.toFixed(1)} ${rCore.toFixed(1)} 0 1 0 ${(-rCore * 2).toFixed(1)} 0 `;
     }
 
-    return { edgesD, facesFrontD, facesBackD, tipsGlowD, tipsCoreD, verts: projected };
+    return { edgesD, facesBrightD, facesMediumD, facesDarkD, facesRimD, tipsGlowD, tipsCoreD, verts: projected };
   });
 
   // Animated props per i vari layer
-  const facesFrontAP = useAnimatedProps(() => ({ d: geom.value.facesFrontD }));
-  const facesBackAP = useAnimatedProps(() => ({ d: geom.value.facesBackD }));
+  const facesBrightAP = useAnimatedProps(() => ({ d: geom.value.facesBrightD }));
+  const facesMediumAP = useAnimatedProps(() => ({ d: geom.value.facesMediumD }));
+  const facesDarkAP = useAnimatedProps(() => ({ d: geom.value.facesDarkD }));
+  const facesRimAP = useAnimatedProps(() => ({ d: geom.value.facesRimD }));
   const edgesGlowXL = useAnimatedProps(() => ({ d: geom.value.edgesD }));
   const edgesGlowL = useAnimatedProps(() => ({ d: geom.value.edgesD }));
   const edgesMid = useAnimatedProps(() => ({ d: geom.value.edgesD }));
@@ -250,34 +308,70 @@ function OctaCrystal({ color }: { color: StateColor }) {
         height={PANE_BOX}
         viewBox={`0 0 ${PANE_BOX} ${PANE_BOX}`}
       >
-        {/* Facce POSTERIORI (dietro) — tinta più tenue, viste per rifrazione */}
-        <AnimatedPath
-          animatedProps={facesBackAP}
-          fill={color.tint}
-          fillOpacity={0.05}
-          stroke="none"
+        <Defs>
+          {/* Alone volumetrico dietro al cristallo (radial gradient
+              del colore stato che sfuma verso l'esterno) */}
+          <RadialGradient id="ambientGlow" cx="50%" cy="50%" r="45%">
+            <Stop offset="0%" stopColor={color.glow} stopOpacity="0.25" />
+            <Stop offset="40%" stopColor={color.glow} stopOpacity="0.10" />
+            <Stop offset="100%" stopColor={color.glow} stopOpacity="0" />
+          </RadialGradient>
+          {/* Gradient per il rim highlight bianco sulla faccia più luminosa */}
+          <LinearGradient id="rimShine" x1="0%" y1="0%" x2="50%" y2="80%">
+            <Stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.45" />
+            <Stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
+          </LinearGradient>
+        </Defs>
+
+        {/* Alone volumetrico ambient — SEMPRE dietro tutto */}
+        <Path
+          d={`M0 0 H ${PANE_BOX} V ${PANE_BOX} H 0 Z`}
+          fill="url(#ambientGlow)"
         />
-        {/* Facce ANTERIORI (davanti) — tinta piena, colore stato */}
+
+        {/* === FACCE VETROSE — 3 bucket per fake lighting =================== */}
+        {/* DARK: facce posteriori e in ombra (rifrazione tenue) */}
         <AnimatedPath
-          animatedProps={facesFrontAP}
+          animatedProps={facesDarkAP}
           fill={color.tint}
-          fillOpacity={0.12}
-          stroke="none"
-        />
-        <AnimatedPath
-          animatedProps={facesFrontAP}
-          fill={color.glow}
           fillOpacity={0.06}
           stroke="none"
         />
+        {/* MEDIUM: facce laterali (rifrazione media) */}
+        <AnimatedPath
+          animatedProps={facesMediumAP}
+          fill={color.tint}
+          fillOpacity={0.16}
+          stroke="none"
+        />
+        {/* BRIGHT: facce che riflettono verso la luce (piene) */}
+        <AnimatedPath
+          animatedProps={facesBrightAP}
+          fill={color.tint}
+          fillOpacity={0.32}
+          stroke="none"
+        />
+        {/* BRIGHT overlay glow: layer extra per far brillare la faccia più esposta */}
+        <AnimatedPath
+          animatedProps={facesBrightAP}
+          fill={color.glow}
+          fillOpacity={0.18}
+          stroke="none"
+        />
+        {/* RIM shine bianco sulla faccia più luminosa (specular highlight) */}
+        <AnimatedPath
+          animatedProps={facesRimAP}
+          fill="url(#rimShine)"
+          stroke="none"
+        />
 
-        {/* Spigoli — stack di stroke per fake bloom neon */}
-        {/* Alone esterno molto diffuso */}
+        {/* === SPIGOLI — sottili, solo per definire i bordi del cristallo === */}
+        {/* Bloom morbido esterno */}
         <AnimatedPath
           animatedProps={edgesGlowXL}
           stroke={color.glow}
-          strokeOpacity={0.10}
-          strokeWidth={20}
+          strokeOpacity={0.15}
+          strokeWidth={12}
           strokeLinecap="round"
           strokeLinejoin="round"
           fill="none"
@@ -285,52 +379,44 @@ function OctaCrystal({ color }: { color: StateColor }) {
         <AnimatedPath
           animatedProps={edgesGlowL}
           stroke={color.glow}
-          strokeOpacity={0.20}
-          strokeWidth={11}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          fill="none"
-        />
-        <AnimatedPath
-          animatedProps={edgesMid}
-          stroke={color.neon}
-          strokeOpacity={0.50}
+          strokeOpacity={0.28}
           strokeWidth={5}
           strokeLinecap="round"
           strokeLinejoin="round"
           fill="none"
         />
+        {/* Bordo core sottile — non più "wireframe" ma sottile spigolo di vetro */}
         <AnimatedPath
           animatedProps={edgesCore}
           stroke={color.neon}
-          strokeOpacity={0.95}
-          strokeWidth={2.2}
+          strokeOpacity={0.65}
+          strokeWidth={1.4}
           strokeLinecap="round"
           strokeLinejoin="round"
           fill="none"
         />
-        {/* Filo bianco crispato al centro dello spigolo → look "vetro sottile" */}
+        {/* Highlight bianco sottilissimo — il "riflesso" sullo spigolo */}
         <AnimatedPath
           animatedProps={edgesWhite}
           stroke="#FFFFFF"
-          strokeOpacity={0.60}
-          strokeWidth={0.9}
+          strokeOpacity={0.55}
+          strokeWidth={0.6}
           strokeLinecap="round"
           strokeLinejoin="round"
           fill="none"
         />
 
-        {/* Puntini luminosi ai 6 vertici — glow esterno + core bianco */}
+        {/* === PUNTE — glow esterno + core bianco brillante ================= */}
         <AnimatedPath
           animatedProps={tipsGlow}
           fill={color.glow}
-          fillOpacity={0.55}
+          fillOpacity={0.65}
           stroke="none"
         />
         <AnimatedPath
           animatedProps={tipsCore}
           fill="#FFFFFF"
-          fillOpacity={0.90}
+          fillOpacity={0.95}
           stroke="none"
         />
       </Svg>
