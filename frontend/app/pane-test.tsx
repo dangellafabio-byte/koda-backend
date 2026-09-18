@@ -38,12 +38,12 @@ import Svg, {
 } from "react-native-svg";
 import Animated, {
   useSharedValue,
-  useAnimatedStyle,
-  withRepeat,
-  withTiming,
-  Easing,
-  interpolate,
+  useDerivedValue,
+  useAnimatedProps,
+  useFrameCallback,
 } from "react-native-reanimated";
+
+const AnimatedPath = Animated.createAnimatedComponent(Path);
 
 // === COLORS (indaco identitario) ===========================================
 const BG_CENTER = "#0F1030";
@@ -87,35 +87,10 @@ const STATE_COLORS: Record<StateKey, StateColor> = {
 // === SIZES =================================================================
 // Stesso footprint dell'EclipseOrb (default size = 280).
 const PANE_BOX = 300;
-// Corpo centrale del cristallo (parte rettangolare)
-const BODY_W = 170;
-const BODY_H = 120;
-// Larghezza delle due punte laterali (tips) → forma esagonale a "gemma"
-const TIP_W = 55;
-// Distanza tra faccia frontale e faccia posteriore (spessore percepito)
-const THICKNESS = 10;
-
-// Vertici della gemma esagonale (coordinate relative al centro).
-// Ordine: sinistra tip → top-left → top-right → right tip → bottom-right → bottom-left
-function gemPath(scale: number = 1): string {
-  "worklet";
-  const hw = (BODY_W / 2) * scale;
-  const hh = (BODY_H / 2) * scale;
-  const tw = TIP_W * scale;
-  // Centriamo in (150, 150) — il viewBox è 300×300
-  const cx = 150;
-  const cy = 150;
-  return (
-    `M ${cx - hw - tw} ${cy} ` +
-    `L ${cx - hw} ${cy - hh} ` +
-    `L ${cx + hw} ${cy - hh} ` +
-    `L ${cx + hw + tw} ${cy} ` +
-    `L ${cx + hw} ${cy + hh} ` +
-    `L ${cx - hw} ${cy + hh} Z`
-  );
-}
-const GEM_PATH = gemPath(1);
-const GEM_PATH_SM = gemPath(0.92); // faccia posteriore leggermente più piccola
+// Raggio dell'ottaedro (distanza dei 6 vertici dal centro)
+const RADIUS = 105;
+// Fattore di prospettiva (0 = ortografica, >0 = più prospettica)
+const PERSP_K = 0.45;
 
 // Font
 const SERIF_FONT = Platform.select({
@@ -125,146 +100,226 @@ const SERIF_FONT = Platform.select({
 });
 
 // ============================================================================
-// GlassPane — rettangolo che ruota in 3D con bordo neon
+// OctaCrystal — Ottaedro 3D (bipiramide a 6 punte) che ruota in continuazione.
+// 6 vertici: alto/basso/sinistra/destra/davanti/dietro.
+// 12 spigoli neon glow. 8 facce triangolari semi-trasparenti (vetro).
 // ============================================================================
-function GlassPane({ color }: { color: StateColor }) {
-  // Due angoli Euler animati con velocità diverse per rotazione infinita
-  // non-ripetitiva.
-  const rotY = useSharedValue(0);
-  const rotX = useSharedValue(0);
 
-  React.useEffect(() => {
-    rotY.value = withRepeat(
-      withTiming(360, { duration: 12000, easing: Easing.linear }),
-      -1,
-      false
-    );
-    rotX.value = withRepeat(
-      withTiming(360, { duration: 18000, easing: Easing.linear }),
-      -1,
-      false
-    );
-  }, [rotY, rotX]);
+// Vertici locali dell'ottaedro (asse Y verso il basso per convenzione SVG).
+// Allungato verticalmente (1.4x) per matchare il cristallo di riferimento —
+// le punte alto/basso sono più lunghe di quelle laterali.
+// Ordine: 0=top, 1=bottom, 2=left, 3=right, 4=back, 5=front
+const OCTA_VERTS: readonly [number, number, number][] = [
+  [0, -1.4, 0], // 0: punta superiore (allungata)
+  [0, 1.4, 0],  // 1: punta inferiore (allungata)
+  [-1, 0, 0],   // 2: punta sinistra
+  [1, 0, 0],    // 3: punta destra
+  [0, 0, -1],   // 4: punta posteriore
+  [0, 0, 1],    // 5: punta frontale
+];
 
-  // Stile animato: perspective + rotate su entrambi gli assi
-  const animStyle = useAnimatedStyle(() => {
-    return {
-      transform: [
-        { perspective: 900 },
-        { rotateY: `${rotY.value}deg` },
-        { rotateX: `${rotX.value}deg` },
-      ],
-    };
+// 12 spigoli (coppie di indici vertici)
+const OCTA_EDGES: readonly [number, number][] = [
+  [0, 2], [0, 3], [0, 4], [0, 5], // top → 4 equatoriali
+  [1, 2], [1, 3], [1, 4], [1, 5], // bottom → 4 equatoriali
+  [2, 4], [4, 3], [3, 5], [5, 2], // 4 spigoli equatoriali
+];
+
+// 8 facce triangolari (per il fill vitreo interno)
+const OCTA_FACES: readonly [number, number, number][] = [
+  [0, 2, 4], [0, 3, 4], [0, 3, 5], [0, 2, 5], // 4 triangoli superiori
+  [1, 2, 4], [1, 3, 4], [1, 3, 5], [1, 2, 5], // 4 triangoli inferiori
+];
+
+function OctaCrystal({ color }: { color: StateColor }) {
+  // Clock condiviso: seconds since app start, letto in worklet
+  const t = useSharedValue(0);
+  useFrameCallback((info) => {
+    "worklet";
+    t.value = info.timestamp / 1000;
+  }, true);
+
+  // useDerivedValue calcola in worklet ogni frame:
+  //  - matrice rotazione (rotY + rotX con velocità diverse)
+  //  - proietta i 6 vertici in 2D con perspective
+  //  - genera le stringhe path per spigoli e facce
+  const geom = useDerivedValue(() => {
+    "worklet";
+    const tt = t.value;
+    // Velocità: rotY ~30°/s (12s giro), rotX ~20°/s (18s giro)
+    const ay = tt * ((Math.PI * 2) / 12);
+    const ax = tt * ((Math.PI * 2) / 18);
+    const sy = Math.sin(ay), cy = Math.cos(ay);
+    const sx = Math.sin(ax), cx = Math.cos(ax);
+
+    // Proietta un vertice locale (x,y,z) → schermo 2D
+    const cx2 = 150; // centro X del viewBox 300×300
+    const cy2 = 150;
+    const projected: { x: number; y: number; z: number; p: number }[] = [];
+    for (let i = 0; i < OCTA_VERTS.length; i++) {
+      const [lx, ly, lz] = OCTA_VERTS[i];
+      // 1) rotY: (x*cy + z*sy, y, -x*sy + z*cy)
+      const x1 = lx * cy + lz * sy;
+      const y1 = ly;
+      const z1 = -lx * sy + lz * cy;
+      // 2) rotX: (x, y*cx - z*sx, y*sx + z*cx)
+      const rx = x1;
+      const ry = y1 * cx - z1 * sx;
+      const rz = y1 * sx + z1 * cx;
+      // Prospettiva: p = 1 / (1 + z*K). z=-1 (vicino) → p ~1.82, z=1 (lontano) → p ~0.69
+      const p = 1 / (1 + rz * PERSP_K);
+      projected.push({
+        x: cx2 + rx * RADIUS * p,
+        y: cy2 + ry * RADIUS * p,
+        z: rz,
+        p,
+      });
+    }
+
+    // Path per gli spigoli — concatenati "M x y L x y" per farli disegnare
+    // in un unico Path (performance)
+    let edgesD = "";
+    for (let i = 0; i < OCTA_EDGES.length; i++) {
+      const [a, b] = OCTA_EDGES[i];
+      const va = projected[a], vb = projected[b];
+      edgesD +=
+        `M ${va.x.toFixed(1)} ${va.y.toFixed(1)} ` +
+        `L ${vb.x.toFixed(1)} ${vb.y.toFixed(1)} `;
+    }
+
+    // Path per le facce triangolari — un unico Path con subpaths chiusi
+    let facesD = "";
+    for (let i = 0; i < OCTA_FACES.length; i++) {
+      const [a, b, c] = OCTA_FACES[i];
+      const va = projected[a], vb = projected[b], vc = projected[c];
+      facesD +=
+        `M ${va.x.toFixed(1)} ${va.y.toFixed(1)} ` +
+        `L ${vb.x.toFixed(1)} ${vb.y.toFixed(1)} ` +
+        `L ${vc.x.toFixed(1)} ${vc.y.toFixed(1)} Z `;
+    }
+
+    // Path per i "puntini luminosi" ai 6 vertici — cerchi disegnati come
+    // sub-path con M + due archi. Raggio proporzionale alla vicinanza camera
+    // (vertici davanti = puntini più grandi). Generiamo 2 varianti: glow
+    // (esterno, morbido) + core (bianco, più piccolo).
+    let tipsGlowD = "";
+    let tipsCoreD = "";
+    for (let i = 0; i < projected.length; i++) {
+      const v = projected[i];
+      const rGlow = 5 + 5 * v.p; // v.p in [~0.69 .. ~1.82]
+      const rCore = 1.5 + 1.5 * v.p;
+      tipsGlowD +=
+        `M ${v.x.toFixed(1)} ${v.y.toFixed(1)} ` +
+        `m -${rGlow.toFixed(1)} 0 ` +
+        `a ${rGlow.toFixed(1)} ${rGlow.toFixed(1)} 0 1 0 ${(rGlow * 2).toFixed(1)} 0 ` +
+        `a ${rGlow.toFixed(1)} ${rGlow.toFixed(1)} 0 1 0 ${(-rGlow * 2).toFixed(1)} 0 `;
+      tipsCoreD +=
+        `M ${v.x.toFixed(1)} ${v.y.toFixed(1)} ` +
+        `m -${rCore.toFixed(1)} 0 ` +
+        `a ${rCore.toFixed(1)} ${rCore.toFixed(1)} 0 1 0 ${(rCore * 2).toFixed(1)} 0 ` +
+        `a ${rCore.toFixed(1)} ${rCore.toFixed(1)} 0 1 0 ${(-rCore * 2).toFixed(1)} 0 `;
+    }
+
+    return { edgesD, facesD, tipsGlowD, tipsCoreD, verts: projected };
   });
+
+  // Animated props per i vari layer
+  const facesAP = useAnimatedProps(() => ({ d: geom.value.facesD }));
+  const edgesGlowXL = useAnimatedProps(() => ({ d: geom.value.edgesD }));
+  const edgesGlowL = useAnimatedProps(() => ({ d: geom.value.edgesD }));
+  const edgesMid = useAnimatedProps(() => ({ d: geom.value.edgesD }));
+  const edgesCore = useAnimatedProps(() => ({ d: geom.value.edgesD }));
+  const edgesWhite = useAnimatedProps(() => ({ d: geom.value.edgesD }));
+  const tipsGlow = useAnimatedProps(() => ({ d: geom.value.tipsGlowD }));
+  const tipsCore = useAnimatedProps(() => ({ d: geom.value.tipsCoreD }));
 
   return (
     <View style={styles.paneBox}>
-      <Animated.View style={[styles.paneCore, animStyle]}>
-        {/* FACCIA POSTERIORE — leggermente più piccola, sotto la frontale,
-            offsettata in Z per creare parallasse durante la rotazione */}
-        <View style={[styles.faceLayer, { transform: [{ translateZ: -THICKNESS }] }]}>
-          <Svg width={300} height={300} viewBox="0 0 300 300">
-            {/* Neon della faccia posteriore, più tenue */}
-            <Path
-              d={GEM_PATH_SM}
-              fill="none"
-              stroke={color.glow}
-              strokeOpacity={0.15}
-              strokeWidth={12}
-            />
-            <Path
-              d={GEM_PATH_SM}
-              fill="none"
-              stroke={color.neon}
-              strokeOpacity={0.55}
-              strokeWidth={2.5}
-            />
-          </Svg>
-        </View>
+      <Svg
+        width={PANE_BOX}
+        height={PANE_BOX}
+        viewBox={`0 0 ${PANE_BOX} ${PANE_BOX}`}
+      >
+        {/* Facce vitree interne — riempimento semitrasparente colore stato */}
+        <AnimatedPath
+          animatedProps={facesAP}
+          fill={color.tint}
+          fillOpacity={0.07}
+          stroke="none"
+        />
+        {/* Secondo layer di facce con tinta diversa per creare gradiente
+            interno naturale durante la rotazione (le facce che si sovrappongono
+            sommano l'opacità → zone più chiare al centro) */}
+        <AnimatedPath
+          animatedProps={facesAP}
+          fill={color.glow}
+          fillOpacity={0.04}
+          stroke="none"
+        />
 
-        {/* FACCIA FRONTALE — piena di dettaglio, gradient, bloom */}
-        <View style={[styles.faceLayer, { transform: [{ translateZ: THICKNESS }] }]}>
-          <Svg width={300} height={300} viewBox="0 0 300 300">
-            <Defs>
-              {/* Gradient interno del vetro — tint dello stato + luce
-                  diagonale per volume */}
-              <LinearGradient
-                id="paneFillGrad"
-                x1="0%"
-                y1="0%"
-                x2="100%"
-                y2="100%"
-              >
-                <Stop offset="0%" stopColor={color.tint} stopOpacity="0.10" />
-                <Stop offset="50%" stopColor={color.tint} stopOpacity="0.04" />
-                <Stop offset="100%" stopColor={color.tint} stopOpacity="0.18" />
-              </LinearGradient>
+        {/* Spigoli — stack di stroke per fake bloom neon */}
+        {/* Alone esterno molto diffuso */}
+        <AnimatedPath
+          animatedProps={edgesGlowXL}
+          stroke={color.glow}
+          strokeOpacity={0.10}
+          strokeWidth={20}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          fill="none"
+        />
+        <AnimatedPath
+          animatedProps={edgesGlowL}
+          stroke={color.glow}
+          strokeOpacity={0.20}
+          strokeWidth={11}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          fill="none"
+        />
+        <AnimatedPath
+          animatedProps={edgesMid}
+          stroke={color.neon}
+          strokeOpacity={0.50}
+          strokeWidth={5}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          fill="none"
+        />
+        <AnimatedPath
+          animatedProps={edgesCore}
+          stroke={color.neon}
+          strokeOpacity={0.95}
+          strokeWidth={2.2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          fill="none"
+        />
+        {/* Filo bianco crispato al centro dello spigolo → look "vetro sottile" */}
+        <AnimatedPath
+          animatedProps={edgesWhite}
+          stroke="#FFFFFF"
+          strokeOpacity={0.60}
+          strokeWidth={0.9}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          fill="none"
+        />
 
-              {/* Highlight lucido angolo alto-sinistra */}
-              <LinearGradient
-                id="paneShine"
-                x1="0%"
-                y1="0%"
-                x2="60%"
-                y2="60%"
-              >
-                <Stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.32" />
-                <Stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
-              </LinearGradient>
-            </Defs>
-
-            {/* Bloom neon esterno (stack di stroke) */}
-            <Path
-              d={GEM_PATH}
-              fill="none"
-              stroke={color.glow}
-              strokeOpacity={0.10}
-              strokeWidth={26}
-              strokeLinejoin="round"
-            />
-            <Path
-              d={GEM_PATH}
-              fill="none"
-              stroke={color.glow}
-              strokeOpacity={0.20}
-              strokeWidth={16}
-              strokeLinejoin="round"
-            />
-            <Path
-              d={GEM_PATH}
-              fill="none"
-              stroke={color.neon}
-              strokeOpacity={0.40}
-              strokeWidth={9}
-              strokeLinejoin="round"
-            />
-            <Path
-              d={GEM_PATH}
-              fill="none"
-              stroke={color.neon}
-              strokeOpacity={0.90}
-              strokeWidth={3.5}
-              strokeLinejoin="round"
-            />
-
-            {/* Superficie di vetro riempita col gradient */}
-            <Path d={GEM_PATH} fill="url(#paneFillGrad)" />
-
-            {/* Highlight lucido (illusione vetro liscio) */}
-            <Path d={GEM_PATH} fill="url(#paneShine)" />
-
-            {/* Bordo interno bianco crispato (spigolo di vetro) */}
-            <Path
-              d={GEM_PATH}
-              fill="none"
-              stroke="#FFFFFF"
-              strokeOpacity={0.55}
-              strokeWidth={1.2}
-              strokeLinejoin="round"
-            />
-          </Svg>
-        </View>
-      </Animated.View>
+        {/* Puntini luminosi ai 6 vertici — glow esterno + core bianco */}
+        <AnimatedPath
+          animatedProps={tipsGlow}
+          fill={color.glow}
+          fillOpacity={0.55}
+          stroke="none"
+        />
+        <AnimatedPath
+          animatedProps={tipsCore}
+          fill="#FFFFFF"
+          fillOpacity={0.90}
+          stroke="none"
+        />
+      </Svg>
     </View>
   );
 }
@@ -335,7 +390,7 @@ export default function PaneTest() {
 
       {/* Lastra centrale */}
       <View style={styles.centerWrap} pointerEvents="none">
-        <GlassPane color={color} />
+        <OctaCrystal color={color} />
       </View>
 
       {/* State selector (top) */}
