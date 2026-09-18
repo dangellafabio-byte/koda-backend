@@ -527,15 +527,14 @@ export default function OnboardingV4() {
   }, [step]);
 
   // Step 2b: confirm speech
-  // v66.5 (Fabio 2026-06-16): copy aggiornato. "Ciao [Nome], piacere" +
-  // "voglio mostrarti come funziono" (io, non impersonale "funziona"):
-  // Ollenya parla di SÉ, non dell'app. Se il nome non è stato capito
-  // (STT vuoto o parsing fallito), fallback generico senza refuso di plurale.
+  // v66.7 (Fabio 2026-06-16): "voglio mostrarti ciò che sono" — meno
+  // tecnico di "come funziono", più affettivo/identitario. Ollenya si
+  // presenta come presenza, non come feature-set.
   useEffect(() => {
     if (step !== "step2_confirm") return;
     const text = userName
-      ? `Ciao ${userName}, piacere. Voglio mostrarti come funziono.`
-      : "Piacere di conoscerti. Voglio mostrarti come funziono.";
+      ? `Ciao ${userName}, piacere. Voglio mostrarti ciò che sono.`
+      : "Piacere di conoscerti. Voglio mostrarti ciò che sono.";
     speak(text, () => {
       if (mountedRef.current) setStep("step3_scrim_write");
     });
