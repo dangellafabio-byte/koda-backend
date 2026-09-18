@@ -61,6 +61,7 @@ import type { OrbStatus } from "./EclipseOrb";
 import { api, API_BASE } from "../lib/api";
 import { getAuthToken } from "../lib/authToken";
 import { ensureSpeechPermission } from "../lib/speechPermission";
+import { prewarmMic } from "../lib/voice";
 
 const TAG = "[ONBOARDING_V4]";
 const VOICE_CIELO_ID = "POuqf18evoXOKIqV2Px7";
@@ -235,6 +236,10 @@ export default function OnboardingV4() {
   useEffect(() => {
     mountedRef.current = true;
     configureAudioForPlayback();
+    // v66.10 (Fabio 2026-06-16): prewarmMic al mount così l'audio session
+    // è già pronta per il record quando arriveremo al primo listen().
+    // Idempotente. Fire-and-forget.
+    prewarmMic().catch(() => {});
     Animated.timing(rootOpacity, { toValue: 1, duration: 600, useNativeDriver: true }).start();
     const loop = Animated.loop(
       Animated.sequence([
@@ -395,24 +400,14 @@ export default function OnboardingV4() {
         continuous: Platform.OS === "android",
         maxAlternatives: 1,
         addsPunctuation: true,
-        // v66.8: on-device disattivato → maggior probabilità che iOS
-        // emetta `volumechange` events e trascrizione più accurata.
         requiresOnDeviceRecognition: false,
         volumeChangeEventOptions: { enabled: true, intervalMillis: 80 },
       };
-      // v66.9 (Fabio 2026-06-16): iOS category ESPLICITA. Senza questa,
-      // ExpoSpeechRecognition eredita la sessione playback lasciata dal
-      // TTS → mic non riceve segnale → volumechange muto + trascrizione
-      // vuota → loop di retry. `playAndRecord` + `measurement` è il set
-      // usato in Home (voiceStream.ts) e conosciuto per funzionare.
-      if (Platform.OS === "ios") {
-        startOpts.iosCategory = {
-          category: "playAndRecord",
-          categoryOptions: ["defaultToSpeaker", "allowBluetooth"],
-          mode: "measurement",
-        };
-        startOpts.iosTaskHint = "dictation";
-      }
+      // v66.10 (Fabio 2026-06-16): iosCategory RIMOSSA. Test su Build 50
+      // ha mostrato che l'override della categoria interferiva con la
+      // ripresa del mic dopo il TTS. Lasciamo che ExpoSpeechRecognition
+      // usi il default della piattaforma (già configurato da prewarmMic
+      // al mount del componente).
       if (Platform.OS === "android") {
         startOpts.androidIntentOptions = {
           EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 3000,
