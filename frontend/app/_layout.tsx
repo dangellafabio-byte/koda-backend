@@ -19,7 +19,7 @@ import LoginScreen from "../components/LoginScreen";
 // account Ollenya. Bypass `AuthGate` per questa specifica route.
 // `/vad-test` è una pagina diagnostica interna, mantenuta pubblica per
 // permettere il test rapido su device Samsung senza flow login.
-const PUBLIC_ROUTES = new Set(["/blind-test", "/vad-test", "/veil-test"]);
+const PUBLIC_ROUTES = new Set(["/blind-test", "/vad-test", "/veil-test", "/pane-test"]);
 import TrialWatcher from "../components/TrialWatcher";
 import OfflineOverlay from "../components/OfflineOverlay";
 import { installDiagLogger } from "../lib/diagLogger";
