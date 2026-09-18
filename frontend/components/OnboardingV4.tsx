@@ -75,7 +75,7 @@ const { width: SCREEN_W } = Dimensions.get("window");
 // percepita per rispettare "tutte identiche alla home".
 const ORB_SIZE = Math.min(SCREEN_W * 0.62, 240);
 const APP_BG = "#1F1A36";
-const METER_THRESHOLD = -35;
+const METER_THRESHOLD = -50;
 // Palette bolle chat identica a quella della chat REALE (theme NOTTE).
 const CHAT_USER_BG = "#0E7C7B";
 const CHAT_USER_TEXT = "#FFFFFF";
@@ -253,12 +253,14 @@ export default function OnboardingV4() {
   }, [rootOpacity, breathe, clearTimer, stopPlayer, stopStt]);
 
   // ==== TTS runtime =========================================================
-  const speak = useCallback(async (text: string, onDone: () => void) => {
-    // v66.4 (Fabio 2026-06-16, bug 4): flag idempotente + clear del safety-
-    // net timer. Prima: onStatus.didJustFinish → onDone; timer 15s scattava
-    // 12s dopo (mentre lo step successivo era già in corso) → chiamava
-    // onDone di NUOVO → doppio advance → loop di frasi ripetute osservato
-    // ("Piacere di conoscerti" e "Quando vuoi io sono qui" 2-3 volte).
+  // v66.8 (Fabio 2026-06-16): speak() ora accetta `opts.silent` — se true,
+  // NON aggiorna il subtitle (usato dai scrim, che hanno il proprio overlay
+  // testo full-screen e non devono avere ghost sotto).
+  const speak = useCallback(async (
+    text: string,
+    onDone: () => void,
+    opts?: { silent?: boolean }
+  ) => {
     let doneCalled = false;
     const safeDone = () => {
       if (doneCalled) return;
@@ -266,7 +268,7 @@ export default function OnboardingV4() {
       clearTimer();
       onDone();
     };
-    setSubtitle(text);
+    if (!opts?.silent) setSubtitle(text);
     setOrbStatus("speaking");
     try {
       const tok = getAuthToken();
@@ -368,10 +370,13 @@ export default function OnboardingV4() {
         continuous: Platform.OS === "android",
         maxAlternatives: 1,
         addsPunctuation: true,
-        requiresOnDeviceRecognition: Platform.OS === "ios",
-        // v66.5 (Fabio 2026-06-16): metering ATTIVO. Ogni 80ms riceviamo
-        // il volume raw dell'utente e lo mappiamo in meterDb (-60..-20)
-        // per far pulsare l'EclipseOrb come nella Home.
+        // v66.8 (Fabio 2026-06-16): on-device disattivato → maggior probabilità
+        // che iOS emetta `volumechange` events (l'orb deve reagire alla voce)
+        // e trascrizione più accurata per il nome utente (server-side).
+        requiresOnDeviceRecognition: false,
+        // v66.5: metering ATTIVO. Ogni 80ms riceviamo il volume raw
+        // dell'utente e lo mappiamo in meterDb per far pulsare l'EclipseOrb
+        // come nella Home.
         volumeChangeEventOptions: { enabled: true, intervalMillis: 80 },
       };
       if (Platform.OS === "ios") {
@@ -429,8 +434,10 @@ export default function OnboardingV4() {
             const clamped = Math.max(0, Math.min(10, raw));
             db = -60 + (clamped / 10) * 40;
           } else {
-            // iOS: value ~ dBFS negativo (-60..0). Clamp e shift.
-            db = Math.max(-60, Math.min(-20, raw));
+            // v66.8: iOS spesso restituisce dBFS negativi molto bassi
+            // (~-40..-2) durante il parlato. Mappa direttamente nel range
+            // -60..-20 usato dall'orb. Clamp finale per sicurezza.
+            db = Math.max(-60, Math.min(-15, raw));
           }
           setOrbMeterDb(db);
         }
@@ -542,11 +549,14 @@ export default function OnboardingV4() {
   }, [step]);
 
   // v66.4 (Fabio 2026-06-16, bug 4): clear subtitle SUBITO su cambio step.
-  // Prima il subtitle "Piacere di conoscerti…" restava visibile sotto lo
-  // scrim "Quando vuoi io sono qui" causando l'illusione di doppie frasi.
-  // Ora ogni cambio step azzera il testo, sarà lo speak() a ripopolarlo.
+  // v66.8 (Fabio 2026-06-16): clear ANCHE il timer d'inattività globale.
+  // Prima il timer 15s partito in step3_demo_write continuava a girare
+  // durante step4_scrim_voice → scadeva mid-TTS → paused_by_inactivity →
+  // tap → restart da step1 con richiesta nome ripetuta.
   useEffect(() => {
     setSubtitle(null);
+    clearInactivityTimer();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
   // v66.6 (Fabio 2026-06-16): timer d'inattività globale. Al termine di
@@ -593,10 +603,10 @@ export default function OnboardingV4() {
     if (scrimStartedRef.current[thisStep]) return;
     scrimStartedRef.current[thisStep] = true;
     setOrbStatus("speaking");
-    // Il subtitle è mostrato dallo scrim overlay, non usiamo setSubtitle.
+    setSubtitle(null); // v66.8: mai ghost sotto lo scrim
     speak(text, () => {
       if (mountedRef.current) setStep(next);
-    });
+    }, { silent: true });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, speak]);
 
@@ -912,7 +922,9 @@ export default function OnboardingV4() {
                     orbStatus === "recording"
                       ? Math.max(
                           0,
-                          Math.min(1, (Math.max(-60, Math.min(-20, orbMeterDb)) + 60) / 40)
+                          // v66.8: mappatura piatta -55..-15 → 0..1 per
+                          // massima reattività percepita durante l'intro.
+                          Math.min(1, (Math.max(-55, Math.min(-15, orbMeterDb)) + 55) / 40)
                         )
                       : 0
                   }
@@ -1131,9 +1143,8 @@ const styles = StyleSheet.create({
     top: 0, left: 0, right: 0, bottom: 0,
     backgroundColor: "rgba(31,26,54,0.92)",
     zIndex: 100,
-  },
-  scrimTouch: {
-    flex: 1,
+    // v66.8 (Fabio 2026-06-16): centering verticale + orizzontale del
+    // testo scrim. Prima era in alto (padding + flex-start implicito).
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 32,
