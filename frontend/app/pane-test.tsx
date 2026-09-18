@@ -29,7 +29,6 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { StatusBar } from "expo-status-bar";
 import { router } from "expo-router";
 import Svg, {
-  Rect,
   Defs,
   RadialGradient,
   Stop,
@@ -87,10 +86,36 @@ const STATE_COLORS: Record<StateKey, StateColor> = {
 
 // === SIZES =================================================================
 // Stesso footprint dell'EclipseOrb (default size = 280).
-const PANE_BOX = 280;
-// Rettangolo rhomboid: leggermente più largo che alto (ratio ~5:3)
-const RECT_W = 240;
-const RECT_H = 150;
+const PANE_BOX = 300;
+// Corpo centrale del cristallo (parte rettangolare)
+const BODY_W = 170;
+const BODY_H = 120;
+// Larghezza delle due punte laterali (tips) → forma esagonale a "gemma"
+const TIP_W = 55;
+// Distanza tra faccia frontale e faccia posteriore (spessore percepito)
+const THICKNESS = 10;
+
+// Vertici della gemma esagonale (coordinate relative al centro).
+// Ordine: sinistra tip → top-left → top-right → right tip → bottom-right → bottom-left
+function gemPath(scale: number = 1): string {
+  "worklet";
+  const hw = (BODY_W / 2) * scale;
+  const hh = (BODY_H / 2) * scale;
+  const tw = TIP_W * scale;
+  // Centriamo in (150, 150) — il viewBox è 300×300
+  const cx = 150;
+  const cy = 150;
+  return (
+    `M ${cx - hw - tw} ${cy} ` +
+    `L ${cx - hw} ${cy - hh} ` +
+    `L ${cx + hw} ${cy - hh} ` +
+    `L ${cx + hw + tw} ${cy} ` +
+    `L ${cx + hw} ${cy + hh} ` +
+    `L ${cx - hw} ${cy + hh} Z`
+  );
+}
+const GEM_PATH = gemPath(1);
+const GEM_PATH_SM = gemPath(0.92); // faccia posteriore leggermente più piccola
 
 // Font
 const SERIF_FONT = Platform.select({
@@ -135,114 +160,110 @@ function GlassPane({ color }: { color: StateColor }) {
   return (
     <View style={styles.paneBox}>
       <Animated.View style={[styles.paneCore, animStyle]}>
-        <Svg
-          width={RECT_W + 60}
-          height={RECT_H + 60}
-          viewBox={`0 0 ${RECT_W + 60} ${RECT_H + 60}`}
-        >
-          <Defs>
-            {/* Gradient interno del vetro: leggerissimo tint dal colore
-                stato → più scuro in basso a destra per dare volume */}
-            <LinearGradient id="paneFillGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-              <Stop offset="0%" stopColor={color.tint} stopOpacity="0.10" />
-              <Stop offset="50%" stopColor={color.tint} stopOpacity="0.04" />
-              <Stop offset="100%" stopColor={color.tint} stopOpacity="0.14" />
-            </LinearGradient>
+        {/* FACCIA POSTERIORE — leggermente più piccola, sotto la frontale,
+            offsettata in Z per creare parallasse durante la rotazione */}
+        <View style={[styles.faceLayer, { transform: [{ translateZ: -THICKNESS }] }]}>
+          <Svg width={300} height={300} viewBox="0 0 300 300">
+            {/* Neon della faccia posteriore, più tenue */}
+            <Path
+              d={GEM_PATH_SM}
+              fill="none"
+              stroke={color.glow}
+              strokeOpacity={0.15}
+              strokeWidth={12}
+            />
+            <Path
+              d={GEM_PATH_SM}
+              fill="none"
+              stroke={color.neon}
+              strokeOpacity={0.55}
+              strokeWidth={2.5}
+            />
+          </Svg>
+        </View>
 
-            {/* Highlight lucido dell'angolo alto-sinistra */}
-            <LinearGradient id="paneShine" x1="0%" y1="0%" x2="60%" y2="60%">
-              <Stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.35" />
-              <Stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
-            </LinearGradient>
-          </Defs>
+        {/* FACCIA FRONTALE — piena di dettaglio, gradient, bloom */}
+        <View style={[styles.faceLayer, { transform: [{ translateZ: THICKNESS }] }]}>
+          <Svg width={300} height={300} viewBox="0 0 300 300">
+            <Defs>
+              {/* Gradient interno del vetro — tint dello stato + luce
+                  diagonale per volume */}
+              <LinearGradient
+                id="paneFillGrad"
+                x1="0%"
+                y1="0%"
+                x2="100%"
+                y2="100%"
+              >
+                <Stop offset="0%" stopColor={color.tint} stopOpacity="0.10" />
+                <Stop offset="50%" stopColor={color.tint} stopOpacity="0.04" />
+                <Stop offset="100%" stopColor={color.tint} stopOpacity="0.18" />
+              </LinearGradient>
 
-          {/* Stack di stroke esterni per fake-bloom neon */}
-          {/* Alone più esterno, ampio e diffuso */}
-          <Rect
-            x={30}
-            y={30}
-            width={RECT_W}
-            height={RECT_H}
-            rx={4}
-            ry={4}
-            fill="none"
-            stroke={color.glow}
-            strokeOpacity={0.10}
-            strokeWidth={22}
-          />
-          <Rect
-            x={30}
-            y={30}
-            width={RECT_W}
-            height={RECT_H}
-            rx={4}
-            ry={4}
-            fill="none"
-            stroke={color.glow}
-            strokeOpacity={0.18}
-            strokeWidth={14}
-          />
-          <Rect
-            x={30}
-            y={30}
-            width={RECT_W}
-            height={RECT_H}
-            rx={4}
-            ry={4}
-            fill="none"
-            stroke={color.neon}
-            strokeOpacity={0.35}
-            strokeWidth={8}
-          />
-          <Rect
-            x={30}
-            y={30}
-            width={RECT_W}
-            height={RECT_H}
-            rx={4}
-            ry={4}
-            fill="none"
-            stroke={color.neon}
-            strokeOpacity={0.85}
-            strokeWidth={3.5}
-          />
+              {/* Highlight lucido angolo alto-sinistra */}
+              <LinearGradient
+                id="paneShine"
+                x1="0%"
+                y1="0%"
+                x2="60%"
+                y2="60%"
+              >
+                <Stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.32" />
+                <Stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
+              </LinearGradient>
+            </Defs>
 
-          {/* Superficie di vetro riempita col gradient */}
-          <Rect
-            x={30}
-            y={30}
-            width={RECT_W}
-            height={RECT_H}
-            rx={4}
-            ry={4}
-            fill="url(#paneFillGrad)"
-          />
+            {/* Bloom neon esterno (stack di stroke) */}
+            <Path
+              d={GEM_PATH}
+              fill="none"
+              stroke={color.glow}
+              strokeOpacity={0.10}
+              strokeWidth={26}
+              strokeLinejoin="round"
+            />
+            <Path
+              d={GEM_PATH}
+              fill="none"
+              stroke={color.glow}
+              strokeOpacity={0.20}
+              strokeWidth={16}
+              strokeLinejoin="round"
+            />
+            <Path
+              d={GEM_PATH}
+              fill="none"
+              stroke={color.neon}
+              strokeOpacity={0.40}
+              strokeWidth={9}
+              strokeLinejoin="round"
+            />
+            <Path
+              d={GEM_PATH}
+              fill="none"
+              stroke={color.neon}
+              strokeOpacity={0.90}
+              strokeWidth={3.5}
+              strokeLinejoin="round"
+            />
 
-          {/* Highlight lucido angolo alto-sinistra (illusione vetro liscio) */}
-          <Rect
-            x={30}
-            y={30}
-            width={RECT_W}
-            height={RECT_H}
-            rx={4}
-            ry={4}
-            fill="url(#paneShine)"
-          />
+            {/* Superficie di vetro riempita col gradient */}
+            <Path d={GEM_PATH} fill="url(#paneFillGrad)" />
 
-          {/* Bordo interno crispato bianco (spigolo di vetro) */}
-          <Rect
-            x={30}
-            y={30}
-            width={RECT_W}
-            height={RECT_H}
-            rx={4}
-            ry={4}
-            fill="none"
-            stroke="#FFFFFF"
-            strokeOpacity={0.55}
-            strokeWidth={1.2}
-          />
-        </Svg>
+            {/* Highlight lucido (illusione vetro liscio) */}
+            <Path d={GEM_PATH} fill="url(#paneShine)" />
+
+            {/* Bordo interno bianco crispato (spigolo di vetro) */}
+            <Path
+              d={GEM_PATH}
+              fill="none"
+              stroke="#FFFFFF"
+              strokeOpacity={0.55}
+              strokeWidth={1.2}
+              strokeLinejoin="round"
+            />
+          </Svg>
+        </View>
       </Animated.View>
     </View>
   );
@@ -392,10 +413,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   paneCore: {
-    width: RECT_W + 60,
-    height: RECT_H + 60,
+    width: 300,
+    height: 300,
     alignItems: "center",
     justifyContent: "center",
+  },
+  faceLayer: {
+    position: "absolute",
+    width: 300,
+    height: 300,
   },
   topBar: {
     position: "absolute",
