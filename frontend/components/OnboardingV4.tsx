@@ -313,19 +313,32 @@ export default function OnboardingV4() {
       if (!mountedRef.current) return;
       const player = createAudioPlayer({ uri: dataUri }, { updateInterval: 100 });
       currentPlayerRef.current = player;
+      const cleanupPlayer = () => {
+        try { player.removeListener("playbackStatusUpdate", onStatus); } catch {}
+        // v66.9 (Fabio 2026-06-16): rilascio ESPLICITO del player TTS
+        // prima di safeDone. Prima il player restava attivo → sessione
+        // audio in playback → il successivo `configureAudioForRecording`
+        // di listen() non riusciva a passare a record → STT muto e
+        // volumechange senza valori → orb fermo e trascrizione vuota →
+        // loop di "Non ho sentito, prova a ripetere".
+        try { player.pause(); } catch {}
+        try { player.remove(); } catch {}
+        if (currentPlayerRef.current === player) currentPlayerRef.current = null;
+      };
       const onStatus = (status: { didJustFinish?: boolean }) => {
         if (status.didJustFinish) {
-          try { player.removeListener("playbackStatusUpdate", onStatus); } catch {}
+          cleanupPlayer();
           safeDone();
         }
       };
       player.addListener("playbackStatusUpdate", onStatus);
       player.play();
-      // Safety net a 15s. Il flag `doneCalled` garantisce che questo timer
-      // NON possa firing un secondo advance se onStatus è già passato.
+      // Safety net a 15s: se onStatus non fira per qualche motivo,
+      // rilasciamo comunque il player e avanziamo.
       timerRef.current = setTimeout(() => {
         if (mountedRef.current && !doneCalled) {
           console.warn(`${TAG} speak safety-net`);
+          cleanupPlayer();
           safeDone();
         }
       }, 15_000);
@@ -343,7 +356,19 @@ export default function OnboardingV4() {
     async (opts: { maxMs?: number }, onTranscript: (text: string) => void) => {
       if (sttActiveRef.current) return;
       setOrbStatus("recording");
+      // v66.9 (Fabio 2026-06-16): TRANSIZIONE SESSIONE AUDIO ORDINATA.
+      // Prima passavamo direttamente a configureAudioForRecording, ma
+      // se un player TTS era ancora attivo iOS teneva la sessione in
+      // playback → STT partiva senza audio → nessun volumechange +
+      // trascrizione vuota. Ora:
+      //   1. Fermiamo QUALSIASI player residuo
+      //   2. Aspettiamo 250ms per far chiudere la sessione playback
+      //   3. Configuriamo per recording
+      //   4. Piccolo delay extra e poi STT
+      stopPlayer();
+      await new Promise((r) => setTimeout(r, 250));
       await configureAudioForRecording();
+      await new Promise((r) => setTimeout(r, 150));
       const perm = await ensureSpeechPermission();
       if (!perm.granted) {
         console.warn(`${TAG} listen no perm → skip`);
@@ -370,21 +395,23 @@ export default function OnboardingV4() {
         continuous: Platform.OS === "android",
         maxAlternatives: 1,
         addsPunctuation: true,
-        // v66.8 (Fabio 2026-06-16): on-device disattivato → maggior probabilità
-        // che iOS emetta `volumechange` events (l'orb deve reagire alla voce)
-        // e trascrizione più accurata per il nome utente (server-side).
+        // v66.8: on-device disattivato → maggior probabilità che iOS
+        // emetta `volumechange` events e trascrizione più accurata.
         requiresOnDeviceRecognition: false,
-        // v66.5: metering ATTIVO. Ogni 80ms riceviamo il volume raw
-        // dell'utente e lo mappiamo in meterDb per far pulsare l'EclipseOrb
-        // come nella Home.
         volumeChangeEventOptions: { enabled: true, intervalMillis: 80 },
       };
+      // v66.9 (Fabio 2026-06-16): iOS category ESPLICITA. Senza questa,
+      // ExpoSpeechRecognition eredita la sessione playback lasciata dal
+      // TTS → mic non riceve segnale → volumechange muto + trascrizione
+      // vuota → loop di retry. `playAndRecord` + `measurement` è il set
+      // usato in Home (voiceStream.ts) e conosciuto per funzionare.
       if (Platform.OS === "ios") {
         startOpts.iosCategory = {
           category: "playAndRecord",
           categoryOptions: ["defaultToSpeaker", "allowBluetooth"],
           mode: "measurement",
         };
+        startOpts.iosTaskHint = "dictation";
       }
       if (Platform.OS === "android") {
         startOpts.androidIntentOptions = {
@@ -722,6 +749,11 @@ export default function OnboardingV4() {
   // via il timer safety interno + globale (resetInactivityTimer).
   const voiceStartedRef = useRef(false);
   const [voiceExchangeCount, setVoiceExchangeCount] = useState(0);
+  // v66.9 (Fabio 2026-06-16): guard contro il loop infinito di retry.
+  // Se lo STT continua a non captare, dopo 3 tentativi consecutivi
+  // avanziamo comunque per non tenere l'utente bloccato.
+  const voiceRetryRef = useRef(0);
+  const VOICE_MAX_RETRIES = 3;
 
   const runVoiceExchange = useCallback(() => {
     if (!mountedRef.current) return;
@@ -731,13 +763,23 @@ export default function OnboardingV4() {
       if (!mountedRef.current) return;
       const text = transcript.trim();
       if (!text) {
-        // Retry: Ollenya chiede di ripetere, poi riavvia la stessa "prova"
-        console.log(`${TAG} step4 empty transcript → retry prompt`);
+        voiceRetryRef.current += 1;
+        console.log(`${TAG} step4 empty transcript retry=${voiceRetryRef.current}`);
+        if (voiceRetryRef.current >= VOICE_MAX_RETRIES) {
+          // v66.9: dopo 3 retry consecutivi, avanza a step5 con nota
+          console.warn(`${TAG} step4 max retries → skip to step5`);
+          speak("Andiamo avanti.", () => {
+            if (mountedRef.current) setStep("step5_scrim_la");
+          });
+          return;
+        }
         speak("Non ho sentito, prova a ripetere.", () => {
           if (mountedRef.current && step === "step4_demo_voice") runVoiceExchange();
         });
         return;
       }
+      // Reset retry counter dopo un turno riuscito
+      voiceRetryRef.current = 0;
       try {
         const resp = await api.converse(text, undefined, { is_voice_turn: true });
         const aiText =
@@ -755,12 +797,10 @@ export default function OnboardingV4() {
           setVoiceExchangeCount((prev) => {
             const nextCount = prev + 1;
             if (nextCount >= REQUIRED_EXCHANGES) {
-              // Ultimo turno: piccola pausa, poi step5
               setTimeout(() => {
                 if (mountedRef.current) setStep("step5_scrim_la");
               }, 1200);
             } else {
-              // Prossimo turno voce
               setTimeout(() => {
                 if (mountedRef.current && step === "step4_demo_voice") runVoiceExchange();
               }, 600);
@@ -771,7 +811,6 @@ export default function OnboardingV4() {
       } catch (e) {
         console.warn(`${TAG} step4 converse failed:`, e);
         if (mountedRef.current) {
-          // Non blocchiamo il flow su errore rete
           speak("Un momento. Riprova.", () => {
             if (mountedRef.current && step === "step4_demo_voice") runVoiceExchange();
           });
@@ -787,6 +826,7 @@ export default function OnboardingV4() {
     voiceStartedRef.current = true;
     setSubtitle(null);
     setVoiceExchangeCount(0);
+    voiceRetryRef.current = 0;
     runVoiceExchange();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
