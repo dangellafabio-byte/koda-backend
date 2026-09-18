@@ -85,12 +85,13 @@ const STATE_COLORS: Record<StateKey, StateColor> = {
 };
 
 // === SIZES =================================================================
-// Stesso footprint dell'EclipseOrb (default size = 280).
-const PANE_BOX = 300;
-// Raggio dell'ottaedro (distanza dei 6 vertici dal centro)
-const RADIUS = 105;
+// Cristallo affusolato — più alto che largo. PANE_BOX segue il footprint
+// dell'EclipseOrb ma verticalmente più esteso per accomodare l'elongazione.
+const PANE_BOX = 380;
+// Raggio dell'ottaedro (distanza dei vertici equatoriali dal centro)
+const RADIUS = 70;
 // Fattore di prospettiva (0 = ortografica, >0 = più prospettica)
-const PERSP_K = 0.45;
+const PERSP_K = 0.35;
 
 // Font
 const SERIF_FONT = Platform.select({
@@ -106,12 +107,12 @@ const SERIF_FONT = Platform.select({
 // ============================================================================
 
 // Vertici locali dell'ottaedro (asse Y verso il basso per convenzione SVG).
-// Allungato verticalmente (1.4x) per matchare il cristallo di riferimento —
-// le punte alto/basso sono più lunghe di quelle laterali.
+// Allungato verticalmente (2.2x) per matchare il cristallo affusolato del
+// riferimento — le punte alto/basso sono molto più lunghe di quelle laterali.
 // Ordine: 0=top, 1=bottom, 2=left, 3=right, 4=back, 5=front
 const OCTA_VERTS: readonly [number, number, number][] = [
-  [0, -1.4, 0], // 0: punta superiore (allungata)
-  [0, 1.4, 0],  // 1: punta inferiore (allungata)
+  [0, -2.2, 0], // 0: punta superiore (molto allungata)
+  [0, 2.2, 0],  // 1: punta inferiore (molto allungata)
   [-1, 0, 0],   // 2: punta sinistra
   [1, 0, 0],    // 3: punta destra
   [0, 0, -1],   // 4: punta posteriore
@@ -153,8 +154,8 @@ function OctaCrystal({ color }: { color: StateColor }) {
     const sx = Math.sin(ax), cx = Math.cos(ax);
 
     // Proietta un vertice locale (x,y,z) → schermo 2D
-    const cx2 = 150; // centro X del viewBox 300×300
-    const cy2 = 150;
+    const cx2 = PANE_BOX / 2;
+    const cy2 = PANE_BOX / 2;
     const projected: { x: number; y: number; z: number; p: number }[] = [];
     for (let i = 0; i < OCTA_VERTS.length; i++) {
       const [lx, ly, lz] = OCTA_VERTS[i];
@@ -187,15 +188,23 @@ function OctaCrystal({ color }: { color: StateColor }) {
         `L ${vb.x.toFixed(1)} ${vb.y.toFixed(1)} `;
     }
 
-    // Path per le facce triangolari — un unico Path con subpaths chiusi
-    let facesD = "";
+    // Path per le facce triangolari — separo front (centroidZ < 0, verso
+    // camera) da back (centroidZ >= 0, dietro) per applicare opacità
+    // diverse: le facce anteriori sono più luminose (viste in diretta),
+    // le posteriori più tenui (viste per rifrazione). Questo dà la
+    // percezione di profondità 3D senza ray-tracing.
+    let facesFrontD = "";
+    let facesBackD = "";
     for (let i = 0; i < OCTA_FACES.length; i++) {
       const [a, b, c] = OCTA_FACES[i];
       const va = projected[a], vb = projected[b], vc = projected[c];
-      facesD +=
+      const zCentroid = (va.z + vb.z + vc.z) / 3;
+      const seg =
         `M ${va.x.toFixed(1)} ${va.y.toFixed(1)} ` +
         `L ${vb.x.toFixed(1)} ${vb.y.toFixed(1)} ` +
         `L ${vc.x.toFixed(1)} ${vc.y.toFixed(1)} Z `;
+      if (zCentroid < 0) facesFrontD += seg;
+      else facesBackD += seg;
     }
 
     // Path per i "puntini luminosi" ai 6 vertici — cerchi disegnati come
@@ -220,11 +229,12 @@ function OctaCrystal({ color }: { color: StateColor }) {
         `a ${rCore.toFixed(1)} ${rCore.toFixed(1)} 0 1 0 ${(-rCore * 2).toFixed(1)} 0 `;
     }
 
-    return { edgesD, facesD, tipsGlowD, tipsCoreD, verts: projected };
+    return { edgesD, facesFrontD, facesBackD, tipsGlowD, tipsCoreD, verts: projected };
   });
 
   // Animated props per i vari layer
-  const facesAP = useAnimatedProps(() => ({ d: geom.value.facesD }));
+  const facesFrontAP = useAnimatedProps(() => ({ d: geom.value.facesFrontD }));
+  const facesBackAP = useAnimatedProps(() => ({ d: geom.value.facesBackD }));
   const edgesGlowXL = useAnimatedProps(() => ({ d: geom.value.edgesD }));
   const edgesGlowL = useAnimatedProps(() => ({ d: geom.value.edgesD }));
   const edgesMid = useAnimatedProps(() => ({ d: geom.value.edgesD }));
@@ -240,20 +250,24 @@ function OctaCrystal({ color }: { color: StateColor }) {
         height={PANE_BOX}
         viewBox={`0 0 ${PANE_BOX} ${PANE_BOX}`}
       >
-        {/* Facce vitree interne — riempimento semitrasparente colore stato */}
+        {/* Facce POSTERIORI (dietro) — tinta più tenue, viste per rifrazione */}
         <AnimatedPath
-          animatedProps={facesAP}
+          animatedProps={facesBackAP}
           fill={color.tint}
-          fillOpacity={0.07}
+          fillOpacity={0.05}
           stroke="none"
         />
-        {/* Secondo layer di facce con tinta diversa per creare gradiente
-            interno naturale durante la rotazione (le facce che si sovrappongono
-            sommano l'opacità → zone più chiare al centro) */}
+        {/* Facce ANTERIORI (davanti) — tinta piena, colore stato */}
         <AnimatedPath
-          animatedProps={facesAP}
+          animatedProps={facesFrontAP}
+          fill={color.tint}
+          fillOpacity={0.12}
+          stroke="none"
+        />
+        <AnimatedPath
+          animatedProps={facesFrontAP}
           fill={color.glow}
-          fillOpacity={0.04}
+          fillOpacity={0.06}
           stroke="none"
         />
 
