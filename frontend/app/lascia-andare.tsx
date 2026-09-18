@@ -1388,7 +1388,7 @@ export default function LasciaAndareScreen() {
         >
           <EclipseOrb
             status={status}
-            size={Math.min(Dimensions.get("window").width * 0.78, 360)}
+            size={Math.min(Dimensions.get("window").width * 0.62, 240)}
             meterDb={meterDb}
             meterThreshold={SPEECH_DB}
             /* === LASCIA ANDARE GLOW (Fabio 2026-08-22) ================
