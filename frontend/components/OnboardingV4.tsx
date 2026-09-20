@@ -47,7 +47,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { createAudioPlayer, setAudioModeAsync, AudioModule, useAudioRecorder, RecordingPresets } from "expo-audio";
+import { createAudioPlayer, setAudioModeAsync, AudioModule, useAudioRecorder, RecordingPresets, setIsAudioActiveAsync } from "expo-audio";
 import type { AudioPlayer } from "expo-audio";
 
 import {
@@ -314,6 +314,13 @@ export default function OnboardingV4() {
         return;
       }
       await configureAudioForPlayback();
+      // v66.11: forziamo deactivate/reactivate ANCHE prima del TTS così
+      // se ExpoSpeechRecognition ha lasciato la sessione in modalità record,
+      // iOS ricarica come "playback puro". Migliora la qualità audio del
+      // primo speak() dopo il permesso mic.
+      try { await setIsAudioActiveAsync(false); } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      try { await setIsAudioActiveAsync(true); } catch {}
       await new Promise((resolve) => setTimeout(resolve, 100));
       if (!mountedRef.current) return;
       const player = createAudioPlayer({ uri: dataUri }, { updateInterval: 100 });
@@ -361,19 +368,31 @@ export default function OnboardingV4() {
     async (opts: { maxMs?: number }, onTranscript: (text: string) => void) => {
       if (sttActiveRef.current) return;
       setOrbStatus("recording");
-      // v66.9 (Fabio 2026-06-16): TRANSIZIONE SESSIONE AUDIO ORDINATA.
-      // Prima passavamo direttamente a configureAudioForRecording, ma
-      // se un player TTS era ancora attivo iOS teneva la sessione in
-      // playback → STT partiva senza audio → nessun volumechange +
-      // trascrizione vuota. Ora:
-      //   1. Fermiamo QUALSIASI player residuo
-      //   2. Aspettiamo 250ms per far chiudere la sessione playback
-      //   3. Configuriamo per recording
-      //   4. Piccolo delay extra e poi STT
+      // v66.11 (Fabio 2026-06-18): TRANSIZIONE SESSIONE AUDIO iOS FORZATA.
+      // v66.9 (250ms + setAudioModeAsync) NON basta: iOS non ricarica la
+      // categoria AVAudioSession se la sessione è ancora attiva. Serve
+      // deactivate esplicito PRIMA di cambiare categoria, poi reactivate.
+      //
+      // Sequenza corretta:
+      //   1. Ferma player TTS (release AVAudioPlayer)
+      //   2. setIsAudioActiveAsync(false) → AVAudioSession setActive:NO
+      //      → iOS rilascia la categoria "Playback"
+      //   3. Attesa 400ms (iOS AudioSession release + interrupt end)
+      //   4. configureAudioForRecording → categoria "PlayAndRecord"
+      //   5. setIsAudioActiveAsync(true) → AVAudioSession setActive:YES
+      //      con la NUOVA categoria
+      //   6. Attesa 250ms per finalizzare la route mic
+      //   7. ExpoSpeechRecognitionModule.start() con audio pipe pronto
       stopPlayer();
-      await new Promise((r) => setTimeout(r, 250));
+      try { await setIsAudioActiveAsync(false); } catch (e) {
+        console.warn(`${TAG} setIsAudioActive(false) failed:`, e);
+      }
+      await new Promise((r) => setTimeout(r, 400));
       await configureAudioForRecording();
-      await new Promise((r) => setTimeout(r, 150));
+      try { await setIsAudioActiveAsync(true); } catch (e) {
+        console.warn(`${TAG} setIsAudioActive(true) failed:`, e);
+      }
+      await new Promise((r) => setTimeout(r, 250));
       const perm = await ensureSpeechPermission();
       if (!perm.granted) {
         console.warn(`${TAG} listen no perm → skip`);
