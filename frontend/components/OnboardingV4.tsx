@@ -47,7 +47,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { createAudioPlayer, setAudioModeAsync, AudioModule, useAudioRecorder, RecordingPresets, setIsAudioActiveAsync } from "expo-audio";
+import { createAudioPlayer, setAudioModeAsync, AudioModule, useAudioRecorder, RecordingPresets } from "expo-audio";
 import type { AudioPlayer } from "expo-audio";
 
 import {
@@ -58,6 +58,7 @@ import {
 
 import EclipseOrb from "./EclipseOrb";
 import type { OrbStatus } from "./EclipseOrb";
+import NeonBorder from "./NeonBorder";
 import { api, API_BASE } from "../lib/api";
 import { getAuthToken } from "../lib/authToken";
 import { ensureSpeechPermission } from "../lib/speechPermission";
@@ -338,15 +339,20 @@ export default function OnboardingV4() {
       };
       player.addListener("playbackStatusUpdate", onStatus);
       player.play();
-      // Safety net a 15s: se onStatus non fira per qualche motivo,
-      // rilasciamo comunque il player e avanziamo.
+      // v66.13 (Fabio 2026-06-18): Safety net PORTATO A 60s.
+      // Prima era 15s → il TTS delle spiegazioni lunghe (step5_scrim_la
+      // ~28s, step4_scrim_voice ~20s) veniva troncato: safety-net scattava,
+      // safeDone() avanzava allo step successivo, cleanupPlayer() fermava
+      // l'audio a metà frase. 60s copre tutti i scrim con margine ampio.
+      // didJustFinish resta il trigger primario (viene sempre firato al
+      // termine reale dell'audio); safety-net è solo per casi patologici.
       timerRef.current = setTimeout(() => {
         if (mountedRef.current && !doneCalled) {
           console.warn(`${TAG} speak safety-net`);
           cleanupPlayer();
           safeDone();
         }
-      }, 15_000);
+      }, 60_000);
     } catch (e) {
       console.warn(`${TAG} speak failed:`, e);
       timerRef.current = setTimeout(() => { if (mountedRef.current) safeDone(); }, 400);
@@ -947,6 +953,13 @@ export default function OnboardingV4() {
   return (
     <Animated.View style={[styles.root, { opacity: rootOpacity }]}>
       <StatusBar barStyle="light-content" backgroundColor={APP_BG} />
+      {/* v66.13 (Fabio 2026-06-18): Neon border SEMPRE presente durante
+          l'onboarding — l'entità è sempre "attiva" e cambia colore in base
+          allo stato (idle=champagne, recording=tiffany, thinking=rosa,
+          speaking=viola). Feedback utente: "deve esserci sempre il neon
+          è comunque l'entità". Posizionato SOPRA il SafeAreaView ma sotto
+          gli scrim overlay in modo che i bordi restino sempre visibili. */}
+      <NeonBorder status={orbStatus} />
       <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
 
         {/* Orb centrale — visibile in tutti gli step tranne "done".
