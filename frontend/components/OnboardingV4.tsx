@@ -314,13 +314,6 @@ export default function OnboardingV4() {
         return;
       }
       await configureAudioForPlayback();
-      // v66.11: forziamo deactivate/reactivate ANCHE prima del TTS così
-      // se ExpoSpeechRecognition ha lasciato la sessione in modalità record,
-      // iOS ricarica come "playback puro". Migliora la qualità audio del
-      // primo speak() dopo il permesso mic.
-      try { await setIsAudioActiveAsync(false); } catch {}
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      try { await setIsAudioActiveAsync(true); } catch {}
       await new Promise((resolve) => setTimeout(resolve, 100));
       if (!mountedRef.current) return;
       const player = createAudioPlayer({ uri: dataUri }, { updateInterval: 100 });
@@ -368,31 +361,15 @@ export default function OnboardingV4() {
     async (opts: { maxMs?: number }, onTranscript: (text: string) => void) => {
       if (sttActiveRef.current) return;
       setOrbStatus("recording");
-      // v66.11 (Fabio 2026-06-18): TRANSIZIONE SESSIONE AUDIO iOS FORZATA.
-      // v66.9 (250ms + setAudioModeAsync) NON basta: iOS non ricarica la
-      // categoria AVAudioSession se la sessione è ancora attiva. Serve
-      // deactivate esplicito PRIMA di cambiare categoria, poi reactivate.
-      //
-      // Sequenza corretta:
-      //   1. Ferma player TTS (release AVAudioPlayer)
-      //   2. setIsAudioActiveAsync(false) → AVAudioSession setActive:NO
-      //      → iOS rilascia la categoria "Playback"
-      //   3. Attesa 400ms (iOS AudioSession release + interrupt end)
-      //   4. configureAudioForRecording → categoria "PlayAndRecord"
-      //   5. setIsAudioActiveAsync(true) → AVAudioSession setActive:YES
-      //      con la NUOVA categoria
-      //   6. Attesa 250ms per finalizzare la route mic
-      //   7. ExpoSpeechRecognitionModule.start() con audio pipe pronto
+      // v66.12 (Fabio 2026-06-18): SEMPLIFICATO. La gestione della sessione
+      // audio ora è delegata a expo-speech-recognition via `iosCategory`
+      // passato in start(). Serve solo:
+      //   1. Fermare il player TTS (release del handle)
+      //   2. Piccola attesa per far chiudere il player pipeline
+      //   3. Verificare permesso
+      //   4. Chiamare ExpoSpeechRecognitionModule.start()
       stopPlayer();
-      try { await setIsAudioActiveAsync(false); } catch (e) {
-        console.warn(`${TAG} setIsAudioActive(false) failed:`, e);
-      }
-      await new Promise((r) => setTimeout(r, 400));
-      await configureAudioForRecording();
-      try { await setIsAudioActiveAsync(true); } catch (e) {
-        console.warn(`${TAG} setIsAudioActive(true) failed:`, e);
-      }
-      await new Promise((r) => setTimeout(r, 250));
+      await new Promise((r) => setTimeout(r, 200));
       const perm = await ensureSpeechPermission();
       if (!perm.granted) {
         console.warn(`${TAG} listen no perm → skip`);
@@ -413,20 +390,43 @@ export default function OnboardingV4() {
         onTranscript(text.trim());
       };
       const maxMs = opts.maxMs ?? INACTIVITY_RESET_MS;
-      const startOpts: any = {
+      // v66.12 (Fabio 2026-06-18): CONFIG STT ALLINEATA A OllenyaIntroV3
+      // (che funziona in produzione da mesi). Rispetto a v66.10:
+      //   - `requiresOnDeviceRecognition: true` su iOS → usa SFSpeechRecognizer
+      //     locale, indipendente da rete + più affidabile per attivazione mic.
+      //   - `iosCategory` RIPRISTINATO con `playAndRecord` + `measurement`.
+      //     La v66.10 aveva rimosso questo campo pensando che interferisse
+      //     con la ripresa mic dopo TTS. In realtà la sua ASSENZA rendeva
+      //     l'audio session NON conforme al recording → mic muto sempre.
+      //   - Rimosso l'audio session dance manuale (setIsAudioActive false/true)
+      //     perché ora è expo-speech-recognition a gestire correttamente
+      //     la transizione tramite iosCategory.
+      const startOpts: {
+        lang: string;
+        interimResults: boolean;
+        continuous: boolean;
+        maxAlternatives: number;
+        addsPunctuation: boolean;
+        requiresOnDeviceRecognition: boolean;
+        volumeChangeEventOptions: { enabled: boolean; intervalMillis: number };
+        iosCategory?: { category: string; categoryOptions: string[]; mode: string };
+        androidIntentOptions?: Record<string, number>;
+      } = {
         lang: "it-IT",
         interimResults: true,
         continuous: Platform.OS === "android",
         maxAlternatives: 1,
         addsPunctuation: true,
-        requiresOnDeviceRecognition: false,
+        requiresOnDeviceRecognition: Platform.OS === "ios",
         volumeChangeEventOptions: { enabled: true, intervalMillis: 80 },
       };
-      // v66.10 (Fabio 2026-06-16): iosCategory RIMOSSA. Test su Build 50
-      // ha mostrato che l'override della categoria interferiva con la
-      // ripresa del mic dopo il TTS. Lasciamo che ExpoSpeechRecognition
-      // usi il default della piattaforma (già configurato da prewarmMic
-      // al mount del componente).
+      if (Platform.OS === "ios") {
+        startOpts.iosCategory = {
+          category: "playAndRecord",
+          categoryOptions: ["defaultToSpeaker", "allowBluetooth"],
+          mode: "measurement",
+        };
+      }
       if (Platform.OS === "android") {
         startOpts.androidIntentOptions = {
           EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 3000,
@@ -719,7 +719,7 @@ export default function OnboardingV4() {
     setWriteMessages((prev) => [...prev, userMsg]);
     setWriteInput("");
     try {
-      const resp = await api.converse(text, undefined, { is_voice_turn: false });
+      const resp = await api.converse(text, undefined, { is_voice_turn: false, demo_mode: true });
       const aiText =
         (resp?.ai_entry as any)?.text ||
         (resp?.ai_entry as any)?.text_clean ||
@@ -795,7 +795,7 @@ export default function OnboardingV4() {
       // Reset retry counter dopo un turno riuscito
       voiceRetryRef.current = 0;
       try {
-        const resp = await api.converse(text, undefined, { is_voice_turn: true });
+        const resp = await api.converse(text, undefined, { is_voice_turn: true, demo_mode: true });
         const aiText =
           (resp?.ai_entry as any)?.text ||
           (resp?.ai_entry as any)?.text_clean ||

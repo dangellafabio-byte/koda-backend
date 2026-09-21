@@ -2219,6 +2219,21 @@ class ConverseRequest(BaseModel):
     # Client legacy che non passano il flag → default False → chat scritta
     # (nessun blocco). Non regressione.
     is_voice_turn: bool = False
+    # === MODALITÀ DEMO ONBOARDING (Fabio 2026-06-18) ========================
+    # True SOLO durante i demo dell'Onboarding (step3 chat + step4 voce).
+    # Comportamento:
+    #   - NON carica taccuino_timeline (nessun contesto pregresso dell'utente
+    #     reale). Ollenya risponde SENZA sapere chi sei, cosa hai fatto ieri,
+    #     senza chiamarti per nome preso da precedenti conversazioni.
+    #   - NON carica memorie semantiche (ricordi).
+    #   - NON carica situations tracking.
+    #   - NON salva l'entry nel taccuino (nessun turno permanente).
+    #   - NON aggiorna il profilo.
+    #   - Se True, ephemeral è forzato True (implicito).
+    # Diverso da `ephemeral`: `ephemeral` è per il Confessionale che vuole
+    # ricordare la sessione corrente del taccuino reale ma non salvare.
+    # `demo_mode` è per il primo contatto — nessuna memoria assoluta.
+    demo_mode: bool = False
 
 
 class ConverseResponse(BaseModel):
@@ -2576,7 +2591,7 @@ def _build_temporal_context(recent: List[TimelineEntry]) -> str:
     return "\n".join(parts) + "\n"
 
 
-def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEntry], memories: Optional[List["Memory"]] = None, trial_state: Optional[str] = None, situations: Optional[List["Situation"]] = None) -> str:
+def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEntry], memories: Optional[List["Memory"]] = None, trial_state: Optional[str] = None, situations: Optional[List["Situation"]] = None, demo_mode: bool = False) -> str:
     lang = profile.language or "it"
     lang_name = {
         "it": "italiano",
@@ -2587,12 +2602,26 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
     }.get(lang, "italiano")
     phase = _confidence_phase(profile.confidence_level)
 
-    memory = profile.memory_summary or "(nessuna memoria di lungo periodo ancora costruita)"
+    # v66.12 (Fabio 2026-06-18): DEMO_MODE = zero-knowledge assoluto.
+    # Ollenya deve rispondere come se fosse il PRIMO CONTATTO: non sa il
+    # nome dell'utente, non ha memoria pregressa, non conosce il genere.
+    # Se demo_mode=True, memory diventa un placeholder neutro e il nome
+    # non viene mai iniettato nel prompt.
+    if demo_mode:
+        memory = "(primo contatto — nessuna memoria pregressa)"
+    else:
+        memory = profile.memory_summary or "(nessuna memoria di lungo periodo ancora costruita)"
 
     # === L'Amico Fraterno: identità AI + decline grammaticali per genere ===
     ai_name = profile.ai_name or "Ollenya"
     user_g = (profile.user_gender or "n").lower()
     ai_g = (profile.ai_gender or "f").lower()
+
+    # v66.12: in demo_mode neutralizziamo le declinazioni di genere utente
+    # (Ollenya non sa chi sei). Il genere di Ollenya (ai_g) resta perché
+    # è una proprietà della persona che risponde, non dell'utente.
+    if demo_mode:
+        user_g = "n"
 
     # Regole di declinazione per il LLM in italiano — MOLTO PIÙ ASSERTIVE.
     # Claude Haiku tende a derivare verso il maschile generico se non glielo
@@ -2633,7 +2662,8 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
     else:
         ai_decl = f"Il tuo genere è neutro/ambiguo (mi chiamo {ai_name}). Evita aggettivi declinati a te stesso quando possibile."
 
-    name_part = f" L'utente si chiama {profile.name}." if profile.name else ""
+    # v66.12: in demo_mode NON iniettiamo il nome utente. Ollenya non lo sa.
+    name_part = "" if demo_mode else (f" L'utente si chiama {profile.name}." if profile.name else "")
 
     now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -8199,6 +8229,13 @@ async def api_converse(req: ConverseRequest):
     if not text:
         raise HTTPException(status_code=400, detail="Empty message")
 
+    # v66.12 (Fabio 2026-06-18): DEMO_MODE forza EPHEMERAL true. Tutti i rami
+    # `if not req.ephemeral` skippano: memorie, situations, save, profilo,
+    # ricerca web, key_facts. In più `if req.demo_mode` skippa recent_docs
+    # (vedi ~riga 8399). Risultato: risposta LLM SENZA nessun contesto utente.
+    if req.demo_mode:
+        req.ephemeral = True
+
     profile = await get_or_create_profile()
 
     # === GATE MINUTI ESAURITI — TURNO VOCE (Fabio 2026-06) ================
@@ -8396,9 +8433,15 @@ async def api_converse(req: ConverseRequest):
     # Load recent context — anche in ephemeral usiamo il context recente per
     # la qualità della risposta, ma la NUOVA confessione non finirà nel
     # contesto futuro perché non viene salvata.
-    recent_docs = await db.taccuino_timeline.find(_uf(), {"_id": 0}).sort("timestamp", -1).to_list(20)
-    recent_docs.reverse()
-    recent = [TimelineEntry(**d) for d in recent_docs]
+    # v66.12 (2026-06-18): in `demo_mode` NON carichiamo NIENTE. L'onboarding
+    # voice/text demo deve rispondere SENZA sapere chi è l'utente, cosa ha
+    # fatto ieri, senza chiamarlo per nome. È il primo contatto: memoria zero.
+    if req.demo_mode:
+        recent = []
+    else:
+        recent_docs = await db.taccuino_timeline.find(_uf(), {"_id": 0}).sort("timestamp", -1).to_list(20)
+        recent_docs.reverse()
+        recent = [TimelineEntry(**d) for d in recent_docs]
 
     # === RICORDI (long-term semantic memory, giugno 2026) ===
     # In modalità normale carichiamo top-6 ricordi rilevanti rispetto al
@@ -8436,7 +8479,7 @@ async def api_converse(req: ConverseRequest):
             situations_for_prompt = []
 
     trial_state_for_prompt = _compute_trial_state(profile)
-    system_prompt = _build_conversation_system_prompt(profile, recent, memories=memories, trial_state=trial_state_for_prompt, situations=situations_for_prompt)
+    system_prompt = _build_conversation_system_prompt(profile, recent, memories=memories, trial_state=trial_state_for_prompt, situations=situations_for_prompt, demo_mode=req.demo_mode)
     history_str = _format_history_for_llm(recent)
 
     # === WEB SEARCH (opt-in via heuristic OR explicit override) ===
@@ -13111,7 +13154,7 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
             situations_for_prompt = []
 
     trial_state_for_prompt = _compute_trial_state(profile)
-    system_prompt = _build_conversation_system_prompt(profile, recent, memories=memories_for_prompt, trial_state=trial_state_for_prompt, situations=situations_for_prompt)
+    system_prompt = _build_conversation_system_prompt(profile, recent, memories=memories_for_prompt, trial_state=trial_state_for_prompt, situations=situations_for_prompt, demo_mode=getattr(req, "demo_mode", False))
     history_str = _format_history_for_llm(recent)
 
     # === WEB SEARCH OPZIONALE (Tavily) ===

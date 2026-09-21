@@ -1,0 +1,48 @@
+{
+  "summary": "Tested new demo_mode flag on POST /api/converse (server.py ~2213, 8221, 8424). 5/6 tests PASSED, 1 FAILED. demo_mode correctly (a) forces ephemeral=True, (b) skips loading recent taccuino_timeline history, (c) does NOT persist user/ai entries to taccuino_timeline. CRITICAL LEAK: profile.name still leaks — with a seeded profile.name='Fabio', the demo_mode response was 'Ciao Fabio. Come stai?'. The leak comes from _build_conversation_system_prompt (server.py:2651) which unconditionally embeds `L'utente si chiama {profile.name}.` in the system prompt and also embeds profile.memory_summary at line 3157 — neither is gated by req.demo_mode. Note: /api/auth/login does not exist in this backend (only dev-login, google/session, apple); tests authenticate via X-User-Id header derived deterministically via _email_to_uid(ollenya.play.review@gmail.com).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/converse (demo_mode=true)",
+        "issue": "Response STILL contains profile.name (e.g. 'Ciao Fabio.'). Root cause: _build_conversation_system_prompt at server.py:2651 injects `L'utente si chiama {profile.name}.` and at line 3157 injects `profile.memory_summary`, both unconditionally. When req.demo_mode=True the caller (api_converse ~line 8467) must pass a scrubbed profile (name='', memory_summary='') OR the prompt builder must accept a `demo_mode` flag and skip name_part + memory block. This defeats the whole 'first-contact / zero memory' goal of the flag.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/auth/login",
+        "issue": "Endpoint referenced in the review request does not exist. Only /api/auth/dev-login, /api/auth/google/session, /api/auth/apple, /api/auth/me, /api/auth/logout exist. Tests worked around this via X-User-Id header. Consider adding email/password login OR update the review request/onboarding docs."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_demo_mode_converse_jan2026.py",
+    "/app/test_reports/pytest/iter24_demo_mode.xml"
+  ],
+  "action_items": [
+    "FIX server.py:_build_conversation_system_prompt — gate `name_part` (line ~2651) and `memory = profile.memory_summary` (line ~2605/3157) behind a new `demo_mode: bool = False` parameter. In api_converse (line ~8467) pass `demo_mode=req.demo_mode`. When True: name_part='' and memory block replaced with 'Non hai ancora memoria su questa persona — è il primo contatto.'",
+    "Also strip profile.ai_name customization only if it matters; leave ai_name (Ollenya) unchanged (it's the AI identity, not user memory).",
+    "Consider blanking additional profile-derived context: profile.user_gender / ai_gender declinations may reveal user's gender inferred earlier; if the demo is meant to be zero-knowledge, force gender='n' when demo_mode.",
+    "After fix, re-run /app/backend/tests/test_demo_mode_converse_jan2026.py — test_demo_mode_true_no_memory_leak should pass. Bonus: extend LEAKAGE_KEYWORDS to catch memory_summary leaks (moto/ducati/stelvio) — currently the LLM only leaked name; memory_summary leak is possible on longer prompts."
+  ],
+  "critical_code_review_comments": [
+    "server.py:8221-8222 — `req.ephemeral = True` mutates the incoming Pydantic model. Works but is a code smell; a local `effective_ephemeral = req.ephemeral or req.demo_mode` would be cleaner and non-mutating.",
+    "server.py is 18,066 lines — should be split into modules (auth, converse, memory, admin, tts). Well beyond the 700-line guideline.",
+    "The demo_mode implementation correctly gates recent_docs, memories, situations, save, key_facts extraction, and profile update — good. Only the base system prompt (name+memory_summary) was missed."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_demo_mode_converse_jan2026.py (NEW)"
+  ],
+  "success_rate": {"backend": "83% (5/6)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Seeded ephemeral user ollenya.play.review@gmail.com (uid=0c6a518c-3372-49f7-82b3-e0b35fe52bcb) with name='Fabio', memory_summary about moto/Ducati, 3 key_facts about moto, and 8 taccuino_timeline entries mentioning Ducati/Stelvio. Cleaned up automatically by pytest teardown fixture.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Re-run `pytest /app/backend/tests/test_demo_mode_converse_jan2026.py -v -s` after main agent fixes _build_conversation_system_prompt. Expected: all 6 tests PASS. The seed uses X-User-Id header (deterministic UUID derived from email via sha256) since /api/auth/login does not exist. LEAKAGE_KEYWORDS list checks for: fabio, moto, ducati, stelvio, catena, motociclista.",
+  "rca_of_issue": "Reproduction: (1) seed profile.name='Fabio' and memory_summary about moto for uid derived from ollenya.play.review@gmail.com; (2) POST /api/converse {\"text\":\"Ciao\",\"demo_mode\":true} with X-User-Id header; (3) response.ai_entry.text = 'Ciao Fabio. Come stai?' — contains 'Fabio' from profile.name. RCA: api_converse (server.py:8210) calls get_or_create_profile() BEFORE the demo_mode branch, then passes the full `profile` object into _build_conversation_system_prompt (line 8467). That builder unconditionally embeds `profile.name` (line 2651 `name_part = f\" L'utente si chiama {profile.name}.\"`) and `profile.memory_summary` (line 3157 `f\"{memory}\\n\"` where `memory = profile.memory_summary`). demo_mode currently only gates recent_docs / memories / situations / save / key_facts / profile update — NOT the two profile fields already denormalized into the base prompt. Mitigation: add a `demo_mode: bool = False` kwarg to _build_conversation_system_prompt and, when True, force `name_part = ''` and `memory = '(primo contatto — nessuna memoria)'` before templating."
+}

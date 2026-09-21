@@ -1,0 +1,30 @@
+{
+  "summary": "RETEST of demo_mode fix on POST /api/converse — all 6/6 tests PASS (previously 5/6). Verified fix at server.py:2594 (new `demo_mode: bool = False` kwarg on _build_conversation_system_prompt), :2610-2613 (memory → placeholder), :2623-2624 (user_g forced to 'n'), :2666 (name_part → '' in demo_mode), and both call sites at :8482 (api_converse passes req.demo_mode) and :13157 (_converse_stream_audio_impl passes via getattr). Concrete evidence: with seeded profile.name='Fabio' + memory_summary about moto/Ducati, POST /api/converse {text:'Ciao', demo_mode:true} returned ai_text='Ciao! Come stai?' — zero leakage keywords (fabio/moto/ducati/stelvio/catena/motociclista). Baseline (demo_mode=false) also produced clean response this run ('Ehi, ciao. Sono qui.') due to Haiku non-determinism, but that path is not affected by the fix. Ephemeral forcing and no-persistence to taccuino_timeline confirmed. No regressions in normal mode (still persists ≥2 timeline entries).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_demo_mode_converse_jan2026.py",
+    "/app/test_reports/pytest/iter25_demo_mode_retest.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix is well-scoped: 3 focused edits inside _build_conversation_system_prompt + 2 call-site updates. No side effects to non-demo paths.",
+    "getattr(req, 'demo_mode', False) at server.py:13157 is defensive but the field exists on ConverseRequest — could be simplified to req.demo_mode; leaving as-is is fine (no bug).",
+    "server.py still 18,081 lines — pre-existing tech debt, unrelated to this fix; consider modular split in a future refactor."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (6/6)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Same seed as iteration_24: ephemeral user ollenya.play.review@gmail.com (uid derived via sha256/_email_to_uid) with name='Fabio', memory_summary about Ducati, 3 key_facts, and 8 timeline entries. Cleaned up automatically via pytest module fixture teardown.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "demo_mode leak on /api/converse fully resolved as of Jan 2026. Regression test lives at /app/backend/tests/test_demo_mode_converse_jan2026.py. If future changes touch _build_conversation_system_prompt or ConverseRequest schema, re-run: `pytest /app/backend/tests/test_demo_mode_converse_jan2026.py -v -s`. LEAKAGE_KEYWORDS = fabio/moto/ducati/stelvio/catena/motociclista.",
+  "rca_of_issue": "Previous iteration_24 RCA still valid — root cause was profile.name + profile.memory_summary unconditionally embedded into base system prompt. Fix (verified in this iteration): demo_mode kwarg propagates from api_converse (and _converse_stream_audio_impl) into _build_conversation_system_prompt, which now short-circuits name_part='' and memory='(primo contatto — nessuna memoria pregressa)', plus forces user_g='n' to neutralize gender declensions. Post-fix response 'Ciao! Come stai?' confirms zero-knowledge behavior."
+}
