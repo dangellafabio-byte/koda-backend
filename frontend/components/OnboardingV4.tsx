@@ -69,7 +69,7 @@ const VOICE_CIELO_ID = "POuqf18evoXOKIqV2Px7";
 // Timeout d'inattività per il reset "torna all'inizio": 15s.
 const INACTIVITY_RESET_MS = 15_000;
 // Numero di scambi obbligatori nelle demo scrittura/voce (utente → Ollenya).
-const REQUIRED_EXCHANGES = 3;
+const REQUIRED_EXCHANGES = 1;
 const { width: SCREEN_W } = Dimensions.get("window");
 // v66.6 (Fabio 2026-06-16): dimensione eclissi allineata alla Home REALE.
 // Home usa Math.min(width * 0.78, 360) ma il wrapper flex + scale animation
@@ -661,25 +661,29 @@ export default function OnboardingV4() {
     if (step === "step3_scrim_write") {
       scrimSpeakStep(
         "step3_scrim_write",
-        "Qui puoi scrivermi quando vuoi. La scrittura è sempre attiva, sempre gratuita, sempre a disposizione. Uno spazio di comunicazione che non si chiude mai. Quando vuoi, io sono qui.",
+        "Qui puoi scrivermi quando vuoi. La scrittura è sempre attiva, sempre gratuita — uno spazio che non si chiude mai. Facciamo una prova.",
         "step3_demo_write"
       );
     } else if (step === "step4_scrim_voice") {
       scrimSpeakStep(
         "step4_scrim_voice",
-        "Adesso ti presento la mia voce. Questa è la mia funzione principale: quando parliamo davvero, tu dici quello che senti e io ti rispondo con la mia voce, come una vera conversazione. Prova ora. Dimmi qualcosa, anche solo una parola. Ti risponderò.",
+        "Adesso ti presento la mia voce. Quando parliamo davvero, tu dici quello che senti e io ti rispondo — come una vera conversazione. Proviamo.",
         "step4_demo_voice"
       );
     } else if (step === "step5_scrim_la") {
       scrimSpeakStep(
         "step5_scrim_la",
-        "Questo è il mio vero cuore. È uno spazio dove non c'è nessuno che ti ascolta e non esiste nessuna risposta. È uno spazio esclusivamente per te, per dare sfogo libero a tutti i tuoi pensieri, senza dover avere nessun confronto con qualcuno. Qui devi solo buttare fuori quello che hai dentro. Qui hai tutto il tempo a tua disposizione. Provalo.",
+        "E adesso ti mostro il mio cuore. Un luogo dove nessuno ti ascolta e nessuno risponde. Uno spazio tutto tuo, per svuotarti di quello che porti dentro. Nessun giudizio, nessuna eco. Quando finisci, l'eclissi si porta via ogni parola. Provalo.",
         "step5_demo_la"
       );
     } else if (step === "step6_scrim_final") {
+      // v66.14: testo finale ridefinito come "upsell voce Premium".
+      // Ollenya (con eclissi + neon speaking) spiega che la voce che
+      // hai appena provato è la funzione Premium; per continuare a
+      // sentirla serve l'abbonamento. Dopo il TTS → done → /paywall.
       scrimSpeakStep(
         "step6_scrim_final",
-        "Perfetto, siamo arrivati alla fine dell'introduzione. Puoi parlare sempre con me tramite la scrittura, e hai sempre a disposizione lo spazio Lascia Andare. Se avessi voglia anche di parlare con me e sentire la mia voce, ti serve attivare la modalità Premium.",
+        "Hai appena provato la mia voce. Se vuoi continuare a parlarmi così, come abbiamo fatto adesso, serve la modalità Premium. La scrittura e questo spazio che ti ho appena mostrato restano sempre tuoi, gratis. Ora ti mostro come attivare la voce.",
         "done"
       );
     } else {
@@ -707,9 +711,14 @@ export default function OnboardingV4() {
     writeStartedRef.current = true;
     setSubtitle(null);
     setOrbStatus("idle");
-    // v66.6 (Fabio 2026-06-16): 15s di inattività assoluta → reset a
-    // paused_by_inactivity. Se l'utente scrive qualcosa, il timer viene
-    // resettato in handleWriteSend/onChangeText.
+    // v66.14: Ollenya APRE lo scambio con una bolla AI iniziale così l'utente
+    // sa subito cosa fare senza sentirsi "sotto esame". Poi 15s inattività.
+    const opener: WriteMsg = {
+      id: `a-opener-${Date.now()}`,
+      role: "ai",
+      text: "Prova a scrivermi qualcosa — quello che vuoi. Anche solo una parola.",
+    };
+    setWriteMessages([opener]);
     resetInactivityTimer();
     return () => clearTimer();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -740,9 +749,14 @@ export default function OnboardingV4() {
       // resettiamo il timer d'inattività a 15s per il prossimo turno.
       if (newCount >= REQUIRED_EXCHANGES) {
         setWriteCompleted(true);
+        // v66.14 (Fabio 2026-06-18): FIX LOOP INFINITO alla fine intro.
+        // clearInactivityTimer PRIMA di setTimeout advance: il timer 15s
+        // dell'ultimo turno era ancora in vita, scadeva DURANTE l'attesa
+        // 3200ms → paused_by_inactivity → tap → restart dall'inizio.
+        clearInactivityTimer();
         timerRef.current = setTimeout(() => {
           if (mountedRef.current) setStep("step4_scrim_voice");
-        }, 3200);
+        }, 2400);
       } else {
         resetInactivityTimer();
       }
@@ -817,6 +831,8 @@ export default function OnboardingV4() {
           setVoiceExchangeCount((prev) => {
             const nextCount = prev + 1;
             if (nextCount >= REQUIRED_EXCHANGES) {
+              // v66.14: clearInactivityTimer per evitare loop paused→step1.
+              clearInactivityTimer();
               setTimeout(() => {
                 if (mountedRef.current) setStep("step5_scrim_la");
               }, 1200);
@@ -847,7 +863,11 @@ export default function OnboardingV4() {
     setSubtitle(null);
     setVoiceExchangeCount(0);
     voiceRetryRef.current = 0;
-    runVoiceExchange();
+    // v66.14: Ollenya APRE con una domanda parlata. Solo dopo che ha finito
+    // di parlare, parte listen(). Così l'utente capisce cosa deve fare.
+    speak("Dimmi una cosa: come ti senti in questo momento?", () => {
+      if (mountedRef.current && step === "step4_demo_voice") runVoiceExchange();
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
@@ -938,13 +958,13 @@ export default function OnboardingV4() {
   const currentScrimText = useMemo(() => {
     switch (step) {
       case "step3_scrim_write":
-        return "Qui puoi scrivermi quando vuoi.\n\nLa scrittura è sempre attiva, sempre gratuita, sempre a disposizione. Uno spazio di comunicazione che non si chiude mai.\n\nQuando vuoi, io sono qui.";
+        return "Qui puoi scrivermi quando vuoi.\n\nLa scrittura è sempre attiva, sempre gratuita — uno spazio che non si chiude mai.\n\nFacciamo una prova.";
       case "step4_scrim_voice":
-        return "Adesso ti presento la mia voce.\n\nQuesta è la mia funzione principale: quando parliamo davvero, tu dici quello che senti e io ti rispondo con la mia voce, come una vera conversazione.\n\nProva ora. Dimmi qualcosa — anche solo una parola. Ti risponderò.";
+        return "Adesso ti presento la mia voce.\n\nQuando parliamo davvero, tu dici quello che senti e io ti rispondo — come una vera conversazione.\n\nProviamo.";
       case "step5_scrim_la":
-        return "Questo è il mio vero cuore.\n\nÈ uno spazio dove non c'è nessuno che ti ascolta e non esiste nessuna risposta. È uno spazio esclusivamente per te, per dare sfogo libero a tutti i tuoi pensieri, senza dover avere nessun confronto con qualcuno.\n\nQui devi solo buttare fuori quello che hai dentro. Qui hai tutto il tempo a tua disposizione. Provalo.";
+        return "E adesso ti mostro il mio cuore.\n\nUn luogo dove nessuno ti ascolta e nessuno risponde. Uno spazio tutto tuo, per svuotarti di quello che porti dentro.\n\nNessun giudizio, nessuna eco. Quando finisci, l'eclissi si porta via ogni parola.\n\nProvalo.";
       case "step6_scrim_final":
-        return "Perfetto, siamo arrivati alla fine dell'introduzione.\n\nPuoi parlare sempre con me tramite la scrittura, e hai sempre a disposizione lo spazio Lascia Andare.\n\nSe avessi voglia anche di parlare con me e sentire la mia voce, ti serve attivare la modalità Premium.";
+        return "Hai appena provato la mia voce.\n\nSe vuoi continuare a parlarmi così, serve la modalità Premium.\n\nLa scrittura e questo spazio restano sempre tuoi, gratis.\n\nOra ti mostro come attivare la voce.";
       default: return null;
     }
   }, [step]);
@@ -1092,10 +1112,11 @@ export default function OnboardingV4() {
           </KeyboardAvoidingView>
         )}
 
-        {/* Step 5 demo LA — v66.4 (bug 6): usa EclipseOrb reale con dbBoost
-            calcolato dal metering microfonico, identico al pattern di
-            /lascia-andare. Il glow champagne pulsa dinamicamente con la
-            voce dell'utente. Nessun testo, nessuna registrazione persistente. */}
+        {/* Step 5 demo LA — v66.14 (Fabio 2026-06-18): EFFETTO "BUCO NERO".
+            RIMOSSO il glow che cresceva con la voce. Ora il glow SI RITIRA
+            man mano che l'utente parla forte: silenzio = alone champagne
+            morbido; volume alto = orb quasi-nero puro. Percettivamente
+            l'eclissi ASSORBE le parole invece di rifletterle. */}
         {step === "step5_demo_la" && (
           <View style={styles.laDemoWrap}>
             <TouchableOpacity
@@ -1113,11 +1134,20 @@ export default function OnboardingV4() {
                 size={ORB_SIZE}
                 meterDb={laMeterDb}
                 meterThreshold={-40}
+                // v66.14: dbBoost INVERTITO. Silenzio (db=-60) → dbBoost=1
+                // (glow pieno). Voce alta (db=-20) → dbBoost=0 (glow assente).
+                // L'orb "risucchia" il glow verso il centro come un buco nero.
                 dbBoost={Math.max(
                   0,
-                  Math.min(1, (Math.max(-60, Math.min(-20, laMeterDb)) + 60) / 40)
+                  Math.min(
+                    1,
+                    1 - (Math.max(-60, Math.min(-20, laMeterDb)) + 60) / 40
+                  )
                 )}
               />
+            </View>
+            <View style={styles.laHintWrap} pointerEvents="none">
+              <Text style={styles.laHintText}>{"parla — l'eclissi ti ascolta e assorbe"}</Text>
             </View>
           </View>
         )}
@@ -1344,5 +1374,18 @@ const styles = StyleSheet.create({
     backgroundColor: "#050310",
     borderWidth: 1,
     borderColor: "rgba(212, 184, 150, 0.10)",
+  },
+  laHintWrap: {
+    position: "absolute",
+    bottom: 60,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+  },
+  laHintText: {
+    color: "rgba(245,230,204,0.5)",
+    fontSize: 13,
+    fontStyle: "italic",
+    letterSpacing: 0.4,
   },
 });
