@@ -34,6 +34,7 @@ import {
   Text,
   StyleSheet,
   Animated,
+  Easing,
   TouchableOpacity,
   TextInput,
   KeyboardAvoidingView,
@@ -85,25 +86,30 @@ const CHAT_AI_BG = "rgba(148,163,184,0.10)";
 const CHAT_AI_BORDER = "rgba(148,163,184,0.35)";
 const CHAT_AI_TEXT = "#E2E8F0";
 
-// ==== Fasi (state machine) v66.15 ===========================================
-// FLUSSO FINALE:
+// ==== Fasi (state machine) v66.16 ===========================================
+// FLUSSO FINALE (~2 minuti):
 //   step1_speak_intro   → Ollenya si presenta (silent, no scritta)
 //   step1_wait_mic      → attesa permesso mic
 //   step2_listen_name   → STT nome
-//   step2_confirm       → "Ciao [nome], piacere. Ti mostro come funziono." (silent)
-//   step3_scrim_write   → SPIEGA la scrittura (con scritta a schermo)
+//   step2_confirm       → "Ciao [nome], piacere..." (silent, no scritta)
+//   step_voice_a        → domanda vocale #1 (impara TIFFANY listening +
+//                         ROSA thinking + VIOLA speaking)
+//   step3_scrim_write   → SPIEGA la scrittura (voce + scritta)
 //   step3_demo_write    → 2 scambi di chat scritta
-//   step5_scrim_la      → SPIEGA Lascia Andare (con scritta)
-//   step5_demo_la       → orb "buco nero" che assorbe
-//   step6_scrim_final   → "Questo è come funziono io... la voce è Premium." (scritta)
+//   step_voice_b        → domanda vocale #2 (rinforza il pattern colori)
+//   step5_scrim_la      → SPIEGA Lascia Andare (voce + scritta)
+//   step5_demo_la       → orb "buco nero" champagne che cresce e implode
+//   step6_scrim_final   → sintesi del modello Free/Premium (voce + scritta)
 //   done                → replace /paywall
 type Step =
   | "step1_speak_intro"
   | "step1_wait_mic"
   | "step2_listen_name"
   | "step2_confirm"
+  | "step_voice_a"
   | "step3_scrim_write"
   | "step3_demo_write"
+  | "step_voice_b"
   | "step5_scrim_la"
   | "step5_demo_la"
   | "step6_scrim_final"
@@ -603,7 +609,7 @@ export default function OnboardingV4() {
       ? `Ciao ${userName}, piacere. Ti mostro come funziono.`
       : "Piacere di conoscerti. Ti mostro come funziono.";
     speak(text, () => {
-      if (mountedRef.current) setStep("step3_scrim_write");
+      if (mountedRef.current) setStep("step_voice_a");
     }, { silent: true });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
@@ -759,7 +765,7 @@ export default function OnboardingV4() {
         // DIRETTAMENTE a Lascia Andare (step5_scrim_la). Il vecchio step4
         // "prova voce" è stato rimosso completamente dal flow.
         timerRef.current = setTimeout(() => {
-          if (mountedRef.current) setStep("step5_scrim_la");
+          if (mountedRef.current) setStep("step_voice_b");
         }, 2400);
       } else {
         resetInactivityTimer();
@@ -785,6 +791,112 @@ export default function OnboardingV4() {
   // riprova." e ri-ascolta senza consumare uno scambio. Dopo 3 exchange
   // completi, avanza a step5. Timer d'inattività: gestito da listen()
   // via il timer safety interno + globale (resetInactivityTimer).
+  // v66.16 (Fabio 2026-06-18): MINI SCAMBI VOCALI riusabili.
+  // Ollenya fa una domanda parlata → utente risponde a voce → converse
+  // demo_mode → Ollenya risponde → advance allo step successivo.
+  // Durante questo ciclo l'utente VEDE il neon border cambiare:
+  //   speaking (viola) mentre Ollenya parla
+  //   recording (tiffany) mentre l'utente parla
+  //   thinking (rosa) mentre il backend genera la risposta
+  // = didattica implicita del linguaggio visivo dell'app.
+  const runVoiceMiniExchange = useCallback(
+    (question: string, nextStep: Step, currentStep: Step) => {
+      if (!mountedRef.current) return;
+      speak(question, () => {
+        if (!mountedRef.current || step !== currentStep) return;
+        setOrbStatus("recording");
+        listen({ maxMs: INACTIVITY_RESET_MS }, async (transcript) => {
+          if (!mountedRef.current) return;
+          const text = transcript.trim();
+          if (!text) {
+            // retry once with a short prompt
+            speak("Non ti ho sentito, prova a ripetere.", () => {
+              if (mountedRef.current && step === currentStep) {
+                setOrbStatus("recording");
+                listen({ maxMs: INACTIVITY_RESET_MS }, async (t2) => {
+                  const t = t2.trim();
+                  if (!t) {
+                    // arrenditi con grazia e avanza
+                    speak("Va bene, andiamo avanti.", () => {
+                      if (mountedRef.current) setStep(nextStep);
+                    }, { silent: true });
+                    return;
+                  }
+                  await handleVoiceReply(t, nextStep);
+                });
+              }
+            }, { silent: true });
+            return;
+          }
+          await handleVoiceReply(text, nextStep);
+        });
+      }, { silent: true });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [speak, listen, step]
+  );
+
+  // Helper interno: chiama /api/converse in demo_mode e fa parlare Ollenya
+  // la risposta AI. Silent perché è dialogo diretto.
+  const handleVoiceReply = useCallback(
+    async (userText: string, nextStep: Step) => {
+      if (!mountedRef.current) return;
+      setOrbStatus("thinking");
+      try {
+        const resp = await api.converse(userText, undefined, {
+          is_voice_turn: true,
+          demo_mode: true,
+        });
+        const aiText =
+          (resp?.ai_entry as any)?.text ||
+          (resp?.ai_entry as any)?.text_clean ||
+          "Ho capito.";
+        if (!mountedRef.current) return;
+        speak(aiText, () => {
+          if (mountedRef.current) setStep(nextStep);
+        }, { silent: true });
+      } catch (e) {
+        console.warn(`${TAG} voice mini exchange converse failed:`, e);
+        if (mountedRef.current) {
+          speak("Ci sarò comunque.", () => {
+            if (mountedRef.current) setStep(nextStep);
+          }, { silent: true });
+        }
+      }
+    },
+    [speak]
+  );
+
+  // Step_voice_a: mini-scambio DOPO il saluto, PRIMA della scrittura.
+  const voiceAStartedRef = useRef(false);
+  useEffect(() => {
+    if (step !== "step_voice_a") { voiceAStartedRef.current = false; return; }
+    if (voiceAStartedRef.current) return;
+    voiceAStartedRef.current = true;
+    setSubtitle(null);
+    runVoiceMiniExchange(
+      "Prima di tutto voglio conoscerti. Dimmi: come ti senti in questo momento?",
+      "step3_scrim_write",
+      "step_voice_a"
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+
+  // Step_voice_b: mini-scambio DOPO la scrittura, PRIMA di Lascia Andare.
+  const voiceBStartedRef = useRef(false);
+  useEffect(() => {
+    if (step !== "step_voice_b") { voiceBStartedRef.current = false; return; }
+    if (voiceBStartedRef.current) return;
+    voiceBStartedRef.current = true;
+    setSubtitle(null);
+    runVoiceMiniExchange(
+      "Ora ti chiedo un'ultima cosa a voce. Cosa cerchi in questo posto?",
+      "step5_scrim_la",
+      "step_voice_b"
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+
   // v66.15 (Fabio 2026-06-18): STEP 4 VOICE DEMO RIMOSSO COMPLETAMENTE.
   // Il flusso ora è: name → scrim_write → demo_write → scrim_la → demo_la
   // → scrim_final → paywall. Nessuna "prova voce" separata: la voce di
@@ -797,13 +909,36 @@ export default function OnboardingV4() {
   // [-60, -20] mappato in [0, 1]. Il glow è champagne come nella LA reale.
   const laStartedRef = useRef(false);
   const [laMeterDb, setLaMeterDb] = useState(-60);
+  // v66.16 (Fabio 2026-06-18): NUOVO EFFETTO "BUCO NERO CHAMPAGNE".
+  //   - laGlowLevel: 0..1 MONOTONO CRESCENTE. Ogni volta che l'utente
+  //     parla forte, l'accumulo cresce (ratchet, mai scende) finché non
+  //     satura a 1. Simula il buco nero che si "riempie" delle parole.
+  //   - laImploding: true SOLO durante l'animazione di uscita. Blocca
+  //     il ratchet e la scale collassa da regime attuale → 0 in 800ms.
+  //   - laVisualScale: scala visiva del glow (implosione).
+  const [laGlowLevel, setLaGlowLevel] = useState(0);
+  const [laImploding, setLaImploding] = useState(false);
+  const laVisualScale = useRef(new Animated.Value(1)).current;
+  const laGlowLevelRef = useRef(0);
   const laRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const laMeterTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
-    if (step !== "step5_demo_la") { laStartedRef.current = false; return; }
+    if (step !== "step5_demo_la") {
+      laStartedRef.current = false;
+      // reset stato al termine
+      laGlowLevelRef.current = 0;
+      setLaGlowLevel(0);
+      setLaImploding(false);
+      laVisualScale.setValue(1);
+      return;
+    }
     if (laStartedRef.current) return;
     laStartedRef.current = true;
     setSubtitle(null);
+    laGlowLevelRef.current = 0;
+    setLaGlowLevel(0);
+    setLaImploding(false);
+    laVisualScale.setValue(1);
     (async () => {
       try {
         const perm = await AudioModule.requestRecordingPermissionsAsync();
@@ -814,12 +949,29 @@ export default function OnboardingV4() {
         await configureAudioForRecording();
         await laRecorder.prepareToRecordAsync();
         laRecorder.record();
-        // Loop di metering: leggiamo `metering` (dBFS) e lo passiamo in state.
+        // Loop di metering 100ms — accumula il glow monotonicamente.
+        // Formula ratchet: se volume istantaneo > threshold, aggiungi
+        // delta proporzionale al dB clampato in [0, 1] al livello corrente.
+        // Delta massimo per tick: ~0.015 → per saturare (1.0) servono ~7s
+        // di parlato continuo forte. Silenzio → nessun avanzamento (non
+        // decresce mai).
         laMeterTimerRef.current = setInterval(() => {
           try {
             const status = laRecorder.getStatus();
             const db = (status as any)?.metering as number | undefined;
-            if (typeof db === "number") setLaMeterDb(db);
+            if (typeof db !== "number") return;
+            setLaMeterDb(db);
+            // Contributo al glow: (db in [-55,-20]) → normalized [0,1]
+            const norm = Math.max(0, Math.min(1, (db + 55) / 35));
+            // Delta cresce con norm^1.4 (soft-knee: sussurri contano poco)
+            const delta = Math.pow(norm, 1.4) * 0.018;
+            if (delta > 0) {
+              const next = Math.min(1, laGlowLevelRef.current + delta);
+              if (next !== laGlowLevelRef.current) {
+                laGlowLevelRef.current = next;
+                setLaGlowLevel(next);
+              }
+            }
           } catch {}
         }, 100);
       } catch (e) {
@@ -836,8 +988,21 @@ export default function OnboardingV4() {
   const closeLADemo = useCallback(() => {
     if (laMeterTimerRef.current) { clearInterval(laMeterTimerRef.current); laMeterTimerRef.current = null; }
     try { laRecorder.stop(); } catch {}
-    setStep("step6_scrim_final");
-  }, [laRecorder]);
+    // v66.16: ANIMAZIONE DI IMPLOSIONE.
+    // Il glow attuale (a qualsiasi livello sia arrivato) collassa verso
+    // il centro dell'eclissi in 800ms con easing forte (accelera nella
+    // seconda metà) → sparisce in un puntino. Solo DOPO l'animazione
+    // avanziamo allo scrim finale.
+    setLaImploding(true);
+    Animated.timing(laVisualScale, {
+      toValue: 0,
+      duration: 800,
+      easing: Easing.bezier(0.7, 0, 0.3, 1),
+      useNativeDriver: true,
+    }).start(() => {
+      setStep("step6_scrim_final");
+    });
+  }, [laRecorder, laVisualScale]);
 
   // Step 6: fine → mark completed + push paywall
   useEffect(() => {
@@ -864,8 +1029,10 @@ export default function OnboardingV4() {
     step === "step1_wait_mic" ||
     step === "step2_listen_name" ||
     step === "step2_confirm" ||
+    step === "step_voice_a" ||
     step === "step3_scrim_write" ||
     step === "step3_demo_write" ||
+    step === "step_voice_b" ||
     step === "step5_scrim_la" ||
     step === "step6_scrim_final" ||
     step === "paused_by_inactivity";
@@ -894,8 +1061,10 @@ export default function OnboardingV4() {
           allo stato (idle=champagne, recording=tiffany, thinking=rosa,
           speaking=viola). Feedback utente: "deve esserci sempre il neon
           è comunque l'entità". Posizionato SOPRA il SafeAreaView ma sotto
-          gli scrim overlay in modo che i bordi restino sempre visibili. */}
-      <NeonBorder status={orbStatus} />
+          gli scrim overlay in modo che i bordi restino sempre visibili.
+          v66.16: TRANNE durante step5_demo_la — in Lascia Andare l'entità
+          è "sotterranea" (nessun neon), solo l'orb assorbe le parole. */}
+      {step !== "step5_demo_la" && <NeonBorder status={orbStatus} />}
       <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
 
         {/* Orb centrale — visibile in tutti gli step tranne "done".
@@ -1028,11 +1197,15 @@ export default function OnboardingV4() {
           </KeyboardAvoidingView>
         )}
 
-        {/* Step 5 demo LA — v66.14 (Fabio 2026-06-18): EFFETTO "BUCO NERO".
-            RIMOSSO il glow che cresceva con la voce. Ora il glow SI RITIRA
-            man mano che l'utente parla forte: silenzio = alone champagne
-            morbido; volume alto = orb quasi-nero puro. Percettivamente
-            l'eclissi ASSORBE le parole invece di rifletterle. */}
+        {/* Step 5 demo LA — v66.16 (Fabio 2026-06-18): BUCO NERO CHAMPAGNE.
+            REGOLE:
+            - NIENTE neon border (l'entità in LA è "sotterranea", non
+              comunica; solo l'orb assorbe).
+            - Il glow parte a 0 e cresce MONOTONICAMENTE quando l'utente
+              parla (ratchet, mai retrocede). Volume alto e sostenuto →
+              satura a 1 (glow ampio, presente).
+            - Alla chiusura (X): tutto il glow attuale IMPLODE in un
+              puntino via scale 1→0 in 800ms con easing accelerato. */}
         {step === "step5_demo_la" && (
           <View style={styles.laDemoWrap}>
             <TouchableOpacity
@@ -1041,30 +1214,34 @@ export default function OnboardingV4() {
               hitSlop={16}
               testID="onboarding-la-close"
               accessibilityLabel="Chiudi Lascia Andare"
+              disabled={laImploding}
             >
               <Ionicons name="close" size={28} color="rgba(245,230,204,0.75)" />
             </TouchableOpacity>
-            <View style={styles.laOrbCenter}>
+            <Animated.View
+              style={[
+                styles.laOrbCenter,
+                {
+                  transform: [{ scale: laVisualScale }],
+                  opacity: laVisualScale,
+                },
+              ]}
+            >
               <EclipseOrb
                 status="recording"
                 size={ORB_SIZE}
                 meterDb={laMeterDb}
                 meterThreshold={-40}
-                // v66.14: dbBoost INVERTITO. Silenzio (db=-60) → dbBoost=1
-                // (glow pieno). Voce alta (db=-20) → dbBoost=0 (glow assente).
-                // L'orb "risucchia" il glow verso il centro come un buco nero.
-                dbBoost={Math.max(
-                  0,
-                  Math.min(
-                    1,
-                    1 - (Math.max(-60, Math.min(-20, laMeterDb)) + 60) / 40
-                  )
-                )}
+                // v66.16: dbBoost = laGlowLevel (ratchet monotono).
+                // Silenzio → 0 (glow assente). Parla forte per ~7s → 1.
+                dbBoost={laGlowLevel}
               />
-            </View>
-            <View style={styles.laHintWrap} pointerEvents="none">
-              <Text style={styles.laHintText}>{"parla — l'eclissi ti ascolta e assorbe"}</Text>
-            </View>
+            </Animated.View>
+            {!laImploding && (
+              <View style={styles.laHintWrap} pointerEvents="none">
+                <Text style={styles.laHintText}>{"parla — l'eclissi assorbe ogni tua parola"}</Text>
+              </View>
+            )}
           </View>
         )}
 
