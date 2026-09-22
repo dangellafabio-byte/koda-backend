@@ -2,7 +2,7 @@
   "expo": {
     "name": "Ollenya",
     "slug": "lamico-fraterno",
-    "version": "1.0.148",
+    "version": "1.0.149",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "koda",
@@ -13,7 +13,7 @@
       "supportsTablet": false,
       "usesAppleSignIn": true,
       "bundleIdentifier": "com.dangella.ollenya",
-      "buildNumber": "55",
+      "buildNumber": "56",
       "privacyManifests": {
         "NSPrivacyTracking": false,
         "NSPrivacyTrackingDomains": [],
@@ -87,7 +87,7 @@
     },
     "android": {
       "package": "com.dangella.ollenya",
-      "versionCode": 55,
+      "versionCode": 56,
       "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.RECORD_AUDIO",

@@ -69,7 +69,7 @@ const VOICE_CIELO_ID = "POuqf18evoXOKIqV2Px7";
 // Timeout d'inattività per il reset "torna all'inizio": 15s.
 const INACTIVITY_RESET_MS = 15_000;
 // Numero di scambi obbligatori nelle demo scrittura/voce (utente → Ollenya).
-const REQUIRED_EXCHANGES = 1;
+const REQUIRED_EXCHANGES = 2;
 const { width: SCREEN_W } = Dimensions.get("window");
 // v66.6 (Fabio 2026-06-16): dimensione eclissi allineata alla Home REALE.
 // Home usa Math.min(width * 0.78, 360) ma il wrapper flex + scale animation
@@ -85,21 +85,30 @@ const CHAT_AI_BG = "rgba(148,163,184,0.10)";
 const CHAT_AI_BORDER = "rgba(148,163,184,0.35)";
 const CHAT_AI_TEXT = "#E2E8F0";
 
-// ==== Fasi (state machine) ==================================================
+// ==== Fasi (state machine) v66.15 ===========================================
+// FLUSSO FINALE:
+//   step1_speak_intro   → Ollenya si presenta (silent, no scritta)
+//   step1_wait_mic      → attesa permesso mic
+//   step2_listen_name   → STT nome
+//   step2_confirm       → "Ciao [nome], piacere. Ti mostro come funziono." (silent)
+//   step3_scrim_write   → SPIEGA la scrittura (con scritta a schermo)
+//   step3_demo_write    → 2 scambi di chat scritta
+//   step5_scrim_la      → SPIEGA Lascia Andare (con scritta)
+//   step5_demo_la       → orb "buco nero" che assorbe
+//   step6_scrim_final   → "Questo è come funziono io... la voce è Premium." (scritta)
+//   done                → replace /paywall
 type Step =
-  | "step1_speak_intro"      // TTS "Ciao... Come ti chiami?"
-  | "step1_wait_mic"         // Attesa concessione microfono post-TTS
-  | "step2_listen_name"      // STT nome (10s timeout)
-  | "step2_confirm"          // TTS "Piacere... Voglio mostrarti come funziona"
-  | "step3_scrim_write"      // Scrim + "Quando vuoi, io sono qui." (TTS + testo)
-  | "step3_demo_write"       // TextInput, richiesti REQUIRED_EXCHANGES turni
-  | "step4_scrim_voice"      // Scrim + "Questa è la mia voce..." (TTS + testo)
-  | "step4_demo_voice"       // STT + risposta TTS, richiesti REQUIRED_EXCHANGES turni
-  | "step5_scrim_la"         // Scrim + testo lungo LA (TTS + testo)
-  | "step5_demo_la"          // Eclissi mic-reattivo, X per chiudere
-  | "step6_scrim_final"      // Scrim + "Perfetto, siamo arrivati..." (TTS + testo)
-  | "paused_by_inactivity"   // 15s senza input → orb idle, tap per riavviare
-  | "done";                  // Marker → replace /paywall
+  | "step1_speak_intro"
+  | "step1_wait_mic"
+  | "step2_listen_name"
+  | "step2_confirm"
+  | "step3_scrim_write"
+  | "step3_demo_write"
+  | "step5_scrim_la"
+  | "step5_demo_la"
+  | "step6_scrim_final"
+  | "paused_by_inactivity"
+  | "done";
 
 // ==== Audio session helpers ================================================
 async function configureAudioForPlayback(): Promise<void> {
@@ -529,9 +538,13 @@ export default function OnboardingV4() {
         }
       }, 900);
     }
+    // v66.15 (Fabio 2026-06-18): silent=true → NIENTE sottotitolo durante
+    // il dialogo diretto. Regola: quando Ollenya PARLA CON L'UTENTE
+    // (saluti, domande interattive) NON compare testo. Il testo compare
+    // SOLO durante gli scrim esplicativi (spiegazioni sul funzionamento).
     speak(text, () => {
       if (mountedRef.current) setStep("step2_listen_name");
-    });
+    }, { silent: true });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
@@ -581,17 +594,17 @@ export default function OnboardingV4() {
   }, [step]);
 
   // Step 2b: confirm speech
-  // v66.7 (Fabio 2026-06-16): "voglio mostrarti ciò che sono" — meno
-  // tecnico di "come funziono", più affettivo/identitario. Ollenya si
-  // presenta come presenza, non come feature-set.
+  // v66.15 (Fabio 2026-06-18): saluto con nome dell'utente. È dialogo
+  // diretto → silent:true (nessun sottotitolo). Poi va DIRETTAMENTE
+  // a step3_scrim_write (spiegazione scrittura).
   useEffect(() => {
     if (step !== "step2_confirm") return;
     const text = userName
-      ? `Ciao ${userName}, piacere. Voglio mostrarti ciò che sono.`
-      : "Piacere di conoscerti. Voglio mostrarti ciò che sono.";
+      ? `Ciao ${userName}, piacere. Ti mostro come funziono.`
+      : "Piacere di conoscerti. Ti mostro come funziono.";
     speak(text, () => {
       if (mountedRef.current) setStep("step3_scrim_write");
-    });
+    }, { silent: true });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
@@ -661,34 +674,25 @@ export default function OnboardingV4() {
     if (step === "step3_scrim_write") {
       scrimSpeakStep(
         "step3_scrim_write",
-        "Qui puoi scrivermi quando vuoi. La scrittura è sempre attiva, sempre gratuita — uno spazio che non si chiude mai. Facciamo una prova.",
+        "Qui puoi scrivermi quando vuoi. La scrittura è sempre attiva, sempre gratuita — uno spazio che non si chiude mai. Facciamo una prova insieme.",
         "step3_demo_write"
-      );
-    } else if (step === "step4_scrim_voice") {
-      scrimSpeakStep(
-        "step4_scrim_voice",
-        "Adesso ti presento la mia voce. Quando parliamo davvero, tu dici quello che senti e io ti rispondo — come una vera conversazione. Proviamo.",
-        "step4_demo_voice"
       );
     } else if (step === "step5_scrim_la") {
       scrimSpeakStep(
         "step5_scrim_la",
-        "E adesso ti mostro il mio cuore. Un luogo dove nessuno ti ascolta e nessuno risponde. Uno spazio tutto tuo, per svuotarti di quello che porti dentro. Nessun giudizio, nessuna eco. Quando finisci, l'eclissi si porta via ogni parola. Provalo.",
+        "E adesso ti mostro il mio cuore. Un luogo dove nessuno ti ascolta e nessuno risponde. Uno spazio tutto tuo, per svuotarti di quello che porti dentro. Nessun giudizio, nessuna eco. Mentre parli, l'eclissi assorbe ogni parola come un buco nero silenzioso. Provalo.",
         "step5_demo_la"
       );
     } else if (step === "step6_scrim_final") {
-      // v66.14: testo finale ridefinito come "upsell voce Premium".
-      // Ollenya (con eclissi + neon speaking) spiega che la voce che
-      // hai appena provato è la funzione Premium; per continuare a
-      // sentirla serve l'abbonamento. Dopo il TTS → done → /paywall.
+      // v66.15 (Fabio 2026-06-18): scrim finale — spiega il modello dell'app.
+      // NON è più upsell voce; è la sintesi di come funziona Ollenya:
+      // scrittura + Lascia Andare = gratuiti per sempre; voce = Premium.
       scrimSpeakStep(
         "step6_scrim_final",
-        "Hai appena provato la mia voce. Se vuoi continuare a parlarmi così, come abbiamo fatto adesso, serve la modalità Premium. La scrittura e questo spazio che ti ho appena mostrato restano sempre tuoi, gratis. Ora ti mostro come attivare la voce.",
+        "Ok, questo è come funziono io. Da adesso in poi, la scrittura e Lascia Andare saranno sempre con te, gratuiti. Se vorrai parlare anche con me e sentire la mia voce, quella è la versione Premium.",
         "done"
       );
     } else {
-      // Reset del guard quando siamo su uno step non-scrim (permette
-      // il riavvio dello stesso scrim in caso di reset per inattività).
       scrimStartedRef.current = {};
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -749,13 +753,13 @@ export default function OnboardingV4() {
       // resettiamo il timer d'inattività a 15s per il prossimo turno.
       if (newCount >= REQUIRED_EXCHANGES) {
         setWriteCompleted(true);
-        // v66.14 (Fabio 2026-06-18): FIX LOOP INFINITO alla fine intro.
-        // clearInactivityTimer PRIMA di setTimeout advance: il timer 15s
-        // dell'ultimo turno era ancora in vita, scadeva DURANTE l'attesa
-        // 3200ms → paused_by_inactivity → tap → restart dall'inizio.
+        // v66.14: FIX LOOP INFINITO — clearInactivityTimer prima del setTimeout.
         clearInactivityTimer();
+        // v66.15 (Fabio 2026-06-18): dopo il demo scrittura andiamo
+        // DIRETTAMENTE a Lascia Andare (step5_scrim_la). Il vecchio step4
+        // "prova voce" è stato rimosso completamente dal flow.
         timerRef.current = setTimeout(() => {
-          if (mountedRef.current) setStep("step4_scrim_voice");
+          if (mountedRef.current) setStep("step5_scrim_la");
         }, 2400);
       } else {
         resetInactivityTimer();
@@ -781,95 +785,11 @@ export default function OnboardingV4() {
   // riprova." e ri-ascolta senza consumare uno scambio. Dopo 3 exchange
   // completi, avanza a step5. Timer d'inattività: gestito da listen()
   // via il timer safety interno + globale (resetInactivityTimer).
-  const voiceStartedRef = useRef(false);
-  const [voiceExchangeCount, setVoiceExchangeCount] = useState(0);
-  // v66.9 (Fabio 2026-06-16): guard contro il loop infinito di retry.
-  // Se lo STT continua a non captare, dopo 3 tentativi consecutivi
-  // avanziamo comunque per non tenere l'utente bloccato.
-  const voiceRetryRef = useRef(0);
-  const VOICE_MAX_RETRIES = 3;
-
-  const runVoiceExchange = useCallback(() => {
-    if (!mountedRef.current) return;
-    resetInactivityTimer();
-    setOrbStatus("recording");
-    listen({ maxMs: INACTIVITY_RESET_MS }, async (transcript) => {
-      if (!mountedRef.current) return;
-      const text = transcript.trim();
-      if (!text) {
-        voiceRetryRef.current += 1;
-        console.log(`${TAG} step4 empty transcript retry=${voiceRetryRef.current}`);
-        if (voiceRetryRef.current >= VOICE_MAX_RETRIES) {
-          // v66.9: dopo 3 retry consecutivi, avanza a step5 con nota
-          console.warn(`${TAG} step4 max retries → skip to step5`);
-          speak("Andiamo avanti.", () => {
-            if (mountedRef.current) setStep("step5_scrim_la");
-          });
-          return;
-        }
-        speak("Non ho sentito, prova a ripetere.", () => {
-          if (mountedRef.current && step === "step4_demo_voice") runVoiceExchange();
-        });
-        return;
-      }
-      // Reset retry counter dopo un turno riuscito
-      voiceRetryRef.current = 0;
-      try {
-        const resp = await api.converse(text, undefined, { is_voice_turn: true, demo_mode: true });
-        const aiText =
-          (resp?.ai_entry as any)?.text ||
-          (resp?.ai_entry as any)?.text_clean ||
-          "";
-        if (!aiText || !mountedRef.current) {
-          speak("Ho capito. Vai avanti.", () => {
-            if (mountedRef.current && step === "step4_demo_voice") runVoiceExchange();
-          });
-          return;
-        }
-        speak(aiText, () => {
-          if (!mountedRef.current) return;
-          setVoiceExchangeCount((prev) => {
-            const nextCount = prev + 1;
-            if (nextCount >= REQUIRED_EXCHANGES) {
-              // v66.14: clearInactivityTimer per evitare loop paused→step1.
-              clearInactivityTimer();
-              setTimeout(() => {
-                if (mountedRef.current) setStep("step5_scrim_la");
-              }, 1200);
-            } else {
-              setTimeout(() => {
-                if (mountedRef.current && step === "step4_demo_voice") runVoiceExchange();
-              }, 600);
-            }
-            return nextCount;
-          });
-        });
-      } catch (e) {
-        console.warn(`${TAG} step4 converse failed:`, e);
-        if (mountedRef.current) {
-          speak("Un momento. Riprova.", () => {
-            if (mountedRef.current && step === "step4_demo_voice") runVoiceExchange();
-          });
-        }
-      }
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listen, speak, resetInactivityTimer, step]);
-
-  useEffect(() => {
-    if (step !== "step4_demo_voice") { voiceStartedRef.current = false; return; }
-    if (voiceStartedRef.current) return;
-    voiceStartedRef.current = true;
-    setSubtitle(null);
-    setVoiceExchangeCount(0);
-    voiceRetryRef.current = 0;
-    // v66.14: Ollenya APRE con una domanda parlata. Solo dopo che ha finito
-    // di parlare, parte listen(). Così l'utente capisce cosa deve fare.
-    speak("Dimmi una cosa: come ti senti in questo momento?", () => {
-      if (mountedRef.current && step === "step4_demo_voice") runVoiceExchange();
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step]);
+  // v66.15 (Fabio 2026-06-18): STEP 4 VOICE DEMO RIMOSSO COMPLETAMENTE.
+  // Il flusso ora è: name → scrim_write → demo_write → scrim_la → demo_la
+  // → scrim_final → paywall. Nessuna "prova voce" separata: la voce di
+  // Ollenya è già percepita durante gli scrim esplicativi + il saluto
+  // con il nome. Se serve, il ripristino è nel git history al tag v66.14.
 
   // Step 5 LA demo — usa il pattern REALE di Lascia Andare (v66.4, bug 6):
   // EclipseOrb con dbBoost calcolato dal metering, così il glow reagisce
@@ -946,8 +866,6 @@ export default function OnboardingV4() {
     step === "step2_confirm" ||
     step === "step3_scrim_write" ||
     step === "step3_demo_write" ||
-    step === "step4_scrim_voice" ||
-    step === "step4_demo_voice" ||
     step === "step5_scrim_la" ||
     step === "step6_scrim_final" ||
     step === "paused_by_inactivity";
@@ -958,13 +876,11 @@ export default function OnboardingV4() {
   const currentScrimText = useMemo(() => {
     switch (step) {
       case "step3_scrim_write":
-        return "Qui puoi scrivermi quando vuoi.\n\nLa scrittura è sempre attiva, sempre gratuita — uno spazio che non si chiude mai.\n\nFacciamo una prova.";
-      case "step4_scrim_voice":
-        return "Adesso ti presento la mia voce.\n\nQuando parliamo davvero, tu dici quello che senti e io ti rispondo — come una vera conversazione.\n\nProviamo.";
+        return "Qui puoi scrivermi quando vuoi.\n\nLa scrittura è sempre attiva, sempre gratuita — uno spazio che non si chiude mai.\n\nFacciamo una prova insieme.";
       case "step5_scrim_la":
-        return "E adesso ti mostro il mio cuore.\n\nUn luogo dove nessuno ti ascolta e nessuno risponde. Uno spazio tutto tuo, per svuotarti di quello che porti dentro.\n\nNessun giudizio, nessuna eco. Quando finisci, l'eclissi si porta via ogni parola.\n\nProvalo.";
+        return "E adesso ti mostro il mio cuore.\n\nUn luogo dove nessuno ti ascolta e nessuno risponde. Uno spazio tutto tuo, per svuotarti di quello che porti dentro.\n\nNessun giudizio, nessuna eco. Mentre parli, l'eclissi assorbe ogni parola come un buco nero silenzioso.\n\nProvalo.";
       case "step6_scrim_final":
-        return "Hai appena provato la mia voce.\n\nSe vuoi continuare a parlarmi così, serve la modalità Premium.\n\nLa scrittura e questo spazio restano sempre tuoi, gratis.\n\nOra ti mostro come attivare la voce.";
+        return "Ok, questo è come funziono io.\n\nDa adesso in poi, la scrittura e Lascia Andare saranno sempre con te, gratuiti.\n\nSe vorrai parlare anche con me e sentire la mia voce, quella è la versione Premium.";
       default: return null;
     }
   }, [step]);
