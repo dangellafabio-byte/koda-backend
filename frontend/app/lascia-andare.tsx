@@ -47,6 +47,10 @@ import {
 import * as FileSystem from "expo-file-system/legacy";
 import * as SecureStore from "expo-secure-store";
 import EclipseOrb, { OrbStatus } from "../components/EclipseOrb";
+import LasciaAndareOrb from "../components/LasciaAndareOrb";
+// EclipseOrb non è più renderizzato direttamente (sostituito da
+// LasciaAndareOrb condiviso, v67). Import mantenuto per il tipo OrbStatus.
+void EclipseOrb;
 import {
   playOpenPhrase,
   playClosePhrase,
@@ -143,6 +147,18 @@ export default function LasciaAndareScreen() {
   const [meterDb, setMeterDb] = useState<number>(-100);
   const [ready, setReady] = useState(false);
   const [permError, setPermError] = useState<string | null>(null);
+  // === v67 (Fabio 2026-06-19) — IMPLOSIONE BUCO NERO CONDIVISA =============
+  // Quando true, il componente `LasciaAndareOrb` avvia la sua animazione
+  // interna di implosione (scale + opacity → 0 in 800ms). A fine anim
+  // fira `onImplodeComplete` → eseguiamo la pendingImplodeAction (teardown +
+  // navigazione). Usato sia da handleExit che da triggerHeartReveal.
+  const [laProdImploding, setLaProdImploding] = useState<boolean>(false);
+  const pendingImplodeActionRef = useRef<(() => void) | null>(null);
+  const onImplodeComplete = useCallback(() => {
+    const action = pendingImplodeActionRef.current;
+    pendingImplodeActionRef.current = null;
+    if (action) action();
+  }, []);
   // === GATE INTRO V3 (Fabio 2026-08-23) ==================================
   // Se `intro_v3_completed_at` non è in SecureStore → l'utente non ha
   // MAI visto la sequenza narrativa → non deve atterrare qui, va inviato
@@ -396,6 +412,10 @@ export default function LasciaAndareScreen() {
   const HARD_TIMEOUT_MS = 90_000;
 
   // Naviga al reveal della voce (chiamata da X o dal silence-watcher)
+  // === v67 (Fabio 2026-06-19) — usa implosione condivisa =====================
+  // Prima: fade-out morbido (orbOpacity+scale → 0) in 500ms.
+  // Adesso: implosione buco nero via LasciaAndareOrb (800ms). Coerente con
+  // l'onboarding intro e con la richiesta esplicita "effetto buco nero".
   const triggerHeartReveal = useCallback(() => {
     if (revealTriggeredRef.current) return;
     revealTriggeredRef.current = true;
@@ -404,22 +424,16 @@ export default function LasciaAndareScreen() {
       clearInterval(revealWatcherRef.current);
       revealWatcherRef.current = null;
     }
-    // Fade-out orb morbido → naviga
     exitingRef.current = true;
-    Animated.parallel([
-      Animated.timing(orbOpacity, {
-        toValue: 0,
-        duration: 500,
-        useNativeDriver: true,
-      }),
-      Animated.timing(orbEntryScale, {
-        toValue: 0.3,
-        duration: 500,
-        easing: Easing.in(Easing.cubic),
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      // Teardown recorder prima della navigazione (evita fuga microfono)
+    // Fade-out hint text in parallelo all'implosione (l'orb è gestito dal
+    // componente condiviso via `laProdImploding`).
+    Animated.timing(hintOpacity, {
+      toValue: 0,
+      duration: 500,
+      useNativeDriver: true,
+    }).start();
+    // Registra l'azione post-implosione, poi trigga l'implosione.
+    pendingImplodeActionRef.current = () => {
       teardown().finally(() => {
         try {
           router.replace("/heart-voice-reveal");
@@ -427,9 +441,10 @@ export default function LasciaAndareScreen() {
           console.warn("[OLLENYA_LA_REVEAL] navigation failed:", e);
         }
       });
-    });
+    };
+    setLaProdImploding(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orbOpacity, orbEntryScale, router]);
+  }, [hintOpacity, router]);
 
   // === TEARDOWN — chiamato all'uscita ================================
   // 1) ferma il polling
@@ -1015,31 +1030,22 @@ export default function LasciaAndareScreen() {
       console.warn("[LasciaAndare] close phrase failed:", e);
     }
 
-    // === ANIMAZIONE DI USCITA (1.2s) ==================================
-    // L'orb si rimpicciolisce lentamente verso il centro e sparisce nel
-    // nero. Comunica visivamente che quello che è stato detto sparisce
-    // davvero. Poi navighiamo indietro.
+    // === ANIMAZIONE DI USCITA — v67 (Fabio 2026-06-19) =====================
+    // Prima: fade-out orbEntryScale+orbOpacity → 0 in 1.2s.
+    // Adesso: implosione "buco nero" delegata al componente condiviso
+    // LasciaAndareOrb (scale + opacity → 0 in 800ms, easing accelerato).
+    // Il hintOpacity va giù in parallelo. Il routing/teardown si esegue
+    // nella callback `onImplodeComplete` — qui usiamo una Promise per
+    // aspettare l'animazione senza duplicare il ramo route.
     await new Promise<void>((resolve) => {
-      Animated.parallel([
-        Animated.timing(orbEntryScale, {
-          toValue: 0,
-          duration: EXIT_DURATION_MS,
-          easing: Easing.in(Easing.cubic),
-          useNativeDriver: true,
-        }),
-        Animated.timing(orbOpacity, {
-          toValue: 0,
-          duration: EXIT_DURATION_MS,
-          easing: Easing.in(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.timing(hintOpacity, {
-          toValue: 0,
-          duration: 500,
-          easing: Easing.in(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ]).start(() => resolve());
+      Animated.timing(hintOpacity, {
+        toValue: 0,
+        duration: 500,
+        easing: Easing.in(Easing.quad),
+        useNativeDriver: true,
+      }).start();
+      pendingImplodeActionRef.current = () => resolve();
+      setLaProdImploding(true);
     });
 
     // Teardown risorse (file tmp, audio session) DOPO che l'animazione
@@ -1357,63 +1363,31 @@ export default function LasciaAndareScreen() {
         </TouchableOpacity>
       )}
 
-      {/* Orb centrale.
-          - "idle" → respiro lento, palette calda
-          - "recording" → tiffany freddo, luce che si "raffredda"
-          Nessun testo intorno: silenzio visivo per silenzio uditivo.
-
-          Transform combinato: entryScale × breathScale × voiceScale.
-          - entryScale (0.3→1.0): animazione d'ingresso / d'uscita
-          - breathScale (1.0↔1.05): respiro base continuo
-          - voiceScale (1.0↔1.12): pulsazione con la voce dell'utente */}
+      {/* Orb centrale — v67 (Fabio 2026-06-19): COMPONENTE CONDIVISO.
+          Usiamo `LasciaAndareOrb` (stesso componente dell'onboarding intro).
+          Comportamento (spec Fabio 2026-06-19):
+            - Frequenza reattiva alla voce in tempo reale (come Speaking).
+            - Grandezza cresce cumulativamente sul tempo di parlato sopra
+              soglia (ratchet, mai retrocede) fino a ~metà schermo.
+            - Reset a ogni apertura (mount fresh → accumulatore parte da 1).
+            - Chiusura via `laProdImploding=true` → buco nero 800ms → callback.
+          Il wrapper esterno gestisce SOLO l'entry animation (orbEntryScale
+          0.3→1.0 + orbOpacity 0→1 al mount, in 2.5s). L'exit animation è
+          ora delegata alla implosione interna di LasciaAndareOrb. */}
       <View style={styles.center}>
         <Animated.View
           style={{
-            // === PUNTO 1 D5+D6 — opacity finale = entry × voiceGlow ========
-            // orbOpacity gestisce il fade-in di ingresso e il fade-out di
-            // uscita (0→1 all'entry, 1→0 all'exit). voiceGlow modula la
-            // presenza dinamicamente in funzione del dB (0.65 silenzio →
-            // 1.00 voce forte). La moltiplicazione è coerente sia durante
-            // le transizioni sia a regime.
-            opacity: Animated.multiply(orbOpacity, voiceGlow),
-            transform: [
-              {
-                scale: Animated.multiply(
-                  orbEntryScale,
-                  Animated.multiply(breathScale, voiceScale)
-                ),
-              },
-            ],
+            opacity: orbOpacity,
+            transform: [{ scale: orbEntryScale }],
           }}
         >
-          <EclipseOrb
-            status={status}
-            size={Math.min(Dimensions.get("window").width * 0.62, 240)}
+          <LasciaAndareOrb
             meterDb={meterDb}
-            meterThreshold={SPEECH_DB}
-            /* === LASCIA ANDARE GLOW (Fabio 2026-08-22) ================
-             * Boost normalizzato (0..1) derivato dal dB microfonico:
-             *   dB clamp   [-60 … -20]   → boost [0 … 1]
-             * Passa questo direttamente dentro EclipseOrb, che a sua volta
-             * modula:
-             *   - opacity dei layer aurora/rim/filamenti (0.45 → 1.0)
-             *   - estensione outward dei filamenti (aurora "esce" di più)
-             * Questo è ciò che rende visibile il glow: prima moltiplicavamo
-             * l'opacity SOLO sul wrapper esterno (voiceGlow), ma i layer
-             * interni erano fissi a 0.45 → il range percettivo era 0.29→0.45
-             * (impercettibile). Ora il boost è APPLICATO DENTRO l'orb, sui
-             * gradienti SVG reali → range percettivo 0.29→1.0 (chiaro). */
-            dbBoost={Math.max(
-              0,
-              Math.min(1, (Math.max(-60, Math.min(-20, meterDb)) + 60) / 40)
-            )}
+            imploding={laProdImploding}
+            onImplodeComplete={onImplodeComplete}
+            baseSize={Math.min(Dimensions.get("window").width * 0.62, 240)}
+            speechThresholdDb={SPEECH_DB}
           />
-          {/* === FIX ECLISSI CENTRATA (Fabio 2026-08-24) =========================
-              Spacer 34px RIMOSSO. Prima l'orb era shiftato verso l'alto di ~17px
-              (mezzo spacer) rispetto al centro del flex-container per compensare
-              il layout home. Adesso Fabio vuole orb ESATTAMENTE al centro dello
-              schermo → l'unico figlio del flex-center è l'Animated.View con
-              l'orb → orb al centro geometrico H/2. */}
         </Animated.View>
       </View>
 

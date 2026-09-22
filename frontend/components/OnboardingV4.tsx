@@ -60,6 +60,7 @@ import {
 import EclipseOrb from "./EclipseOrb";
 import type { OrbStatus } from "./EclipseOrb";
 import NeonBorder from "./NeonBorder";
+import LasciaAndareOrb from "./LasciaAndareOrb";
 import { api, API_BASE } from "../lib/api";
 import { getAuthToken } from "../lib/authToken";
 import { ensureSpeechPermission } from "../lib/speechPermission";
@@ -903,42 +904,33 @@ export default function OnboardingV4() {
   // Ollenya è già percepita durante gli scrim esplicativi + il saluto
   // con il nome. Se serve, il ripristino è nel git history al tag v66.14.
 
-  // Step 5 LA demo — usa il pattern REALE di Lascia Andare (v66.4, bug 6):
-  // EclipseOrb con dbBoost calcolato dal metering, così il glow reagisce
-  // dinamicamente alla voce come nella LA principale. dB range utile
-  // [-60, -20] mappato in [0, 1]. Il glow è champagne come nella LA reale.
+  // Step 5 LA demo — v67 (Fabio 2026-06-19): usa componente CONDIVISO
+  // `LasciaAndareOrb` (stesso identico visual della LA produzione).
+  //   - Frequenza: pulsa in tempo reale sulla voce (come Speaking).
+  //   - Grandezza: cresce cumulativamente sul tempo di parlato sopra soglia.
+  //   - Chiusura: implosione buco nero via `imploding=true` → callback.
+  // Il caller (questo componente) ha solo il compito di:
+  //   - alimentare `meterDb` dal proprio recorder expo-audio,
+  //   - attivare `imploding` quando l'utente preme X,
+  //   - navigare al prossimo step nella callback `onImplodeComplete`.
   const laStartedRef = useRef(false);
   const [laMeterDb, setLaMeterDb] = useState(-60);
-  // v66.16 (Fabio 2026-06-18): NUOVO EFFETTO "BUCO NERO CHAMPAGNE".
-  //   - laGlowLevel: 0..1 MONOTONO CRESCENTE. Ogni volta che l'utente
-  //     parla forte, l'accumulo cresce (ratchet, mai scende) finché non
-  //     satura a 1. Simula il buco nero che si "riempie" delle parole.
-  //   - laImploding: true SOLO durante l'animazione di uscita. Blocca
-  //     il ratchet e la scale collassa da regime attuale → 0 in 800ms.
-  //   - laVisualScale: scala visiva del glow (implosione).
-  const [laGlowLevel, setLaGlowLevel] = useState(0);
   const [laImploding, setLaImploding] = useState(false);
-  const laVisualScale = useRef(new Animated.Value(1)).current;
-  const laGlowLevelRef = useRef(0);
   const laRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const laMeterTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     if (step !== "step5_demo_la") {
       laStartedRef.current = false;
       // reset stato al termine
-      laGlowLevelRef.current = 0;
-      setLaGlowLevel(0);
       setLaImploding(false);
-      laVisualScale.setValue(1);
+      setLaMeterDb(-60);
       return;
     }
     if (laStartedRef.current) return;
     laStartedRef.current = true;
     setSubtitle(null);
-    laGlowLevelRef.current = 0;
-    setLaGlowLevel(0);
     setLaImploding(false);
-    laVisualScale.setValue(1);
+    setLaMeterDb(-60);
     (async () => {
       try {
         const perm = await AudioModule.requestRecordingPermissionsAsync();
@@ -949,29 +941,15 @@ export default function OnboardingV4() {
         await configureAudioForRecording();
         await laRecorder.prepareToRecordAsync();
         laRecorder.record();
-        // Loop di metering 100ms — accumula il glow monotonicamente.
-        // Formula ratchet: se volume istantaneo > threshold, aggiungi
-        // delta proporzionale al dB clampato in [0, 1] al livello corrente.
-        // Delta massimo per tick: ~0.015 → per saturare (1.0) servono ~7s
-        // di parlato continuo forte. Silenzio → nessun avanzamento (non
-        // decresce mai).
+        // Loop di metering 100ms — alimenta il visual LasciaAndareOrb.
+        // Il ratchet di crescita e la pulsazione sono gestiti internamente
+        // dal componente condiviso: qui trasmettiamo solo il dB grezzo.
         laMeterTimerRef.current = setInterval(() => {
           try {
             const status = laRecorder.getStatus();
             const db = (status as any)?.metering as number | undefined;
             if (typeof db !== "number") return;
             setLaMeterDb(db);
-            // Contributo al glow: (db in [-55,-20]) → normalized [0,1]
-            const norm = Math.max(0, Math.min(1, (db + 55) / 35));
-            // Delta cresce con norm^1.4 (soft-knee: sussurri contano poco)
-            const delta = Math.pow(norm, 1.4) * 0.018;
-            if (delta > 0) {
-              const next = Math.min(1, laGlowLevelRef.current + delta);
-              if (next !== laGlowLevelRef.current) {
-                laGlowLevelRef.current = next;
-                setLaGlowLevel(next);
-              }
-            }
           } catch {}
         }, 100);
       } catch (e) {
@@ -988,21 +966,11 @@ export default function OnboardingV4() {
   const closeLADemo = useCallback(() => {
     if (laMeterTimerRef.current) { clearInterval(laMeterTimerRef.current); laMeterTimerRef.current = null; }
     try { laRecorder.stop(); } catch {}
-    // v66.16: ANIMAZIONE DI IMPLOSIONE.
-    // Il glow attuale (a qualsiasi livello sia arrivato) collassa verso
-    // il centro dell'eclissi in 800ms con easing forte (accelera nella
-    // seconda metà) → sparisce in un puntino. Solo DOPO l'animazione
-    // avanziamo allo scrim finale.
+    // v67: implosione delegata al componente condiviso. Il flag `imploding`
+    // triggera l'animazione buco nero (800ms); a fine anim il callback
+    // avanza allo scrim finale.
     setLaImploding(true);
-    Animated.timing(laVisualScale, {
-      toValue: 0,
-      duration: 800,
-      easing: Easing.bezier(0.7, 0, 0.3, 1),
-      useNativeDriver: true,
-    }).start(() => {
-      setStep("step6_scrim_final");
-    });
-  }, [laRecorder, laVisualScale]);
+  }, [laRecorder]);
 
   // Step 6: fine → mark completed + push paywall
   useEffect(() => {
@@ -1197,15 +1165,16 @@ export default function OnboardingV4() {
           </KeyboardAvoidingView>
         )}
 
-        {/* Step 5 demo LA — v66.16 (Fabio 2026-06-18): BUCO NERO CHAMPAGNE.
-            REGOLE:
-            - NIENTE neon border (l'entità in LA è "sotterranea", non
-              comunica; solo l'orb assorbe).
-            - Il glow parte a 0 e cresce MONOTONICAMENTE quando l'utente
-              parla (ratchet, mai retrocede). Volume alto e sostenuto →
-              satura a 1 (glow ampio, presente).
-            - Alla chiusura (X): tutto il glow attuale IMPLODE in un
-              puntino via scale 1→0 in 800ms con easing accelerato. */}
+        {/* Step 5 demo LA — v67 (Fabio 2026-06-19): COMPONENTE CONDIVISO.
+            L'orb qui è lo stesso identico usato in /lascia-andare.tsx
+            (produzione). Regole applicate dal componente `LasciaAndareOrb`:
+            - Frequenza reattiva alla voce in tempo reale (come Speaking).
+            - Grandezza cresce cumulativamente sul tempo di parlato
+              (ratchet, mai retrocede) fino a un cap ~metà schermo.
+            - Alla X: implosione "buco nero" (scale + opacity → 0 in 800ms).
+            - Reset a ogni apertura (mount fresh → accumulatore parte da 1.0).
+            NIENTE neon border qui: in Lascia Andare l'entità è "sotterranea",
+            solo l'orb assorbe. */}
         {step === "step5_demo_la" && (
           <View style={styles.laDemoWrap}>
             <TouchableOpacity
@@ -1218,25 +1187,14 @@ export default function OnboardingV4() {
             >
               <Ionicons name="close" size={28} color="rgba(245,230,204,0.75)" />
             </TouchableOpacity>
-            <Animated.View
-              style={[
-                styles.laOrbCenter,
-                {
-                  transform: [{ scale: laVisualScale }],
-                  opacity: laVisualScale,
-                },
-              ]}
-            >
-              <EclipseOrb
-                status="recording"
-                size={ORB_SIZE}
+            <View style={styles.laOrbCenter}>
+              <LasciaAndareOrb
                 meterDb={laMeterDb}
-                meterThreshold={-40}
-                // v66.16: dbBoost = laGlowLevel (ratchet monotono).
-                // Silenzio → 0 (glow assente). Parla forte per ~7s → 1.
-                dbBoost={laGlowLevel}
+                imploding={laImploding}
+                onImplodeComplete={() => setStep("step6_scrim_final")}
+                baseSize={ORB_SIZE}
               />
-            </Animated.View>
+            </View>
             {!laImploding && (
               <View style={styles.laHintWrap} pointerEvents="none">
                 <Text style={styles.laHintText}>{"parla — l'eclissi assorbe ogni tua parola"}</Text>

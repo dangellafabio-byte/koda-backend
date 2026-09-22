@@ -1261,3 +1261,22 @@ Seed 30 eventi (20 turbo 10s+5s user, 10 flash 7s+4s user) → endpoint ritorna:
 ### Verifica
 - Backend testing_agent iter 22: 6/6 pass. Endpoint intro-premium/{state,mark-seen}, converse, freemium/status contract intatti.
 - QA on-device richiesta per Intro V3 (mic-gated).
+
+
+---
+
+## 2026-06-19 — v67.0 — LasciaAndareOrb condiviso
+
+### Interventi
+- **Nuovo componente `components/LasciaAndareOrb.tsx`** (visuale condiviso Intro + produzione).
+  - Frequenza: pulsazione reattiva al dB istantaneo (attack 180ms / release 500ms, come Speaking).
+  - Grandezza: crescita cumulativa ratchet sul tempo di parlato sopra soglia (default -35 dB), cap ~metà schermo (default `min(1.8, screenW*0.5/baseSize + 1.0)`), rate 0.05 scale/s (~10s per saturare).
+  - Glow: opacity 0.65 → 1.00 modulata dal dB (stessa curva).
+  - Reset a ogni apertura (state locale al mount).
+  - Chiusura: `imploding=true` → animazione buco nero 800ms (scale + opacity → 0, easing bezier accelerato) → callback `onImplodeComplete`.
+- **`OnboardingV4.tsx` step5_demo_la**: sostituito il ratchet interno + Animated.View custom con `<LasciaAndareOrb>`. Rimosse variabili `laGlowLevel`, `laVisualScale`, `laGlowLevelRef`.
+- **`app/lascia-andare.tsx` produzione**: sostituito `<EclipseOrb>` inline (+ Animated.multiply su voiceScale/breathScale/voiceGlow) con `<LasciaAndareOrb>`. Nuovo state `laProdImploding` + `pendingImplodeActionRef` per gestire teardown post-implosione. `triggerHeartReveal` e `handleExit` ora triggerano l'implosione condivisa invece del fade-out custom.
+
+### Verifica
+- Lint: warning non-bloccanti (import inutilizzati collaterali al refactor).
+- QA on-device richiesta: STT + metering mic non funzionano in Expo Go web preview. Il glow reattivo + crescita cumulativa + implosione sono testabili SOLO su build EAS (iOS/Android real device).
