@@ -13,7 +13,7 @@
       "supportsTablet": false,
       "usesAppleSignIn": true,
       "bundleIdentifier": "com.dangella.ollenya",
-      "buildNumber": "58",
+      "buildNumber": "59",
       "privacyManifests": {
         "NSPrivacyTracking": false,
         "NSPrivacyTrackingDomains": [],
@@ -87,7 +87,7 @@
     },
     "android": {
       "package": "com.dangella.ollenya",
-      "versionCode": 58,
+      "versionCode": 59,
       "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.RECORD_AUDIO",

@@ -27,7 +27,7 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { Animated, Easing, View, StyleSheet, Dimensions } from "react-native";
+import { Animated, Easing, View, StyleSheet, Dimensions, Text } from "react-native";
 import EclipseOrb from "./EclipseOrb";
 
 const { width: SCREEN_W } = Dimensions.get("window");
@@ -44,13 +44,19 @@ const DEFAULT_MAX_SCALE = Math.max(
   Math.min(1.8, (SCREEN_W * 0.5) / DEFAULT_BASE_SIZE + 1.0)
 );
 // Rate di crescita (scale-units al secondo di voce sopra soglia):
-// (maxScale - 1) / rate = tempo per saturare. Con rate=0.05 e maxScale=1.5
-// servono ~10s di parlato continuo per raggiungere il cap. Coerente con
-// "piano piano diventa sempre più grande" (Fabio).
-const DEFAULT_GROWTH_PER_SECOND = 0.05;
+// v67.1 (2026-06-24): bumped 0.05 → 0.15. Il valore precedente rendeva
+// gli incrementi impercettibili nei primi 3-5s di parlato; 0.15/s significa
+// che in ~3s di voce sostenuta l'orb raggiunge scale 1.45 (visibilmente
+// più grande), e in ~5s satura al cap. Coerente con "piano piano diventa
+// sempre più grande" ma percettibile subito.
+const DEFAULT_GROWTH_PER_SECOND = 0.15;
 // Soglia sopra cui il dB conta come "parlato reale" (ignora rumore ambientale).
-// Allineata a SPEECH_DB di /lascia-andare.tsx.
-const DEFAULT_SPEECH_THRESHOLD_DB = -35;
+// v67.1 (2026-06-24): bumped da -35 a -42. iOS con `unprocessed` audioSource
+// spesso restituisce valori conservativi anche durante il parlato normale
+// (voce a distanza normale dal mic → -38..-32 dB). Soglia a -42 include
+// anche voce sussurrata / a distanza, escludendo comunque il silenzio
+// ambientale tipico (< -50 dB) e il fruscio del mic (< -55 dB).
+const DEFAULT_SPEECH_THRESHOLD_DB = -42;
 // Range dB usato per la mappatura pulse/glow.
 const DB_CLAMP_MIN = -60;
 const DB_CLAMP_MAX = -20;
@@ -65,7 +71,13 @@ const GLOW_MAX = 1.0;
 const ATTACK_MS = 180;
 const RELEASE_MS = 500;
 // Implosione buco nero.
-const IMPLODE_DURATION_MS = 800;
+// v67.1 (2026-06-24): durata bumpata 800→1200ms + easing cambiato da
+// bezier(0.7,0,0.3,1) (s-curve) a Easing.in(Easing.expo) (slow start,
+// esplosiva accelerazione a fine). L'effetto "buco nero" ha bisogno di
+// un collasso ACCELERATO — non simmetrico. Con expo-in, i primi 800ms
+// l'orb rimpicciolisce lentamente, poi negli ultimi 400ms crolla di
+// colpo verso il centro → percezione di "gravità che vince".
+const IMPLODE_DURATION_MS = 1200;
 // Tick del ratchet di crescita. 100ms = 10 tick/sec, allineato al polling
 // tipico expo-audio metering.
 const RATCHET_TICK_MS = 100;
@@ -87,6 +99,10 @@ export interface LasciaAndareOrbProps {
   speechThresholdDb?: number;
   /** Wrapping style opzionale per posizionamento esterno. */
   style?: any;
+  /** Se true, mostra un HUD di debug con meterDb + growth + imploding.
+   *  Usato solo nelle build diagnostiche per verificare che il componente
+   *  riceva davvero il metering e la crescita si accumuli. */
+  debug?: boolean;
 }
 
 export default function LasciaAndareOrb({
@@ -98,6 +114,7 @@ export default function LasciaAndareOrb({
   growthPerSecond = DEFAULT_GROWTH_PER_SECOND,
   speechThresholdDb = DEFAULT_SPEECH_THRESHOLD_DB,
   style,
+  debug = false,
 }: LasciaAndareOrbProps) {
   // === ANIMATED VALUES ======================================================
   // pulse: oscillazione frequenza (reattiva al dB istantaneo)
@@ -114,7 +131,7 @@ export default function LasciaAndareOrb({
   // Il valore numerico corrente è tenuto in ref per evitare stale closures
   // dentro il setInterval.
   const growthValueRef = useRef<number>(1.0);
-  const [, setGrowthState] = useState<number>(1.0);
+  const [growthState, setGrowthState] = useState<number>(1.0);
   // Freeze: se in implosione, il ratchet si ferma.
   const frozenRef = useRef<boolean>(false);
   // Ref sempre aggiornata con l'ultimo meterDb (letta dentro setInterval per
@@ -198,15 +215,17 @@ export default function LasciaAndareOrb({
       Animated.timing(implodeAnim, {
         toValue: 0,
         duration: IMPLODE_DURATION_MS,
-        // Curva accelerata: prima metà lenta, seconda metà veloce → percezione
-        // "collasso improvviso nel centro" tipico di un buco nero.
-        easing: Easing.bezier(0.7, 0, 0.3, 1),
+        // v67.1: Easing.in(Easing.expo) — inizio lento, collasso esplosivo
+        // negli ultimi ~30% dell'anim. Percezione "buco nero che vince
+        // la gravità" invece della simmetria del bezier precedente.
+        easing: Easing.in(Easing.exp),
         useNativeDriver: true,
       }),
       Animated.timing(implodeOpacityAnim, {
         toValue: 0,
         duration: IMPLODE_DURATION_MS,
-        easing: Easing.in(Easing.cubic),
+        // Opacity accelera anche lei ma con curva meno estrema
+        easing: Easing.in(Easing.quad),
         useNativeDriver: true,
       }),
     ]).start(() => {
@@ -257,6 +276,35 @@ export default function LasciaAndareOrb({
           dbBoost={dbBoost}
         />
       </Animated.View>
+      {/* === HUD DIAGNOSTICO (debug=true, temporaneo) ==========================
+          Overlay inline che mostra in real-time i valori chiave del componente
+          v67. Se il ratchet funziona, `growth` deve incrementare mentre parli
+          (da 1.00 verso maxScale). Se `meterDb` resta a -100 → il caller non
+          sta passando il metering. Se `meterDb` è alto ma `growth` non sale →
+          il ratchet è rotto. */}
+      {debug && (
+        <View
+          style={{
+            position: "absolute",
+            bottom: -80,
+            left: -140,
+            right: -140,
+            alignItems: "center",
+            paddingVertical: 6,
+            paddingHorizontal: 10,
+            backgroundColor: "rgba(0,0,0,0.75)",
+            borderRadius: 8,
+          }}
+          pointerEvents="none"
+        >
+          <Text style={{ color: "#00F5D4", fontSize: 11, fontFamily: "monospace" }}>
+            {`meterDb=${meterDb.toFixed(1)}  thr=${speechThresholdDb}  active=${meterDb > speechThresholdDb ? "Y" : "N"}`}
+          </Text>
+          <Text style={{ color: "#F5E6CC", fontSize: 11, fontFamily: "monospace" }}>
+            {`growth=${growthState.toFixed(3)}  max=${maxScale.toFixed(2)}  imploding=${imploding ? "Y" : "N"}`}
+          </Text>
+        </View>
+      )}
     </View>
   );
 }

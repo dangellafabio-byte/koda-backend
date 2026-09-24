@@ -1367,7 +1367,7 @@ export default function LasciaAndareScreen() {
             letterSpacing: 0.5,
           }}
         >
-          BUILD 58 · v67 LasciaAndareOrb condiviso · 2026-06-24
+          BUILD 59 · v67.1 growth+implode tuned · HUD debug ON
         </Text>
       </View>
       {/* Uscita — pulsante discreto in alto a sinistra.
@@ -1418,7 +1418,7 @@ export default function LasciaAndareScreen() {
             imploding={laProdImploding}
             onImplodeComplete={onImplodeComplete}
             baseSize={Math.min(Dimensions.get("window").width * 0.62, 240)}
-            speechThresholdDb={SPEECH_DB}
+            debug={true}
           />
         </Animated.View>
       </View>

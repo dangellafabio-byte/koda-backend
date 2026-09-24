@@ -1049,7 +1049,7 @@ export default function OnboardingV4() {
             letterSpacing: 0.5,
           }}
         >
-          BUILD 58 · v67 LasciaAndareOrb condiviso · 2026-06-24
+          BUILD 59 · v67.1 growth+implode tuned · HUD debug ON
         </Text>
       </View>
       {/* v66.13 (Fabio 2026-06-18): Neon border SEMPRE presente durante
@@ -1221,6 +1221,7 @@ export default function OnboardingV4() {
                 imploding={laImploding}
                 onImplodeComplete={() => setStep("step6_scrim_final")}
                 baseSize={ORB_SIZE}
+                debug={true}
               />
             </View>
             {!laImploding && (
