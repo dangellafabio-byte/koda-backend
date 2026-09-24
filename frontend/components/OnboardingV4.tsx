@@ -1024,6 +1024,34 @@ export default function OnboardingV4() {
   return (
     <Animated.View style={[styles.root, { opacity: rootOpacity }]}>
       <StatusBar barStyle="light-content" backgroundColor={APP_BG} />
+      {/* === BANNER DIAGNOSTICO TEMPORANEO BUILD 58 (2026-06-24) ===============
+          Marker visibile inequivocabile per verificare se la nuova build EAS
+          ha effettivamente incluso il commit v67. Rimuovere dopo il test. */}
+      <View
+        style={{
+          position: "absolute",
+          top: insets.top,
+          left: 0,
+          right: 0,
+          backgroundColor: "#DC2626",
+          paddingVertical: 6,
+          paddingHorizontal: 12,
+          zIndex: 9999,
+        }}
+        pointerEvents="none"
+      >
+        <Text
+          style={{
+            color: "#FFFFFF",
+            fontSize: 12,
+            fontWeight: "700",
+            textAlign: "center",
+            letterSpacing: 0.5,
+          }}
+        >
+          BUILD 58 · v67 LasciaAndareOrb condiviso · 2026-06-24
+        </Text>
+      </View>
       {/* v66.13 (Fabio 2026-06-18): Neon border SEMPRE presente durante
           l'onboarding — l'entità è sempre "attiva" e cambia colore in base
           allo stato (idle=champagne, recording=tiffany, thinking=rosa,
