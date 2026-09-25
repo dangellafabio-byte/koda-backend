@@ -32,17 +32,23 @@ import EclipseOrb from "./EclipseOrb";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 
-// === COSTANTI DI DESIGN =====================================================
-// baseSize allineata al valore usato in produzione (`lascia-andare.tsx`) e in
-// OnboardingV4 → nessuna discrepanza percettiva tra i due contesti.
+// === COSTANTI DI DESIGN (v67.2 — mockup Fabio 2026-06-24) ==================
+// Il mockup mostra un'eclissi che parte PICCOLA (~15-20% viewport height)
+// e cresce fino al MASSIMO che è "circa il doppio del size iniziale".
+// Interpretiamo: base rendering SVG a piena dimensione, ma il transform
+// scale parte a INITIAL_SCALE (0.6) e cresce fino a MAX_SCALE (1.2).
+// Rapporto max/initial = 2.0 → "circa il doppio del size iniziale" ✓
 const DEFAULT_BASE_SIZE = Math.min(SCREEN_W * 0.62, 240);
-// Cap di crescita: metà schermo (spec Fabio). Il computo è sul cerchio
-// "core" dell'eclissi; l'aurora esterna aggiunge un extra ~30% quindi a
-// scale=MAX_SCALE la presenza visiva copre effettivamente > 50% viewport.
-const DEFAULT_MAX_SCALE = Math.max(
-  1.2, // safety floor: qualcosa DEVE crescere anche su tablet
-  Math.min(1.8, (SCREEN_W * 0.5) / DEFAULT_BASE_SIZE + 1.0)
-);
+// Scala iniziale del componente (matcha "1. INIZIO" del mockup: piccolo,
+// glow minimo). Il pulse e la growth si moltiplicano SU questo valore
+// tramite la growth ratchet (che parte da 1.0 = INITIAL_SCALE e sale).
+const DEFAULT_INITIAL_SCALE = 0.6;
+// Rapporto crescita max / iniziale. 2.0 = "circa il doppio del size iniziale".
+const DEFAULT_MAX_GROWTH_RATIO = 2.0;
+// MAX_SCALE del ratchet = INITIAL_SCALE * MAX_GROWTH_RATIO (relativo alla
+// scala corrente in ratchet, che parte a 1.0 e sale). Con INITIAL=0.6 e
+// MAX_RATIO=2.0, il ratchet arriva a scale=2.0 → visivamente 0.6×2.0=1.2 del base.
+const DEFAULT_MAX_SCALE = DEFAULT_MAX_GROWTH_RATIO;
 // Rate di crescita (scale-units al secondo di voce sopra soglia):
 // v67.1 (2026-06-24): bumped 0.05 → 0.15. Il valore precedente rendeva
 // gli incrementi impercettibili nei primi 3-5s di parlato; 0.15/s significa
@@ -103,6 +109,9 @@ export interface LasciaAndareOrbProps {
    *  Usato solo nelle build diagnostiche per verificare che il componente
    *  riceva davvero il metering e la crescita si accumuli. */
   debug?: boolean;
+  /** Scala iniziale del rendering (moltiplicatore, default 0.6 = piccola).
+   *  Il pulse + growth ratchet si applicano SU questa base. */
+  initialScale?: number;
 }
 
 export default function LasciaAndareOrb({
@@ -115,17 +124,21 @@ export default function LasciaAndareOrb({
   speechThresholdDb = DEFAULT_SPEECH_THRESHOLD_DB,
   style,
   debug = false,
+  initialScale = DEFAULT_INITIAL_SCALE,
 }: LasciaAndareOrbProps) {
   // === ANIMATED VALUES ======================================================
   // pulse: oscillazione frequenza (reattiva al dB istantaneo)
   // glow:  opacity (0.65 → 1.00 reattiva al dB istantaneo)
   // growth: scale cumulativo (ratchet 1.00 → maxScale, tempo di parlato)
   // implode: fattore [1..0] moltiplicativo, animato solo a chiusura
+  // supernovaFlash: [0..1..0] flash luminoso centrale durante l'implosione
   const pulseAnim = useRef(new Animated.Value(PULSE_MIN)).current;
   const glowAnim = useRef(new Animated.Value(GLOW_MIN)).current;
   const growthAnim = useRef(new Animated.Value(1.0)).current;
   const implodeAnim = useRef(new Animated.Value(1.0)).current;
   const implodeOpacityAnim = useRef(new Animated.Value(1.0)).current;
+  const supernovaFlashAnim = useRef(new Animated.Value(0)).current;
+  const supernovaRayAnim = useRef(new Animated.Value(0)).current;
 
   // Accumulatore ratchet (state per re-render EclipseOrb dbBoost).
   // Il valore numerico corrente è tenuto in ref per evitare stale closures
@@ -137,9 +150,18 @@ export default function LasciaAndareOrb({
   // Ref sempre aggiornata con l'ultimo meterDb (letta dentro setInterval per
   // evitare stale closures). Dichiarata QUI, prima del useEffect che la usa.
   const meterDbLatestRef = useRef<number>(meterDb);
+  // === HUD DIAGNOSTIC STATE (v67.2) ==========================================
+  // Contatori per diagnosticare dove si rompe la reattività:
+  // - meterUpdateCount: quante volte il prop `meterDb` è cambiato dal mount
+  // - ratchetTickCount: quante volte il timer del ratchet è partito
+  // - ratchetSpeechCount: quante volte il ratchet ha visto db > threshold
+  const [meterUpdateCount, setMeterUpdateCount] = useState<number>(0);
+  const [ratchetTickCount, setRatchetTickCount] = useState<number>(0);
+  const [ratchetSpeechCount, setRatchetSpeechCount] = useState<number>(0);
   useEffect(() => {
     meterDbLatestRef.current = meterDb;
-  }, [meterDb]);
+    if (debug) setMeterUpdateCount((n) => n + 1);
+  }, [meterDb, debug]);
 
   // === 1. PULSE + GLOW — reattivi al dB istantaneo ==========================
   // Mappa dB → target pulse/glow con isteresi temporale (attack/release).
@@ -159,14 +181,14 @@ export default function LasciaAndareOrb({
       toValue: targetPulse,
       duration,
       easing: Easing.out(Easing.quad),
-      useNativeDriver: true,
+      useNativeDriver: false,
     }).start();
 
     Animated.timing(glowAnim, {
       toValue: targetGlow,
       duration,
       easing: Easing.out(Easing.quad),
-      useNativeDriver: true,
+      useNativeDriver: false,
     }).start();
   }, [meterDb, speechThresholdDb, pulseAnim, glowAnim]);
 
@@ -177,8 +199,10 @@ export default function LasciaAndareOrb({
     if (frozenRef.current) return;
 
     const timer = setInterval(() => {
+      if (debug) setRatchetTickCount((n) => n + 1);
       if (frozenRef.current) return;
       if (meterDbLatestRef.current <= speechThresholdDb) return;
+      if (debug) setRatchetSpeechCount((n) => n + 1);
 
       const delta = growthPerSecond * (RATCHET_TICK_MS / 1000);
       const next = Math.min(maxScale, growthValueRef.current + delta);
@@ -191,16 +215,26 @@ export default function LasciaAndareOrb({
           toValue: next,
           duration: RATCHET_TICK_MS + 20, // leggero overshoot temporale per smoothness
           easing: Easing.linear,
-          useNativeDriver: true,
+          useNativeDriver: false,
         }).start();
       }
     }, RATCHET_TICK_MS);
 
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [speechThresholdDb, growthPerSecond, maxScale, growthAnim]);
+  }, [speechThresholdDb, growthPerSecond, maxScale, growthAnim, debug]);
 
-  // === 3. IMPLOSIONE "BUCO NERO" ============================================
+  // === 3. IMPLOSIONE "SUPERNOVA" (v67.2, mockup Fabio 2026-06-24) ===========
+  // Il mockup mostra un implosione a più fasi:
+  //   6→7: tap sulla X → glow inizia a ritirarsi verso il centro
+  //   8:   la compressione emette RAGGI luminosi (supernova collapse)
+  //   9:   collassa in un PUNTO luminoso centrale (bright flash)
+  //   10:  il punto si dissolve, ritorno al nero
+  // Implementazione:
+  //   - implodeAnim: scale 1→0 (shrink dell'orb principale, 0..1200ms)
+  //   - implodeOpacityAnim: opacity 1→0 dell'orb (0..1200ms)
+  //   - supernovaFlashAnim: 0→1→0 (peak a metà, poi fade)
+  //   - supernovaRayAnim: 0→1 (raggi che si espandono in outward burst)
   useEffect(() => {
     if (!imploding) return;
     if (frozenRef.current) return;
@@ -212,26 +246,46 @@ export default function LasciaAndareOrb({
     growthAnim.stopAnimation();
 
     Animated.parallel([
+      // Shrink orb (con collasso esplosivo verso il centro)
       Animated.timing(implodeAnim, {
         toValue: 0,
         duration: IMPLODE_DURATION_MS,
-        // v67.1: Easing.in(Easing.expo) — inizio lento, collasso esplosivo
-        // negli ultimi ~30% dell'anim. Percezione "buco nero che vince
-        // la gravità" invece della simmetria del bezier precedente.
         easing: Easing.in(Easing.exp),
-        useNativeDriver: true,
+        useNativeDriver: false,
       }),
+      // Fade orb
       Animated.timing(implodeOpacityAnim, {
         toValue: 0,
         duration: IMPLODE_DURATION_MS,
-        // Opacity accelera anche lei ma con curva meno estrema
         easing: Easing.in(Easing.quad),
-        useNativeDriver: true,
+        useNativeDriver: false,
       }),
+      // Supernova: raggi che si espandono in outward burst (0→1 in 800ms)
+      Animated.timing(supernovaRayAnim, {
+        toValue: 1,
+        duration: IMPLODE_DURATION_MS * 0.7,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: false,
+      }),
+      // Supernova: flash luminoso centrale (0→1 nella prima metà, 1→0 nella seconda)
+      Animated.sequence([
+        Animated.timing(supernovaFlashAnim, {
+          toValue: 1,
+          duration: IMPLODE_DURATION_MS * 0.55,
+          easing: Easing.in(Easing.quad),
+          useNativeDriver: false,
+        }),
+        Animated.timing(supernovaFlashAnim, {
+          toValue: 0,
+          duration: IMPLODE_DURATION_MS * 0.45,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: false,
+        }),
+      ]),
     ]).start(() => {
       onImplodeComplete?.();
     });
-  }, [imploding, implodeAnim, implodeOpacityAnim, pulseAnim, glowAnim, growthAnim, onImplodeComplete]);
+  }, [imploding, implodeAnim, implodeOpacityAnim, pulseAnim, glowAnim, growthAnim, supernovaFlashAnim, supernovaRayAnim, onImplodeComplete]);
 
   // === RENDER ===============================================================
   // Transform combinato: scale = growth * pulse * implode
@@ -262,46 +316,142 @@ export default function LasciaAndareOrb({
 
   return (
     <View style={[styles.wrap, style]} pointerEvents="none">
+      {/* Wrapper esterno con scala iniziale (parte piccola).
+          initialScale=0.6 → l'orb parte a ~60% del baseSize.
+          Growth ratchet fa crescere il moltiplicatore interno da 1.0 → maxScale=2.0
+          → dimensione finale visibile ≈ initialScale * maxScale = 1.2 del baseSize
+          → "circa il doppio del size iniziale" ✓ (mockup Fabio 2026-06-24). */}
       <Animated.View
         style={{
-          opacity: combinedOpacity,
-          transform: [{ scale: combinedScale }],
+          transform: [{ scale: initialScale }],
         }}
       >
-        <EclipseOrb
-          status="recording"
-          size={baseSize}
-          meterDb={meterDb}
-          meterThreshold={speechThresholdDb}
-          dbBoost={dbBoost}
-        />
+        <Animated.View
+          style={{
+            opacity: combinedOpacity,
+            transform: [{ scale: combinedScale }],
+          }}
+        >
+          <EclipseOrb
+            status="recording"
+            size={baseSize}
+            meterDb={meterDb}
+            meterThreshold={speechThresholdDb}
+            dbBoost={dbBoost}
+          />
+        </Animated.View>
+        {/* === SUPERNOVA RAYS (v67.2) =========================================
+            Otto raggi luminosi che si irraggiano verso l'esterno durante
+            l'implosione. Ogni raggio è una View sottile ruotata a 45°
+            l'uno dall'altro. Animano scale (0→ampio) + opacity (0→1→0).
+            Renderizzati SOPRA l'orb, dietro il flash centrale. */}
+        {imploding && (
+          <Animated.View
+            style={{
+              position: "absolute",
+              top: baseSize / 2 - 2,
+              left: baseSize / 2 - baseSize * 0.9,
+              width: baseSize * 1.8,
+              height: 4,
+              opacity: supernovaRayAnim.interpolate({
+                inputRange: [0, 0.3, 0.7, 1],
+                outputRange: [0, 1, 1, 0],
+              }),
+              transform: [
+                {
+                  scaleX: supernovaRayAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.1, 1.4],
+                  }),
+                },
+              ],
+            }}
+            pointerEvents="none"
+          >
+            {[0, 22.5, 45, 67.5, 90, 112.5, 135, 157.5].map((deg) => (
+              <View
+                key={deg}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  height: "100%",
+                  transform: [{ rotate: `${deg}deg` }],
+                }}
+              >
+                <View
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    backgroundColor: "#B9F5EC",
+                    borderRadius: 2,
+                    shadowColor: "#00F5D4",
+                    shadowOpacity: 0.9,
+                    shadowRadius: 10,
+                    shadowOffset: { width: 0, height: 0 },
+                  }}
+                />
+              </View>
+            ))}
+          </Animated.View>
+        )}
+        {/* === SUPERNOVA FLASH (v67.2) =========================================
+            Punto luminoso centrale che appare a metà implosione, pulsa
+            bianco→tiffany, e si dissolve. Corrisponde a fase 9 "CHIUSURA"
+            del mockup: "collassa in un punto luminoso centrale". */}
+        {imploding && (
+          <Animated.View
+            style={{
+              position: "absolute",
+              top: baseSize / 2 - 12,
+              left: baseSize / 2 - 12,
+              width: 24,
+              height: 24,
+              borderRadius: 12,
+              backgroundColor: "#FFFFFF",
+              opacity: supernovaFlashAnim,
+              transform: [
+                {
+                  scale: supernovaFlashAnim.interpolate({
+                    inputRange: [0, 0.5, 1],
+                    outputRange: [0.3, 1.4, 2.0],
+                  }),
+                },
+              ],
+              shadowColor: "#B9F5EC",
+              shadowOpacity: 1,
+              shadowRadius: 30,
+              shadowOffset: { width: 0, height: 0 },
+            }}
+            pointerEvents="none"
+          />
+        )}
       </Animated.View>
-      {/* === HUD DIAGNOSTICO (debug=true, temporaneo) ==========================
-          Overlay inline che mostra in real-time i valori chiave del componente
-          v67. Se il ratchet funziona, `growth` deve incrementare mentre parli
-          (da 1.00 verso maxScale). Se `meterDb` resta a -100 → il caller non
-          sta passando il metering. Se `meterDb` è alto ma `growth` non sale →
-          il ratchet è rotto. */}
+      {/* === HUD DIAGNOSTICO (debug=true, temporaneo) ========================== */}
       {debug && (
         <View
           style={{
             position: "absolute",
-            bottom: -80,
-            left: -140,
-            right: -140,
+            bottom: -120,
+            left: -150,
+            right: -150,
             alignItems: "center",
-            paddingVertical: 6,
+            paddingVertical: 8,
             paddingHorizontal: 10,
-            backgroundColor: "rgba(0,0,0,0.75)",
+            backgroundColor: "rgba(0,0,0,0.85)",
             borderRadius: 8,
           }}
           pointerEvents="none"
         >
           <Text style={{ color: "#00F5D4", fontSize: 11, fontFamily: "monospace" }}>
-            {`meterDb=${meterDb.toFixed(1)}  thr=${speechThresholdDb}  active=${meterDb > speechThresholdDb ? "Y" : "N"}`}
+            {`meterDb=${meterDb.toFixed(1)} thr=${speechThresholdDb} active=${meterDb > speechThresholdDb ? "Y" : "N"}`}
           </Text>
           <Text style={{ color: "#F5E6CC", fontSize: 11, fontFamily: "monospace" }}>
-            {`growth=${growthState.toFixed(3)}  max=${maxScale.toFixed(2)}  imploding=${imploding ? "Y" : "N"}`}
+            {`growth=${growthState.toFixed(3)} max=${maxScale.toFixed(2)} imploding=${imploding ? "Y" : "N"}`}
+          </Text>
+          <Text style={{ color: "#FFB86C", fontSize: 10, fontFamily: "monospace" }}>
+            {`upd=${meterUpdateCount} tick=${ratchetTickCount} speech=${ratchetSpeechCount}`}
           </Text>
         </View>
       )}

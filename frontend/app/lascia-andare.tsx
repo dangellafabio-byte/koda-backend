@@ -833,6 +833,11 @@ export default function LasciaAndareScreen() {
             sampleRate: 16000,
             numberOfChannels: 1,
             bitRate: 24000,
+            // v67.2 (2026-06-24): AGGIUNTO isMeteringEnabled anche in ios.
+            // Il top-level flag NON viene ereditato automaticamente su iOS
+            // in expo-audio recente → senza questo, `getStatus().metering`
+            // resta a -100/-160 fisso indipendentemente dalla voce.
+            isMeteringEnabled: true,
           },
           web: {
             ...(base.web || {}),
@@ -1367,7 +1372,7 @@ export default function LasciaAndareScreen() {
             letterSpacing: 0.5,
           }}
         >
-          BUILD 59 · v67.1 growth+implode tuned · HUD debug ON
+          BUILD 60 · v67.2 iOS metering fix + supernova · HUD debug ON
         </Text>
       </View>
       {/* Uscita — pulsante discreto in alto a sinistra.

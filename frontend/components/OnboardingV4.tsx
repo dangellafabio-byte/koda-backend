@@ -916,7 +916,25 @@ export default function OnboardingV4() {
   const laStartedRef = useRef(false);
   const [laMeterDb, setLaMeterDb] = useState(-60);
   const [laImploding, setLaImploding] = useState(false);
-  const laRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const laRecorder = useAudioRecorder({
+    // v67.2 (2026-06-24): preset custom con isMeteringEnabled: true.
+    // RecordingPresets.HIGH_QUALITY di expo-audio NON abilita il metering
+    // per default → getStatus().metering restituisce undefined → il glow
+    // LasciaAndareOrb non riceve mai voice level → resta statico.
+    // Fix definitivo: copiamo HIGH_QUALITY e aggiungiamo metering ENABLED
+    // sia top-level (Android/generico) sia in ios (non ereditato).
+    ...(RecordingPresets.HIGH_QUALITY as any),
+    isMeteringEnabled: true,
+    android: {
+      ...((RecordingPresets.HIGH_QUALITY as any).android || {}),
+      isMeteringEnabled: true,
+      audioSource: "unprocessed",
+    },
+    ios: {
+      ...((RecordingPresets.HIGH_QUALITY as any).ios || {}),
+      isMeteringEnabled: true,
+    },
+  } as any);
   const laMeterTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     if (step !== "step5_demo_la") {
@@ -1049,7 +1067,7 @@ export default function OnboardingV4() {
             letterSpacing: 0.5,
           }}
         >
-          BUILD 59 · v67.1 growth+implode tuned · HUD debug ON
+          BUILD 60 · v67.2 iOS metering fix + supernova · HUD debug ON
         </Text>
       </View>
       {/* v66.13 (Fabio 2026-06-18): Neon border SEMPRE presente durante
