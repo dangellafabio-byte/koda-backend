@@ -50,6 +50,7 @@ import type {
 import EclipseOrb, { OrbStatus, OrbTone } from "../components/EclipseOrb";
 import { API_BASE } from "../lib/api";
 import { getAuthToken } from "../lib/authToken";
+import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
 
 const TAG = "KODA_MICRODEMO";
 
@@ -68,7 +69,7 @@ const RATE_LIMIT_MS = 72 * 60 * 60 * 1000; // 72h
 const MAX_DURATION_MS = 90_000;
 
 const { width: WINDOW_WIDTH } = Dimensions.get("window");
-const ORB_SIZE = Math.min(WINDOW_WIDTH * 0.78, 360);
+const ORB_SIZE = ECLIPSE_MAX_DIAMETER;
 
 type Phase = "checking" | "opening" | "listening" | "thinking" | "speaking" | "closing" | "done";
 

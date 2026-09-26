@@ -1372,7 +1372,7 @@ export default function LasciaAndareScreen() {
             letterSpacing: 0.5,
           }}
         >
-          BUILD 60 · v67.2 iOS metering fix + supernova · HUD debug ON
+          BUILD 61 · v67.3 nucleo 200 fisso · aurora 240→320 · HUD ON
         </Text>
       </View>
       {/* Uscita — pulsante discreto in alto a sinistra.

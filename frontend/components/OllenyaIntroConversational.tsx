@@ -70,6 +70,7 @@ import NeonBorder, { NeonBorderStatus } from "./NeonBorder";
 import { api, API_BASE } from "../lib/api";
 import { getAuthToken } from "../lib/authToken";
 import { useTheme } from "../lib/theme";
+import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
 
 const TAG = "KODA_INTRO_V2";
 
@@ -298,7 +299,7 @@ async function fetchConverse(text: string): Promise<ConverseAiEntry | null> {
 // ==================== COMPONENT ====================
 const { width: WINDOW_WIDTH } = Dimensions.get("window");
 // Stessa formula della home (index.tsx riga 5071)
-const ORB_SIZE = Math.min(WINDOW_WIDTH * 0.78, 360);
+const ORB_SIZE = ECLIPSE_MAX_DIAMETER;
 
 export default function OllenyaIntroConversational() {
   const insets = useSafeAreaInsets();

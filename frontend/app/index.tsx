@@ -143,6 +143,7 @@ import {
   resetQuotaExhaustedSession,
 } from "../lib/quotaExhaustedAudio";
 import { useFonts } from "expo-font";
+import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
 // === Caveat font (Fabio 2026-06-21 v15): caricato via expo-font + file
 // .ttf locali in assets/fonts/. Sostituisce @expo-google-fonts/caveat che
 // era vietato dal sistema Emergent (build pipeline lo blocca). Stesso
@@ -772,7 +773,7 @@ export default function Taccuino() {
     // aggiunge SOLO se il nome è davvero presente.
     const userName = userNameRaw || "";
     const nameVocative = userNameRaw ? `, ${userNameRaw}` : "";
-    const orbSize = Math.min(W * 0.78, 360);
+    const orbSize = ECLIPSE_MAX_DIAMETER;
     // === FIX ECLISSI CENTRATA (Fabio 2026-08-24) =========================
     // Prima: H * 0.46 (46% dall'alto) → fallback per il coach-mark quando
     // measureRef fallisce. Ora l'orb reale è centrato a H/2 esatto → il
@@ -6880,7 +6881,7 @@ export default function Taccuino() {
                       speakingPaletteOverride={getVoiceSpeakingPalette(
                         (profile?.settings as any)?.tts_voice_id
                       )}
-                      size={Math.min(windowWidth * 0.78, 360)}
+                      size={ECLIPSE_MAX_DIAMETER}
                       meterDb={meterDb}
                       meterThreshold={meterThreshold}
                     />

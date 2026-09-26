@@ -60,6 +60,7 @@ import EclipseOrb, { OrbStatus, OrbTone } from "./EclipseOrb";
 import NeonBorder, { NeonBorderStatus } from "./NeonBorder";
 import { api } from "../lib/api";
 import { useTheme } from "../lib/theme";
+import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
 
 const TAG = "KODA_INTRO_V3";
 
@@ -234,7 +235,7 @@ async function configureAudioForRecording(): Promise<void> {
 
 // ==================== COMPONENT ====================
 const { width: WINDOW_WIDTH } = Dimensions.get("window");
-const ORB_SIZE = Math.min(WINDOW_WIDTH * 0.78, 360);
+const ORB_SIZE = ECLIPSE_MAX_DIAMETER;
 
 export default function OllenyaIntroV3() {
   const insets = useSafeAreaInsets();

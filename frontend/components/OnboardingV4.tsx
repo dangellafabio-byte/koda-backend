@@ -65,6 +65,7 @@ import { api, API_BASE } from "../lib/api";
 import { getAuthToken } from "../lib/authToken";
 import { ensureSpeechPermission } from "../lib/speechPermission";
 import { prewarmMic } from "../lib/voice";
+import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
 
 const TAG = "[ONBOARDING_V4]";
 const VOICE_CIELO_ID = "POuqf18evoXOKIqV2Px7";
@@ -77,7 +78,7 @@ const { width: SCREEN_W } = Dimensions.get("window");
 // Home usa Math.min(width * 0.78, 360) ma il wrapper flex + scale animation
 // rendono un'immagine visualmente ~240. Uniamo intro e LA a questa taglia
 // percepita per rispettare "tutte identiche alla home".
-const ORB_SIZE = Math.min(SCREEN_W * 0.62, 240);
+const ORB_SIZE = ECLIPSE_MAX_DIAMETER;
 const APP_BG = "#1F1A36";
 const METER_THRESHOLD = -50;
 // Palette bolle chat identica a quella della chat REALE (theme NOTTE).
@@ -1067,7 +1068,7 @@ export default function OnboardingV4() {
             letterSpacing: 0.5,
           }}
         >
-          BUILD 60 · v67.2 iOS metering fix + supernova · HUD debug ON
+          BUILD 61 · v67.3 nucleo 200 fisso · aurora 240→320 · HUD ON
         </Text>
       </View>
       {/* v66.13 (Fabio 2026-06-18): Neon border SEMPRE presente durante

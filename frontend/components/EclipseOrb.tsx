@@ -27,6 +27,7 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import { View, StyleSheet, Animated, Easing } from "react-native";
 import Svg, { Defs, RadialGradient, Stop, Circle } from "react-native-svg";
+import { ECLIPSE_NUCLEUS_DIAMETER } from "../lib/eclipseConstants";
 // Nota: useTheme non è più importato dopo il rollback del 2026-08-04
 //       (l'orb non dipende più dal tema — cambia solo il cielo attorno).
 
@@ -67,6 +68,12 @@ type Props = {
    *  Passato solo da lascia-andare.tsx; nel main flow resta undefined
    *  → nessun impatto sulla logica esistente (backward compatible). */
   dbBoost?: number | null;
+  /** === LASCIA ANDARE AURORA SCALE (v67.3, Fabio 2026-06-24) ================
+   *  Scala visiva di aurora/halo/filamenti (NON del nucleo, che resta fisso).
+   *  1.0 = aurora al size nativo. Valori > 1.0 espandono l'aurora attorno
+   *  al nucleo fisso, valori < 1.0 la contraggono. Passato Animated.Value
+   *  per animarlo esternamente (ratchet crescita in LasciaAndareOrb). */
+  auroraScale?: Animated.AnimatedInterpolation<number> | Animated.Value | number | null;
   /** Override della palette durante "speaking" — legata alla voce scelta.
    *  Acqua=viola (default), Vento=cobalto. Se passato, sostituisce
    *  TONE_PALETTES.warm/concerned/etc durante lo speaking. */
@@ -140,6 +147,7 @@ export default function EclipseOrb({
   meterDb,
   meterThreshold,
   dbBoost,
+  auroraScale,
   speakingPaletteOverride,
   forceVoiceIdentity = false,
   speechActive = true,
@@ -493,10 +501,16 @@ export default function EclipseOrb({
     ]).start();
   }, [status, auroraIntensity, filamentExtend, flicker, speakPulse, listenPulse]);
 
-  // === Geometry constants
+  // === Geometry constants (v67.3: nucleo FISSO da eclipseConstants) =========
+  // Il diametro del nucleo NON dipende più da `size`. È hardcoded a
+  // ECLIPSE_NUCLEUS_DIAMETER=200 (unica fonte di verità in lib/eclipseConstants.ts).
+  // In questo modo il nucleo è visivamente identico in Home, Splash, Intro,
+  // Lascia Andare, ecc. — indipendente da quale `size` prop viene passato.
+  // Aurora/halo/filamenti restano proporzionali a `size` per gestire schermi
+  // di diversa densità, ma i callers passano tutti `ECLIPSE_MAX_DIAMETER=320`.
   const center = size / 2;
-  const discRadius = size * 0.30;   // disco nero centrale
-  const haloRadius = size * 0.50;   // halo globale
+  const discRadius = ECLIPSE_NUCLEUS_DIAMETER / 2;   // FISSO 100px = 200px diametro nucleo
+  const haloRadius = size * 0.50;   // halo globale (aurora esterna)
   const filamentSize = size * 0.95; // ogni filamento è una "macchia di luce"
 
   // Pre-calc filament positions (4 filaments at 0/90/180/270° baseline,
@@ -553,7 +567,22 @@ export default function EclipseOrb({
       ]}
       pointerEvents="none"
     >
-      {/* === Layer 0: HALO BASE (radial gradient grande, dietro tutto) */}
+      {/* === v67.3 (Fabio 2026-06-24) — AURORA WRAPPER SCALABILE ==============
+          Envelope che contiene aurora, filamenti e rim. Il nucleo (Layer 3)
+          NON è dentro qui → nucleo fisso a ECLIPSE_NUCLEUS_DIAMETER=200px
+          in tutte le schermate e stati. `auroraScale` (opzionale, default 1)
+          consente di far crescere/contrarre solo la parte luminosa attorno
+          al nucleo. Usato da LasciaAndareOrb per la crescita cumulativa. */}
+      <Animated.View
+        style={[
+          StyleSheet.absoluteFill,
+          {
+            transform: [{ scale: auroraScale ?? 1 }],
+          },
+        ]}
+        pointerEvents="none"
+      >
+        {/* === Layer 0: HALO BASE (radial gradient grande, dietro tutto) */}
       <Animated.View
         style={[
           StyleSheet.absoluteFill,
@@ -669,8 +698,12 @@ export default function EclipseOrb({
           <Circle cx={center} cy={center} r={haloRadius} fill="url(#rim)" />
         </Svg>
       </Animated.View>
+      </Animated.View>
+      {/* fine wrapper aurora scalabile v67.3 — sotto renderizza il nucleo fisso */}
 
-      {/* === Layer 3: DISCO CENTRALE ===
+      {/* === Layer 3: DISCO CENTRALE (NUCLEO FISSO v67.3) ===
+          Renderizzato FUORI dal wrapper aurora scalabile → nucleo sempre
+          ECLIPSE_NUCLEUS_DIAMETER=200px, indipendente da auroraScale.
           Cerchio nero SEMPRE — in dark e in light mode. Il disco nero
           È l'identità dell'orb ("eclissi"). Cambia solo il cielo attorno
           (indaco vs azzurro) tra i due mode; il centro resta scuro come

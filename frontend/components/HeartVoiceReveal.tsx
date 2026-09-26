@@ -36,12 +36,13 @@ import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import type { AudioPlayer } from "expo-audio";
 import * as SecureStore from "expo-secure-store";
 import EclipseOrb from "../components/EclipseOrb";
+import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
 
 const TAG = "KODA_HEART_REVEAL";
 const REVEAL_CLIP = require("../assets/sounds/intro/reveal_cuore_voce-cielo.mp3");
 
 const { width: WINDOW_WIDTH } = Dimensions.get("window");
-const ORB_SIZE = Math.min(WINDOW_WIDTH * 0.78, 360);
+const ORB_SIZE = ECLIPSE_MAX_DIAMETER;
 
 async function configureAudioForPlayback(): Promise<void> {
   if (Platform.OS === "web") return;

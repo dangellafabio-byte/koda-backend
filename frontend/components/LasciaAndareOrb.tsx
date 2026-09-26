@@ -29,6 +29,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Animated, Easing, View, StyleSheet, Dimensions, Text } from "react-native";
 import EclipseOrb from "./EclipseOrb";
+import { ECLIPSE_MAX_DIAMETER, ECLIPSE_MIN_DIAMETER } from "../lib/eclipseConstants";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 
@@ -38,7 +39,7 @@ const { width: SCREEN_W } = Dimensions.get("window");
 // Interpretiamo: base rendering SVG a piena dimensione, ma il transform
 // scale parte a INITIAL_SCALE (0.6) e cresce fino a MAX_SCALE (1.2).
 // Rapporto max/initial = 2.0 → "circa il doppio del size iniziale" ✓
-const DEFAULT_BASE_SIZE = Math.min(SCREEN_W * 0.62, 240);
+const DEFAULT_BASE_SIZE = ECLIPSE_MAX_DIAMETER;
 // Scala iniziale del componente (matcha "1. INIZIO" del mockup: piccolo,
 // glow minimo). Il pulse e la growth si moltiplicano SU questo valore
 // tramite la growth ratchet (che parte da 1.0 = INITIAL_SCALE e sale).
@@ -295,10 +296,8 @@ export default function LasciaAndareOrb({
   // - implode → collasso a 0 su chiusura
   // - glow    → opacity modulata dalla voce
   // - implodeOpacity → fade a 0 su chiusura
-  const combinedScale = Animated.multiply(
-    Animated.multiply(growthAnim, pulseAnim),
-    implodeAnim
-  );
+  // v67.3: combinedScale rimosso (transform: scale ora è solo implodeAnim
+  // sul wrapper. Aurora è modulata via `auroraScale` interno a EclipseOrb).
   const combinedOpacity = Animated.multiply(glowAnim, implodeOpacityAnim);
 
   // dbBoost per EclipseOrb (opacity dei layer interni aurora/rim). Uguale
@@ -314,44 +313,53 @@ export default function LasciaAndareOrb({
     )
   );
 
+  // === RENDER ===============================================================
+  // v67.3 (Fabio 2026-06-24) — NUCLEO FISSO, SOLO GLOW CRESCE:
+  //   - EclipseOrb renderizzato a size FISSO ECLIPSE_MAX_DIAMETER=320.
+  //   - Nucleo hardcoded a ECLIPSE_NUCLEUS_DIAMETER=200 (dentro EclipseOrb).
+  //   - `auroraScale` prop applicata solo ai layer aurora/halo/filamenti:
+  //       * growth=1.0 → auroraScale = MIN/MAX = 240/320 = 0.75 (aurora contratta)
+  //       * growth=maxScale (2.0) → auroraScale = MAX/MAX = 1.0 (aurora massima)
+  //   - pulseAnim modula il boost interno di EclipseOrb (dbBoost) → non
+  //     più applicato come transform esterno.
+  //   - Implosione: transform scale sul wrapper esterno (nucleo + aurora
+  //     collassano insieme = buco nero, spec Fabio).
+  const auroraGrowthScale = growthAnim.interpolate({
+    inputRange: [1, maxScale],
+    outputRange: [ECLIPSE_MIN_DIAMETER / ECLIPSE_MAX_DIAMETER, 1.0],
+    extrapolate: "clamp",
+  });
+  // aurora finale = growth cumulativa × pulse voce istantanea
+  const finalAuroraScale = Animated.multiply(auroraGrowthScale, pulseAnim);
+
   return (
     <View style={[styles.wrap, style]} pointerEvents="none">
-      {/* Wrapper esterno con scala iniziale (parte piccola).
-          initialScale=0.6 → l'orb parte a ~60% del baseSize.
-          Growth ratchet fa crescere il moltiplicatore interno da 1.0 → maxScale=2.0
-          → dimensione finale visibile ≈ initialScale * maxScale = 1.2 del baseSize
-          → "circa il doppio del size iniziale" ✓ (mockup Fabio 2026-06-24). */}
+      {/* Wrapper implosion: al collasso, TUTTO (nucleo+aurora) collassa.
+          In stato normale scale=1, opacity dal glow reattivo. */}
       <Animated.View
         style={{
-          transform: [{ scale: initialScale }],
+          opacity: combinedOpacity,
+          transform: [{ scale: implodeAnim }],
         }}
       >
-        <Animated.View
-          style={{
-            opacity: combinedOpacity,
-            transform: [{ scale: combinedScale }],
-          }}
-        >
-          <EclipseOrb
-            status="recording"
-            size={baseSize}
-            meterDb={meterDb}
-            meterThreshold={speechThresholdDb}
-            dbBoost={dbBoost}
-          />
-        </Animated.View>
+        <EclipseOrb
+          status="recording"
+          size={ECLIPSE_MAX_DIAMETER}
+          meterDb={meterDb}
+          meterThreshold={speechThresholdDb}
+          dbBoost={dbBoost}
+          auroraScale={finalAuroraScale}
+        />
         {/* === SUPERNOVA RAYS (v67.2) =========================================
             Otto raggi luminosi che si irraggiano verso l'esterno durante
-            l'implosione. Ogni raggio è una View sottile ruotata a 45°
-            l'uno dall'altro. Animano scale (0→ampio) + opacity (0→1→0).
-            Renderizzati SOPRA l'orb, dietro il flash centrale. */}
+            l'implosione. */}
         {imploding && (
           <Animated.View
             style={{
               position: "absolute",
-              top: baseSize / 2 - 2,
-              left: baseSize / 2 - baseSize * 0.9,
-              width: baseSize * 1.8,
+              top: ECLIPSE_MAX_DIAMETER / 2 - 2,
+              left: ECLIPSE_MAX_DIAMETER / 2 - ECLIPSE_MAX_DIAMETER * 0.9,
+              width: ECLIPSE_MAX_DIAMETER * 1.8,
               height: 4,
               opacity: supernovaRayAnim.interpolate({
                 inputRange: [0, 0.3, 0.7, 1],
@@ -396,16 +404,13 @@ export default function LasciaAndareOrb({
             ))}
           </Animated.View>
         )}
-        {/* === SUPERNOVA FLASH (v67.2) =========================================
-            Punto luminoso centrale che appare a metà implosione, pulsa
-            bianco→tiffany, e si dissolve. Corrisponde a fase 9 "CHIUSURA"
-            del mockup: "collassa in un punto luminoso centrale". */}
+        {/* === SUPERNOVA FLASH (v67.2) ========================================= */}
         {imploding && (
           <Animated.View
             style={{
               position: "absolute",
-              top: baseSize / 2 - 12,
-              left: baseSize / 2 - 12,
+              top: ECLIPSE_MAX_DIAMETER / 2 - 12,
+              left: ECLIPSE_MAX_DIAMETER / 2 - 12,
               width: 24,
               height: 24,
               borderRadius: 12,

@@ -29,6 +29,7 @@ import { createAudioPlayer, setAudioModeAsync, setIsAudioActiveAsync } from "exp
 import EclipseOrb from "./EclipseOrb";
 import HandsFreeOrb from "./HandsFreeOrb";
 import { ensureSpeechPermission } from "../lib/speechPermission";
+import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
 
 const TAG = "[intro-premium]";
 const CLIP_ECCOMI = require("../assets/sounds/intro/intro_premium_eccomi-cielo.mp3");
@@ -84,7 +85,7 @@ export default function IntroPremium() {
   // ricentrata a H/2 → l'orb virtuale per posizionare i coach-mark labels
   // ora è ANCHE lui a H/2 esatto.
   const headerCY = Math.max(insets.top + 28, 70) + 22;
-  const orbSize = Math.min(W * 0.78, 360);
+  const orbSize = ECLIPSE_MAX_DIAMETER;
   const orbCY = H / 2;
 
   const RECTS: Record<"orb" | "hf" | "la" | "settings", Rect> = {
