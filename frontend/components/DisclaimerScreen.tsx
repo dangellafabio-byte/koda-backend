@@ -93,26 +93,25 @@ export default function DisclaimerScreen({ onAccepted }: DisclaimerScreenProps) 
         {/* Titolo */}
         <Text style={styles.title}>Ollenya è qui per ascoltarti.</Text>
 
-        {/* Corpo — tono umano, non legale */}
+        {/* Corpo poetico v67.5 (Fabio 2026-06-24, consulenza legale) —
+            posizionamento 'presenza interattiva digitale automatizzata'
+            + trasparenza tecnologica. Coerente con il system prompt
+            (server.py riga 2777: 'lo riporti alla vita', riga 2954-2955:
+            'esci a prenderti aria'). */}
         <Text style={styles.paragraph}>
-          Non è una terapia, non è uno psicologo, non sostituisce un percorso
-          professionale.
+          Ollenya è una presenza progettata per ascoltarti e interagire con te.
         </Text>
 
         <Text style={styles.paragraph}>
-          Ollenya non fa diagnosi, non dà consigli clinici, non interpreta quello
-          che senti.
-        </Text>
-
-        <Text style={styles.paragraphEmphasis}>
-          È uno spazio dove puoi parlare liberamente e sentirti ascoltato,
-          quando ne hai bisogno.
+          Il servizio <Text style={styles.bold}>non è una terapia, non è uno psicologo</Text> e non sostituisce in alcun modo un percorso professionale, medico o di salute mentale.
         </Text>
 
         <Text style={styles.paragraph}>
-          Se stai attraversando un momento difficile che richiede supporto
-          professionale, Ollenya te lo dirà con chiarezza e potrà indicarti dove
-          trovare aiuto vero.
+          Ollenya è uno <Text style={styles.bold}>spazio interattivo digitale automatizzato</Text>, pensato per offrirti un luogo in cui esprimere liberamente i tuoi pensieri e trovare un momento di ascolto. Il nostro obiettivo è accompagnarti a ritrovare un equilibrio sereno nella tua quotidianità, stimolando la consapevolezza personale all'interno e al di fuori del mondo digitale.
+        </Text>
+
+        <Text style={styles.paragraph}>
+          Se stai attraversando un momento difficile che richiede supporto specialistico, l'app ti indicherà con chiarezza dove trovare aiuto reale.
         </Text>
 
         {/* === EMERGENZE (v67.4) =============================================

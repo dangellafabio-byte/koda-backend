@@ -1068,7 +1068,7 @@ export default function OnboardingV4() {
             letterSpacing: 0.5,
           }}
         >
-          BUILD 62 · v67.4 legal rework · HUD ON
+          BUILD 63 · v67.5 disclaimer definitivo · HUD ON
         </Text>
       </View>
       {/* v66.13 (Fabio 2026-06-18): Neon border SEMPRE presente durante
