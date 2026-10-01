@@ -66,6 +66,7 @@ import { getAuthToken } from "../lib/authToken";
 import { ensureSpeechPermission } from "../lib/speechPermission";
 import { prewarmMic } from "../lib/voice";
 import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
+import { useFonts } from "expo-font";
 
 const TAG = "[ONBOARDING_V4]";
 const VOICE_CIELO_ID = "POuqf18evoXOKIqV2Px7";
@@ -82,11 +83,11 @@ const ORB_SIZE = ECLIPSE_MAX_DIAMETER;
 const APP_BG = "#1F1A36";
 const METER_THRESHOLD = -50;
 // Palette bolle chat identica a quella della chat REALE (theme NOTTE).
-const CHAT_USER_BG = "#0E7C7B";
+const CHAT_USER_BG = "#0E7C7B";        // teal pieno, identico alla chat vera
 const CHAT_USER_TEXT = "#FFFFFF";
-const CHAT_AI_BG = "rgba(148,163,184,0.10)";
-const CHAT_AI_BORDER = "rgba(148,163,184,0.35)";
-const CHAT_AI_TEXT = "#E2E8F0";
+const CHAT_AI_BG = "rgba(139,92,246,0.18)";  // viola 'eclissi' soft (chat vera)
+const CHAT_AI_BORDER = "#8B5CF6";             // viola 'eclissi' pieno (border brillante)
+const CHAT_AI_TEXT = "#FFFFFF";
 
 // ==== Fasi (state machine) v66.16 ===========================================
 // FLUSSO FINALE (~2 minuti):
@@ -204,6 +205,15 @@ const Scrim: React.FC<ScrimProps> = ({ text, onDone, autoDismissMs = 3200, showT
 export default function OnboardingV4() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+
+  // v67.6 (Fabio 2026-06-24): Caveat font identico alla chat vera (app/index.tsx
+  // riga 5507-5511). Caricamento async: se non ancora pronto `aiFontFamily`
+  // è undefined e Text usa il system font (fallback graceful).
+  const [fontsLoaded] = useFonts({
+    Caveat_400Regular: require("../assets/fonts/Caveat_400Regular.ttf"),
+    Caveat_500Medium: require("../assets/fonts/Caveat_500Medium.ttf"),
+  });
+  const aiFontFamily = fontsLoaded ? "Caveat_500Medium" : undefined;
 
   const [step, setStep] = useState<Step>("step1_speak_intro");
   const [userName, setUserName] = useState<string | null>(null);
@@ -1043,34 +1053,6 @@ export default function OnboardingV4() {
   return (
     <Animated.View style={[styles.root, { opacity: rootOpacity }]}>
       <StatusBar barStyle="light-content" backgroundColor={APP_BG} />
-      {/* === BANNER DIAGNOSTICO TEMPORANEO BUILD 58 (2026-06-24) ===============
-          Marker visibile inequivocabile per verificare se la nuova build EAS
-          ha effettivamente incluso il commit v67. Rimuovere dopo il test. */}
-      <View
-        style={{
-          position: "absolute",
-          top: insets.top,
-          left: 0,
-          right: 0,
-          backgroundColor: "#DC2626",
-          paddingVertical: 6,
-          paddingHorizontal: 12,
-          zIndex: 9999,
-        }}
-        pointerEvents="none"
-      >
-        <Text
-          style={{
-            color: "#FFFFFF",
-            fontSize: 12,
-            fontWeight: "700",
-            textAlign: "center",
-            letterSpacing: 0.5,
-          }}
-        >
-          BUILD 63 · v67.5 disclaimer definitivo · HUD ON
-        </Text>
-      </View>
       {/* v66.13 (Fabio 2026-06-18): Neon border SEMPRE presente durante
           l'onboarding — l'entità è sempre "attiva" e cambia colore in base
           allo stato (idle=champagne, recording=tiffany, thinking=rosa,
@@ -1156,6 +1138,7 @@ export default function OnboardingV4() {
                       style={[
                         styles.bubbleText,
                         m.role === "user" ? styles.bubbleTextUser : styles.bubbleTextAi,
+                        m.role === "ai" && aiFontFamily ? { fontFamily: aiFontFamily, fontSize: 19, lineHeight: 26 } : null,
                       ]}
                     >
                       {m.text}
@@ -1240,7 +1223,6 @@ export default function OnboardingV4() {
                 imploding={laImploding}
                 onImplodeComplete={() => setStep("step6_scrim_final")}
                 baseSize={ORB_SIZE}
-                debug={true}
               />
             </View>
             {!laImploding && (

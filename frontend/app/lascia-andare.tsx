@@ -1343,38 +1343,6 @@ export default function LasciaAndareScreen() {
 
   return (
     <View style={styles.root}>
-      {/* === BANNER DIAGNOSTICO TEMPORANEO BUILD 58 (2026-06-24) ===============
-          Marker visibile inequivocabile per verificare se la nuova build EAS
-          ha effettivamente incluso il commit v67 (`LasciaAndareOrb` condiviso).
-          Se vedi questo banner rosso sopra a "Lascia Andare" → il bundle
-          contiene le modifiche v67 → l'orb userà crescita cumulativa + implosione.
-          Se NON vedi il banner → la build sta servendo codice pre-v67.
-          RIMUOVERE questo blocco dopo il test diagnostico. */}
-      <View
-        style={{
-          position: "absolute",
-          top: Math.max(insets.top, 0),
-          left: 0,
-          right: 0,
-          backgroundColor: "#DC2626",
-          paddingVertical: 6,
-          paddingHorizontal: 12,
-          zIndex: 9999,
-        }}
-        pointerEvents="none"
-      >
-        <Text
-          style={{
-            color: "#FFFFFF",
-            fontSize: 12,
-            fontWeight: "700",
-            textAlign: "center",
-            letterSpacing: 0.5,
-          }}
-        >
-          BUILD 63 · v67.5 disclaimer definitivo · HUD ON
-        </Text>
-      </View>
       {/* Uscita — pulsante discreto in alto a sinistra.
           Touch target 44×44 (linee guida iOS), icona X neutra.
           === SPEC 2026-08-21 (Fabio) — FIRSTBOOT GATE ===
@@ -1423,7 +1391,6 @@ export default function LasciaAndareScreen() {
             imploding={laProdImploding}
             onImplodeComplete={onImplodeComplete}
             baseSize={Math.min(Dimensions.get("window").width * 0.62, 240)}
-            debug={true}
           />
         </Animated.View>
       </View>
