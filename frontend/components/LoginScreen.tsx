@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -6,18 +6,38 @@ import {
   StyleSheet,
   Platform,
   ActivityIndicator,
+  Linking,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useAuth } from "../lib/auth";
+import { useRouter } from "expo-router";
+import { useAuth, persistToken } from "../lib/auth";
 import { api } from "../lib/api";
-import { persistToken } from "../lib/auth";
+import EclipseOrb from "./EclipseOrb";
+import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
 
 export default function LoginScreen() {
   const { signInGoogle, signInApple, refresh } = useAuth() as any;
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const [busy, setBusy] = useState<null | "google" | "apple" | "dev">(null);
   const [err, setErr] = useState<string | null>(null);
+
+  const onOpenTerms = useCallback(() => {
+    try {
+      router.push("/legal/terms");
+    } catch {
+      Linking.openURL("https://ollenya.com/legal/terms").catch(() => {});
+    }
+  }, [router]);
+
+  const onOpenPrivacy = useCallback(() => {
+    try {
+      router.push("/legal/privacy");
+    } catch {
+      Linking.openURL("https://ollenya.com/legal/privacy").catch(() => {});
+    }
+  }, [router]);
 
   const onGoogle = async () => {
     setErr(null);
@@ -82,7 +102,12 @@ export default function LoginScreen() {
   return (
     <View style={[styles.root, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 32 }]}>
       <View style={styles.center}>
-        <View style={styles.orb} />
+        {/* v67.4: pallino mint → EclipseOrb reale (coerente con splash,
+            home, intro, lascia-andare). Size = ECLIPSE_MAX_DIAMETER (320),
+            nucleo fisso 200px via lib/eclipseConstants. */}
+        <View style={styles.orbWrap}>
+          <EclipseOrb status="idle" size={ECLIPSE_MAX_DIAMETER} />
+        </View>
         <Text style={styles.brand}>Ollenya</Text>
         <Text style={styles.tagline}>Per le cose che vuoi portare con te.{"\n"}Per quelle che vuoi lasciare andare.</Text>
       </View>
@@ -150,7 +175,18 @@ export default function LoginScreen() {
           </TouchableOpacity>
         ) : null}
 
-        <Text style={styles.legal}>Accedendo accetti i Termini e la Privacy Policy di Ollenya.</Text>
+        {/* v67.4: footer legale con link cliccabili verso /legal/terms e /legal/privacy. */}
+        <Text style={styles.legal}>
+          Accedendo accetti i{" "}
+          <Text style={styles.legalLink} onPress={onOpenTerms}>
+            Termini
+          </Text>
+          {" "}e la{" "}
+          <Text style={styles.legalLink} onPress={onOpenPrivacy}>
+            Privacy Policy
+          </Text>
+          {" "}di Ollenya.
+        </Text>
       </View>
     </View>
   );
@@ -159,7 +195,7 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#08070A", paddingHorizontal: 28, justifyContent: "space-between" },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
-  orb: { width: 96, height: 96, borderRadius: 48, backgroundColor: "#6EE7B7", marginBottom: 28, opacity: 0.9 },
+  orbWrap: { marginBottom: 24, alignItems: "center", justifyContent: "center" },
   brand: { color: "#FFFFFF", fontSize: 40, fontWeight: "800", letterSpacing: 1 },
   tagline: { color: "rgba(255,255,255,0.6)", fontSize: 16, textAlign: "center", marginTop: 12, lineHeight: 24 },
   bottom: { gap: 12 },
@@ -173,5 +209,6 @@ const styles = StyleSheet.create({
   devBtn: { backgroundColor: "rgba(252, 211, 77, 0.10)", borderWidth: 1, borderColor: "rgba(252, 211, 77, 0.45)", marginTop: 8 },
   devText: { color: "#FCD34D", fontSize: 14, fontWeight: "700" },
   err: { color: "#FCA5A5", fontSize: 13, textAlign: "center", marginBottom: 8, paddingHorizontal: 12, lineHeight: 18 },
-  legal: { color: "rgba(255,255,255,0.35)", fontSize: 12, textAlign: "center", marginTop: 8 },
+  legal: { color: "rgba(255,255,255,0.35)", fontSize: 12, textAlign: "center", marginTop: 8, lineHeight: 18 },
+  legalLink: { color: "rgba(255,255,255,0.75)", textDecorationLine: "underline", fontWeight: "600" },
 });

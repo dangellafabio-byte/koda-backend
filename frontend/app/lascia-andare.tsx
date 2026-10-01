@@ -1372,7 +1372,7 @@ export default function LasciaAndareScreen() {
             letterSpacing: 0.5,
           }}
         >
-          BUILD 61 · v67.3 nucleo 200 fisso · aurora 240→320 · HUD ON
+          BUILD 62 · v67.4 legal rework · HUD ON
         </Text>
       </View>
       {/* Uscita — pulsante discreto in alto a sinistra.

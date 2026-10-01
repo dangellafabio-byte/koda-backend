@@ -5,7 +5,7 @@
     "version": "1.0.150",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "koda",
+    "scheme": "ollenya",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "runtimeVersion": "1.0.133",
@@ -13,7 +13,7 @@
       "supportsTablet": false,
       "usesAppleSignIn": true,
       "bundleIdentifier": "com.dangella.ollenya",
-      "buildNumber": "61",
+      "buildNumber": "62",
       "privacyManifests": {
         "NSPrivacyTracking": false,
         "NSPrivacyTrackingDomains": [],
@@ -87,7 +87,7 @@
     },
     "android": {
       "package": "com.dangella.ollenya",
-      "versionCode": 61,
+      "versionCode": 62,
       "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.RECORD_AUDIO",
