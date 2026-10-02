@@ -1,5 +1,28 @@
 # Taccuino Vivo — Product Requirements Document
 
+### v67.9 (2026-06-24) — Fix LA intro cosmic edge-to-edge + glow enorme + post-paywall indigo (Build 67)
+
+**Fix 1 — LA intro bordo superiore indaco**
+Problema: in `OnboardingV4` step5_demo_la lo sfondo cosmic era confinato dentro `SafeAreaView` → una striscia indaco visibile nella fascia notch/status bar.
+
+Soluzione: `CosmicBackground` spostato a livello root (fuori dal `SafeAreaView`), e il background della `Animated.View` root diventa dinamico (`COSMIC_SPACE_BG` quando `step === "step5_demo_la"`, altrimenti `APP_BG_INDIGO`). Anche `StatusBar.backgroundColor` segue lo stesso rootBg. Risultato: LA intro = edge-to-edge identica a `/lascia-andare.tsx`.
+
+**Fix 2 — Glow Lascia Andare molto più espansivo**
+In `LasciaAndareOrb.tsx` l'`auroraGrowthScale` mappava `[1 .. maxScale]` → `[0.75 .. 1.0]` (crescita impercettibile). Ora mappa a `[0.75 .. 3.2]` → al cap dell'accumulatore l'aurora occupa ~1000px (riempie quasi tutto lo schermo del telefono). Il nucleo nero NON si espande (resta a `ECLIPSE_NUCLEUS_DIAMETER=200`).
+
+**Fix 3 — Schermate post-paywall unificate su Indigo**
+Rimossi gli ultimi 4 background divergenti:
+  • `HeartVoiceReveal.tsx`: `#0F0F1A` → `APP_BG_INDIGO`
+  • `MicroDemoOllenya.tsx`: `#0F0F1A` → `APP_BG_INDIGO`
+  • `IntroPremium.tsx`: `#0A0A0F` → `APP_BG_INDIGO`
+  • `AppWelcomeIntro.tsx`: `#0F0C1C` → `APP_BG_INDIGO`
+
+Ora TUTTE le schermate (login, legal, disclaimer, onboarding, intro premium, microdemo, heart reveal) usano lo stesso identico Indigo `#1F1A36`. Unica eccezione = Lascia Andare → cosmic space `#06060E`.
+
+**Build** — bump 66 → 67 in `app.json`.
+
+---
+
 ### v67.8 (2026-06-24) — DOCUMENTO UNICO: sezioni 1, 4, 7, 8 completate (Build 66)
 
 **Sezione 1 — Sfondi unificati**

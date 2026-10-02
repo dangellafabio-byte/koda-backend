@@ -37,6 +37,7 @@ import type { AudioPlayer } from "expo-audio";
 import * as SecureStore from "expo-secure-store";
 import EclipseOrb from "../components/EclipseOrb";
 import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
+import { APP_BG_INDIGO } from "../lib/uiConstants";
 
 const TAG = "KODA_HEART_REVEAL";
 const REVEAL_CLIP = require("../assets/sounds/intro/reveal_cuore_voce-cielo.mp3");
@@ -351,7 +352,7 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     // Sfondo Ollenya-blu profondo (coerente con LA + Intro)
-    backgroundColor: "#0F0F1A",
+    backgroundColor: APP_BG_INDIGO,
   },
   centerContainer: {
     flex: 1,

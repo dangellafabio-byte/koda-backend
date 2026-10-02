@@ -51,6 +51,7 @@ import EclipseOrb, { OrbStatus, OrbTone } from "../components/EclipseOrb";
 import { API_BASE } from "../lib/api";
 import { getAuthToken } from "../lib/authToken";
 import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
+import { APP_BG_INDIGO } from "../lib/uiConstants";
 
 const TAG = "KODA_MICRODEMO";
 
@@ -689,7 +690,7 @@ export default function MicroDemoOllenya() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#0F0F1A",
+    backgroundColor: APP_BG_INDIGO,
   },
   abortBtn: {
     position: "absolute",

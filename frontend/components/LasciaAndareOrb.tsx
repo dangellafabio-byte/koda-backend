@@ -186,9 +186,14 @@ export default function LasciaAndareOrb({
 
   const combinedOpacity = Animated.multiply(glowAnim, implodeOpacityAnim);
 
+  // v67.9 (Fabio 2026-06-24): il glow deve ESPANDERSI MOLTO di più
+  // con l'accumulo del parlato. Prima la aurora andava da 0.75 → 1.0
+  // (quasi impercettibile). Ora va da 0.75 → 3.2 così, raggiunto il cap
+  // dell'accumulatore, l'alone riempie quasi l'intero schermo mobile.
+  // Il nucleo nero NON si espande (gestito a parte da EclipseOrb).
   const auroraGrowthScale = growthAnim.interpolate({
     inputRange: [1, maxScale],
-    outputRange: [ECLIPSE_MIN_DIAMETER / ECLIPSE_MAX_DIAMETER, 1.0],
+    outputRange: [ECLIPSE_MIN_DIAMETER / ECLIPSE_MAX_DIAMETER, 3.2],
     extrapolate: "clamp",
   });
   const finalAuroraScale = Animated.multiply(auroraGrowthScale, pulseAnim);

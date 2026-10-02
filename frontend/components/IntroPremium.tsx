@@ -30,6 +30,7 @@ import EclipseOrb from "./EclipseOrb";
 import HandsFreeOrb from "./HandsFreeOrb";
 import { ensureSpeechPermission } from "../lib/speechPermission";
 import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
+import { APP_BG_INDIGO } from "../lib/uiConstants";
 
 const TAG = "[intro-premium]";
 const CLIP_ECCOMI = require("../assets/sounds/intro/intro_premium_eccomi-cielo.mp3");
@@ -539,7 +540,7 @@ export default function IntroPremium() {
 
 // ==================== STYLES ====================
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#0A0A0F" },
+  screen: { flex: 1, backgroundColor: APP_BG_INDIGO },
   orbWrap: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: "center", alignItems: "center",

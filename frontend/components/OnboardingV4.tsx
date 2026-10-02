@@ -1117,9 +1117,19 @@ export default function OnboardingV4() {
   }, [step]);
 
   // ==== JSX =================================================================
+  // v67.9 (Fabio 2026-06-24): quando siamo in step5_demo_la il background
+  // ROOT (dietro SafeArea → copre anche il notch/status bar) diventa
+  // COSMIC_SPACE_BG. Senza questo rimaneva una striscia indaco in alto
+  // durante la demo LA, mentre la LA produzione è edge-to-edge cosmica.
+  const isLaDemo = step === "step5_demo_la";
+  const rootBg = isLaDemo ? COSMIC_SPACE_BG : APP_BG;
   return (
-    <Animated.View style={[styles.root, { opacity: rootOpacity }]}>
-      <StatusBar barStyle="light-content" backgroundColor={APP_BG} />
+    <Animated.View style={[styles.root, { backgroundColor: rootBg, opacity: rootOpacity }]}>
+      <StatusBar barStyle="light-content" backgroundColor={rootBg} />
+      {/* v67.9: CosmicBackground renderizzato PRIMA del SafeAreaView, come
+          strato sotto a tutto (StyleSheet.absoluteFill), così le stelle
+          coprono anche l'area del notch/status bar — identico a LA produzione. */}
+      {isLaDemo && <CosmicBackground />}
       {/* v66.13 (Fabio 2026-06-18): Neon border SEMPRE presente durante
           l'onboarding — l'entità è sempre "attiva" e cambia colore in base
           allo stato (idle=champagne, recording=tiffany, thinking=rosa,
@@ -1128,7 +1138,7 @@ export default function OnboardingV4() {
           gli scrim overlay in modo che i bordi restino sempre visibili.
           v66.16: TRANNE durante step5_demo_la — in Lascia Andare l'entità
           è "sotterranea" (nessun neon), solo l'orb assorbe le parole. */}
-      {step !== "step5_demo_la" && <NeonBorder status={orbStatus} />}
+      {!isLaDemo && <NeonBorder status={orbStatus} />}
       <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
 
         {/* Orb centrale — visibile in tutti gli step tranne "done".
@@ -1279,9 +1289,10 @@ export default function OnboardingV4() {
             solo l'orb assorbe. */}
         {step === "step5_demo_la" && (
           <View style={styles.laDemoWrap}>
-            {/* v67.8 (doc unico sez 1): sfondo cosmic space UGUALE alla
-                LA produzione — l'utente deve percepire lo stesso luogo. */}
-            <CosmicBackground />
+            {/* v67.9: Il CosmicBackground è renderizzato a livello root
+                (fuori dal SafeAreaView) per coprire anche la fascia del
+                notch — qui dentro laDemoWrap teniamo bg transparent così
+                non si crea una copertura doppia che "spegne" le stelle. */}
             <TouchableOpacity
               onPress={closeLADemo}
               style={[styles.laCloseBtn, { top: insets.top + 12 }]}
@@ -1498,7 +1509,9 @@ const styles = StyleSheet.create({
   // ==== Step 5 LA demo ====
   laDemoWrap: {
     flex: 1,
-    backgroundColor: COSMIC_SPACE_BG,
+    // v67.9: trasparente — il CosmicBackground è a livello root e deve
+    // trasparire anche attraverso laDemoWrap (dentro SafeArea).
+    backgroundColor: "transparent",
   },
   laCloseBtn: {
     position: "absolute",

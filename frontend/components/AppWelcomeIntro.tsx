@@ -37,6 +37,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { APP_BG_INDIGO } from "../lib/uiConstants";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 
@@ -111,7 +112,7 @@ export default function AppWelcomeIntro({ onDone }: AppWelcomeIntroProps) {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor="#0F0C1C" />
+      <StatusBar barStyle="light-content" backgroundColor={APP_BG_INDIGO} />
       <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
         {/* Skip in alto a destra */}
         <View style={styles.topBar}>
@@ -216,7 +217,7 @@ export default function AppWelcomeIntro({ onDone }: AppWelcomeIntroProps) {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#0F0C1C",
+    backgroundColor: APP_BG_INDIGO,
   },
   safe: {
     flex: 1,
