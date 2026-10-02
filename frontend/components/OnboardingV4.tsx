@@ -83,10 +83,12 @@ const ORB_SIZE = ECLIPSE_MAX_DIAMETER;
 const APP_BG = "#1F1A36";
 const METER_THRESHOLD = -50;
 // Palette bolle chat identica a quella della chat REALE (theme NOTTE).
-const CHAT_USER_BG = "#0E7C7B";        // teal pieno, identico alla chat vera
+const CHAT_USER_BG = "#0E7C7B";
 const CHAT_USER_TEXT = "#FFFFFF";
-const CHAT_AI_BG = "rgba(139,92,246,0.18)";  // viola 'eclissi' soft (chat vera)
-const CHAT_AI_BORDER = "#8B5CF6";             // viola 'eclissi' pieno (border brillante)
+// v67.7 (doc unico sez 2): identico alla chat vera (app/index.tsx riga 7892).
+// aiBg = bubbleAccent.color + "66" = alpha 0.4 (NON 0.18).
+const CHAT_AI_BG = "rgba(139,92,246,0.40)";
+const CHAT_AI_BORDER = "#8B5CF6";
 const CHAT_AI_TEXT = "#FFFFFF";
 
 // ==== Fasi (state machine) v66.16 ===========================================
@@ -1120,7 +1122,10 @@ export default function OnboardingV4() {
               keyboardShouldPersistTaps="handled"
             >
               {/* v66.4 (bug 1): rendering ENTRAMBI i lati (user + ai). */}
-              {writeMessages.map((m) => (
+              {writeMessages.map((m, idx) => {
+                // v67.7: rotation deterministico ±1.2° come chat vera (app/index.tsx riga 7881)
+                const rotation = ((idx * 7) % 24 - 12) * 0.1; // -1.2..+1.2 deterministico
+                return (
                 <View
                   key={m.id}
                   style={[
@@ -1132,20 +1137,22 @@ export default function OnboardingV4() {
                     style={[
                       styles.bubble,
                       m.role === "user" ? styles.bubbleUser : styles.bubbleAi,
+                      { transform: [{ rotate: `${rotation}deg` }] },
                     ]}
                   >
                     <Text
                       style={[
                         styles.bubbleText,
                         m.role === "user" ? styles.bubbleTextUser : styles.bubbleTextAi,
-                        m.role === "ai" && aiFontFamily ? { fontFamily: aiFontFamily, fontSize: 19, lineHeight: 26 } : null,
+                        m.role === "ai" && aiFontFamily ? { fontFamily: aiFontFamily, fontSize: 20, lineHeight: 28 } : null,
                       ]}
                     >
                       {m.text}
                     </Text>
                   </View>
                 </View>
-              ))}
+                );
+              })}
               {writeSending ? (
                 <View style={[styles.bubbleRow, styles.bubbleRowAi]}>
                   <View style={[styles.bubble, styles.bubbleAi]}>
