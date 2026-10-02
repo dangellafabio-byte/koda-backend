@@ -48,6 +48,8 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as SecureStore from "expo-secure-store";
 import EclipseOrb, { OrbStatus } from "../components/EclipseOrb";
 import LasciaAndareOrb from "../components/LasciaAndareOrb";
+import CosmicBackground from "../components/CosmicBackground";
+import { COSMIC_SPACE_BG } from "../lib/uiConstants";
 // EclipseOrb non è più renderizzato direttamente (sostituito da
 // LasciaAndareOrb condiviso, v67). Import mantenuto per il tipo OrbStatus.
 void EclipseOrb;
@@ -1330,7 +1332,7 @@ export default function LasciaAndareScreen() {
   // del replace verso /paywall) → schermo nero minimo, nessun contenuto
   // sensibile né interazione. Questo è il gate visivo del Livello 2+3.
   if (authorized !== "allowed") {
-    return <View style={[styles.root, { backgroundColor: "#000000" }]} />;
+    return <View style={[styles.root, { backgroundColor: COSMIC_SPACE_BG }]} />;
   }
   // === GATE INTRO V3 (Fabio 2026-08-23) ==================================
   // Se stiamo ancora verificando `intro_v3_completed_at` o abbiamo appena
@@ -1338,11 +1340,15 @@ export default function LasciaAndareScreen() {
   // orb, no "Prenditi il tuo tempo"). Il redirect avviene nel useEffect
   // sopra, che ha già chiamato router.replace("/intro-v3").
   if (introGate !== "authorized") {
-    return <View style={[styles.root, { backgroundColor: "#000000" }]} />;
+    return <View style={[styles.root, { backgroundColor: COSMIC_SPACE_BG }]} />;
   }
 
   return (
     <View style={styles.root}>
+      {/* v67.8 (doc unico sez 1): sfondo "cosmic space" (nero profondo
+          con nebulose e stelle fisse). Unica eccezione documentata al
+          background Indigo standard. Statico, pointerEvents=none. */}
+      <CosmicBackground />
       {/* Uscita — pulsante discreto in alto a sinistra.
           Touch target 44×44 (linee guida iOS), icona X neutra.
           === SPEC 2026-08-21 (Fabio) — FIRSTBOOT GATE ===
@@ -1486,7 +1492,7 @@ export default function LasciaAndareScreen() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#000000",
+    backgroundColor: COSMIC_SPACE_BG,
     justifyContent: "center",
     alignItems: "center",
   },

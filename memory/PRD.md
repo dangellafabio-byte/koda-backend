@@ -1,5 +1,64 @@
 # Taccuino Vivo — Product Requirements Document
 
+### v67.8 (2026-06-24) — DOCUMENTO UNICO: sezioni 1, 4, 7, 8 completate (Build 66)
+
+**Sezione 1 — Sfondi unificati**
+Creato `/app/frontend/lib/uiConstants.ts` come single source of truth:
+  • `APP_BG_INDIGO = "#1F1A36"` — tutte le schermate standard
+  • `COSMIC_SPACE_BG = "#06060E"` — eccezione documentata per Lascia Andare
+
+Allineati:
+  • `DisclaimerScreen.tsx`: `#0B1220` → `APP_BG_INDIGO` (bottone CTA passato da `#3B82F6` blu generico a `#8B5CF6` viola brand)
+  • `LoginScreen.tsx`: `#08070A` → `APP_BG_INDIGO`
+  • `legal-consent.tsx`: `#0F0C1C` → `APP_BG_INDIGO`
+  • `OnboardingV4.tsx`: era già `#1F1A36`, costante importata da uiConstants
+
+**Lascia Andare "cosmic space"**
+Nuovo componente `/app/frontend/components/CosmicBackground.tsx`:
+  • Base `COSMIC_SPACE_BG` (indaco quasi-nero)
+  • 36 stelle statiche distribuite in modo pseudo-random deterministico (seed=42), r=0.6..1.6px, opacity 0.25..0.75. Nessuna stella nei 170px centrali per non interferire con l'orb.
+  • 2 nuvole di nebulosa radiali (viola molto desaturato in alto-sx, indaco profondo in basso-dx)
+  • `pointerEvents="none"`, zero animazioni in loop (LA = silenzio, lo sfondo non ha vita propria)
+
+Applicato in `app/lascia-andare.tsx` (sostituisce il vecchio `#000000`) e in `components/OnboardingV4.tsx` step5_demo_la (coerenza tra demo intro e LA produzione).
+
+**Sezione 4 — Presentazione iniziale naturale (OnboardingV4)**
+Nuovo helper `speakChain(lines[], onAllDone, opts)` per catene di TTS con pause.
+
+Sequenza step1_speak_intro (sostituisce il vecchio TTS unico "Ciao, io sono Ollenya, sono una presenza..."):
+  1. "Ciao." → pausa 450ms
+  2. "Ciao." → pausa 500ms
+  3. "Io sono Ollenya, tu?" → step2_listen_name
+
+Sequenza step2_confirm (sostituisce "Ciao [nome], piacere. Ti mostro come funziono."):
+  1. "Piacere di conoscerti, [Nome]." → pausa 500ms
+  2. "Iniziamo piano." → step_voice_a
+
+Interrompibile: su cambio step (mountedRef / step guard), la chain si ferma senza spezzare il flow.
+
+**Sezione 7 — Verifica EclipseOrb centralizzato**
+Grep conferma che TUTTE le schermate (lascia-andare, index, OllenyaIntroV3, HeartVoiceReveal, OnboardingV4, OllenyaIntro, MicroDemoOllenya, OllenyaIntroConversational, LoginScreen, IntroPremium) importano e usano `EclipseOrb` da `components/EclipseOrb.tsx`. L'unica eccezione è `OllenyaSplash.tsx` che usa un `OrbCircle` interno per il ciclo 5-palette identitario (champagne → viola → tiffany → ciclamino → rosa). Documentata come eccezione intenzionale.
+
+**Sezione 8 — Testi dei 3 modi aggiornati**
+Scrim SCRITTURA:
+  "Qui puoi scrivermi quando vuoi. La scrittura è sempre tua, sempre gratuita. Uno spazio che non si chiude mai. Proviamo."
+
+Scrim LASCIA ANDARE:
+  "E adesso ti mostro il mio cuore. Un luogo in cui nessuno ti ascolta e nessuno risponde. Solo tuo, per lasciare andare quello che porti dentro. Mentre parli, l'eclissi assorbe ogni parola. Provalo."
+
+Scrim VOCE / modello finale:
+  "Questo è come funziono io. La scrittura e Lascia Andare restano con te, gratuiti, per sempre. Se vorrai sentirmi parlare, quella è la versione Premium."
+
+**Bug fix OnboardingV4** — Rimossi reference a identificatori non esistenti (`setVoiceExchangeCount`, `voiceStartedRef`) nell'handler `paused_by_inactivity`. Ora resetta correttamente `voiceAStartedRef` e `voiceBStartedRef` prima di tornare a step1.
+
+**Build bump** — `buildNumber` + `versionCode` 65 → 66 in `app.json`.
+
+Issue aperti (NON toccati in questa iterazione, da escalation a `support_agent`/Emergent):
+  • Apple Sign-In HTTP 500 (`APPLE_AUDIENCES` + race condition upsert)
+  • OAuth native dialog branding "Koda" → "Ollenya"
+
+
+
 ## ⚠️ Policy bloccanti da leggere PRIMA di toccare aree sensibili
 
 Prima di lavorare su queste aree, l'agent DEVE leggere il documento di policy corrispondente:

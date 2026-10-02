@@ -34,6 +34,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
+import { APP_BG_INDIGO } from "../lib/uiConstants";
 
 const TAG = "[LEGAL_CONSENT]";
 
@@ -84,7 +85,7 @@ export default function LegalConsentScreen() {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor="#0F0C1C" />
+      <StatusBar barStyle="light-content" backgroundColor={APP_BG_INDIGO} />
       <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
         <ScrollView
           style={styles.scroll}
@@ -187,7 +188,7 @@ export default function LegalConsentScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#0F0C1C" },
+  root: { flex: 1, backgroundColor: APP_BG_INDIGO },
   safe: { flex: 1 },
   scroll: { flex: 1 },
   scrollContent: {
@@ -273,7 +274,7 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === "ios" ? 8 : 20,
     borderTopWidth: 1,
     borderTopColor: "rgba(255,255,255,0.06)",
-    backgroundColor: "#0F0C1C",
+    backgroundColor: APP_BG_INDIGO,
   },
   checkRow: {
     flexDirection: "row",

@@ -61,11 +61,13 @@ import EclipseOrb from "./EclipseOrb";
 import type { OrbStatus } from "./EclipseOrb";
 import NeonBorder from "./NeonBorder";
 import LasciaAndareOrb from "./LasciaAndareOrb";
+import CosmicBackground from "./CosmicBackground";
 import { api, API_BASE } from "../lib/api";
 import { getAuthToken } from "../lib/authToken";
 import { ensureSpeechPermission } from "../lib/speechPermission";
 import { prewarmMic } from "../lib/voice";
 import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
+import { APP_BG_INDIGO, COSMIC_SPACE_BG } from "../lib/uiConstants";
 import { useFonts } from "expo-font";
 
 const TAG = "[ONBOARDING_V4]";
@@ -80,7 +82,9 @@ const { width: SCREEN_W } = Dimensions.get("window");
 // rendono un'immagine visualmente ~240. Uniamo intro e LA a questa taglia
 // percepita per rispettare "tutte identiche alla home".
 const ORB_SIZE = ECLIPSE_MAX_DIAMETER;
-const APP_BG = "#1F1A36";
+// v67.8 (doc unico sez 1): sfondo Indigo UNICO per tutte le schermate
+// standard (incluso OnboardingV4). Rimosso l'hardcoded locale.
+const APP_BG = APP_BG_INDIGO;
 const METER_THRESHOLD = -50;
 // Palette bolle chat identica a quella della chat REALE (theme NOTTE).
 const CHAT_USER_BG = "#0E7C7B";
@@ -539,12 +543,58 @@ export default function OnboardingV4() {
     [clearTimer, stopStt]
   );
 
-  // ==== Step orchestration ==================================================
+  // ==== TTS runtime =========================================================
+  // v67.8 (Fabio 2026-06-24, doc unico sez 4): helper per catena di TTS
+  // con pause. Chiama `speak` in sequenza, con una pausa configurable
+  // tra una frase e l'altra. Serve per la presentazione iniziale naturale:
+  //   "Ciao." → pausa → "Ciao." → pausa → "Io sono Ollenya, tu?"
+  //
+  // Interrompibile: se nel frattempo `mountedRef` diventa false o lo step
+  // cambia, la catena si interrompe senza "spezzare" il flow.
+  const speakChain = useCallback(
+    async (
+      lines: { text: string; pauseAfterMs?: number }[],
+      onAllDone: () => void,
+      opts?: { silent?: boolean }
+    ) => {
+      let i = 0;
+      const next = () => {
+        if (!mountedRef.current) return;
+        if (i >= lines.length) {
+          onAllDone();
+          return;
+        }
+        const line = lines[i++];
+        speak(
+          line.text,
+          () => {
+            if (!mountedRef.current) return;
+            const pause = line.pauseAfterMs ?? 0;
+            if (pause > 0) {
+              timerRef.current = setTimeout(() => {
+                if (mountedRef.current) next();
+              }, pause);
+            } else {
+              next();
+            }
+          },
+          opts
+        );
+      };
+      next();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [speak]
+  );
 
-  // Step 1: TTS intro + richiesta mic dopo che il TTS è partito
+
+  // Step 1: Presentazione iniziale naturale (doc unico sez 4).
+  //   Ciao. → (pausa) → Ciao. → (pausa) → Io sono Ollenya, tu?
+  // Interrompibile: cambio step → chain si ferma su mountedRef/step guard.
+  // Richiede permesso mic subito dopo l'inizio del TTS, in modo che quando
+  // arriviamo a "step2_listen_name" il permesso sia già risolto.
   useEffect(() => {
     if (step !== "step1_speak_intro") return;
-    const text = "Ciao, io sono Ollenya, sono una presenza, e sono qui per te! Come ti chiami?";
     // Richiedi mic subito dopo l'inizio del TTS (dopo un piccolo delay per
     // lasciar partire l'audio e mostrare il testo).
     if (!micRequestedRef.current) {
@@ -558,13 +608,19 @@ export default function OnboardingV4() {
         }
       }, 900);
     }
-    // v66.15 (Fabio 2026-06-18): silent=true → NIENTE sottotitolo durante
-    // il dialogo diretto. Regola: quando Ollenya PARLA CON L'UTENTE
-    // (saluti, domande interattive) NON compare testo. Il testo compare
-    // SOLO durante gli scrim esplicativi (spiegazioni sul funzionamento).
-    speak(text, () => {
-      if (mountedRef.current) setStep("step2_listen_name");
-    }, { silent: true });
+    // v67.8 (doc unico sez 4): sequenza "Ciao → Ciao → Io sono Ollenya, tu?"
+    // Dialogo diretto → silent:true (nessun sottotitolo sovraimpresso).
+    speakChain(
+      [
+        { text: "Ciao.", pauseAfterMs: 450 },
+        { text: "Ciao.", pauseAfterMs: 500 },
+        { text: "Io sono Ollenya, tu?", pauseAfterMs: 0 },
+      ],
+      () => {
+        if (mountedRef.current) setStep("step2_listen_name");
+      },
+      { silent: true }
+    );
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
@@ -614,19 +670,26 @@ export default function OnboardingV4() {
   }, [step]);
 
   // Step 2b: confirm speech
-  // v66.15 (Fabio 2026-06-18): saluto con nome dell'utente. È dialogo
-  // diretto → silent:true (nessun sottotitolo). Poi va DIRETTAMENTE
-  // a step3_scrim_write (spiegazione scrittura).
+  // v67.8 (Fabio 2026-06-24, doc unico sez 4): catena naturale
+  //   "Piacere di conoscerti, [Nome]." → (pausa) → "Iniziamo piano."
+  // Dialogo diretto → silent:true. Avanza a step_voice_a.
   useEffect(() => {
     if (step !== "step2_confirm") return;
-    const text = userName
-      ? `Ciao ${userName}, piacere. Ti mostro come funziono.`
-      : "Piacere di conoscerti. Ti mostro come funziono.";
-    speak(text, () => {
-      if (mountedRef.current) setStep("step_voice_a");
-    }, { silent: true });
+    const greeting = userName
+      ? `Piacere di conoscerti, ${userName}.`
+      : "Piacere di conoscerti.";
+    speakChain(
+      [
+        { text: greeting, pauseAfterMs: 500 },
+        { text: "Iniziamo piano.", pauseAfterMs: 0 },
+      ],
+      () => {
+        if (mountedRef.current) setStep("step_voice_a");
+      },
+      { silent: true }
+    );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step]);
+  }, [step, userName]);
 
   // v66.4 (Fabio 2026-06-16, bug 4): clear subtitle SUBITO su cambio step.
   // v66.8 (Fabio 2026-06-16): clear ANCHE il timer d'inattività globale.
@@ -692,24 +755,26 @@ export default function OnboardingV4() {
 
   useEffect(() => {
     if (step === "step3_scrim_write") {
+      // v67.8 (doc unico sez 8): testo SCRITTURA — asciutto, diretto.
       scrimSpeakStep(
         "step3_scrim_write",
-        "Qui puoi scrivermi quando vuoi. La scrittura è sempre attiva, sempre gratuita — uno spazio che non si chiude mai. Facciamo una prova insieme.",
+        "Qui puoi scrivermi quando vuoi. La scrittura è sempre tua, sempre gratuita. Uno spazio che non si chiude mai. Proviamo.",
         "step3_demo_write"
       );
     } else if (step === "step5_scrim_la") {
+      // v67.8 (doc unico sez 8): testo LASCIA ANDARE — essenziale, poetico.
       scrimSpeakStep(
         "step5_scrim_la",
-        "E adesso ti mostro il mio cuore. Un luogo dove nessuno ti ascolta e nessuno risponde. Uno spazio tutto tuo, per svuotarti di quello che porti dentro. Nessun giudizio, nessuna eco. Mentre parli, l'eclissi assorbe ogni parola come un buco nero silenzioso. Provalo.",
+        "E adesso ti mostro il mio cuore. Un luogo in cui nessuno ti ascolta e nessuno risponde. Solo tuo, per lasciare andare quello che porti dentro. Mentre parli, l'eclissi assorbe ogni parola. Provalo.",
         "step5_demo_la"
       );
     } else if (step === "step6_scrim_final") {
-      // v66.15 (Fabio 2026-06-18): scrim finale — spiega il modello dell'app.
-      // NON è più upsell voce; è la sintesi di come funziona Ollenya:
-      // scrittura + Lascia Andare = gratuiti per sempre; voce = Premium.
+      // v67.8 (doc unico sez 8): testo VOCE / modello finale — chiaro,
+      // non commerciale. Scrittura e Lascia Andare sempre gratuiti; voce
+      // = Premium.
       scrimSpeakStep(
         "step6_scrim_final",
-        "Ok, questo è come funziono io. Da adesso in poi, la scrittura e Lascia Andare saranno sempre con te, gratuiti. Se vorrai parlare anche con me e sentire la mia voce, quella è la versione Premium.",
+        "Questo è come funziono io. La scrittura e Lascia Andare restano con te, gratuiti, per sempre. Se vorrai sentirmi parlare, quella è la versione Premium.",
         "done"
       );
     } else {
@@ -1042,11 +1107,11 @@ export default function OnboardingV4() {
   const currentScrimText = useMemo(() => {
     switch (step) {
       case "step3_scrim_write":
-        return "Qui puoi scrivermi quando vuoi.\n\nLa scrittura è sempre attiva, sempre gratuita — uno spazio che non si chiude mai.\n\nFacciamo una prova insieme.";
+        return "Qui puoi scrivermi quando vuoi.\n\nLa scrittura è sempre tua, sempre gratuita.\n\nUno spazio che non si chiude mai.\n\nProviamo.";
       case "step5_scrim_la":
-        return "E adesso ti mostro il mio cuore.\n\nUn luogo dove nessuno ti ascolta e nessuno risponde. Uno spazio tutto tuo, per svuotarti di quello che porti dentro.\n\nNessun giudizio, nessuna eco. Mentre parli, l'eclissi assorbe ogni parola come un buco nero silenzioso.\n\nProvalo.";
+        return "E adesso ti mostro il mio cuore.\n\nUn luogo in cui nessuno ti ascolta e nessuno risponde.\n\nSolo tuo, per lasciare andare quello che porti dentro.\n\nMentre parli, l'eclissi assorbe ogni parola.\n\nProvalo.";
       case "step6_scrim_final":
-        return "Ok, questo è come funziono io.\n\nDa adesso in poi, la scrittura e Lascia Andare saranno sempre con te, gratuiti.\n\nSe vorrai parlare anche con me e sentire la mia voce, quella è la versione Premium.";
+        return "Questo è come funziono io.\n\nLa scrittura e Lascia Andare restano con te, gratuiti, per sempre.\n\nSe vorrai sentirmi parlare, quella è la versione Premium.";
       default: return null;
     }
   }, [step]);
@@ -1214,6 +1279,9 @@ export default function OnboardingV4() {
             solo l'orb assorbe. */}
         {step === "step5_demo_la" && (
           <View style={styles.laDemoWrap}>
+            {/* v67.8 (doc unico sez 1): sfondo cosmic space UGUALE alla
+                LA produzione — l'utente deve percepire lo stesso luogo. */}
+            <CosmicBackground />
             <TouchableOpacity
               onPress={closeLADemo}
               style={[styles.laCloseBtn, { top: insets.top + 12 }]}
@@ -1255,10 +1323,13 @@ export default function OnboardingV4() {
               setWriteExchangeCount(0);
               setWriteCompleted(false);
               setWriteInput("");
-              setVoiceExchangeCount(0);
+              // v67.8: puliamo gli started-refs degli scambi vocali
+              // (step_voice_a/b) e degli scrim. voiceExchangeCount
+              // non esiste più dalla v66.15 — rimosso.
+              voiceAStartedRef.current = false;
+              voiceBStartedRef.current = false;
               scrimStartedRef.current = {};
               writeStartedRef.current = false;
-              voiceStartedRef.current = false;
               micRequestedRef.current = false;
               setStep("step1_speak_intro");
             }}
@@ -1427,7 +1498,7 @@ const styles = StyleSheet.create({
   // ==== Step 5 LA demo ====
   laDemoWrap: {
     flex: 1,
-    backgroundColor: APP_BG,
+    backgroundColor: COSMIC_SPACE_BG,
   },
   laCloseBtn: {
     position: "absolute",

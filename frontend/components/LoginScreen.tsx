@@ -15,6 +15,7 @@ import { useAuth, persistToken } from "../lib/auth";
 import { api } from "../lib/api";
 import EclipseOrb from "./EclipseOrb";
 import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
+import { APP_BG_INDIGO } from "../lib/uiConstants";
 
 export default function LoginScreen() {
   const { signInGoogle, signInApple, refresh } = useAuth() as any;
@@ -193,7 +194,7 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#08070A", paddingHorizontal: 28, justifyContent: "space-between" },
+  root: { flex: 1, backgroundColor: APP_BG_INDIGO, paddingHorizontal: 28, justifyContent: "space-between" },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
   orbWrap: { marginBottom: 24, alignItems: "center", justifyContent: "center" },
   brand: { color: "#FFFFFF", fontSize: 40, fontWeight: "800", letterSpacing: 1 },

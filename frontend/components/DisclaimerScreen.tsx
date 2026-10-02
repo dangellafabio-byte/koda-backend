@@ -33,6 +33,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { api } from "../lib/api";
+import { APP_BG_INDIGO } from "../lib/uiConstants";
 
 export type DisclaimerScreenProps = {
   /** Chiamato quando l'utente ha tappato "Accetta e Continua" e
@@ -213,7 +214,7 @@ export default function DisclaimerScreen({ onAccepted }: DisclaimerScreenProps) 
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#0B1220" },
+  root: { flex: 1, backgroundColor: APP_BG_INDIGO },
   scrollContent: { paddingHorizontal: 28, paddingTop: 8 },
   title: {
     color: "#FFFFFF",
@@ -334,10 +335,10 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: "rgba(255,255,255,0.06)",
-    backgroundColor: "#0B1220",
+    backgroundColor: APP_BG_INDIGO,
   },
   acceptBtn: {
-    backgroundColor: "#3B82F6",
+    backgroundColor: "#8B5CF6",
     borderRadius: 14,
     paddingVertical: 16,
     alignItems: "center",
