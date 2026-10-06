@@ -1,28 +1,34 @@
 /**
- * Diagnostics screen — accessibile via /diagnostics (file-based routing).
+ * Diagnostics / Segnala un problema (v67.10 Fabio 2026-06-24 — REFATTO).
  *
- * Mostra gli ultimi 500 eventi `[KODA_*]` catturati dal logger (vedi
- * `lib/diagLogger.ts`). Pensata per essere usata da utente reale:
- *   - "Copia" → copia tutto negli appunti → l'utente incolla in chat/email
- *   - "Condividi" → apre lo share sheet iOS/Android
- *   - "Pulisci" → svuota buffer (utile prima di riprodurre il bug)
+ * Prima: mostrava gli eventi `[OLLENYA_VAD] [OLLENYA_TIMING] …` grezzi
+ * all'utente (criptico, intimorisce, "sembra un errore grave").
  *
- * Stile minimale, monospace, niente fronzoli. È uno strumento di debug.
+ * Ora: schermata di supporto ESPLICITA e amichevole:
+ *   • Niente codici tecnici in vista → l'utente vede solo un contatore
+ *     "N eventi registrati, pronti da inviare".
+ *   • Campo di testo libero dove l'utente DESCRIVE il problema.
+ *   • Un unico bottone "Invia segnalazione" → apre share-sheet con la
+ *     descrizione utente + il report tecnico allegato in coda.
+ *   • Sfondo Indigo standard (uiConstants).
+ *
+ * Il report tecnico c'è ancora (serve al dev team), ma è nascosto.
  */
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import {
   View,
   Text,
-  ScrollView,
+  TextInput,
   TouchableOpacity,
   StyleSheet,
   Share,
   Alert,
   Platform,
+  KeyboardAvoidingView,
+  ScrollView,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import * as Clipboard from "expo-clipboard";
 import { Ionicons } from "@expo/vector-icons";
 import {
   getDiagEvents,
@@ -30,61 +36,78 @@ import {
   formatDiagEventsForExport,
   type DiagEvent,
 } from "../lib/diagLogger";
+import { APP_BG_INDIGO } from "../lib/uiConstants";
+
+const SUPPORT_EMAIL = "support@ollenya.app";
 
 export default function DiagnosticsScreen() {
   const router = useRouter();
   const [events, setEvents] = useState<DiagEvent[]>([]);
-  const [refreshTick, setRefreshTick] = useState(0);
+  const [userText, setUserText] = useState("");
+  const [sending, setSending] = useState(false);
+  const inputRef = useRef<TextInput | null>(null);
 
-  // Auto-refresh ogni 1s mentre la schermata è aperta. Costo trascurabile
-  // (chiama getDiagEvents che è una slice del buffer).
+  // Snapshot UNA VOLTA all'apertura: il buffer tecnico va "fotografato"
+  // nel momento in cui l'utente apre la segnalazione. Niente auto-refresh
+  // che possa inquinare il report con eventi successivi (es. apertura
+  // tastiera, scroll).
   useEffect(() => {
     setEvents(getDiagEvents());
-    const t = setInterval(() => {
-      setEvents(getDiagEvents());
-    }, 1000);
-    return () => clearInterval(t);
-  }, [refreshTick]);
-
-  const handleCopy = useCallback(async () => {
-    try {
-      const txt = formatDiagEventsForExport(events);
-      await Clipboard.setStringAsync(txt);
-      Alert.alert("Copiato", `Diario tecnico copiato (${events.length} eventi). Ora incollalo nella chat o email al supporto.`);
-    } catch (e) {
-      Alert.alert("Errore copia", String(e));
-    }
-  }, [events]);
-
-  const handleShare = useCallback(async () => {
-    try {
-      const txt = formatDiagEventsForExport(events);
-      await Share.share({
-        message: txt,
-        title: "Ollenya diag log",
-      });
-    } catch (e) {
-      Alert.alert("Errore condivisione", String(e));
-    }
-  }, [events]);
-
-  const handleClear = useCallback(() => {
-    Alert.alert(
-      "Svuotare il diario?",
-      "Cancella tutti gli eventi tecnici raccolti finora. Utile se vuoi riprovare a riprodurre un problema specifico partendo da un diario pulito.",
-      [
-        { text: "Annulla", style: "cancel" },
-        {
-          text: "Svuota",
-          style: "destructive",
-          onPress: () => {
-            clearDiagEvents();
-            setRefreshTick((x) => x + 1);
-          },
-        },
-      ],
-    );
   }, []);
+
+  const handleSubmit = useCallback(async () => {
+    if (sending) return;
+    const descr = userText.trim();
+    if (descr.length < 10) {
+      Alert.alert(
+        "Descrivi brevemente il problema",
+        "Scrivi almeno una frase su cosa è successo e cosa ti aspettavi che accadesse. Ci aiuta tantissimo a capire.",
+      );
+      return;
+    }
+    setSending(true);
+    try {
+      // Compongo un payload testuale pulito:
+      //   1. Riga di intestazione (data, versione, tier)
+      //   2. Descrizione dell'utente (in evidenza)
+      //   3. Report tecnico in coda (nascosto in realtà, ma allegato)
+      const header =
+        `Segnalazione Ollenya\n` +
+        `Data: ${new Date().toISOString()}\n` +
+        `Piattaforma: ${Platform.OS} ${Platform.Version}\n` +
+        `────────────────────────────\n\n`;
+      const userBlock =
+        `COSA È SUCCESSO (parole dell'utente):\n` +
+        `${descr}\n\n` +
+        `────────────────────────────\n`;
+      const techBlock =
+        `Report tecnico (${events.length} eventi):\n\n` +
+        formatDiagEventsForExport(events);
+      const full = header + userBlock + techBlock;
+      await Share.share({
+        message: full,
+        title: "Segnalazione Ollenya",
+      });
+      // Dopo lo share, resettiamo il buffer così la prossima segnalazione
+      // parte pulita. L'utente può chiudere senza esportare: in quel caso
+      // il buffer resta e può riprovare.
+      clearDiagEvents();
+      setUserText("");
+      // Chiudiamo con un messaggio di ringraziamento (non-bloccante).
+      setTimeout(() => {
+        try {
+          Alert.alert(
+            "Grazie",
+            "La tua segnalazione è stata preparata per l'invio. Se non si è aperta la finestra di condivisione, controlla le autorizzazioni dell'app.",
+          );
+        } catch {}
+      }, 300);
+    } catch (e) {
+      Alert.alert("Impossibile inviare la segnalazione", String(e));
+    } finally {
+      setSending(false);
+    }
+  }, [events, userText, sending]);
 
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
@@ -92,68 +115,67 @@ export default function DiagnosticsScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} hitSlop={12}>
           <Ionicons name="chevron-back" size={24} color="#fff" />
         </TouchableOpacity>
-        {/* === TITOLO USER-FRIENDLY (2026-07-24 pre-lancio) ===
-            "Diagnostica" → "Segnala un problema". Stessa funzione tecnica
-            sotto, framing comprensibile per utenti non tecnici. */}
         <Text style={styles.title}>Segnala un problema</Text>
         <View style={{ width: 24 }} />
       </View>
 
-      <View style={styles.statsBar}>
-        <Text style={styles.statsText}>
-          {events.length === 0
-            ? "Diario tecnico vuoto"
-            : `Diario tecnico: ${events.length} event${events.length === 1 ? "o" : "i"}`}
-        </Text>
-        <Text style={styles.statsTextDim}>
-          Riproduci il problema, poi tocca "Condividi" per inviarcelo.
-        </Text>
-      </View>
-
-      <ScrollView
-        style={styles.logScroll}
-        contentContainerStyle={styles.logContent}
-        showsVerticalScrollIndicator
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
       >
-        {events.length === 0 ? (
-          <Text style={styles.emptyText}>
-            Nessun evento nel diario.{"\n\n"}Riproduci il problema che vuoi segnalarci (parla con Ollenya, prova la funzione che non va), poi torna qui e tocca "Condividi" per inviarci il diario.
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.intro}>
+            Raccontaci cosa è successo. Il report tecnico del momento verrà
+            allegato automaticamente, non serve che te ne occupi tu.
           </Text>
-        ) : (
-          events.map((ev, i) => (
-            <Text
-              key={`${ev.t}-${i}`}
-              style={styles.logLine}
-              selectable
-            >
-              {ev.line}
+
+          <Text style={styles.label}>Cosa è successo?</Text>
+          <TextInput
+            ref={inputRef}
+            value={userText}
+            onChangeText={setUserText}
+            placeholder="Es: ho premuto l'eclissi per parlare, ma non si è attivata. Mi aspettavo di sentire il microfono partire…"
+            placeholderTextColor="rgba(255,255,255,0.35)"
+            multiline
+            style={styles.textarea}
+            textAlignVertical="top"
+          />
+
+          {/* Indicatore minimale: niente codici, solo un conteggio.
+              Rende visibile che "qualcosa di tecnico" c'è, senza spaventare. */}
+          <View style={styles.statsBox}>
+            <Ionicons name="document-text-outline" size={16} color="rgba(255,255,255,0.55)" />
+            <Text style={styles.statsText}>
+              {events.length === 0
+                ? "Report tecnico vuoto (nessun evento recente)"
+                : `Report tecnico pronto: ${events.length} ${events.length === 1 ? "evento" : "eventi"} registrati`}
             </Text>
-          ))
-        )}
-      </ScrollView>
+          </View>
 
-      {/* === Link a Diagnostica VAD RIMOSSO (Fabio 2026-06-21) ===
-          Il bottone "Diagnostica Neural VAD" è stato rimosso perché la pagina
-          /diagnostics-vad importava @siteed/audio-studio + onnxruntime-react-native
-          e crashava l'app su iOS dopo l'abbandono dell'approccio ONNX nativo.
-          Il VAD ora gira lato server (Plan C, /api/vad/probe).
-          Il file diagnostics-vad.tsx è conservato come .OLD-onnx.tsx.bak per
-          riferimento futuro (eventuale migrazione TFLite). */}
+          <TouchableOpacity
+            style={[styles.sendBtn, sending && { opacity: 0.6 }]}
+            onPress={handleSubmit}
+            disabled={sending}
+            testID="submit-report"
+          >
+            <Ionicons name="paper-plane-outline" size={18} color="#fff" />
+            <Text style={styles.sendLabel}>
+              {sending ? "Invio in corso…" : "Invia segnalazione"}
+            </Text>
+          </TouchableOpacity>
 
-      <View style={styles.actionsRow}>
-        <TouchableOpacity style={styles.actionBtn} onPress={handleCopy}>
-          <Ionicons name="copy-outline" size={18} color="#fff" />
-          <Text style={styles.actionLabel}>Copia</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionBtn} onPress={handleShare}>
-          <Ionicons name="share-outline" size={18} color="#fff" />
-          <Text style={styles.actionLabel}>Condividi</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.actionBtn, styles.dangerBtn]} onPress={handleClear}>
-          <Ionicons name="trash-outline" size={18} color="#ff8a8a" />
-          <Text style={[styles.actionLabel, { color: "#ff8a8a" }]}>Svuota</Text>
-        </TouchableOpacity>
-      </View>
+          <Text style={styles.footerHint}>
+            Dalla finestra di condivisione puoi inviare la segnalazione via
+            email, messaggi o qualsiasi altra app. In caso di difficoltà,
+            scrivi a {SUPPORT_EMAIL}.
+          </Text>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -161,7 +183,7 @@ export default function DiagnosticsScreen() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#0a0a0a",
+    backgroundColor: APP_BG_INDIGO,
   },
   header: {
     flexDirection: "row",
@@ -170,7 +192,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#222",
+    borderBottomColor: "rgba(255,255,255,0.08)",
   },
   backBtn: {
     width: 32,
@@ -183,72 +205,71 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: "600",
   },
-  statsBar: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: "#111",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#222",
+  scroll: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 40,
   },
-  statsText: {
-    color: "#fff",
-    fontSize: 13,
-    fontWeight: "500",
-  },
-  statsTextDim: {
-    color: "#888",
-    fontSize: 11,
-    marginTop: 2,
-  },
-  // vadLinkBtn / vadLinkLabel rimossi insieme al bottone "Diagnostica Neural
-  // VAD" (Fabio 2026-06-21). Mantenuti solo come reference storica nel commit.
-  logScroll: {
-    flex: 1,
-    backgroundColor: "#000",
-  },
-  logContent: {
-    padding: 12,
-    paddingBottom: 24,
-  },
-  logLine: {
-    color: "#aef",
-    fontSize: 11,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    lineHeight: 16,
-    marginBottom: 4,
-  },
-  emptyText: {
-    color: "#666",
+  intro: {
+    color: "rgba(255,255,255,0.75)",
     fontSize: 14,
-    textAlign: "center",
-    marginTop: 60,
-    lineHeight: 22,
+    lineHeight: 20,
+    marginBottom: 20,
   },
-  actionsRow: {
+  label: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "600",
+    marginBottom: 8,
+  },
+  textarea: {
+    minHeight: 150,
+    maxHeight: 300,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: "#fff",
+    fontSize: 15,
+    lineHeight: 21,
+  },
+  statsBox: {
+    marginTop: 14,
     flexDirection: "row",
+    alignItems: "center",
     gap: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#222",
-    backgroundColor: "#0a0a0a",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderRadius: 10,
   },
-  actionBtn: {
+  statsText: {
+    color: "rgba(255,255,255,0.65)",
+    fontSize: 12,
     flex: 1,
+  },
+  sendBtn: {
+    marginTop: 22,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 12,
-    backgroundColor: "#222",
-    borderRadius: 8,
-    gap: 6,
+    gap: 10,
+    backgroundColor: "#8B5CF6",
+    paddingVertical: 15,
+    borderRadius: 14,
   },
-  dangerBtn: {
-    backgroundColor: "#2a1414",
-  },
-  actionLabel: {
+  sendLabel: {
     color: "#fff",
-    fontSize: 13,
-    fontWeight: "500",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  footerHint: {
+    marginTop: 20,
+    color: "rgba(255,255,255,0.45)",
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: "center",
   },
 });

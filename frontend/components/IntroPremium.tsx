@@ -507,11 +507,11 @@ export default function IntroPremium() {
           per marcare visivamente quale elemento la card sta indicando.
           v66.0: rimosse card coach_la e coach_swipe. */}
       {phase === "coach_orb" &&
-        renderCard(RECTS.orb, "Qui puoi parlarmi", "Toccami per iniziare, e ancora per fermarmi. I minuti disponibili sono nelle Impostazioni.", true, true)}
+        renderCard(RECTS.orb, "Qui puoi parlarmi", "Tocca e tieni premuto per parlare, rilascia per inviare. I minuti disponibili sono nelle Impostazioni.", true, true)}
       {phase === "coach_hf" &&
-        renderCard(RECTS.hf, "Mani libere", "Se lo attivi ti ascolto in continuo. Non serve toccarmi.", true, true)}
+        renderCard(RECTS.hf, "Mani libere", "Se attivo non serve cliccare l'eclissi per dirmi che hai finito la frase, capirò io!", true, true)}
       {phase === "coach_settings" &&
-        renderCard(RECTS.settings, "Impostazioni", "Da qui cambi voce, tema, memoria.", true, true)}
+        renderCard(RECTS.settings, "Impostazioni", "Qui accedi alle modifiche.", true, true)}
 
       {/* v66.3 (Fabio 2026-06-16) — Scrim finale post-payment.
           Ultima frase in overlay full-screen: "hai tutto quello che posso

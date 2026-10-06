@@ -131,6 +131,24 @@ export default function PaywallScreen() {
     let cancelled = false;
     (async () => {
       try {
+        // v67.10 (Fabio 2026-06-24): la voce "paywall_voce-cielo.mp3" fa
+        // parte ESCLUSIVAMENTE dell'intro iniziale (microdemo → paywall).
+        // Se l'utente ha già completato l'intro V3, NON deve più sentirla:
+        // ogni successiva apertura del paywall (es. uscita da Lascia Andare,
+        // tap su funzione Premium nella home) mostra solo il banner.
+        // Richiesta esplicita utente 2026-06-24.
+        const introDone = await SecureStore.getItemAsync("intro_v3_completed_at");
+        if (introDone) {
+          console.log("[paywall post-demo] intro already completed → skip voice");
+          if (!cancelled) {
+            Animated.timing(contentOpacity, {
+              toValue: 1,
+              duration: 400,
+              useNativeDriver: true,
+            }).start();
+          }
+          return;
+        }
         if (Platform.OS !== "web") {
           await setAudioModeAsync({
             allowsRecording: false,

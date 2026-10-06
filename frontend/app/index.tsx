@@ -5970,25 +5970,17 @@ export default function Taccuino() {
       icon: "🧠",
       title: "Memoria",
       description: "Cosa Ollenya ricorda di te.",
-      count: 4,
+      count: 3,
       body: (
         <>
-            {/* === V65.50 REFACTOR — Card unificata Memoria =============
-                Racchiude sotto un unico ombrello i DUE sistemi tecnici
-                distinti (situazioni ricorrenti vs ricordi semantici), con
-                etichette chiare che li distinguono. Anche l'azione
-                distruttiva "Azzera memoria" (prima in Aiuto) è qui: è il
-                posto dove l'utente si aspetta di trovarla.
-                ========================================================= */}
-
-            {/* --- Toggle situation tracking --- */}
+            {/* --- Toggle MEMORIA (master switch, v67.10) --- */}
             <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8, marginTop: 14 }]}>
               <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.settingLabel}>🧭 Ollenya può ricordare le situazioni</Text>
+                  <Text style={styles.settingLabel}>🧠 Memoria attiva</Text>
                   <Text style={styles.settingHint}>
-                    Se attivo, Ollenya ricorda temi e situazioni ricorrenti
-                    di cui le hai parlato. Le riprende quando torni sull'argomento.
+                    Se attiva, Ollenya ricorda temi e situazioni di cui le hai parlato.
+                    Se la disattivi, parte da zero a ogni conversazione.
                   </Text>
                 </View>
                 <Switch
@@ -6007,39 +5999,8 @@ export default function Taccuino() {
               </View>
             </View>
 
-            {/* --- Vedi situazioni --- */}
-            <TouchableOpacity
-              onPress={() => {
-                const enabled = (profile?.settings as any)?.situation_tracking_enabled === true;
-                if (!enabled) {
-                  Alert.alert(
-                    "Memoria situazioni disattivata",
-                    "Attiva prima l'interruttore qui sopra per vedere le situazioni ricordate.",
-                  );
-                  return;
-                }
-                setShowSettings(false);
-                setTimeout(() => { try { router.push("/situations"); } catch {} }, 100);
-              }}
-              style={{
-                marginTop: 10,
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-                backgroundColor: "rgba(255,255,255,0.06)",
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.14)",
-                borderRadius: 10,
-                paddingHorizontal: 14,
-                paddingVertical: 12,
-              }}
-              testID="see-situations-btn"
-            >
-              <Text style={[styles.settingLabel, { fontSize: 14 }]}>📖 Vedi le situazioni che Ollenya ricorda</Text>
-              <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
-            </TouchableOpacity>
-
-            {/* --- Ricordi semantici (viewer /memories) --- */}
+            {/* --- Riepilogo UNICO di quello che Ollenya sa di te
+                (v67.10: unificato "Vedi situazioni" + "I miei ricordi") --- */}
             <TouchableOpacity
               onPress={() => {
                 setShowSettings(false);
@@ -6060,9 +6021,9 @@ export default function Taccuino() {
               testID="open-memories"
             >
               <View style={{ flex: 1 }}>
-                <Text style={[styles.settingLabel, { fontSize: 14 }]}>🤍 I miei ricordi</Text>
+                <Text style={[styles.settingLabel, { fontSize: 14 }]}>📖 Riepilogo di quello che Ollenya sa di te</Text>
                 <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>
-                  Vedi, esporta o cancella i singoli ricordi.
+                  Tocca per vedere tutto: situazioni, ricordi, storia.
                 </Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />

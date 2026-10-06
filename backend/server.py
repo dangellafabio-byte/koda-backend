@@ -15047,6 +15047,28 @@ async def _fast_pipeline_task(
                 f"[fast {session_id[:8]}] GPS available ({location_city!r}) "
                 f"but no geo_request → skipping injection (uses memory instead)"
             )
+        elif _wants_geo and not location_city:
+            # v67.10 (Fabio 2026-06-24): l'utente CHIEDE dove si trova MA
+            # la posizione GPS è disattivata (default off). Istruiamo Claude
+            # a dire chiaramente di attivarla in Impostazioni, invece di
+            # inventarsi la risposta o fare domande vaghe.
+            sys_prompt = sys_prompt + (
+                "\n\n⚠️ ATTENZIONE LOCATION: l'utente ha fatto una domanda su "
+                "DOVE si trova (posizione, meteo locale, città, zona), MA "
+                "la geolocalizzazione del telefono è DISATTIVATA (default: "
+                "off per privacy). NON inventare la risposta, NON provare "
+                "a indovinare la città. Rispondi dicendogli con tono d'amico "
+                "che per poterti dare quell'informazione deve attivare la "
+                "posizione nelle Impostazioni dell'app (voce 'Posizione' o "
+                "'Geolocalizzazione'). Breve, naturale, senza elencare "
+                "alternative tecniche. Esempio: \"Non ce l'ho la tua "
+                "posizione ora — se la attivi dalle Impostazioni dell'app "
+                "te lo dico al volo.\"\n"
+            )
+            logger.info(
+                f"[fast {session_id[:8]}] GPS OFF + geo_request → "
+                f"instructing Claude to redirect to Settings"
+            )
 
         # === SAFETY GUARDRAILS (Italia) — P0 obbligatorio per App Store ===
         # Se il messaggio contiene parole chiave critiche (suicidio/auto-

@@ -588,11 +588,11 @@ export default function OnboardingV4() {
   );
 
 
-  // Step 1: Presentazione iniziale naturale (doc unico sez 4).
-  //   Ciao. → (pausa) → Ciao. → (pausa) → Io sono Ollenya, tu?
+  // Step 1: Presentazione iniziale naturale (v67.10 Fabio 2026-06-24).
+  //   "Ciao, io sono Ollenya... come ti chiami?"
+  // Frase unica (prima era "Ciao → Ciao → Io sono Ollenya, tu?" ma l'utente
+  // ha richiesto una presentazione lineare, senza doppio "Ciao").
   // Interrompibile: cambio step → chain si ferma su mountedRef/step guard.
-  // Richiede permesso mic subito dopo l'inizio del TTS, in modo che quando
-  // arriviamo a "step2_listen_name" il permesso sia già risolto.
   useEffect(() => {
     if (step !== "step1_speak_intro") return;
     // Richiedi mic subito dopo l'inizio del TTS (dopo un piccolo delay per
@@ -608,13 +608,9 @@ export default function OnboardingV4() {
         }
       }, 900);
     }
-    // v67.8 (doc unico sez 4): sequenza "Ciao → Ciao → Io sono Ollenya, tu?"
-    // Dialogo diretto → silent:true (nessun sottotitolo sovraimpresso).
     speakChain(
       [
-        { text: "Ciao.", pauseAfterMs: 450 },
-        { text: "Ciao.", pauseAfterMs: 500 },
-        { text: "Io sono Ollenya, tu?", pauseAfterMs: 0 },
+        { text: "Ciao, io sono Ollenya... come ti chiami?", pauseAfterMs: 0 },
       ],
       () => {
         if (mountedRef.current) setStep("step2_listen_name");
@@ -669,19 +665,21 @@ export default function OnboardingV4() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
-  // Step 2b: confirm speech
-  // v67.8 (Fabio 2026-06-24, doc unico sez 4): catena naturale
-  //   "Piacere di conoscerti, [Nome]." → (pausa) → "Iniziamo piano."
-  // Dialogo diretto → silent:true. Avanza a step_voice_a.
+  // Step 2b: saluto personalizzato + domanda aperta.
+  // v67.10 (Fabio 2026-06-24): nuovo copy intro Free.
+  //   "Ciao [Nome], piacere di conoscerti, qui con me puoi parlare di tutto
+  //    quello che vuoi, senza filtri. C'è qualcosa che hai voglia di buttare
+  //    fuori oggi?"
+  // Dialogo diretto → silent:true. Avanza a step_voice_a (che diventa
+  // "ascolto risposta aperta + outro" invece che "mini scambio vocale").
   useEffect(() => {
     if (step !== "step2_confirm") return;
     const greeting = userName
-      ? `Piacere di conoscerti, ${userName}.`
-      : "Piacere di conoscerti.";
+      ? `Ciao ${userName}, piacere di conoscerti, qui con me puoi parlare di tutto quello che vuoi, senza filtri. C'è qualcosa che hai voglia di buttare fuori oggi?`
+      : `Piacere di conoscerti, qui con me puoi parlare di tutto quello che vuoi, senza filtri. C'è qualcosa che hai voglia di buttare fuori oggi?`;
     speakChain(
       [
-        { text: greeting, pauseAfterMs: 500 },
-        { text: "Iniziamo piano.", pauseAfterMs: 0 },
+        { text: greeting, pauseAfterMs: 0 },
       ],
       () => {
         if (mountedRef.current) setStep("step_voice_a");
@@ -840,11 +838,14 @@ export default function OnboardingV4() {
         setWriteCompleted(true);
         // v66.14: FIX LOOP INFINITO — clearInactivityTimer prima del setTimeout.
         clearInactivityTimer();
-        // v66.15 (Fabio 2026-06-18): dopo il demo scrittura andiamo
-        // DIRETTAMENTE a Lascia Andare (step5_scrim_la). Il vecchio step4
-        // "prova voce" è stato rimosso completamente dal flow.
+        // v67.10 (Fabio 2026-06-24): dopo il demo scrittura andiamo
+        // DIRETTAMENTE a step5_scrim_la (SPIEGA Lascia Andare), senza
+        // passare da step_voice_b. Il mini-scambio vocale "Cosa cerchi
+        // in questo posto?" è stato rimosso perché l'intro Free è ora
+        // più lineare: name → domanda aperta → spiegazione → scrittura
+        // → Lascia Andare.
         timerRef.current = setTimeout(() => {
-          if (mountedRef.current) setStep("step_voice_b");
+          if (mountedRef.current) setStep("step5_scrim_la");
         }, 2400);
       } else {
         resetInactivityTimer();
@@ -946,33 +947,60 @@ export default function OnboardingV4() {
     [speak]
   );
 
-  // Step_voice_a: mini-scambio DOPO il saluto, PRIMA della scrittura.
+  // Step_voice_a — v67.10 (Fabio 2026-06-24): RIFATTO.
+  // Prima: mini-scambio vocale ("Dimmi come ti senti?" → listen → converse).
+  // Ora: dopo la domanda aperta già fatta in step2_confirm ("C'è qualcosa
+  // che hai voglia di buttare fuori oggi?"), ASCOLTIAMO la risposta
+  // dell'utente (senza farci rispondere dall'AI — è la sua apertura, non
+  // va "giudicata"), poi parliamo la frase di raccordo:
+  //   "Ok, decidi sempre tu il ritmo, prima di iniziare ti spiego in due
+  //    parole come funziona tutto."
+  // e avanziamo a step3_scrim_write (spiegazione scrittura).
+  //
+  // Se l'utente non parla / STT non capta: dopo il timer d'inattività
+  // (gestito da listen) avanziamo comunque dicendo "Va bene, andiamo avanti."
   const voiceAStartedRef = useRef(false);
   useEffect(() => {
     if (step !== "step_voice_a") { voiceAStartedRef.current = false; return; }
     if (voiceAStartedRef.current) return;
     voiceAStartedRef.current = true;
     setSubtitle(null);
-    runVoiceMiniExchange(
-      "Prima di tutto voglio conoscerti. Dimmi: come ti senti in questo momento?",
-      "step3_scrim_write",
-      "step_voice_a"
-    );
+
+    const speakOutroAndAdvance = () => {
+      if (!mountedRef.current) return;
+      speak(
+        "Ok, decidi sempre tu il ritmo, prima di iniziare ti spiego in due parole come funziona tutto.",
+        () => {
+          if (mountedRef.current) setStep("step3_scrim_write");
+        },
+        { silent: true }
+      );
+    };
+
+    // Ascolto la risposta aperta — niente converse, niente giudizio.
+    // Prendiamo la trascrizione, logghiamo, e passiamo oltre.
+    setOrbStatus("recording");
+    listen({ maxMs: INACTIVITY_RESET_MS }, (transcript) => {
+      const text = (transcript || "").trim();
+      console.log(`${TAG} step_voice_a open-ended response: "${text}"`);
+      if (!mountedRef.current) return;
+      setOrbStatus("speaking");
+      speakOutroAndAdvance();
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
-  // Step_voice_b: mini-scambio DOPO la scrittura, PRIMA di Lascia Andare.
+  // Step_voice_b — v67.10 (Fabio 2026-06-24): DISATTIVATO.
+  // Il mini-scambio vocale pre-Lascia Andare è stato rimosso dall'intro
+  // Free (ora: scrittura → LA direttamente). Safety net: se qualcosa
+  // dovesse mettere step=step_voice_b, saltiamo subito a step5_scrim_la.
   const voiceBStartedRef = useRef(false);
   useEffect(() => {
     if (step !== "step_voice_b") { voiceBStartedRef.current = false; return; }
     if (voiceBStartedRef.current) return;
     voiceBStartedRef.current = true;
-    setSubtitle(null);
-    runVoiceMiniExchange(
-      "Ora ti chiedo un'ultima cosa a voce. Cosa cerchi in questo posto?",
-      "step5_scrim_la",
-      "step_voice_b"
-    );
+    console.log(`${TAG} step_voice_b reached — bypassing to step5_scrim_la`);
+    if (mountedRef.current) setStep("step5_scrim_la");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
