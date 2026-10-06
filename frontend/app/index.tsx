@@ -4424,6 +4424,64 @@ export default function Taccuino() {
     }
   };
 
+  // === PUSH-TO-TALK HANDLERS (v67.11 Fabio 2026-06-24) ========================
+  // Richiesta esplicita utente: quando "Mani libere" è DISATTIVATO, il tasto
+  // orb deve funzionare come walkie-talkie:
+  //   • TIENI PREMUTO per registrare
+  //   • RILASCIA per terminare e inviare
+  // Non più tap-toggle (apri/chiudi).
+  //
+  // Quando "Mani libere" è ATTIVO: lasciamo invariato il comportamento
+  // precedente (onPress = onBigButton con hard-stop/riavvio, onLongPress =
+  // kill switch).
+  //
+  // Guardia pttRecordingRef = true tra onPressIn e onPressOut → ci dice
+  // SICURAMENTE se è stato un gesto PTT (non un tap in HF).
+  const pttRecordingRef = useRef(false);
+
+  const onBigButtonPressIn = () => {
+    // In HF ON l'input è gestito da onPress (toggle classico). PressIn non-op.
+    if (handsFreeRef.current) return;
+    if (isFreeGate()) return; // paywall gestito su onPress
+    // Dimmer swallow — se il tap serve solo a riaccendere la luminosità,
+    // NON avviare registrazione.
+    if (Date.now() < swallowNextBigButtonTapUntilRef.current) {
+      swallowNextBigButtonTapUntilRef.current = 0;
+      console.log(`[OLLENYA_PTT] swallow first-tap — screen dim`);
+      return;
+    }
+    userInteractedRef.current = true;
+    pttRecordingRef.current = true;
+    console.log(`[OLLENYA_PTT] press-in → start recording (status=${status})`);
+    if (status !== "idle") {
+      // Ollenya sta parlando/pensando: hard-stop poi start.
+      // onBigButton ha già tutta la logica di hard-stop → riusiamo.
+      try { onBigButton(); } catch {}
+      setTimeout(() => {
+        if (pttRecordingRef.current) {
+          // Reset debounce lock come fa il tap manuale.
+          lastStartTalkAtRef.current = 0;
+          startTalk();
+        }
+      }, 60);
+    } else {
+      lastStartTalkAtRef.current = 0;
+      startTalk();
+    }
+  };
+
+  const onBigButtonPressOut = () => {
+    if (handsFreeRef.current) return;
+    if (!pttRecordingRef.current) return;
+    pttRecordingRef.current = false;
+    console.log(`[OLLENYA_PTT] press-out → stop & send (status=${status})`);
+    // stopTalk processa l'audio e lo invia. Se recRef è null (es.
+    // registrazione mai partita per permessi), è un no-op.
+    stopTalk().catch((e) => {
+      console.warn(`[OLLENYA_PTT] stopTalk failed:`, e);
+    });
+  };
+
   const onBigButton = () => {
     // === FIX v65.27 (2026-09-07) — DIMMER SWALLOW FIRST-TAP (deterministic) ==
     // Se al momento del touch il dimmer era dimmed/dimming, il root View ha
@@ -6776,6 +6834,15 @@ export default function Taccuino() {
               <>
                 <Pressable
                   ref={orbBtnRef}
+                  onPressIn={() => {
+                    // v67.11 (Fabio 2026-06-24): Push-to-Talk quando
+                    // "Mani libere" è OFF. Handler no-op se HF è ON.
+                    onBigButtonPressIn();
+                  }}
+                  onPressOut={() => {
+                    // v67.11: rilascio = stop + invia (solo in HF OFF).
+                    onBigButtonPressOut();
+                  }}
                   onPress={() => {
                     // v66.1 (Fabio 2026-06-16): Free tier → paywall teaser.
                     // Voce completa (STT + LLM + TTS) è funzione Premium.
@@ -6784,6 +6851,11 @@ export default function Taccuino() {
                       showPremiumTeaser();
                       return;
                     }
+                    // v67.11 (Fabio 2026-06-24): se Mani libere è OFF,
+                    // il gesto è PTT (gestito da onPressIn/onPressOut).
+                    // onPress deve essere NO-OP, altrimenti dopo il rilascio
+                    // partirebbe un turno "fantasma" oltre a quello PTT.
+                    if (!handsFreeRef.current) return;
                     onBigButton();
                   }}
                   onLongPress={() => {
@@ -6791,6 +6863,10 @@ export default function Taccuino() {
                       showPremiumTeaser();
                       return;
                     }
+                    // v67.11: in PTT mode il long-press È il gesto normale di
+                    // registrazione (tieni-premuto). Il kill-switch resta
+                    // attivo SOLO quando mani libere è ON.
+                    if (!handsFreeRef.current) return;
                     onBigButtonLongPress();
                   }}
                   delayLongPress={500}

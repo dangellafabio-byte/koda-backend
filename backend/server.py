@@ -15112,7 +15112,36 @@ async def _fast_pipeline_task(
                 f"({location_city!r}) → skip Tavily, use GPS only"
             )
         elif not ws_enabled:
+            # v67.11 (Fabio 2026-06-24): se la ricerca web è disattivata MA
+            # l'utente chiede info real-time (notizie, meteo, prezzi, eventi
+            # correnti, "cosa sta succedendo"…), Ollenya NON deve inventare
+            # con la sua training-data: deve dire chiaramente che non ha
+            # autorizzazione a cercare sul web e invitare l'utente ad
+            # attivare la ricerca web nelle Impostazioni se vuole quella
+            # risposta.
             logger.info(f"[fast {session_id[:8]}] web-search disabled by user — skip")
+            if _should_web_search(text, force_open=True):
+                sys_prompt = sys_prompt + (
+                    "\n\n⚠️ ATTENZIONE RICERCA WEB: l'utente ha fatto una "
+                    "domanda che richiede informazioni real-time dal web "
+                    "(notizie recenti, meteo, prezzi, eventi correnti, "
+                    "'cosa sta succedendo', data odierna, risultati sportivi, "
+                    "ecc.). La RICERCA WEB è DISATTIVATA dall'utente nelle "
+                    "sue Impostazioni (privacy). NON PROVARE a rispondere "
+                    "con la tua training-data perché sarebbe obsoleta o "
+                    "inventata. NON indovinare, NON fare esempi plausibili. "
+                    "Rispondi con tono d'amico diretto che non hai "
+                    "l'autorizzazione a cercare sul web e che, se vuole "
+                    "quella risposta, può attivare 'Ricerca web' dalle "
+                    "Impostazioni dell'app. Breve, naturale, nessun elenco "
+                    "tecnico. Esempio: \"Non ho il permesso di guardare sul "
+                    "web — l'hai disattivato dalle Impostazioni. Se vuoi "
+                    "quella risposta, riattivalo e te la do.\"\n"
+                )
+                logger.info(
+                    f"[fast {session_id[:8]}] web-search OFF + real-time question "
+                    f"→ instructing Claude to refuse politely"
+                )
         elif _should_web_search(text, force_open=True):
             logger.info(f"[fast {session_id[:8]}] web-search triggered (open internet) for: {text[:80]}")
             t_search = time.time()
