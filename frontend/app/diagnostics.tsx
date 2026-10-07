@@ -58,10 +58,15 @@ export default function DiagnosticsScreen() {
   const handleSubmit = useCallback(async () => {
     if (sending) return;
     const descr = userText.trim();
-    if (descr.length < 10) {
+    // v67.12 (Fabio 2026-06-24): minimo 4 parole di descrizione.
+    // Prima: minimo 10 caratteri → bastava "aiuto!" per inviare, troppo
+    // povero di contesto per il supporto. Ora chiediamo almeno 4 parole
+    // separate da spazio → forza l'utente a scrivere una frase minima.
+    const wordCount = descr.split(/\s+/).filter((w) => w.length > 0).length;
+    if (wordCount < 4) {
       Alert.alert(
         "Descrivi brevemente il problema",
-        "Scrivi almeno una frase su cosa è successo e cosa ti aspettavi che accadesse. Ci aiuta tantissimo a capire.",
+        "Scrivi almeno quattro parole su cosa è successo e cosa ti aspettavi che accadesse. Ci aiuta tantissimo a capire.",
       );
       return;
     }
