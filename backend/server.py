@@ -204,6 +204,26 @@ async def api_health():
     }
 
 
+# === DOWNLOAD DOCUMENTO LEGALE (temp, Fabio 2026-06-24) =====================
+# Endpoint one-off per permettere all'owner di scaricare il PDF del documento
+# tecnico-legale da dare all'avvocato. Non è un endpoint pubblico: rimarrà
+# attivo finché il PDF esiste sul server. Nessun dato utente coinvolto.
+from fastapi.responses import FileResponse as _FileResponse
+import os as _legal_os
+
+@api_router.get("/legal-doc.pdf")
+async def api_legal_doc_pdf():
+    path = "/app/memory/documento_tecnico_legale_v69.pdf"
+    if not _legal_os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="PDF not found")
+    return _FileResponse(
+        path,
+        media_type="application/pdf",
+        filename="Ollenya_documento_tecnico_legale_v69.pdf",
+    )
+
+
+
 # === FIX 2026-07-03 v40 — Debug endpoint per timing pipeline (Fabio) ===
 # Salva in memoria l'ultimo KODA_PIPELINE_SUMMARY prodotto, così
 # possiamo esporlo via /api/debug/last-turn-timing e leggere il breakdown
