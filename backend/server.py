@@ -4603,21 +4603,25 @@ FREE_TRIAL_MINUTES = 15.0          # DEPRECATO — sostituito da FREE_TRIAL_SECO
 # Fonte di verità unica: `subscription_ledger.TIER_BASE_MINUTES`.
 # Questi dict sono dead code storico; lasciati allineati per riferimento.
 TIER_MONTHLY_BUDGET = {
-    "monthly":   200.0,
-    "bimonthly": 230.0,
-    "annual":    230.0,
+    "monthly":   500.0,
+    "bimonthly": 500.0,
+    "annual":    500.0,
 }
 # Pool massimo di carryover per tier (minuti totali conservabili)
+# v67.13 (Fabio 2026-06-24) — Allineato alla spec paywall UI:
+#   • Mensile:    nessun carryover
+#   • Bimestrale: 1 slot singolo da 50 min (vive 1 mese)
+#   • Annuale:    6 slot da 50 min (vivono fino a 6 mesi, non cumulabili tra loro)
 TIER_POOL_MAX = {
     "monthly":   0.0,          # 0 mesi carryover
     "bimonthly": 50.0,         # 1 slot da max 50 (vive 1 mese)
-    "annual":    100.0,        # 2 slot da max 50 (ciascuno vive 2 mesi)
+    "annual":    300.0,        # 6 slot da max 50 (ciascuno vive 6 mesi, non cumulabili)
 }
 # Cap hard mensile di CONSUMO (budget + pool_consumato_nel_mese ≤ hard_cap)
 TIER_MONTHLY_HARD_CAP = {
-    "monthly":   200.0,
-    "bimonthly": 280.0,        # 230 budget + max 50 dal pool
-    "annual":    330.0,        # 230 budget + max 100 dal pool (2 slot)
+    "monthly":   500.0,
+    "bimonthly": 550.0,        # 500 budget + max 50 dal pool
+    "annual":    550.0,        # 500 budget + max 50 dal pool nel singolo mese (non cumulabili)
 }
 # Soglia di warning gentile (percentuale del budget mensile)
 WARNING_THRESHOLD_PCT = 0.90

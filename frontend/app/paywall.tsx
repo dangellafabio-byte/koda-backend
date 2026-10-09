@@ -63,14 +63,14 @@ const PLANS: PlanInfo[] = [
     label: "Bimestrale",
     price: "35,99 €",
     priceUnit: "/2 mesi",
-    minutesLine: "500 min/mese · carryover fino a 500 min",
+    minutesLine: "500 min/mese · carryover 50 min (singolo)",
   },
   {
     id: "yearly",
     label: "Annuale",
     price: "209,99 €",
     priceUnit: "/anno",
-    minutesLine: "500 min/mese · carryover 500 min ogni mese",
+    minutesLine: "500 min/mese · 50 min di carryover/mese (max 6 mesi, non cumulabili)",
   },
 ];
 
@@ -407,8 +407,9 @@ export default function PaywallScreen() {
             "1000 min" = valore MAX teorico (500 base + 500 carryover slot). */}
         <View style={styles.carryoverClaim}>
           <Text style={[styles.carryoverClaimText, { color: theme.textDim }]}>
-            500 minuti al mese. Se non li usi tutti, restano tuoi —
-            fino a 1.000 minuti disponibili quando ne hai davvero bisogno.
+            500 minuti al mese. Se non li usi tutti, puoi conservare
+            fino a 50 min/mese come carryover (singolo per il bimestrale,
+            fino a 6 mesi per l'annuale, non cumulabili).
           </Text>
           <Text style={[styles.carryoverTopup, { color: theme.textDim + "99" }]}>
             Hai ancora qualcosa da dire? +30 min · 2,49 €
