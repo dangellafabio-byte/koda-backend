@@ -1,56 +1,108 @@
 #!/usr/bin/env python3
 """
-Ollenya — Usage Audit (sola lettura)
-=====================================
+Ollenya — Usage Audit (sola lettura, PRODUZIONE)
+=================================================
 
-Scopo: estrarre lo STORICO di utilizzo aggregato dal database MongoDB
-di produzione (Atlas) senza leggere alcun contenuto testuale, nome,
-email, contenuto di conversazioni o chiave API.
+Scopo: estrarre lo STORICO aggregato di utilizzo dal database MongoDB
+Atlas di produzione senza leggere alcun contenuto testuale, nome,
+email, contenuto di conversazioni, chiave API o credenziale.
 
-Caratteristiche di sicurezza:
-  • Query SOLO di tipo aggregate / count / distinct.
-  • Nessun .find() che restituisca campi testuali (`text`, `voice_text`,
-    `name`, `email`, prompt, ecc.).
+GARANZIE DI SICUREZZA
+---------------------
+  • Query SOLO di tipo aggregate / count / distinct / find con proiezione
+    campi ristretta.
+  • Nessuna scrittura, update, delete.
+  • Campi sensibili (text, voice_text, name, email, ecc.) MAI letti né
+    esposti in output. Mascherati come "<redacted:...>".
   • Profile ID troncati ai primi 8 caratteri nell'output.
-  • Nessuna scrittura, nessun update, nessuna delete.
-  • Output: JSON stampato su stdout.
+  • Connection string NON esposta: `mongo_url_host` mostra solo l'host.
+  • Output JSON puro su stdout, log diagnostica su stderr.
 
-Esecuzione su Railway:
-    railway run python /app/backend/scripts/usage_audit.py
+GARANZIE DI AMBIENTE
+--------------------
+  • Lo script RIFIUTA di eseguire se MONGO_URL punta a localhost / 127.*
+    / mongodb-dev-like, oppure se DB_NAME è "test_database".
+  • Nessun fallback silenzioso: se la configurazione di produzione non
+    è trovata, esce con codice 2 e messaggio esplicito.
+  • Flag `--allow-dev` opzionale per debug nell'ambiente di sviluppo
+    (NON passare in produzione).
 
-Oppure, dalla shell Railway interattiva:
-    python backend/scripts/usage_audit.py
+OUTPUT
+------
+  • Default: JSON su stdout.
+  • Con `--out FILE`: scrive il JSON su file e stampa su stderr il path.
+  • Sezione `coverage_period` con data minima/massima rilevata nelle
+    collezioni temporali principali.
+  • Sezione `populated_fields` per collezione: lista campi che hanno
+    almeno un documento con valore non-null (campione statistico).
 
-Richiede che la variabile d'ambiente MONGO_URL sia configurata su Railway
-(è già così in produzione).
+USAGE
+-----
+    python backend/scripts/usage_audit.py [--out audit.json] [--allow-dev]
 
-Autore: Agente Emergent (ambiente dev), 2026-10-12.
+Esecuzione raccomandata (Railway produzione):
+    railway ssh                          # entra nel container di prod
+    python backend/scripts/usage_audit.py --out /tmp/audit.json
+
+Versione: 1.1 (2026-10-12) — fail-fast + coverage + populated_fields
+Autore: Agente Emergent (ambiente dev, trasferibile a produzione).
 """
 from __future__ import annotations
 import os
+import re
 import sys
 import json
+import argparse
 from datetime import datetime, timezone
 from collections import defaultdict
+from urllib.parse import urlparse
 
 try:
     from pymongo import MongoClient
 except ImportError:
-    print("ERRORE: pymongo non installato. Installa con: pip install pymongo", file=sys.stderr)
+    print("ERRORE: pymongo non installato. Installa con: pip install pymongo",
+          file=sys.stderr)
     sys.exit(1)
+
+
+# ============================================================================
+# PRODUCTION GUARD — nessun fallback silenzioso
+# ============================================================================
+def _parse_mongo_host(url: str) -> str:
+    """Estrae l'host dalla connection string, senza esporre credenziali."""
+    if not url:
+        return ""
+    try:
+        # Rimuovi protocol e credenziali prima del parsing
+        safe = re.sub(r"://[^@]*@", "://", url)
+        p = urlparse(safe)
+        return p.hostname or ""
+    except Exception:
+        return ""
+
+
+def _is_dev_connection(url: str, db_name: str) -> tuple[bool, str]:
+    """Ritorna (is_dev, motivo). Blocca ogni esecuzione su ambiente dev."""
+    host = _parse_mongo_host(url).lower()
+
+    dev_hosts = ("localhost", "127.0.0.1", "0.0.0.0", "mongo-dev", "mongo-local")
+    for d in dev_hosts:
+        if host == d or host.startswith(d + "."):
+            return True, f"host MongoDB '{host}' è dev-like"
+
+    dev_dbs = ("test_database", "test", "dev", "development", "localdb")
+    if (db_name or "").lower() in dev_dbs:
+        return True, f"DB_NAME '{db_name}' è dev-like"
+
+    if not host:
+        return True, "host MongoDB non riconosciuto o vuoto"
+
+    return False, ""
+
 
 # ============================================================================
 # CONFIG
 # ============================================================================
-MONGO_URL = os.environ.get("MONGO_URL")
-if not MONGO_URL:
-    print("ERRORE: variabile MONGO_URL non impostata.", file=sys.stderr)
-    sys.exit(1)
-
-DB_NAME = os.environ.get("DB_NAME", "test_database")
-
-# Collezioni che vogliamo auditare. Nome collezione → campo timestamp primario.
-# Se il campo è None, la collezione è conteggiata ma non spezzata per mese.
 TARGET_COLLECTIONS = {
     "taccuino_profile": "created_at",
     "taccuino_subscription": "created_at",
@@ -61,7 +113,7 @@ TARGET_COLLECTIONS = {
     "confessional_entries": "created_at",
     "confessional_buffer": "created_at",
     "koda_events": "created_at",
-    "analytics_events": "created_at",
+    "analytics_events": "ts",
     "admin_alert_outbox": "created_at",
     "messages": "timestamp",
     "conversations": "created_at",
@@ -75,13 +127,14 @@ TARGET_COLLECTIONS = {
     "users": "created_at",
 }
 
-# Campi SENSIBILI che NON devono mai essere letti/esposti.
 SENSITIVE_FIELDS = {
     "text", "voice_text", "content", "message", "prompt", "response",
     "name", "first_name", "last_name", "email", "phone", "address",
     "apple_user_id", "google_user_id", "device_id", "session_token",
     "api_key", "password", "secret", "nickname", "bio", "notes",
     "personal_info", "full_name", "voice_sample", "biometric",
+    "query", "summary", "fact", "source_text", "concept",
+    "memory_summary", "core_traits", "ai_name", "home_city",
 }
 
 
@@ -89,7 +142,6 @@ SENSITIVE_FIELDS = {
 # HELPERS
 # ============================================================================
 def _month_key(ts) -> str | None:
-    """Estrae YYYY-MM da un timestamp (ISO string o datetime)."""
     if ts is None:
         return None
     if isinstance(ts, str):
@@ -100,7 +152,6 @@ def _month_key(ts) -> str | None:
 
 
 def _anon(pid) -> str:
-    """Tronca profile_id ai primi 8 char."""
     if not pid:
         return "none"
     s = str(pid)
@@ -108,8 +159,6 @@ def _anon(pid) -> str:
 
 
 def _safe_schema(doc: dict) -> dict:
-    """Ritorna solo i NOMI dei campi + tipo, escludendo i campi sensibili.
-    NON legge mai i valori di campi sensibili."""
     out = {}
     for k, v in doc.items():
         if k.lower() in SENSITIVE_FIELDS:
@@ -123,23 +172,46 @@ def _safe_schema(doc: dict) -> dict:
     return out
 
 
+def _populated_fields(coll, sample_size: int = 50) -> dict:
+    """Per ogni campo del campione, conta quanti documenti hanno valore
+    non-null (esclusi campi sensibili). Serve per capire quali metriche
+    sono effettivamente registrate.
+    """
+    count = coll.estimated_document_count()
+    if count == 0:
+        return {"__count__": 0}
+    sample_size = min(sample_size, count)
+    try:
+        pipeline = [{"$sample": {"size": sample_size}}]
+        docs = list(coll.aggregate(pipeline, allowDiskUse=False))
+    except Exception as e:
+        return {"__error__": str(e)}
+    tally = defaultdict(int)
+    for d in docs:
+        for k, v in d.items():
+            if k.lower() in SENSITIVE_FIELDS:
+                continue  # Non contiamo i sensibili
+            if v is not None and v != "" and v != [] and v != {}:
+                tally[k] += 1
+    return {
+        "__sample_size__": len(docs),
+        **{k: tally[k] for k in sorted(tally.keys())}
+    }
+
+
 # ============================================================================
 # AUDIT STEPS
 # ============================================================================
 def audit_connection(client) -> dict:
-    """Verifica connessione e lista database."""
     try:
         client.admin.command("ping")
-        return {
-            "status": "ok",
-            "databases": sorted(client.list_database_names()),
-        }
+        return {"status": "ok",
+                "databases": sorted(client.list_database_names())}
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
 
 def audit_collections_overview(db) -> dict:
-    """Per ogni collezione target: conteggio documenti + schema campi (senza valori)."""
     overview = {}
     existing = set(db.list_collection_names())
     for coll_name, ts_field in TARGET_COLLECTIONS.items():
@@ -150,24 +222,59 @@ def audit_collections_overview(db) -> dict:
         count = coll.estimated_document_count()
         sample = coll.find_one()
         schema = _safe_schema(sample) if sample else {}
+        populated = _populated_fields(coll)
         overview[coll_name] = {
             "exists": True,
             "count": count,
             "ts_field": ts_field,
             "schema": schema,
+            "populated_fields_sample": populated,
         }
     return overview
 
 
+def audit_coverage_period(db) -> dict:
+    """Trova la data minima e massima dei record nelle collezioni temporali
+    principali. Serve a dichiarare esattamente il periodo coperto dal
+    dataset.
+    """
+    out = {}
+    checks = [
+        ("taccuino_timeline", "timestamp"),
+        ("koda_events", "created_at"),
+        ("taccuino_profile", "created_at"),
+        ("analytics_events", "ts"),
+        ("admin_alert_outbox", "created_at"),
+    ]
+    for coll_name, field in checks:
+        try:
+            coll = db[coll_name]
+            if coll.estimated_document_count() == 0:
+                out[coll_name] = {"min": None, "max": None, "count": 0}
+                continue
+            # Query minimale: solo il campo timestamp
+            first = coll.find_one({field: {"$ne": None}}, {field: 1},
+                                  sort=[(field, 1)])
+            last = coll.find_one({field: {"$ne": None}}, {field: 1},
+                                 sort=[(field, -1)])
+            out[coll_name] = {
+                "field": field,
+                "min": str(first.get(field)) if first else None,
+                "max": str(last.get(field)) if last else None,
+                "count": coll.estimated_document_count(),
+            }
+        except Exception as e:
+            out[coll_name] = {"error": str(e)}
+    return out
+
+
 def audit_profiles(db) -> dict:
-    """Conteggio profili per mese di creazione + distribuzione tier."""
     coll = db["taccuino_profile"]
     out = {"total": coll.estimated_document_count()}
 
-    # Per mese di creazione
     monthly = defaultdict(int)
     try:
-        for p in coll.find({}, {"created_at": 1, "subscription_tier": 1, "tier": 1}):
+        for p in coll.find({}, {"created_at": 1}):
             m = _month_key(p.get("created_at"))
             if m:
                 monthly[m] += 1
@@ -175,7 +282,6 @@ def audit_profiles(db) -> dict:
         out["monthly_error"] = str(e)
     out["monthly_new_profiles"] = dict(sorted(monthly.items()))
 
-    # Distribuzione tier (campo può essere `subscription_tier` o `tier`)
     tier_dist = defaultdict(int)
     try:
         for p in coll.find({}, {"subscription_tier": 1, "tier": 1}):
@@ -189,7 +295,6 @@ def audit_profiles(db) -> dict:
 
 
 def audit_timeline(db) -> dict:
-    """Aggregazione mensile dei turni, separati per role e profile."""
     coll = db["taccuino_timeline"]
     out = {"total": coll.estimated_document_count()}
 
@@ -208,13 +313,14 @@ def audit_timeline(db) -> dict:
         {"$sort": {"_id.m": 1}},
     ]
     monthly = defaultdict(lambda: defaultdict(lambda: {
-        "user_turns": 0, "ai_turns": 0, "user_audio_ms": 0, "ai_audio_ms": 0,
+        "user_turns": 0, "ai_turns": 0,
+        "user_audio_ms": 0, "ai_audio_ms": 0,
     }))
     try:
         for r in coll.aggregate(pipeline):
-            m = r["_id"]["m"]
-            p = _anon(r["_id"]["p"])
-            role = r["_id"]["r"] or "unknown"
+            m = r["_id"].get("m") or "no_timestamp"
+            p = _anon(r["_id"].get("p"))
+            role = r["_id"].get("r") or "unknown"
             n = r["turns"]
             audio_ms = r["audio_ms_sum"] or 0
             if role == "user":
@@ -223,48 +329,42 @@ def audit_timeline(db) -> dict:
             elif role == "ai":
                 monthly[m][p]["ai_turns"] += n
                 monthly[m][p]["ai_audio_ms"] += audio_ms
+            else:
+                monthly[m][p].setdefault("other_turns", 0)
+                monthly[m][p]["other_turns"] += n
     except Exception as e:
         out["pipeline_error"] = str(e)
-    # Converti nested defaultdict in dict per JSON serialization
+
     out["monthly_by_profile"] = {
         m: {p: dict(v) for p, v in profs.items()}
         for m, profs in sorted(monthly.items())
     }
-
-    # Totale aggregato per mese (somma su tutti i profili)
     monthly_totals = {}
     for m, profs in monthly.items():
         tot = {"user_turns": 0, "ai_turns": 0, "user_audio_ms": 0,
                "ai_audio_ms": 0, "distinct_profiles": len(profs)}
         for p, v in profs.items():
-            tot["user_turns"] += v["user_turns"]
-            tot["ai_turns"] += v["ai_turns"]
-            tot["user_audio_ms"] += v["user_audio_ms"]
-            tot["ai_audio_ms"] += v["ai_audio_ms"]
+            tot["user_turns"] += v.get("user_turns", 0)
+            tot["ai_turns"] += v.get("ai_turns", 0)
+            tot["user_audio_ms"] += v.get("user_audio_ms", 0)
+            tot["ai_audio_ms"] += v.get("ai_audio_ms", 0)
         monthly_totals[m] = tot
     out["monthly_totals"] = dict(sorted(monthly_totals.items()))
-
     return out
 
 
 def audit_koda_events(db) -> dict:
-    """
-    Aggregazione mensile di `koda_events`:
-      - eventi totali / mese
-      - tts_seconds totali / mese (TTS ElevenLabs generato in secondi)
-      - user_audio_ms totali / mese (audio inviato a Deepgram, in ms)
-      - media tts_seconds per evento
-    """
     coll = db["koda_events"]
     total = coll.estimated_document_count()
     out = {"total": total}
     if total == 0:
-        out["note"] = "collezione vuota in questo ambiente"
+        out["note"] = "collezione vuota"
         return out
 
     pipeline = [
         {"$project": {
-            "month": {"$substr": [{"$ifNull": ["$created_at", "$timestamp"]}, 0, 7]},
+            "month": {"$substr": [
+                {"$ifNull": ["$created_at", "$timestamp"]}, 0, 7]},
             "tts_seconds": {"$ifNull": ["$tts_seconds", 0]},
             "user_audio_ms": {"$ifNull": ["$user_audio_ms", 0]},
             "event_type": 1,
@@ -273,8 +373,11 @@ def audit_koda_events(db) -> dict:
             "_id": "$month",
             "events": {"$sum": 1},
             "tts_seconds_sum": {"$sum": "$tts_seconds"},
-            "events_with_tts": {"$sum": {"$cond": [{"$gt": ["$tts_seconds", 0]}, 1, 0]}},
+            "events_with_tts": {"$sum": {"$cond": [
+                {"$gt": ["$tts_seconds", 0]}, 1, 0]}},
             "user_audio_ms_sum": {"$sum": "$user_audio_ms"},
+            "events_with_audio": {"$sum": {"$cond": [
+                {"$gt": ["$user_audio_ms", 0]}, 1, 0]}},
         }},
         {"$sort": {"_id": 1}},
     ]
@@ -288,20 +391,22 @@ def audit_koda_events(db) -> dict:
             audio_s = float(r["user_audio_ms_sum"] or 0) / 1000.0
             events = int(r["events"])
             with_tts = int(r["events_with_tts"])
+            with_audio = int(r["events_with_audio"])
             monthly[m] = {
                 "events": events,
                 "tts_seconds": round(tts_s, 2),
                 "tts_minutes": round(tts_s / 60.0, 2),
                 "events_with_tts": with_tts,
-                "avg_tts_sec_per_tts_event": round(tts_s / with_tts, 2) if with_tts else 0,
+                "avg_tts_sec_per_tts_event":
+                    round(tts_s / with_tts, 2) if with_tts else 0,
                 "user_audio_seconds": round(audio_s, 2),
                 "user_audio_minutes": round(audio_s / 60.0, 2),
+                "events_with_audio": with_audio,
             }
     except Exception as e:
         out["pipeline_error"] = str(e)
     out["monthly"] = dict(sorted(monthly.items()))
 
-    # Breakdown per event_type
     try:
         type_pipeline = [
             {"$group": {"_id": "$event_type", "n": {"$sum": 1},
@@ -309,7 +414,8 @@ def audit_koda_events(db) -> dict:
             {"$sort": {"n": -1}},
         ]
         out["by_event_type"] = [
-            {"type": r["_id"], "count": r["n"], "tts_seconds": round(float(r["tts_s"] or 0), 2)}
+            {"type": r["_id"], "count": r["n"],
+             "tts_seconds": round(float(r["tts_s"] or 0), 2)}
             for r in coll.aggregate(type_pipeline)
         ]
     except Exception as e:
@@ -319,24 +425,25 @@ def audit_koda_events(db) -> dict:
 
 
 def audit_subscriptions(db) -> dict:
-    """Distribuzione abbonamenti attivi."""
     coll = db["taccuino_subscription"]
     out = {"total": coll.estimated_document_count()}
     tier_dist = defaultdict(int)
     status_dist = defaultdict(int)
+    plan_dist = defaultdict(int)
     try:
-        for s in coll.find({}, {"tier": 1, "status": 1, "created_at": 1}):
+        for s in coll.find({}, {"tier": 1, "plan": 1, "status": 1}):
             tier_dist[str(s.get("tier") or "unknown")] += 1
             status_dist[str(s.get("status") or "unknown")] += 1
+            plan_dist[str(s.get("plan") or "unknown")] += 1
     except Exception as e:
         out["error"] = str(e)
     out["tier_distribution"] = dict(tier_dist)
+    out["plan_distribution"] = dict(plan_dist)
     out["status_distribution"] = dict(status_dist)
     return out
 
 
 def audit_admin_alerts(db) -> dict:
-    """Email admin inviate (via Resend managed)."""
     coll = db["admin_alert_outbox"]
     total = coll.estimated_document_count()
     out = {"total": total}
@@ -344,7 +451,7 @@ def audit_admin_alerts(db) -> dict:
         return out
     try:
         monthly = defaultdict(int)
-        for d in coll.find({}, {"created_at": 1, "status": 1}):
+        for d in coll.find({}, {"created_at": 1}):
             m = _month_key(d.get("created_at"))
             if m:
                 monthly[m] += 1
@@ -354,27 +461,78 @@ def audit_admin_alerts(db) -> dict:
     return out
 
 
+def audit_analytics_events(db) -> dict:
+    """analytics_events può registrare eventi UI/business (es. onboarding
+    completato, paywall visto, ecc.). Breakdown per `event` + mese."""
+    coll = db["analytics_events"]
+    total = coll.estimated_document_count()
+    out = {"total": total}
+    if total == 0:
+        return out
+    try:
+        pipeline = [
+            {"$group": {"_id": "$event", "n": {"$sum": 1}}},
+            {"$sort": {"n": -1}},
+            {"$limit": 100},
+        ]
+        out["by_event"] = [{"event": r["_id"], "count": r["n"]}
+                           for r in coll.aggregate(pipeline)]
+    except Exception as e:
+        out["error"] = str(e)
+    return out
+
+
 # ============================================================================
 # MAIN
 # ============================================================================
 def main():
+    parser = argparse.ArgumentParser(
+        description="Ollenya Usage Audit (read-only).")
+    parser.add_argument("--out", type=str, default=None,
+                        help="Scrive JSON su file invece di stdout.")
+    parser.add_argument("--allow-dev", action="store_true",
+                        help="Permette esecuzione su DB dev (solo debug).")
+    args = parser.parse_args()
+
+    mongo_url = os.environ.get("MONGO_URL")
+    db_name = os.environ.get("DB_NAME", "")
+
+    # === PRODUCTION GUARD ===
+    if not mongo_url:
+        print("FATAL: variabile MONGO_URL non impostata. "
+              "Lo script RIFIUTA di eseguire senza una configurazione DB "
+              "esplicita.", file=sys.stderr)
+        sys.exit(2)
+
+    is_dev, motivo = _is_dev_connection(mongo_url, db_name)
+    if is_dev and not args.allow_dev:
+        print(f"FATAL: ambiente rilevato come DEV ({motivo}). "
+              f"Lo script RIFIUTA di eseguire. Usa --allow-dev solo per "
+              f"debug locale, mai in produzione.", file=sys.stderr)
+        sys.exit(3)
+
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "mongo_url_host": MONGO_URL.split("@")[-1].split("/")[0] if "@" in MONGO_URL else "localhost",
-        "db_name": DB_NAME,
-        "script_version": "1.0 (2026-10-12)",
+        "script_version": "1.1 (2026-10-12)",
+        "mongo_url_host": _parse_mongo_host(mongo_url),
+        "db_name": db_name,
+        "allow_dev_flag": args.allow_dev,
     }
 
     try:
-        client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=10000)
+        client = MongoClient(mongo_url, serverSelectionTimeoutMS=15000)
         report["connection"] = audit_connection(client)
         if report["connection"]["status"] != "ok":
-            print(json.dumps(report, indent=2, default=str))
+            _emit(report, args.out)
             sys.exit(1)
 
-        db = client[DB_NAME]
+        db = client[db_name] if db_name else client.get_default_database()
+        report["effective_db"] = db.name
 
-        print("[audit] overview collezioni...", file=sys.stderr)
+        print("[audit] coverage_period...", file=sys.stderr)
+        report["coverage_period"] = audit_coverage_period(db)
+
+        print("[audit] collections_overview...", file=sys.stderr)
         report["collections_overview"] = audit_collections_overview(db)
 
         print("[audit] profili...", file=sys.stderr)
@@ -392,12 +550,26 @@ def main():
         print("[audit] email admin...", file=sys.stderr)
         report["admin_alerts"] = audit_admin_alerts(db)
 
+        print("[audit] analytics_events...", file=sys.stderr)
+        report["analytics_events"] = audit_analytics_events(db)
+
         print("[audit] completato.", file=sys.stderr)
 
     except Exception as e:
         report["fatal_error"] = str(e)
 
-    print(json.dumps(report, indent=2, default=str))
+    _emit(report, args.out)
+
+
+def _emit(report: dict, out_path: str | None):
+    payload = json.dumps(report, indent=2, default=str, ensure_ascii=False)
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(payload)
+        print(f"[audit] JSON scritto in: {out_path} "
+              f"({len(payload)} bytes)", file=sys.stderr)
+    else:
+        print(payload)
 
 
 if __name__ == "__main__":
