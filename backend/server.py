@@ -235,6 +235,25 @@ async def api_costi_ollenya_pdf():
     )
 
 
+# === DOWNLOAD SCRIPT USAGE AUDIT (temp, Fabio 2026-10-12) ===================
+# Endpoint one-off per permettere all'owner di scaricare lo script di audit
+# `usage_audit.py` da trasferire al container Railway di produzione.
+# ATTENZIONE: questo endpoint esiste SOLO nell'ambiente di sviluppo Emergent.
+# NON è deployato su Railway (il backend produzione non ha il file in
+# /app/memory). Nessun dato utente, nessuna credenziale, nessun segreto:
+# il contenuto è il sorgente Python puro dello script.
+@api_router.get("/scripts/usage_audit.py")
+async def api_scripts_usage_audit():
+    path = "/app/memory/usage_audit.py"
+    if not _legal_os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="script not found")
+    return _FileResponse(
+        path,
+        media_type="text/x-python",
+        filename="usage_audit.py",
+    )
+
+
 
 # === FIX 2026-07-03 v40 — Debug endpoint per timing pipeline (Fabio) ===
 # Salva in memoria l'ultimo KODA_PIPELINE_SUMMARY prodotto, così
