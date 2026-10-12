@@ -223,6 +223,18 @@ async def api_legal_doc_pdf():
     )
 
 
+@api_router.get("/costi-ollenya.pdf")
+async def api_costi_ollenya_pdf():
+    path = "/app/memory/costi_completi_ollenya.pdf"
+    if not _legal_os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="PDF not found")
+    return _FileResponse(
+        path,
+        media_type="application/pdf",
+        filename="Ollenya_lista_completa_costi.pdf",
+    )
+
+
 
 # === FIX 2026-07-03 v40 — Debug endpoint per timing pipeline (Fabio) ===
 # Salva in memoria l'ultimo KODA_PIPELINE_SUMMARY prodotto, così
