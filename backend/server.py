@@ -254,6 +254,20 @@ async def api_scripts_usage_audit():
     )
 
 
+@api_router.get("/soglie-tts.md")
+async def api_soglie_tts_md():
+    """One-off: scarica il file soglie_tts_ollenya.md con tutti i limiti
+    V3/Turbo/Flash e le percentuali misurate. Nessun dato utente."""
+    path = "/app/memory/soglie_tts_ollenya.md"
+    if not _legal_os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="file not found")
+    return _FileResponse(
+        path,
+        media_type="text/markdown",
+        filename="soglie_tts_ollenya.md",
+    )
+
+
 
 # === FIX 2026-07-03 v40 — Debug endpoint per timing pipeline (Fabio) ===
 # Salva in memoria l'ultimo KODA_PIPELINE_SUMMARY prodotto, così
