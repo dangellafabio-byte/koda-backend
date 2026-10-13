@@ -209,6 +209,25 @@ def print_cost(r: dict) -> None:
     """
     Stampa i costi SOLO se abbiamo i conteggi Anthropic esatti.
     Se mancano: nessun costo, warning esplicito.
+
+    IMPORTANTE — SCENARI DI CACHE
+    -----------------------------
+    Il blocco `system` di Ollenya marcato con `cache_control: ephemeral`
+    contiene TUTTE queste parti variabili turno-turno:
+      1. Blocco temporale "ora attuale" (`_build_temporal_context`): cambia
+         ad ogni minuto di orologio.
+      2. Memorie (`memories`): cambia quando l'utente aggiunge/rimuove fatti
+         o quando il FIFO del memory_summary ruota.
+      3. Situazioni (`situations`): cambia quando una situazione si apre,
+         si chiude, si aggiorna.
+      4. Trial state injection: cambia al passaggio di stato (es. active →
+         closing → expired).
+    Finché NON è stato eseguito un test di invariance (due o più turni
+    consecutivi che restituiscono `cache_read_input_tokens > 0`) il cache
+    hit non è un costo previsionale: è un pavimento teorico irraggiungibile
+    nelle condizioni attuali del prompt. Il costo PREVISIONALE per il
+    sizing dei 500 minuti/mese è lo scenario A (no-cache) oppure B
+    (cache_write ad ogni turno).
     """
     sys_tok = r["anthropic_system_only"]
     usr_tok = r["anthropic_user_only"]
@@ -220,34 +239,45 @@ def print_cost(r: dict) -> None:
 
     out_tok = r["max_tokens_output"]
 
-    # A) No cache: tutto input al prezzo pieno.
+    # A) No cache / cache disabilitata: tutto input al prezzo pieno.
     cost_no_cache = (
         total_tok * PRICE_INPUT_PER_1M / 1_000_000
         + out_tok * PRICE_OUTPUT_PER_1M / 1_000_000
     )
-    # B) Cache WRITE (primo turno di una serie, o cache scaduta/invalidata).
-    #    system pagato a tariffa cache_write, user a tariffa standard.
+    # B) Cache WRITE ad ogni turno. SCENARIO PREVISIONALE REALISTICO
+    #    finché la cache_read non è dimostrata in produzione, perché il
+    #    system contiene parti dinamiche (temporal_block, memorie,
+    #    situazioni, trial_state) che invalidano l'hit.
     cost_cache_write = (
         sys_tok * PRICE_CACHE_WRITE_5M_PER_1M / 1_000_000
         + usr_tok * PRICE_INPUT_PER_1M / 1_000_000
         + out_tok * PRICE_OUTPUT_PER_1M / 1_000_000
     )
-    # C) Cache HIT (turno successivo, system invariato dentro 5 min).
-    #    system a cache_read, user a tariffa standard.
-    cost_cache_hit = (
+    # D) Cache HIT (pavimento teorico, NON previsionale).
+    #    Vale SOLO se il system è bit-identico al turno precedente entro
+    #    5 minuti. Richiede test di invariance in produzione prima di
+    #    poterlo usare come costo atteso.
+    cost_cache_hit_floor = (
         sys_tok * PRICE_CACHE_HIT_PER_1M / 1_000_000
         + usr_tok * PRICE_INPUT_PER_1M / 1_000_000
         + out_tok * PRICE_OUTPUT_PER_1M / 1_000_000
     )
+
     print(f"  [COSTO per turno — Claude Haiku 4.5, prezzi listino pubblici]")
-    print(f"     A) Cache DISATTIVATA (tetto):             ${cost_no_cache:.6f}")
-    print(f"     B) Cache WRITE (primo turno della serie): ${cost_cache_write:.6f}")
-    print(f"     C) Cache HIT  (turno successivo, 5m TTL): ${cost_cache_hit:.6f}")
     print()
-    print(f"     Nota: il cache HIT reale richiede che il system block NON cambi")
-    print(f"           tra due turni consecutivi entro 5 minuti. In produzione il")
-    print(f"           system contiene un blocco temporale 'ora attuale' che cambia")
-    print(f"           al minuto → ogni cambio di minuto invalida la cache e paghi B.")
+    print(f"  SCENARI PREVISIONALI (usare per sizing 500 min/mese):")
+    print(f"     A) Cache DISATTIVATA / nessun breakpoint:   ${cost_no_cache:.6f}")
+    print(f"     B) Cache WRITE ad ogni turno (realistico):  ${cost_cache_write:.6f}")
+    print()
+    print(f"  PAVIMENTO TEORICO (NON previsionale, da provare in produzione):")
+    print(f"     D) Cache HIT 100% (irrealistico qui):       ${cost_cache_hit_floor:.6f}")
+    print()
+    print(f"     Perché D non è previsionale: il system block di Ollenya contiene")
+    print(f"     almeno 4 parti dinamiche (ora attuale al minuto, memorie, situazioni,")
+    print(f"     trial_state). Finché non viene misurato in produzione un turno con")
+    print(f"     cache_read_input_tokens > 0 (vedi `usage` del response di")
+    print(f"     messages.create), lo scenario B è il tetto previsionale per il")
+    print(f"     sizing economico. Lo scenario D va considerato solo DOPO prova.")
 
 
 def main() -> None:
