@@ -59,6 +59,31 @@
         "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app"
       },
       "channel": "preview"
+    },
+    "inworld-ab-ios": {
+      "distribution": "store",
+      "autoIncrement": true,
+      "credentialsSource": "local",
+      "ios": {
+        "resourceClass": "m-medium",
+        "simulator": false
+      },
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app"
+      },
+      "channel": "inworld-ab"
+    },
+    "inworld-ab-android": {
+      "distribution": "internal",
+      "autoIncrement": true,
+      "credentialsSource": "local",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app"
+      },
+      "channel": "inworld-ab"
     }
   },
   "submit": {
