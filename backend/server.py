@@ -675,32 +675,123 @@ async def _tts_provider_for_current_user() -> str:
     Default sempre ``"elevenlabs"`` se:
      * adapter non disponibile
      * uid non risolvibile
-     * email non in whitelist A/B
      * nessun doc di preferenza
 
-    Mai solleva (silent fallback a default)."""
+    Mai solleva (silent fallback a default).
+
+    v2 (2026-10 Fabio bug fix): la whitelist email check è stata rimossa
+    dal resolver runtime — la verifica è già enforced all'activate.
+    L'email non serve più per ritornare "inworld" dal doc.
+    """
     if not _INWORLD_ADAPTER_AVAILABLE:
+        logger.info(f"[tts_provider_resolve] adapter_unavailable → elevenlabs")
         return _koda_tts_prefs.DEFAULT_PROVIDER if _koda_tts_prefs else "elevenlabs"
     try:
         uid = current_user_id() or _current_user_id.get()
     except Exception:
         uid = None
     if not uid or uid == "me":
+        logger.info(
+            f"[tts_provider_resolve] uid_missing_or_me ({uid!r}) → elevenlabs default"
+        )
         return _koda_tts_prefs.DEFAULT_PROVIDER
     try:
-        email = await _uid_email_from_session_or_profile(uid)
-    except Exception:
-        email = None
-    try:
-        return await _koda_tts_prefs.get_provider_for_uid(
+        prov = await _koda_tts_prefs.get_provider_for_uid(
             db, uid,
             allowed_emails=_INWORLD_AB_ALLOWED_EMAILS,
-            email=(email or "").strip().lower() if email else None,
+            email=None,  # non più usato post-fix
         )
+        logger.info(
+            f"[tts_provider_resolve] uid={uid[:8]}… resolved={prov}"
+        )
+        return prov
     except Exception as e:
         logger.warning(f"[tts_provider_resolve] uid={uid[:8]}… err: {e}")
         return _koda_tts_prefs.DEFAULT_PROVIDER
 # === /INWORLD DEV ENDPOINTS =================================================
+
+
+# =============================================================================
+# ADMIN DIAGNOSTIC — TTS Provider State (Fabio 2026-10)
+# =============================================================================
+# Permette di ispezionare lo stato esatto di un utente senza fare chiamate
+# a pagamento. Protetto da KODA_ADMIN_TOKEN. Accetta ?email=<e-mail>.
+# =============================================================================
+@api_router.get("/admin/dev/tts-provider-debug")
+async def api_admin_tts_provider_debug(
+    email: Optional[str] = None,
+    admin_token: Optional[str] = None,
+):
+    """Ritorna lo stato di routing TTS per l'utente ``email``. Non chiama
+    nessun provider. Scopo: debug mancato switch Inworld.
+
+    Query:
+      - ?email=<e-mail utente> (obbligatorio)
+      - ?admin_token=<KODA_ADMIN_TOKEN> (obbligatorio, no bearer)
+    """
+    expected = os.environ.get("KODA_ADMIN_TOKEN", "").strip()
+    if not expected or admin_token != expected:
+        raise HTTPException(status_code=401, detail="admin token required")
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="email query param required")
+    email_norm = email.strip().lower()
+    uid = _email_to_uid(email_norm)
+
+    # Legge il doc pref
+    prefs_doc = None
+    if _koda_tts_prefs is not None:
+        try:
+            prefs_doc = await db[_koda_tts_prefs.PREFS_COLLECTION].find_one(
+                {"user_id": uid}
+            )
+            if prefs_doc:
+                prefs_doc["_id"] = str(prefs_doc.get("_id", ""))
+                if "updated_at" in prefs_doc and hasattr(prefs_doc["updated_at"], "isoformat"):
+                    prefs_doc["updated_at"] = prefs_doc["updated_at"].isoformat()
+        except Exception as e:
+            prefs_doc = {"__read_error__": str(e)}
+
+    # Simula il resolver
+    resolved = "elevenlabs"
+    resolver_error = None
+    if _INWORLD_ADAPTER_AVAILABLE and _koda_tts_prefs is not None:
+        try:
+            resolved = await _koda_tts_prefs.get_provider_for_uid(
+                db, uid,
+                allowed_emails=_INWORLD_AB_ALLOWED_EMAILS,
+                email=email_norm,
+            )
+        except Exception as e:
+            resolver_error = str(e)
+
+    # Ultimi 10 eventi TTS per questo uid
+    recent_events: list = []
+    if _koda_tts_events is not None:
+        try:
+            recent_events = await _koda_tts_events.recent_events(
+                db, user_id=uid, limit=10
+            )
+            # Pulizia campi lunghi
+            for ev in recent_events:
+                ev.pop("error_message_short", None)
+        except Exception as e:
+            recent_events = [{"__read_error__": str(e)}]
+
+    return {
+        "email_input": email_norm,
+        "uid_derived": uid,
+        "in_hardcoded_allowlist": email_norm in _INWORLD_AB_ALLOWED_EMAILS,
+        "adapter_available": _INWORLD_ADAPTER_AVAILABLE,
+        "adapter_import_error": _INWORLD_ADAPTER_IMPORT_ERROR,
+        "inworld_api_key_set": bool(os.environ.get("INWORLD_API_KEY", "").strip()),
+        "elevenlabs_api_key_set": bool(os.environ.get("ELEVENLABS_API_KEY", "").strip()),
+        "prefs_doc": prefs_doc,
+        "resolver_returns": resolved,
+        "resolver_error": resolver_error,
+        "recent_tts_events_count": len(recent_events),
+        "recent_tts_events": recent_events,
+    }
+
 
 
 
