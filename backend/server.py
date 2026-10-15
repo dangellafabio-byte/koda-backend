@@ -100,6 +100,21 @@ else:
     _TTS_CLASSIFIER_IMPORT_ERROR = None
 
 
+# === INWORLD TTS ADAPTER + TELEMETRIA (dev-only, 2026-10 Fabio) =============
+# Import isolato: se il modulo manca o fallisce l'import, il server resta
+# funzionante al 100% (gli endpoint dev-only non vengono registrati).
+try:
+    import inworld_tts as _inworld_tts
+    import koda_tts_events as _koda_tts_events
+    _INWORLD_ADAPTER_AVAILABLE = True
+    _INWORLD_ADAPTER_IMPORT_ERROR: Optional[str] = None
+except Exception as _inw_e:
+    _inworld_tts = None  # type: ignore
+    _koda_tts_events = None  # type: ignore
+    _INWORLD_ADAPTER_AVAILABLE = False
+    _INWORLD_ADAPTER_IMPORT_ERROR = str(_inw_e)
+
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -326,6 +341,195 @@ async def api_inworld_samples_download(filename: str):
         filename=filename,
     )
 # === /INWORLD SAMPLES =======================================================
+
+
+# === DEV: SORGENTE CLIP ORIGINALI (per confronto A/B su tablet, dev-only) ===
+# Serve le clip MP3 **già pubblicamente shippate nel bundle Expo** (quindi
+# nessuna informazione aggiuntiva viene esposta) con una whitelist stretta
+# di filename: così l'owner può ascoltarle da tablet via browser senza
+# dover decodificare Base64 o navigare la cartella /assets servita da Metro.
+# Nessun log del filename (ridondante nel path di accesso), nessun body
+# dinamico, nessun side-effect su DB.
+_ORIG_INTRO_SRC_DIR = "/app/frontend/assets/sounds/intro"
+_ORIG_INTRO_ALLOWED_FILENAMES = frozenset({
+    # Clip con TESTO INCERTO da sottoporre a Fabio per trascrizione
+    "intro_premium_eccomi-cielo.mp3",
+    "intro_premium_closing-cielo.mp3",
+    # Clip in cartella /audio (quota exhausted) — path separato
+})
+_ORIG_AUDIO_SRC_DIR = "/app/frontend/assets/audio"
+_ORIG_AUDIO_ALLOWED_FILENAMES = frozenset({
+    "koda_quota_exhausted.mp3",
+})
+
+
+@api_router.get("/dev/intro-source-sample/{filename}")
+async def api_dev_intro_source_sample(filename: str):
+    """Serve una delle clip ORIGINALI (ElevenLabs) dalla build Expo,
+    per permettere all'owner di ascoltarle su tablet e dettare la
+    trascrizione esatta.
+
+    Protezione: whitelist stretta di filename. Nessun path traversal,
+    nessun log del nome file. Le clip sono già nel bundle pubblico
+    `/assets/sounds/intro/` → nessuna info nuova esposta.
+    """
+    if filename in _ORIG_INTRO_ALLOWED_FILENAMES:
+        base_dir = _ORIG_INTRO_SRC_DIR
+    elif filename in _ORIG_AUDIO_ALLOWED_FILENAMES:
+        base_dir = _ORIG_AUDIO_SRC_DIR
+    else:
+        raise HTTPException(status_code=404, detail="not whitelisted")
+    full = _inw_os.path.join(base_dir, filename)
+    if not _inw_os.path.isfile(full):
+        raise HTTPException(status_code=404, detail="file missing")
+    return _FileResponse(
+        full,
+        media_type="audio/mpeg",
+        filename=filename,
+    )
+# === /DEV SORGENTE CLIP =====================================================
+
+
+# =============================================================================
+# INWORLD A/B TEST — Gate di sicurezza (dev-only)
+# =============================================================================
+# L'opt-in Inworld deve rimanere ISOLATO al solo account di prova
+# concordato (ollenya.play.review@gmail.com) + l'owner. L'autorizzazione
+# avviene lato backend:
+#  1) sessione autenticata valida (session_token OR dev-login attivo)
+#  2) email risolta appartiene a `_INWORLD_AB_ALLOWED_EMAILS` **E**
+#     il DB conferma la whitelist unlimited (già usata per il bypass
+#     paywall) — doppio controllo per evitare che un bug lato dispatcher
+#     estenda l'opt-in ad altri utenti.
+#
+# Il controllo è usato da TUTTI i /api/dev/* nuovi:
+#  - /api/dev/inworld-tts-selftest-dry
+#  - /api/dev/tts-telemetry/*
+#  - (futuro) /api/dev/profile/tts-provider
+# =============================================================================
+_INWORLD_AB_ALLOWED_EMAILS: frozenset[str] = frozenset({
+    "ollenya.play.review@gmail.com",
+    "dangella.fabio@gmail.com",
+    "wqm4r4jn7f@privaterelay.appleid.com",
+})
+
+
+async def _require_inworld_ab_test_user(request) -> tuple[str, str]:
+    """Gate per endpoint A/B Inworld. Ritorna ``(uid, email)`` se
+    autorizzato, altrimenti solleva 401/403.
+
+    Protezione a due livelli (defense in depth):
+      1. Risolve l'email dalla sessione corrente (session_token)
+      2. Verifica che l'email sia nell'allow-list hardcoded sopra
+      3. Doppio check: verifica che l'utente sia anche nella whitelist
+         "unlimited" (coerenza con il resto del bypass review)
+
+    NESSUN parametro di request viene loggato. Logga solo esito.
+    """
+    # Step 1: sessione autenticata
+    uid = await _resolve_uid_from_session(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="auth required")
+
+    # Step 2: risolvi email
+    email = (await _uid_email_from_session_or_profile(uid) or "").strip().lower()
+    if not email:
+        logger.warning(f"[inworld_ab_gate] uid={uid[:8]}… no email resolvable")
+        raise HTTPException(status_code=403, detail="email not resolvable")
+
+    # Step 3: allow-list hardcoded
+    if email not in _INWORLD_AB_ALLOWED_EMAILS:
+        logger.warning(f"[inworld_ab_gate] uid={uid[:8]}… email NOT in allow-list")
+        raise HTTPException(status_code=403, detail="not authorized for A/B test")
+
+    # Step 4: coerenza con whitelist unlimited (defense in depth)
+    is_unlimited, _reason = await is_user_unlimited(email, uid)
+    if not is_unlimited:
+        logger.warning(
+            f"[inworld_ab_gate] uid={uid[:8]}… allow-list OK but NOT unlimited"
+        )
+        raise HTTPException(status_code=403, detail="unlimited whitelist required")
+
+    return uid, email
+
+
+# =============================================================================
+# INWORLD TTS ADAPTER — Endpoint di self-test DRY (nessuna chiamata API)
+# =============================================================================
+@api_router.get("/dev/inworld-tts-selftest-dry")
+async def api_dev_inworld_tts_selftest_dry(request: Request):
+    """Verifica che l'adapter Inworld sia installato correttamente e che
+    la config sia valida. **NESSUNA chiamata API Inworld**: nessun
+    carattere consumato.
+
+    Risposta: dict con flag di salute (modulo caricato, httpx presente,
+    API key presente, parametri default). I valori NON contengono mai
+    la chiave API.
+    """
+    uid, email = await _require_inworld_ab_test_user(request)
+
+    if not _INWORLD_ADAPTER_AVAILABLE:
+        return {
+            "ok": False,
+            "module_loaded": False,
+            "import_error": _INWORLD_ADAPTER_IMPORT_ERROR or "unknown",
+        }
+
+    health = _inworld_tts.health_check_config()
+    # Simuliamo anche la validazione input senza chiamare l'API
+    sample_text = "Prova silenziosa."
+    try:
+        _inworld_tts._validate_text(sample_text)
+        validation_ok = True
+    except Exception as e:
+        validation_ok = False
+        health["validation_error"] = str(e)
+
+    logger.info(f"[inworld_selftest_dry] uid={uid[:8]}… OK")
+    return {
+        "ok": True,
+        **health,
+        "input_validation_sample_ok": validation_ok,
+        "note": "DRY run: nessuna chiamata API Inworld effettuata.",
+    }
+
+
+# =============================================================================
+# INWORLD TELEMETRY — Endpoint read-only
+# =============================================================================
+@api_router.get("/dev/tts-telemetry/recent")
+async def api_dev_tts_telemetry_recent(
+    request: Request,
+    user_id: Optional[str] = None,
+    limit: int = 50,
+):
+    """Ultimi N eventi TTS (default 50, max 500). Filtrabile per
+    ``user_id`` (default: uid autenticato)."""
+    uid, _email = await _require_inworld_ab_test_user(request)
+    if not _INWORLD_ADAPTER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="telemetry module unavailable")
+    target_uid = user_id or uid
+    rows = await _koda_tts_events.recent_events(
+        db, user_id=target_uid, limit=limit
+    )
+    return {"user_id": target_uid, "count": len(rows), "events": rows}
+
+
+@api_router.get("/dev/tts-telemetry/summary")
+async def api_dev_tts_telemetry_summary(
+    request: Request,
+    user_id: Optional[str] = None,
+    since_hours: int = 24,
+):
+    """Aggregato per provider nelle ultime N ore (default 24)."""
+    uid, _email = await _require_inworld_ab_test_user(request)
+    if not _INWORLD_ADAPTER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="telemetry module unavailable")
+    target_uid = user_id or uid
+    return await _koda_tts_events.summary_by_provider(
+        db, user_id=target_uid, since_hours=max(1, min(since_hours, 720))
+    )
+# === /INWORLD DEV ENDPOINTS =================================================
 
 
 
@@ -18026,6 +18230,23 @@ async def startup_db_client():
         logger.info("[startup] unlimited_users whitelist ready")
     except Exception as e:
         logger.warning(f"[startup] unlimited_users seed failed: {e}")
+
+    # === INWORLD TTS TELEMETRY — indici koda_tts_events (2026-10) ============
+    # Isolato: se il modulo non è caricato (import fallito al boot) saltiamo
+    # senza impattare il resto. Nessuna dipendenza runtime per il dispatcher
+    # prod (non ancora collegato).
+    if _INWORLD_ADAPTER_AVAILABLE and _koda_tts_events is not None:
+        try:
+            await _koda_tts_events.ensure_indexes(db)
+            logger.info("[startup] koda_tts_events indexes ready")
+        except Exception as e:
+            logger.warning(f"[startup] koda_tts_events index init failed: {e}")
+    else:
+        logger.info(
+            f"[startup] Inworld TTS adapter NOT available "
+            f"(err={_INWORLD_ADAPTER_IMPORT_ERROR or 'unknown'}) — "
+            f"telemetria disabilitata"
+        )
 
     # === REBRAND KODA → OLLENYA (2026-06 Fabio, one-shot idempotente) ======
     # Al rebrand del brand da "Koda" a "Ollenya", i profili utente esistenti
