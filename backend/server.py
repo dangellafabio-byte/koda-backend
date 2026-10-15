@@ -446,13 +446,10 @@ async def _require_inworld_ab_test_user(request) -> tuple[str, str]:
         logger.warning(f"[inworld_ab_gate] uid={uid[:8]}… email NOT in allow-list")
         raise HTTPException(status_code=403, detail="not authorized for A/B test")
 
-    # Step 4: coerenza con whitelist unlimited (defense in depth)
-    is_unlimited, _reason = await is_user_unlimited(email, uid)
-    if not is_unlimited:
-        logger.warning(
-            f"[inworld_ab_gate] uid={uid[:8]}… allow-list OK but NOT unlimited"
-        )
-        raise HTTPException(status_code=403, detail="unlimited whitelist required")
+    # Step 4 RIMOSSO (2026-10 Fabio): il doppio controllo con
+    # is_user_unlimited() causava 403 spuri perché la whitelist DB
+    # unlimited non è sempre sincronizzata con l'allow-list A/B.
+    # L'allow-list hardcoded sopra (3 email) è già un gate forte.
 
     return uid, email
 
