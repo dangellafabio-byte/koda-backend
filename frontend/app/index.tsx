@@ -6482,6 +6482,106 @@ export default function Taccuino() {
               </View>
               <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
             </TouchableOpacity>
+
+            {/* === INWORLD A/B TTS — attiva con token monouso (Fabio 2026-10) === */}
+            <TouchableOpacity
+              style={[styles.settingRow, { paddingVertical: 14 }]}
+              onPress={async () => {
+                try {
+                  const { activateWithToken, readTTSProviderSync } = await import("../lib/ttsProviderClient");
+                  const { getAuthToken } = await import("../lib/authToken");
+                  const { KODA_BACKEND_URL } = await import("../lib/backendUrl");
+                  const curProv = readTTSProviderSync();
+                  if (curProv === "inworld") {
+                    Alert.alert(
+                      "TTS Inworld già attivo",
+                      "La voce Cielo è servita da Inworld AI (TTS-2). Per tornare a ElevenLabs usa il tasto qui sotto.",
+                    );
+                    return;
+                  }
+                  // Prompt testo semplice (compat tablet) con Alert.prompt su iOS,
+                  // fallback form su Android via ActionSheetIOS-like approach.
+                  // Qui usiamo il prompt nativo: su Android ricadiamo su un
+                  // minuscolo form inline (non implementato in questa fase → copia).
+                  if (Platform.OS === "ios" && (Alert as any).prompt) {
+                    (Alert as any).prompt(
+                      "Attiva TTS Inworld (A/B)",
+                      "Incolla qui il token monouso ricevuto in chat (scadenza 10 min).",
+                      async (token: string) => {
+                        if (!token || token.length < 10) return;
+                        try {
+                          const authTok = getAuthToken();
+                          const uidFromProfile = (profile as any)?.id || "";
+                          await activateWithToken(
+                            KODA_BACKEND_URL.replace(/\/$/, ""),
+                            authTok ? { Authorization: `Bearer ${authTok}` } : {},
+                            token.trim(),
+                            String(uidFromProfile),
+                          );
+                          Alert.alert(
+                            "Inworld attivato ✅",
+                            "La voce Cielo passa a Inworld TTS-2 su tutti i percorsi. Chiudi questa schermata, poi usa 'Rivedi Intro Premium' per riprovare l'intro.",
+                          );
+                        } catch (e: any) {
+                          Alert.alert("Attivazione fallita", String(e?.message || e));
+                        }
+                      },
+                      "plain-text",
+                    );
+                  } else {
+                    Alert.alert(
+                      "Attiva TTS Inworld",
+                      "Al momento il prompt-token funziona solo su iOS. Chiedi a Fabio di implementare la form inline per Android.",
+                    );
+                  }
+                } catch (e) {
+                  console.warn("[tts-inworld-activate] failed:", e);
+                }
+              }}
+              testID="toggle-tts-inworld-activate"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>🎙️ Attiva TTS Inworld (A/B)</Text>
+                <Text style={styles.settingHint}>
+                  Richiede token monouso dalla chat (10 min). Applica Inworld
+                  TTS-2 alla voce Cielo su intro, LA, microdemo, paywall, quota
+                  e risposte live. Vento resta su ElevenLabs.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+            </TouchableOpacity>
+
+            {/* === INWORLD A/B TTS — reset a ElevenLabs (Fabio 2026-10) === */}
+            <TouchableOpacity
+              style={[styles.settingRow, { paddingVertical: 14 }]}
+              onPress={async () => {
+                try {
+                  const { resetProviderOnServer } = await import("../lib/ttsProviderClient");
+                  const { getAuthToken } = await import("../lib/authToken");
+                  const { KODA_BACKEND_URL } = await import("../lib/backendUrl");
+                  const authTok = getAuthToken();
+                  await resetProviderOnServer(
+                    KODA_BACKEND_URL.replace(/\/$/, ""),
+                    authTok ? { Authorization: `Bearer ${authTok}` } : {},
+                  );
+                  Alert.alert(
+                    "TTS tornato a ElevenLabs",
+                    "La preferenza A/B è stata rimossa sia lato device che backend. Riavvia l'app per sentire la voce ElevenLabs standard.",
+                  );
+                } catch (e: any) {
+                  Alert.alert("Reset fallito", String(e?.message || e));
+                }
+              }}
+              testID="toggle-tts-inworld-reset"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>↩️ TTS → ElevenLabs</Text>
+                <Text style={styles.settingHint}>
+                  Rimuove la preferenza Inworld (device + backend). Nessun effetto per gli altri utenti.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+            </TouchableOpacity>
         </>
       ),
     }] : []),

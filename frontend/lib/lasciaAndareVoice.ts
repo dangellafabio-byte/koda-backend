@@ -31,24 +31,22 @@ import { createAudioPlayer, AudioPlayer } from "expo-audio";
 // ============================================================================
 // Nota: NON usare percorsi dinamici tipo require(`../assets/sounds/${key}.mp3`)
 // perché Metro NON risolve template literal a build-time.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const openCielo = require("../assets/sounds/lascia-andare/open-cielo.mp3");
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const openVento = require("../assets/sounds/lascia-andare/open-vento.mp3");
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const closeCielo = require("../assets/sounds/lascia-andare/close-cielo.mp3");
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const closeVento = require("../assets/sounds/lascia-andare/close-vento.mp3");
+// === INWORLD A/B — asset risolti via dispatcher (Fabio 2026-10) ============
+// Il dispatcher legge SecureStore (ollenya_tts_provider_dev) e sceglie
+// cartella `lascia-andare/` o `lascia-andare-inworld/`. Vento resta
+// SEMPRE su ElevenLabs (fase 1, Inworld solo Cielo).
+import { getIntroAsset } from "./introAssetProvider";
+const openCielo = getIntroAsset("la_open_cielo");
+const openVento = getIntroAsset("la_open_vento");
+const closeCielo = getIntroAsset("la_close_cielo");
+const closeVento = getIntroAsset("la_close_vento");
 
 // === SPEC 2026-08-21 (Fabio) — Clip narrative firstBoot V3 =================
 // Riprodotte una sola volta all'ingresso di LA se params.firstBoot === "1".
 // Non hanno varianti Cielo/Vento: la sequenza narrativa V3 usa sempre
-// la voce di default (Cielo). Le due clip vengono generate/mantenute
-// dallo script /app/backend/scripts/gen_intro_clips.py.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const firstBootCuoreClip = require("../assets/sounds/intro/la_cuore-cielo.mp3");
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const firstBootProvaloClip = require("../assets/sounds/intro/la_provalo-cielo.mp3");
+// la voce di default (Cielo).
+const firstBootCuoreClip = getIntroAsset("la_cuore");
+const firstBootProvaloClip = getIntroAsset("la_provalo");
 
 // ============================================================================
 // Mapping voice → asset

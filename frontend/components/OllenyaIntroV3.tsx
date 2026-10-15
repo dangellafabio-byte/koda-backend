@@ -72,9 +72,11 @@ const TAG = "KODA_INTRO_V3";
 // La clip intro_v3_saluto-cielo.mp3 è stata rigenerata con il nuovo testo:
 //   "Ciao, piacere di conoscerti… io sono Ollenya, e tu?"
 // (rispetto al vecchio testo "Ciao. Io sono Ollenya. Voglio farti conoscere il mio cuore.")
+import { getIntroAsset } from "../lib/introAssetProvider";
+
 const CIELO_CLIPS = {
   intro_v3_saluto: require("../assets/sounds/intro/intro_v3_saluto-cielo.mp3"),
-  intro_v3_parte_di_me: require("../assets/sounds/intro/intro_v3_parte_di_me-cielo.mp3"),
+  intro_v3_parte_di_me: getIntroAsset("intro_v3_parte_di_me"),
 };
 
 // ==================== STATE MACHINE TYPES ====================

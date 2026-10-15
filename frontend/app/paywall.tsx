@@ -161,7 +161,7 @@ export default function PaywallScreen() {
         await new Promise((r) => setTimeout(r, 200));
         if (cancelled) return;
         const player = createAudioPlayer(
-          require("../assets/sounds/intro/paywall_voce-cielo.mp3"),
+          getIntroAsset("paywall_voce"),
           { updateInterval: 100 }
         );
         audioPlayerRef.current = player;

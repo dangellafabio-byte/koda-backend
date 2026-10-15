@@ -88,7 +88,7 @@ export async function handleQuotaExhausted(): Promise<void> {
     // Carica asset statico dal bundle
     const { sound } = await Audio.Sound.createAsync(
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require("../assets/audio/koda_quota_exhausted.mp3"),
+      getIntroAsset("quota_exhausted"),
       { shouldPlay: true, volume: 1.0 }
     );
     _cachedSound = sound;

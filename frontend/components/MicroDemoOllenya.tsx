@@ -55,8 +55,9 @@ import { APP_BG_INDIGO } from "../lib/uiConstants";
 
 const TAG = "KODA_MICRODEMO";
 
-const CLIP_OPEN = require("../assets/sounds/intro/microdemo_open-cielo.mp3");
-const CLIP_CLOSE = require("../assets/sounds/intro/microdemo_close-cielo.mp3");
+import { getIntroAsset } from "../lib/introAssetProvider";
+const CLIP_OPEN = getIntroAsset("microdemo_open");
+const CLIP_CLOSE = getIntroAsset("microdemo_close");
 const VOICE_CIELO_ID = "POuqf18evoXOKIqV2Px7";
 
 const MAX_TURNS = 5; // Fabio 2026-06: 3→5 turni per far percepire meglio Ollenya prima del paywall

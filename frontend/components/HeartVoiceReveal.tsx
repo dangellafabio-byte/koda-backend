@@ -40,7 +40,8 @@ import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
 import { APP_BG_INDIGO } from "../lib/uiConstants";
 
 const TAG = "KODA_HEART_REVEAL";
-const REVEAL_CLIP = require("../assets/sounds/intro/reveal_cuore_voce-cielo.mp3");
+import { getIntroAsset } from "../lib/introAssetProvider";
+const REVEAL_CLIP = getIntroAsset("reveal_cuore_voce");
 
 const { width: WINDOW_WIDTH } = Dimensions.get("window");
 const ORB_SIZE = ECLIPSE_MAX_DIAMETER;

@@ -33,7 +33,8 @@ import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
 import { APP_BG_INDIGO } from "../lib/uiConstants";
 
 const TAG = "[intro-premium]";
-const CLIP_ECCOMI = require("../assets/sounds/intro/intro_premium_eccomi-cielo.mp3");
+import { getIntroAsset } from "../lib/introAssetProvider";
+const CLIP_ECCOMI = getIntroAsset("intro_premium_eccomi");
 
 type Phase =
   | "boot" | "speaking" | "asking_permission" | "waiting_tap"

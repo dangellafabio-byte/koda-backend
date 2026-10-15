@@ -106,11 +106,15 @@ else:
 try:
     import inworld_tts as _inworld_tts
     import koda_tts_events as _koda_tts_events
+    import koda_tts_prefs as _koda_tts_prefs
+    import inworld_dispatcher as _inworld_dispatcher
     _INWORLD_ADAPTER_AVAILABLE = True
     _INWORLD_ADAPTER_IMPORT_ERROR: Optional[str] = None
 except Exception as _inw_e:
     _inworld_tts = None  # type: ignore
     _koda_tts_events = None  # type: ignore
+    _koda_tts_prefs = None  # type: ignore
+    _inworld_dispatcher = None  # type: ignore
     _INWORLD_ADAPTER_AVAILABLE = False
     _INWORLD_ADAPTER_IMPORT_ERROR = str(_inw_e)
 
@@ -529,6 +533,148 @@ async def api_dev_tts_telemetry_summary(
     return await _koda_tts_events.summary_by_provider(
         db, user_id=target_uid, since_hours=max(1, min(since_hours, 720))
     )
+
+
+# =============================================================================
+# INWORLD TTS — Gestione provider per utente (token monouso)
+# =============================================================================
+@api_router.post("/dev/tts-provider/issue-token")
+async def api_dev_tts_provider_issue_token(request: Request):
+    """Rilascia un token monouso (TTL 10 min) per attivare un provider
+    sul dispositivo. Il body JSON opzionale: ``{"provider": "inworld"}``
+    (default ``"inworld"``). Risponde con ``{token, provider, expires_at,
+    ttl_minutes}``.
+
+    Il token NON contiene chiavi API. Va passato all'app via
+    ``POST /api/dev/tts-provider/activate``.
+    """
+    uid, _email = await _require_inworld_ab_test_user(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    provider = (body or {}).get("provider") or "inworld"
+    if provider not in _koda_tts_prefs.ALLOWED_PROVIDERS:
+        raise HTTPException(status_code=400, detail="provider non valido")
+    out = await _koda_tts_prefs.issue_switch_token(db, uid, provider)
+    logger.info(
+        f"[tts_provider] uid={uid[:8]}… issued token "
+        f"provider={provider} ttl={out['ttl_minutes']}min"
+    )
+    return out
+
+
+@api_router.post("/dev/tts-provider/activate")
+async def api_dev_tts_provider_activate(request: Request):
+    """Consuma un token one-shot e attiva il provider per questo uid.
+
+    Body: ``{"token": "<token>"}``. Il token è legato all'uid autenticato
+    (binding da :func:`issue_switch_token`): se il client prova a usare
+    un token emesso per un altro utente → 403.
+    """
+    uid, _email = await _require_inworld_ab_test_user(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    token = (body or {}).get("token") or ""
+    if not isinstance(token, str) or len(token) < 10:
+        raise HTTPException(status_code=400, detail="missing token")
+    try:
+        out = await _koda_tts_prefs.consume_switch_token(db, uid, token)
+    except ValueError as e:
+        reason = str(e)
+        http_code = 400
+        if reason in ("expired", "used"):
+            http_code = 410  # Gone
+        elif reason in ("uid_mismatch", "invalid"):
+            http_code = 403
+        logger.warning(
+            f"[tts_provider] uid={uid[:8]}… activate failed: {reason}"
+        )
+        raise HTTPException(status_code=http_code, detail=f"token {reason}")
+    logger.info(
+        f"[tts_provider] uid={uid[:8]}… activated provider={out['provider']}"
+    )
+    return out
+
+
+@api_router.get("/dev/tts-provider/me")
+async def api_dev_tts_provider_me(request: Request):
+    """Stato del provider corrente per l'uid autenticato."""
+    uid, email = await _require_inworld_ab_test_user(request)
+    provider = await _koda_tts_prefs.get_provider_for_uid(
+        db, uid,
+        allowed_emails=_INWORLD_AB_ALLOWED_EMAILS,
+        email=email,
+    )
+    return {
+        "user_id": uid,
+        "provider": provider,
+        "whitelisted": True,
+    }
+
+
+@api_router.delete("/dev/tts-provider/me")
+async def api_dev_tts_provider_reset(request: Request):
+    """Reset: rimuove la preferenza A/B (torna a elevenlabs default)."""
+    uid, _email = await _require_inworld_ab_test_user(request)
+    await _koda_tts_prefs.clear_provider_for_uid(db, uid)
+    logger.info(f"[tts_provider] uid={uid[:8]}… reset to default (elevenlabs)")
+    return {"user_id": uid, "provider": _koda_tts_prefs.DEFAULT_PROVIDER}
+
+
+@api_router.post("/dev/tts-provider/ack-play")
+async def api_dev_tts_provider_ack_play(request: Request):
+    """ACK dal frontend: segna un evento TTS come effettivamente
+    riprodotto. Body: ``{event_id, played: true|false}``."""
+    uid, _email = await _require_inworld_ab_test_user(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    event_id = (body or {}).get("event_id")
+    played = bool((body or {}).get("played", True))
+    if not event_id:
+        raise HTTPException(status_code=400, detail="event_id required")
+    matched = await _koda_tts_events.update_play_ack(db, event_id, played)
+    return {"matched": matched, "event_id": event_id, "played": played}
+
+
+# =============================================================================
+# HELPER: resolver provider corrente nei call-site TTS (silenzioso, cached)
+# =============================================================================
+async def _tts_provider_for_current_user() -> str:
+    """Risolve il provider TTS per l'uid della request corrente.
+
+    Default sempre ``"elevenlabs"`` se:
+     * adapter non disponibile
+     * uid non risolvibile
+     * email non in whitelist A/B
+     * nessun doc di preferenza
+
+    Mai solleva (silent fallback a default)."""
+    if not _INWORLD_ADAPTER_AVAILABLE:
+        return _koda_tts_prefs.DEFAULT_PROVIDER if _koda_tts_prefs else "elevenlabs"
+    try:
+        uid = current_user_id() or _current_user_id.get()
+    except Exception:
+        uid = None
+    if not uid or uid == "me":
+        return _koda_tts_prefs.DEFAULT_PROVIDER
+    try:
+        email = await _uid_email_from_session_or_profile(uid)
+    except Exception:
+        email = None
+    try:
+        return await _koda_tts_prefs.get_provider_for_uid(
+            db, uid,
+            allowed_emails=_INWORLD_AB_ALLOWED_EMAILS,
+            email=(email or "").strip().lower() if email else None,
+        )
+    except Exception as e:
+        logger.warning(f"[tts_provider_resolve] uid={uid[:8]}… err: {e}")
+        return _koda_tts_prefs.DEFAULT_PROVIDER
 # === /INWORLD DEV ENDPOINTS =================================================
 
 
@@ -11383,6 +11529,38 @@ async def api_tts(req: TTSRequest):
     voice_id = req.voice_id or "6TngzmzM89jJ3Y2Yiywr"  # default Acqua
     voice_settings = _voice_settings_for_tone(req.tone, req.stability, req.similarity_boost)
 
+    # === [INWORLD A/B DISPATCH] — Fabio 2026-10 ===============================
+    # Se l'utente ha opt-in a Inworld (whitelist A/B + preferenza salvata),
+    # bypassiamo ElevenLabs e usiamo l'adapter Inworld. Nessun fallback
+    # automatico (contratto Fabio): se Inworld fallisce → HTTP 502 chiaro.
+    # Guard voce Vento: non disponibile in fase 1 → HTTP 503 esplicito.
+    _provider = await _tts_provider_for_current_user()
+    if _provider == "inworld" and _INWORLD_ADAPTER_AVAILABLE:
+        try:
+            _uid_now = current_user_id() or _current_user_id.get() or "anon"
+            _audio = await _inworld_dispatcher.generate_non_streaming(
+                db,
+                text=text,
+                user_id=_uid_now,
+                endpoint="api_tts",
+                voice_id_requested=voice_id,
+                tone=req.tone,
+            )
+        except _inworld_dispatcher.InworldVoiceNotAvailable as e:
+            raise HTTPException(status_code=503, detail={
+                "error": "voice_not_available_in_inworld",
+                "message": str(e),
+            })
+        except _inworld_tts.InworldTTSError as e:
+            raise HTTPException(status_code=502, detail={
+                "error": "tts_provider_failed",
+                "provider": "inworld",
+                "class": type(e).__name__,
+                "message": str(e),
+            })
+        return Response(content=_audio, media_type="audio/mpeg")
+
+
     try:
         # Use eleven_v3 if the text contains audio tags ([sospira], [ride], etc.)
         # — only v3 honors them. For plain text use FLASH (faster than turbo).
@@ -11623,14 +11801,54 @@ async def api_tts_bridge(style: str = "generico", i: int = 0, voice_id: Optional
     text = phrases[idx]
     vid = voice_id or "6TngzmzM89jJ3Y2Yiywr"  # default Acqua
 
-    # Cache key versionato → nuove frasi invalidano automaticamente le vecchie
-    cache_key = f"bridge:{BRIDGE_VERSION}:{vid}:{tier}:{idx}"
+    # === [INWORLD A/B DISPATCH BRIDGE] — Fabio 2026-10 ========================
+    # Risolve il provider PRIMA della cache: la cache_key include il
+    # provider così filler ElevenLabs e Inworld non collidono.
+    _provider_br = await _tts_provider_for_current_user()
+    provider_key = _provider_br if _provider_br in ("inworld",) else "elevenlabs"
+    cache_key = f"bridge:{BRIDGE_VERSION}:{provider_key}:{vid}:{tier}:{idx}"
     cache_token = hashlib.md5(cache_key.encode("utf-8")).hexdigest()
 
     cached = await db.tts_audio_cache.find_one({"token": cache_token}, {"audio": 1, "_id": 0})
     if cached and cached.get("audio"):
         return Response(
             content=cached["audio"],
+            media_type="audio/mpeg",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
+    # Branch Inworld (dev A/B)
+    if provider_key == "inworld" and _INWORLD_ADAPTER_AVAILABLE:
+        try:
+            _uid_br = current_user_id() or _current_user_id.get() or "anon"
+            audio_data = await _inworld_dispatcher.generate_non_streaming(
+                db,
+                text=text,
+                user_id=_uid_br,
+                endpoint="api_tts_bridge",
+                voice_id_requested=vid,
+                tone=None,
+            )
+        except _inworld_dispatcher.InworldVoiceNotAvailable as e:
+            raise HTTPException(status_code=503, detail={
+                "error": "voice_not_available_in_inworld", "message": str(e),
+            })
+        except _inworld_tts.InworldTTSError as e:
+            raise HTTPException(status_code=502, detail={
+                "error": "tts_provider_failed", "provider": "inworld",
+                "class": type(e).__name__, "message": str(e),
+            })
+        try:
+            await db.tts_audio_cache.update_one(
+                {"token": cache_token},
+                {"$set": {"token": cache_token, "audio": audio_data,
+                          "created_at": datetime.now(timezone.utc)}},
+                upsert=True,
+            )
+        except Exception as e:
+            logger.warning(f"Bridge cache write failed (inworld): {e}")
+        return Response(
+            content=audio_data,
             media_type="audio/mpeg",
             headers={"Cache-Control": "public, max-age=31536000, immutable"},
         )
@@ -11714,6 +11932,32 @@ async def api_tts_prepare(req: TTSRequest):
 
     voice_id = req.voice_id or "6TngzmzM89jJ3Y2Yiywr"  # default Acqua
     voice_settings = _voice_settings_for_tone(req.tone, req.stability, req.similarity_boost)
+
+    # === [INWORLD A/B DISPATCH PREPARE] — Fabio 2026-10 =======================
+    _provider_pr = await _tts_provider_for_current_user()
+    if _provider_pr == "inworld" and _INWORLD_ADAPTER_AVAILABLE:
+        try:
+            _uid_pr = current_user_id() or _current_user_id.get() or "anon"
+            _audio_pr = await _inworld_dispatcher.generate_non_streaming(
+                db,
+                text=text,
+                user_id=_uid_pr,
+                endpoint="api_tts_prepare",
+                voice_id_requested=voice_id,
+                tone=req.tone,
+            )
+        except _inworld_dispatcher.InworldVoiceNotAvailable as e:
+            raise HTTPException(status_code=503, detail={
+                "error": "voice_not_available_in_inworld", "message": str(e),
+            })
+        except _inworld_tts.InworldTTSError as e:
+            raise HTTPException(status_code=502, detail={
+                "error": "tts_provider_failed", "provider": "inworld",
+                "class": type(e).__name__, "message": str(e),
+            })
+        token_pr = await _store_tts_audio(_audio_pr)
+        return {"token": token_pr, "size": len(_audio_pr)}
+
 
     try:
         use_v3 = _has_audio_tags(text)
@@ -11823,6 +12067,52 @@ async def _tts_stream_impl(
         raise HTTPException(status_code=400, detail="Empty text")
     if len(text) > 1500:
         text = text[:1500]
+
+    # === [INWORLD A/B DISPATCH STREAM] — Fabio 2026-10 ========================
+    # Risoluzione provider PRIMA di ElevenLabs. Il contratto audio è
+    # identico: StreamingResponse(media_type="audio/mpeg") con bytes MP3
+    # puri (nessun SSE, nessun NDJSON esposto al client — l'adapter
+    # Inworld decodifica NDJSON internamente e yielda MP3 bytes).
+    vid_for_guard = voice_id or "6TngzmzM89jJ3Y2Yiywr"
+    _provider_st = await _tts_provider_for_current_user()
+    if _provider_st == "inworld" and _INWORLD_ADAPTER_AVAILABLE:
+        # Guard voce Vento PRIMA di aprire lo stream (così possiamo rispondere
+        # con HTTP 503 senza avviare la chiamata upstream).
+        if _koda_tts_prefs.is_vento_voice(vid_for_guard):
+            raise HTTPException(status_code=503, detail={
+                "error": "voice_not_available_in_inworld",
+                "message": "Voce 'Vento' non disponibile con provider Inworld "
+                           "in questa fase di test.",
+            })
+        _uid_st = current_user_id() or _current_user_id.get() or "anon"
+
+        async def _inworld_stream_iter():
+            try:
+                async for chunk in _inworld_dispatcher.stream_mp3(
+                    db,
+                    text=text,
+                    user_id=_uid_st,
+                    endpoint="api_tts_stream",
+                    voice_id_requested=vid_for_guard,
+                    tone=tone,
+                ):
+                    yield chunk
+            except _inworld_tts.InworldTTSError as e:
+                # Lo stream è già aperto: non possiamo cambiare status.
+                # Il client vedrà uno stream troncato. Logghiamo l'errore
+                # per diagnostica e NON facciamo fallback automatico.
+                logger.error(f"[/tts/stream inworld] {type(e).__name__}: {e}")
+                return
+
+        return StreamingResponse(
+            _inworld_stream_iter(),
+            media_type="audio/mpeg",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+                "X-TTS-Provider": "inworld",
+            },
+        )
 
     client_el = _get_eleven_client()
     if client_el is None:
@@ -15065,6 +15355,39 @@ async def _fast_pipeline_task(
                         return bytes(_audio)
 
                     _audio_bytes = await asyncio.to_thread(_do_tts_didnt_hear)
+                    # === [INWORLD A/B DISPATCH DIDNT_HEAR] — Fabio 2026-10 ====
+                    # Se l'utente è Inworld opt-in, sostituiamo l'audio generato
+                    # da ElevenLabs (gratuito, già fatto sopra) con una call
+                    # Inworld. Lo facciamo DOPO il blocco originale per non
+                    # romperne l'invariante di assegnazione. Se Inworld fallisce
+                    # → NESSUN fallback automatico: _audio_bytes resterà quello
+                    # ElevenLabs del tentativo precedente SOLO SE already-OK;
+                    # altrimenti vuoto → client vedrà solo il testo (fallback
+                    # grazioso già previsto sotto, riga ~15370).
+                    _provider_dh = await _tts_provider_for_current_user()
+                    if _provider_dh == "inworld" and _INWORLD_ADAPTER_AVAILABLE:
+                        try:
+                            _uid_dh = current_user_id() or _current_user_id.get() or "anon"
+                            _audio_bytes = await _inworld_dispatcher.generate_non_streaming(
+                                db,
+                                text=_phrase_norm,  # senza [gently] tag v3
+                                user_id=_uid_dh,
+                                endpoint="_do_tts_didnt_hear",
+                                voice_id_requested=_voice_id,
+                                tone="calm",
+                            )
+                        except _inworld_dispatcher.InworldVoiceNotAvailable:
+                            logger.warning(
+                                f"[fast {session_id[:8]}] inworld didnt_hear "
+                                f"vento guard → audio vuoto (client mostra solo testo)"
+                            )
+                            _audio_bytes = b""
+                        except _inworld_tts.InworldTTSError as _ie_dh:
+                            logger.error(
+                                f"[fast {session_id[:8]}] inworld didnt_hear "
+                                f"error: {type(_ie_dh).__name__}: {_ie_dh}"
+                            )
+                            _audio_bytes = b""
                     # === FIX 2026-07-23 v60.2 — Loudness norm anche sul canned ===
                     # Se poi la canned scatta ANCHE dopo una frase reale della
                     # stessa sessione (rara ma possibile), coerenza livello.
@@ -16257,7 +16580,37 @@ async def _fast_pipeline_task(
                     f"[OLLENYA_TIMING] TTS_REQUEST sid={session_id[:8]} idx={idx} "
                     f"model={model_id} chars={len(clean_tts) if 'clean_tts' in dir() else len(clean)}"
                 )
-                audio_bytes = await asyncio.to_thread(_do_tts)
+                # === [INWORLD A/B DISPATCH FAST PIPELINE] — Fabio 2026-10 =====
+                # Se l'utente è opt-in Inworld, bypassiamo l'intera pipeline
+                # ElevenLabs (model gating, stitching, previous_text, loudness)
+                # e usiamo Inworld non-streaming. Rispetta il contratto:
+                #  - voce Vento → skip chunk (log warning, chunk perso)
+                #  - errore upstream → chunk perso (NESSUN fallback automatico)
+                _tts_provider_fp = await _tts_provider_for_current_user()
+                if _tts_provider_fp == "inworld" and _INWORLD_ADAPTER_AVAILABLE:
+                    try:
+                        _uid_fp = current_user_id() or _current_user_id.get() or "anon"
+                        audio_bytes = await _inworld_dispatcher.generate_non_streaming(
+                            db,
+                            text=clean_tts if 'clean_tts' in dir() else clean,
+                            user_id=_uid_fp,
+                            endpoint="_do_tts_fast_pipeline",
+                            voice_id_requested=voice_id,
+                            tone=current_tone,
+                        )
+                    except _inworld_dispatcher.InworldVoiceNotAvailable as _vne:
+                        logger.warning(
+                            f"[fast {session_id[:8]}] inworld vento guard idx={idx} — chunk skipped"
+                        )
+                        return
+                    except _inworld_tts.InworldTTSError as _ie:
+                        logger.error(
+                            f"[fast {session_id[:8]}] inworld tts error idx={idx} "
+                            f"{type(_ie).__name__}: {_ie}"
+                        )
+                        return
+                else:
+                    audio_bytes = await asyncio.to_thread(_do_tts)
                 tts_ms = int((time.time() - t_tts) * 1000)
                 logger.info(f"[fast] sentence idx={idx} chars={len(clean)} tts_ms={tts_ms} mp3_bytes={len(audio_bytes)}")
                 # === FIX 2026-07-23 v60.3 — Normalizzazione RELATIVA per-turno ===
@@ -18241,6 +18594,11 @@ async def startup_db_client():
             logger.info("[startup] koda_tts_events indexes ready")
         except Exception as e:
             logger.warning(f"[startup] koda_tts_events index init failed: {e}")
+        try:
+            await _koda_tts_prefs.ensure_indexes(db)
+            logger.info("[startup] koda_tts_provider_prefs indexes ready")
+        except Exception as e:
+            logger.warning(f"[startup] koda_tts_provider_prefs init failed: {e}")
     else:
         logger.info(
             f"[startup] Inworld TTS adapter NOT available "

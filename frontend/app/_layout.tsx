@@ -13,6 +13,11 @@ import { api } from "../lib/api";
 import { prewarmAudio } from "../lib/speech";
 import { loadProfileCache } from "../lib/localCache";
 import { AuthProvider, useAuth } from "../lib/auth";
+// === INWORLD TTS A/B (dev, 2026-10 Fabio) ===============================
+// Idratazione sincrona della preferenza TTS prima di qualsiasi componente
+// che carichi asset audio statici (intro, LA, microdemo, paywall, quota).
+// `useIntroAsset` legge dalla cache in-memory popolata da questo call.
+import { hydrateTTSProvider, reconcileWithCurrentUid } from "../lib/ttsProviderClient";
 import LoginScreen from "../components/LoginScreen";
 // === Route pubbliche (Fabio 2026-09-10) ===================================
 // `/blind-test` è accessibile ai tester esterni tramite link diretto, senza
@@ -76,6 +81,14 @@ function ThemedShell({ children }: { children: React.ReactNode }) {
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   const pathname = usePathname();
+  // === INWORLD A/B — riconcilia TTS provider al cambio account ============
+  // Se l'uid della sessione è diverso da quello che aveva attivato il flag
+  // in SecureStore, la preferenza viene cancellata (torna a elevenlabs).
+  // Evita che un dispositivo condiviso tra account propaghi Inworld.
+  React.useEffect(() => {
+    const uid = (user as any)?.id || (user as any)?.uid || null;
+    reconcileWithCurrentUid(uid).catch(() => {});
+  }, [(user as any)?.id, (user as any)?.uid]);
   // Route pubbliche (tester esterni, diagnostiche): skip login gate
   if (PUBLIC_ROUTES.has(pathname || "")) {
     return <>{children}</>;
@@ -122,6 +135,13 @@ function RootLayout() {
     // Pre-warm iOS/Android audio session BEFORE first TTS plays.
     // Fixes "Ollenya silent in first intro steps" bug on fresh native build.
     prewarmAudio().catch(() => {});
+
+    // === INWORLD A/B — idrata la preferenza prima dei primi asset =========
+    // `getIntroAsset()` è SINCRONA e legge una cache in-memory popolata
+    // qui. Prima di questo hydrate, i componenti vedranno sempre il
+    // default (elevenlabs) — accettabile per la primissima apertura, ma
+    // sui boot successivi il valore è coerente già al primo render.
+    hydrateTTSProvider().catch(() => {});
 
     if (Platform.OS !== "web") {
       // === BLOCCO A (2026-08-25) — scheduleWeeklyAppNotification RIMOSSO ==

@@ -29,7 +29,8 @@ import { createAudioPlayer, setAudioModeAsync, setIsAudioActiveAsync } from "exp
 import { api } from "../lib/api";
 
 const TAG = "[intro-premium-final]";
-const CLIP_CLOSING = require("../assets/sounds/intro/intro_premium_closing-cielo.mp3");
+import { getIntroAsset } from "../lib/introAssetProvider";
+const CLIP_CLOSING = getIntroAsset("intro_premium_closing");
 
 type Props = {
   onComplete: () => void;
