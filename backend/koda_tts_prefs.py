@@ -67,10 +67,20 @@ async def get_provider_for_uid(db, uid: str,
                                email: Optional[str] = None) -> str:
     """Risolve il provider per un uid. **Default elevenlabs** sempre.
 
-    Doppio controllo (defense in depth): anche se il DB avesse un doc
-    con ``inworld``, se l'email NON è nell'allow-list A/B il resolver
-    ritorna comunque ``elevenlabs``. L'allow-list è passata esplicitamente
-    dal chiamante per evitare import circolari.
+    Fonte di verità: il doc in ``koda_tts_provider_prefs``. L'allow-list
+    email è già enforced una volta al momento dell'activate (vedi
+    ``_require_inworld_ab_test_user`` in server.py): il doc può esistere
+    SOLO se l'utente era whitelisted al momento dello switch. Ri-controllare
+    la whitelist ad ogni call runtime era defense-in-depth che richiede
+    la risoluzione dell'email — info che il resolver runtime non ha
+    sempre disponibile (vedi bug 2026-10 Fabio: `_uid_email_from_session_or_profile`
+    non leggeva dalle sessions → forzava fallback a elevenlabs anche con
+    pref valida).
+
+    I parametri ``allowed_emails`` / ``email`` sono mantenuti per
+    retrocompatibilità ma NON più usati per il gating. Se un utente
+    viene rimosso dalla hardcoded allow-list A/B, basta eliminare la
+    riga dalla collezione ``koda_tts_provider_prefs``.
     """
     if not uid:
         return DEFAULT_PROVIDER
@@ -84,21 +94,6 @@ async def get_provider_for_uid(db, uid: str,
     provider = (doc.get("provider") or DEFAULT_PROVIDER).lower()
     if provider not in ALLOWED_PROVIDERS:
         return DEFAULT_PROVIDER
-    # Defense in depth: se stiamo per restituire inworld, verifica la
-    # whitelist. Se l'allow-list non è passata (strano) → fail safe.
-    if provider == "inworld":
-        if not allowed_emails or not email:
-            log.warning(
-                f"[koda_tts_prefs] uid={uid[:8]}… prefs=inworld but no "
-                f"whitelist check possible → forcing elevenlabs"
-            )
-            return DEFAULT_PROVIDER
-        if (email or "").lower() not in allowed_emails:
-            log.warning(
-                f"[koda_tts_prefs] uid={uid[:8]}… prefs=inworld but email "
-                f"NOT whitelisted → forcing elevenlabs"
-            )
-            return DEFAULT_PROVIDER
     return provider
 
 
