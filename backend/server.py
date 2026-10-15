@@ -422,34 +422,62 @@ async def _require_inworld_ab_test_user(request) -> tuple[str, str]:
     """Gate per endpoint A/B Inworld. Ritorna ``(uid, email)`` se
     autorizzato, altrimenti solleva 401/403.
 
-    Protezione a due livelli (defense in depth):
-      1. Risolve l'email dalla sessione corrente (session_token)
-      2. Verifica che l'email sia nell'allow-list hardcoded sopra
-      3. Doppio check: verifica che l'utente sia anche nella whitelist
-         "unlimited" (coerenza con il resto del bypass review)
+    Protezione (defense in depth):
+      1. Sessione autenticata valida (Bearer token OR cookie)
+      2. Email letta DIRETTAMENTE dalla collezione `sessions` (fonte di
+         verità al login) — il fallback via `_uid_email_from_session_or_profile`
+         era fragile perché cercava solo in `taccuino_profile` che può
+         non avere il campo email popolato.
+      3. Allow-list hardcoded (3 email).
 
-    NESSUN parametro di request viene loggato. Logga solo esito.
+    Step 4 (coerenza con whitelist unlimited) rimosso 2026-10 perché
+    causava 403 spuri.
     """
-    # Step 1: sessione autenticata
-    uid = await _resolve_uid_from_session(request)
-    if not uid:
+    import time as _time
+    # Step 1: estrai token dalla request
+    auth = request.headers.get("authorization", "") or ""
+    tok: Optional[str] = None
+    if auth.lower().startswith("bearer "):
+        tok = auth[7:].strip()
+    else:
+        try:
+            tok = request.cookies.get("session_token")
+        except Exception:
+            tok = None
+    if not tok:
         raise HTTPException(status_code=401, detail="auth required")
 
-    # Step 2: risolvi email
-    email = (await _uid_email_from_session_or_profile(uid) or "").strip().lower()
-    if not email:
-        logger.warning(f"[inworld_ab_gate] uid={uid[:8]}… no email resolvable")
+    # Step 2: lookup sessione in DB (fonte di verità per uid+email)
+    try:
+        sess = await db.sessions.find_one({"session_token": tok})
+    except Exception as e:
+        logger.warning(f"[inworld_ab_gate] db error on session lookup: {e}")
+        raise HTTPException(status_code=503, detail="session store unavailable")
+    if not sess:
+        raise HTTPException(status_code=401, detail="auth required")
+    exp = sess.get("expires_at")
+    if exp is not None and getattr(exp, "tzinfo", None) is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if exp is not None and exp < datetime.now(timezone.utc):
+        raise HTTPException(status_code=401, detail="session expired")
+
+    email = (sess.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        logger.warning(f"[inworld_ab_gate] session OK but no email")
         raise HTTPException(status_code=403, detail="email not resolvable")
+
+    uid = _email_to_uid(email)
 
     # Step 3: allow-list hardcoded
     if email not in _INWORLD_AB_ALLOWED_EMAILS:
-        logger.warning(f"[inworld_ab_gate] uid={uid[:8]}… email NOT in allow-list")
-        raise HTTPException(status_code=403, detail="not authorized for A/B test")
-
-    # Step 4 RIMOSSO (2026-10 Fabio): il doppio controllo con
-    # is_user_unlimited() causava 403 spuri perché la whitelist DB
-    # unlimited non è sempre sincronizzata con l'allow-list A/B.
-    # L'allow-list hardcoded sopra (3 email) è già un gate forte.
+        logger.warning(
+            f"[inworld_ab_gate] uid={uid[:8]}… email={email} NOT in allow-list"
+        )
+        # Nota: embed email in detail — utile se il frontend lo mostra.
+        raise HTTPException(
+            status_code=403,
+            detail=f"email '{email}' not in A/B allow-list",
+        )
 
     return uid, email
 
