@@ -6483,12 +6483,19 @@ export default function Taccuino() {
               <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
             </TouchableOpacity>
 
-            {/* === INWORLD A/B TTS — attiva con token monouso (Fabio 2026-10) === */}
+            {/* === INWORLD A/B TTS — toggle self-serve one-tap (Fabio 2026-10) ===
+                v2: niente più token da copiare. Il bottone usa la sessione
+                autenticata del dispositivo per fare in sequenza
+                issue-token → activate. Zero dipendenza dalla chat. */}
             <TouchableOpacity
               style={[styles.settingRow, { paddingVertical: 14 }]}
               onPress={async () => {
                 try {
-                  const { activateWithToken, readTTSProviderSync } = await import("../lib/ttsProviderClient");
+                  const {
+                    activateWithToken,
+                    issueSwitchToken,
+                    readTTSProviderSync,
+                  } = await import("../lib/ttsProviderClient");
                   const { getAuthToken } = await import("../lib/authToken");
                   const { KODA_BACKEND_URL } = await import("../lib/backendUrl");
                   const curProv = readTTSProviderSync();
@@ -6499,42 +6506,45 @@ export default function Taccuino() {
                     );
                     return;
                   }
-                  // Prompt testo semplice (compat tablet) con Alert.prompt su iOS,
-                  // fallback form su Android via ActionSheetIOS-like approach.
-                  // Qui usiamo il prompt nativo: su Android ricadiamo su un
-                  // minuscolo form inline (non implementato in questa fase → copia).
-                  if (Platform.OS === "ios" && (Alert as any).prompt) {
-                    (Alert as any).prompt(
-                      "Attiva TTS Inworld (A/B)",
-                      "Incolla qui il token monouso ricevuto in chat (scadenza 10 min).",
-                      async (token: string) => {
-                        if (!token || token.length < 10) return;
-                        try {
-                          const authTok = getAuthToken();
-                          const uidFromProfile = (profile as any)?.id || "";
-                          await activateWithToken(
-                            KODA_BACKEND_URL.replace(/\/$/, ""),
-                            authTok ? { Authorization: `Bearer ${authTok}` } : {},
-                            token.trim(),
-                            String(uidFromProfile),
-                          );
-                          Alert.alert(
-                            "Inworld attivato ✅",
-                            "La voce Cielo passa a Inworld TTS-2 su tutti i percorsi. Chiudi questa schermata, poi usa 'Rivedi Intro Premium' per riprovare l'intro.",
-                          );
-                        } catch (e: any) {
-                          Alert.alert("Attivazione fallita", String(e?.message || e));
-                        }
-                      },
-                      "plain-text",
+                  const authTok = getAuthToken();
+                  const authHeaders: Record<string, string> = authTok
+                    ? { Authorization: `Bearer ${authTok}` }
+                    : {};
+                  const backend = KODA_BACKEND_URL.replace(/\/$/, "");
+                  const uidFromProfile = String((profile as any)?.id || "");
+                  // Step 1: issue one-shot token con la sessione corrente
+                  const issued = await issueSwitchToken(
+                    backend,
+                    authHeaders,
+                    "inworld",
+                  );
+                  // Step 2: consume immediatamente lo stesso token
+                  await activateWithToken(
+                    backend,
+                    authHeaders,
+                    issued.token,
+                    uidFromProfile,
+                  );
+                  Alert.alert(
+                    "Inworld attivato ✅",
+                    "La voce Cielo passa a Inworld TTS-2 su tutti i percorsi. Chiudi questa schermata, poi usa 'Rivedi Intro Premium' per sentire la differenza.",
+                  );
+                } catch (e: any) {
+                  const msg = String(e?.message || e);
+                  // 401 = sessione scaduta, 403 = non whitelisted
+                  if (msg.includes("401")) {
+                    Alert.alert(
+                      "Sessione scaduta",
+                      "Esci e rifai il login prima di attivare Inworld.",
+                    );
+                  } else if (msg.includes("403")) {
+                    Alert.alert(
+                      "Account non autorizzato",
+                      "Il test A/B Inworld è limitato all'account owner e all'account review.",
                     );
                   } else {
-                    Alert.alert(
-                      "Attiva TTS Inworld",
-                      "Al momento il prompt-token funziona solo su iOS. Chiedi a Fabio di implementare la form inline per Android.",
-                    );
+                    Alert.alert("Attivazione fallita", msg);
                   }
-                } catch (e) {
                   console.warn("[tts-inworld-activate] failed:", e);
                 }
               }}
@@ -6543,9 +6553,9 @@ export default function Taccuino() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.settingLabel}>🎙️ Attiva TTS Inworld (A/B)</Text>
                 <Text style={styles.settingHint}>
-                  Richiede token monouso dalla chat (10 min). Applica Inworld
-                  TTS-2 alla voce Cielo su intro, LA, microdemo, paywall, quota
-                  e risposte live. Vento resta su ElevenLabs.
+                  Un tap per passare la voce Cielo a Inworld TTS-2 su intro, LA,
+                  microdemo, paywall, quota e risposte live. Vento resta su
+                  ElevenLabs. Nessun token da copiare.
                 </Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
