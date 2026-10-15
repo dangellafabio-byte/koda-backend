@@ -268,6 +268,66 @@ async def api_soglie_tts_md():
     )
 
 
+# === INWORLD SAMPLES — Dev-only clip listing/download =======================
+# Endpoint di soli lettura, solo-dev, per permettere a Fabio (su tablet) di
+# scaricare/ascoltare le clip MP3 generate dallo script
+# `/app/memory/scripts/regen_single_clip.py` nella cartella isolata
+# `/app/memory/home_payloads/inworld_samples/`.
+# NESSUN dato utente, NESSUN segreto, NESSUNA generazione da qui — solo
+# file-serving di MP3 già presenti su disco. Il path è sanitizzato per evitare
+# directory traversal (solo filename base, nessun `..`, solo estensione .mp3).
+import os as _inw_os
+_INWORLD_SAMPLES_DIR = "/app/memory/home_payloads/inworld_samples"
+
+
+@api_router.get("/inworld-samples/")
+async def api_inworld_samples_list():
+    """Lista le clip MP3 Inworld disponibili per l'ascolto (dev-only)."""
+    from fastapi.responses import JSONResponse
+    if not _inw_os.path.isdir(_INWORLD_SAMPLES_DIR):
+        return JSONResponse({"files": [], "dir_exists": False})
+    items = []
+    for fname in sorted(_inw_os.listdir(_INWORLD_SAMPLES_DIR)):
+        if not fname.lower().endswith(".mp3"):
+            continue
+        full = _inw_os.path.join(_INWORLD_SAMPLES_DIR, fname)
+        try:
+            size = _inw_os.path.getsize(full)
+            mtime = _inw_os.path.getmtime(full)
+        except OSError:
+            continue
+        items.append({
+            "filename": fname,
+            "size_bytes": size,
+            "mtime_epoch": mtime,
+            "url": f"/api/inworld-samples/{fname}",
+        })
+    return JSONResponse({"files": items, "dir_exists": True})
+
+
+@api_router.get("/inworld-samples/{filename}")
+async def api_inworld_samples_download(filename: str):
+    """Serve una singola clip MP3 Inworld. Solo filename base, solo .mp3."""
+    # Sanitize: no path traversal, no directory separators, must end in .mp3
+    if (
+        not filename
+        or "/" in filename
+        or "\\" in filename
+        or ".." in filename
+        or not filename.lower().endswith(".mp3")
+    ):
+        raise HTTPException(status_code=400, detail="invalid filename")
+    full = _inw_os.path.join(_INWORLD_SAMPLES_DIR, filename)
+    if not _inw_os.path.isfile(full):
+        raise HTTPException(status_code=404, detail="clip not found")
+    return _FileResponse(
+        full,
+        media_type="audio/mpeg",
+        filename=filename,
+    )
+# === /INWORLD SAMPLES =======================================================
+
+
 
 # === FIX 2026-07-03 v40 — Debug endpoint per timing pipeline (Fabio) ===
 # Salva in memoria l'ultimo KODA_PIPELINE_SUMMARY prodotto, così
