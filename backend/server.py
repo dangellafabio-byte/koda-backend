@@ -711,6 +711,40 @@ async def _tts_provider_for_current_user() -> str:
 # === /INWORLD DEV ENDPOINTS =================================================
 
 
+async def _tts_provider_for_uid(uid: Optional[str]) -> str:
+    """Variante esplicita del resolver: non legge dal ContextVar, usa l'uid
+    passato direttamente dal chiamante (es. fast pipeline che riceve
+    ``authed_uid`` come argomento). Serve a eliminare qualsiasi dubbio di
+    propagazione context nei background task.
+
+    Default sempre ``"elevenlabs"`` se:
+     * adapter non disponibile
+     * uid None / "me" / "anon"
+     * nessun doc di preferenza
+    """
+    if not _INWORLD_ADAPTER_AVAILABLE or _koda_tts_prefs is None:
+        logger.info(f"[tts_provider_resolve_explicit] adapter_unavailable → elevenlabs")
+        return "elevenlabs"
+    if not uid or uid in ("me", "anon"):
+        logger.info(
+            f"[tts_provider_resolve_explicit] uid_invalid ({uid!r}) → elevenlabs"
+        )
+        return _koda_tts_prefs.DEFAULT_PROVIDER
+    try:
+        prov = await _koda_tts_prefs.get_provider_for_uid(
+            db, uid,
+            allowed_emails=_INWORLD_AB_ALLOWED_EMAILS,
+            email=None,
+        )
+        logger.info(
+            f"[tts_provider_resolve_explicit] uid={uid[:8]}… resolved={prov}"
+        )
+        return prov
+    except Exception as e:
+        logger.warning(f"[tts_provider_resolve_explicit] uid={uid[:8]}… err: {e}")
+        return _koda_tts_prefs.DEFAULT_PROVIDER
+
+
 # =============================================================================
 # ADMIN DIAGNOSTIC — TTS Provider State (Fabio 2026-10)
 # =============================================================================
@@ -15363,6 +15397,11 @@ async def _fast_pipeline_task(
     # Serve per aggirare il bug su iPhone dove il profilo può essere out-of-sync
     # (setVoice HTTP arrivato ma profile letto dal WS con delay).
     client_voice_id: Optional[str] = None,
+    # === FIX 2026-10 Fabio — authed_uid esplicito ===
+    # Non facciamo più affidamento solo sul ContextVar: il chiamante HTTP/WS
+    # lo passa esplicitamente (lo risolve dalla sessione prima di spawnare
+    # il task). Se None, cadiamo sul ContextVar come prima (back-compat).
+    authed_uid: Optional[str] = None,
 ):
     """Background task: streamma Claude con prompt condensato, frase per
     frase chiama ElevenLabs Flash v2.5, salva ogni MP3 come token e
@@ -16697,16 +16736,17 @@ async def _fast_pipeline_task(
                     f"model={model_id} chars={len(clean_tts) if 'clean_tts' in dir() else len(clean)}"
                 )
                 # === [INWORLD A/B DISPATCH FAST PIPELINE] — Fabio 2026-10 =====
-                # v2 2026-10 bugfix: se Inworld fallisce (chiave invalida,
-                # voice Vento, timeout upstream…) FALLBACK AUTOMATICO a
-                # ElevenLabs invece di scartare il chunk silenziosamente.
-                # Il return precedente faceva perdere sia testo che audio
-                # → utente non riceveva risposta.
-                _tts_provider_fp = await _tts_provider_for_current_user()
-                audio_bytes = None
+                # v3 2026-10: provider scelto GOVERNA la call. Niente fallback
+                # silenzioso. Se Inworld fallisce, pubblichiamo un evento
+                # "error" al client così la bolla non resta sospesa su "..."
+                # e Fabio vede immediatamente la causa.
+                #
+                # uid: priorità ad authed_uid esplicito (passato dal chiamante
+                # HTTP/WS); fallback al ContextVar per back-compat.
+                _uid_fp = authed_uid or current_user_id() or _current_user_id.get() or "anon"
+                _tts_provider_fp = await _tts_provider_for_uid(_uid_fp)
                 if _tts_provider_fp == "inworld" and _INWORLD_ADAPTER_AVAILABLE:
                     try:
-                        _uid_fp = current_user_id() or _current_user_id.get() or "anon"
                         audio_bytes = await _inworld_dispatcher.generate_non_streaming(
                             db,
                             text=clean_tts if 'clean_tts' in dir() else clean,
@@ -16717,22 +16757,37 @@ async def _fast_pipeline_task(
                         )
                     except _inworld_dispatcher.InworldVoiceNotAvailable as _vne:
                         logger.warning(
-                            f"[fast {session_id[:8]}] inworld vento guard idx={idx} — FALLBACK elevenlabs"
+                            f"[fast {session_id[:8]}] inworld vento guard idx={idx}: {_vne}"
                         )
-                        audio_bytes = None
+                        await _publish({
+                            "type": "error",
+                            "message": f"Inworld voce non supportata: {str(_vne)[:120]}",
+                            "source": "inworld_vento_guard",
+                        })
+                        return
                     except _inworld_tts.InworldTTSError as _ie:
                         logger.error(
                             f"[fast {session_id[:8]}] inworld tts error idx={idx} "
-                            f"{type(_ie).__name__}: {_ie} — FALLBACK elevenlabs"
+                            f"{type(_ie).__name__}: {_ie}"
                         )
-                        audio_bytes = None
+                        await _publish({
+                            "type": "error",
+                            "message": f"Inworld TTS error ({type(_ie).__name__}): {str(_ie)[:160]}",
+                            "source": "inworld_tts",
+                        })
+                        return
                     except Exception as _ie_generic:
                         logger.error(
                             f"[fast {session_id[:8]}] inworld generic error idx={idx}: "
-                            f"{type(_ie_generic).__name__}: {_ie_generic} — FALLBACK elevenlabs"
+                            f"{type(_ie_generic).__name__}: {_ie_generic}"
                         )
-                        audio_bytes = None
-                if audio_bytes is None:
+                        await _publish({
+                            "type": "error",
+                            "message": f"Inworld inatteso ({type(_ie_generic).__name__}): {str(_ie_generic)[:160]}",
+                            "source": "inworld_generic",
+                        })
+                        return
+                else:
                     audio_bytes = await asyncio.to_thread(_do_tts)
                 tts_ms = int((time.time() - t_tts) * 1000)
                 logger.info(f"[fast] sentence idx={idx} chars={len(clean)} tts_ms={tts_ms} mp3_bytes={len(audio_bytes)}")
@@ -17827,12 +17882,17 @@ async def api_converse_fast_start(req: FastStartRequest):
     await _fast_session_create(session_id)
 
     # Spawn background pipeline. Survives this request's lifecycle.
+    # authed_uid viene risolto QUI (dentro il context HTTP vivo) e passato
+    # esplicitamente al task, così non dipendiamo dalla propagazione del
+    # ContextVar dentro asyncio.create_task.
+    _authed_uid_for_task = current_user_id()
     asyncio.create_task(_fast_pipeline_task(
         session_id=session_id,
         text=text,
         ephemeral=bool(req.ephemeral),
         audio_duration_ms=req.audio_duration_ms,
         stt_confidence=req.stt_confidence,
+        authed_uid=_authed_uid_for_task,
     ))
 
     # filler_token: sempre None (campo mantenuto per compatibilità API col
@@ -18009,6 +18069,8 @@ async def _converse_ws_handler(websocket: WebSocket):
         # Esegue la pipeline. emit pubblica direttamente al client; lo
         # storage su Mongo continua a girare per fallback.
         try:
+            # authed_uid risolto QUI, nel contesto WS vivo
+            _authed_uid_ws = current_user_id()
             await _fast_pipeline_task(
                 session_id=session_id,
                 text=text,
@@ -18016,6 +18078,7 @@ async def _converse_ws_handler(websocket: WebSocket):
                 audio_duration_ms=audio_duration_ms,
                 emit=_emit,
                 stt_confidence=stt_confidence,
+                authed_uid=_authed_uid_ws,
             )
         except Exception as e:
             logger.error(f"[ws {session_id[:8]}] pipeline crashed: {e}")
@@ -18085,11 +18148,6 @@ async def _run_pipeline_for_streamed_text(
     location_country: Optional[str] = None,
     stt_source: Optional[str] = None,
     # === FIX 2026-07-26 v64.5 — Propagazione client_voice_id ===
-    # v64.4 aveva aggiunto client_voice_id lato client (voiceStream.ts) e
-    # lato _fast_pipeline_task (destinatario finale), ma ha DIMENTICATO
-    # questo wrapper intermedio → ogni turno WS crashava con:
-    # "_run_pipeline_for_streamed_text() got an unexpected keyword argument
-    # 'client_voice_id'" → conversazione iOS completamente rotta.
     client_voice_id: Optional[str] = None,
 ) -> None:
     """Wrap di _fast_pipeline_task per il voice streaming.
@@ -18099,6 +18157,9 @@ async def _run_pipeline_for_streamed_text(
     """
     await _ensure_fast_session_indexes()
     await _fast_session_create(session_id)
+    # authed_uid: risolto QUI nel contesto WS (api_voice_stream ha fatto
+    # _current_user_id.set(uid) prima di chiamare voice_stream_handler).
+    _authed_uid_vs = current_user_id()
     await _fast_pipeline_task(
         session_id=session_id,
         text=text,
@@ -18111,6 +18172,7 @@ async def _run_pipeline_for_streamed_text(
         location_country=location_country,
         stt_source=stt_source,
         client_voice_id=client_voice_id,
+        authed_uid=_authed_uid_vs,
     )
 
 
