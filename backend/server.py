@@ -9198,6 +9198,40 @@ async def api_converse(req: ConverseRequest):
                 await _free_gate.rollback_premium_turn(db, profile.id)
             except Exception as _rbe:
                 logger.warning(f"[premium_gate] rollback exception: {_rbe}")
+        # === DEMO MODE FALLBACK — Fabio 2026-10 ============================
+        # Se la chiamata LLM fallisce durante l'intro-free (demo_mode=True),
+        # NON blocchiamo l'utente con un 500: il frontend `OnboardingV4` fa
+        # catch generico mostrando "Ci sarò comunque." SENZA incrementare il
+        # contatore, intrappolando l'utente nell'intro. Ritorniamo invece un
+        # ai_entry 200 con una frase canned, così il frontend conta lo scambio
+        # e l'utente arriva al passo successivo. Zero spesa API, zero toccato
+        # alla memoria permanente (ephemeral è già True).
+        if req.demo_mode:
+            import random as _rnd
+            _demo_canned = [
+                "Ti sento. Dimmi ancora qualcosa.",
+                "Ok. Continua pure.",
+                "Ci sarò comunque. Scrivi quello che vuoi.",
+                "Ti ascolto. Prosegui.",
+            ]
+            _ai_fallback = _rnd.choice(_demo_canned)
+            logger.warning(
+                f"[demo_mode_fallback] LLM failed in demo intro, returning "
+                f"canned reply (len={len(_ai_fallback)})"
+            )
+            _user_entry = TimelineEntry(role="user", text=req.text)
+            _ai_entry = TimelineEntry(
+                role="ai",
+                text=_ai_fallback,
+                voice_text=_ai_fallback,
+                tone="warm",
+            )
+            # Non salviamo nulla su DB: demo_mode → ephemeral
+            return ConverseResponse(
+                user_entry=_user_entry,
+                ai_entry=_ai_entry,
+                profile=profile,
+            )
         raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")
 
     data = extract_json(raw or "") or {}
