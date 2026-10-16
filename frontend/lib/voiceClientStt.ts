@@ -114,6 +114,8 @@ export class VoiceClientSttSession {
   private ws: WebSocket | null = null;
   private callbacks: VoiceStreamCallbacks;
   private stopRequested = false;
+  private recognitionStarted = false;
+  private finalResultTimer: ReturnType<typeof setTimeout> | null = null;
   private startedAt = 0;
   private sessionReady = false;
   private doneReceived = false;
@@ -161,11 +163,6 @@ export class VoiceClientSttSession {
   // finita per "utente ha finito di parlare" o "utente ha taciuto".
   // Ora traccciamo il flag così `end` può fare graceful close.
   private noSpeechReceived = false;
-  // === FIX 2026-06-12 Fabio — tracked recognizer-native end =============
-  // Set a true quando il listener `end` del recognizer nativo scatta.
-  // Serve a `stop()` per capire se vale la pena di aspettare o se il
-  // recognizer è già uscito senza altro da emettere.
-  private recognizerEndedNatively = false;
 
   // Route audio (rilevata prima di start)
   private audioRoute: "bluetooth" | "wired" | "builtin" | "unknown" = "unknown";
@@ -262,8 +259,9 @@ export class VoiceClientSttSession {
     if (Platform.OS !== "ios" && Platform.OS !== "android") {
       throw new Error("client_stt_mobile_only");
     }
+    // A session object is single-use. Cancellation during setup is terminal.
+    if (this.stopRequested || this.doneReceived) return;
     this.startedAt = Date.now();
-    this.stopRequested = false;
     this.sessionReady = false;
     this.doneReceived = false;
     this.notifiedUpperOnClose = false;
@@ -274,6 +272,7 @@ export class VoiceClientSttSession {
 
     // 1) Permission check
     const perm = await VoiceClientSttSession.requestPermissions();
+    if (this.stopRequested || this.doneReceived) return;
     if (!perm.granted) {
       throw new Error(`permission_denied${perm.canAskAgain ? "" : "_permanent"}`);
     }
@@ -388,6 +387,8 @@ export class VoiceClientSttSession {
       console.log(`[${TAG}] audio_route detection failed: ${e?.message || e}`);
     }
 
+    if (this.stopRequested || this.doneReceived) return;
+
     // 4) Apri WS
     const url = buildWsUrl();
     // === FIX 2026-07-23 v5 — WARMUP AWAITED PRIMA DI WS =================
@@ -403,28 +404,7 @@ export class VoiceClientSttSession {
     // (dimezzato). Warm case: POST in 100-300ms → WS in 500ms → 500-800ms
     // (invariato rispetto a prima).
     try {
-      // === FIX 2026-06-12 Fabio — strip query/token prima dello swap path ===
-      // Prima: url.replace(/\/api\/voice\/stream$/, ...) NON matchava quando
-      // buildWsUrl() accoda ?token=<auth>. Risultato: httpUrl restava
-      // `.../api/voice/stream?token=…` e la POST tornava 404 (log briefing).
-      // Oltre a sprecare tempo, il warmup non svegliava Railway.
-      const httpUrl = (() => {
-        try {
-          const u = new URL(url);
-          u.protocol = u.protocol === "wss:" ? "https:" : "http:";
-          u.pathname = u.pathname.replace(/\/api\/voice\/stream$/, "/api/voice/warmup");
-          // Rimuoviamo la query (token) dal warmup: endpoint non autenticato,
-          // niente leak di token nei log del proxy.
-          u.search = "";
-          return u.toString();
-        } catch {
-          // Fallback best-effort se URL() non è disponibile (shouldn't on RN).
-          return url
-            .replace(/^ws/, "http")
-            .replace(/\?[^#]*$/, "")
-            .replace(/\/api\/voice\/stream$/, "/api/voice/warmup");
-        }
-      })();
+      const httpUrl = url.replace(/^ws/, "http").replace(/\/api\/voice\/stream(?:\?.*)?$/, "/api/voice/warmup");
       const ctrl = new AbortController();
       const t0 = Date.now();
       const timer = setTimeout(() => ctrl.abort(), 5000);
@@ -439,27 +419,11 @@ export class VoiceClientSttSession {
         // freddo, il WS handshake attenderà quel che resta del boot.
       }
     } catch {}
-    console.log(`[${TAG}] opening WS → ${url} route=${this.audioRoute}`);
+    if (this.stopRequested || this.doneReceived) return;
+    console.log(`[${TAG}] opening voice WS route=${this.audioRoute}`);
     await this.openWs(url);
-
-    // === FIX 2026-06-12 Fabio — early stop check PRIMA del sendJson(start) ===
-    // Prima: sendJson({type:"start"}) partiva incondizionatamente dopo openWs
-    // e SOLO DOPO si controllava stopRequested → se true, forceCloseWs ma il
-    // server aveva già creato la sessione, loggato "accepted" e stava
-    // aspettando audio. Nel log del briefing: "WS accepted and instantly
-    // closed with end without transcript". Spostiamo il check PRIMA del
-    // frame start: se stop è stato chiamato durante setAudioMode/warmup, il
-    // server non vede nemmeno la sessione (nessun log orfano).
-    if (this.stopRequested) {
-      console.log(`[${TAG}] stopRequested=true BEFORE sendJson(start) → silent abort`);
-      this.notifiedUpperOnClose = true;
-      this.doneReceived = true;
-      try {
-        this.callbacks.onError?.("aborted_pre_recognition");
-      } catch {}
-      try {
-        this.forceCloseWs();
-      } catch {}
+    if (this.stopRequested || this.doneReceived) {
+      this.forceCloseWs();
       return;
     }
 
@@ -489,10 +453,6 @@ export class VoiceClientSttSession {
       console.log(`[${TAG}] WS start sent voice_id=${opts.voiceId} (client-authoritative)`);
     }
 
-    // Secondo check: se stop() è arrivato tra il check precedente e qui,
-    // chiudiamo subito. Il server ha visto il frame start ma riceverà
-    // la WS close prima di qualunque transcript → logga "closed without
-    // transcript" ma non spawna la pipeline LLM (text vuoto bail-out).
     if (this.stopRequested) {
       // === FIX 2026-07-24 v63.5 — Xiaomi cascata infinita (Fix A) ===
       // BUG OSSERVATO nel log Xiaomi (24/07 19:47): startTalkInternal
@@ -558,12 +518,11 @@ export class VoiceClientSttSession {
       } catch {}
       await new Promise((r) => setTimeout(r, 80));
     }
+    if (this.stopRequested || this.doneReceived) return;
     // Reset watchdog state
     this.speechStartReceived = false;
     // Reset no-speech flag (v64.1)
     this.noSpeechReceived = false;
-    // Reset recognizer-native end flag (FIX 2026-06-12 Fabio)
-    this.recognizerEndedNatively = false;
 
     // Registra listeners prima di start()
     this.subSpeechStart = ExpoSpeechRecognitionModule.addListener(
@@ -664,9 +623,6 @@ export class VoiceClientSttSession {
     );
 
     this.subEnd = ExpoSpeechRecognitionModule.addListener("end", () => {
-      // FIX 2026-06-12 Fabio — segna subito che il recognizer è uscito,
-      // così `stop()` (che aspetta final) può terminare presto il polling.
-      this.recognizerEndedNatively = true;
       // iOS può emettere "end" più volte per sessione (specialmente dopo
       // isFinal). Il guard `dispatched` previene safety net multipli.
       if (this.dispatched) {
@@ -686,39 +642,8 @@ export class VoiceClientSttSession {
         );
         return;
       }
-      // === FIX 2026-07-26 v64.1 — Graceful cleanup su no-speech ===
-      //
-      // Se end fira SENZA transcript e c'è stato un no-speech (utente
-      // ha taciuto per > silence threshold), la sessione è morta ma:
-      //   - WS resta aperta
-      //   - Backend non ha ricevuto né transcript_from_client né end
-      //   - Upper layer non riceve mai `done` → status resta "recording"
-      //     per sempre → utente vede UI bloccata (bug 26/07)
-      //
-      // Fix: mandiamo `{type:"end"}` al backend che chiude gracefully
-      // la sessione. Il backend risponderà con `done` (o WS.close) →
-      // pipelineDone=true → status torna idle → HF_LOOP può ripartire
-      // per il prossimo turno (comportamento simile a iPhone "retry").
-      if (!this.currentTranscript && !this.doneReceived && this.noSpeechReceived) {
-        console.log(
-          `[${TAG}] end fired with empty transcript + no-speech → sending {type:end} for graceful close`
-        );
-        try {
-          this.sendJson({ type: "end" });
-        } catch {}
-        // Notifica upper layer che la sessione va chiusa (turno vuoto,
-        // niente TTS in arrivo). Usa un codice speciale "no_speech" che
-        // speech.ts può interpretare per NON considerare come errore
-        // pipeline reale.
-        this.dispatched = true;
-        this.doneReceived = true;
-        this.notifiedUpperOnClose = true;
-        try {
-          this.callbacks.onError?.("no_speech");
-        } catch {}
-        this.removeListeners();
-        this.stopKeepalive();
-        this.forceCloseWs();
+      if (!this.doneReceived) {
+        this.finishWithoutTranscript();
       }
     });
 
@@ -789,6 +714,11 @@ export class VoiceClientSttSession {
           EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 500,
         };
       }
+      if (this.stopRequested || this.doneReceived) {
+        this.removeListeners();
+        return;
+      }
+      this.recognitionStarted = true;
       ExpoSpeechRecognitionModule.start(startOpts);
       console.log(`[${TAG}] ExpoSpeechRecognitionModule.start() OK (v64.1 continuous=${startOpts.continuous})`);
       // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
@@ -874,8 +804,14 @@ export class VoiceClientSttSession {
     // Set flag SUBITO — così ogni chiamata successiva (safety net di end
     // handler, timeout, ecc.) diventa no-op. Evita 30+ duplicati che iOS
     // può innescare emettendo "end" ripetutamente.
-    this.dispatched = true;
     const text = (this.currentTranscript || "").trim();
+    if (!text) {
+      this.finishWithoutTranscript();
+      return;
+    }
+    this.dispatched = true;
+    this.clearFinalResultTimer();
+    this.recognitionStarted = false;
     const conf = this.currentConfidence;
     const durMs = this.speechStartMs
       ? Math.max(0, Date.now() - this.speechStartMs)
@@ -919,14 +855,10 @@ export class VoiceClientSttSession {
     // vogliamo cmq zero rumore log e zero side-effects).
     this.removeListeners();
 
-    // === FIX 2026-06-12 Fabio — niente stop globale su cleanup naturale ===
-    // Prima qui chiamavamo `ExpoSpeechRecognitionModule.stop()` come safety.
-    // Però il modulo è un singleton nativo condiviso: se un turno successivo
-    // è PARTITO prima che questo cleanup si eseguisse (race in HF_LOOP), lo
-    // stop qui killa il mic del NUOVO turno → sintomo "parla ma non trascrive
-    // più nulla". Dopo isFinal il recognizer si è già fermato autonomamente,
-    // quindi un secondo stop è ridondante e potenzialmente dannoso.
-    // Lasciamo il cleanup solo su `abort()` (hard stop esplicito).
+    // Fermiamo il recognizer (già stopped su isFinal, ma safety)
+    try {
+      ExpoSpeechRecognitionModule.stop();
+    } catch {}
 
     // === FIX 2026-07-25 v63.8 — TTS MUTO su Android/MIUI (Fix C1) ===
     //
@@ -1028,74 +960,75 @@ export class VoiceClientSttSession {
     }
   }
 
+  private clearFinalResultTimer(): void {
+    if (this.finalResultTimer !== null) {
+      clearTimeout(this.finalResultTimer);
+      this.finalResultTimer = null;
+    }
+  }
+
+  private finishWithoutTranscript(): void {
+    if (this.doneReceived || this.dispatched) return;
+    this.clearFinalResultTimer();
+    const wasRecognizing = this.recognitionStarted;
+    this.recognitionStarted = false;
+    this.doneReceived = true;
+    this.notifiedUpperOnClose = true;
+    this.removeListeners();
+    if (wasRecognizing) {
+      try { ExpoSpeechRecognitionModule.abort(); } catch {}
+    }
+    this.stopKeepalive();
+    this.forceCloseWs();
+    this.callbacks.onError?.(
+      this.noSpeechReceived ? "no_speech" : "client_stt_end_without_transcript"
+    );
+  }
+
   async stop(): Promise<void> {
+    // Cleanup of an old/completed session must not stop the next native
+    // recognizer: ExpoSpeechRecognitionModule is shared by all sessions.
+    if (this.doneReceived || this.dispatched || this.stopRequested) return;
     this.stopRequested = true;
     console.log(`[${TAG}] stop() called`);
-    // === FIX 2026-06-12 Fabio — attendi result finale PRIMA di mandare end ===
-    // Prima: `ExpoSpeechRecognitionModule.stop()` è una chiamata nativa
-    // async che dice al recognizer "finalizza e emetti il result finale".
-    // Il result arriva come evento DOPO (tipicamente 50-400ms). Nel vecchio
-    // codice, subito dopo stop() il check `if (this.currentTranscript)`
-    // era quasi sempre falso perché l'evento non era ancora arrivato →
-    // ramo else → sendJson({type:"end"}) → server chiude la sessione
-    // SENZA mai ricevere il transcript. L'utente vedeva:
-    //   recording ✅ → thinking brevissimo → idle silenzioso ❌
-    //
-    // Fix: dopo .stop(), aspettiamo fino a 1200ms che il recognizer emetta
-    // il risultato finale (via listener → currentTranscript popolato) o
-    // l'evento end nativo. Solo dopo decidiamo se dispatchare o chiudere.
+    if (!this.recognitionStarted) {
+      await this.abort();
+      this.callbacks.onError?.("aborted_pre_recognition");
+      return;
+    }
+    // Native stop is asynchronous: the final result can arrive AFTER it
+    // returns. Keep the result/end listeners and WS alive until then.
+    this.finalResultTimer = setTimeout(() => {
+      this.finalResultTimer = null;
+      if (this.dispatched || this.doneReceived) return;
+      if (this.currentTranscript.trim()) {
+        this.dispatchFinalToBackend().catch(() => {
+          this.callbacks.onError?.("client_stt_dispatch_failed");
+        });
+      } else {
+        this.finishWithoutTranscript();
+      }
+    }, 1500);
     try {
       ExpoSpeechRecognitionModule.stop();
-    } catch {}
-
-    const finalWaitMs = 1200;
-    const pollIntervalMs = 50;
-    const t0 = Date.now();
-    while (Date.now() - t0 < finalWaitMs) {
-      if (this.doneReceived) break;
-      // Final transcript arrivato → esci subito dal wait
-      if (this.currentTranscript && this.currentTranscript.trim().length > 0) break;
-      // Il listener `end` del recognizer è scattato → non arriverà altro
-      if (this.recognizerEndedNatively) break;
-      await new Promise((r) => setTimeout(r, pollIntervalMs));
+    } catch {
+      this.clearFinalResultTimer();
+      this.finishWithoutTranscript();
     }
-
-    if (this.currentTranscript && !this.doneReceived) {
-      console.log(
-        `[${TAG}] stop() dispatching final after ${Date.now() - t0}ms wait ` +
-        `(len=${this.currentTranscript.length})`
-      );
-      this.dispatchFinalToBackend().catch((e: any) =>
-        console.log(`[VoiceClientSttSession] dispatchFinal error: ${e?.message || e}`)
-      );
-    } else {
-      console.log(
-        `[${TAG}] stop() no transcript after ${Date.now() - t0}ms ` +
-        `(recognizerEndedNatively=${this.recognizerEndedNatively}, noSpeech=${this.noSpeechReceived}) → sending end`
-      );
-      try {
-        this.sendJson({ type: "end" });
-      } catch {}
-    }
-    // Safety timeout — se dopo 40s il server non manda done, chiudi WS
-    setTimeout(() => {
-      if (!this.doneReceived) {
-        console.log(`[${TAG}] stop() safety timeout — force closing WS`);
-        this.stopKeepalive();
-        this.forceCloseWs();
-      }
-    }, 40_000);
   }
 
   async abort(): Promise<void> {
     console.log(`[${TAG}] abort() — hard stop`);
     this.stopRequested = true;
+    this.clearFinalResultTimer();
+    const wasRecognizing = this.recognitionStarted;
+    this.recognitionStarted = false;
     this.doneReceived = true;
     this.notifiedUpperOnClose = true;
-    try {
-      ExpoSpeechRecognitionModule.abort();
-    } catch {}
     this.removeListeners();
+    if (wasRecognizing) {
+      try { ExpoSpeechRecognitionModule.abort(); } catch {}
+    }
     this.stopKeepalive();
     this.forceCloseWs();
   }

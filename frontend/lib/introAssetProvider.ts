@@ -15,8 +15,7 @@
  * delivery CREATIVE. Testi identici alle versioni ElevenLabs
  * (verificati 2026-10 via trascrizione STT).
  *
- * Fallback: se una chiave non è coperta Inworld (es: file Vento maschile,
- * legacy V2), ritorniamo SEMPRE l'asset ElevenLabs — no silenzio.
+ * Missing Inworld assets are explicit errors; no cross-provider fallback.
  */
 import { readTTSProviderSync } from "./ttsProviderClient";
 
@@ -45,13 +44,7 @@ const ELEVEN = {
 };
 
 // ===== Inworld A/B (dev, voce Cielo soltanto in fase 1) =====
-// NOTA: le varianti Vento NON esistono in Inworld in questa fase.
-// Se l'utente ha selezionato Vento mentre il provider è Inworld, i
-// componenti chiamano la_open_vento / la_close_vento → qui ritorniamo
-// l'asset ElevenLabs originale (NON silenzio): coerente con il contratto
-// "Vento resta su ElevenLabs quando il resto va su Inworld, ma a livello
-// endpoint runtime il backend blocca con 503". Per gli asset statici il
-// fallback è trasparente (nessun endpoint da bloccare).
+// Vento is unavailable under Inworld: getIntroAsset reports an error.
 const INWORLD = {
   intro_v3_parte_di_me: require("../assets/sounds/intro-inworld/intro_v3_parte_di_me-cielo.mp3"),
   intro_premium_eccomi: require("../assets/sounds/intro-inworld/intro_premium_eccomi-cielo.mp3"),
@@ -64,9 +57,7 @@ const INWORLD = {
   paywall_voce: require("../assets/sounds/intro-inworld/paywall_voce-cielo.mp3"),
   la_open_cielo: require("../assets/sounds/lascia-andare-inworld/open-cielo.mp3"),
   la_close_cielo: require("../assets/sounds/lascia-andare-inworld/close-cielo.mp3"),
-  // Vento voci non disponibili in Inworld fase 1 → ricadiamo su ElevenLabs
-  la_open_vento: ELEVEN.la_open_vento,
-  la_close_vento: ELEVEN.la_close_vento,
+
   quota_exhausted: require("../assets/audio-inworld/koda_quota_exhausted.mp3"),
 };
 
@@ -79,10 +70,10 @@ export type IntroAssetKey = keyof typeof ELEVEN;
 export function getIntroAsset(key: IntroAssetKey) {
   const provider = readTTSProviderSync();
   if (provider === "inworld") {
-    const asset = INWORLD[key];
+    const asset = INWORLD[key as keyof typeof INWORLD];
     if (asset !== undefined) return asset;
-    // Chiave non coperta Inworld → fallback trasparente a ElevenLabs
-    return ELEVEN[key];
+    console.error(`[TTS_ASSET_UNAVAILABLE] provider=inworld asset=${key}`);
+    throw new Error(`Audio Inworld non disponibile: ${key}`);
   }
   return ELEVEN[key];
 }

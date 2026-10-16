@@ -670,79 +670,31 @@ async def api_dev_tts_provider_ack_play(request: Request):
 # HELPER: resolver provider corrente nei call-site TTS (silenzioso, cached)
 # =============================================================================
 async def _tts_provider_for_current_user() -> str:
-    """Risolve il provider TTS per l'uid della request corrente.
-
-    Default sempre ``"elevenlabs"`` se:
-     * adapter non disponibile
-     * uid non risolvibile
-     * nessun doc di preferenza
-
-    Mai solleva (silent fallback a default).
-
-    v2 (2026-10 Fabio bug fix): la whitelist email check è stata rimossa
-    dal resolver runtime — la verifica è già enforced all'activate.
-    L'email non serve più per ritornare "inworld" dal doc.
-    """
-    if not _INWORLD_ADAPTER_AVAILABLE:
-        logger.info(f"[tts_provider_resolve] adapter_unavailable → elevenlabs")
-        return _koda_tts_prefs.DEFAULT_PROVIDER if _koda_tts_prefs else "elevenlabs"
-    try:
-        uid = current_user_id() or _current_user_id.get()
-    except Exception:
-        uid = None
-    if not uid or uid == "me":
-        logger.info(
-            f"[tts_provider_resolve] uid_missing_or_me ({uid!r}) → elevenlabs default"
-        )
-        return _koda_tts_prefs.DEFAULT_PROVIDER
-    try:
-        prov = await _koda_tts_prefs.get_provider_for_uid(
-            db, uid,
-            allowed_emails=_INWORLD_AB_ALLOWED_EMAILS,
-            email=None,  # non più usato post-fix
-        )
-        logger.info(
-            f"[tts_provider_resolve] uid={uid[:8]}… resolved={prov}"
-        )
-        return prov
-    except Exception as e:
-        logger.warning(f"[tts_provider_resolve] uid={uid[:8]}… err: {e}")
-        return _koda_tts_prefs.DEFAULT_PROVIDER
-# === /INWORLD DEV ENDPOINTS =================================================
+    return await _tts_provider_for_uid(current_user_id())
 
 
 async def _tts_provider_for_uid(uid: Optional[str]) -> str:
-    """Variante esplicita del resolver: non legge dal ContextVar, usa l'uid
-    passato direttamente dal chiamante (es. fast pipeline che riceve
-    ``authed_uid`` come argomento). Serve a eliminare qualsiasi dubbio di
-    propagazione context nei background task.
+    """Absent preference means ElevenLabs; lookup/adapter failures are errors.
 
-    Default sempre ``"elevenlabs"`` se:
-     * adapter non disponibile
-     * uid None / "me" / "anon"
-     * nessun doc di preferenza
+    Read the preference even if an Inworld import failed, so an opted-in
+    user never silently hears ElevenLabs because of an unavailable adapter.
     """
-    if not _INWORLD_ADAPTER_AVAILABLE or _koda_tts_prefs is None:
-        logger.info(f"[tts_provider_resolve_explicit] adapter_unavailable → elevenlabs")
-        return "elevenlabs"
     if not uid or uid in ("me", "anon"):
-        logger.info(
-            f"[tts_provider_resolve_explicit] uid_invalid ({uid!r}) → elevenlabs"
-        )
-        return _koda_tts_prefs.DEFAULT_PROVIDER
+        return "elevenlabs"
     try:
-        prov = await _koda_tts_prefs.get_provider_for_uid(
-            db, uid,
-            allowed_emails=_INWORLD_AB_ALLOWED_EMAILS,
-            email=None,
-        )
-        logger.info(
-            f"[tts_provider_resolve_explicit] uid={uid[:8]}… resolved={prov}"
-        )
-        return prov
-    except Exception as e:
-        logger.warning(f"[tts_provider_resolve_explicit] uid={uid[:8]}… err: {e}")
-        return _koda_tts_prefs.DEFAULT_PROVIDER
+        doc = await db["koda_tts_provider_prefs"].find_one({"user_id": uid})
+    except Exception as exc:
+        logger.warning("[tts_provider_resolve] preference read failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail={"error": "tts_preference_unavailable"}) from exc
+    provider = (doc.get("provider") or "elevenlabs").lower() if doc else "elevenlabs"
+    if provider not in ("elevenlabs", "inworld"):
+        raise HTTPException(status_code=503, detail={"error": "tts_preference_invalid"})
+    if provider == "inworld" and not _INWORLD_ADAPTER_AVAILABLE:
+        raise HTTPException(status_code=503, detail={
+            "error": "tts_provider_unavailable", "provider": "inworld",
+        })
+    logger.info("[tts_provider_resolve] uid=%s provider=%s", uid[:8], provider)
+    return provider
 
 
 # =============================================================================
@@ -11706,10 +11658,6 @@ async def api_tts(req: TTSRequest):
                     },
                 )
 
-    client_el = _get_eleven_client()
-    if client_el is None:
-        raise HTTPException(status_code=503, detail="ElevenLabs not configured")
-
     voice_id = req.voice_id or "6TngzmzM89jJ3Y2Yiywr"  # default Acqua
     voice_settings = _voice_settings_for_tone(req.tone, req.stability, req.similarity_boost)
 
@@ -11744,6 +11692,10 @@ async def api_tts(req: TTSRequest):
             })
         return Response(content=_audio, media_type="audio/mpeg")
 
+
+    client_el = _get_eleven_client()
+    if client_el is None:
+        raise HTTPException(status_code=503, detail="ElevenLabs not configured")
 
     try:
         # Use eleven_v3 if the text contains audio tags ([sospira], [ride], etc.)
@@ -12110,10 +12062,6 @@ async def api_tts_prepare(req: TTSRequest):
     if len(text) > 1500:
         text = text[:1500]
 
-    client_el = _get_eleven_client()
-    if client_el is None:
-        raise HTTPException(status_code=503, detail="ElevenLabs not configured")
-
     voice_id = req.voice_id or "6TngzmzM89jJ3Y2Yiywr"  # default Acqua
     voice_settings = _voice_settings_for_tone(req.tone, req.stability, req.similarity_boost)
 
@@ -12142,6 +12090,10 @@ async def api_tts_prepare(req: TTSRequest):
         token_pr = await _store_tts_audio(_audio_pr)
         return {"token": token_pr, "size": len(_audio_pr)}
 
+
+    client_el = _get_eleven_client()
+    if client_el is None:
+        raise HTTPException(status_code=503, detail="ElevenLabs not configured")
 
     try:
         use_v3 = _has_audio_tags(text)
@@ -15461,6 +15413,8 @@ async def _fast_pipeline_task(
             logger.warning(f"[fast] mongo append failed: {e}")
 
     try:
+        _uid_fp = authed_uid or current_user_id() or "anon"
+        _tts_provider_fp = await _tts_provider_for_uid(_uid_fp)
         # === FIX 2026-07-03 v40 — Sub-timing setup breakdown ===
         # Decomposizione del setup 4093ms per capire chi consuma cosa.
         _t_before_profile = time.time()
@@ -15506,98 +15460,69 @@ async def _fast_pipeline_task(
             # costo, doppio delay). Ora decidiamo in anticipo e chiamiamo
             # un solo provider.
             _audio_bytes: bytes = b""
-            try:
-                _provider_dh = await _tts_provider_for_current_user()
-            except Exception as _pe:
-                logger.warning(f"[fast didnt-hear] provider resolve failed: {_pe}")
-                _provider_dh = "elevenlabs"
-
-            _tts_lang = (getattr(profile, "language", None) or "it").lower()
-            if not (isinstance(_tts_lang, str) and len(_tts_lang) == 2):
-                _tts_lang = "it"
             _phrase_norm = _normalize_for_tts_it(_phrase)
-
-            if _provider_dh == "inworld" and _INWORLD_ADAPTER_AVAILABLE:
-                # Percorso Inworld PURO — nessun passaggio da ElevenLabs
-                try:
-                    _uid_dh = current_user_id() or _current_user_id.get() or "anon"
+            try:
+                if _tts_provider_fp == "inworld":
                     _audio_bytes = await _inworld_dispatcher.generate_non_streaming(
-                        db,
-                        text=_phrase_norm,
-                        user_id=_uid_dh,
+                        db, text=_phrase_norm, user_id=_uid_fp,
                         endpoint="_do_tts_didnt_hear",
-                        voice_id_requested=_voice_id,
-                        tone="calm",
+                        voice_id_requested=_voice_id, tone="calm",
                     )
-                except _inworld_dispatcher.InworldVoiceNotAvailable:
-                    logger.warning(
-                        f"[fast {session_id[:8]}] inworld didnt_hear "
-                        f"vento guard → audio vuoto (client mostra solo testo)"
-                    )
-                    _audio_bytes = b""
-                except _inworld_tts.InworldTTSError as _ie_dh:
-                    logger.error(
-                        f"[fast {session_id[:8]}] inworld didnt_hear "
-                        f"error: {type(_ie_dh).__name__}: {_ie_dh}"
-                    )
-                    _audio_bytes = b""
-            else:
-                # Percorso ElevenLabs standard
-                _client_el_tmp = _get_eleven_client()
-                if _client_el_tmp is not None:
-                    try:
-                        _vs = _voice_settings_for_tone("calm", None, None)
-                        _phrase_v3 = f"[gently] {_phrase_norm}"
-
-                        def _do_tts_didnt_hear():
-                            _audio = bytearray()
+                else:
+                    _client_el_tmp = _get_eleven_client()
+                    if _client_el_tmp is None:
+                        raise RuntimeError("ElevenLabs not configured")
+                    _vs = _voice_settings_for_tone("calm", None, None)
+                    _tts_lang = (getattr(profile, "language", None) or "it").lower()
+                    if not (isinstance(_tts_lang, str) and len(_tts_lang) == 2):
+                        _tts_lang = "it"
+                    _phrase_v3 = f"[gently] {_phrase_norm}"
+                    def _do_tts_didnt_hear():
+                        _audio = bytearray()
+                        try:
+                            _gen = _client_el_tmp.text_to_speech.convert(
+                                text=_phrase_v3,
+                                voice_id=_voice_id,
+                                model_id="eleven_v3",
+                                output_format="mp3_44100_128",
+                                language_code=_tts_lang,
+                                voice_settings=_vs,
+                            )
+                            for _chunk in _gen:
+                                if _chunk:
+                                    _audio.extend(_chunk)
+                        except Exception as _e:
+                            logger.warning(f"[fast didnt-hear v3] tts error: {_e}")
+                            # Fallback flash se v3 fallisce
                             try:
-                                _gen = _client_el_tmp.text_to_speech.convert(
-                                    text=_phrase_v3,
+                                _gen2 = _client_el_tmp.text_to_speech.convert(
+                                    text=_phrase_norm,
                                     voice_id=_voice_id,
-                                    model_id="eleven_v3",
+                                    model_id="eleven_flash_v2_5",
                                     output_format="mp3_44100_128",
                                     language_code=_tts_lang,
                                     voice_settings=_vs,
                                 )
-                                for _chunk in _gen:
-                                    if _chunk:
-                                        _audio.extend(_chunk)
-                            except Exception as _e:
-                                logger.warning(f"[fast didnt-hear v3] tts error: {_e}")
-                                # Fallback flash se v3 fallisce
-                                try:
-                                    _gen2 = _client_el_tmp.text_to_speech.convert(
-                                        text=_phrase_norm,
-                                        voice_id=_voice_id,
-                                        model_id="eleven_flash_v2_5",
-                                        output_format="mp3_44100_128",
-                                        language_code=_tts_lang,
-                                        voice_settings=_vs,
-                                    )
-                                    for _c in _gen2:
-                                        if _c:
-                                            _audio.extend(_c)
-                                except Exception as _e2:
-                                    logger.warning(f"[fast didnt-hear flash] tts error: {_e2}")
-                            return bytes(_audio)
+                                for _c in _gen2:
+                                    if _c:
+                                        _audio.extend(_c)
+                            except Exception as _e2:
+                                logger.warning(f"[fast didnt-hear flash] tts error: {_e2}")
+                        return bytes(_audio)
 
-                        _audio_bytes = await asyncio.to_thread(_do_tts_didnt_hear)
-                    except Exception as _e:
-                        logger.warning(f"[fast didnt-hear] TTS ElevenLabs crashed: {_e}")
-                        _audio_bytes = b""
-
-            # === FIX 2026-07-23 v60.2 — Loudness norm anche sul canned ===
-            # Se poi la canned scatta ANCHE dopo una frase reale della
-            # stessa sessione (rara ma possibile), coerenza livello.
-            if _audio_bytes:
-                try:
+                    _audio_bytes = await asyncio.to_thread(_do_tts_didnt_hear)
+                if _audio_bytes:
                     _audio_bytes = await asyncio.to_thread(
                         _normalize_loudness_mp3, _audio_bytes,
                         session_short=session_id[:8],
                     )
-                except Exception as _ln_e:
-                    logger.warning(f"[fast didnt-hear] loudness norm failed: {_ln_e}")
+            except Exception as exc:
+                logger.warning("[fast %s] didnt-hear TTS failed provider=%s class=%s",
+                               session_id[:8], _tts_provider_fp, type(exc).__name__)
+                await _publish({"type": "error", "message": "tts_provider_failed",
+                                "provider": _tts_provider_fp})
+                await _fast_session_mark_done(session_id)
+                return
 
             # Emit sentence: se abbiamo audio, il client lo suona; altrimenti
             # mostra solo il testo (fallback grazioso).
@@ -15658,21 +15583,9 @@ async def _fast_pipeline_task(
             except Exception as e:
                 logger.warning(f"[key_facts] extraction failed: {e}")
 
-        # === FIX 2026-06-12 Fabio — provider resolve PRIMA del guard EL ===
-        # Prima: `if _get_eleven_client() is None` abortiva la pipeline anche
-        # per utenti Inworld, che non hanno bisogno di ElevenLabs. Ora:
-        #   - utente Inworld → non serve client_el, procediamo
-        #   - utente ElevenLabs → serve client_el, altrimenti errore
-        try:
-            _provider_for_turn = await _tts_provider_for_current_user()
-        except Exception as _pe_turn:
-            logger.warning(f"[fast {session_id[:8]}] provider resolve failed: {_pe_turn}")
-            _provider_for_turn = "elevenlabs"
-        client_el = _get_eleven_client()
-        if _provider_for_turn == "inworld" and _INWORLD_ADAPTER_AVAILABLE:
-            # Percorso Inworld: client_el può essere None.
-            pass
-        elif client_el is None:
+        # Only the selected provider needs to be configured for this turn.
+        client_el = _get_eleven_client() if _tts_provider_fp == "elevenlabs" else None
+        if _tts_provider_fp == "elevenlabs" and client_el is None:
             await _publish({"type": "error", "message": "TTS unavailable"})
             await _fast_session_mark_done(session_id)
             return
@@ -16800,8 +16713,6 @@ async def _fast_pipeline_task(
                 #
                 # uid: priorità ad authed_uid esplicito (passato dal chiamante
                 # HTTP/WS); fallback al ContextVar per back-compat.
-                _uid_fp = authed_uid or current_user_id() or _current_user_id.get() or "anon"
-                _tts_provider_fp = await _tts_provider_for_uid(_uid_fp)
                 if _tts_provider_fp == "inworld" and _INWORLD_ADAPTER_AVAILABLE:
                     try:
                         audio_bytes = await _inworld_dispatcher.generate_non_streaming(

@@ -141,22 +141,8 @@ function RootLayout() {
     // qui. Prima di questo hydrate, i componenti vedranno sempre il
     // default (elevenlabs).
     //
-    // === FIX 2026-06-12 Fabio — attendi hydrate PRIMA di marcare ready ====
-    // Prima: `hydrateTTSProvider().catch(() => {})` fire-and-forget → i
-    // componenti di intro potevano montare con cache=elevenlabs e caricare
-    // i MP3 di quella voce anche se l'utente aveva già switchato a Inworld.
-    // Ora blocchiamo il `ready` finché la SecureStore non ha risposto (o
-    // 300ms di guard-rail per non pietrificare l'app se SecureStore impazzisce).
-    const hydrateTTS = (async () => {
-      try {
-        await Promise.race([
-          hydrateTTSProvider(),
-          new Promise<void>((resolve) => setTimeout(resolve, 300)),
-        ]);
-      } catch {
-        /* no-op */
-      }
-    })();
+    // Keep the existing loading view until the saved preference is read.
+    const hydrateTTS = hydrateTTSProvider().catch(() => {});
 
     if (Platform.OS !== "web") {
       // === BLOCCO A (2026-08-25) — scheduleWeeklyAppNotification RIMOSSO ==
@@ -164,7 +150,7 @@ function RootLayout() {
     }
     (async () => {
       // === FIX 2026-06-12 Fabio — aspetta hydrate TTS prima di render ====
-      // Guard-rail 300ms (vedi sopra). Garantisce che i primi componenti
+      // I primi componenti
       // di intro leggano il provider corretto.
       await hydrateTTS;
 

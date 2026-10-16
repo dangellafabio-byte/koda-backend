@@ -88,7 +88,7 @@ async def get_provider_for_uid(db, uid: str,
         doc = await db[PREFS_COLLECTION].find_one({"user_id": uid})
     except Exception as e:
         log.warning(f"[koda_tts_prefs] read failed uid={uid[:8]}: {e}")
-        return DEFAULT_PROVIDER
+        raise
     if not doc:
         return DEFAULT_PROVIDER
     provider = (doc.get("provider") or DEFAULT_PROVIDER).lower()
@@ -123,6 +123,7 @@ async def clear_provider_for_uid(db, uid: str) -> None:
         await db[PREFS_COLLECTION].delete_one({"user_id": uid})
     except Exception as e:
         log.warning(f"[koda_tts_prefs] clear failed uid={uid[:8]}: {e}")
+        raise
 
 
 # =============================================================================

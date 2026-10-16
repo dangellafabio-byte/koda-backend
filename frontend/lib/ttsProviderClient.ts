@@ -184,41 +184,19 @@ export async function activateWithToken(
 
 /**
  * Reset lato backend (rimuove la pref dal DB) + lato client.
- *
- * === FIX 2026-06-12 Fabio ===
- * Prima: la fetch backend era wrappata in `try{} catch{}` vuoto e, QUALUNQUE
- * cosa succedesse, il client faceva `clearTTSProvider()` dichiarando il reset
- * riuscito. Risultato: su backend 500 l'app diceva "disattivato" mentre il
- * server continuava a servire Inworld (DB preference ancora presente).
- * Ora propaghiamo l'errore: se il backend non conferma la DELETE, NON
- * ripristiniamo la pref locale e lasciamo che il chiamante mostri un errore.
  */
 export async function resetProviderOnServer(
   backendUrl: string,
   authHeaders: Record<string, string>
 ): Promise<void> {
-  let backendDeleted = false;
-  let lastErr: unknown = null;
-  try {
-    const res = await fetch(`${backendUrl}/api/dev/tts-provider/me`, {
-      method: "DELETE",
-      headers: authHeaders,
-    });
-    // 200/204 OK, 404 significa "non c'era nulla da cancellare" → ancora OK.
-    if (res.ok || res.status === 404) {
-      backendDeleted = true;
-    } else {
-      lastErr = new Error(`reset HTTP ${res.status}`);
-    }
-  } catch (e) {
-    lastErr = e;
-  }
-  if (!backendDeleted) {
-    // NON tocchiamo la pref locale: altrimenti UI dice "OFF" ma backend
-    // continua a servire Inworld al prossimo turno → divergenza silenziosa.
-    throw lastErr instanceof Error
-      ? lastErr
-      : new Error(`resetProviderOnServer failed: ${String(lastErr)}`);
+  const res = await fetch(`${backendUrl}/api/dev/tts-provider/me`, {
+    method: "DELETE",
+    headers: authHeaders,
+  });
+  if (!res.ok) throw new Error(`reset-provider HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.provider !== DEFAULT_PROVIDER) {
+    throw new Error("reset-provider: unexpected provider from server");
   }
   await clearTTSProvider();
 }
