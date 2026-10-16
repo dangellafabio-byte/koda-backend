@@ -16697,12 +16697,13 @@ async def _fast_pipeline_task(
                     f"model={model_id} chars={len(clean_tts) if 'clean_tts' in dir() else len(clean)}"
                 )
                 # === [INWORLD A/B DISPATCH FAST PIPELINE] — Fabio 2026-10 =====
-                # Se l'utente è opt-in Inworld, bypassiamo l'intera pipeline
-                # ElevenLabs (model gating, stitching, previous_text, loudness)
-                # e usiamo Inworld non-streaming. Rispetta il contratto:
-                #  - voce Vento → skip chunk (log warning, chunk perso)
-                #  - errore upstream → chunk perso (NESSUN fallback automatico)
+                # v2 2026-10 bugfix: se Inworld fallisce (chiave invalida,
+                # voice Vento, timeout upstream…) FALLBACK AUTOMATICO a
+                # ElevenLabs invece di scartare il chunk silenziosamente.
+                # Il return precedente faceva perdere sia testo che audio
+                # → utente non riceveva risposta.
                 _tts_provider_fp = await _tts_provider_for_current_user()
+                audio_bytes = None
                 if _tts_provider_fp == "inworld" and _INWORLD_ADAPTER_AVAILABLE:
                     try:
                         _uid_fp = current_user_id() or _current_user_id.get() or "anon"
@@ -16716,16 +16717,22 @@ async def _fast_pipeline_task(
                         )
                     except _inworld_dispatcher.InworldVoiceNotAvailable as _vne:
                         logger.warning(
-                            f"[fast {session_id[:8]}] inworld vento guard idx={idx} — chunk skipped"
+                            f"[fast {session_id[:8]}] inworld vento guard idx={idx} — FALLBACK elevenlabs"
                         )
-                        return
+                        audio_bytes = None
                     except _inworld_tts.InworldTTSError as _ie:
                         logger.error(
                             f"[fast {session_id[:8]}] inworld tts error idx={idx} "
-                            f"{type(_ie).__name__}: {_ie}"
+                            f"{type(_ie).__name__}: {_ie} — FALLBACK elevenlabs"
                         )
-                        return
-                else:
+                        audio_bytes = None
+                    except Exception as _ie_generic:
+                        logger.error(
+                            f"[fast {session_id[:8]}] inworld generic error idx={idx}: "
+                            f"{type(_ie_generic).__name__}: {_ie_generic} — FALLBACK elevenlabs"
+                        )
+                        audio_bytes = None
+                if audio_bytes is None:
                     audio_bytes = await asyncio.to_thread(_do_tts)
                 tts_ms = int((time.time() - t_tts) * 1000)
                 logger.info(f"[fast] sentence idx={idx} chars={len(clean)} tts_ms={tts_ms} mp3_bytes={len(audio_bytes)}")
