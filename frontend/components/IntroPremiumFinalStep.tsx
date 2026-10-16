@@ -30,7 +30,8 @@ import { api } from "../lib/api";
 
 const TAG = "[intro-premium-final]";
 import { getIntroAsset } from "../lib/introAssetProvider";
-const CLIP_CLOSING = getIntroAsset("intro_premium_closing");
+// FIX 2026-06-12 Fabio — resolve asset al play (ora funzione, non costante)
+const getClipClosing = () => getIntroAsset("intro_premium_closing");
 
 type Props = {
   onComplete: () => void;
@@ -128,7 +129,7 @@ export default function IntroPremiumFinalStep({ onComplete }: Props) {
     await new Promise((r) => setTimeout(r, 250));
     if (!mountedRef.current) return;
     try {
-      const player = createAudioPlayer(CLIP_CLOSING, { updateInterval: 100 });
+      const player = createAudioPlayer(getClipClosing(), { updateInterval: 100 });
       playerRef.current = player;
       // Volume immediato (Android alcuni device inizializzano a 0.x)
       try { (player as any).volume = 1.0; } catch {}

@@ -56,8 +56,13 @@ import { APP_BG_INDIGO } from "../lib/uiConstants";
 const TAG = "KODA_MICRODEMO";
 
 import { getIntroAsset } from "../lib/introAssetProvider";
-const CLIP_OPEN = getIntroAsset("microdemo_open");
-const CLIP_CLOSE = getIntroAsset("microdemo_close");
+// === FIX 2026-06-12 Fabio — resolve asset AL MOMENTO DELLA RIPRODUZIONE ===
+// Prima: `const CLIP_OPEN = getIntroAsset("microdemo_open")` top-level
+// risolveva il provider UNA VOLTA all'import del modulo. Se poi l'utente
+// switciava ElevenLabs↔Inworld, il MP3 restava quello iniziale.
+// Ora usiamo funzioni getter chiamate al momento della riproduzione.
+const getClipOpen = () => getIntroAsset("microdemo_open");
+const getClipClose = () => getIntroAsset("microdemo_close");
 const VOICE_CIELO_ID = "POuqf18evoXOKIqV2Px7";
 
 const MAX_TURNS = 5; // Fabio 2026-06: 3→5 turni per far percepire meglio Ollenya prima del paywall
@@ -507,7 +512,7 @@ export default function MicroDemoOllenya() {
       configureAudioForPlayback().then(() => {
         if (abortRef.current || !mountedRef.current) return;
         console.log(`[${TAG}] play open clip`);
-        playClipBundled(CLIP_OPEN, () => {
+        playClipBundled(getClipOpen(), () => {
           if (abortRef.current || !mountedRef.current) return;
           runTurn();
         });
@@ -517,7 +522,7 @@ export default function MicroDemoOllenya() {
       configureAudioForPlayback().then(() => {
         if (abortRef.current || !mountedRef.current) return;
         console.log(`[${TAG}] play close clip`);
-        playClipBundled(CLIP_CLOSE, async () => {
+        playClipBundled(getClipClose(), async () => {
           if (abortRef.current || !mountedRef.current) return;
           await consumeRateLimit();
           setPhase("done");

@@ -35,18 +35,22 @@ import { createAudioPlayer, AudioPlayer } from "expo-audio";
 // Il dispatcher legge SecureStore (ollenya_tts_provider_dev) e sceglie
 // cartella `lascia-andare/` o `lascia-andare-inworld/`. Vento resta
 // SEMPRE su ElevenLabs (fase 1, Inworld solo Cielo).
+// === FIX 2026-06-12 Fabio — resolve asset AL MOMENTO DEL PLAY =============
+// Prima questi `const` risolvevano all'import del modulo e congelavano il
+// provider corrente. Dopo uno switch Inworld↔ElevenLabs, i MP3 restavano
+// quelli iniziali. Ora ogni getter è una funzione chiamata al momento del play.
 import { getIntroAsset } from "./introAssetProvider";
-const openCielo = getIntroAsset("la_open_cielo");
-const openVento = getIntroAsset("la_open_vento");
-const closeCielo = getIntroAsset("la_close_cielo");
-const closeVento = getIntroAsset("la_close_vento");
+const getOpenCielo = () => getIntroAsset("la_open_cielo");
+const getOpenVento = () => getIntroAsset("la_open_vento");
+const getCloseCielo = () => getIntroAsset("la_close_cielo");
+const getCloseVento = () => getIntroAsset("la_close_vento");
 
 // === SPEC 2026-08-21 (Fabio) — Clip narrative firstBoot V3 =================
 // Riprodotte una sola volta all'ingresso di LA se params.firstBoot === "1".
 // Non hanno varianti Cielo/Vento: la sequenza narrativa V3 usa sempre
 // la voce di default (Cielo).
-const firstBootCuoreClip = getIntroAsset("la_cuore");
-const firstBootProvaloClip = getIntroAsset("la_provalo");
+const getFirstBootCuoreClip = () => getIntroAsset("la_cuore");
+const getFirstBootProvaloClip = () => getIntroAsset("la_provalo");
 
 // ============================================================================
 // Mapping voice → asset
@@ -60,14 +64,14 @@ export type LasciaAndareVoice = "aria" | "theo" | "cielo" | "vento" | "echo" | s
 function pickOpenAsset(voice: LasciaAndareVoice) {
   const v = (voice || "").toString().toLowerCase();
   // "theo" è il valore canonico del backend per la voce maschile Vento
-  if (v === "vento" || v === "echo" || v === "theo") return openVento;
-  return openCielo; // default (aria/cielo/qualsiasi altro)
+  if (v === "vento" || v === "echo" || v === "theo") return getOpenVento();
+  return getOpenCielo(); // default (aria/cielo/qualsiasi altro)
 }
 
 function pickCloseAsset(voice: LasciaAndareVoice) {
   const v = (voice || "").toString().toLowerCase();
-  if (v === "vento" || v === "echo" || v === "theo") return closeVento;
-  return closeCielo;
+  if (v === "vento" || v === "echo" || v === "theo") return getCloseVento();
+  return getCloseCielo();
 }
 
 // ============================================================================
@@ -206,8 +210,8 @@ export function stopAll(): void {
  */
 export async function playFirstBootIntroSequence(): Promise<void> {
   try {
-    await playAndWait(firstBootCuoreClip, 15000);
-    await playAndWait(firstBootProvaloClip, 5000);
+    await playAndWait(getFirstBootCuoreClip(), 15000);
+    await playAndWait(getFirstBootProvaloClip(), 5000);
   } catch (e) {
     console.warn("[lasciaAndareVoice] firstBoot intro sequence failed:", e);
   }

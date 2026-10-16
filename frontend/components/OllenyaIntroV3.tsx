@@ -74,9 +74,13 @@ const TAG = "KODA_INTRO_V3";
 // (rispetto al vecchio testo "Ciao. Io sono Ollenya. Voglio farti conoscere il mio cuore.")
 import { getIntroAsset } from "../lib/introAssetProvider";
 
-const CIELO_CLIPS = {
-  intro_v3_saluto: require("../assets/sounds/intro/intro_v3_saluto-cielo.mp3"),
-  intro_v3_parte_di_me: getIntroAsset("intro_v3_parte_di_me"),
+const CIELO_CLIPS: Record<string, () => any> = {
+  // === FIX 2026-06-12 Fabio — resolve asset AL MOMENTO DEL PLAY =============
+  // Prima la map conteneva asset risolti all'import. Dopo un cambio di
+  // provider ElevenLabs↔Inworld, il MP3 di intro restava quello iniziale.
+  // Ora ogni voce è una thunk `() => require(...)` chiamata al momento del play.
+  intro_v3_saluto: () => require("../assets/sounds/intro/intro_v3_saluto-cielo.mp3"),
+  intro_v3_parte_di_me: () => getIntroAsset("intro_v3_parte_di_me"),
 };
 
 // ==================== STATE MACHINE TYPES ====================
@@ -1064,7 +1068,8 @@ export default function OllenyaIntroV3() {
       }
       case "speak": {
         setOrbState("speaking");
-        const clipSource = CIELO_CLIPS[currentTurn.clipKey];
+        const clipThunk = CIELO_CLIPS[currentTurn.clipKey];
+        const clipSource = typeof clipThunk === "function" ? clipThunk() : clipThunk;
         try {
           console.log(`[${TAG} DIAG] speak clipKey="${currentTurn.clipKey}"`);
         } catch {}

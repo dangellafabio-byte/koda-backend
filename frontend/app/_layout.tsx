@@ -139,15 +139,35 @@ function RootLayout() {
     // === INWORLD A/B — idrata la preferenza prima dei primi asset =========
     // `getIntroAsset()` è SINCRONA e legge una cache in-memory popolata
     // qui. Prima di questo hydrate, i componenti vedranno sempre il
-    // default (elevenlabs) — accettabile per la primissima apertura, ma
-    // sui boot successivi il valore è coerente già al primo render.
-    hydrateTTSProvider().catch(() => {});
+    // default (elevenlabs).
+    //
+    // === FIX 2026-06-12 Fabio — attendi hydrate PRIMA di marcare ready ====
+    // Prima: `hydrateTTSProvider().catch(() => {})` fire-and-forget → i
+    // componenti di intro potevano montare con cache=elevenlabs e caricare
+    // i MP3 di quella voce anche se l'utente aveva già switchato a Inworld.
+    // Ora blocchiamo il `ready` finché la SecureStore non ha risposto (o
+    // 300ms di guard-rail per non pietrificare l'app se SecureStore impazzisce).
+    const hydrateTTS = (async () => {
+      try {
+        await Promise.race([
+          hydrateTTSProvider(),
+          new Promise<void>((resolve) => setTimeout(resolve, 300)),
+        ]);
+      } catch {
+        /* no-op */
+      }
+    })();
 
     if (Platform.OS !== "web") {
       // === BLOCCO A (2026-08-25) — scheduleWeeklyAppNotification RIMOSSO ==
       // Nessun promemoria settimanale automatico.
     }
     (async () => {
+      // === FIX 2026-06-12 Fabio — aspetta hydrate TTS prima di render ====
+      // Guard-rail 300ms (vedi sopra). Garantisce che i primi componenti
+      // di intro leggano il provider corretto.
+      await hydrateTTS;
+
       // === FAST-PATH CACHE (2026-06) ===
       // Prima del network, leggi la cache locale e applica TEMA / orari.
       // Così l'utente al cold start salta direttamente alla home senza

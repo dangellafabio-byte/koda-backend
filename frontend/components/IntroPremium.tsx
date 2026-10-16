@@ -34,7 +34,8 @@ import { APP_BG_INDIGO } from "../lib/uiConstants";
 
 const TAG = "[intro-premium]";
 import { getIntroAsset } from "../lib/introAssetProvider";
-const CLIP_ECCOMI = getIntroAsset("intro_premium_eccomi");
+// FIX 2026-06-12 Fabio — resolve asset al play (ora funzione, non costante)
+const getClipEccomi = () => getIntroAsset("intro_premium_eccomi");
 
 type Phase =
   | "boot" | "speaking" | "asking_permission" | "waiting_tap"
@@ -186,7 +187,7 @@ export default function IntroPremium() {
       askPermission();
     };
     try {
-      const player = createAudioPlayer(CLIP_ECCOMI, { updateInterval: 100 });
+      const player = createAudioPlayer(getClipEccomi(), { updateInterval: 100 });
       currentPlayerRef.current = player;
       // === FIX 2026-08-27 v65.12 — Volume esplicito + wait load (Android) =====
       // Su Android alcuni device inizializzano il player con volume<1.0

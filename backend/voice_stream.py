@@ -1463,11 +1463,28 @@ async def voice_stream_handler(
                     # keepalive → ignora silenziosamente
                     continue
                 if mtype == "end":
+                    # === FIX 2026-06-12 Fabio ===
+                    # Prima rispondevamo con {"type":"done"} che il client
+                    # interpreta come successo → HF_LOOP azzerava il counter
+                    # errori → ripartenza immediata della stessa sessione
+                    # → cascata infinita di sessioni abortite senza mai
+                    # transcrivere nulla.
+                    # Ora propaghiamo esplicitamente un errore così:
+                    #  1) voiceStreamConverse popola pipelineError
+                    #  2) il player loop esce con ok=false
+                    #  3) HF_BACKOFF conta il fallimento
+                    #  4) dopo soglia il loop si ferma e mostra UI al utente
+                    # Nota: non spawna la pipeline LLM (text vuoto). Costo zero.
                     logger.info(
-                        f"[KODA_STREAM sess={short_id}] client_stt got 'end' without transcript"
+                        f"[KODA_STREAM sess={short_id}] client_stt got 'end' without transcript "
+                        f"→ emitting error for diagnostic (prev: done — causava cascata)"
                     )
                     if client_alive:
-                        await emit_to_client({"type": "done"})
+                        await emit_to_client({
+                            "type": "error",
+                            "message": "client_stt_end_without_transcript",
+                            "source": "voice_stream_handler",
+                        })
                     return
                 if mtype == "transcript_from_client":
                     text_raw = (msg.get("text") or "").strip()

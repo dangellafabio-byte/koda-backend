@@ -41,7 +41,8 @@ import { APP_BG_INDIGO } from "../lib/uiConstants";
 
 const TAG = "KODA_HEART_REVEAL";
 import { getIntroAsset } from "../lib/introAssetProvider";
-const REVEAL_CLIP = getIntroAsset("reveal_cuore_voce");
+// FIX 2026-06-12 Fabio — resolve asset al momento del play (vedi MicroDemoOllenya)
+const getRevealClip = () => getIntroAsset("reveal_cuore_voce");
 
 const { width: WINDOW_WIDTH } = Dimensions.get("window");
 const ORB_SIZE = ECLIPSE_MAX_DIAMETER;
@@ -236,7 +237,7 @@ export default function HeartVoiceReveal() {
       clipStarted = true;
       try {
         console.log(`[${TAG}] startPlayback: createAudioPlayer`);
-        const player = createAudioPlayer(REVEAL_CLIP, { updateInterval: 100 });
+        const player = createAudioPlayer(getRevealClip(), { updateInterval: 100 });
         playerRef.current = player;
         // Forza volume max esplicitamente per evitare bug volume=0 residuo
         try {
