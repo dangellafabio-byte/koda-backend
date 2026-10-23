@@ -191,6 +191,15 @@ async def update_my_tts_prefs(
         log.warning(f"[tts_prefs] update failed uid={uid[:8]}: {e}")
         raise HTTPException(status_code=500, detail="update failed")
 
+    # Invalida la cache in-memory server-side (TTL 60s) così la prossima
+    # richiesta vede subito il nuovo provider.
+    try:
+        import server as _srv_cache  # type: ignore
+        if hasattr(_srv_cache, "_invalidate_tts_pref_cache"):
+            _srv_cache._invalidate_tts_pref_cache(uid)
+    except Exception:
+        pass
+
     return {
         "ok": True,
         "provider": updated.get("provider"),
@@ -207,6 +216,12 @@ async def reset_my_tts_prefs(request: Request) -> Dict[str, Any]:
     uid = _require_auth_uid(request)
     db = _get_db(request)
     await _prefs.clear_prefs_for_uid(db, uid)
+    try:
+        import server as _srv_cache  # type: ignore
+        if hasattr(_srv_cache, "_invalidate_tts_pref_cache"):
+            _srv_cache._invalidate_tts_pref_cache(uid)
+    except Exception:
+        pass
     return {"ok": True, "provider": _prefs.DEFAULT_PROVIDER, "voice_id": None}
 
 

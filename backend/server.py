@@ -9,7 +9,7 @@ import re
 import math
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any, Callable, Awaitable
+from typing import List, Optional, Dict, Any, Callable, Awaitable, Tuple
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -4759,15 +4759,45 @@ def _compute_trial_state(profile: "Profile") -> str:
 
 
 def _estimate_mp3_duration_seconds(mp3_bytes: bytes, bitrate_bps: int = 128_000) -> float:
-    """Stima la durata di un blob mp3 dalla dimensione + bitrate.
-    ElevenLabs genera mp3_44100_128 (128 kbps CBR) → durata = bytes / 16000.
-    Approssimazione robusta ±5% per header/frame overhead; sufficiente per il
-    trial accounting (dove serve la coerenza col costo ElevenLabs, non
-    precisione al ms). Ritorna 0.0 su input invalido.
+    """Stima la durata di un blob MP3 in secondi.
+
+    === FIX 2026-10 (Fabio) — Dual-provider accounting ===
+    Prima: formula semplificata ``bytes / 16000`` assumendo CBR 128 kbps
+    (output ElevenLabs ``mp3_44100_128``). Perfetta per ElevenLabs, ma
+    IMPRECISA per Inworld che può emettere MP3 a bitrate variabile
+    (VBR / CBR 48/64/96 kbps a seconda del modello). Rischio: utente con
+    preferenza Inworld pagherebbe più minuti del dovuto se Inworld emette
+    bitrate più basso (es. 64 kbps → stima 2× rispetto al reale).
+
+    Ora: proviamo prima il parser basato su frame-header
+    (`koda_tts_events.estimate_mp3_duration_ms`). Robusto a:
+      * CBR / VBR
+      * MPEG1 Layer 3 (44.1/48 kHz) e MPEG2/2.5 Layer 3 (8-24 kHz)
+      * Header ID3 iniziali
+      * Frame malformati (skip e continua)
+
+    Fallback: formula CBR @ `bitrate_bps` (default 128 kbps).
+    Ritorna 0.0 su input invalido / blob troppo piccolo per essere audio.
+
+    ATTENZIONE: in caso di chunk MP3 "parziali" (es. streaming di byte
+    non allineati a frame-boundary), il parser può ritornare un valore
+    leggermente diverso dal reale: il contratto resta "stima migliore
+    disponibile per singolo blob". NON incrementiamo il counter prima
+    che il blob sia completo nel pipeline WS, quindi il double-count è
+    già evitato a livello di chiamante.
     """
     try:
         if not mp3_bytes or len(mp3_bytes) < 100:
             return 0.0
+        # Parser frame-based (gestisce VBR, MPEG1/2/2.5, ID3)
+        try:
+            import koda_tts_events as _ktevs  # import locale per evitare cicli
+            ms = _ktevs.estimate_mp3_duration_ms(bytes(mp3_bytes))
+            if isinstance(ms, int) and ms > 0:
+                return ms / 1000.0
+        except Exception:
+            pass
+        # Fallback: CBR @ bitrate_bps (default 128 kbps = ElevenLabs stream)
         bytes_per_second = float(bitrate_bps) / 8.0
         return float(len(mp3_bytes)) / bytes_per_second
     except Exception:
@@ -9679,6 +9709,121 @@ def _get_eleven_client():
         return None
 
 
+# =========================================================================
+# TTS PROVIDER RESOLVER (Fabio 2026-10) — "Voce di Ollenya" wiring
+# =========================================================================
+# Il frontend salva la preferenza (ElevenLabs | Inworld) via PUT
+# /api/tts/preferences. I path TTS live (WS /api/voice/stream, /api/tts/*)
+# devono rispettarla E:
+#   * NON fare mai fallback automatico ad altro provider pagato (contratto
+#     Fabio): se mancano le key del provider scelto → errore pulito, no
+#     ElevenLabs silenzioso.
+#   * NON duplicare chiamate al DB: la pref viene letta UNA volta per TTS
+#     path (small in-memory cache 60s per uid, invalidata su update
+#     tramite PUT /api/tts/preferences → qui non c'è però notify, quindi
+#     TTL breve basta a non far percepire lag di propagazione).
+# =========================================================================
+try:
+    import inworld_tts as _inworld_adapter  # type: ignore
+    import inworld_dispatcher as _inworld_dispatcher  # type: ignore
+    import koda_tts_prefs as _koda_tts_prefs  # type: ignore
+    import koda_voice_catalog as _koda_voice_catalog  # type: ignore
+    _INWORLD_WIRED = True
+except Exception as _iw_err:  # pragma: no cover
+    _inworld_adapter = None
+    _inworld_dispatcher = None
+    _koda_tts_prefs = None
+    _koda_voice_catalog = None
+    _INWORLD_WIRED = False
+    logger.warning(f"[tts] inworld wiring failed: {_iw_err}")
+
+
+_TTS_PREF_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_TTS_PREF_CACHE_TTL_S = 60.0
+
+
+async def _resolve_tts_pref_for_uid(uid: Optional[str]) -> Dict[str, Any]:
+    """Ritorna la pref TTS attiva dell'utente.
+
+    Default per utenti anonimi / 'me' / pref assente / modulo prefs
+    non caricato = ``{"provider": "elevenlabs", "voice_id": None}``.
+
+    Caching in-memory per 60s per uid. Il reset si ottiene solo per
+    scadenza TTL: la UI chiama PUT e si aspetta che la selezione sia
+    attiva dalla PROSSIMA sessione — accettabile per uno switch
+    deliberato (non siamo in hot-path per ogni frame audio).
+    """
+    out = {"provider": "elevenlabs", "voice_id": None}
+    if not uid or uid == "me" or _koda_tts_prefs is None:
+        return out
+    now = time.time()
+    cached = _TTS_PREF_CACHE.get(uid)
+    if cached and (now - cached[0]) < _TTS_PREF_CACHE_TTL_S:
+        return cached[1]
+    try:
+        prefs = await _koda_tts_prefs.get_prefs_for_uid(db, uid)
+        p = (prefs.get("provider") or "elevenlabs").lower().strip()
+        if p not in ("elevenlabs", "inworld"):
+            p = "elevenlabs"
+        out = {"provider": p, "voice_id": prefs.get("voice_id")}
+    except Exception as e:
+        logger.warning(f"[tts] pref resolve failed uid={(uid or '')[:8]}: {e}")
+    _TTS_PREF_CACHE[uid] = (now, out)
+    return out
+
+
+def _invalidate_tts_pref_cache(uid: Optional[str]) -> None:
+    """Scarta la cache della pref per `uid` (es: dopo PUT /tts/preferences)."""
+    if uid and uid in _TTS_PREF_CACHE:
+        _TTS_PREF_CACHE.pop(uid, None)
+
+
+async def _try_inworld_tts_bytes(
+    *,
+    text: str,
+    user_id: str,
+    endpoint: str,
+    voice_key: Optional[str],
+    tone: Optional[str] = None,
+) -> Optional[bytes]:
+    """Prova a generare TTS via Inworld dispatcher.
+
+    Ritorna:
+      * ``bytes`` MP3 su successo.
+      * Solleva ``RuntimeError`` con un messaggio chiaro in caso di:
+          - API key mancante
+          - voce non disponibile su Inworld
+          - timeout / upstream error
+      * ``None`` SOLO se il dispatcher non è stato caricato (modulo
+        rotto in deploy): il caller può decidere se continuare con
+        ElevenLabs o errore 503. Nel path WS live scegliamo di NON
+        fare fallback automatico (contratto Fabio): error 503-like.
+    """
+    if _inworld_dispatcher is None or _inworld_adapter is None:
+        return None
+    try:
+        audio = await _inworld_dispatcher.generate_non_streaming(
+            db,
+            text=text,
+            user_id=user_id or "me",
+            endpoint=endpoint,
+            voice_key=voice_key,
+            tone=tone,
+        )
+        return audio
+    except _inworld_adapter.InworldTTSAuthError as e:
+        raise RuntimeError(f"inworld_auth_missing: {e}")
+    except _inworld_dispatcher.InworldVoiceNotAvailable as e:
+        raise RuntimeError(f"inworld_voice_unavailable: {e}")
+    except _inworld_adapter.InworldTTSRateLimitError as e:
+        raise RuntimeError(f"inworld_rate_limit: {e}")
+    except _inworld_adapter.InworldTTSTimeoutError as e:
+        raise RuntimeError(f"inworld_timeout: {e}")
+    except _inworld_adapter.InworldTTSError as e:
+        raise RuntimeError(f"inworld_error: {type(e).__name__}")
+
+
+
 # Curated list of voices that work well for Italian.
 # (voice_id, display name, short description, gender)
 CURATED_VOICES = [
@@ -11440,12 +11585,58 @@ async def api_tts_prepare(req: TTSRequest):
 
     This is the preferred path on mobile clients (Audio.Sound.createAsync on iOS
     can fail loading audio from local file URIs after base64 decoding).
+
+    === FIX 2026-10 (Fabio) — Routing provider utente ===
+    Legge la pref ``koda_tts_provider_prefs`` per uid autenticato. Se
+    pref=inworld e il modulo è wired, generiamo via dispatcher Inworld.
+    Nessun fallback automatico a ElevenLabs: se Inworld fallisce →
+    HTTP 503 pulito; l'utente capisce che il provider scelto non è
+    disponibile e NON spende caratteri sull'altro provider pagato.
     """
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Empty text")
     if len(text) > 1500:
         text = text[:1500]
+
+    # Risolvi pref provider
+    _uid = current_user_id()
+    _pref = await _resolve_tts_pref_for_uid(_uid)
+    _provider = _pref.get("provider") or "elevenlabs"
+    logger.info(
+        f"[TTS_PROVIDER] /api/tts/prepare provider={_provider} "
+        f"uid={(_uid or 'me')[:8]}"
+    )
+
+    if _provider == "inworld" and _INWORLD_WIRED:
+        _voice_key_pref = _pref.get("voice_id")
+        _voice_key = None
+        if _voice_key_pref and _koda_voice_catalog:
+            _entry = (
+                _koda_voice_catalog.find_by_key(_voice_key_pref)
+                or _koda_voice_catalog.find_by_elevenlabs_voice_id(_voice_key_pref)
+            )
+            if _entry:
+                _voice_key = _entry.key
+        if _voice_key is None and req.voice_id and _koda_voice_catalog:
+            _entry = _koda_voice_catalog.find_by_elevenlabs_voice_id(req.voice_id)
+            if _entry:
+                _voice_key = _entry.key
+        try:
+            audio_data = await _try_inworld_tts_bytes(
+                text=text,
+                user_id=_uid or "me",
+                endpoint="/api/tts/prepare",
+                voice_key=_voice_key,
+                tone=req.tone,
+            )
+        except RuntimeError as _iw_err:
+            # Niente fallback automatico a ElevenLabs.
+            raise HTTPException(status_code=503, detail=f"TTS Inworld: {str(_iw_err)}")
+        if not audio_data:
+            raise HTTPException(status_code=503, detail="TTS Inworld non disponibile")
+        token = await _store_tts_audio(audio_data)
+        return {"token": token, "size": len(audio_data)}
 
     client_el = _get_eleven_client()
     if client_el is None:
@@ -11556,12 +11747,69 @@ async def _tts_stream_impl(
     sia completo. Modello scelto auto:
       - audio tags presenti → eleven_v3 (espressivo)
       - testo plain         → eleven_flash_v2_5 (rapidissimo, ~75ms TTFB)
+
+    === FIX 2026-10 (Fabio) — Routing provider utente ===
+    Analogo a /api/tts/prepare: se pref=inworld generiamo via dispatcher
+    Inworld e serviamo l'MP3 come un singolo blob (non true-streaming
+    chunked ma il contratto HTTP media-type è identico). Nessun
+    fallback automatico a ElevenLabs.
     """
     text = (text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Empty text")
     if len(text) > 1500:
         text = text[:1500]
+
+    _uid = current_user_id()
+    _pref = await _resolve_tts_pref_for_uid(_uid)
+    _provider = _pref.get("provider") or "elevenlabs"
+    logger.info(
+        f"[TTS_PROVIDER] /api/tts/stream provider={_provider} "
+        f"uid={(_uid or 'me')[:8]}"
+    )
+
+    if _provider == "inworld" and _INWORLD_WIRED:
+        _voice_key_pref = _pref.get("voice_id")
+        _voice_key = None
+        if _voice_key_pref and _koda_voice_catalog:
+            _entry = (
+                _koda_voice_catalog.find_by_key(_voice_key_pref)
+                or _koda_voice_catalog.find_by_elevenlabs_voice_id(_voice_key_pref)
+            )
+            if _entry:
+                _voice_key = _entry.key
+        if _voice_key is None and voice_id and _koda_voice_catalog:
+            _entry = _koda_voice_catalog.find_by_elevenlabs_voice_id(voice_id)
+            if _entry:
+                _voice_key = _entry.key
+        try:
+            audio_data = await _try_inworld_tts_bytes(
+                text=text,
+                user_id=_uid or "me",
+                endpoint="/api/tts/stream",
+                voice_key=_voice_key,
+                tone=tone,
+            )
+        except RuntimeError as _iw_err:
+            raise HTTPException(status_code=503, detail=f"TTS Inworld: {str(_iw_err)}")
+        if not audio_data:
+            raise HTTPException(status_code=503, detail="TTS Inworld non disponibile")
+
+        async def _iter_bytes_once():
+            # Chunk fissi da 32KB per non bloccare l'event loop su MP3 grossi
+            CHUNK = 32 * 1024
+            for off in range(0, len(audio_data), CHUNK):
+                yield audio_data[off:off + CHUNK]
+
+        return StreamingResponse(
+            _iter_bytes_once(),
+            media_type="audio/mpeg",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+                "X-TTS-Provider": "inworld",
+            },
+        )
 
     client_el = _get_eleven_client()
     if client_el is None:
@@ -15996,7 +16244,69 @@ async def _fast_pipeline_task(
                     f"[OLLENYA_TIMING] TTS_REQUEST sid={session_id[:8]} idx={idx} "
                     f"model={model_id} chars={len(clean_tts) if 'clean_tts' in dir() else len(clean)}"
                 )
-                audio_bytes = await asyncio.to_thread(_do_tts)
+                # === INWORLD ROUTING (Fabio 2026-10) =====================
+                # Se l'utente ha selezionato Inworld come provider TTS,
+                # usiamo il dispatcher. NESSUN fallback silenzioso a
+                # ElevenLabs: se Inworld fallisce (auth/timeout/voce non
+                # disponibile) → audio_bytes resta vuoto per questo chunk,
+                # la frase viene saltata, il turno continua. Il frontend
+                # resta sulla pref dell'utente. Vedi log [TTS_PROVIDER].
+                # NOTE: `voice_id` qui è l'ElevenLabs ID (dal CURATED
+                # voices). Il dispatcher Inworld si aspetta la "voice_key"
+                # brand (cielo/vento) → facciamo reverse-lookup via
+                # koda_voice_catalog.
+                _tts_pref = await _resolve_tts_pref_for_uid(current_user_id())
+                _tts_provider_actual = _tts_pref.get("provider") or "elevenlabs"
+                audio_bytes: bytes = b""
+                if _tts_provider_actual == "inworld" and _INWORLD_WIRED:
+                    # Risolvi voice brand key dalla pref o dalla voice_id
+                    # ElevenLabs attiva.
+                    _voice_key_pref = _tts_pref.get("voice_id")
+                    _voice_key = None
+                    if _voice_key_pref:
+                        # Pref può salvare già la brand key ("cielo"/"vento")
+                        # oppure un ElevenLabs voice_id legacy.
+                        _entry_pref = (
+                            _koda_voice_catalog.find_by_key(_voice_key_pref)
+                            if _koda_voice_catalog else None
+                        )
+                        if _entry_pref is None and _koda_voice_catalog:
+                            _entry_pref = _koda_voice_catalog.find_by_elevenlabs_voice_id(_voice_key_pref)
+                        if _entry_pref:
+                            _voice_key = _entry_pref.key
+                    if _voice_key is None and _koda_voice_catalog:
+                        # Fallback: usa il voice_id ElevenLabs attivo
+                        _entry_from_el = _koda_voice_catalog.find_by_elevenlabs_voice_id(voice_id)
+                        if _entry_from_el:
+                            _voice_key = _entry_from_el.key
+                    logger.info(
+                        f"[TTS_PROVIDER] sid={session_id[:8]} idx={idx} "
+                        f"provider=inworld voice_key={_voice_key or '?'}"
+                    )
+                    try:
+                        _inworld_bytes = await _try_inworld_tts_bytes(
+                            text=clean_tts if 'clean_tts' in dir() else clean,
+                            user_id=current_user_id() or "me",
+                            endpoint="ws:/api/voice/stream",
+                            voice_key=_voice_key,
+                            tone=current_tone,
+                        )
+                        if _inworld_bytes:
+                            audio_bytes = _inworld_bytes
+                    except RuntimeError as _iw_err:
+                        # NESSUN fallback automatico a ElevenLabs.
+                        logger.warning(
+                            f"[TTS_PROVIDER] sid={session_id[:8]} idx={idx} "
+                            f"inworld failed → chunk saltato (NO auto-fallback). err={_iw_err}"
+                        )
+                        audio_bytes = b""
+                else:
+                    if _tts_provider_actual == "inworld" and not _INWORLD_WIRED:
+                        logger.warning(
+                            f"[TTS_PROVIDER] sid={session_id[:8]} inworld pref ma modulo non wired "
+                            f"→ fallback ElevenLabs (deploy issue, no API call bruciata)"
+                        )
+                    audio_bytes = await asyncio.to_thread(_do_tts)
                 tts_ms = int((time.time() - t_tts) * 1000)
                 logger.info(f"[fast] sentence idx={idx} chars={len(clean)} tts_ms={tts_ms} mp3_bytes={len(audio_bytes)}")
                 # === FIX 2026-07-23 v60.3 — Normalizzazione RELATIVA per-turno ===

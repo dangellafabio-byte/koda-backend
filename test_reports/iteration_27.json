@@ -1,0 +1,36 @@
+{
+  "summary": "Backend-only verification of Inworld TTS dispatcher wiring + frame-based MP3 duration accuracy. Ran the 4 pytest suites requested (test_inworld_tts_unit.py, test_koda_voice_catalog.py, test_inworld_dispatcher_wiring.py, test_mp3_duration_accuracy.py) → 24/24 PASS. Live-endpoint checks on http://localhost:8001: GET /api/tts/catalog → 200 with label='Voce di Ollenya', allowed_providers=['elevenlabs','inworld'], both voices (cielo, vento) with available_on arrays (currently ['elevenlabs'] only because INWORLD_VOICE_CIELO/VENTO env vars not configured — expected, documented in iter26). GET /api/dev/inworld-tts-health → 200 with api_key_present=true (bool), default_model_id='inworld-tts-1', default_voice_id='Alessandro', default_language='it-IT', model_locked=false, no raw secrets in response body. GET /api/tts/preferences without auth → 401 (contract honored). Code inspection confirmed all 5 required wiring points in server.py: (1) _estimate_mp3_duration_seconds (L4761) delegates to koda_tts_events.estimate_mp3_duration_ms with CBR 128kbps fallback; (2) WebSocket pipeline L16258-16309 resolves pref BEFORE _do_tts, branches on provider=='inworld' and _INWORLD_WIRED; (3) on Inworld RuntimeError the WS pipeline logs exact string 'inworld failed → chunk saltato (NO auto-fallback)' and sets audio_bytes=b'' — no silent ElevenLabs fallback; (4) /api/tts/prepare (L11611) and /api/tts/stream (L11771) have `if _provider == 'inworld' and _INWORLD_WIRED:` branches that raise HTTPException(503) on failure, no fallback; (5) pref cache invalidation hooked in routes/tts_providers.py L198-222 for both PUT and DELETE. Log-redaction scan of /var/log/supervisor/backend.out.log: both real API keys (INWORLD 78 chars, ELEVENLABS 51 chars) scanned verbatim across full log + regex patterns (Bearer <token>, xi-api-key:, INWORLD_API_KEY=) → ZERO leak hits. Dispatcher is correctly wired, duration logic is accurate (<=1% error on CBR 128, more accurate than old formula on VBR/low-bitrate), and no cross-provider auto-fallback.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_inworld_tts_unit.py",
+    "/app/backend/tests/test_koda_voice_catalog.py",
+    "/app/backend/tests/test_inworld_dispatcher_wiring.py",
+    "/app/backend/tests/test_mp3_duration_accuracy.py",
+    "/app/test_reports/pytest/iter27_inworld_dispatcher.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 18549 lines — well over the 700-line soft limit called out in the code review guidelines. The TTS dispatcher logic (resolver, cache, try_inworld wrapper, provider branches) is a natural seam to extract into a new module (e.g., backend/tts_dispatcher_runtime.py) and would make this area far easier to maintain and test. Not a blocker for this iteration.",
+    "WS pipeline line 16288: `text=clean_tts if 'clean_tts' in dir() else clean` — using dir() for a conditional variable lookup is fragile; prefer `locals().get('clean_tts', clean)` or an explicit None sentinel assigned higher up.",
+    "koda_voice_catalog voices currently expose available_on=['elevenlabs'] only because INWORLD_VOICE_CIELO/VENTO env vars are not set. This is expected per iter26 context, but it means the 'inworld' leg is only exercised in unit tests (test_try_inworld_wraps_auth_error asserts the no-fallback contract via injected adapter). Once Inworld voice IDs are provisioned, a true live wiring test on /api/tts/prepare with pref=inworld should be added."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (24/24 pytest + 3/3 live endpoint checks + 5/5 code-inspection checkpoints + log redaction scan)",
+    "frontend": "N/A (backend-only per request)"
+  },
+  "seed_data_creation": "None. Live endpoint checks are read-only (GET). No DB writes performed.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Inworld dispatcher is now fully wired to: (a) WebSocket /api/voice/stream, (b) /api/tts/prepare, (c) /api/tts/stream. Contract: provider pref resolved via _resolve_tts_pref_for_uid(), on inworld failure NO fallback — WS skips chunk (audio_bytes=b''), REST raises 503. Pref cache invalidation hooked in PUT/DELETE /api/tts/preferences. MP3 duration now uses frame parser from koda_tts_events (accurate for VBR/CBR, any bitrate). INWORLD_API_KEY and ELEVENLABS_API_KEY ARE present in backend/.env (lengths 78 and 51 respectively) but the ElevenLabs key is marked REVOKED by main agent — any live TTS call will 401; this is expected and NOT a bug to retest. INWORLD_VOICE_CIELO / INWORLD_VOICE_VENTO are NOT set in env, so /api/tts/catalog voices show available_on=['elevenlabs'] only — this is why PUT /api/tts/preferences with provider=inworld + voice_id=cielo returns 409 (voice not available on provider). To exercise the live inworld path end-to-end those env vars must be provisioned.",
+  "rca_of_issue": "N/A — feature-wiring verification, not a bug fix."
+}
