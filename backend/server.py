@@ -116,6 +116,78 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# LOG REDACTION (Fabio 2026-10) — maschera credenziali/token nei log di access
+# ============================================================================
+# Il WebSocket /api/voice/stream accetta ?token=<session_token> come query.
+# uvicorn.access registra la URL completa compreso quel token → leak di
+# credenziali nei log. Qui installiamo un logging.Filter sul logger
+# `uvicorn.access` (e `uvicorn.error`) che redata l'intera coppia
+# `token=XXX` → `token=***` prima che il record venga formattato.
+#
+# Il filter è applicato ANCHE ai record di livello WARNING/ERROR per non
+# lasciare passare nemmeno gli stack trace che potrebbero includere URL.
+# Nessuna modifica alla logica di parsing: il token continua a essere
+# consumato normalmente dal /api/voice/stream endpoint — tocchiamo solo
+# il rendering del record.
+class _SensitiveQueryFilter(logging.Filter):
+    _REDACT_PATTERNS = [
+        # querystring: qualsiasi *token=... (token, admin_token, session_token,
+        # access_token, refresh_token) → maschera il valore ma preserva il nome
+        re.compile(r"([?&][a-zA-Z0-9_\-]*token)=[^&\s\"']+", re.IGNORECASE),
+        # querystring: *api_key=... / *api-key=...
+        re.compile(r"([?&][a-zA-Z0-9_\-]*api[_\-]?key)=[^&\s\"']+", re.IGNORECASE),
+        # querystring: *secret=... / *password=... (defense in depth)
+        re.compile(r"([?&][a-zA-Z0-9_\-]*(?:secret|password))=[^&\s\"']+", re.IGNORECASE),
+        # Authorization header dumps "Bearer xyz"
+        re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]+", re.IGNORECASE),
+        # cookie "session_token=xyz"
+        re.compile(r"(session_token=)[^;\s\"']+", re.IGNORECASE),
+    ]
+
+    _KEYWORDS = ("token", "bearer", "api_key", "api-key", "secret", "password")
+
+    def _redact(self, text: str) -> str:
+        if not isinstance(text, str):
+            return text
+        lower = text.lower()
+        if not any(k in lower for k in self._KEYWORDS):
+            return text
+        out = text
+        out = self._REDACT_PATTERNS[0].sub(r"\1=***", out)
+        out = self._REDACT_PATTERNS[1].sub(r"\1=***", out)
+        out = self._REDACT_PATTERNS[2].sub(r"\1=***", out)
+        out = self._REDACT_PATTERNS[3].sub(r"\1***", out)
+        out = self._REDACT_PATTERNS[4].sub(r"\1***", out)
+        return out
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
+        try:
+            if isinstance(record.msg, str):
+                record.msg = self._redact(record.msg)
+            if record.args:
+                if isinstance(record.args, tuple):
+                    record.args = tuple(
+                        self._redact(a) if isinstance(a, str) else a for a in record.args
+                    )
+                elif isinstance(record.args, dict):
+                    record.args = {
+                        k: (self._redact(v) if isinstance(v, str) else v)
+                        for k, v in record.args.items()
+                    }
+        except Exception:
+            # mai bloccare il logging per via del filter
+            return True
+        return True
+
+
+_SENSITIVE_FILTER = _SensitiveQueryFilter()
+for _logger_name in ("uvicorn.access", "uvicorn.error", "uvicorn", "fastapi"):
+    try:
+        logging.getLogger(_logger_name).addFilter(_SENSITIVE_FILTER)
+    except Exception:
+        pass
+
 # Create the main app
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -17337,11 +17409,22 @@ async def api_voice_stream(websocket: WebSocket):
                     email = (sess.get("email") or "").strip().lower()
                     if email:
                         uid = _email_to_uid(email)
+                        # === FIX LOG REDACTION (Fabio 2026-10) ===================
+                        # Prima logavamo l'email in chiaro + abbiamo accettato
+                        # il token come query param che finisce nei log di
+                        # access di uvicorn. Fix: logga SOLO uid troncato,
+                        # mai email o token raw. L'access-log filter più in
+                        # basso (SensitiveQueryFilter) maschera token=*** nelle
+                        # URL dei log di uvicorn.access.
                         logger.info(
-                            f"[voice/ws] auth via ?token= query → uid={uid[:8]}... (email={email})"
+                            f"[voice/ws] auth via query token → uid={uid[:8]}..."
                         )
         except Exception as e:
-            logger.warning(f"[voice/ws] token query lookup failed: {e}")
+            # Mai includere il body dell'eccezione se potrebbe contenere il
+            # token (es. ValueError con token echoed). Logghiamo solo la classe.
+            logger.warning(
+                f"[voice/ws] token query lookup failed: {type(e).__name__}"
+            )
 
     # === STEP 2: fallback fingerprint (v26 pre-esistente) ===
     if not uid:
@@ -17466,6 +17549,20 @@ try:
     logger.info("[startup] Blind test TTS routes registered")
 except Exception as _bt_err:  # pragma: no cover
     logger.warning(f"[startup] Blind test TTS routes NOT registered: {_bt_err}")
+
+# ============================================================
+# TTS PROVIDERS (Fabio 2026-10) — "Voce di Ollenya" selector
+# ============================================================
+# Esponi catalogo voci + preferenze TTS (provider+voice) auth-bound.
+# L'autenticazione viene dal middleware HTTP esistente (nessun bypass).
+# Nessun endpoint fa chiamate API esterne a Inworld/ElevenLabs:
+# consuma solo collezioni MongoDB locali + env configurazione.
+try:
+    from routes.tts_providers import router as _tts_providers_router  # noqa: E402
+    api_router.include_router(_tts_providers_router)
+    logger.info("[startup] TTS providers routes registered")
+except Exception as _tts_err:  # pragma: no cover
+    logger.warning(f"[startup] TTS providers routes NOT registered: {_tts_err}")
 
 app.include_router(api_router)
 
@@ -17886,6 +17983,16 @@ async def startup_db_client():
         logger.info("[startup] voice_auth_bridge indexes ready")
     except Exception as e:
         logger.warning(f"[startup] voice_auth_bridge index init failed: {e}")
+
+    # === TTS providers (Fabio 2026-10): preferenze + telemetria ================
+    try:
+        import koda_tts_prefs as _koda_tts_prefs_mod
+        import koda_tts_events as _koda_tts_events_mod
+        await _koda_tts_prefs_mod.ensure_indexes(db)
+        await _koda_tts_events_mod.ensure_indexes(db)
+        logger.info("[startup] koda_tts_prefs + koda_tts_events indexes ready")
+    except Exception as e:
+        logger.warning(f"[startup] koda_tts indexes init failed: {e}")
     # === WHITELIST UNLIMITED — pre-seed owner + Stefania (2026-07-24) ===
     try:
         await _seed_unlimited_users_once()

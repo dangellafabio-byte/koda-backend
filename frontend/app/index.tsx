@@ -30,6 +30,7 @@ import { Ionicons } from "@expo/vector-icons";
 import HandsFreeOrb from "../components/HandsFreeOrb";
 import LasciaAndareIntroModal from "../components/LasciaAndareIntroModal";
 import SubscriptionStatus from "../components/SubscriptionStatus";
+import VoiceOfOllenyaCard from "../components/VoiceOfOllenyaCard";
 import SettingsWalletStack, { type SettingsCard } from "../components/SettingsWalletStack";
 import MinutesWarningBanner from "../components/MinutesWarningBanner";
 import { FlashList } from "@shopify/flash-list";
@@ -5812,6 +5813,22 @@ export default function Taccuino() {
     },
     // Card 4: Aspetto (rinominata da Schermo — v65.50)
     {
+      key: "voice_provider",
+      icon: "🎙️",
+      title: "Voce di Ollenya",
+      description: "Scegli il provider e la voce di Ollenya.",
+      count: 1,
+      body: (
+        <VoiceOfOllenyaCard
+          textColor={theme.text}
+          mutedColor={theme.textMuted}
+          accentColor={bubbleAccent.color}
+          cardBg={theme.surfaceAlt}
+          disabled={isFreeGate()}
+        />
+      ),
+    },
+    {
       key: "border",
       icon: "📱",
       title: "Aspetto",
@@ -6496,6 +6513,7 @@ export default function Taccuino() {
       "plan",          // 1. Il mio piano
       "behavior",      // 2. Comportamento
       "voice",         // 3. Voce
+      "voice_provider", // 3b. Voce di Ollenya (provider + voce)
       "border",        // 4. Aspetto
       "memory",        // 5. Memoria
       "privacy_data",  // 6. Privacy e dati

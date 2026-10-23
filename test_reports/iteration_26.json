@@ -1,0 +1,37 @@
+{
+  "summary": "Backend-only test della re-integrazione Inworld TTS + preferenze auth-bound + log redaction. Eseguiti 14 unit test (tests/test_inworld_tts_unit.py + tests/test_koda_voice_catalog.py) → 14/14 PASS. Creato nuovo file tests/test_tts_providers_integration.py con 15 integration test (catalog, auth-bound prefs, dev health, log redaction, regression /api/health /api/_version /api/voice/options) → 15/15 PASS. Startup logs del backend verificati: presenti '[startup] TTS providers routes registered' e '[startup] koda_tts_prefs + koda_tts_events indexes ready'. Log redaction visivamente confermata: 'GET /api/voice/stream?token=***&admin_token=***&api_key=***&session_token=*** 404'. Nessuna chiamata reale a Inworld/ElevenLabs. Nessun secret in chiaro nei response né nei log. Tutti i 14 test unit richiesti dall'utente passano. Nessun deprecated package rilevato nel backend testato. Totale: 29/29 test pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_inworld_tts_unit.py",
+    "/app/backend/tests/test_koda_voice_catalog.py",
+    "/app/backend/tests/test_tts_providers_integration.py",
+    "/app/test_reports/pytest/iter26_tts_providers.xml",
+    "/app/test_reports/pytest/iter26_tts_integration.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "koda_voice_catalog.py importa `asdict` ma non lo usa — micro cleanup, non blocca.",
+    "routes/tts_providers.py: `_get_db` accetta Request ma non lo usa (prende db direttamente da `server.db`). OK funzionalmente ma il parametro è dead code; da ripulire quando conveniente."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_tts_providers_integration.py (nuovo)"
+  ],
+  "success_rate": {
+    "backend": "100% (29/29 test — 14 unit + 15 integration)",
+    "frontend": "N/A (skipped per request: backend only)"
+  },
+  "seed_data_creation": "Utente dev `dev@koda.local` creato via POST /api/auth/dev-login per i test auth-bound. Doc koda_tts_provider_prefs creato/pulito durante i test (fixture _reset_prefs chiama DELETE prima di ogni test). Nessuna seed persistente aggiuntiva.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "I nuovi endpoint TTS providers sono stabili. Le preferenze sono salvate nella collection `koda_tts_provider_prefs` (indice unique su user_id). Per test autenticati usare POST /api/auth/dev-login → ritorna {session_token} da passare come `Authorization: Bearer <token>`. La redazione dei query param nei log è ora attiva: token/admin_token/api_key/session_token/password/secret vengono mascherati come `***` nell'access log uvicorn. INWORLD_VOICE_CIELO/VENTO non sono setati nell'env, quindi `inworld` NON è presente in `available_on` per nessuna voce → qualunque PUT con provider=inworld e voice_id valido ritorna 409.",
+  "rca_of_issue": "N/A — non è un bug fix. Feature addition verificata."
+}
