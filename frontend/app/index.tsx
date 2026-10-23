@@ -524,8 +524,8 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v65.54-premium-hardcap";
-  const OLLENYA_BUILD_DATE = "2026-09-06";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.0-inworld-tts-dispatcher";
+  const OLLENYA_BUILD_DATE = "2026-10-23";
   useEffect(() => {
     console.log(
       `[OLLENYA_BUILDTAG] ${OLLENYA_BUILD_SHORT_TAG} v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=${OLLENYA_BUILD_DATE} ` +
