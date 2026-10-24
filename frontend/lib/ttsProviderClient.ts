@@ -19,6 +19,8 @@
  */
 import * as SecureStore from "expo-secure-store";
 import { useEffect, useState } from "react";
+import { API_BASE } from "./api";
+import { getAuthToken } from "./authToken";
 
 const KEY_PROVIDER = "ollenya_tts_provider_dev";
 const KEY_UID = "ollenya_tts_provider_dev_uid";
@@ -217,4 +219,175 @@ export async function readProviderFromServer(
   } catch {
     return null;
   }
+}
+
+// =============================================================================
+// Catalog + Preferences API (fusione 2026-10 — selettore pubblico "Voce di Ollenya")
+// =============================================================================
+// Convive con il flusso SecureStore sopra: le due API sono complementari.
+//   * SecureStore layer: cache locale veloce usata dai component asset-loader
+//     (`readTTSProviderSync`) + attivazione via dev-token.
+//   * Catalog/Preferences layer: fonte di verità lato server, usata dal
+//     selettore UI "Voce di Ollenya" per DB-persisted prefs {provider,voice_id}.
+// NB: dopo `updatePrefs()` chiamiamo anche `setTTSProvider()` per allineare la
+// cache SecureStore con quanto appena scelto, così i component asset-loader
+// vedono subito il nuovo provider.
+
+export interface VoiceEntry {
+  key: string; // "cielo" | "vento"
+  name: string;
+  gender: "femminile" | "maschile";
+  description: string;
+  elevenlabs_voice_id: string | null;
+  available_on: TTSProvider[];
+}
+
+export interface ProviderMeta {
+  name: string;
+  description: string;
+  model_locked?: boolean;
+}
+
+export interface TTSCatalog {
+  label: string;
+  default_provider: TTSProvider;
+  allowed_providers: TTSProvider[];
+  providers_meta: Record<TTSProvider, ProviderMeta>;
+  voices: VoiceEntry[];
+}
+
+export interface TTSPrefs {
+  provider: TTSProvider;
+  voice_id: string | null;
+  updated_at: string | null;
+}
+
+let _cachedCatalog: TTSCatalog | null = null;
+let _cachedPrefs: TTSPrefs | null = null;
+const _prefsListeners = new Set<(prefs: TTSPrefs) => void>();
+
+function _apiBase(): string {
+  try {
+    if (typeof API_BASE === "string" && API_BASE.length > 0) {
+      return API_BASE.replace(/\/$/, "");
+    }
+  } catch {}
+  return (
+    (process.env.EXPO_PUBLIC_BACKEND_URL || "").replace(/\/$/, "") || ""
+  );
+}
+
+async function _authHeaders(): Promise<Record<string, string>> {
+  try {
+    const tok = getAuthToken();
+    if (tok) return { Authorization: `Bearer ${tok}` };
+  } catch {}
+  return {};
+}
+
+/** Fetch catalogo voci di Ollenya. Pubblico, non richiede auth. */
+export async function fetchCatalog(): Promise<TTSCatalog | null> {
+  if (_cachedCatalog) return _cachedCatalog;
+  try {
+    const base = _apiBase();
+    const res = await fetch(`${base}/tts/catalog`);
+    if (!res.ok) return null;
+    const data = (await res.json()) as TTSCatalog;
+    _cachedCatalog = data;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+/** Fetch preferenza utente. Richiede auth; 401 → ritorna null. */
+export async function fetchPrefs(force = false): Promise<TTSPrefs | null> {
+  if (!force && _cachedPrefs) return _cachedPrefs;
+  try {
+    const base = _apiBase();
+    const headers = await _authHeaders();
+    const res = await fetch(`${base}/tts/preferences`, { headers });
+    if (res.status === 401) return null;
+    if (!res.ok) return null;
+    const data = (await res.json()) as any;
+    const prefs: TTSPrefs = {
+      provider: (data.provider as TTSProvider) || DEFAULT_PROVIDER,
+      voice_id: data.voice_id ?? null,
+      updated_at: data.updated_at ?? null,
+    };
+    _cachedPrefs = prefs;
+    _prefsListeners.forEach((cb) => { try { cb(prefs); } catch {} });
+    return prefs;
+  } catch {
+    return null;
+  }
+}
+
+/** Aggiorna preferenza utente. Mantiene allineato il layer SecureStore. */
+export async function updatePrefs(
+  patch: Partial<Pick<TTSPrefs, "provider" | "voice_id">>,
+  uid?: string | null,
+): Promise<TTSPrefs> {
+  const base = _apiBase();
+  const headers = {
+    "Content-Type": "application/json",
+    ...(await _authHeaders()),
+  };
+  const res = await fetch(`${base}/tts/preferences`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const b = await res.json();
+      if (b?.detail) msg = String(b.detail);
+    } catch {}
+    throw new Error(msg);
+  }
+  const data = (await res.json()) as any;
+  const prefs: TTSPrefs = {
+    provider: (data.provider as TTSProvider) || DEFAULT_PROVIDER,
+    voice_id: data.voice_id ?? null,
+    updated_at: data.updated_at ?? null,
+  };
+  _cachedPrefs = prefs;
+  _prefsListeners.forEach((cb) => { try { cb(prefs); } catch {} });
+  // Allinea layer SecureStore con la nuova scelta → asset-loaders vedono subito
+  try { await setTTSProvider(prefs.provider, uid ?? null); } catch {}
+  return prefs;
+}
+
+/** Resetta la preferenza al default (ElevenLabs). */
+export async function resetPrefs(): Promise<TTSPrefs> {
+  const base = _apiBase();
+  const headers = await _authHeaders();
+  const res = await fetch(`${base}/tts/preferences`, {
+    method: "DELETE",
+    headers,
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = (await res.json()) as any;
+  const prefs: TTSPrefs = {
+    provider: (data.provider as TTSProvider) || DEFAULT_PROVIDER,
+    voice_id: null,
+    updated_at: null,
+  };
+  _cachedPrefs = prefs;
+  _prefsListeners.forEach((cb) => { try { cb(prefs); } catch {} });
+  try { await clearTTSProvider(); } catch {}
+  return prefs;
+}
+
+/** Subscribe a cambi di preferenza (DB layer). */
+export function subscribePrefs(cb: (prefs: TTSPrefs) => void): () => void {
+  _prefsListeners.add(cb);
+  return () => { _prefsListeners.delete(cb); };
+}
+
+/** Clear cache (es. su logout). */
+export function clearCache(): void {
+  _cachedCatalog = null;
+  _cachedPrefs = null;
 }

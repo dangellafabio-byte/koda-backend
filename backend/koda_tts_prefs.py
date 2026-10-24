@@ -26,7 +26,7 @@ import datetime as _dt
 import hashlib
 import logging
 import secrets
-from typing import Optional
+from typing import Optional, Dict, Any
 
 log = logging.getLogger(__name__)
 
@@ -123,6 +123,91 @@ async def clear_provider_for_uid(db, uid: str) -> None:
         await db[PREFS_COLLECTION].delete_one({"user_id": uid})
     except Exception as e:
         log.warning(f"[koda_tts_prefs] clear failed uid={uid[:8]}: {e}")
+
+
+# =============================================================================
+# Preferenze estese {provider, voice_id} — wrapper 2026-10 (Fabio)
+# =============================================================================
+# Richieste dalla UI pubblica "Voce di Ollenya" che esponiamo tramite
+# ``/api/tts/catalog`` + ``/api/tts/preferences``. Fusione lato DB: UNA
+# sola collezione (PREFS_COLLECTION) con lo schema esteso
+# ``{user_id, provider, voice_id, updated_at}``. ``voice_id`` è
+# BACKWARD COMPATIBLE (null-safe) → i reader che leggono solo
+# ``provider`` continuano a funzionare.
+async def get_prefs_for_uid(db, uid: str) -> Dict[str, Any]:
+    """Ritorna ``{provider: str, voice_id: Optional[str], updated_at: dt}``.
+
+    Default elevenlabs + voice_id=None se il doc non esiste o è
+    inconsistente.
+    """
+    out: Dict[str, Any] = {
+        "provider": DEFAULT_PROVIDER,
+        "voice_id": None,
+        "updated_at": None,
+    }
+    if not uid:
+        return out
+    try:
+        doc = await db[PREFS_COLLECTION].find_one({"user_id": uid})
+    except Exception as e:
+        log.warning(f"[koda_tts_prefs] get_prefs read failed uid={uid[:8]}: {e}")
+        return out
+    if not doc:
+        return out
+    p = (doc.get("provider") or DEFAULT_PROVIDER).lower()
+    if p in ALLOWED_PROVIDERS:
+        out["provider"] = p
+    v = doc.get("voice_id")
+    out["voice_id"] = v if isinstance(v, str) and v else None
+    out["updated_at"] = doc.get("updated_at")
+    return out
+
+
+async def set_prefs_for_uid(
+    db,
+    uid: str,
+    *,
+    provider: Optional[str] = None,
+    voice_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Upsert di provider e/o voice_id. Ritorna lo stato finale.
+
+    Se ``provider`` None → non lo tocca (idem per ``voice_id``).
+    Se ``voice_id`` è stringa vuota → lo rimuove (set None).
+    """
+    if provider is not None:
+        provider = (provider or "").lower().strip()
+        if provider not in ALLOWED_PROVIDERS:
+            raise ValueError(f"provider non valido: {provider!r}")
+    set_fields: Dict[str, Any] = {
+        "user_id": uid,
+        "updated_at": _dt.datetime.now(_dt.timezone.utc),
+    }
+    if provider is not None:
+        set_fields["provider"] = provider
+    unset_fields: Dict[str, Any] = {}
+    if voice_id is not None:
+        v = (voice_id or "").strip()
+        if v:
+            set_fields["voice_id"] = v
+        else:
+            unset_fields["voice_id"] = ""
+    update_op: Dict[str, Any] = {"$set": set_fields}
+    if unset_fields:
+        update_op["$unset"] = unset_fields
+    try:
+        await db[PREFS_COLLECTION].update_one(
+            {"user_id": uid}, update_op, upsert=True
+        )
+    except Exception as e:
+        log.warning(f"[koda_tts_prefs] set_prefs failed uid={uid[:8]}: {e}")
+        raise
+    return await get_prefs_for_uid(db, uid)
+
+
+async def clear_prefs_for_uid(db, uid: str) -> None:
+    """Alias di ``clear_provider_for_uid``: rimuove tutta la riga pref."""
+    await clear_provider_for_uid(db, uid)
 
 
 # =============================================================================

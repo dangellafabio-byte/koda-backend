@@ -1,0 +1,71 @@
+{
+  "summary": "Frontend-only verification of VoiceOfOllenyaCard. Tested via Playwright at mobile viewport 390x844 against http://localhost:3000 (Expo web preview). Flow executed: Entra come Tester (solo preview) → disclaimer-accept → settings-toggle → expand 'Voce di Ollenya' card. Verified: (1) /api/tts/catalog loads and card renders with header '🎙️ Voce di Ollenya' + hint 'Scegli chi offre la voce di Ollenya e quale voce sentire.'; (2) all 4 testIDs present and interactive — tts-provider-elevenlabs, tts-provider-inworld, tts-voice-cielo, tts-voice-vento; (3) default state is ElevenLabs active (purple border rgb(124,58,237), bg rgba(124,58,237,.13)); both voices Cielo/Vento render with correct 'Femminile'/'Maschile' labels and are visually available (no 'Non disponibile' badge on ElevenLabs); (4) tap on tts-provider-elevenlabs is a safe no-op (already active, early return — no crash); (5) tap on tts-voice-vento successfully persists via PUT /api/tts/preferences and visually highlights Vento (purple active). KEY FINDING on test 5 (switch to Inworld) and test 7 (unauth save): the component correctly INVOKES Alert.alert() for both 'Nessuna voce disponibile' (when no voice is mapped on Inworld) and 'Accedi per salvare' (on 401), BUT react-native-web ships `Alert.alert` as a NO-OP (verified at /app/frontend/node_modules/react-native-web/dist/exports/Alert/index.js — `static alert() {}`). On the web preview tapping Inworld therefore gives NO visible feedback (the guard correctly prevents the switch to a provider with no voices, but the user gets no explanation on web). On native iOS/Android this works correctly since RN provides a real Alert. No crash occurred in any scenario — the acceptance criterion 'does NOT crash' is satisfied. CORS note: /app/frontend/lib/backendUrl.ts hardcodes the Railway backend; Railway returns 404 on /api/tts/catalog and preview URL returns CORS wildcard+credentials conflict for /api/profile — I temporarily pointed KODA_BACKEND_URL to the preview URL to be able to run the test, then REVERTED to Railway and restarted expo. Dev-login + card flow worked against preview URL because ttsProviderClient.ts does NOT use credentials:include (plain fetch), so wildcard CORS is accepted for /tts/catalog and /tts/preferences.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "VoiceOfOllenyaCard",
+        "issue": "Alert.alert() calls are silent on react-native-web — 'Nessuna voce disponibile' (tap Inworld with no mapped voice) and 'Accedi per salvare' (401 on save) never surface to the user on the web preview. Component correctly invokes them but react-native-web's Alert is a no-op (node_modules/react-native-web/dist/exports/Alert/index.js). Native iOS/Android are unaffected. Recommendation: wrap with a cross-platform toast/modal (Platform.OS === 'web' fallback to custom overlay) so web testers get feedback. Reference: /app/frontend/components/VoiceOfOllenyaCard.tsx:132, 163, 180.",
+        "testID": "tts-provider-inworld, tts-voice-cielo, tts-voice-vento",
+        "priority": "MEDIUM"
+      },
+      {
+        "component": "VoiceOfOllenyaCard",
+        "issue": "When Inworld has no mapped voices and user taps tts-provider-inworld, the pill shows no visual/state change at all (correct early-return behavior) but combined with the silent Alert the UX is confusing — looks like a dead button. Consider either (a) also disabling the provider pill when the catalog has 0 voices for it, or (b) using a Platform-safe toast. Reference: /app/frontend/components/VoiceOfOllenyaCard.tsx:158-172.",
+        "testID": "tts-provider-inworld",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Backend URL hardcoded in frontend",
+        "issue": "/app/frontend/lib/backendUrl.ts hardcodes KODA_BACKEND_URL to the Railway deployment, but Railway currently returns 404 on /api/tts/catalog (and other current endpoints). The frontend therefore cannot talk to a backend that has the TTS catalog unless the Railway deploy is updated or the constant is switched back to EXPO_PUBLIC_BACKEND_URL. On localhost web the Railway CORS layer correctly allows origin, but the endpoint simply doesn't exist in that deploy. Not a code bug in the card, but blocks real E2E testing.",
+        "affected_testIDs": ["tts-provider-elevenlabs", "tts-provider-inworld", "tts-voice-cielo", "tts-voice-vento"]
+      },
+      {
+        "flow": "CORS misconfig on preview backend",
+        "issue": "backend/server.py L18260-18262 uses CORSMiddleware with allow_origins=['*'] AND allow_credentials=True. Browsers refuse this combo for any request made with credentials:'include' (as lib/api.ts:209 does for /api/profile). This broke /auth/me, /profile, freemium status etc. during web testing. Fix: either set allow_origins=['http://localhost:3000', 'https://...preview...', 'https://...railway...'] with credentials=true, OR drop credentials:'include' on the client. TTS endpoints are not affected since ttsProviderClient uses plain fetch without credentials:include."
+    }
+    ],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "expo-av",
+        "issue": "expo-av is DEPRECATED and will be removed in SDK 54 (console warning on every bundle). Migrate to expo-audio for audio and expo-video for video. Reference: frontend/package.json."
+      },
+      {
+        "component": "Alert (react-native-web)",
+        "issue": "react-native-web ships Alert.alert as a no-op. Any Alert.alert() in cross-platform code gives silent failures on web. Reference: /app/frontend/node_modules/react-native-web/dist/exports/Alert/index.js. Workaround: Platform-check and use window.alert or a custom modal on web."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/tmp/tts_test/13_voce_expanded.png",
+    "/tmp/tts_test/15_after_inworld_tap.png",
+    "/tmp/tts_test/16_after_vento.png"
+  ],
+  "action_items": [
+    "Replace Alert.alert() usage in VoiceOfOllenyaCard.tsx (lines 132, 163, 180) with a Platform-safe toast/modal so web testers see 'Accedi per salvare' and 'Nessuna voce disponibile' feedback.",
+    "Decide the backend URL strategy: either revert /app/frontend/lib/backendUrl.ts to read EXPO_PUBLIC_BACKEND_URL, or redeploy the Railway backend with the TTS endpoints so the hardcoded URL continues to work for the TestFlight/APK builds.",
+    "Fix CORS misconfig in /app/backend/server.py L18260: allow_origins=['*'] with allow_credentials=True is rejected by browsers for credentialed requests. Use an explicit allow_origins list, or drop credentials:'include' on the client.",
+    "Replace expo-av with expo-audio / expo-video before SDK 54."
+  ],
+  "critical_code_review_comments": [
+    "VoiceOfOllenyaCard L158-172: when a provider has 0 compatible voices in the catalog, onPickProvider aborts with Alert.alert and leaves the pill looking tappable. Combined with Alert being a no-op on web the user sees nothing. Suggestion: in render, compute `providerHasAnyVoice = voiceEntries.some(v => v.available_on.includes(p))` and pass `disabled={!providerHasAnyVoice || saving || disabled}` to the provider TouchableOpacity so empty providers look visibly disabled.",
+    "ttsProviderClient.ts L105-109: provider is coerced via `(data.provider as TTSProvider) || DEFAULT_PROVIDER` — safe, but note that if a legacy row stores an unknown provider string, it will NOT fall back to DEFAULT_PROVIDER (truthy string). Consider: `const prov = (['elevenlabs','inworld'].includes(data.provider) ? data.provider : DEFAULT_PROVIDER)`.",
+    "lib/backendUrl.ts hardcodes the production URL; this is an explicit design choice (comment explains Emergent env ripristino) but prevents local E2E tests. A `__DEV__ && process.env.EXPO_PUBLIC_BACKEND_URL` short-circuit would preserve both goals."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "N/A (frontend-only per request)",
+    "frontend": "7/7 UI checks pass structurally (card renders, catalog loads, all 4 testIDs present, defaults correct, pills interactive, no crash, state updates on voice tap). 2/7 feedback-alerts cannot be visually verified on web due to react-native-web Alert no-op — not a card bug."
+  },
+  "seed_data_creation": "None. One PUT /api/tts/preferences was issued against the preview backend during the Vento tap test (voice_id='vento' for the dev-login tester user). This can be reset via DELETE /api/tts/preferences if needed.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "The VoiceOfOllenyaCard renders correctly and all 4 testIDs are present. To reach the card: tap [data-testid=login-dev] → tap center of screen (splash dismiss) → tap [data-testid=disclaimer-accept] → tap [data-testid=settings-toggle] → tap text 'Voce di Ollenya' row to expand → testIDs tts-provider-elevenlabs/inworld and tts-voice-cielo/vento are now in DOM. IMPORTANT: /app/frontend/lib/backendUrl.ts hardcodes Railway, which does NOT currently host the TTS endpoints — to test locally you MUST temporarily point KODA_BACKEND_URL to the preview URL (https://app-finder-408.preview.emergentagent.com) and restart expo (sudo supervisorctl restart expo). After testing REVERT it. Also note: react-native-web's Alert.alert is a NO-OP, so any Alert.alert() in the card is silent on the web preview — this is NOT a bug in the card, it is a react-native-web limitation.",
+  "rca_of_issue": "Primary observation: Alert.alert() renders invisible on react-native-web (source: node_modules/react-native-web/dist/exports/Alert/index.js is literally `class Alert { static alert() {} }`). The card's error-handling path for both 401 (unauth) and 'provider has no voices' therefore produces silent failures on the Expo web preview. On native iOS/Android the RN Alert module provides a real native alert dialog and these flows work as designed. Reproduction: Expo web, tap tts-provider-inworld with no INWORLD_VOICE_* env vars set — provider does not switch, no visible feedback. Mitigation: Platform.OS === 'web' branch using window.alert() or a custom Modal/Toast component."
+}

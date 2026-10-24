@@ -135,6 +135,98 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# LOG REDACTION (Fabio 2026-10) — maschera credenziali/token nei log di access
+# ============================================================================
+# Il WebSocket /api/voice/stream accetta ?token=<session_token> come query.
+# uvicorn.access registra la URL completa compreso quel token → leak di
+# credenziali nei log. Qui installiamo un logging.Filter sul logger
+# `uvicorn.access` (e `uvicorn.error`) che redata l'intera coppia
+# `token=XXX` → `token=***` prima che il record venga formattato.
+#
+# Il filter è applicato ANCHE ai record di livello WARNING/ERROR per non
+# lasciare passare nemmeno gli stack trace che potrebbero includere URL.
+# Nessuna modifica alla logica di parsing: il token continua a essere
+# consumato normalmente dal /api/voice/stream endpoint — tocchiamo solo
+# il rendering del record.
+class _SensitiveQueryFilter(logging.Filter):
+    _REDACT_PATTERNS = [
+        # querystring: qualsiasi *token=... (token, admin_token, session_token,
+        # access_token, refresh_token) → maschera il valore ma preserva il nome
+        re.compile(r"([?&][a-zA-Z0-9_\-]*token)=[^&\s\"']+", re.IGNORECASE),
+        # querystring: *api_key=... / *api-key=...
+        re.compile(r"([?&][a-zA-Z0-9_\-]*api[_\-]?key)=[^&\s\"']+", re.IGNORECASE),
+        # querystring: *secret=... / *password=... (defense in depth)
+        re.compile(r"([?&][a-zA-Z0-9_\-]*(?:secret|password))=[^&\s\"']+", re.IGNORECASE),
+        # Authorization header dumps "Bearer xyz"
+        re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]+", re.IGNORECASE),
+        # cookie "session_token=xyz"
+        re.compile(r"(session_token=)[^;\s\"']+", re.IGNORECASE),
+    ]
+
+    _KEYWORDS = ("token", "bearer", "api_key", "api-key", "secret", "password")
+
+    def _redact(self, text: str) -> str:
+        if not isinstance(text, str):
+            return text
+        lower = text.lower()
+        if not any(k in lower for k in self._KEYWORDS):
+            return text
+        out = text
+        out = self._REDACT_PATTERNS[0].sub(r"\1=***", out)
+        out = self._REDACT_PATTERNS[1].sub(r"\1=***", out)
+        out = self._REDACT_PATTERNS[2].sub(r"\1=***", out)
+        out = self._REDACT_PATTERNS[3].sub(r"\1***", out)
+        out = self._REDACT_PATTERNS[4].sub(r"\1***", out)
+        return out
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
+        try:
+            if isinstance(record.msg, str):
+                record.msg = self._redact(record.msg)
+            if record.args:
+                if isinstance(record.args, tuple):
+                    record.args = tuple(
+                        self._redact(a) if isinstance(a, str) else a for a in record.args
+                    )
+                elif isinstance(record.args, dict):
+                    record.args = {
+                        k: (self._redact(v) if isinstance(v, str) else v)
+                        for k, v in record.args.items()
+                    }
+        except Exception:
+            # mai bloccare il logging per via del filter
+            return True
+        return True
+
+
+_SENSITIVE_FILTER = _SensitiveQueryFilter()
+
+
+def _install_sensitive_filter():
+    """Installa il filter sui logger uvicorn + fastapi + i loro handler.
+
+    Chiamato all'import E dentro ``@app.on_event("startup")`` perché
+    uvicorn applica ``logging.config.dictConfig()`` DOPO l'import del
+    modulo app, resettando i filter installati all'import. Lo startup
+    event gira dopo quella configurazione → i filter persistono.
+    """
+    for _logger_name in ("uvicorn.access", "uvicorn.error", "uvicorn", "fastapi"):
+        try:
+            _lg = logging.getLogger(_logger_name)
+            # Evita doppi filter sul logger
+            if _SENSITIVE_FILTER not in _lg.filters:
+                _lg.addFilter(_SENSITIVE_FILTER)
+            # Installa anche sugli handler esistenti → defense in depth
+            for _h in _lg.handlers:
+                if _SENSITIVE_FILTER not in _h.filters:
+                    _h.addFilter(_SENSITIVE_FILTER)
+        except Exception:
+            pass
+
+
+_install_sensitive_filter()
+
 # Create the main app
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -5316,15 +5408,33 @@ def _compute_trial_state(profile: "Profile") -> str:
 
 
 def _estimate_mp3_duration_seconds(mp3_bytes: bytes, bitrate_bps: int = 128_000) -> float:
-    """Stima la durata di un blob mp3 dalla dimensione + bitrate.
-    ElevenLabs genera mp3_44100_128 (128 kbps CBR) → durata = bytes / 16000.
-    Approssimazione robusta ±5% per header/frame overhead; sufficiente per il
-    trial accounting (dove serve la coerenza col costo ElevenLabs, non
-    precisione al ms). Ritorna 0.0 su input invalido.
+    """Stima la durata di un blob MP3 in secondi.
+
+    === FIX 2026-10 (Fabio) — Dual-provider accounting ===
+    Prima: formula semplificata ``bytes / 16000`` assumendo CBR 128 kbps
+    (output ElevenLabs ``mp3_44100_128``). Perfetta per ElevenLabs, ma
+    IMPRECISA per Inworld che può emettere MP3 a bitrate variabile
+    (VBR / CBR 48/64/96 kbps a seconda del modello). Rischio: utente con
+    preferenza Inworld pagherebbe più minuti del dovuto se Inworld emette
+    bitrate più basso (es. 64 kbps → stima 2× rispetto al reale).
+
+    Ora: proviamo prima il parser basato su frame-header
+    (`koda_tts_events.estimate_mp3_duration_ms`). Robusto a CBR / VBR,
+    MPEG1 Layer 3 (44.1/48 kHz) e MPEG2/2.5 Layer 3 (8-24 kHz),
+    header ID3 iniziali e frame malformati. Fallback: formula CBR @
+    `bitrate_bps` (default 128 kbps = ElevenLabs). Ritorna 0.0 su input
+    invalido / blob troppo piccolo per essere audio.
     """
     try:
         if not mp3_bytes or len(mp3_bytes) < 100:
             return 0.0
+        try:
+            import koda_tts_events as _ktevs  # import locale per evitare cicli
+            ms = _ktevs.estimate_mp3_duration_ms(bytes(mp3_bytes))
+            if isinstance(ms, int) and ms > 0:
+                return ms / 1000.0
+        except Exception:
+            pass
         bytes_per_second = float(bitrate_bps) / 8.0
         return float(len(mp3_bytes)) / bytes_per_second
     except Exception:
@@ -18372,6 +18482,19 @@ try:
 except Exception as _bt_err:  # pragma: no cover
     logger.warning(f"[startup] Blind test TTS routes NOT registered: {_bt_err}")
 
+# === TTS PROVIDERS / CATALOG (Fabio 2026-10) =================================
+# Router pubblico per "Voce di Ollenya": catalogo voci (/api/tts/catalog) +
+# preferenze utente CRUD (/api/tts/preferences). Il catalogo è pubblico,
+# le preferenze richiedono auth. La preferenza salvata viene letta a runtime
+# da `_tts_provider_for_uid` (sopra). Convive con il flusso dev-token
+# /api/dev/tts-provider/* senza sovrapposizioni.
+try:
+    from routes.tts_providers import router as _tts_providers_router  # noqa: E402
+    api_router.include_router(_tts_providers_router)
+    logger.info("[startup] TTS providers routes registered")
+except Exception as _tp_err:  # pragma: no cover
+    logger.warning(f"[startup] TTS providers routes NOT registered: {_tp_err}")
+
 app.include_router(api_router)
 
 # === DEMO SOUNDS (preview only) ============================================
@@ -18765,6 +18888,13 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_db_client():
     """Crea indici DB necessari all'avvio."""
+    # Re-installa il filter log redaction dopo che uvicorn ha configurato
+    # il suo logging via dictConfig (che resetta i filter dall'import).
+    try:
+        _install_sensitive_filter()
+        logger.info("[startup] sensitive log filter re-installed")
+    except Exception as e:
+        logger.warning(f"[startup] sensitive log filter re-install failed: {e}")
     try:
         await _ensure_tts_audio_indexes()
         logger.info("[startup] tts_audio_cache indexes ready")
