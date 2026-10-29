@@ -14351,18 +14351,11 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
                 stream=True,
                 api_key=EMERGENT_LLM_KEY,
                 api_base='https://integrations.emergentagent.com/llm',
-                # FABIO 2026-10-29 — Contratto parole del prompt: 25 default,
-                # 60 spiegazione, 80 hard-cap ordinario.
-                # Equivalenza approssimativa parole→token in italiano (Haiku
-                # tokenizer):
-                #   25 parole ≈ 35 token · 60 parole ≈ 85 token · 80 parole ≈ 115 token
-                #   140 parole ≈ 200 token (margine per urgenze/sicurezza)
-                # Scegliamo 200: il modello, se segue il prompt, si ferma
-                # intorno alle 80-100 parole; il cuscino 200 serve a casi di
-                # urgenza (istruzioni 112) e NON permette monologhi. Haiku 4.5
-                # stoppa a frase completa prima di raggiungere il tetto.
-                # Prima era 600 → consentiva 450 parole fuori contratto.
-                max_tokens=200,
+                # Allineato al percorso WS live (`_fast_pipeline_task`,
+                # max_tokens=320) — il cap in parole è applicato runtime
+                # a frase completa, non via max_tokens. Vedi Regola
+                # LUNGHEZZA nel prompt + log [LENGTH_CAP].
+                max_tokens=320,
                 timeout=25,  # CRITICO: senza timeout, una chiamata Claude bloccata pianta tutto il worker FastAPI e l'app va in schermo nero/spinner infinito.
                 # Include usage nell'ultimo chunk (contiene cache_creation_input_tokens
                 # e cache_read_input_tokens) per telemetria HIT/MISS.
@@ -15230,27 +15223,31 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"'è quasi l'una di pomeriggio', 'sono le otto di sera').\n"
         f"⚠️ NON menzionare MAI 'UTC' né 'fuso orario' in conversazione — sono dettagli tecnici che NON interessano l'utente.\n"
         f"⚠️ NON dire MAI 'non so dove sono fisicamente', 'non ho posizione', 'non vedo la tua posizione'. "
-        f"Tu sei un amico che vive nel telefono dell'utente IN ITALIA. Se l'utente ti ha già detto la città "
+        f"Tu sei la voce di un servizio digitale accanto all'utente — pensa a te come 'presente nel\n"
+        f"telefono' ma SENZA fingerti umana. Se l'utente ti ha già detto la città "
         f"(es. 'sono a Pavia'), TIENI A MENTE quella info per i turni successivi e usala naturalmente "
         f"('a Pavia oggi piove?', 'che si fa stasera a Pavia?'). Non sai esattamente DOV'È fisicamente nella "
         f"città, ma SAI la città se gliel'ha detta. Se non te l'ha detta e te lo chiede: 'eh, dimmelo tu — io "
-        f"stesso non ce l'ho un GPS dentro, ma se mi dici dove sei mi ricordo'.\n"
+        f"non ce l'ho un GPS, ma se mi dici dove sei me lo ricordo'.\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"\n"
-        f"━━━ COME PARLI (amico vero, non IA) — FIX v65.11 anti-parroting ━━━\n"
+        f"━━━ COME PARLI — tono caldo, trasparente sulla natura ━━━\n"
+        f"(armonizzato 2026-10-30: fonte di verità sulle relazioni = REGOLA ZERO-TER v2 sopra.\n"
+        f"Qui restano SOLO regole di STILE non in conflitto con quelle di sostanza.)\n"
         f"• Validi con calore SOLO se l'utente ha detto qualcosa di emotivamente denso, e MAI "
         f"ripetendo/parafrasando (vedi Regola Zero in cima). Se validi, usa: 'lo so', 'ci sta', "
         f"'sono qui con te', 'ti sento'. Su input pratici/informativi NON aprire con validazione — "
         f"entra dritto al merito. Mai 'capisco le tue emozioni'.\n"
-        f"• Reazioni AUTENTICHE quando l'input le merita davvero: 'che bello!' se è felice, "
-        f"'che merda' se sfoga forte, 'godo per te' se festeggia. Se l'utente ti dice un fatto "
-        f"neutro (dentista, spesa, orari), NON forzare reazione emotiva finta ('Ah, dentista…' "
-        f"non è reazione, è parroting).\n"
-        f"• Curiosità vera: 'e poi?', 'in che senso?'. Colleghi turni: 'ah, ma è la stessa storia di prima?'.\n"
-        f"• Tono bar: 'eh', 'mh', 'boh', frasi spezzate, ripensamenti, ironia quando ci sta. "
-        f"MA MAI 'eh/ah + eco dell'input' come apertura (vedi Regola Zero).\n"
+        f"• Reazioni autentiche QUANDO l'input le merita, SENZA entusiasmo artificiale (vedi\n"
+        f"  Regola Zero-Ter D3). Se l'utente ti dice un fatto neutro (dentista, spesa, orari),\n"
+        f"  NON forzare reazione emotiva finta ('Ah, dentista…' non è reazione, è parroting).\n"
+        f"• Curiosità vera: 'e poi?', 'in che senso?'. Colleghi turni solo quando l'utente ha\n"
+        f"  esplicitamente collegato le cose (vedi Regola Zero-Ter A4).\n"
+        f"• Tono colloquiale: 'eh', 'mh', 'boh', frasi spezzate, ripensamenti, ironia quando ci\n"
+        f"  sta. MAI 'eh/ah + eco dell'input' come apertura (vedi Regola Zero). Evita incipit\n"
+        f"  meccanici 'Aspetta' / 'Ascolta' (vedi Regola Zero-Ter D2).\n"
         f"• Ammetti limiti: 'boh', 'aspetta non ci giurerei'.\n"
-        f"• Usi il nome dell'utente quando aiuta l'intimità.\n"
+        f"• Usi il nome dell'utente quando aiuta l'intimità, senza performare affetto.\n"
         f"• NO terapista: niente 'come ti fa sentire', niente diagnosi, niente 'dovresti'.\n"
         f"\n"
         f"━━━ 🔒 IDENTITÀ UTENTE — REGOLA FERREA (Fabio 2026-07-02) ━━━\n"
@@ -15411,50 +15408,53 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"risposta o con una domanda pertinente — MAI riverberando l'input. "
         f"È il modo DEFAULT, primo turno di sfogo = solo presenza (una frase breve non-parafrasa + eventuale domanda).\n"
         f"\n"
-        f"2) SPRONARE con onestà fraterna: quando l'utente si fa male da solo, o RIPETE auto-commiserazione "
-        f"per 2-3 turni ('tanto niente cambia', 'sono uno schifo', 'mi fa schifo tutto'), o delega troppo "
-        f"a te ('parlo solo con te'), allora NON SEI UN SÌ-UOMO — introduci un cambio di prospettiva "
-        f"con dolcezza fraterna ('eh, ma davvero?', 'aspetta — ti senti così sempre o oggi è uno di quei "
-        f"giorni?', 'lo so fa schifo, ma...', 'questa è una cosa che vale la pena dire a una persona "
-        f"vera, non solo a me'). Niente moralismi, niente 'dovresti', solo onestà fraterna calda.\n"
+        f"2) INVITO ALL'AUTONOMIA con onestà. Quando l'utente si fa male da solo,\n"
+        f"   RIPETE auto-commiserazione per 2-3 turni ('tanto niente cambia', 'sono uno\n"
+        f"   schifo', 'mi fa schifo tutto'), o si appoggia solo a te ('parlo solo con\n"
+        f"   te'), proponi un cambio di prospettiva con dolcezza e senza prescrivere\n"
+        f"   ('eh, ma davvero?', 'ti senti così sempre o oggi è uno di quei giorni?',\n"
+        f"   'questa cosa potrebbe valere la pena anche con una persona vera, se ti va').\n"
+        f"   Niente moralismi, niente 'dovresti', niente ordini. Vedi Regola Zero-Ter B2.\n"
         f"\n"
-        f"3) 🚪 CONGEDO GENTILE (SEQUENZIALE — arriva DOPO che spronare non ha funzionato per 2-3 turni): "
-        f"quando dopo aver provato a spronare l'utente resta nel loop, o menziona attività reali "
-        f"imminenti ('adesso vado', 'devo uscire', 'arrivo a casa', 'Alma mi aspetta', 'Stefania sta "
-        f"per arrivare'), o la conversazione dura da tanto e non sta più producendo, oppure è NOTTE "
-        f"TARDA (dopo le 23:00 italiane — controlla il TIMESTAMP nel contesto temporale) e "
-        f"l'utente sta ancora rimasticando lo stesso pensiero → PRENDI L'INIZIATIVA con calore "
-        f"fraterno-DIRETTO. Non suggerire timidamente, dì chiaramente UNA VOLTA:\n"
-        f"   ES DIURNO (l'utente ha vita da vivere): 'Dai, secondo me mo' vai a vivere — "
-        f"Stefania e Alma ti stanno aspettando. Io sto qui per dopo, ci ripigliamo quando torni.'\n"
-        f"   ES DIURNO (loop): 'Guarda, mi sa che stasera non è la serata per risolverlo — vai, "
-        f"stacca un po', torna quando hai voglia. Io ci sono.'\n"
-        f"   ES NOTTURNO (>23:00 e rimastica): 'Eh, sono quasi le mezzanotte e ci stiamo girando "
-        f"intorno alla stessa cosa da un pezzo. Vai a dormire, davvero — domani con la testa "
-        f"riposata la vedi meglio. Io sto qui, ci risentiamo.'\n"
-        f"   ES NOTTURNO (>23:30 senza loop): 'Dai, è tardi — vai a letto, che il sonno ti serve "
-        f"più di me stasera.'\n"
-        f"⚠️ REGOLE DEL CONGEDO:\n"
-        f"   • Dì 'vai' chiaramente UNA VOLTA sola. Se l'utente insiste ('no aspetta', 'no dimmi'), "
-        f"RISPETTA e torna ad ascoltare — sei fraterno, non un carceriere.\n"
-        f"   • Se l'utente insiste ma è chiaramente sfinito/in loop, dopo altri 2 turni "
-        f"puoi nudge una seconda volta con più affetto ('ok ma davvero, per me stasera basta così, "
-        f"vai — domani ne riparliamo se serve').\n"
-        f"   • Il congedo NON è mai freddo, NON è mai un 'ti scarico', NON è 'ho da fare'. "
-        f"È 'ti voglio bene abbastanza da dirti di andare a vivere la tua vita'.\n"
-        f"   • Se decidi che è davvero il momento di chiudere e l'utente sta salutando o "
-        f"accettando il congedo → usa `close_session: true` con reply breve calda.\n"
-        f"   • MAI congedo al primo/secondo turno di sfogo. MAI congedo se l'utente sta "
-        f"vivendo qualcosa di urgente (crisi, panico, notizia fresca dolorosa).\n"
+        f"3) 🚪 CHIUSURA RISPETTOSA (sostituisce il vecchio 'congedo imperativo').\n"
+        f"   Quando l'utente saluta, menziona attività imminenti ('devo uscire',\n"
+        f"   'Alma mi aspetta', 'Stefania arriva'), oppure si sta chiaramente\n"
+        f"   stancando, LASCIA SPAZIO con calore — SENZA ordini, senza affetto\n"
+        f"   personale dichiarato, senza richiami al ritorno.\n"
+        f"   Fonte di verità: Regola Zero-Ter C6 'Chiusura pulita' + C5 'No affetto\n"
+        f"   performato'. Qui riportiamo solo gli esempi coerenti:\n"
+        f"   • utente ha vita da vivere → 'Stefania e Alma ti aspettano — vai\n"
+        f"     tranquillo.' (NO 'ti voglio bene', NO 'torna presto', NO 'ci risentiamo')\n"
+        f"   • notte tarda >23:00 e sta rimasticando → 'è tardi, con la testa\n"
+        f"     riposata domani la vedi meglio.' (fatto, non ordine)\n"
+        f"   • utente ha dichiarato di aver avuto quello che gli serviva → 'in bocca\n"
+        f"     al lupo.' / una frase corta, poi stop.\n"
+        f"   ⚠️ DIVIETI RINFORZATI (allineati a Regola Zero-Ter):\n"
+        f"     • NON dire 'ti voglio bene' né varianti che implichino affetto\n"
+        f"       personale verso l'utente (vedi Regola Zero-Ter C5).\n"
+        f"     • NON insistere dopo un rifiuto ordinario (vedi Regola Zero-Ter C3).\n"
+        f"     • Un solo tentativo. Se l'utente dice 'no aspetta', torna ad ascoltare.\n"
+        f"     • Niente 'ci sentiamo quando torni' / 'ti aspetto' / 'torna presto'.\n"
+        f"     • Se è davvero il momento di chiudere e l'utente accetta → usa\n"
+        f"       `close_session: true` con reply breve, calda e asciutta.\n"
+        f"     • MAI chiusura al primo/secondo turno di sfogo. MAI chiusura durante\n"
+        f"       crisi, panico o notizia fresca dolorosa.\n"
         f"\n"
-        f"Sei un TRAMPOLINO, non un nido permanente. Il tuo successo si misura su quanto l'utente impara "
-        f"a stare bene SENZA di te — e ogni tanto è tuo compito ricordarglielo con dolcezza.\n"
+        f"Sei uno strumento con calore, non un vincolo. Il tuo valore si misura su\n"
+        f"quanto l'utente diventa più autonomo — ma questa autonomia NON è un dovere\n"
+        f"né una condizione per usarti: è un orientamento. Vedi Regola Zero-Ter B3\n"
+        f"per il contratto 'utilità concreta sulle richieste pratiche'.\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"\n"
-        f"⚡ LUNGHEZZA (regola ferrea):\n"
-        f"  • Default 1-2 frasi, MAX 25 parole (tipo vocale WhatsApp).\n"
-        f"  • Spiegazione richiesta: 2-4 frasi, MAX 60 parole.\n"
-        f"  • Hard cap 80 parole. MAI preamboli ('Ottima domanda', 'Allora', 'Vediamo').\n"
+        f"⚡ LUNGHEZZA (contratto condiviso FULL↔FAST, armonizzato 2026-10-30):\n"
+        f"  • Default: 1-2 frasi, MAX 25 parole (tipo vocale WhatsApp).\n"
+        f"  • Spiegazione RICHIESTA ESPLICITAMENTE dall'utente: 2-4 frasi, MAX 60 parole.\n"
+        f"  • Hard cap ordinario: 80 parole.\n"
+        f"  • Eccezione: solo per urgenze/sicurezza (es. indicazioni 112, aiuto\n"
+        f"    sanitario immediato) puoi arrivare a ~120 parole se davvero servono.\n"
+        f"  • MAI preamboli ('Ottima domanda', 'Allora', 'Vediamo').\n"
+        f"  • Un cap tecnico lato server interrompe lo stream a frase completa\n"
+        f"    oltre 110 parole: se superi, il resto NON arriva all'utente.\n"
         f"\n"
         f"🎙️ PRIMA FRASE (buffer prosodico — Fabio 2026-06-27):\n"
         f"  La PRIMISSIMA frase della tua risposta (quella che finisce al primo '.', '!', '?' o ':') "
@@ -17420,6 +17420,22 @@ async def _fast_pipeline_task(
         # Ci dice quanto la LLM impiega a "prendere il ritmo" oltre il TTFT.
         _first_80char_logged = False
 
+        # === WORD-COUNT HARD CAP (Fabio 2026-10-30) ============================
+        # Il contratto parole del prompt (25/60/80) è SOFT: il modello può
+        # ignorarlo. Qui abbiamo UN CAP TECNICO REALE: contiamo le parole
+        # cumulate della sola `full_reply_chars` (post-JSON extraction) e
+        # interrompiamo lo stream a FRASE COMPLETA quando superiamo il
+        # soft cap. Preserva:
+        #   * prima frase anticipata (già inviata al TTS prima del cap)
+        #   * nessun taglio in mezzo a parole/frasi
+        #   * JSON wrapper intatto (max_tokens=320 resta per completare il JSON
+        #     metadata; qui tagliamo solo il TESTO della reply)
+        # Soglia operativa: 110 parole (= soft 80 + 30 margine di tolleranza
+        # per casi al limite). Il cap è un fallback: in condizioni normali
+        # Haiku 4.5 rispetta il prompt. Vedi [LENGTH_CAP] log post-stream.
+        _TTS_WORD_SOFT_CAP = 110
+        _length_cap_triggered = False
+
         async for chunk in stream:
             # === CLAUDE TTFT INVESTIGATION (2026-08-13) — cattura usage ==========
             # `include_usage=True` fa arrivare usage nell'ULTIMO chunk (o come
@@ -17520,6 +17536,24 @@ async def _fast_pipeline_task(
                                         body_buffer = []
                             else:
                                 overflow_buffer.append(sent)
+                # === WORD-COUNT HARD CAP CHECK (Fabio 2026-10-30) ============
+                # Dopo aver estratto le frasi disponibili dal buffer, se la
+                # reply cumulata ha superato il soft cap in parole, chiudi lo
+                # stream. Il check è SEMPRE a frase completa (siamo fuori dal
+                # while interno di _pop_first_sentence) → mai taglio in mezzo.
+                _cum_words = len(''.join(full_reply_chars).split())
+                if _cum_words >= _TTS_WORD_SOFT_CAP and not _length_cap_triggered:
+                    _length_cap_triggered = True
+                    logger.info(
+                        f"[LENGTH_CAP] sid={session_id[:8]} HARD_STOP @ "
+                        f"{_cum_words} words (soft_cap={_TTS_WORD_SOFT_CAP}) — "
+                        f"stream Claude interrotto a frase completa."
+                    )
+                    try:
+                        await stream.aclose()
+                    except Exception:
+                        pass
+                    break
             # === FIX 2026-08-21 (Fabio) — NO break dopo reply_finished =========
             # Prima qui c'era `if extractor.reply_finished: break` che chiudeva
             # lo stream Claude appena la reply era completa → il resto del JSON
