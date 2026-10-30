@@ -16,6 +16,42 @@ from datetime import datetime, timezone, timedelta
 # === .env deve essere caricato PRIMA dell'init Sentry (SENTRY_DSN_BACKEND) ===
 load_dotenv()
 
+# Claude configuration shared by the voice, text and helper paths.
+# No automatic fallback to a more expensive model if the proxy rejects this ID.
+CLAUDE_MODEL_ID = "claude-haiku-5-5"
+CLAUDE_PROXY_MODEL_ID = f"openai/{CLAUDE_MODEL_ID}"
+
+
+def _claude_extra_body(messages=None) -> dict:
+    # Haiku 5.5 otherwise enables billable adaptive thinking by default.
+    # extra_body preserves this native Anthropic option through the OpenAI proxy.
+    body = {"thinking": {"type": "disabled"}}
+    if messages is not None:
+        # LiteLLM's OpenAI transformation can strip cache_control. Preserve the
+        # complete original messages in the SDK body override before it runs.
+        # Copy first: provider normalization may mutate its own messages.
+        import copy
+        body["messages"] = copy.deepcopy(messages)
+    return body
+
+
+async def _claude_acompletion(*, messages, **kwargs):
+    import copy
+    import litellm
+    return await litellm.acompletion(
+        model=CLAUDE_PROXY_MODEL_ID,
+        messages=copy.deepcopy(messages),
+        extra_body=_claude_extra_body(messages),
+        **kwargs,
+    )
+
+
+def _claude_max_tokens(previous_limit: int) -> int:
+    # The newer tokenizer needs about 30% more tokens for equivalent text.
+    # This adjusts the transport ceiling, not the prompt's response length rules.
+    return (previous_limit * 13 + 9) // 10
+
+
 # === SENTRY 2026-07-26 v65 — crash reporting backend (EU region) ===
 # Init il più presto possibile per catturare crash all'avvio.
 # Se SENTRY_DSN_BACKEND non è configurato, no-op silenzioso.
@@ -5073,16 +5109,13 @@ async def debug_probe_claude(req: _ProbeClaudeRequest):
         "    → situation_evidence: null (nessun nome/evento)\n\n"
         "REGOLA new_memory: crea ricordo se emerge una persona cara/luogo/evento/valore/preoccupazione. Altrimenti null.\n"
     )
-    import litellm as _litellm
     try:
-        resp = await _litellm.acompletion(
-            model="openai/claude-haiku-4-5-20251001",
+        resp = await _claude_acompletion(
             messages=[
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": req.user_text},
             ],
-            max_tokens=400,
-            temperature=0.3,
+            max_tokens=_claude_max_tokens(400),
             api_key=os.environ.get("EMERGENT_LLM_KEY"),
             api_base="https://integrations.emergentagent.com/llm",
         )
@@ -7653,7 +7686,8 @@ async def _safety_llm_classify(text: str) -> Optional[Dict[str, Any]]:
             api_key=key,
             session_id=session_id,
             system_message=system_prompt,
-        ).with_model("anthropic", "claude-haiku-4-5-20251001").with_params(max_tokens=80)
+        ).with_model("anthropic", CLAUDE_MODEL_ID).with_params(
+            max_tokens=_claude_max_tokens(80), extra_body=_claude_extra_body())
         reply = await chat.send_message(UserMessage(text=text[:1500]))
         # Estrai JSON
         import re as _re
@@ -9447,11 +9481,10 @@ async def api_converse(req: ConverseRequest):
         _kt_llm_start = time.time()
         logger.info(
             f"[OLLENYA_TIMING] LLM_START_STANDARD path=/converse "
-            f"prompt_chars={len(system_prompt)} model=claude-haiku-4-5 "
+            f"prompt_chars={len(system_prompt)} model={CLAUDE_MODEL_ID} "
             f"ephemeral={req.ephemeral}"
         )
-        resp = await litellm.acompletion(
-            model='openai/claude-haiku-4-5-20251001',
+        resp = await _claude_acompletion(
             messages=[
                 {
                     'role': 'system',
@@ -9467,7 +9500,7 @@ async def api_converse(req: ConverseRequest):
             ],
             api_key=EMERGENT_LLM_KEY,
             api_base='https://integrations.emergentagent.com/llm',
-            max_tokens=_free_max_tokens_override if _free_max_tokens_override else 800,
+            max_tokens=_claude_max_tokens(_free_max_tokens_override if _free_max_tokens_override else 800),
             timeout=25,
         )
         raw = resp["choices"][0]["message"]["content"] or ""
@@ -9475,7 +9508,7 @@ async def api_converse(req: ConverseRequest):
             f"[OLLENYA_TIMING] LLM_END_STANDARD path=/converse "
             f"elapsed_ms={int((time.time() - _kt_llm_start) * 1000)} "
             f"reply_chars={len(raw or '')} "
-            f"max_tokens_used={_free_max_tokens_override if _free_max_tokens_override else 800}"
+            f"max_tokens_used={_claude_max_tokens(_free_max_tokens_override if _free_max_tokens_override else 800)}"
         )
     except Exception as e:
         logger.error(f"LLM converse error: {e}")
@@ -10401,7 +10434,8 @@ async def api_ghost(req: GhostRequest):
                 api_key=EMERGENT_LLM_KEY,
                 session_id=str(uuid.uuid4()),
                 system_message=sys,
-            ).with_model("anthropic", "claude-haiku-4-5-20251001")
+            ).with_model("anthropic", CLAUDE_MODEL_ID).with_params(
+                max_tokens=_claude_max_tokens(200), extra_body=_claude_extra_body())
             raw = await chat.send_message(UserMessage(text=entry.text[:1500]))
             cand = (raw or "").strip().strip('"').strip()
             if cand and cand.upper() not in {"NULL", "NONE"}:
@@ -10464,7 +10498,8 @@ async def api_recap(period: str = "today"):
             api_key=EMERGENT_LLM_KEY,
             session_id=str(uuid.uuid4()),
             system_message=sys,
-        ).with_model("anthropic", "claude-haiku-4-5-20251001")
+        ).with_model("anthropic", CLAUDE_MODEL_ID).with_params(
+            max_tokens=_claude_max_tokens(400), extra_body=_claude_extra_body())
         out = await chat.send_message(UserMessage(text=history))
     except Exception as e:
         logger.error(f"recap error: {e}")
@@ -11471,8 +11506,8 @@ async def api_intro_gender_from_name(req: IntroGenderRequest):
                 session_id=session_id,
                 system_message=system_prompt,
             )
-            .with_model("anthropic", "claude-haiku-4-5-20251001")
-            .with_params(max_tokens=60)
+            .with_model("anthropic", CLAUDE_MODEL_ID)
+            .with_params(max_tokens=_claude_max_tokens(60), extra_body=_claude_extra_body())
         )
         reply = await chat.send_message(UserMessage(text=name))
         import re as _re
@@ -14345,8 +14380,7 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
             _store_converse_result(result_id, payload)
 
         try:
-            stream = await litellm.acompletion(
-                model='openai/claude-haiku-4-5-20251001',
+            stream = await _claude_acompletion(
                 messages=[
                     # === FIX 2026-09-09 — Anthropic prompt caching ripristinato ===
                     # Support Emergent ha confermato (mail 8 settembre) che il
@@ -14374,11 +14408,11 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
                 stream=True,
                 api_key=EMERGENT_LLM_KEY,
                 api_base='https://integrations.emergentagent.com/llm',
-                # Allineato al percorso WS live (`_fast_pipeline_task`,
-                # max_tokens=320) — il cap in parole è applicato runtime
+                # Allineato al percorso WS live (`_fast_pipeline_task`).
+                # Il cap in parole è applicato runtime
                 # a frase completa, non via max_tokens. Vedi Regola
                 # LUNGHEZZA nel prompt + log [LENGTH_CAP].
-                max_tokens=320,
+                max_tokens=_claude_max_tokens(320),
                 timeout=25,  # CRITICO: senza timeout, una chiamata Claude bloccata pianta tutto il worker FastAPI e l'app va in schermo nero/spinner infinito.
                 # Include usage nell'ultimo chunk (contiene cache_creation_input_tokens
                 # e cache_read_input_tokens) per telemetria HIT/MISS.
@@ -16441,7 +16475,7 @@ async def _fast_pipeline_task(
         logger.info(f"[fast {session_id[:8]}] LLM start, prompt {len(sys_prompt)} chars")
         logger.info(f"[OLLENYA_TIMING] LLM_START sid={session_id[:8]} prompt_chars={len(sys_prompt)}")
 
-        stream = await litellm.acompletion(
+        stream = await _claude_acompletion(
             # === FIX LINGUA SPAGNOLA (sprint 2026-06-20) ===
             # gpt-5.4-mini IGNORA i language constraint anche con prompt
             # rinforzato 🇮🇹 alla fine del user payload. Verificato da log
@@ -16453,7 +16487,6 @@ async def _fast_pipeline_task(
             # ma garantisce italiano stabile turn dopo turn.
             # L'empatia non cambia (dipende dal prompt, vedi
             # _build_fast_system_prompt per le istruzioni di tono caldo).
-            model='openai/claude-haiku-4-5-20251001',
             messages=_build_cacheable_messages(sys_prompt, user_payload, session_id),
             stream=True,
             api_key=EMERGENT_LLM_KEY,
@@ -16473,12 +16506,9 @@ async def _fast_pipeline_task(
             # +40-50 token extra. In produzione questo causava JSON troncato in
             # mezzo a `new_memory`/`situation_evidence` → parsing fallito →
             # NIENTE ricordo/situation salvati (bug scoperto durante l'E2E).
-            # Nuovo cap: 320 token (headroom ~15% sopra worst-case teorico).
-            # Impatto costo: la reply reale non si allunga (Claude non riempie
-            # per riempire), solo il JSON viene sempre completato. Costo LLM
-            # marginale (Haiku 4.5 output ~$0.5/1M tok → +0.006 c€/turno).
-            # Costo TTS ZERO change (dipende dalla reply, non dal JSON).
-            max_tokens=320,
+            # Il precedente cap di 320 viene compensato per il tokenizer 5.5:
+            # 416 token, senza thinking. La lunghezza resta guidata dal prompt.
+            max_tokens=_claude_max_tokens(320),
             timeout=18,
             # === CLAUDE TTFT INVESTIGATION (2026-08-13 Fabio) ================
             # `include_usage: True` fa arrivare l'oggetto `usage` nell'ULTIMO
@@ -17628,6 +17658,7 @@ async def _fast_pipeline_task(
 
         logger.info(
             f"[OLLENYA_TIMING] CLAUDE_WALL sid={session_id[:8]} "
+            f"model={CLAUDE_MODEL_ID} "
             f"wall_ms={_claude_wall_ms_container[0]} "
             f"ttft_ms={timing_llm_ttft_ms} "
             f"post_ttft_ms={_claude_wall_ms_container[0] - (timing_llm_ttft_ms or 0)} "
@@ -17817,7 +17848,7 @@ async def _fast_pipeline_task(
         logger.info(
             f"[OLLENYA_LLM_OUT] sid={session_id[:8]} "
             f"profile_lang={profile_lang!r} "
-            f"model=claude-haiku-4-5 "
+            f"model={CLAUDE_MODEL_ID} "
             f"reply_first150={full_reply[:150]!r} "
             f"chars={len(full_reply)}"
         )
@@ -18183,9 +18214,8 @@ async def _fast_pipeline_task(
             # Era hardcoded "gpt-5.4-mini" anche dopo il cambio modello
             # → il client logava il modello vecchio nei [OLLENYA_SUMMARY]
             # creando ambiguità ("il fix è davvero attivo?"). Allineato
-            # a claude-haiku-4-5 che è il modello effettivamente in uso
-            # nel fast pipeline (vedi riga ~3360 litellm.acompletion).
-            "model": "claude-haiku-4-5",
+            # al modello condiviso effettivamente richiesto dal fast pipeline.
+            "model": CLAUDE_MODEL_ID,
             "path": "fast",
             # === KODA FEEDBACK EVENT ID (Fabio 2026-09-11) ===
             # Capability token per POST /api/feedback later. Il client lo
