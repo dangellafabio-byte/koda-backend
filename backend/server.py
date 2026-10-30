@@ -5567,10 +5567,33 @@ def _compute_trial_state(profile: "Profile") -> str:
     return "active"
 
 
+# Explicit boundary: only the instructions before it are eligible for caching.
+# The builder places time, memory and all later per-turn additions after it.
+_CACHE_CONTEXT_BOUNDARY = "\n<<<OLLENYA_DYNAMIC_CONTEXT>>>\n"
+
+
+def _build_cacheable_messages(sys_prompt: str, user_payload: str, session_id: str) -> list:
+    """Cache stable rules only; preserve the complete per-turn context."""
+    stable, boundary, variable = sys_prompt.partition(_CACHE_CONTEXT_BOUNDARY)
+    if not boundary:
+        # Unknown prompt layout: do not guess which content is stable.
+        logger.warning("[CACHE_SPLIT] missing explicit boundary sid=%s", session_id[:8])
+        return [
+            {'role': 'system', 'content': sys_prompt},
+            {'role': 'user', 'content': user_payload},
+        ]
+    blocks = [{'type': 'text', 'text': stable,
+               'cache_control': {'type': 'ephemeral'}}]
+    if variable:
+        blocks.append({'type': 'text', 'text': variable})
+    logger.info("[CACHE_SPLIT] sid=%s stable=%sch volatile=%sch",
+                session_id[:8], len(stable), len(variable))
+    return [{'role': 'system', 'content': blocks},
+            {'role': 'user', 'content': user_payload}]
+
+
 def _estimate_mp3_duration_seconds(mp3_bytes: bytes, bitrate_bps: int = 128_000) -> float:
     """Stima la durata di un blob MP3 in secondi.
-
-    === FIX 2026-10 (Fabio) — Dual-provider accounting ===
     Prima: formula semplificata ``bytes / 16000`` assumendo CBR 128 kbps
     (output ElevenLabs ``mp3_44100_128``). Perfetta per ElevenLabs, ma
     IMPRECISA per Inworld che può emettere MP3 a bitrate variabile
@@ -15217,7 +15240,7 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"{name_part}\n"
         f"\n"
         f"━━━ CONTESTO TEMPORALE (fix Fabio 2026-06-20) ━━━\n"
-        f"📅 ADESSO è: {time_block}\n"
+        f"📅 Data e ora correnti sono nel CONTESTO ATTUALE in fondo.\n"
         f"⚠️ NON dire MAI 'sono le 10:18 UTC' o equivalente: tu vivi nel fuso italiano CET/CEST, l'utente è in Italia.\n"
         f"⚠️ Quando ti chiedono l'ora, rispondi nell'orologio ITALIANO leggibile (es. 'sono le dodici e mezza', "
         f"'è quasi l'una di pomeriggio', 'sono le otto di sera').\n"
@@ -15508,7 +15531,7 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"introduci dolce cambio prospettiva (vedi SCOPO DOPPIO sopra).\n"
         f"\n"
         f"⚠️ ITALIANO: articoli/pronomi atoni perfetti, concordanza SONO/HANNO. No dialetto, no anglicismi.\n"
-        f"{memory_block}\n"
+        f"I fatti e i ricordi dell’utente sono nel CONTESTO ATTUALE in fondo.\n"
         f"━━━ COSA PUOI E NON PUOI FARE — ONESTÀ ASSOLUTA (Fabio 2026-07-02) ━━━\n"
         f"REGOLA D'ORO: NON PROMETTERE MAI cose che non puoi fare. Meglio dire 'no, non ci arrivo'\n"
         f"con calore fraterno che promettere e deludere. La FIDUCIA vale più della cortesia.\n"
@@ -15651,7 +15674,12 @@ def _build_fast_system_prompt(profile: Profile, recent: List[TimelineEntry], mem
         f"quando serve DAVVERO — dolore reale, safety, gioia forte. Regola pratica: "
         f"80%+ dei turni sono tone=warm/neutral, mai concerned/paced per default.\n"
     )
-    return temporal_block + "\n" + base_prompt + trial_block + final_reminder
+    return (
+        base_prompt + final_reminder + _CACHE_CONTEXT_BOUNDARY
+        + "━━━ CONTESTO ATTUALE ━━━\n"
+        + temporal_block + "\n📅 ADESSO è: " + time_block + "\n"
+        + memory_block + trial_block
+    )
 
 
 # ============================================================
@@ -16426,26 +16454,7 @@ async def _fast_pipeline_task(
             # L'empatia non cambia (dipende dal prompt, vedi
             # _build_fast_system_prompt per le istruzioni di tono caldo).
             model='openai/claude-haiku-4-5-20251001',
-            messages=[
-                # === FIX 2026-07-01 — Anthropic prompt caching (Fabio latenza) ===
-                # System prompt Ollenya è ~2500 token. Cachandolo su Anthropic
-                # (marker cache_control ephemeral) risparmiamo ~300-500ms
-                # su TTFT + 90% costi input sui token cachati. Il formato
-                # con content=list[content_block] è il canonico Anthropic
-                # (litellm lo passa through per model="anthropic/*").
-                # Cache TTL default 5 min → coerente con conversation flow.
-                {
-                    'role': 'system',
-                    'content': [
-                        {
-                            'type': 'text',
-                            'text': sys_prompt,
-                            'cache_control': {'type': 'ephemeral'},
-                        }
-                    ],
-                },
-                {'role': 'user', 'content': user_payload},
-            ],
+            messages=_build_cacheable_messages(sys_prompt, user_payload, session_id),
             stream=True,
             api_key=EMERGENT_LLM_KEY,
             api_base='https://integrations.emergentagent.com/llm',

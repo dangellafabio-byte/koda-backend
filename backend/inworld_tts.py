@@ -81,7 +81,9 @@ class InworldVoiceParams:
     language: str = "it-IT"
     speaking_rate: float = 1.05
     delivery_mode: str = "CREATIVE"  # CREATIVE | EXPRESSIVE | STANDARD | CALM | NEUTRAL
-    model_id: str = "inworld-tts-2"
+    # Modello default allineato a scelta Fabio 2026-10-30: TTS-2 Flash
+    # (variante a latenza bassa / costo contenuto).
+    model_id: str = "inworld-tts-2-flash"
     audio_encoding: str = "MP3"
 
     def to_payload(self, text: str) -> dict:
