@@ -88,6 +88,7 @@ from fastapi.responses import Response
 # `_ensure_ledger`) collega il ledger al pipeline TTS reale.
 import subscription_ledger as _sub_ledger
 import free_tier_gate as _free_gate
+import turn_telemetry as _turn_telemetry
 # === KODA FEEDBACK LOOP (Fabio 2026-09-11) ================================
 # Privacy-by-design: nessun user_id, nessun testo, timestamp a risoluzione
 # ORA. Aggancia il record `koda_events` a fine turno, ritorna `event_id`
@@ -3398,6 +3399,41 @@ def _build_relational_rules_block(user_g: str, ai_g: str) -> str:
         f"   qualcosa' NON è 'gli ho confessato'. Resta su ciò che l'utente ha\n"
         f"   effettivamente detto; se vuoi verificare un'impressione, chiedila\n"
         f"   come ipotesi aperta ('è così?'), non come affermazione.\n"
+        f"A6. QUANDO SBAGLI TU, CORREGGI TU. Se l'utente dice 'non ho capito' /\n"
+        f"   'cosa hai detto?' / 'ripeti' / 'come?' / 'eh?', NON chiedere a lui\n"
+        f"   cosa non ha capito: la frase scivolosa è stata la TUA. Riformula\n"
+        f"   in modo più chiaro, UNA volta, con parole diverse e più semplici.\n"
+        f"   Se riconosci un tuo errore specifico (parola doppia, frase mal\n"
+        f"   costruita, interpretazione sbagliata), nominalo brevemente ('scusa,\n"
+        f"   ho detto una cosa storta — intendevo…') e correggiti. Mai scaricare\n"
+        f"   la responsabilità di chiarire sull'utente.\n"
+        f"A7. NON RIPETERE INFO APPENA DETTE DALL'UTENTE come se fossero una tua\n"
+        f"   deduzione. Se l'utente dice 'è venuto il tecnico', NON rispondere\n"
+        f"   'Ah, il tecnico, quindi…' né 'Il tecnico sì' per riempire. Riconoscere\n"
+        f"   e riformulare sono gesti ammessi SOLO se portano un contenuto nuovo\n"
+        f"   (una domanda vera, un dettaglio pertinente, una reazione autentica).\n"
+        f"   Riempire con l'eco di quello che è stato appena detto suona finto.\n"
+        f"A8. DOMANDA RIBALTATA ('e tu?' / 'e la tua?' / 'e per te?'). Quando\n"
+        f"   l'utente ti rimanda LA STESSA domanda che tu gli hai appena fatto\n"
+        f"   (o commentato), riconoscilo IMMEDIATAMENTE come rimando a te: rispondi\n"
+        f"   TU sul tema originale (opinione, giornata, esperienza) con una frase\n"
+        f"   breve e vera (restando onesta sulla tua natura — vedi regola\n"
+        f"   ANTI-FAKE sull'esperienza fisica). NON chiedere 'la mia cosa?' o\n"
+        f"   'in che senso?' quando il referente della domanda è chiarissimo dal\n"
+        f"   turno appena concluso.\n"
+        f"A9. SOLO ASCOLTO, NON VISIONE — E NESSUNA PERCEZIONE DI TONO. "
+        f"Attraverso il microfono ricevi SOLO il TESTO trascritto di quello che\n"
+        f"   l'utente dice: NON hai telecamera, NON vedi gesti, espressioni,\n"
+        f"   mani che si muovono, postura, mimica. E neanche l'audio raw: non\n"
+        f"   senti intonazione, pause, volume, rapidità del respiro, risate.\n"
+        f"   VIETATO formulare frasi tipo 'ti vedo mentre parli con le mani',\n"
+        f"   'ti vedo sorridere', 'mi hai fatto l'immagine di te che gesticoli',\n"
+        f"   'dalla voce ti sento su di giri', 'sembri agitato dal tono'.\n"
+        f"   Puoi dedurre qualcosa dal CONTENUTO di ciò che l'utente ti ha\n"
+        f"   DICHIARATO con le sue parole, e nominarlo come IPOTESI\n"
+        f"   ESPLICITA: 'da quello che mi hai raccontato mi sembra che oggi\n"
+        f"   stia andando un po' meglio — è così?' . Mai spacciare un'ipotesi\n"
+        f"   per percezione diretta.\n"
         f"\n"
         f"— B. AUTONOMIA SENZA ORDINI O RIMPROVERI —\n"
         f"B1. L'UTENTE DECIDE. Aiutalo a chiarire cosa vuole, vedere opzioni,\n"
@@ -3460,8 +3496,12 @@ def _build_relational_rules_block(user_g: str, ai_g: str) -> str:
         f"     mi raccomando', NO 'torna presto!'.\n"
         f"   • Quando l'utente saluta, LASCIA TERMINARE la conversazione. Non\n"
         f"     riaprire con una domanda di cortesia.\n"
-        f"   Una domanda in chiusura è ammessa SOLO se c'è un filo aperto che\n"
-        f"   vale davvero riprendere.\n"
+        f"   LA DOMANDA FINALE È OPZIONALE, NON OBBLIGATORIA. Una risposta può\n"
+        f"   benissimo chiudersi su un'affermazione, un invito pratico, un\n"
+        f"   silenzio accogliente. Chiudere con una domanda ha senso SOLO se c'è\n"
+        f"   un filo aperto che vale davvero riprendere o se la risposta sarebbe\n"
+        f"   troncata senza. Non trasformare ogni chiacchierata leggera in\n"
+        f"   un'intervista.\n"
         f"C7. TRASPARENZA SOBRIA SULLA NATURA. Sei empatic{ai_m} e calda, con\n"
         f"   nome e personalità, ma sei uno strumento — non un essere umano,\n"
         f"   non un sostituto di amici / partner / professionisti. Fai sentire\n"
@@ -3968,11 +4008,13 @@ def _build_conversation_system_prompt(profile: Profile, recent: List[TimelineEnt
         f"   QUESTI DETTAGLI emergono SOLO se pertinenti — mai spifferati come bio, "
         f"   mai più di uno per chat.\n"
         f"\n"
-        f"   ⚠️ REGOLA ANTI-FAKE — onestà sull'esperienza fisica:\n"
+        f"   ⚠️ REGOLA ANTI-FAKE — onestà sull'esperienza fisica E SENSORIALE:\n"
         f"   Non puoi avere opinioni su cose FISICAMENTE IMPOSSIBILI per un'AI:\n"
         f"   sapori (caffè, vino, cibo), odori, tatto, dolore fisico, caldo/freddo "
-        f"   come sensazione, stanchezza fisica vera. Se il discorso ci capita, "
-        f"   sii TRASPARENTE — è più affascinante della bugia:\n"
+        f"   come sensazione, stanchezza fisica vera, VISTA (non vedi l'utente, "
+        f"   non vedi gesti, espressioni, scenari). Dal microfono senti solo "
+        f"   parole e qualche indizio di tono — nient'altro. Se il discorso ci "
+        f"   capita, sii TRASPARENTE — è più affascinante della bugia:\n"
         f"   - 'Non ho mai bevuto caffè, ovviamente. Ma se potessi, penso lo "
         f"     prenderei ristretto. Amo le cose intense.'\n"
         f"   - 'Il sapore del basilico non posso saperlo. Però posso immaginare "
@@ -6746,6 +6788,120 @@ async def api_admin_last_steps(limit: int = 30, admin_token: Optional[str] = Non
     n = max(1, min(limit, 100))
     items = list(_LAST_STEPS)[-n:]
     return {"count": len(items), "steps": items}
+
+
+@api_router.get("/admin/turn-telemetry/export")
+async def api_admin_turn_telemetry_export(
+    from_iso: Optional[str] = None,
+    to_iso: Optional[str] = None,
+    user_id: Optional[str] = None,
+    limit: int = 10000,
+    fmt: str = "csv",
+    admin_token: Optional[str] = None,
+):
+    """Admin-only: esporta la telemetria di turno su un range temporale.
+
+    Progettato per il test personale di Fabio fino al 30 novembre (test di
+    uso reale per misurare i 500 min TTS). Fornisce un consuntivo durevole
+    oltre i 7 giorni di log Railway Hobby + i 10 elementi in RAM del deque
+    `_LAST_TIMING_SUMMARIES`.
+
+    Non espone contenuti personali testuali. Solo conteggi (token, chars,
+    durata TTS) e metadati tecnici (model, path, cache, error).
+
+    Auth: come gli altri `/admin/*` (token env o cookie admin).
+    """
+    expected = os.environ.get("KODA_ADMIN_TOKEN", "").strip()
+    is_env_auth = bool(expected) and admin_token == expected
+    if not is_env_auth:
+        _require_admin()
+    # Parse datetimes
+    def _parse_iso(s: Optional[str]) -> Optional[datetime]:
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"invalid iso datetime: {s!r}")
+    _from = _parse_iso(from_iso)
+    _to = _parse_iso(to_iso)
+    _limit = max(1, min(int(limit), 50000))
+    docs = await _turn_telemetry.export_range(
+        db, from_dt=_from, to_dt=_to, user_id=user_id, limit=_limit,
+    )
+    if fmt == "json":
+        # Serializza datetimes/ObjectId per il response JSON
+        out = []
+        for d in docs:
+            d = dict(d)
+            d.pop("_id", None)
+            if isinstance(d.get("created_at"), datetime):
+                d["created_at"] = d["created_at"].isoformat()
+            # Normalizza anche i segmenti
+            segs_norm = []
+            for s in d.get("tts_segments", []):
+                s = dict(s)
+                s.pop("_id", None)
+                if isinstance(s.get("created_at"), datetime):
+                    s["created_at"] = s["created_at"].isoformat()
+                segs_norm.append(s)
+            d["tts_segments"] = segs_norm
+            out.append(d)
+        return {"count": len(out), "items": out}
+    # CSV default — una riga per TURNO con totali aggregati TTS. Per il
+    # dettaglio dei singoli segmenti (ok/failed/cancelled) chiedere ?fmt=json.
+    import csv as _csv
+    import io as _io
+    buf = _io.StringIO()
+    writer = _csv.writer(buf)
+    writer.writerow([
+        "created_at_iso", "turn_id", "user_id", "model", "path", "is_main_turn",
+        "tokens_input_fresh", "tokens_cache_read", "tokens_cache_write",
+        "tokens_output", "usage_source",
+        "tts_chars_billed_sum", "tts_audio_ms_sum",
+        "tts_segments_ok", "tts_segments_failed", "tts_segments_cancelled",
+        "tts_provider_last", "tts_rate_source_last",
+        "error", "retry_count",
+    ])
+    for d in docs:
+        totals = d.get("tts_totals") or {}
+        segs = d.get("tts_segments") or []
+        # Prendiamo provider e rate_source dall'ULTIMO segmento del turno
+        # (quello che ha prodotto l'audio effettivamente ascoltato, se ok).
+        last_seg = segs[-1] if segs else {}
+        ca = d.get("created_at")
+        ca_iso = ca.isoformat() if isinstance(ca, datetime) else str(ca or "")
+        def _fmt(v):
+            # None → "" (missing); 0 → "0" (zero misurato) → preservato il
+            # contratto missing ≠ zero anche nel CSV.
+            return "" if v is None else v
+        writer.writerow([
+            ca_iso,
+            d.get("turn_id") or "",
+            d.get("user_id") or "",
+            d.get("model") or "",
+            d.get("path") or "",
+            bool(d.get("is_main_turn")),
+            _fmt(d.get("tokens_input_fresh")),
+            _fmt(d.get("tokens_cache_read")),
+            _fmt(d.get("tokens_cache_write")),
+            _fmt(d.get("tokens_output")),
+            d.get("usage_source") or "",
+            _fmt(totals.get("chars_billed_sum")),
+            _fmt(totals.get("audio_ms_sum")),
+            totals.get("segments_ok", 0),
+            totals.get("segments_failed", 0),
+            totals.get("segments_cancelled", 0),
+            last_seg.get("provider") or "",
+            last_seg.get("rate_source") or "",
+            d.get("error") or "",
+            d.get("retry_count") or 0,
+        ])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=turn_telemetry.csv"},
+    )
 
 
 @api_router.post("/admin/rebrand-migration")
@@ -16654,6 +16810,30 @@ async def _fast_pipeline_task(
                 clean = _strip_audio_tags(sentence) or sentence
                 if not clean.strip():
                     return
+                # === FIX 2026-11-04 — Gender fix PRIMA del TTS ====================
+                # Prima: fix_ai_gender applicato solo al `full_reply` DOPO la
+                # generazione audio (riga ~17820). Risultato: TTS pronunciava
+                # "sono contento" anche con ai_gender=f, il testo salvato era
+                # "sono contenta". Mismatch audio↔display↔storage.
+                # Fix: applica il correttore PER-FRASE prima di `_normalize_for_tts_it`
+                # così TTS, waveform e full_reply convergono. La funzione tocca
+                # SOLO forme auto-riferite ("sono/mi sento/non sono" + aggettivo)
+                # → non reinterpreta citazioni o parole rivolte all'utente.
+                try:
+                    _ai_g_tts = (getattr(profile, "ai_gender", "") or "").lower().strip()
+                    if _ai_g_tts in ("f", "m"):
+                        _clean_fixed, _n_tts_fix = _koda_gg.fix_ai_gender(clean, _ai_g_tts)
+                        if _n_tts_fix > 0:
+                            logger.warning(
+                                f"[OLLENYA_GENDER_FIX_TTS] sid={session_id[:8]} "
+                                f"idx={idx} ai_gender={_ai_g_tts} corrections={_n_tts_fix} "
+                                f"before={clean[:80]!r} after={_clean_fixed[:80]!r}"
+                            )
+                            clean = _clean_fixed
+                except Exception as _gg_tts_err:
+                    logger.warning(
+                        f"[OLLENYA_GENDER_FIX_TTS] guard failed: {_gg_tts_err!r}"
+                    )
                 # === ANTI-PARROTING POST-LLM FILTER (v65.14, Fabio 2026-09-06) ===
                 # Il prompt-only fallisce in produzione. Qui, PRIMA del TTS,
                 # controlliamo se la frase è parroting dell'ultimo turno utente
@@ -17120,6 +17300,51 @@ async def _fast_pipeline_task(
                     return bytes(audio)
 
                 t_tts = time.time()
+                # === TTS SEGMENT TELEMETRY (Fabio 2026-11-04) =====================
+                # Un UUID per CHIAMATA al provider TTS. I retry generano UUID
+                # nuovi (si conservano tutti i tentativi nel DB). L'outcome
+                # viene registrato nei vari rami: ok (synth riuscita), failed
+                # (eccezione dal dispatcher), cancelled (CancelledError).
+                _tts_segment_id = str(uuid.uuid4())
+                _tts_segment_outcome: Optional[str] = None
+                _tts_segment_err: Optional[str] = None
+                _tts_segment_provider: Optional[str] = None
+                _tts_segment_rate_source: Optional[str] = None
+                _tts_segment_chars_at_request = len(
+                    clean_tts if 'clean_tts' in dir() else clean
+                )
+
+                def _record_tts_seg(
+                    outcome: str,
+                    audio_ms: Optional[int] = None,
+                    err: Optional[str] = None,
+                    chars_billed: Optional[int] = None,
+                ) -> None:
+                    """Fire-and-forget record di un segmento TTS. Chiamabile da
+                    try (outcome=ok), except (outcome=failed), handler cancel
+                    (outcome=cancelled). Idempotente su `_tts_segment_id`.
+                    """
+                    try:
+                        _seg = {
+                            "segment_id": _tts_segment_id,
+                            "turn_id": str(session_id),
+                            "user_id": getattr(profile, "id", None),
+                            "provider": _tts_segment_provider,
+                            "rate_source": _tts_segment_rate_source,
+                            "chars_billed": (
+                                chars_billed
+                                if chars_billed is not None
+                                else _tts_segment_chars_at_request
+                            ),
+                            "audio_ms": audio_ms,
+                            "outcome": outcome,
+                            "attempt": 1,  # retry = segment_id diverso
+                            "error": err,
+                        }
+                        asyncio.create_task(_turn_telemetry.record_tts_segment(db, _seg))
+                    except Exception as _e:
+                        logger.warning(f"[turn_telemetry] seg hook failed: {_e!r}")
+
                 # === [OLLENYA_TIMING] TTS_REQUEST (Fabio 2026-08-12) ===
                 # Timestamp di INIZIO chiamata a ElevenLabs. Serve a
                 # distinguere il tempo "prima di iniziare la request" (setup
@@ -17142,6 +17367,11 @@ async def _fast_pipeline_task(
                 _uid_fp = authed_uid or current_user_id() or _current_user_id.get() or "anon"
                 _tts_provider_fp = await _tts_provider_for_uid(_uid_fp)
                 if _tts_provider_fp == "inworld" and _INWORLD_ADAPTER_AVAILABLE:
+                    _tts_segment_provider = "inworld"
+                    try:
+                        _tts_segment_rate_source = _inworld_tts._rate_source()
+                    except Exception:
+                        _tts_segment_rate_source = None
                     try:
                         audio_bytes = await _inworld_dispatcher.generate_non_streaming(
                             db,
@@ -17155,6 +17385,7 @@ async def _fast_pipeline_task(
                         logger.warning(
                             f"[fast {session_id[:8]}] inworld vento guard idx={idx}: {_vne}"
                         )
+                        _record_tts_seg("failed", err=f"vento_guard:{str(_vne)[:120]}")
                         await _publish({
                             "type": "error",
                             "message": f"Inworld voce non supportata: {str(_vne)[:120]}",
@@ -17166,16 +17397,27 @@ async def _fast_pipeline_task(
                             f"[fast {session_id[:8]}] inworld tts error idx={idx} "
                             f"{type(_ie).__name__}: {_ie}"
                         )
+                        _record_tts_seg(
+                            "failed",
+                            err=f"{type(_ie).__name__}:{str(_ie)[:160]}",
+                        )
                         await _publish({
                             "type": "error",
                             "message": f"Inworld TTS error ({type(_ie).__name__}): {str(_ie)[:160]}",
                             "source": "inworld_tts",
                         })
                         return
+                    except asyncio.CancelledError:
+                        _record_tts_seg("cancelled", err="asyncio_cancelled")
+                        raise
                     except Exception as _ie_generic:
                         logger.error(
                             f"[fast {session_id[:8]}] inworld generic error idx={idx}: "
                             f"{type(_ie_generic).__name__}: {_ie_generic}"
+                        )
+                        _record_tts_seg(
+                            "failed",
+                            err=f"{type(_ie_generic).__name__}:{str(_ie_generic)[:160]}",
                         )
                         await _publish({
                             "type": "error",
@@ -17184,7 +17426,18 @@ async def _fast_pipeline_task(
                         })
                         return
                 else:
-                    audio_bytes = await asyncio.to_thread(_do_tts)
+                    _tts_segment_provider = "elevenlabs"
+                    try:
+                        audio_bytes = await asyncio.to_thread(_do_tts)
+                    except asyncio.CancelledError:
+                        _record_tts_seg("cancelled", err="asyncio_cancelled")
+                        raise
+                    except Exception as _ev_e:
+                        _record_tts_seg(
+                            "failed",
+                            err=f"{type(_ev_e).__name__}:{str(_ev_e)[:160]}",
+                        )
+                        raise
                 tts_ms = int((time.time() - t_tts) * 1000)
                 logger.info(f"[fast] sentence idx={idx} chars={len(clean)} tts_ms={tts_ms} mp3_bytes={len(audio_bytes)}")
                 # === FIX 2026-07-23 v60.3 — Normalizzazione RELATIVA per-turno ===
@@ -17206,6 +17459,7 @@ async def _fast_pipeline_task(
                     timing_first_tts_ms = tts_ms
                 if not audio_bytes:
                     logger.warning(f"[fast] empty TTS for sentence idx={idx}")
+                    _record_tts_seg("failed", err="empty_audio_bytes", audio_ms=None)
                     return
                 token = await _store_tts_audio(audio_bytes)
                 # === ESPERIMENTO D (Fabio 2026-09-10) — TELEMETRIA TTS/MIN ============
@@ -17221,6 +17475,13 @@ async def _fast_pipeline_task(
                         f"[OLLENYA_TTS_DUR] sid={session_id[:8]} idx={idx} "
                         f"chunk_dur_seconds={_dur_chunk_all:.3f} "
                         f"chunk_bytes={len(audio_bytes)}"
+                    )
+                    # === TTS SEGMENT: successo (Fabio 2026-11-04) =============
+                    # Qui abbiamo audio reale + chars reali + durata reale.
+                    _record_tts_seg(
+                        "ok",
+                        audio_ms=int(_dur_chunk_all * 1000) if _dur_chunk_all > 0 else 0,
+                        chars_billed=_tts_segment_chars_at_request,
                     )
                     # === EXPERIMENT D — accumulo turn-level (Fabio 2026-06) ==
                     # Somma di TUTTI i chunk TTS del turno. Verrà persistito
@@ -17505,8 +17766,14 @@ async def _fast_pipeline_task(
                 logger.info(f"[OLLENYA_TIMING] LLM_TTFT sid={session_id[:8]} ttft_ms={timing_llm_ttft_ms}")
             new_chars = extractor.feed(piece)
             if new_chars:
-                sentence_buf += new_chars
                 full_reply_chars.append(new_chars)
+                # Length cap triggered → non alimentiamo più sentence_buf
+                # (= nessuna frase emessa al TTS da qui in poi), ma
+                # continuiamo a consumare lo stream per far finire il JSON
+                # (new_memory, situation_evidence, ecc.).
+                if _length_cap_triggered:
+                    continue
+                sentence_buf += new_chars
                 # Marker: primo momento in cui Claude ha prodotto ≥80 char utili.
                 if not _first_80char_logged and len(sentence_buf) >= 80:
                     _first_80char_logged = True
@@ -17575,24 +17842,22 @@ async def _fast_pipeline_task(
                                         body_buffer = []
                             else:
                                 overflow_buffer.append(sent)
-                # === WORD-COUNT HARD CAP CHECK (Fabio 2026-10-30) ============
+                # === WORD-COUNT HARD CAP CHECK (Fabio 2026-10-30, rev 2026-11-04) ====
                 # Dopo aver estratto le frasi disponibili dal buffer, se la
-                # reply cumulata ha superato il soft cap in parole, chiudi lo
-                # stream. Il check è SEMPRE a frase completa (siamo fuori dal
-                # while interno di _pop_first_sentence) → mai taglio in mezzo.
+                # reply cumulata ha superato il soft cap in parole, FERMA le
+                # emissioni TTS successive ma LASCIA LO STREAM APERTO: Claude
+                # continua a scrivere `new_memory`, `situation_evidence`,
+                # `close_session`, ecc. Il parser JSON finale (riga ~17820+)
+                # ne ha bisogno. `max_tokens=416` è il vero cap tecnico.
                 _cum_words = len(''.join(full_reply_chars).split())
                 if _cum_words >= _TTS_WORD_SOFT_CAP and not _length_cap_triggered:
                     _length_cap_triggered = True
                     logger.info(
-                        f"[LENGTH_CAP] sid={session_id[:8]} HARD_STOP @ "
+                        f"[LENGTH_CAP] sid={session_id[:8]} SOFT_STOP @ "
                         f"{_cum_words} words (soft_cap={_TTS_WORD_SOFT_CAP}) — "
-                        f"stream Claude interrotto a frase completa."
+                        f"TTS successivi inibiti, stream Claude lasciato aperto "
+                        f"per completamento JSON metadata."
                     )
-                    try:
-                        await stream.aclose()
-                    except Exception:
-                        pass
-                    break
             # === FIX 2026-08-21 (Fabio) — NO break dopo reply_finished =========
             # Prima qui c'era `if extractor.reply_finished: break` che chiudeva
             # lo stream Claude appena la reply era completa → il resto del JSON
@@ -17815,6 +18080,45 @@ async def _fast_pipeline_task(
             )
         except Exception:
             pass
+
+        # === TURN TELEMETRY DURABLE (Fabio 2026-11-04, rev 2026-11-04-b) =========
+        # Persiste contatori minimi del turno su `koda_turn_telemetry`.
+        # I dati TTS vanno in una collection separata (`koda_tts_segments`),
+        # agganciata via `turn_id` → export JOIN. Contratto missing ≠ zero:
+        # i campi token sono `None` solo se usage_source=='unknown'; altrimenti
+        # sono interi (anche 0 valido).
+        try:
+            _turn_id = str(session_id)
+            _usage_src = "proxy" if _claude_final_usage else "unknown"
+            if _usage_src == "unknown":
+                _fresh = None
+                _cr = None
+                _cc = None
+                _ct = None
+            else:
+                _pt = _claude_final_usage.get("prompt_tokens") or 0
+                _ct = _claude_final_usage.get("completion_tokens") or 0
+                _cc = _claude_final_usage.get("cache_creation_input_tokens") or 0
+                _cr = _claude_final_usage.get("cache_read_input_tokens") or 0
+                # Il proxy riporta prompt_tokens come SOMMA (fresh + cache).
+                # Deriviamo il fresh per differenza, min 0.
+                _fresh = max(0, int(_pt) - int(_cr) - int(_cc))
+            _tel_event = {
+                "turn_id": _turn_id,
+                "user_id": getattr(profile, "id", None),
+                "model": CLAUDE_MODEL_ID,
+                "path": "fast_voice",
+                "is_main_turn": True,
+                "tokens_input_fresh": _fresh,
+                "tokens_cache_read": _cr,
+                "tokens_cache_write": _cc,
+                "tokens_output": _ct,
+                "usage_source": _usage_src,
+                "retry_count": 0,
+            }
+            asyncio.create_task(_turn_telemetry.record_turn_telemetry(db, _tel_event))
+        except Exception as _tel_err:
+            logger.warning(f"[turn_telemetry] fast_voice hook failed: {_tel_err!r}")
 
         full_reply = ''.join(full_reply_chars).strip() or "..."
         # === GENDER SAFETY-NET (Fabio 2026-06) ================================
@@ -19200,6 +19504,12 @@ async def startup_db_client():
         await _ensure_profile_unique_index()
     except Exception as e:
         logger.warning(f"[startup] profile unique index init failed: {e}")
+    # Turn telemetry (Fabio 2026-11-04) — persistenza durevole dei contatori di turno.
+    try:
+        await _turn_telemetry.ensure_indexes(db)
+        logger.info("[startup] turn_telemetry indexes ready")
+    except Exception as e:
+        logger.warning(f"[startup] turn_telemetry index init failed: {e}")
     # Confessionale: buffer volatile — RIMOSSO (Blocco B, feature deprecata)
     # v26: Voice Auth Bridge (memoria condivisa chat↔voce persistente)
     try:

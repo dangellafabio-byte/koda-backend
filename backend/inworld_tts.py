@@ -58,8 +58,12 @@ INWORLD_API_BASE = "https://api.inworld.ai"
 INWORLD_ENDPOINT_NON_STREAMING = f"{INWORLD_API_BASE}/tts/v1/voice"
 INWORLD_ENDPOINT_STREAMING = f"{INWORLD_API_BASE}/tts/v1/voice:stream"
 
-# Tariffa listino on-demand (USD per 1M char processati). Override via
-# env ``INWORLD_RATE_PER_1M_CHARS_USD`` se Fabio passa a un piano diverso.
+# Tariffa listino on-demand di partenza (USD per 1M char processati).
+# ATTENZIONE: 25.00 USD/1M è il PLACEHOLDER di listino "Starter"; non
+# corrisponde necessariamente al piano reale di Fabio né al rate specifico
+# di ``inworld-tts-2-flash``. Override via env ``INWORLD_RATE_PER_1M_CHARS_USD``
+# ogni volta che il piano cambia. La fonte della tariffa viene annotata nei
+# documenti telemetria (`tts.rate_source`) per distinguere stima da addebito.
 DEFAULT_INWORLD_RATE_PER_1M_CHARS_USD = 25.00
 
 # Timeout singola richiesta (sec). Non-streaming può essere più lungo
@@ -183,6 +187,46 @@ def _rate_per_1m_usd() -> float:
                                     DEFAULT_INWORLD_RATE_PER_1M_CHARS_USD))
     except (TypeError, ValueError):
         return DEFAULT_INWORLD_RATE_PER_1M_CHARS_USD
+
+
+def _rate_source() -> str:
+    """Ritorna una stringa che indica la PROVENIENZA del rate corrente.
+    IMPORTANTE: nessun livello qui garantisce la tariffa reale fatturata
+    dal provider — solo la fattura Inworld è fonte di verità per
+    l'addebito. Questi marker servono a documentare la fonte del
+    parametro usato nella STIMA.
+
+    Livelli:
+      * 'inworld_env_configured':
+            l'env ``INWORLD_RATE_PER_1M_CHARS_USD`` è impostata e parsabile
+            → il parametro è stato configurato esplicitamente.
+            NON implica che corrisponda al piano reale: l'utente potrebbe
+            aver inserito un valore sbagliato o obsoleto.
+      * 'inworld_env_verified':
+            l'env ``INWORLD_RATE_PER_1M_CHARS_USD`` è impostata E l'env
+            ``INWORLD_RATE_VERIFIED=1`` è presente — l'operatore ha
+            dichiarato ESPLICITAMENTE di aver confrontato il valore con
+            il contratto del piano attivo (o con una fattura recente).
+            Resta una stima, ma rafforzata da verifica umana.
+      * 'inworld_fallback_placeholder':
+            nessun override env → stiamo usando il PLACEHOLDER di listino
+            ($25.00 USD / 1M char) definito in
+            ``DEFAULT_INWORLD_RATE_PER_1M_CHARS_USD``. Questo valore
+            NON è specifico di `inworld-tts-2-flash`, NON corrisponde al
+            piano reale di Fabio, ed è destinato a essere sostituito via
+            env quando il piano è noto. Qualsiasi stima calcolata con
+            questo rate è INDICATIVA, non una previsione di addebito.
+    """
+    raw = os.environ.get("INWORLD_RATE_PER_1M_CHARS_USD")
+    if not raw:
+        return "inworld_fallback_placeholder"
+    try:
+        float(raw)
+    except (TypeError, ValueError):
+        return "inworld_fallback_placeholder"
+    if os.environ.get("INWORLD_RATE_VERIFIED") == "1":
+        return "inworld_env_verified"
+    return "inworld_env_configured"
 
 
 def _estimate_cost_usd(chars: int) -> float:
