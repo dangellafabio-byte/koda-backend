@@ -176,7 +176,7 @@ Ogni step ha un'etichetta (per UI) + uno `speech` (cosa Koda dice a voce e nel t
 ### Pagina LETTURA (chat scritta)
 
 **Step T6 — Lettura** (target: bolle chat)
-> "Qui rileggi tutto. Tocca una bolla per risentirmi a voce."
+> "Qui rileggi tutto quello che ci siamo detti. Ogni parola resta tua."
 
 **Step T7 — Tieni premuto** (target: bolla)
 > "Tieni premuto un messaggio per cancellarlo. Sparisce dal mio ricordo."
