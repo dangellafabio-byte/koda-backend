@@ -1580,18 +1580,6 @@ export async function fastConverseWS(
     // (pydub/ffmpeg unavail, decode fail, WS drop) questa callback
     // non viene mai chiamata → l'orb resta sul comportamento attuale.
     onSpeechActive?: (active: boolean) => void;
-    // === REPLAY BIT-EXACT (Fabio 2026-11-04) =============================
-    // Callback OPZIONALE invocata per ogni segmento TTS ricevuto dal
-    // server (coppia header+binary). Il caller la usa per archiviare
-    // i bytes su disco e permettere il replay bit-exact del messaggio.
-    // Chiamata fire-and-forget: non deve bloccare il playback.
-    //   - `idx`: ordine del segmento (0-based) all'interno del turno
-    //   - `bytes`: Uint8Array MP3 completi del segmento
-    //   - `text`: testo del segmento (dal header `sentence`), se presente
-    //   - `tone`: tag [TONE:xxx] del server, se presente
-    // Zero attese: la callback può essere async ma il WS loop continua
-    // comunque. Se la callback lancia, l'errore viene swallowato.
-    onAudioSegment?: (seg: { idx: number; bytes: Uint8Array; text?: string | null; tone?: string | null }) => void | Promise<void>;
   } = {}
 ): Promise<FastConverseResult> {
   const timeoutMs = opts.timeoutMs ?? 45000;
@@ -1738,25 +1726,12 @@ export async function fastConverseWS(
             // Blob (web). Convertiamo in modo asincrono.
             d.arrayBuffer().then((buf: ArrayBuffer) => {
               if (pendingSentence) {
-                const _bytes = new Uint8Array(buf);
                 sentenceQueue.push({
                   i: pendingSentence.i || 0,
-                  bytes: _bytes,
+                  bytes: new Uint8Array(buf),
                   waveform: Array.isArray(pendingSentence.waveform) ? pendingSentence.waveform : null,
                   window_ms: typeof pendingSentence.window_ms === "number" ? pendingSentence.window_ms : 60,
                 });
-                // === REPLAY BIT-EXACT: notifica fire-and-forget ========
-                try {
-                  if (typeof opts.onAudioSegment === "function") {
-                    const _p = opts.onAudioSegment({
-                      idx: pendingSentence.i || 0,
-                      bytes: _bytes,
-                      text: typeof pendingSentence.text === "string" ? pendingSentence.text : null,
-                      tone: typeof pendingSentence.tone === "string" ? pendingSentence.tone : null,
-                    });
-                    if (_p && typeof (_p as any).catch === "function") (_p as any).catch(() => {});
-                  }
-                } catch {}
                 pendingSentence = null;
                 notify();
               }
@@ -1782,18 +1757,6 @@ export async function fastConverseWS(
             waveform: Array.isArray(pendingSentence.waveform) ? pendingSentence.waveform : null,
             window_ms: typeof pendingSentence.window_ms === "number" ? pendingSentence.window_ms : 60,
           });
-          // === REPLAY BIT-EXACT: notifica fire-and-forget ===============
-          try {
-            if (typeof opts.onAudioSegment === "function") {
-              const _p = opts.onAudioSegment({
-                idx: pendingSentence.i || 0,
-                bytes: u8,
-                text: typeof pendingSentence.text === "string" ? pendingSentence.text : null,
-                tone: typeof pendingSentence.tone === "string" ? pendingSentence.tone : null,
-              });
-              if (_p && typeof (_p as any).catch === "function") (_p as any).catch(() => {});
-            }
-          } catch {}
           pendingSentence = null;
           notify();
         } else {

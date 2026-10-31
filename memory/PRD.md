@@ -98,3 +98,44 @@ Il wiring è completo e tutti i test automatici passano, MA nessun agente ha tes
 - Vento disponibile su Inworld (Phase 2, serve validazione voce maschile)
 - Voiceprint biometric GDPR consent flow (Phase 2)
 - `Alert.alert` no-op su web preview (non impatta iOS native, solo preview UX)
+
+---
+
+## Update 2026-10-31 — Rimozione riascolto bolla (Fabio)
+
+### Deciso
+- Il **riascolto bit-exact delle bolle** è stato **eliminato**.
+- Al tap sulla bolla di Ollenya **non parte alcun audio** e **nessun generatore** viene chiamato (Claude, Inworld, ElevenLabs, TTS locale: tutti esclusi).
+- Il testo della risposta resta visibile nella timeline; la pronuncia avviene **una sola volta** durante la conversazione.
+- Il **long-press per il feedback** resta invariato (gestito da `onLongPressFeedback` dentro `BubbleImpl`).
+- Il tap mostra/nasconde l'orario della bolla, come fallback leggero (coerente con le bolle utente).
+
+### Modifiche applicate
+- 🗑️ `frontend/lib/audioStore.ts` — eliminato (manifest MP3 + persistenza non più necessari).
+- 🗑️ `backend/tests/test_audio_store_contract.py` — eliminato.
+- ✏️ `frontend/lib/speech.ts` — rimossa la callback opzionale `onAudioSegment` e i due siti di chiamata nei binary frame handler.
+- ✏️ `frontend/app/index.tsx`:
+  - rimosso `import * as audioStore from "../lib/audioStore"`.
+  - rimossi `_turnMsgId`/`_uidForReplay` e la callback `onAudioSegment` passata a `fastConverseWS`.
+  - ripristinato `aiEntry.id = \`fast-ai-${Date.now()}\``.
+  - eliminata la funzione `replayMessage` e lo stato `playingMsgId*`.
+  - rimossa la prop `onReplay` da `BubbleImpl` (type + call-site + memo comparator).
+  - cambiato il tap della bolla AI: ora `setShowTime` (toggle orario) invece di `onReplay`.
+  - rimossa dall'onboarding la frase *"Qui rileggi tutto. Tocca una bolla per risentirmi a voce."* → nuova stringa *"Qui rileggi tutto quello che ci siamo detti. Ogni parola resta tua."*.
+  - aggiornato l'accessibility label della bolla AI: *"Messaggio di Ollenya. Tieni premuto per il feedback."*.
+
+### Preservato intenzionalmente
+- Lavoro Inworld **intonazione** (buffer di contesto, dispatcher, flag `INWORLD_SEND_CONTEXT`, test `test_inworld_synthesis_context.py`) → **non toccato**: resta come committato in `1155ae80`, in attesa di valutazione separata.
+
+### Audio pre-registrati (intro/onboarding)
+- Scansionati `frontend/assets/sounds/intro/` e `frontend/assets/sounds/intro-inworld/`: **nessun file audio registrato contiene la frase sul riascolto bolla**. La frase di onboarding "Qui rileggi tutto…" era **sintetizzata a runtime** via TTS (campo `speech` nella tutorial step), ora già aggiornata. **Nessuna rigenerazione a pagamento richiesta**.
+- Altre menzioni di "riascolt-" nel codice:
+  - `MicroDemoOllenya.tsx:544` → *"Puoi riascoltarmi tra ~X ore"* = messaggio di quota paywall per la demo, **non** riguarda il riascolto bolla. **Lasciata invariata** su indicazione: "non eliminare istruzioni relative ad altre funzioni".
+
+### Verifica offline (nessuna chiamata API a pagamento)
+- `tsc --noEmit`: nessun nuovo errore in `index.tsx`/`speech.ts` (anzi −2 errori netti vs baseline).
+- Backend tests mirati (`test_inworld_synthesis_context`, `test_inworld_dispatcher_wiring`, `test_inworld_tts_unit`): **31/31 OK**.
+- Diff finale: `+19 / −752` su 4 file.
+
+### Push
+- **Non eseguito**. Attendo clic utente su "Save to GitHub" nella UI Emergent (PAT CLI non disponibile).

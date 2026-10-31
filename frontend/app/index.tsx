@@ -61,7 +61,6 @@ import PremiumTeaserToast from "../components/PremiumTeaserToast";
 import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
 import { checkHasSpeech, logGateDecision } from "../lib/silenceGate";
 import { SpeechMod, unlockSpeech, setDefaultVoiceId, preloadFillerPool } from "../lib/speech";
-import * as audioStore from "../lib/audioStore";
 // Rimosso import kodaAudioOutput (Modalità Telefono rollback 2026-07-13)
 import { preloadOfflineClips, isOfflineNow, playRandomOfflineClip } from "../lib/offlineClips";
 import { startThinkingSound, stopThinkingSound } from "../lib/thinkingSound";
@@ -850,7 +849,7 @@ export default function Taccuino() {
         rect: { x: 8, y: Math.max(insets.top + 70, 110), w: W - 16, h: H * 0.55 },
         label: "Lettura",
         shape: "round",
-        speech: `Qui rileggi tutto. Tocca una bolla per risentirmi a voce.`,
+        speech: `Qui rileggi tutto quello che ci siamo detti. Ogni parola resta tua.`,
       },
       {
         page: "reading",
@@ -3124,13 +3123,6 @@ export default function Taccuino() {
               // almeno un frame dal server, droppiamo il WS e cadiamo
               // immediatamente su HTTP poll (~1.7s totali invece di 25s).
               const useWS = String(process.env.EXPO_PUBLIC_USE_WS_CONVERSE || "").toLowerCase() === "true";
-              // === REPLAY BIT-EXACT (Fabio 2026-11-04) =================
-              // Genero un ID STABILE per questo turno PRIMA di avviare la
-              // chiamata. Lo riuso sia in `aiEntry.id` sia nelle scritture
-              // on-disk via audioStore.appendSegment. Così il tap sulla
-              // bolla può ritrovare i file giusti.
-              const _turnMsgId = `fast-ai-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-              const _uidForReplay = String(profile?.id || "anon");
               if (useWS) {
                 try {
                   const wsResult = await SpeechMod.fastConverseWS(txt, {
@@ -3152,27 +3144,6 @@ export default function Taccuino() {
                     onSpeechActive: (active) => {
                       try { setSpeechActive(!!active); } catch {}
                     },
-                    // === REPLAY BIT-EXACT (Fabio 2026-11-04) ===========
-                    // Archivia asincronamente ogni segmento MP3 su disco
-                    // associandolo a `_turnMsgId`. NON awaited: la
-                    // riproduzione del primo chunk NON deve aspettare
-                    // la scrittura. Se audioStore disabilitato dal
-                    // flag → appendSegment è no-op silenziosa.
-                    onAudioSegment: (seg) => {
-                      try {
-                        audioStore.appendSegment({
-                          userId: _uidForReplay,
-                          messageId: _turnMsgId,
-                          idx: seg.idx,
-                          bytes: seg.bytes,
-                          text: seg.text || null,
-                          tone: seg.tone || null,
-                          voiceId: typeof voiceId === "string" ? voiceId : null,
-                          modelId: "inworld-tts-2-flash",
-                          provider: "inworld",
-                        }).catch(() => {});
-                      } catch {}
-                    },
                     onMeta: (meta) => {
                       capturedMeta = meta;
                       try {
@@ -3181,7 +3152,7 @@ export default function Taccuino() {
                           id: `fast-u-${Date.now()}`,
                         };
                         const aiEntry: TimelineEntry = {
-                          id: _turnMsgId,
+                          id: `fast-ai-${Date.now()}`,
                           role: "ai",
                           text: stripDisplayTags(meta.reply || ""),
                           voice_text: meta.voice_text || undefined,
@@ -5343,97 +5314,14 @@ export default function Taccuino() {
   // sulla pipeline OTA di Emergent (Updates.checkForUpdateAsync restava
   // appeso senza rispondere). Pulsante corrispondente rimosso dalla UI.
 
-  /**
-   * Tap-on-AI-bubble handler: TOGGLE play/stop the AI's message via voice.
-   *  - 1st tap on a bubble → start speaking that message
-   *  - 2nd tap on the SAME bubble (while speaking) → stop the voice
-   *  - Tap on a DIFFERENT bubble → stop current, start new
-   */
-  const playingMsgIdRef = useRef<string | null>(null);
-  const [playingMsgId, setPlayingMsgId] = useState<string | null>(null);
-
-  const replayMessage = async (entry: TimelineEntry) => {
-    if (!entry || entry.role === "user" || !entry.text) return;
-    // If THIS bubble is currently playing → toggle stop
-    if (playingMsgIdRef.current === entry.id) {
-      SpeechMod.stop();
-      playingMsgIdRef.current = null;
-      setPlayingMsgId(null);
-      return;
-    }
-    // Otherwise stop whatever's playing and start the new one
-    SpeechMod.stop();
-    playingMsgIdRef.current = entry.id;
-    setPlayingMsgId(entry.id);
-    try {
-      await unlockSpeech();
-      // === REPLAY BIT-EXACT (Fabio 2026-11-04) =============================
-      // Prima strategia: riprodurre gli audio MP3 originali salvati su disco.
-      // Nessuna chiamata a Claude/Inworld/ElevenLabs. Se tutti i segmenti
-      // sono presenti sul filesystem per questo (user_id, message_id) →
-      // li riproduciamo in ordine come audio locali.
-      // Se MANCA anche solo un segmento o il manifest → mostriamo
-      // "Riascolto non disponibile". NESSUN fallback a rigenerazione.
-      const uid = String(profile?.id || "anon");
-      const replay = await audioStore.readForReplay(uid, entry.id);
-      if (replay.ok) {
-        try {
-          const player = require("expo-audio");
-          for (const seg of replay.segments) {
-            if (playingMsgIdRef.current !== entry.id) break; // utente ha stoppato
-            const p = player.createAudioPlayer(seg.filepath);
-            try {
-              p.play();
-              // Attesa non blocking: polling fino a fine playback
-              // (expo-audio non espone promise completion diretta).
-              await new Promise<void>((resolve) => {
-                const start = Date.now();
-                const iv = setInterval(() => {
-                  const stillPlaying = playingMsgIdRef.current === entry.id;
-                  // Guardia hard: max 60s per segmento (segmenti reali
-                  // ≤ 30s + margine). Evita leak se il player non chiude.
-                  if (!stillPlaying || Date.now() - start > 60000 ||
-                      (typeof p.playing === "boolean" && !p.playing && Date.now() - start > 500)) {
-                    clearInterval(iv);
-                    resolve();
-                  }
-                }, 100);
-              });
-            } finally {
-              try { p.remove && p.remove(); } catch {}
-            }
-          }
-        } catch (e) {
-          console.warn("[replay] bit-exact playback error:", e);
-        }
-      } else {
-        // Audio originale non disponibile → NON rigeneriamo.
-        // Mostriamo un hint sobrio all'utente (toast/alert).
-        try {
-          const reasonLabel = ({
-            feature_disabled: "Riascolto fedele disattivato nelle impostazioni.",
-            missing_meta: "Riascolto non disponibile per questo messaggio.",
-            missing_segments: "Riascolto non disponibile: audio originale mancante o incompleto.",
-            user_mismatch: "Riascolto non disponibile per questo profilo.",
-            zero_segments: "Riascolto non disponibile per questo messaggio.",
-          } as const)[replay.reason] || "Riascolto non disponibile.";
-          const RN = require("react-native");
-          if (RN.Platform.OS === "android") {
-            RN.ToastAndroid.show(reasonLabel, RN.ToastAndroid.SHORT);
-          } else {
-            RN.Alert.alert("Riascolto", reasonLabel);
-          }
-        } catch {}
-      }
-    } catch (e) {
-      console.warn("[replay] handler error:", e);
-    }
-    // When speech finishes naturally, clear the marker
-    if (playingMsgIdRef.current === entry.id) {
-      playingMsgIdRef.current = null;
-      setPlayingMsgId(null);
-    }
-  };
+  // === RIMOZIONE RIASCOLTO BOLLA (Fabio 2026-11-04) ======================
+  // Il tap sulla bolla di Ollenya NON riproduce più alcun audio e non
+  // chiama alcun generatore. La risposta viene pronunciata una sola volta
+  // durante la conversazione; il testo resta scritto nella timeline.
+  // Il long-press per il feedback resta attivo (gestito dentro `BubbleImpl`
+  // tramite la prop `onLongPressFeedback`). Il tap mostra/nasconde l'orario
+  // del messaggio come fallback leggero.
+  // (Funzione `replayMessage` e stato `playingMsgId*` rimossi.)
 
   // === GHOST handler ("Dimentica il fatto, ricorda l'insegnamento")
   // Long-press su una bolla → conferma → POST /api/ghost.
@@ -7257,7 +7145,6 @@ export default function Taccuino() {
               >
                 <Bubble
                   entry={it.entry as any}
-                  onReplay={() => {}}
                   onGhost={() => {}}
                   bubbleAccent={bubbleAccent}
                   bubbleStyle={bubbleStyle}
@@ -7282,7 +7169,6 @@ export default function Taccuino() {
             // onPress (replay), altrimenti → onLongPress (feedback menu).
             <Bubble
               entry={it.entry}
-              onReplay={replayMessage}
               onGhost={ghostMessage}
               onLongPressFeedback={
                 it.entry.role === "ai"
@@ -8228,7 +8114,6 @@ function MiniOrb({ color = "#7C3AED" }: { color?: string }) {
 
 function BubbleImpl({
   entry,
-  onReplay,
   onGhost,
   onLongPressFeedback,
   bubbleAccent,
@@ -8238,7 +8123,6 @@ function BubbleImpl({
   aiFontFamily,
 }: {
   entry: TimelineEntry;
-  onReplay?: (e: TimelineEntry) => void;
   /** Long-press handler for "Ghost" / "Dimentica questo". */
   onGhost?: (e: TimelineEntry) => void;
   /**
@@ -8376,8 +8260,13 @@ function BubbleImpl({
         ) : (
           <Pressable
             {...wrapperPress(() => {
-              if (onReplay) onReplay(entry);
-              else setShowTime((s) => !s);
+              // Rimozione riascolto bolla (Fabio 2026-11-04):
+              // il tap sulla bolla di Ollenya NON riproduce più audio.
+              // Preservata l'azione fallback "mostra orario" per dare
+              // comunque un feedback visivo al tap. Il long-press per il
+              // feedback resta attivo tramite `onLongPressFeedback` nel
+              // wrapperPress sopra.
+              setShowTime((s) => !s);
             })}
             style={({ pressed }: any) => [
               styles.bubbleAi,
@@ -8385,7 +8274,7 @@ function BubbleImpl({
               pressed && { opacity: 0.78 },
             ]}
             accessibilityRole="button"
-            accessibilityLabel="Tocca per ascoltare. Tocca di nuovo per fermare."
+            accessibilityLabel="Messaggio di Ollenya. Tieni premuto per il feedback."
             testID={`replay-${entry.id}`}
           >
             <Text
@@ -8464,7 +8353,6 @@ function arePropsEqualBubble(
     prev.aiFontFamily === next.aiFontFamily &&
     prev.bubbleAccent.color === next.bubbleAccent.color &&
     prev.bubbleAccent.soft === next.bubbleAccent.soft &&
-    prev.onReplay === next.onReplay &&
     prev.onGhost === next.onGhost
     // === NB (Fabio + Neo 2026-09-11 Fix C) =================================
     // `onLongPressFeedback` deliberatamente NON incluso nel confronto.
