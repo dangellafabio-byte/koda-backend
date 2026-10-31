@@ -1,0 +1,156 @@
+commit 1155ae80e75d970afb8f0947d5d759ad6318fc08
+Author:     Fabio <fabio@koda.local>
+AuthorDate: Sat Oct 31 10:57:38 2026 +0000
+Commit:     Fabio <fabio@koda.local>
+CommitDate: Sat Oct 31 10:57:38 2026 +0000
+
+    Replay bit-exact + prova intonazione Inworld dietro flag (Fabio 2026-11-04)
+    
+    Base: koda/main @ 351187fb. Nessun cambio Claude/voce/modello TTS/prezzi/
+    minuti/memoria. Due flag indipendenti, entrambi disattivabili senza
+    toccare codice.
+    
+    A. REPLAY BIT-EXACT — tap su bolla = audio originale, zero rigenerazione
+    =========================================================================
+    Nuovo `frontend/lib/audioStore.ts`:
+      - Scrive MP3 originali su disco (expo-file-system/legacy) in
+        `${docDir}koda/audio/<user_id>/<message_id>/<idx>.mp3` + `meta.json`.
+      - API `appendSegment()` fire-and-forget: la prima risposta NON attende
+        la scrittura prima di parlare (chiamata dentro callback senza await).
+      - API `readForReplay(user_id, message_id)`: verifica presenza di TUTTI
+        i segmenti sul filesystem. Se anche uno manca → ritorna
+        `{ok:false, reason:'missing_segments'}`. Nessun fallback TTS.
+      - Isolamento utente: la path include `user_id` sanitizzato
+        (regex A-Za-z0-9_-, max 64 char, no path traversal); `readMeta()`
+        rifiuta se `meta.user_id` non combacia con l'utente richiedente.
+      - Pulizia esplicita `cleanup({maxAgeMs, maxMessagesPerUser})`
+        (default 7 giorni / 100 msg/user); non si auto-GC su write.
+      - Flag master `EXPO_PUBLIC_REPLAY_BIT_EXACT` (default '1' = ON);
+        '0' → appendSegment no-op, readForReplay returns feature_disabled
+        → caller cade sul comportamento pre-riforma.
+    
+    Hook in `frontend/lib/speech.ts`:
+      - Nuova opt callback `onAudioSegment` su `fastConverseWS({...})`.
+      - Invocata in entrambi i rami di binary frame (sync Uint8Array + async
+        Blob.arrayBuffer()). Fire-and-forget: errori swallowed, nessun
+        blocco del WS loop.
+      - Legge `pendingSentence.text` (il server pubblica `text`, non
+        `sentence`) — invariante presidiato da test statico.
+    
+    Rewiring in `frontend/app/index.tsx`:
+      - `_turnMsgId = fast-ai-<ts>-<rand>` generato PRIMA di fastConverseWS
+        e riusato come `aiEntry.id` → onAudioSegment e aiEntry puntano allo
+        stesso message_id. Zero race.
+      - `onAudioSegment: (seg) => audioStore.appendSegment(...).catch(()=>{})`.
+      - `replayMessage` RISCRITTO: niente `SpeechMod.speak`, niente
+        rigenerazione. Chiama `audioStore.readForReplay`; se ok → riproduce
+        i segmenti in ordine con `expo-audio.createAudioPlayer(filepath).play()`;
+        se not ok → Toast/Alert 'Riascolto non disponibile' (nessun fallback).
+    
+    B. PROVA INTONAZIONE — synthesisContext.previousRequests dietro flag
+    =====================================================================
+    Verifica preliminare segmentatore (`_SENTENCE_RE`):
+      - Già riconosce . ! ? … come terminatori. NON spezza all'interno di
+        domande (test_question_mark_not_split_inside PASSA).
+      - `_pop_first_chunk_aggressive` (fast idx=0): cerca soft-break
+        SOLO dopo MIN_FIRST_CHUNK_CHARS=80; sotto soglia aspetta più testo
+        → non taglia domande brevi.
+      - Decisione: NON riscrivere il segmentatore. Documentato nei test.
+    
+    Documentazione Inworld verificata su docs.inworld.ai 2026-11-04:
+      - `synthesisContext.previousRequests` supportato su endpoint
+        synthesize-speech / stream / websocket.
+      - Limiti: max 5 elementi, totale ≤ 2000 char, oldest→newest.
+      - 'context text is NOT billed toward your character usage; only the
+        primary text field of the current request is billed' → zero costo.
+      - `inworld-tts-2-flash` non supporta steering (instruction tags
+        ignorati) ma accetta `synthesisContext` secondo le docs.
+      - `deliveryMode` è di tts-2 (non flash) — non toccato.
+    
+    Nuovo `backend/inworld_context_buffer.py`:
+      - Buffer in-memory per-utente degli ULTIMI 5 testi effettivamente
+        sintetizzati con successo da Inworld (API record_synthesized_text).
+      - Troncamento per-item 400 char, totale ≤ 2000, TTL 180s
+        (INWORLD_CONTEXT_TTL_S overridabile).
+      - `is_context_feature_enabled()` ← legge `INWORLD_SEND_CONTEXT=1`.
+        Default OFF → payload identico a pre-2026-11-04.
+    
+    Hook in `inworld_dispatcher.generate_non_streaming`:
+      - PRIMA della synth: se feature ON e il buffer dell'utente contiene
+        materiale fresco → `previous_requests_for_payload` iniettati nel
+        payload via `synthesize_non_streaming(..., previous_requests=...)`.
+      - DOPO synth RIUSCITA: `record_synthesized_text(user_id, text)` →
+        il turno successivo avrà questa frase come contesto.
+      - Scrittura sempre: così accendere il flag a runtime non lascia il
+        buffer vuoto per i primi N turni.
+      - COMPROMESSO DOCUMENTATO (nei commenti e nei test): la pipeline
+        Ollenya genera segmenti in PARALLELO. Il buffer per il segmento N+1
+        può essere PARZIALMENTE vuoto se il segmento N non è ancora
+        completato. Non aggiungiamo attese (vincolo Fabio): accettiamo
+        context best-effort.
+      - Il campo in `InworldVoiceParams.to_payload` valida i limiti
+        (max 5, ≤2000 char) → ValueError LOCALE se qualcuno abusa, non
+        silent trim.
+    
+    C. TEST OFFLINE — nessuna chiamata paid
+    ========================================
+      - test_inworld_synthesis_context (22 test):
+        * flag OFF default, flag ON tramite env
+        * payload senza/con context (shape corretta)
+        * payload rifiuta > 5 items / > 2000 char
+        * buffer: isolamento utenti, cap 5 items (LRU), per-item 400,
+          totale 2000, TTL 50ms, order chronological, clear user, no-op
+          su empty/missing user
+        * SEGMENTER: `_SENTENCE_RE` matcha ? ! . terminatori; non spezza
+          domande a metà; _pop_first_chunk_aggressive non taglia sotto 80 char
+      - test_audio_store_contract (18 test):
+        * statico: flag EXPO_PUBLIC_REPLAY_BIT_EXACT letto, default '1'
+        * appendSegment early-return se flag OFF
+        * readForReplay ritorna feature_disabled se flag OFF
+        * user isolation: readMeta rifiuta user_id mismatch,
+          ritorna user_mismatch
+        * sanitizeId regex [A-Za-z0-9_-] + slice(64)
+        * NO SpeechMod, fastConverseWS, fastConverse nel modulo
+        * cleanup policy fields present
+        * replayMessage in index.tsx: NO SpeechMod.speak, NO fastConverse,
+          ha ramo 'non disponibile', usa audioStore.readForReplay
+        * _turnMsgId generato PRIMA della chiamata ws
+        * onAudioSegment wired su fastConverseWS + usa pendingSentence.text
+        * property-based su 1000 input random: sanitize mai produce /, ..,
+          caratteri non-safe
+    
+    Suite completa: 74/74 OK. Nessuna chiamata rete esterna.
+    
+    D. COSA RESTA DA ASCOLTARE NELL'APP (NON testabile offline)
+    =============================================================
+    Replay:
+      - [ ] Verifica che il tap su una bolla AI dopo un messaggio recente
+        riproduca ESATTAMENTE l'audio originale (stesso timbro, stesse
+        pause). Confronto A/B con prima generazione: devono coincidere.
+      - [ ] Verifica che su un messaggio DOPO deploy (quindi senza
+        audioStore manifest storico, pre-feature) il tap mostri 'Riascolto
+        non disponibile' SENZA mai parlare.
+      - [ ] Verifica che svuotare lo storage (es. clear app data) → tap
+        mostra 'Riascolto non disponibile', nessun crash.
+    
+    Intonazione:
+      - [ ] Abilita INWORLD_SEND_CONTEXT=1 e INWORLD_CONTEXT_TTL_S=180 in
+        produzione. Confronta la PRIMA risposta su domande sincere / retoriche /
+        affermazioni rispetto al baseline (flag OFF). È un ascolto, non un test.
+      - [ ] Se noti rallentamenti su generazione parallela: controlla
+        i log INFO per '[inworld_dispatcher] context_buffer' — se vedi
+        error, segnalalo.
+      - [ ] NON garantisco che il contesto risolva l'intonazione: va
+        verificato all'ascolto come richiesto.
+    
+    Non pushato: attendo tua autorizzazione prima del push.
+
+ backend/inworld_context_buffer.py               | 173 +++++++++++
+ backend/inworld_dispatcher.py                   |  36 ++-
+ backend/inworld_tts.py                          |  61 +++-
+ backend/tests/test_audio_store_contract.py      | 207 +++++++++++++
+ backend/tests/test_inworld_synthesis_context.py | 213 +++++++++++++
+ frontend/app/index.tsx                          | 107 ++++++-
+ frontend/lib/audioStore.ts                      | 377 ++++++++++++++++++++++++
+ frontend/lib/speech.ts                          |  39 ++-
+ 8 files changed, 1191 insertions(+), 22 deletions(-)

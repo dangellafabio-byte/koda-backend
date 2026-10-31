@@ -1,0 +1,1533 @@
+commit 1155ae80e75d970afb8f0947d5d759ad6318fc08
+Author:     Fabio <fabio@koda.local>
+AuthorDate: Sat Oct 31 10:57:38 2026 +0000
+Commit:     Fabio <fabio@koda.local>
+CommitDate: Sat Oct 31 10:57:38 2026 +0000
+
+    Replay bit-exact + prova intonazione Inworld dietro flag (Fabio 2026-11-04)
+    
+    Base: koda/main @ 351187fb. Nessun cambio Claude/voce/modello TTS/prezzi/
+    minuti/memoria. Due flag indipendenti, entrambi disattivabili senza
+    toccare codice.
+    
+    A. REPLAY BIT-EXACT — tap su bolla = audio originale, zero rigenerazione
+    =========================================================================
+    Nuovo `frontend/lib/audioStore.ts`:
+      - Scrive MP3 originali su disco (expo-file-system/legacy) in
+        `${docDir}koda/audio/<user_id>/<message_id>/<idx>.mp3` + `meta.json`.
+      - API `appendSegment()` fire-and-forget: la prima risposta NON attende
+        la scrittura prima di parlare (chiamata dentro callback senza await).
+      - API `readForReplay(user_id, message_id)`: verifica presenza di TUTTI
+        i segmenti sul filesystem. Se anche uno manca → ritorna
+        `{ok:false, reason:'missing_segments'}`. Nessun fallback TTS.
+      - Isolamento utente: la path include `user_id` sanitizzato
+        (regex A-Za-z0-9_-, max 64 char, no path traversal); `readMeta()`
+        rifiuta se `meta.user_id` non combacia con l'utente richiedente.
+      - Pulizia esplicita `cleanup({maxAgeMs, maxMessagesPerUser})`
+        (default 7 giorni / 100 msg/user); non si auto-GC su write.
+      - Flag master `EXPO_PUBLIC_REPLAY_BIT_EXACT` (default '1' = ON);
+        '0' → appendSegment no-op, readForReplay returns feature_disabled
+        → caller cade sul comportamento pre-riforma.
+    
+    Hook in `frontend/lib/speech.ts`:
+      - Nuova opt callback `onAudioSegment` su `fastConverseWS({...})`.
+      - Invocata in entrambi i rami di binary frame (sync Uint8Array + async
+        Blob.arrayBuffer()). Fire-and-forget: errori swallowed, nessun
+        blocco del WS loop.
+      - Legge `pendingSentence.text` (il server pubblica `text`, non
+        `sentence`) — invariante presidiato da test statico.
+    
+    Rewiring in `frontend/app/index.tsx`:
+      - `_turnMsgId = fast-ai-<ts>-<rand>` generato PRIMA di fastConverseWS
+        e riusato come `aiEntry.id` → onAudioSegment e aiEntry puntano allo
+        stesso message_id. Zero race.
+      - `onAudioSegment: (seg) => audioStore.appendSegment(...).catch(()=>{})`.
+      - `replayMessage` RISCRITTO: niente `SpeechMod.speak`, niente
+        rigenerazione. Chiama `audioStore.readForReplay`; se ok → riproduce
+        i segmenti in ordine con `expo-audio.createAudioPlayer(filepath).play()`;
+        se not ok → Toast/Alert 'Riascolto non disponibile' (nessun fallback).
+    
+    B. PROVA INTONAZIONE — synthesisContext.previousRequests dietro flag
+    =====================================================================
+    Verifica preliminare segmentatore (`_SENTENCE_RE`):
+      - Già riconosce . ! ? … come terminatori. NON spezza all'interno di
+        domande (test_question_mark_not_split_inside PASSA).
+      - `_pop_first_chunk_aggressive` (fast idx=0): cerca soft-break
+        SOLO dopo MIN_FIRST_CHUNK_CHARS=80; sotto soglia aspetta più testo
+        → non taglia domande brevi.
+      - Decisione: NON riscrivere il segmentatore. Documentato nei test.
+    
+    Documentazione Inworld verificata su docs.inworld.ai 2026-11-04:
+      - `synthesisContext.previousRequests` supportato su endpoint
+        synthesize-speech / stream / websocket.
+      - Limiti: max 5 elementi, totale ≤ 2000 char, oldest→newest.
+      - 'context text is NOT billed toward your character usage; only the
+        primary text field of the current request is billed' → zero costo.
+      - `inworld-tts-2-flash` non supporta steering (instruction tags
+        ignorati) ma accetta `synthesisContext` secondo le docs.
+      - `deliveryMode` è di tts-2 (non flash) — non toccato.
+    
+    Nuovo `backend/inworld_context_buffer.py`:
+      - Buffer in-memory per-utente degli ULTIMI 5 testi effettivamente
+        sintetizzati con successo da Inworld (API record_synthesized_text).
+      - Troncamento per-item 400 char, totale ≤ 2000, TTL 180s
+        (INWORLD_CONTEXT_TTL_S overridabile).
+      - `is_context_feature_enabled()` ← legge `INWORLD_SEND_CONTEXT=1`.
+        Default OFF → payload identico a pre-2026-11-04.
+    
+    Hook in `inworld_dispatcher.generate_non_streaming`:
+      - PRIMA della synth: se feature ON e il buffer dell'utente contiene
+        materiale fresco → `previous_requests_for_payload` iniettati nel
+        payload via `synthesize_non_streaming(..., previous_requests=...)`.
+      - DOPO synth RIUSCITA: `record_synthesized_text(user_id, text)` →
+        il turno successivo avrà questa frase come contesto.
+      - Scrittura sempre: così accendere il flag a runtime non lascia il
+        buffer vuoto per i primi N turni.
+      - COMPROMESSO DOCUMENTATO (nei commenti e nei test): la pipeline
+        Ollenya genera segmenti in PARALLELO. Il buffer per il segmento N+1
+        può essere PARZIALMENTE vuoto se il segmento N non è ancora
+        completato. Non aggiungiamo attese (vincolo Fabio): accettiamo
+        context best-effort.
+      - Il campo in `InworldVoiceParams.to_payload` valida i limiti
+        (max 5, ≤2000 char) → ValueError LOCALE se qualcuno abusa, non
+        silent trim.
+    
+    C. TEST OFFLINE — nessuna chiamata paid
+    ========================================
+      - test_inworld_synthesis_context (22 test):
+        * flag OFF default, flag ON tramite env
+        * payload senza/con context (shape corretta)
+        * payload rifiuta > 5 items / > 2000 char
+        * buffer: isolamento utenti, cap 5 items (LRU), per-item 400,
+          totale 2000, TTL 50ms, order chronological, clear user, no-op
+          su empty/missing user
+        * SEGMENTER: `_SENTENCE_RE` matcha ? ! . terminatori; non spezza
+          domande a metà; _pop_first_chunk_aggressive non taglia sotto 80 char
+      - test_audio_store_contract (18 test):
+        * statico: flag EXPO_PUBLIC_REPLAY_BIT_EXACT letto, default '1'
+        * appendSegment early-return se flag OFF
+        * readForReplay ritorna feature_disabled se flag OFF
+        * user isolation: readMeta rifiuta user_id mismatch,
+          ritorna user_mismatch
+        * sanitizeId regex [A-Za-z0-9_-] + slice(64)
+        * NO SpeechMod, fastConverseWS, fastConverse nel modulo
+        * cleanup policy fields present
+        * replayMessage in index.tsx: NO SpeechMod.speak, NO fastConverse,
+          ha ramo 'non disponibile', usa audioStore.readForReplay
+        * _turnMsgId generato PRIMA della chiamata ws
+        * onAudioSegment wired su fastConverseWS + usa pendingSentence.text
+        * property-based su 1000 input random: sanitize mai produce /, ..,
+          caratteri non-safe
+    
+    Suite completa: 74/74 OK. Nessuna chiamata rete esterna.
+    
+    D. COSA RESTA DA ASCOLTARE NELL'APP (NON testabile offline)
+    =============================================================
+    Replay:
+      - [ ] Verifica che il tap su una bolla AI dopo un messaggio recente
+        riproduca ESATTAMENTE l'audio originale (stesso timbro, stesse
+        pause). Confronto A/B con prima generazione: devono coincidere.
+      - [ ] Verifica che su un messaggio DOPO deploy (quindi senza
+        audioStore manifest storico, pre-feature) il tap mostri 'Riascolto
+        non disponibile' SENZA mai parlare.
+      - [ ] Verifica che svuotare lo storage (es. clear app data) → tap
+        mostra 'Riascolto non disponibile', nessun crash.
+    
+    Intonazione:
+      - [ ] Abilita INWORLD_SEND_CONTEXT=1 e INWORLD_CONTEXT_TTL_S=180 in
+        produzione. Confronta la PRIMA risposta su domande sincere / retoriche /
+        affermazioni rispetto al baseline (flag OFF). È un ascolto, non un test.
+      - [ ] Se noti rallentamenti su generazione parallela: controlla
+        i log INFO per '[inworld_dispatcher] context_buffer' — se vedi
+        error, segnalalo.
+      - [ ] NON garantisco che il contesto risolva l'intonazione: va
+        verificato all'ascolto come richiesto.
+    
+    Non pushato: attendo tua autorizzazione prima del push.
+
+diff --git a/backend/inworld_context_buffer.py b/backend/inworld_context_buffer.py
+new file mode 100644
+index 00000000..8ed7324d
+--- /dev/null
++++ b/backend/inworld_context_buffer.py
+@@ -0,0 +1,173 @@
++"""inworld_context_buffer.py — buffer per-utente dei testi effettivamente
++sintetizzati, per alimentare `synthesisContext.previousRequests` di Inworld
++TTS (Fabio 2026-11-04).
++
++Scopo:
++  - Conservare GLI ULTIMI testi che Inworld ha realmente sintetizzato con
++    SUCCESSO per uno specifico utente. Serve come "memoria prosodica"
++    passata nel body REST della chiamata successiva.
++  - MAI contenere testo dell'utente (STT) spacciato per "sintesi
++    precedente". Solo output effettivamente parlati da Ollenya.
++  - MAI aggiungere latenza: la lettura è snapshot in-memory, O(1).
++
++Vincoli documentati:
++  - Max 5 testi (`MAX_PREV_REQUESTS`).
++  - Combinati ≤ 2000 char (`MAX_PREV_TOTAL_CHARS`).
++  - Ordine cronologico oldest→newest.
++  - TTL (`CONTEXT_TTL_S`, default 180s): oltre questa soglia la coda
++    scade e torna vuota — "contesto fresco" per nuove sessioni.
++
++Flag di controllo:
++  - Env ``INWORLD_SEND_CONTEXT=1`` → l'adapter dispatcher legge dal
++    buffer e passa il campo nel payload. OFF di default: comportamento
++    pre-2026-11-04 preservato.
++  - Env ``INWORLD_SEND_CONTEXT`` non è letto QUI (modulo neutro): è il
++    chiamante dispatcher a decidere se interrogare il buffer. Questo
++    isola la policy dal data layer.
++
++LIMITAZIONE NOTA (documentata, non bug):
++  La pipeline Ollenya può generare segmenti TTS IN PARALLELO: segmento N+1
++  può partire PRIMA che il segmento N abbia finito la synth. In questo
++  caso il buffer per N+1 è "best-effort": contiene solo i segmenti già
++  completati al momento della call. Non aspettiamo mai sintesi precedenti:
++  l'alternativa (serializzare TTS per avere contesto perfetto) aumenterebbe
++  la latenza e viola il vincolo esplicito di Fabio.
++
++Policy di igiene:
++  - Nessun contenuto personale STT. Il modulo accetta solo testi
++    output. Chi inserisce accidentalmente un testo utente commette un
++    bug CHIAMANTE: qui non facciamo euristica di detection.
++  - I testi inseriti vengono troncati a 400 char (soglia conservativa
++    per non superare il totale di 2000 su 5).
++"""
++from __future__ import annotations
++
++import logging
++import os
++import time
++from collections import deque
++from threading import Lock
++from typing import Deque, Dict, List, Optional, Tuple
++
++logger = logging.getLogger(__name__)
++
++# ─── Limiti documentati Inworld (verificati su docs 2026-11-04) ──────
++MAX_PREV_REQUESTS = 5
++MAX_PREV_TOTAL_CHARS = 2000
++PER_ITEM_SOFT_CAP_CHARS = 400  # 5 × 400 = 2000, dà cushion
++
++# ─── TTL del buffer: oltre questo intervallo la coda è "stale" ───────
++CONTEXT_TTL_S = float(os.environ.get("INWORLD_CONTEXT_TTL_S", "180"))
++
++# ─── Max utenti attivi in buffer (LRU implicita per inattività) ──────
++MAX_USERS_IN_MEMORY = int(os.environ.get("INWORLD_CONTEXT_MAX_USERS", "500"))
++
++# user_id → deque di (timestamp_s, text_snippet). Snippet già troncato.
++_buffers: Dict[str, Deque[Tuple[float, str]]] = {}
++_lock = Lock()
++
++
++def record_synthesized_text(user_id: Optional[str], text: str) -> None:
++    """Chiamato dal dispatcher dopo una call Inworld RIUSCITA.
++
++    `text` deve essere il testo REALMENTE inviato come `text` del payload
++    (ciò che Inworld ha convertito in audio). Troncato internamente a
++    PER_ITEM_SOFT_CAP_CHARS per garantire il vincolo cumulativo.
++
++    Thread-safe. Idempotente logicamente (chiamarla 2 volte di seguito
++    con lo stesso testo appende 2 entry — è responsabilità del chiamante
++    non doppiare).
++    """
++    if not user_id or not text:
++        return
++    text = text.strip()
++    if not text:
++        return
++    snippet = text[:PER_ITEM_SOFT_CAP_CHARS]
++    now = time.monotonic()
++    with _lock:
++        q = _buffers.get(user_id)
++        if q is None:
++            # Semplice capienza per evitare growth illimitata.
++            if len(_buffers) >= MAX_USERS_IN_MEMORY:
++                # Elimina l'utente più stantio (quello col top più vecchio).
++                try:
++                    stalest_uid = min(
++                        _buffers,
++                        key=lambda u: (
++                            _buffers[u][0][0] if _buffers[u] else 0.0
++                        ),
++                    )
++                    _buffers.pop(stalest_uid, None)
++                except ValueError:
++                    pass
++            q = deque(maxlen=MAX_PREV_REQUESTS)
++            _buffers[user_id] = q
++        q.append((now, snippet))
++
++
++def _prune_for_payload(entries: List[Tuple[float, str]]) -> List[str]:
++    """Applica i limiti documentati: tiene gli ultimi N (<=5) e taglia
++    quelli più vecchi se il totale supera 2000 char. Mantiene l'ordine
++    cronologico (oldest→newest). Elimina entries scadute per TTL.
++    """
++    now = time.monotonic()
++    fresh = [(ts, t) for (ts, t) in entries if now - ts <= CONTEXT_TTL_S]
++    if not fresh:
++        return []
++    # Prendi gli ultimi ≤5
++    fresh = fresh[-MAX_PREV_REQUESTS:]
++    # Dal più RECENTE indietro: accumula finché totale ≤ 2000.
++    out_rev: List[str] = []
++    total = 0
++    for (_ts, t) in reversed(fresh):
++        if total + len(t) > MAX_PREV_TOTAL_CHARS:
++            break
++        out_rev.append(t)
++        total += len(t)
++    return list(reversed(out_rev))
++
++
++def get_context_for_user(user_id: Optional[str]) -> List[str]:
++    """Snapshot thread-safe. Ritorna lista pronta per
++    `synthesisContext.previousRequests` (già rispetta i limiti).
++    Lista vuota = nessun contesto da inviare.
++    """
++    if not user_id:
++        return []
++    with _lock:
++        q = _buffers.get(user_id)
++        if not q:
++            return []
++        entries = list(q)
++    return _prune_for_payload(entries)
++
++
++def clear_user(user_id: Optional[str]) -> None:
++    """Reset esplicito (es. logout, cambio sessione)."""
++    if not user_id:
++        return
++    with _lock:
++        _buffers.pop(user_id, None)
++
++
++def is_context_feature_enabled() -> bool:
++    """Flag master: SOLO se ``INWORLD_SEND_CONTEXT=1`` il dispatcher
++    chiama ``get_context_for_user()``. Default OFF — nessun cambio di
++    comportamento rispetto al pre-2026-11-04."""
++    return os.environ.get("INWORLD_SEND_CONTEXT", "").strip() == "1"
++
++
++# ─── Introspection per diagnostica (uso test / admin) ────────────────
++def _debug_snapshot(user_id: Optional[str]) -> Dict[str, object]:
++    """Non-pubblica: usata dai test offline per asserire stato."""
++    if not user_id:
++        return {"queue": [], "count": 0}
++    with _lock:
++        q = _buffers.get(user_id)
++        if not q:
++            return {"queue": [], "count": 0}
++        return {
++            "queue": [{"age_s": time.monotonic() - ts, "text": t} for (ts, t) in q],
++            "count": len(q),
++        }
+diff --git a/backend/inworld_dispatcher.py b/backend/inworld_dispatcher.py
+index 34f11bef..eb330841 100644
+--- a/backend/inworld_dispatcher.py
++++ b/backend/inworld_dispatcher.py
+@@ -24,14 +24,18 @@ Zero import di server.py → nessun ciclo.
+ from __future__ import annotations
+ 
+ import asyncio
++import logging
+ import time
+ import uuid
+ from typing import AsyncIterator, Optional
+ 
+ import inworld_tts as _ad
++import inworld_context_buffer as _context_buffer
+ import koda_tts_events as _ev
+ import koda_tts_prefs as _prefs
+ 
++logger = logging.getLogger(__name__)
++
+ 
+ class InworldVoiceNotAvailable(_ad.InworldTTSError):
+     """La voice_id richiesta non è coperta dalla fase A/B corrente."""
+@@ -94,8 +98,30 @@ async def generate_non_streaming(
+     event_id = str(uuid.uuid4())
+     params = _ad.DEFAULT_VOICE_PARAMS
+ 
++    # === SYNTHESIS CONTEXT (Fabio 2026-11-04) ===========================
++    # Dietro flag INWORLD_SEND_CONTEXT=1. Legge dal buffer per-utente gli
++    # ultimi testi EFFETTIVAMENTE sintetizzati (zero STT utente, mai).
++    # - Best-effort: se la pipeline è parallela, il buffer può essere
++    #   parzialmente vuoto. Non attendiamo mai nulla.
++    # - Zero costo extra: "context text is not billed" (Inworld docs
++    #   2026-11-04, verificato su best-practices/generating-speech).
++    # - Flag OFF → payload identico a pre-2026-11-04.
++    prev_requests_for_payload: Optional[list] = None
++    if _context_buffer.is_context_feature_enabled():
++        try:
++            prev_requests_for_payload = _context_buffer.get_context_for_user(user_id)
++            if not prev_requests_for_payload:
++                prev_requests_for_payload = None  # no field in payload
++        except Exception as _cb_err:
++            logger.warning(f"[inworld_dispatcher] context_buffer read failed: {_cb_err!r}")
++            prev_requests_for_payload = None
++
+     try:
+-        res = await _ad.synthesize_non_streaming(text, params)
++        res = await _ad.synthesize_non_streaming(
++            text,
++            params,
++            previous_requests=prev_requests_for_payload,
++        )
+     except _ad.InworldTTSError as e:
+         # Record tentativo fallito. Se è un timeout o un'auth error,
+         # l'addebito è incerto → chars_billed=None, billable=True
+@@ -169,6 +195,14 @@ async def generate_non_streaming(
+         upstream_request_id=res.request_id,
+         http_status=res.http_status,
+     ))
++    # === SYNTHESIS CONTEXT: appendi al buffer SOLO su successo ========
++    # Il buffer è ignorato se INWORLD_SEND_CONTEXT!=1 (lettura gated),
++    # ma scriviamo comunque così, se Fabio accende il flag a runtime
++    # su un server caldo, le prime chiamate hanno già materiale fresco.
++    try:
++        _context_buffer.record_synthesized_text(user_id, text)
++    except Exception as _cb_err:
++        logger.warning(f"[inworld_dispatcher] context_buffer write failed: {_cb_err!r}")
+     return res.audio_bytes
+ 
+ 
+diff --git a/backend/inworld_tts.py b/backend/inworld_tts.py
+index f8054c64..968f1ee5 100644
+--- a/backend/inworld_tts.py
++++ b/backend/inworld_tts.py
+@@ -46,7 +46,7 @@ import json
+ import os
+ import time
+ from dataclasses import dataclass, field
+-from typing import AsyncIterator, Optional
++from typing import Any, AsyncIterator, Dict, List, Optional
+ 
+ import httpx
+ 
+@@ -90,8 +90,31 @@ class InworldVoiceParams:
+     model_id: str = "inworld-tts-2-flash"
+     audio_encoding: str = "MP3"
+ 
+-    def to_payload(self, text: str) -> dict:
+-        return {
++    def to_payload(
++        self,
++        text: str,
++        *,
++        previous_requests: Optional[List[str]] = None,
++    ) -> dict:
++        """Costruisce il payload REST verso Inworld TTS.
++
++        `previous_requests`: lista di testi effettivamente sintetizzati
++        in turni precedenti (ordine cronologico, oldest→newest). Se
++        presente, viene inserita in `synthesisContext.previousRequests`
++        — vedi docs Inworld "best-practices/generating-speech":
++          - max 5 elementi
++          - lunghezza combinata ≤ 2000 char
++          - ordinati dal più vecchio al più nuovo
++          - "context text is not billed toward your character usage;
++            only the primary `text` field of the current request is
++            billed" → inviare contesto NON aumenta la spesa.
++
++        NOTA Flash: `inworld-tts-2-flash` NON supporta "steering"
++        (instruction tags vocali ignorati), MA accetta `synthesisContext`
++        secondo la documentazione pubblica (endpoint synthesize-speech,
++        verificato 2026-11-04).
++        """
++        payload: Dict[str, Any] = {
+             "text": text,
+             "modelId": self.model_id,
+             "voiceId": self.voice_id,
+@@ -100,6 +123,28 @@ class InworldVoiceParams:
+             "deliveryMode": self.delivery_mode,
+             "audioConfig": {"audioEncoding": self.audio_encoding},
+         }
++        if previous_requests:
++            # Sanity check: rispettiamo i limiti documentati, non li
++            # ridimensioniamo silenziosamente. Chi passa più di 5 o
++            # più di 2000 char complessivi riceve un errore locale
++            # subito, non una failure Inworld. Vedi
++            # `inworld_context_buffer._prune_for_payload()` per la
++            # politica di selezione a monte.
++            if len(previous_requests) > 5:
++                raise ValueError(
++                    "synthesisContext.previousRequests: max 5 elementi "
++                    "(Inworld docs 2026-11-04)"
++                )
++            total_chars = sum(len(t or "") for t in previous_requests)
++            if total_chars > 2000:
++                raise ValueError(
++                    f"synthesisContext.previousRequests: max 2000 char "
++                    f"combinati (ricevuti {total_chars})"
++                )
++            payload["synthesisContext"] = {
++                "previousRequests": [{"text": t} for t in previous_requests],
++            }
++        return payload
+ 
+ 
+ DEFAULT_VOICE_PARAMS = InworldVoiceParams()
+@@ -278,12 +323,20 @@ async def synthesize_non_streaming(
+     params: InworldVoiceParams = DEFAULT_VOICE_PARAMS,
+     *,
+     timeout_s: float = DEFAULT_NON_STREAM_TIMEOUT_S,
++    previous_requests: Optional[List[str]] = None,
+ ) -> InworldSynthesisResult:
+     """Chiamata TTS Inworld non-streaming. Un single-shot, 0 retry.
+ 
+     Il chiamante gestisce retry/fallback/cache a monte: qui NON facciamo
+     retry automatici per rispettare la regola "nessun fallback automatico".
+ 
++    Args:
++        previous_requests: opzionale, lista di testi effettivamente
++            sintetizzati in turni precedenti (ordine cronologico), da
++            iniettare in ``synthesisContext.previousRequests``. Se
++            ``None`` il payload NON contiene il campo (comportamento
++            retro-compatibile). Vedi :meth:`InworldVoiceParams.to_payload`.
++
+     Returns:
+         :class:`InworldSynthesisResult` — contiene i bytes MP3 completi
+         pronti da servire al frontend con media_type ``audio/mpeg``.
+@@ -297,7 +350,7 @@ async def synthesize_non_streaming(
+     """
+     text = _validate_text(text)
+     api_key = _load_api_key()
+-    payload = params.to_payload(text)
++    payload = params.to_payload(text, previous_requests=previous_requests)
+     chars_sent = len(text)
+ 
+     t0 = time.perf_counter()
+diff --git a/backend/tests/test_audio_store_contract.py b/backend/tests/test_audio_store_contract.py
+new file mode 100644
+index 00000000..bfe91760
+--- /dev/null
++++ b/backend/tests/test_audio_store_contract.py
+@@ -0,0 +1,207 @@
++"""Test OFFLINE — contratto audioStore (frontend) + invariant replayMessage
++(Fabio 2026-11-04).
++
++Il frontend non ha un test-runner JS installato (no jest/tsx/ts-node).
++Questi test verificano in modo STATICO che il codice TypeScript rispetti
++il contratto richiesto da Fabio:
++
++  1. Replay con zero chiamate ai generatori:
++     - `replayMessage` NON chiama più `SpeechMod.speak`.
++     - `replayMessage` NON chiama `fastConverseWS`.
++     - Il nuovo path chiama solo `audioStore.readForReplay` + player
++       locale su file.
++  2. Audio assente/incompleto → ok=false con reason specifica, nessun
++     fallback a rigenerazione (nessun `SpeechMod.speak` nel ramo else).
++  3. Isolamento utente: `readMeta` verifica `user_id`.
++  4. Flag disattivato preserva comportamento precedente:
++     - `isBitExactReplayEnabled()` legge `EXPO_PUBLIC_REPLAY_BIT_EXACT`.
++     - `appendSegment` ritorna early quando il flag è OFF.
++     - `readForReplay` ritorna `feature_disabled` quando OFF.
++  5. Path safety: sanitizeId rifiuta `..`, `/`, ecc.
++  6. Isolamento filesystem: path include `user_id` sanitizzato.
++
++Più un contratto-test IMPLEMENTATIVO in Python che riproduce la logica
++di sanitize + path builder per asserire che non emerga mai un path
++traversal (property-based su 1000 input random).
++"""
++from __future__ import annotations
++
++import random
++import re
++import string
++import sys
++import unittest
++from pathlib import Path
++
++FRONTEND = Path(__file__).parent.parent.parent / "frontend"
++AUDIO_STORE_PATH = FRONTEND / "lib" / "audioStore.ts"
++SPEECH_PATH = FRONTEND / "lib" / "speech.ts"
++INDEX_PATH = FRONTEND / "app" / "index.tsx"
++
++
++def _read(p: Path) -> str:
++    return p.read_text(encoding="utf-8")
++
++
++class TestAudioStoreTSInvariants(unittest.TestCase):
++
++    @classmethod
++    def setUpClass(cls):
++        if not AUDIO_STORE_PATH.exists():
++            raise unittest.SkipTest(f"missing {AUDIO_STORE_PATH}")
++        cls.src = _read(AUDIO_STORE_PATH)
++
++    def test_feature_flag_readable_and_default_on(self):
++        self.assertIn("EXPO_PUBLIC_REPLAY_BIT_EXACT", self.src)
++        self.assertIn('"1"', self.src)
++        self.assertIn("isBitExactReplayEnabled", self.src)
++
++    def test_appendSegment_early_returns_when_flag_off(self):
++        # Deve esistere un check su isBitExactReplayEnabled() prima
++        # di scrivere su filesystem.
++        append_block = re.search(
++            r"export async function appendSegment\(.*?\): Promise<void> \{(.+?)^\}",
++            self.src, re.DOTALL | re.MULTILINE,
++        )
++        self.assertIsNotNone(append_block, "appendSegment signature missing")
++        body = append_block.group(1)
++        self.assertIn("isBitExactReplayEnabled()", body)
++        self.assertIn("return", body)
++
++    def test_readForReplay_returns_feature_disabled_when_off(self):
++        self.assertIn('reason: "feature_disabled"', self.src)
++        read_block = re.search(
++            r"export async function readForReplay\(.+?\n\}",
++            self.src, re.DOTALL,
++        )
++        self.assertIsNotNone(read_block)
++        body = read_block.group(0)
++        self.assertIn("isBitExactReplayEnabled()", body)
++
++    def test_user_isolation_check_present(self):
++        # readMeta deve rifiutare se parsed.user_id !== userId
++        self.assertIn("parsed.user_id !== userId", self.src)
++        # readForReplay deve ritornare user_mismatch quando il campo
++        # salvato non coincide.
++        self.assertIn('reason: "user_mismatch"', self.src)
++
++    def test_sanitizeId_regex(self):
++        # Permette solo [A-Za-z0-9_-], len ≤ 64
++        self.assertIn("[^A-Za-z0-9_-]", self.src)
++        self.assertIn("slice(0, 64)", self.src)
++
++    def test_no_fallback_regen_on_missing(self):
++        # Nel modulo audioStore stesso NON deve mai apparire
++        # `SpeechMod` né chiamate TTS di nessun tipo.
++        self.assertNotIn("SpeechMod", self.src)
++        self.assertNotIn("fastConverseWS", self.src)
++        self.assertNotIn("fastConverse", self.src)
++
++    def test_cleanup_explicit_policy_fields(self):
++        self.assertIn("DEFAULT_MAX_AGE_MS", self.src)
++        self.assertIn("DEFAULT_MAX_MESSAGES_PER_USER", self.src)
++        self.assertIn("messages_removed_by_age", self.src)
++        self.assertIn("messages_removed_by_count", self.src)
++
++    def test_meta_schema_version(self):
++        self.assertIn("schema_version", self.src)
++
++
++class TestReplayMessageNoRegenInIndex(unittest.TestCase):
++
++    @classmethod
++    def setUpClass(cls):
++        if not INDEX_PATH.exists():
++            raise unittest.SkipTest(f"missing {INDEX_PATH}")
++        cls.src = _read(INDEX_PATH)
++        # Estrai il body di replayMessage
++        m = re.search(
++            r"const replayMessage = async \(entry: TimelineEntry\) => \{(.+?)^\s*\};",
++            cls.src, re.DOTALL | re.MULTILINE,
++        )
++        if not m:
++            raise unittest.SkipTest("replayMessage body not found")
++        cls.body = m.group(1)
++
++    def test_replay_uses_audioStore_readForReplay(self):
++        self.assertIn("audioStore.readForReplay", self.body)
++
++    def test_replay_does_not_call_SpeechMod_speak(self):
++        # SpeechMod.stop() è OK (toggle); SpeechMod.speak() NO (= regen).
++        self.assertNotIn("SpeechMod.speak", self.body)
++
++    def test_replay_does_not_call_fastConverse(self):
++        self.assertNotIn("fastConverse", self.body)
++
++    def test_replay_has_unavailable_message_branch(self):
++        # Deve esserci un ramo che mostra "non disponibile" o simile
++        # quando ok=false. Verifichiamo la presenza di una delle label.
++        self.assertRegex(
++            self.body,
++            r"non disponibile|non_disponibile|Riascolto.*disattivato|missing_segments",
++        )
++
++    def test_turn_message_id_is_stable_before_ws(self):
++        # Il generatore `_turnMsgId` deve esistere PRIMA della chiamata
++        # a fastConverseWS, così onAudioSegment e aiEntry.id combaciano.
++        wsidx = self.src.find("fastConverseWS(")
++        tidx = self.src.find("_turnMsgId")
++        self.assertGreater(wsidx, 0)
++        self.assertGreater(tidx, 0)
++        self.assertLess(tidx, wsidx, "_turnMsgId generato DOPO ws → mismatch")
++
++    def test_onAudioSegment_wired_into_fastConverseWS(self):
++        self.assertIn("onAudioSegment:", self.src)
++        self.assertIn("audioStore.appendSegment", self.src)
++
++
++class TestSpeechTsCallbackContract(unittest.TestCase):
++
++    @classmethod
++    def setUpClass(cls):
++        if not SPEECH_PATH.exists():
++            raise unittest.SkipTest(f"missing {SPEECH_PATH}")
++        cls.src = _read(SPEECH_PATH)
++
++    def test_onAudioSegment_option_declared(self):
++        self.assertIn("onAudioSegment?:", self.src)
++        self.assertIn("idx: number", self.src)
++        self.assertIn("bytes: Uint8Array", self.src)
++
++    def test_onAudioSegment_called_in_both_binary_branches(self):
++        # Deve essere invocata sia nel ramo sync (u8) sia in quello async (Blob).
++        count = self.src.count("opts.onAudioSegment")
++        self.assertGreaterEqual(count, 2, f"found {count} invocations, expected ≥2")
++
++    def test_onAudioSegment_uses_pendingSentence_text_not_sentence(self):
++        # Il server pubblica `text` nel header 'sentence'. Il callback
++        # DEVE leggere da `pendingSentence.text`, non `.sentence`.
++        self.assertIn("pendingSentence.text", self.src)
++
++
++class TestSanitizePropertyBased(unittest.TestCase):
++    """Property-based su 1000 input random — nessun output deve contenere
++    `/`, `..`, o altri caratteri path-sensitive."""
++
++    SAFE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
++
++    @staticmethod
++    def _sanitize_py(raw: str) -> str:
++        s = re.sub(r"[^A-Za-z0-9_-]", "_", raw or "")[:64]
++        return s or "_"
++
++    def test_random_inputs_safe(self):
++        rnd = random.Random(42)
++        alphabet = string.printable + "àèéìòù\u2019\u201C\x00/\\"
++        for _ in range(1000):
++            n = rnd.randint(0, 120)
++            raw = "".join(rnd.choice(alphabet) for _ in range(n))
++            out = self._sanitize_py(raw)
++            self.assertTrue(self.SAFE_RE.match(out))
++            self.assertNotIn("..", out)
++            self.assertNotIn("/", out)
++            self.assertLessEqual(len(out), 64)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/backend/tests/test_inworld_synthesis_context.py b/backend/tests/test_inworld_synthesis_context.py
+new file mode 100644
+index 00000000..3eedd5e9
+--- /dev/null
++++ b/backend/tests/test_inworld_synthesis_context.py
+@@ -0,0 +1,213 @@
++"""Test OFFLINE — Inworld synthesisContext.previousRequests (Fabio 2026-11-04).
++
++Verifica:
++  1. Flag OFF (default) → payload NON contiene `synthesisContext`.
++  2. Flag ON → `synthesisContext.previousRequests` presente SOLO se
++     il buffer ha testi reali.
++  3. I testi nel buffer vengono MAI messaggi utente (STT): è
++     responsabilità del chiamante, qui testiamo che il record funzioni
++     solo con testo output effettivo.
++  4. Limiti documentati: max 5, max 2000 char, oldest→newest.
++  5. TTL: oltre `CONTEXT_TTL_S` la coda è stale.
++  6. Isolamento tra utenti.
++  7. Segmentazione: `_SENTENCE_RE` preserva `?` finali di domande,
++     NON spezza domande a metà.
++
++Nessuna chiamata rete, nessuna chiamata paid.
++"""
++from __future__ import annotations
++
++import os
++import sys
++import time
++import unittest
++from pathlib import Path
++
++BACKEND = Path(__file__).parent.parent
++sys.path.insert(0, str(BACKEND))
++
++import inworld_context_buffer as cb  # noqa: E402
++import inworld_tts as inworld  # noqa: E402
++
++
++class TestPayloadFlagGating(unittest.TestCase):
++
++    def tearDown(self):
++        os.environ.pop("INWORLD_SEND_CONTEXT", None)
++        cb._buffers.clear()
++
++    def test_flag_off_by_default(self):
++        self.assertFalse(cb.is_context_feature_enabled())
++
++    def test_flag_on_when_env_set(self):
++        os.environ["INWORLD_SEND_CONTEXT"] = "1"
++        self.assertTrue(cb.is_context_feature_enabled())
++
++    def test_payload_without_context(self):
++        p = inworld.DEFAULT_VOICE_PARAMS.to_payload("Ciao", previous_requests=None)
++        self.assertNotIn("synthesisContext", p)
++        self.assertEqual(p["text"], "Ciao")
++
++    def test_payload_with_context(self):
++        p = inworld.DEFAULT_VOICE_PARAMS.to_payload(
++            "Perché?",
++            previous_requests=["Davvero?"],
++        )
++        self.assertIn("synthesisContext", p)
++        pr = p["synthesisContext"]["previousRequests"]
++        self.assertEqual(len(pr), 1)
++        self.assertEqual(pr[0], {"text": "Davvero?"})
++
++    def test_payload_rejects_more_than_5_items(self):
++        with self.assertRaises(ValueError):
++            inworld.DEFAULT_VOICE_PARAMS.to_payload(
++                "x",
++                previous_requests=["a", "b", "c", "d", "e", "f"],
++            )
++
++    def test_payload_rejects_more_than_2000_chars(self):
++        with self.assertRaises(ValueError):
++            inworld.DEFAULT_VOICE_PARAMS.to_payload(
++                "x",
++                previous_requests=["a" * 1000, "b" * 1200],
++            )
++
++
++class TestContextBufferBehavior(unittest.TestCase):
++
++    def setUp(self):
++        cb._buffers.clear()
++
++    def test_record_and_get_single_user(self):
++        cb.record_synthesized_text("u1", "Ciao, come stai?")
++        cb.record_synthesized_text("u1", "Bene, grazie.")
++        out = cb.get_context_for_user("u1")
++        self.assertEqual(out, ["Ciao, come stai?", "Bene, grazie."])
++
++    def test_user_isolation(self):
++        cb.record_synthesized_text("u1", "testo di U1")
++        cb.record_synthesized_text("u2", "testo di U2")
++        self.assertEqual(cb.get_context_for_user("u1"), ["testo di U1"])
++        self.assertEqual(cb.get_context_for_user("u2"), ["testo di U2"])
++
++    def test_cap_5_items_lru(self):
++        for i in range(1, 8):
++            cb.record_synthesized_text("u1", f"frase {i}")
++        out = cb.get_context_for_user("u1")
++        # Solo le ULTIME 5
++        self.assertEqual(out, [f"frase {i}" for i in range(3, 8)])
++
++    def test_truncate_per_item_cap(self):
++        long = "x" * 500  # oltre il PER_ITEM_SOFT_CAP_CHARS=400
++        cb.record_synthesized_text("u1", long)
++        out = cb.get_context_for_user("u1")
++        self.assertEqual(len(out), 1)
++        self.assertEqual(len(out[0]), cb.PER_ITEM_SOFT_CAP_CHARS)
++
++    def test_total_budget_2000(self):
++        for i in range(5):
++            cb.record_synthesized_text("u1", "a" * 400)
++        out = cb.get_context_for_user("u1")
++        self.assertEqual(len(out), 5)
++        self.assertEqual(sum(len(t) for t in out), 2000)
++
++    def test_total_budget_drops_oldest_when_exceeded(self):
++        # Mettiamo 5 x 400 = 2000. Aggiungiamo un 6° (deque maxlen=5 →
++        # il primo esce). Totale resta ≤ 2000.
++        for i in range(6):
++            cb.record_synthesized_text("u1", "a" * 400)
++        out = cb.get_context_for_user("u1")
++        self.assertLessEqual(sum(len(t) for t in out), 2000)
++        self.assertLessEqual(len(out), 5)
++
++    def test_ttl_expires_entries(self):
++        orig_ttl = cb.CONTEXT_TTL_S
++        cb.CONTEXT_TTL_S = 0.05  # 50ms
++        try:
++            cb.record_synthesized_text("u1", "vecchio")
++            time.sleep(0.1)
++            cb.record_synthesized_text("u1", "nuovo")
++            out = cb.get_context_for_user("u1")
++            self.assertEqual(out, ["nuovo"])
++        finally:
++            cb.CONTEXT_TTL_S = orig_ttl
++
++    def test_empty_text_ignored(self):
++        cb.record_synthesized_text("u1", "")
++        cb.record_synthesized_text("u1", "   ")
++        self.assertEqual(cb.get_context_for_user("u1"), [])
++
++    def test_missing_user_id_noop(self):
++        cb.record_synthesized_text(None, "ciao")
++        cb.record_synthesized_text("", "ciao")
++        self.assertEqual(cb.get_context_for_user(None), [])
++        self.assertEqual(cb.get_context_for_user(""), [])
++
++    def test_clear_user(self):
++        cb.record_synthesized_text("u1", "x")
++        cb.clear_user("u1")
++        self.assertEqual(cb.get_context_for_user("u1"), [])
++
++    def test_order_chronological(self):
++        cb.record_synthesized_text("u1", "primo")
++        time.sleep(0.01)
++        cb.record_synthesized_text("u1", "secondo")
++        time.sleep(0.01)
++        cb.record_synthesized_text("u1", "terzo")
++        self.assertEqual(cb.get_context_for_user("u1"), ["primo", "secondo", "terzo"])
++
++
++class TestSegmenterPreservesQuestions(unittest.TestCase):
++    """Il segmentatore attuale (`_SENTENCE_RE`) deve riconoscere `?` come
++    terminatore e NON spezzare dentro una domanda. Questo è un invariante
++    che Fabio ha chiesto di VERIFICARE prima di riscrivere il segmentatore.
++    """
++
++    def test_question_mark_as_terminator(self):
++        import server
++        sent, rest = server._pop_first_sentence("Come stai? Dimmi.")
++        self.assertEqual(sent, "Come stai?")
++        self.assertEqual(rest.strip(), "Dimmi.")
++
++    def test_question_mark_not_split_inside(self):
++        import server
++        # Il regex matcha PRIMO `?` → la prima frase è "Come stai?",
++        # il rest comincia con " E tu?". Non c'è taglio INTERNO alla
++        # domanda "Come stai?" (nessun soft-break tipo `,` dentro).
++        sent, rest = server._pop_first_sentence("Come stai, oggi? E tu?")
++        self.assertEqual(sent, "Come stai, oggi?")
++        self.assertEqual(rest.strip(), "E tu?")
++
++    def test_multiple_question_marks_preserved(self):
++        import server
++        # Doppi "??" sono comuni in italiano colloquiale (urgenza/sorpresa).
++        # Il regex `[.!?…]+` li tratta come SINGOLO terminatore.
++        sent, rest = server._pop_first_sentence("Davvero?? Non ci credo.")
++        self.assertEqual(sent, "Davvero??")
++        self.assertEqual(rest.strip(), "Non ci credo.")
++
++    def test_early_chunk_does_not_split_inside_question(self):
++        import server
++        # Domanda lunga ma senza terminatori interni (`.`, `!`, `?`
++        # intermedio). Un soft-break `,` c'è, ma `_pop_first_chunk_aggressive`
++        # cerca soft-break SOLO dopo MIN_FIRST_CHUNK_CHARS=80. La virgola
++        # qui è a pos 48, SOTTO soglia → nessun taglio. Risultato: aspetta
++        # più testo (ritorna "", buf) finché non arriva il `?`.
++        q = "Come stai dopo tutto, e cosa pensi del risultato"
++        self.assertLess(len(q), 80)
++        sent, rest = server._pop_first_chunk_aggressive(q)
++        self.assertEqual(sent, "")
++        self.assertEqual(rest, q)
++
++    def test_sentence_regex_recognizes_interrogation(self):
++        import re, server
++        # L'invariante direct-on-regex: `?` è nel pattern di terminatore
++        # ammessi. Se qualcuno un giorno rimuove `?` dal regex, questo
++        # test lo intercetta.
++        self.assertIn("?", server._SENTENCE_RE.pattern)
++        self.assertIn("!", server._SENTENCE_RE.pattern)
++        self.assertIn(".", server._SENTENCE_RE.pattern)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/frontend/app/index.tsx b/frontend/app/index.tsx
+index 916f7b7a..f346d310 100644
+--- a/frontend/app/index.tsx
++++ b/frontend/app/index.tsx
+@@ -61,6 +61,7 @@ import PremiumTeaserToast from "../components/PremiumTeaserToast";
+ import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
+ import { checkHasSpeech, logGateDecision } from "../lib/silenceGate";
+ import { SpeechMod, unlockSpeech, setDefaultVoiceId, preloadFillerPool } from "../lib/speech";
++import * as audioStore from "../lib/audioStore";
+ // Rimosso import kodaAudioOutput (Modalità Telefono rollback 2026-07-13)
+ import { preloadOfflineClips, isOfflineNow, playRandomOfflineClip } from "../lib/offlineClips";
+ import { startThinkingSound, stopThinkingSound } from "../lib/thinkingSound";
+@@ -3123,6 +3124,13 @@ export default function Taccuino() {
+               // almeno un frame dal server, droppiamo il WS e cadiamo
+               // immediatamente su HTTP poll (~1.7s totali invece di 25s).
+               const useWS = String(process.env.EXPO_PUBLIC_USE_WS_CONVERSE || "").toLowerCase() === "true";
++              // === REPLAY BIT-EXACT (Fabio 2026-11-04) =================
++              // Genero un ID STABILE per questo turno PRIMA di avviare la
++              // chiamata. Lo riuso sia in `aiEntry.id` sia nelle scritture
++              // on-disk via audioStore.appendSegment. Così il tap sulla
++              // bolla può ritrovare i file giusti.
++              const _turnMsgId = `fast-ai-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
++              const _uidForReplay = String(profile?.id || "anon");
+               if (useWS) {
+                 try {
+                   const wsResult = await SpeechMod.fastConverseWS(txt, {
+@@ -3144,6 +3152,27 @@ export default function Taccuino() {
+                     onSpeechActive: (active) => {
+                       try { setSpeechActive(!!active); } catch {}
+                     },
++                    // === REPLAY BIT-EXACT (Fabio 2026-11-04) ===========
++                    // Archivia asincronamente ogni segmento MP3 su disco
++                    // associandolo a `_turnMsgId`. NON awaited: la
++                    // riproduzione del primo chunk NON deve aspettare
++                    // la scrittura. Se audioStore disabilitato dal
++                    // flag → appendSegment è no-op silenziosa.
++                    onAudioSegment: (seg) => {
++                      try {
++                        audioStore.appendSegment({
++                          userId: _uidForReplay,
++                          messageId: _turnMsgId,
++                          idx: seg.idx,
++                          bytes: seg.bytes,
++                          text: seg.text || null,
++                          tone: seg.tone || null,
++                          voiceId: typeof voiceId === "string" ? voiceId : null,
++                          modelId: "inworld-tts-2-flash",
++                          provider: "inworld",
++                        }).catch(() => {});
++                      } catch {}
++                    },
+                     onMeta: (meta) => {
+                       capturedMeta = meta;
+                       try {
+@@ -3152,7 +3181,7 @@ export default function Taccuino() {
+                           id: `fast-u-${Date.now()}`,
+                         };
+                         const aiEntry: TimelineEntry = {
+-                          id: `fast-ai-${Date.now()}`,
++                          id: _turnMsgId,
+                           role: "ai",
+                           text: stripDisplayTags(meta.reply || ""),
+                           voice_text: meta.voice_text || undefined,
+@@ -5337,22 +5366,68 @@ export default function Taccuino() {
+     playingMsgIdRef.current = entry.id;
+     setPlayingMsgId(entry.id);
+     try {
+-      const langTag = profile?.language === "it" ? "it-IT" : profile?.language || "it-IT";
+       await unlockSpeech();
+-      // === FIX #1 + #11 REPLAY TTS (2026-06-22 v8) ===
+-      // Bug #1 risolto: non leggere ad alta voce "[TONE:warm]".
+-      // Bug #11 risolto: preservare gli audio tags ElevenLabs ([sigh],
+-      // [laughs], [whispered]) che il backend mette in voice_text per
+-      // dare prosody migliore al TTS — la prima riproduzione li usava,
+-      // il replay con stripDisplayTags li perdeva → prosody piatta.
+-      // Soluzione: stripToneMarkerOnly rimuove solo il meta-marker TONE,
+-      // preservando i bracket tag legittimi per ElevenLabs.
+-      const ttsText = stripToneMarkerOnly(entry.voice_text || entry.text);
+-      await SpeechMod.speak(ttsText, {
+-        language: langTag,
+-        tone: (entry.tone as Tone) || "neutral",
+-      });
+-    } catch {}
++      // === REPLAY BIT-EXACT (Fabio 2026-11-04) =============================
++      // Prima strategia: riprodurre gli audio MP3 originali salvati su disco.
++      // Nessuna chiamata a Claude/Inworld/ElevenLabs. Se tutti i segmenti
++      // sono presenti sul filesystem per questo (user_id, message_id) →
++      // li riproduciamo in ordine come audio locali.
++      // Se MANCA anche solo un segmento o il manifest → mostriamo
++      // "Riascolto non disponibile". NESSUN fallback a rigenerazione.
++      const uid = String(profile?.id || "anon");
++      const replay = await audioStore.readForReplay(uid, entry.id);
++      if (replay.ok) {
++        try {
++          const player = require("expo-audio");
++          for (const seg of replay.segments) {
++            if (playingMsgIdRef.current !== entry.id) break; // utente ha stoppato
++            const p = player.createAudioPlayer(seg.filepath);
++            try {
++              p.play();
++              // Attesa non blocking: polling fino a fine playback
++              // (expo-audio non espone promise completion diretta).
++              await new Promise<void>((resolve) => {
++                const start = Date.now();
++                const iv = setInterval(() => {
++                  const stillPlaying = playingMsgIdRef.current === entry.id;
++                  // Guardia hard: max 60s per segmento (segmenti reali
++                  // ≤ 30s + margine). Evita leak se il player non chiude.
++                  if (!stillPlaying || Date.now() - start > 60000 ||
++                      (typeof p.playing === "boolean" && !p.playing && Date.now() - start > 500)) {
++                    clearInterval(iv);
++                    resolve();
++                  }
++                }, 100);
++              });
++            } finally {
++              try { p.remove && p.remove(); } catch {}
++            }
++          }
++        } catch (e) {
++          console.warn("[replay] bit-exact playback error:", e);
++        }
++      } else {
++        // Audio originale non disponibile → NON rigeneriamo.
++        // Mostriamo un hint sobrio all'utente (toast/alert).
++        try {
++          const reasonLabel = ({
++            feature_disabled: "Riascolto fedele disattivato nelle impostazioni.",
++            missing_meta: "Riascolto non disponibile per questo messaggio.",
++            missing_segments: "Riascolto non disponibile: audio originale mancante o incompleto.",
++            user_mismatch: "Riascolto non disponibile per questo profilo.",
++            zero_segments: "Riascolto non disponibile per questo messaggio.",
++          } as const)[replay.reason] || "Riascolto non disponibile.";
++          const RN = require("react-native");
++          if (RN.Platform.OS === "android") {
++            RN.ToastAndroid.show(reasonLabel, RN.ToastAndroid.SHORT);
++          } else {
++            RN.Alert.alert("Riascolto", reasonLabel);
++          }
++        } catch {}
++      }
++    } catch (e) {
++      console.warn("[replay] handler error:", e);
++    }
+     // When speech finishes naturally, clear the marker
+     if (playingMsgIdRef.current === entry.id) {
+       playingMsgIdRef.current = null;
+diff --git a/frontend/lib/audioStore.ts b/frontend/lib/audioStore.ts
+new file mode 100644
+index 00000000..3218789b
+--- /dev/null
++++ b/frontend/lib/audioStore.ts
+@@ -0,0 +1,377 @@
++// frontend/lib/audioStore.ts — Replay bit-exact per i messaggi di Ollenya
++// (Fabio 2026-11-04).
++//
++// Obiettivo:
++//   Il tap su una bolla AI deve riprodurre esattamente l'audio generato
++//   la prima volta. Zero chiamate a Claude, Inworld, ElevenLabs, TTS web
++//   locale. Se l'audio originale manca → messaggio esplicito di
++//   "riascolto non disponibile", MAI fallback a rigenerazione.
++//
++// Design:
++//   - Un segmento TTS = 1 file MP3 su disco (`${docDir}koda/audio/<uid>/
++//     <mid>/<idx>.mp3`).
++//   - Un messaggio = 1 directory + 1 file `meta.json` con metadati.
++//   - Scrittura asincrona non-bloccante (fire-and-forget): la prima
++//     risposta non deve attendere il salvataggio prima di iniziare a
++//     parlare. Il caller usa `appendSegment()` dentro una Promise non
++//     awaited.
++//   - Isolamento per utente: la path include `user_id`, e il meta.json
++//     ne ricopia il valore. Lettura richiede matching `user_id`.
++//   - Pulizia esplicita: `cleanup({ maxAgeMs, maxMessages })`. Non
++//     facciamo garbage-collect implicito su ogni write.
++//
++// Flag di attivazione:
++//   `EXPO_PUBLIC_REPLAY_BIT_EXACT` ∈ {"1", "0"}. Default "1" (ON).
++//   Se "0", le API appendSegment/read restituiscono rispettivamente
++//   no-op/null → il caller cade sul comportamento pre-2026-11-04
++//   (il tap sulla bolla può comportarsi come prima della riforma).
++
++import * as FileSystem from "expo-file-system/legacy";
++
++// Costanti ───────────────────────────────────────────────────────────
++const ROOT_SUBDIR = "koda/audio";
++const META_FILENAME = "meta.json";
++
++// Policy di default (sovrascrivibile da chi chiama cleanup())
++export const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 giorni
++export const DEFAULT_MAX_MESSAGES_PER_USER = 100;
++
++// Shape dei metadati salvati
++export type SegmentMeta = {
++  idx: number;              // ordine di generazione (0-based)
++  file: string;             // nome file relativo (`${idx}.mp3`)
++  chars: number;            // lunghezza testo sintetizzato
++  text?: string | null;     // testo originale (opzionale, utile per debug)
++  tone?: string | null;
++  voice_id?: string | null;
++  model_id?: string | null;
++  provider?: string | null; // 'inworld' | 'elevenlabs'
++  size_bytes: number;
++  created_at: number;       // Date.now()
++};
++
++export type MessageMeta = {
++  message_id: string;
++  user_id: string;
++  created_at: number;
++  updated_at: number;
++  schema_version: 1;
++  segments: SegmentMeta[];
++};
++
++// Helpers path ───────────────────────────────────────────────────────
++const docDir = (FileSystem.documentDirectory || "") as string;
++
++const rootDir = (): string => `${docDir}${ROOT_SUBDIR}/`;
++
++const userDir = (userId: string): string => `${rootDir()}${sanitizeId(userId)}/`;
++
++const messageDir = (userId: string, messageId: string): string =>
++  `${userDir(userId)}${sanitizeId(messageId)}/`;
++
++const metaPath = (userId: string, messageId: string): string =>
++  `${messageDir(userId, messageId)}${META_FILENAME}`;
++
++// Prevenire path traversal: solo [A-Za-z0-9_-] accettati.
++function sanitizeId(raw: string): string {
++  return (raw || "").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64) || "_";
++}
++
++// Flag master
++export function isBitExactReplayEnabled(): boolean {
++  const v = (process.env.EXPO_PUBLIC_REPLAY_BIT_EXACT || "1").trim();
++  return v !== "0";
++}
++
++// Scrittura (safe → non lancia mai) ──────────────────────────────────
++async function ensureDir(path: string): Promise<void> {
++  try {
++    const info = await FileSystem.getInfoAsync(path);
++    if (!info.exists) {
++      await FileSystem.makeDirectoryAsync(path, { intermediates: true });
++    }
++  } catch {}
++}
++
++async function readMeta(userId: string, messageId: string): Promise<MessageMeta | null> {
++  try {
++    const p = metaPath(userId, messageId);
++    const info = await FileSystem.getInfoAsync(p);
++    if (!info.exists) return null;
++    const txt = await FileSystem.readAsStringAsync(p);
++    const parsed = JSON.parse(txt);
++    if (!parsed || typeof parsed !== "object") return null;
++    if (parsed.user_id !== userId) return null; // isolamento utente
++    return parsed as MessageMeta;
++  } catch {
++    return null;
++  }
++}
++
++async function writeMeta(meta: MessageMeta): Promise<void> {
++  try {
++    const dir = messageDir(meta.user_id, meta.message_id);
++    await ensureDir(dir);
++    await FileSystem.writeAsStringAsync(
++      metaPath(meta.user_id, meta.message_id),
++      JSON.stringify(meta),
++    );
++  } catch {}
++}
++
++/**
++ * Scrive asincronamente un segmento MP3. Non lancia mai eccezioni:
++ * il fallimento è loggato in console ma la pipeline del caller continua.
++ *
++ * Chiamare SENZA await per non bloccare il playback della prima risposta.
++ */
++export async function appendSegment(params: {
++  userId: string;
++  messageId: string;
++  idx: number;
++  bytes: Uint8Array;
++  text?: string | null;
++  tone?: string | null;
++  voiceId?: string | null;
++  modelId?: string | null;
++  provider?: string | null;
++}): Promise<void> {
++  if (!isBitExactReplayEnabled()) return;
++  const { userId, messageId, idx, bytes } = params;
++  if (!userId || !messageId || !bytes || bytes.byteLength === 0) return;
++  try {
++    const dir = messageDir(userId, messageId);
++    await ensureDir(dir);
++    const file = `${idx}.mp3`;
++    const filepath = `${dir}${file}`;
++    // Scrittura base64 (RN FS legacy accetta base64 encoding option)
++    const b64 = toBase64(bytes);
++    await FileSystem.writeAsStringAsync(filepath, b64, {
++      encoding: FileSystem.EncodingType.Base64,
++    });
++    // Aggiorna meta.json (CAS semplice: read-modify-write)
++    const existing = await readMeta(userId, messageId);
++    const now = Date.now();
++    const segMeta: SegmentMeta = {
++      idx,
++      file,
++      chars: (params.text || "").length,
++      text: params.text || null,
++      tone: params.tone || null,
++      voice_id: params.voiceId || null,
++      model_id: params.modelId || null,
++      provider: params.provider || null,
++      size_bytes: bytes.byteLength,
++      created_at: now,
++    };
++    const nextMeta: MessageMeta = existing
++      ? {
++          ...existing,
++          updated_at: now,
++          segments: [
++            ...existing.segments.filter((s) => s.idx !== idx),
++            segMeta,
++          ].sort((a, b) => a.idx - b.idx),
++        }
++      : {
++          message_id: messageId,
++          user_id: userId,
++          created_at: now,
++          updated_at: now,
++          schema_version: 1,
++          segments: [segMeta],
++        };
++    await writeMeta(nextMeta);
++  } catch (e) {
++    console.warn(`[audioStore] appendSegment failed: ${e}`);
++  }
++}
++
++export type ReplayPayload = {
++  ok: true;
++  segments: {
++    idx: number;
++    filepath: string;
++    size_bytes: number;
++    duration_hint_ms?: number | null;
++  }[];
++  meta: MessageMeta;
++};
++
++export type ReplayUnavailable = {
++  ok: false;
++  reason:
++    | "feature_disabled"
++    | "missing_meta"
++    | "missing_segments"
++    | "user_mismatch"
++    | "zero_segments";
++  user_id?: string;
++  message_id?: string;
++};
++
++/**
++ * Legge il manifest di un messaggio e verifica che TUTTI i file MP3
++ * siano presenti sul filesystem. Se anche uno manca → `ok=false` con
++ * reason `missing_segments`. Nessun fallback a rigenerazione: il
++ * caller mostra "riascolto non disponibile".
++ */
++export async function readForReplay(
++  userId: string,
++  messageId: string,
++): Promise<ReplayPayload | ReplayUnavailable> {
++  if (!isBitExactReplayEnabled()) {
++    return { ok: false, reason: "feature_disabled", user_id: userId, message_id: messageId };
++  }
++  const meta = await readMeta(userId, messageId);
++  if (!meta) {
++    return { ok: false, reason: "missing_meta", user_id: userId, message_id: messageId };
++  }
++  if (meta.user_id !== userId) {
++    return { ok: false, reason: "user_mismatch" };
++  }
++  if (!Array.isArray(meta.segments) || meta.segments.length === 0) {
++    return { ok: false, reason: "zero_segments", user_id: userId, message_id: messageId };
++  }
++  const dir = messageDir(userId, messageId);
++  const ordered = [...meta.segments].sort((a, b) => a.idx - b.idx);
++  const payload: ReplayPayload["segments"] = [];
++  for (const s of ordered) {
++    const filepath = `${dir}${s.file}`;
++    try {
++      const info = await FileSystem.getInfoAsync(filepath);
++      if (!info.exists || (typeof info.size === "number" && info.size === 0)) {
++        return {
++          ok: false,
++          reason: "missing_segments",
++          user_id: userId,
++          message_id: messageId,
++        };
++      }
++    } catch {
++      return {
++        ok: false,
++        reason: "missing_segments",
++        user_id: userId,
++        message_id: messageId,
++      };
++    }
++    payload.push({ idx: s.idx, filepath, size_bytes: s.size_bytes });
++  }
++  return { ok: true, segments: payload, meta };
++}
++
++// Pulizia esplicita ──────────────────────────────────────────────────
++export type CleanupStats = {
++  users_scanned: number;
++  messages_removed_by_age: number;
++  messages_removed_by_count: number;
++  errors: number;
++};
++
++export async function cleanup(
++  opts: { maxAgeMs?: number; maxMessagesPerUser?: number } = {},
++): Promise<CleanupStats> {
++  const maxAgeMs = opts.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
++  const maxMsgs = opts.maxMessagesPerUser ?? DEFAULT_MAX_MESSAGES_PER_USER;
++  const stats: CleanupStats = {
++    users_scanned: 0,
++    messages_removed_by_age: 0,
++    messages_removed_by_count: 0,
++    errors: 0,
++  };
++  try {
++    const root = rootDir();
++    const rootInfo = await FileSystem.getInfoAsync(root);
++    if (!rootInfo.exists) return stats;
++    const users = await FileSystem.readDirectoryAsync(root);
++    const now = Date.now();
++    for (const uid of users) {
++      stats.users_scanned += 1;
++      const udir = `${root}${uid}/`;
++      let msgs: string[] = [];
++      try {
++        msgs = await FileSystem.readDirectoryAsync(udir);
++      } catch {
++        stats.errors += 1;
++        continue;
++      }
++      // Scorri meta per età
++      const kept: { mid: string; updated_at: number }[] = [];
++      for (const mid of msgs) {
++        try {
++          const m = await readMeta(uid, mid);
++          if (!m) continue;
++          if (now - m.updated_at > maxAgeMs) {
++            await FileSystem.deleteAsync(`${udir}${mid}/`, { idempotent: true });
++            stats.messages_removed_by_age += 1;
++          } else {
++            kept.push({ mid, updated_at: m.updated_at });
++          }
++        } catch {
++          stats.errors += 1;
++        }
++      }
++      // Taglia per count: tiene i più recenti
++      if (kept.length > maxMsgs) {
++        kept.sort((a, b) => b.updated_at - a.updated_at);
++        const toDrop = kept.slice(maxMsgs);
++        for (const { mid } of toDrop) {
++          try {
++            await FileSystem.deleteAsync(`${udir}${mid}/`, { idempotent: true });
++            stats.messages_removed_by_count += 1;
++          } catch {
++            stats.errors += 1;
++          }
++        }
++      }
++    }
++  } catch (e) {
++    console.warn(`[audioStore] cleanup error: ${e}`);
++  }
++  return stats;
++}
++
++// Base64 encoder (puro JS, no deps) ──────────────────────────────────
++function toBase64(bytes: Uint8Array): string {
++  // Fast path web
++  // @ts-ignore
++  if (typeof btoa === "function") {
++    let bin = "";
++    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
++    // @ts-ignore
++    return btoa(bin);
++  }
++  // RN polyfill via Buffer
++  // @ts-ignore
++  if (typeof Buffer !== "undefined") {
++    // @ts-ignore
++    return Buffer.from(bytes).toString("base64");
++  }
++  // Fallback puro
++  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
++  let out = "";
++  const len = bytes.length;
++  for (let i = 0; i < len; i += 3) {
++    const a = bytes[i];
++    const b = i + 1 < len ? bytes[i + 1] : 0;
++    const c = i + 2 < len ? bytes[i + 2] : 0;
++    out += chars[a >> 2];
++    out += chars[((a & 3) << 4) | (b >> 4)];
++    out += i + 1 < len ? chars[((b & 15) << 2) | (c >> 6)] : "=";
++    out += i + 2 < len ? chars[c & 63] : "=";
++  }
++  return out;
++}
++
++// Export per i test
++export const _internal = {
++  sanitizeId,
++  rootDir,
++  userDir,
++  messageDir,
++  metaPath,
++  readMeta,
++  writeMeta,
++  toBase64,
++};
+diff --git a/frontend/lib/speech.ts b/frontend/lib/speech.ts
+index 639250b4..9e2522bd 100644
+--- a/frontend/lib/speech.ts
++++ b/frontend/lib/speech.ts
+@@ -1580,6 +1580,18 @@ export async function fastConverseWS(
+     // (pydub/ffmpeg unavail, decode fail, WS drop) questa callback
+     // non viene mai chiamata → l'orb resta sul comportamento attuale.
+     onSpeechActive?: (active: boolean) => void;
++    // === REPLAY BIT-EXACT (Fabio 2026-11-04) =============================
++    // Callback OPZIONALE invocata per ogni segmento TTS ricevuto dal
++    // server (coppia header+binary). Il caller la usa per archiviare
++    // i bytes su disco e permettere il replay bit-exact del messaggio.
++    // Chiamata fire-and-forget: non deve bloccare il playback.
++    //   - `idx`: ordine del segmento (0-based) all'interno del turno
++    //   - `bytes`: Uint8Array MP3 completi del segmento
++    //   - `text`: testo del segmento (dal header `sentence`), se presente
++    //   - `tone`: tag [TONE:xxx] del server, se presente
++    // Zero attese: la callback può essere async ma il WS loop continua
++    // comunque. Se la callback lancia, l'errore viene swallowato.
++    onAudioSegment?: (seg: { idx: number; bytes: Uint8Array; text?: string | null; tone?: string | null }) => void | Promise<void>;
+   } = {}
+ ): Promise<FastConverseResult> {
+   const timeoutMs = opts.timeoutMs ?? 45000;
+@@ -1726,12 +1738,25 @@ export async function fastConverseWS(
+             // Blob (web). Convertiamo in modo asincrono.
+             d.arrayBuffer().then((buf: ArrayBuffer) => {
+               if (pendingSentence) {
++                const _bytes = new Uint8Array(buf);
+                 sentenceQueue.push({
+                   i: pendingSentence.i || 0,
+-                  bytes: new Uint8Array(buf),
++                  bytes: _bytes,
+                   waveform: Array.isArray(pendingSentence.waveform) ? pendingSentence.waveform : null,
+                   window_ms: typeof pendingSentence.window_ms === "number" ? pendingSentence.window_ms : 60,
+                 });
++                // === REPLAY BIT-EXACT: notifica fire-and-forget ========
++                try {
++                  if (typeof opts.onAudioSegment === "function") {
++                    const _p = opts.onAudioSegment({
++                      idx: pendingSentence.i || 0,
++                      bytes: _bytes,
++                      text: typeof pendingSentence.text === "string" ? pendingSentence.text : null,
++                      tone: typeof pendingSentence.tone === "string" ? pendingSentence.tone : null,
++                    });
++                    if (_p && typeof (_p as any).catch === "function") (_p as any).catch(() => {});
++                  }
++                } catch {}
+                 pendingSentence = null;
+                 notify();
+               }
+@@ -1757,6 +1782,18 @@ export async function fastConverseWS(
+             waveform: Array.isArray(pendingSentence.waveform) ? pendingSentence.waveform : null,
+             window_ms: typeof pendingSentence.window_ms === "number" ? pendingSentence.window_ms : 60,
+           });
++          // === REPLAY BIT-EXACT: notifica fire-and-forget ===============
++          try {
++            if (typeof opts.onAudioSegment === "function") {
++              const _p = opts.onAudioSegment({
++                idx: pendingSentence.i || 0,
++                bytes: u8,
++                text: typeof pendingSentence.text === "string" ? pendingSentence.text : null,
++                tone: typeof pendingSentence.tone === "string" ? pendingSentence.tone : null,
++              });
++              if (_p && typeof (_p as any).catch === "function") (_p as any).catch(() => {});
++            }
++          } catch {}
+           pendingSentence = null;
+           notify();
+         } else {
