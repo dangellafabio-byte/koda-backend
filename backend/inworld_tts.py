@@ -46,7 +46,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import AsyncIterator, Optional
 
 import httpx
 
@@ -81,7 +81,7 @@ class InworldVoiceParams:
     delivery ``CREATIVE``).
     """
 
-    voice_id: str = "vivid-feather-7719__design-voice-37081da2"
+    voice_id: str = "vivid-feather-7719__design-voice-0245caaf"
     language: str = "it-IT"
     speaking_rate: float = 1.05
     delivery_mode: str = "CREATIVE"  # CREATIVE | EXPRESSIVE | STANDARD | CALM | NEUTRAL
@@ -90,31 +90,8 @@ class InworldVoiceParams:
     model_id: str = "inworld-tts-2-flash"
     audio_encoding: str = "MP3"
 
-    def to_payload(
-        self,
-        text: str,
-        *,
-        previous_requests: Optional[List[str]] = None,
-    ) -> dict:
-        """Costruisce il payload REST verso Inworld TTS.
-
-        `previous_requests`: lista di testi effettivamente sintetizzati
-        in turni precedenti (ordine cronologico, oldest→newest). Se
-        presente, viene inserita in `synthesisContext.previousRequests`
-        — vedi docs Inworld "best-practices/generating-speech":
-          - max 5 elementi
-          - lunghezza combinata ≤ 2000 char
-          - ordinati dal più vecchio al più nuovo
-          - "context text is not billed toward your character usage;
-            only the primary `text` field of the current request is
-            billed" → inviare contesto NON aumenta la spesa.
-
-        NOTA Flash: `inworld-tts-2-flash` NON supporta "steering"
-        (instruction tags vocali ignorati), MA accetta `synthesisContext`
-        secondo la documentazione pubblica (endpoint synthesize-speech,
-        verificato 2026-11-04).
-        """
-        payload: Dict[str, Any] = {
+    def to_payload(self, text: str) -> dict:
+        return {
             "text": text,
             "modelId": self.model_id,
             "voiceId": self.voice_id,
@@ -123,28 +100,6 @@ class InworldVoiceParams:
             "deliveryMode": self.delivery_mode,
             "audioConfig": {"audioEncoding": self.audio_encoding},
         }
-        if previous_requests:
-            # Sanity check: rispettiamo i limiti documentati, non li
-            # ridimensioniamo silenziosamente. Chi passa più di 5 o
-            # più di 2000 char complessivi riceve un errore locale
-            # subito, non una failure Inworld. Vedi
-            # `inworld_context_buffer._prune_for_payload()` per la
-            # politica di selezione a monte.
-            if len(previous_requests) > 5:
-                raise ValueError(
-                    "synthesisContext.previousRequests: max 5 elementi "
-                    "(Inworld docs 2026-11-04)"
-                )
-            total_chars = sum(len(t or "") for t in previous_requests)
-            if total_chars > 2000:
-                raise ValueError(
-                    f"synthesisContext.previousRequests: max 2000 char "
-                    f"combinati (ricevuti {total_chars})"
-                )
-            payload["synthesisContext"] = {
-                "previousRequests": [{"text": t} for t in previous_requests],
-            }
-        return payload
 
 
 DEFAULT_VOICE_PARAMS = InworldVoiceParams()
@@ -323,19 +278,11 @@ async def synthesize_non_streaming(
     params: InworldVoiceParams = DEFAULT_VOICE_PARAMS,
     *,
     timeout_s: float = DEFAULT_NON_STREAM_TIMEOUT_S,
-    previous_requests: Optional[List[str]] = None,
 ) -> InworldSynthesisResult:
     """Chiamata TTS Inworld non-streaming. Un single-shot, 0 retry.
 
     Il chiamante gestisce retry/fallback/cache a monte: qui NON facciamo
     retry automatici per rispettare la regola "nessun fallback automatico".
-
-    Args:
-        previous_requests: opzionale, lista di testi effettivamente
-            sintetizzati in turni precedenti (ordine cronologico), da
-            iniettare in ``synthesisContext.previousRequests``. Se
-            ``None`` il payload NON contiene il campo (comportamento
-            retro-compatibile). Vedi :meth:`InworldVoiceParams.to_payload`.
 
     Returns:
         :class:`InworldSynthesisResult` — contiene i bytes MP3 completi
@@ -350,7 +297,7 @@ async def synthesize_non_streaming(
     """
     text = _validate_text(text)
     api_key = _load_api_key()
-    payload = params.to_payload(text, previous_requests=previous_requests)
+    payload = params.to_payload(text)
     chars_sent = len(text)
 
     t0 = time.perf_counter()
