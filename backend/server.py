@@ -18,14 +18,19 @@ load_dotenv()
 
 # Claude configuration shared by the voice, text and helper paths.
 # No automatic fallback to a more expensive model if the proxy rejects this ID.
-CLAUDE_MODEL_ID = "claude-haiku-5-5"
+# Temporary comparison switch; missing env preserves the deployed default.
+CLAUDE_MODEL_ID = os.getenv("OLLENYA_CLAUDE_MODEL", "claude-haiku-5-5").strip()
+if CLAUDE_MODEL_ID not in ("claude-haiku-5-5", "claude-haiku-4-5-20251001"):
+    raise ValueError("Unsupported OLLENYA_CLAUDE_MODEL; expected Haiku 5.5 or Haiku 4.5")
 CLAUDE_PROXY_MODEL_ID = f"openai/{CLAUDE_MODEL_ID}"
 
 
 def _claude_extra_body(messages=None) -> dict:
     # Haiku 5.5 otherwise enables billable adaptive thinking by default.
     # extra_body preserves this native Anthropic option through the OpenAI proxy.
-    body = {"thinking": {"type": "disabled"}}
+    # 4.5 uses its original non-thinking request; 5.5 explicitly disables
+    # adaptive thinking. Cache-message preservation is identical for both.
+    body = {"thinking": {"type": "disabled"}} if CLAUDE_MODEL_ID == "claude-haiku-5-5" else {}
     if messages is not None:
         # LiteLLM's OpenAI transformation can strip cache_control. Preserve the
         # complete original messages in the SDK body override before it runs.
