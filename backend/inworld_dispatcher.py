@@ -24,13 +24,17 @@ Zero import di server.py → nessun ciclo.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from typing import AsyncIterator, Optional
 
 import inworld_tts as _ad
+import inworld_context_buffer as _context_buffer
 import koda_tts_events as _ev
 import koda_tts_prefs as _prefs
+
+logger = logging.getLogger(__name__)
 
 
 class InworldVoiceNotAvailable(_ad.InworldTTSError):
@@ -94,8 +98,30 @@ async def generate_non_streaming(
     event_id = str(uuid.uuid4())
     params = _ad.DEFAULT_VOICE_PARAMS
 
+    # === SYNTHESIS CONTEXT (Fabio 2026-11-04) ===========================
+    # Dietro flag INWORLD_SEND_CONTEXT=1. Legge dal buffer per-utente gli
+    # ultimi testi EFFETTIVAMENTE sintetizzati (zero STT utente, mai).
+    # - Best-effort: se la pipeline è parallela, il buffer può essere
+    #   parzialmente vuoto. Non attendiamo mai nulla.
+    # - Zero costo extra: "context text is not billed" (Inworld docs
+    #   2026-11-04, verificato su best-practices/generating-speech).
+    # - Flag OFF → payload identico a pre-2026-11-04.
+    prev_requests_for_payload: Optional[list] = None
+    if _context_buffer.is_context_feature_enabled():
+        try:
+            prev_requests_for_payload = _context_buffer.get_context_for_user(user_id)
+            if not prev_requests_for_payload:
+                prev_requests_for_payload = None  # no field in payload
+        except Exception as _cb_err:
+            logger.warning(f"[inworld_dispatcher] context_buffer read failed: {_cb_err!r}")
+            prev_requests_for_payload = None
+
     try:
-        res = await _ad.synthesize_non_streaming(text, params)
+        res = await _ad.synthesize_non_streaming(
+            text,
+            params,
+            previous_requests=prev_requests_for_payload,
+        )
     except _ad.InworldTTSError as e:
         # Record tentativo fallito. Se è un timeout o un'auth error,
         # l'addebito è incerto → chars_billed=None, billable=True
@@ -169,6 +195,14 @@ async def generate_non_streaming(
         upstream_request_id=res.request_id,
         http_status=res.http_status,
     ))
+    # === SYNTHESIS CONTEXT: appendi al buffer SOLO su successo ========
+    # Il buffer è ignorato se INWORLD_SEND_CONTEXT!=1 (lettura gated),
+    # ma scriviamo comunque così, se Fabio accende il flag a runtime
+    # su un server caldo, le prime chiamate hanno già materiale fresco.
+    try:
+        _context_buffer.record_synthesized_text(user_id, text)
+    except Exception as _cb_err:
+        logger.warning(f"[inworld_dispatcher] context_buffer write failed: {_cb_err!r}")
     return res.audio_bytes
 
 

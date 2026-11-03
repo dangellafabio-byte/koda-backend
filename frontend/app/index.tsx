@@ -849,7 +849,7 @@ export default function Taccuino() {
         rect: { x: 8, y: Math.max(insets.top + 70, 110), w: W - 16, h: H * 0.55 },
         label: "Lettura",
         shape: "round",
-        speech: `Qui rileggi tutto. Tocca una bolla per risentirmi a voce.`,
+        speech: `Qui rileggi tutto quello che ci siamo detti. Ogni parola resta tua.`,
       },
       {
         page: "reading",
@@ -5314,51 +5314,14 @@ export default function Taccuino() {
   // sulla pipeline OTA di Emergent (Updates.checkForUpdateAsync restava
   // appeso senza rispondere). Pulsante corrispondente rimosso dalla UI.
 
-  /**
-   * Tap-on-AI-bubble handler: TOGGLE play/stop the AI's message via voice.
-   *  - 1st tap on a bubble → start speaking that message
-   *  - 2nd tap on the SAME bubble (while speaking) → stop the voice
-   *  - Tap on a DIFFERENT bubble → stop current, start new
-   */
-  const playingMsgIdRef = useRef<string | null>(null);
-  const [playingMsgId, setPlayingMsgId] = useState<string | null>(null);
-
-  const replayMessage = async (entry: TimelineEntry) => {
-    if (!entry || entry.role === "user" || !entry.text) return;
-    // If THIS bubble is currently playing → toggle stop
-    if (playingMsgIdRef.current === entry.id) {
-      SpeechMod.stop();
-      playingMsgIdRef.current = null;
-      setPlayingMsgId(null);
-      return;
-    }
-    // Otherwise stop whatever's playing and start the new one
-    SpeechMod.stop();
-    playingMsgIdRef.current = entry.id;
-    setPlayingMsgId(entry.id);
-    try {
-      const langTag = profile?.language === "it" ? "it-IT" : profile?.language || "it-IT";
-      await unlockSpeech();
-      // === FIX #1 + #11 REPLAY TTS (2026-06-22 v8) ===
-      // Bug #1 risolto: non leggere ad alta voce "[TONE:warm]".
-      // Bug #11 risolto: preservare gli audio tags ElevenLabs ([sigh],
-      // [laughs], [whispered]) che il backend mette in voice_text per
-      // dare prosody migliore al TTS — la prima riproduzione li usava,
-      // il replay con stripDisplayTags li perdeva → prosody piatta.
-      // Soluzione: stripToneMarkerOnly rimuove solo il meta-marker TONE,
-      // preservando i bracket tag legittimi per ElevenLabs.
-      const ttsText = stripToneMarkerOnly(entry.voice_text || entry.text);
-      await SpeechMod.speak(ttsText, {
-        language: langTag,
-        tone: (entry.tone as Tone) || "neutral",
-      });
-    } catch {}
-    // When speech finishes naturally, clear the marker
-    if (playingMsgIdRef.current === entry.id) {
-      playingMsgIdRef.current = null;
-      setPlayingMsgId(null);
-    }
-  };
+  // === RIMOZIONE RIASCOLTO BOLLA (Fabio 2026-11-04) ======================
+  // Il tap sulla bolla di Ollenya NON riproduce più alcun audio e non
+  // chiama alcun generatore. La risposta viene pronunciata una sola volta
+  // durante la conversazione; il testo resta scritto nella timeline.
+  // Il long-press per il feedback resta attivo (gestito dentro `BubbleImpl`
+  // tramite la prop `onLongPressFeedback`). Il tap mostra/nasconde l'orario
+  // del messaggio come fallback leggero.
+  // (Funzione `replayMessage` e stato `playingMsgId*` rimossi.)
 
   // === GHOST handler ("Dimentica il fatto, ricorda l'insegnamento")
   // Long-press su una bolla → conferma → POST /api/ghost.
@@ -7182,7 +7145,6 @@ export default function Taccuino() {
               >
                 <Bubble
                   entry={it.entry as any}
-                  onReplay={() => {}}
                   onGhost={() => {}}
                   bubbleAccent={bubbleAccent}
                   bubbleStyle={bubbleStyle}
@@ -7207,7 +7169,6 @@ export default function Taccuino() {
             // onPress (replay), altrimenti → onLongPress (feedback menu).
             <Bubble
               entry={it.entry}
-              onReplay={replayMessage}
               onGhost={ghostMessage}
               onLongPressFeedback={
                 it.entry.role === "ai"
@@ -8153,7 +8114,6 @@ function MiniOrb({ color = "#7C3AED" }: { color?: string }) {
 
 function BubbleImpl({
   entry,
-  onReplay,
   onGhost,
   onLongPressFeedback,
   bubbleAccent,
@@ -8163,7 +8123,6 @@ function BubbleImpl({
   aiFontFamily,
 }: {
   entry: TimelineEntry;
-  onReplay?: (e: TimelineEntry) => void;
   /** Long-press handler for "Ghost" / "Dimentica questo". */
   onGhost?: (e: TimelineEntry) => void;
   /**
@@ -8301,8 +8260,13 @@ function BubbleImpl({
         ) : (
           <Pressable
             {...wrapperPress(() => {
-              if (onReplay) onReplay(entry);
-              else setShowTime((s) => !s);
+              // Rimozione riascolto bolla (Fabio 2026-11-04):
+              // il tap sulla bolla di Ollenya NON riproduce più audio.
+              // Preservata l'azione fallback "mostra orario" per dare
+              // comunque un feedback visivo al tap. Il long-press per il
+              // feedback resta attivo tramite `onLongPressFeedback` nel
+              // wrapperPress sopra.
+              setShowTime((s) => !s);
             })}
             style={({ pressed }: any) => [
               styles.bubbleAi,
@@ -8310,7 +8274,7 @@ function BubbleImpl({
               pressed && { opacity: 0.78 },
             ]}
             accessibilityRole="button"
-            accessibilityLabel="Tocca per ascoltare. Tocca di nuovo per fermare."
+            accessibilityLabel="Messaggio di Ollenya. Tieni premuto per il feedback."
             testID={`replay-${entry.id}`}
           >
             <Text
@@ -8389,7 +8353,6 @@ function arePropsEqualBubble(
     prev.aiFontFamily === next.aiFontFamily &&
     prev.bubbleAccent.color === next.bubbleAccent.color &&
     prev.bubbleAccent.soft === next.bubbleAccent.soft &&
-    prev.onReplay === next.onReplay &&
     prev.onGhost === next.onGhost
     // === NB (Fabio + Neo 2026-09-11 Fix C) =================================
     // `onLongPressFeedback` deliberatamente NON incluso nel confronto.
