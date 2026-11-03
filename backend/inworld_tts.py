@@ -76,12 +76,12 @@ DEFAULT_STREAM_TOTAL_TIMEOUT_S = 120.0
 class InworldVoiceParams:
     """Parametri vocali Inworld — immutabili per request.
 
-    Default: identici alla voce approvata da Fabio durante i test API
-    (``vivid-feather-7719__design-voice-37081da2``, ``it-IT``, rate 1.05,
+    Default: voce aggiornata 2026-11-04 su richiesta Fabio
+    (``vivid-feather-7719__design-voice-0245caaf``, ``it-IT``, rate 1.05,
     delivery ``CREATIVE``).
     """
 
-    voice_id: str = "vivid-feather-7719__design-voice-37081da2"
+    voice_id: str = "vivid-feather-7719__design-voice-0245caaf"
     language: str = "it-IT"
     speaking_rate: float = 1.05
     delivery_mode: str = "CREATIVE"  # CREATIVE | EXPRESSIVE | STANDARD | CALM | NEUTRAL
