@@ -148,7 +148,7 @@ class TestPromptStructureV3(unittest.TestCase):
             "UTILITÀ CONCRETA",
             "NIENTE ESCLUSIVITÀ", "USO TROPPO L'AI", "INVITO AI CONTATTI UMANI",
             "PROMESSE SU REAZIONI ALTRUI", "AFFETTO PERFORMATO",
-            "CHIUSURA PULITA", "TRASPARENZA SOBRIA",
+            "CHIUSURA SENZA PROLUNGAMENTI RITUALI", "REGISTRI DELLA RISPOSTA",
         ]
         for p in pillars:
             self.assertIn(p, block, f"missing pillar: {p}")

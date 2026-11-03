@@ -12,7 +12,9 @@ class TestCacheBoundary(unittest.TestCase):
     def setUp(self):
         tree = ast.parse((Path(__file__).parents[1] / 'server.py').read_text())
         names = {'_build_fast_system_prompt', '_build_cacheable_messages',
-                 '_build_relational_rules_block'}
+                 '_build_relational_rules_block',
+                 '_build_identity_facts_block', '_style_prefs_to_prompt',
+                 '_resolve_model_family_label'}
         nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
         self.env = dict(Profile=object, TimelineEntry=object, List=List, Optional=Optional,
                         datetime=datetime, timezone=timezone, _ITALY_TZ=None,
@@ -21,6 +23,8 @@ class TestCacheBoundary(unittest.TestCase):
                         _build_temporal_context=lambda recent: '|'.join(recent),
                         TRIAL_CLOSING_PROMPT_BLOCK='TRIAL_CLOSING_TEST',
                         _CACHE_CONTEXT_BOUNDARY='\n<<<OLLENYA_DYNAMIC_CONTEXT>>>\n',
+                        OLLENYA_PRODUCT_NAME='Ollenya',
+                        CLAUDE_MODEL_ID='claude-haiku-5-5',
                         logger=logging.getLogger(__name__))
         exec(compile(ast.Module(body=nodes, type_ignores=[]), 'server_functions', 'exec'), self.env)
 
