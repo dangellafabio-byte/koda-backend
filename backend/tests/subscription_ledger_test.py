@@ -31,6 +31,7 @@ from subscription_ledger import (  # noqa: E402
     TIER_MAX_CARRYOVER_PER_SLOT,
     TIER_SLOT_LIFETIME_MONTHS,
     TIER_CYCLE_LENGTH_MONTHS,
+    TIER_MAX_CYCLE_CARRYOVER,
     CarryoverSlot,
     SubscriptionLedger,
     create_ledger,
@@ -331,6 +332,63 @@ def test_serialization_roundtrip():
     _assert(len(restored.carryover_slots) == len(ledger.carryover_slots), "numero slot preservato")
     _assert(restored.carryover_slots[0].minutes_remaining ==
             ledger.carryover_slots[0].minutes_remaining, "slot data preservato")
+    _assert(restored.cycle_carryover_generated == ledger.cycle_carryover_generated,
+            "cycle_carryover_generated preservato")
+
+
+# ======================================================================
+# TEST 13 — Annual: cap aggregato 300 min nell'annualità
+# ======================================================================
+def test_annual_max_6_carryovers_in_cycle():
+    print("\n[TEST 13] Annual: 6 passaggi × 50 = 300 totali trasferiti")
+    ledger = create_ledger("annual", purchase_date=_dt(2026, 1, 15))
+    for i in range(6):
+        year, month = 2026, 1 + i
+        consume(ledger, 60.0, now=_dt(year, month, 20))
+        nxt = (month + 1, year) if month < 12 else (1, year + 1)
+        advance_period(ledger, now=_dt(nxt[1], nxt[0], 16))
+    _assert(ledger.cycle_carryover_generated == 300.0,
+            f"cycle_carryover_generated = 300 (got {ledger.cycle_carryover_generated})")
+
+
+# ======================================================================
+# TEST 14 — Annual: cap aggregato blocca il 7° riporto
+# ======================================================================
+def test_annual_cycle_cap_blocks_7th_carryover():
+    print("\n[TEST 14] Annual: dopo 300 min riportati, il 7° slot NON viene creato")
+    ledger = create_ledger("annual", purchase_date=_dt(2026, 1, 15))
+    # 6 mesi consecutivi con residuo generoso → 6 slot da 50
+    for i in range(7):
+        year, month = 2026, 1 + i
+        consume(ledger, 60.0, now=_dt(year, month, 20))
+        nxt = (month + 1, year) if month < 12 else (1, year + 1)
+        advance_period(ledger, now=_dt(nxt[1], nxt[0], 16))
+    # Sul 7° giro il cap aggregato (300) è esaurito → nessun nuovo slot
+    _assert(ledger.cycle_carryover_generated == 300.0,
+            f"il 7° riporto è stato bloccato dal cap annuale (got {ledger.cycle_carryover_generated})")
+    # L'ultimo slot NON dovrebbe essere origin_month_index=7 (bloccato)
+    origins = [s.origin_month_index for s in ledger.carryover_slots]
+    _assert(7 not in origins, f"slot M7 NON creato (origins={origins})")
+
+
+# ======================================================================
+# TEST 15 — Annual: riporti parziali contano solo i minuti effettivi
+# ======================================================================
+def test_annual_partial_carryover_counts_actuals():
+    print("\n[TEST 15] Annual: riporti parziali (10 min) consumano SOLO 10 dal cap, non 50")
+    ledger = create_ledger("annual", purchase_date=_dt(2026, 1, 15))
+    # M1: consumo 290 su 300 → leftover 10 → slot M1 cap 10 (non 50)
+    consume(ledger, 290.0, now=_dt(2026, 1, 20))
+    advance_period(ledger, now=_dt(2026, 2, 16))
+    _assert(len(ledger.carryover_slots) == 1, "slot M1 creato")
+    _assert(ledger.carryover_slots[0].minutes_remaining == 10.0,
+            f"slot M1 = 10 (leftover), got {ledger.carryover_slots[0].minutes_remaining}")
+    _assert(ledger.cycle_carryover_generated == 10.0,
+            f"cycle counter = 10 (non 50), got {ledger.cycle_carryover_generated}")
+    # Verifica: con 10 min già consumati dal cap 300, ne restano 290 per futuri passaggi
+    remaining_cycle = TIER_MAX_CYCLE_CARRYOVER["annual"] - ledger.cycle_carryover_generated
+    _assert(remaining_cycle == 290.0,
+            f"budget residuo ciclo = 290 (got {remaining_cycle})")
 
 
 # ======================================================================
@@ -345,35 +403,6 @@ def test_mobile_cycle_anchor():
     advance_period(ledger, now=_dt(2026, 2, 20))
     m2_end = _parse_iso(ledger.current_period_end_iso)
     _assert(m2_end.day == 15, f"M2 finisce il 15 mar, got {m2_end.day}")
-
-
-# ======================================================================
-# TEST 13 — Annual: massimo 6 riporti nell'annualità (brief 2026-11-06)
-# ======================================================================
-def test_annual_max_6_carryovers_in_cycle():
-    print("\n[TEST 13] Annual: 6 passaggi mensili consecutivi × 50 = 300 totali")
-    ledger = create_ledger("annual", purchase_date=_dt(2026, 1, 15))
-    # Simuliamo 6 mesi con consumo moderato che permette carry pieno ogni volta
-    total_carry_generated = 0.0
-    for i in range(6):
-        year = 2026
-        month = 1 + i
-        consume(ledger, 60.0, now=_dt(year, month, 20))
-        nxt_month = month + 1
-        nxt_year = year
-        if nxt_month > 12:
-            nxt_month -= 12
-            nxt_year += 1
-        # cattura leftover prima del rollover
-        leftover = TIER_BASE_MINUTES["annual"] - ledger.base_minutes_used
-        advance_period(ledger, now=_dt(nxt_year, nxt_month, 16))
-        # dopo il rollover c'è uno slot nuovo da min(leftover, 50)
-        if ledger.carryover_slots:
-            total_carry_generated += min(leftover, CAP)
-    _assert(total_carry_generated <= 300.0,
-            f"massimo 300 min carry nell'annualità, got {total_carry_generated}")
-    _assert(total_carry_generated == 300.0,
-            f"6 passaggi × 50 = 300 (got {total_carry_generated})")
 
 
 if __name__ == "__main__":
@@ -393,6 +422,8 @@ if __name__ == "__main__":
         test_serialization_roundtrip,
         test_mobile_cycle_anchor,
         test_annual_max_6_carryovers_in_cycle,
+        test_annual_cycle_cap_blocks_7th_carryover,
+        test_annual_partial_carryover_counts_actuals,
     ]
     failed = []
     for t in tests:

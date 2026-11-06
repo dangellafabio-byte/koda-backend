@@ -357,6 +357,62 @@ async def api_health():
     }
 
 
+# === INWORLD SMOKE TESTS (Fabio 2026-11-06) ================================
+# Endpoint diagnostici *solo* per confermare l'inferenza di Haiku 5.5
+# via Inworld prima della migrazione effettiva dei call-site. Richiedono
+# header X-Admin-Token = REVENUECAT_WEBHOOK_AUTH (lo riutilizziamo come
+# segreto admin; non è pubblico). NON sono usati dall'app client.
+@api_router.post("/debug/inworld-chat")
+async def api_debug_inworld_chat(request: Request):
+    """Chiama Haiku 5.5 via Inworld /v1/chat/completions.
+    Body: {"prompt": "ciao"}. Response: {"ok","text","usage","latency_ms"}.
+    """
+    admin = request.headers.get("X-Admin-Token", "")
+    expected = os.getenv("REVENUECAT_WEBHOOK_AUTH", "").strip()
+    if not expected or admin != expected:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    prompt = (body.get("prompt") or "Scrivi solo: pong.").strip()[:400]
+    model = body.get("model", "anthropic/claude-haiku-5-5")
+
+    inworld_key = os.environ.get("INWORLD_API_KEY", "")
+    if not inworld_key:
+        raise HTTPException(status_code=503, detail="INWORLD_API_KEY missing")
+
+    import httpx
+    import time as _t
+    t0 = _t.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                "https://api.inworld.ai/v1/chat/completions",
+                headers={"Content-Type": "application/json",
+                          "Authorization": f"Basic {inworld_key}"},
+                json={"model": model,
+                      "messages": [{"role": "user", "content": prompt}],
+                      "max_tokens": 64, "stream": False},
+            )
+            latency_ms = int((_t.monotonic() - t0) * 1000)
+            if r.status_code != 200:
+                return {"ok": False, "status": r.status_code,
+                         "body": r.text[:600], "latency_ms": latency_ms}
+            data = r.json()
+            text = ""
+            usage = data.get("usage") or {}
+            try:
+                text = data["choices"][0]["message"]["content"]
+            except Exception:
+                pass
+            return {"ok": True, "text": text, "usage": usage,
+                     "latency_ms": latency_ms, "model": model}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200],
+                 "latency_ms": int((_t.monotonic() - t0) * 1000)}
+
+
 # === DOWNLOAD DOCUMENTO LEGALE (temp, Fabio 2026-06-24) =====================
 # Endpoint one-off per permettere all'owner di scaricare il PDF del documento
 # tecnico-legale da dare all'avvocato. Non è un endpoint pubblico: rimarrà
@@ -8596,111 +8652,188 @@ async def api_subscription_status():
 @api_router.post("/subscription/webhook")
 async def api_subscription_webhook(request: Request):
     """Webhook RevenueCat. Riceve eventi INITIAL_PURCHASE, RENEWAL,
-    CANCELLATION, EXPIRATION, etc. Aggiorna Profile.subscription_*.
+    PRODUCT_CHANGE, CANCELLATION, EXPIRATION, BILLING_ISSUE, REFUND,
+    SUBSCRIPTION_PAUSED, etc. Aggiorna Profile.subscription_*.
 
-    Auth: header Authorization deve matchare REVENUECAT_WEBHOOK_AUTH.
+    Hardening 2026-11-06 (Fabio):
+      - Auth OBBLIGATORIA: se `REVENUECAT_WEBHOOK_AUTH` non è configurata
+        o l'header non combacia → 401. Nessun comportamento aperto.
+      - Dedup su `event.id` (fallback `transaction_id` solo se event.id
+        manca). Protezione atomica tramite insert con _id unico.
+      - Rinnovi aggiornano `expires_at` anche a tier invariato, SENZA
+        duplicare accrediti (ledger ricreato solo se cambia il plan).
+      - CANCELLATION = non-renew: accesso resta fino a `expires_at`.
+      - EXPIRATION/BILLING_ISSUE/REFUND/SUBSCRIPTION_PAUSED → disattiva.
+      - PRODUCT_CHANGE: nuovo tier PENDING fino a decorrenza store
+        (`expiration_at_ms` presente). Non resetta subito il consumo.
+      - Mapping separato product_id ↔ entitlement_ids.
+
+    Ref: https://www.revenuecat.com/docs/integrations/webhooks/event-types-and-fields
     """
-    expected = os.getenv("REVENUECAT_WEBHOOK_AUTH", "")
-    if expected:
-        auth = request.headers.get("Authorization", "")
-        if auth != expected:
-            raise HTTPException(status_code=401, detail="invalid webhook auth")
+    # === AUTH (obbligatoria, no comportamento aperto) ======================
+    expected = os.getenv("REVENUECAT_WEBHOOK_AUTH", "").strip()
+    if not expected:
+        logger.error("[rc-webhook] REVENUECAT_WEBHOOK_AUTH not configured → refusing request (401)")
+        raise HTTPException(status_code=401, detail="webhook auth not configured")
+    auth = request.headers.get("Authorization", "")
+    if auth != expected:
+        raise HTTPException(status_code=401, detail="invalid webhook auth")
+
     try:
         payload = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="invalid json")
 
     event = payload.get("event", {}) if isinstance(payload, dict) else {}
-    app_user_id = event.get("app_user_id", "")
-    evt_type = event.get("type", "")
+    app_user_id = event.get("app_user_id") or event.get("original_app_user_id") or ""
+    evt_type = (event.get("type") or "").upper()
+    product_id = event.get("product_id") or event.get("new_product_id") or ""
     entitlements = event.get("entitlements", {}) or {}
-    active_ents = [k for k, v in entitlements.items() if (v or {}).get("active")]
-    # === ENTITLEMENT MAPPING (Fabio 2026-11-06) ===========================
-    # Tre piani definitivi monthly/bimonthly/annual. Ogni piano ha il suo
-    # entitlement RevenueCat. Il tier interno combacia esattamente col
-    # ledger (`subscription_ledger.TIER_BASE_MINUTES`). Priorità nel caso
-    # di più entitlement attivi contemporaneamente (dovrebbe essere raro):
-    # annual > bimonthly > monthly, tier più lungo = quello che l'utente
-    # ha scelto come impegno finale.
-    tier = None
-    if "ollenya_annual" in active_ents:
-        tier = "annual"
-    elif "ollenya_bimonthly" in active_ents:
-        tier = "bimonthly"
-    elif "ollenya_monthly" in active_ents:
-        tier = "monthly"
-    # === DEDUP WEBHOOK (Fabio 2026-11-06) =================================
-    # RevenueCat può ripetere lo stesso evento (retry su timeout). Il
-    # transaction_id è la chiave di idempotenza. Se l'abbiamo già
-    # processato, torniamo 200 OK senza riapplicare (evita doppi accrediti).
-    tx_id = (
-        event.get("transaction_id")
-        or event.get("original_transaction_id")
-        or event.get("id")
-    )
-    if tx_id:
-        try:
-            already = await db.rc_webhook_events.find_one({"_id": str(tx_id)})
-            if already:
-                logger.info(f"[rc-webhook] dedup: skip tx_id={tx_id}")
-                return {"ok": True, "deduped": True}
-        except Exception as _dd:
-            logger.warning(f"[rc-webhook] dedup check failed: {_dd}")
+    # entitlements può arrivare come dict{id:{...}} oppure come list[str]
+    if isinstance(entitlements, dict):
+        active_ents = [k for k, v in entitlements.items() if (v or {}).get("active") is not False]
+    elif isinstance(entitlements, list):
+        active_ents = list(entitlements)
+    else:
+        active_ents = []
+    entitlement_ids = event.get("entitlement_ids") or event.get("entitlement_id")
+    if entitlement_ids and not active_ents:
+        active_ents = entitlement_ids if isinstance(entitlement_ids, list) else [entitlement_ids]
 
-    is_active = bool(active_ents) and evt_type not in ("EXPIRATION", "CANCELLATION")
-    expires_at = event.get("expiration_at_ms")
-    expires_iso = None
-    if expires_at:
+    # === MAPPING ESPLICITO product_id ↔ entitlement_id ↔ tier interno ======
+    # Source of truth: brief 2026-11-06.
+    PRODUCT_TO_ENTITLEMENT: Dict[str, str] = {
+        "ollenya_monthly":   "ollenya_monthly",
+        "ollenya_bimonthly": "ollenya_bimonthly",
+        "ollenya_annual":    "ollenya_annual",
+    }
+    ENTITLEMENT_TO_TIER: Dict[str, str] = {
+        "ollenya_annual":    "annual",
+        "ollenya_bimonthly": "bimonthly",
+        "ollenya_monthly":   "monthly",
+    }
+    # Priority: annual > bimonthly > monthly (contratto più lungo vince)
+    tier: Optional[str] = None
+    for ent_priority in ("ollenya_annual", "ollenya_bimonthly", "ollenya_monthly"):
+        if ent_priority in active_ents:
+            tier = ENTITLEMENT_TO_TIER[ent_priority]
+            break
+
+    # === DEDUP via event.id (chiave idempotenza RevenueCat) ================
+    # RevenueCat docs: `event.id` è unico per singolo evento (non per
+    # transazione). Due eventi distinti (es. INITIAL_PURCHASE + RENEWAL)
+    # sulla stessa transaction condividono transaction_id ma hanno event.id
+    # diversi. Uso event.id come key, fallback a transaction_id SOLO se manca.
+    dedup_key = event.get("id") or event.get("event_id") or event.get("transaction_id") or ""
+    if dedup_key:
         try:
-            expires_iso = datetime.fromtimestamp(int(expires_at) / 1000, tz=timezone.utc).isoformat()
+            # Insert atomico: se il doc esiste già, lancia DuplicateKeyError.
+            await db.rc_webhook_events.insert_one({
+                "_id": str(dedup_key),
+                "evt_type": evt_type,
+                "app_user_id": app_user_id,
+                "tier": tier,
+                "product_id": product_id,
+                "received_at": datetime.now(timezone.utc).isoformat(),
+                "processed": False,
+            })
+        except Exception as _dup:
+            # Se duplicate key → evento già processato → 200 silente
+            if "duplicate key" in str(_dup).lower() or "E11000" in str(_dup):
+                logger.info(f"[rc-webhook] dedup: skip event.id={dedup_key} type={evt_type}")
+                return {"ok": True, "deduped": True}
+            logger.warning(f"[rc-webhook] dedup insert err: {_dup}")
+
+    # === SEMANTICA EVENTO ==================================================
+    # INITIAL_PURCHASE, RENEWAL, UNCANCELLATION, TRIAL_CONVERSION → active
+    # PRODUCT_CHANGE → active (new product), decorrenza = expiration_at_ms
+    # CANCELLATION → active=True, auto-renew disattivato (accesso fino a scadenza)
+    # EXPIRATION, BILLING_ISSUE, SUBSCRIPTION_PAUSED → inactive
+    # REFUND, TRANSFER (target=other) → inactive, revoca
+    ACTIVATING = {"INITIAL_PURCHASE", "RENEWAL", "UNCANCELLATION",
+                  "TRIAL_CONVERSION", "PRODUCT_CHANGE"}
+    SOFT_CANCEL = {"CANCELLATION"}   # mantiene accesso fino a scadenza
+    HARD_REVOKE = {"EXPIRATION", "BILLING_ISSUE", "SUBSCRIPTION_PAUSED",
+                   "REFUND", "TRANSFER"}
+
+    is_active = False
+    if evt_type in ACTIVATING and tier:
+        is_active = True
+    elif evt_type in SOFT_CANCEL:
+        is_active = True   # resta attivo fino a expires_at
+    elif evt_type in HARD_REVOKE:
+        is_active = False
+
+    expires_at_ms = event.get("expiration_at_ms") or event.get("expires_at_ms")
+    expires_iso: Optional[str] = None
+    if expires_at_ms:
+        try:
+            expires_iso = datetime.fromtimestamp(
+                int(expires_at_ms) / 1000, tz=timezone.utc
+            ).isoformat()
         except Exception:
             pass
 
-    # Per ora il single-user è "me" — quando avremo auth multi-user
-    # mapperemo rc_app_user_id → user_id.
     target_uid = app_user_id or "me"
-    update = {
-        "subscription_active": is_active,
-        "subscription_tier": tier,
+
+    # Fetch stato esistente per decidere se rinnovare o rifare ledger
+    existing = await db.taccuino_profile.find_one(
+        {"id": target_uid},
+        {"ledger_state": 1, "subscription_tier": 1, "subscription_expires_at": 1}
+    ) or {}
+    existing_tier = existing.get("subscription_tier")
+    existing_state = existing.get("ledger_state") if isinstance(existing.get("ledger_state"), dict) else None
+
+    update: Dict[str, Any] = {
         "subscription_expires_at": expires_iso,
     }
-    # === LEDGER LIFECYCLE SUI WEBHOOK ======================================
-    # INITIAL_PURCHASE / RENEWAL con tier valido → crea/rinnova ledger
-    #   ma SOLO se cambia il tier (per non azzerare consumo in-cycle).
-    # CANCELLATION / EXPIRATION → NON toccare il ledger: la cancellazione
-    #   vale alla scadenza. Il tier resta attivo fino a expires_at.
-    if tier in _PAID_TIERS and evt_type in ("INITIAL_PURCHASE", "RENEWAL", "PRODUCT_CHANGE"):
-        try:
-            existing = await db.taccuino_profile.find_one(
-                {"id": target_uid}, {"ledger_state": 1}
-            )
-            existing_state = (existing or {}).get("ledger_state")
-            if not isinstance(existing_state, dict) or existing_state.get("plan") != tier:
-                fresh = _sub_ledger.create_ledger(tier)
-                update["ledger_state"] = fresh.to_dict()
-                update["minutes_used_this_month"] = 0.0
-                update["monthly_reset_date"] = _this_month_utc_str()
-        except Exception as _le:
-            logger.warning(f"[rc-webhook] ledger init failed: {_le}")
+    if evt_type in ACTIVATING and tier:
+        update["subscription_tier"] = tier
+        update["subscription_active"] = True
+        same_plan = (existing_tier == tier and existing_state and existing_state.get("plan") == tier)
+        if evt_type == "INITIAL_PURCHASE" or not same_plan:
+            # Nuovo tier (o primo acquisto): ledger fresh.
+            fresh = _sub_ledger.create_ledger(tier)
+            update["ledger_state"] = fresh.to_dict()
+            update["minutes_used_this_month"] = 0.0
+            update["monthly_reset_date"] = _this_month_utc_str()
+        else:
+            # RENEWAL stesso piano: NON ricreare il ledger (altrimenti
+            # duplichi l'accredito mensile). advance_period si occuperà
+            # del rollover alla prossima chiamata, quando siamo oltre
+            # current_period_end. Aggiorno solo expires_at.
+            pass
+    elif evt_type in SOFT_CANCEL:
+        # Cancellation = auto-renew off. Tier resta, access rimane fino a scadenza.
+        update["subscription_active"] = True
+    elif evt_type in HARD_REVOKE:
+        update["subscription_active"] = False
+        update["subscription_tier"] = None
+        update["ledger_state"] = None
 
     await db.taccuino_profile.update_one(
         {"id": target_uid},
         {"$set": update},
         upsert=False,
     )
-    if tx_id:
+
+    # Marca evento come processato nel dedup log
+    if dedup_key:
         try:
-            await db.rc_webhook_events.insert_one({
-                "_id": str(tx_id),
-                "evt_type": evt_type,
-                "app_user_id": app_user_id,
-                "tier": tier,
-                "processed_at": datetime.now(timezone.utc).isoformat(),
-            })
-        except Exception as _dd2:
-            logger.warning(f"[rc-webhook] dedup insert failed: {_dd2}")
-    logger.info(f"[rc-webhook] {evt_type} app_user={app_user_id} active={is_active} tier={tier} tx={tx_id}")
-    return {"ok": True}
+            await db.rc_webhook_events.update_one(
+                {"_id": str(dedup_key)},
+                {"$set": {"processed": True,
+                           "processed_at": datetime.now(timezone.utc).isoformat()}},
+            )
+        except Exception:
+            pass
+
+    logger.info(
+        f"[rc-webhook] {evt_type} user={app_user_id[:16] if app_user_id else '(none)'} "
+        f"product={product_id} tier={tier} active={is_active} expires={expires_iso} "
+        f"evt_id={dedup_key[:16] if dedup_key else '(none)'}"
+    )
+    return {"ok": True, "evt_type": evt_type, "tier": tier}
 
 
 # === FIX 2026-07-02 (Fabio) — Rimosso endpoint /profile/background ===

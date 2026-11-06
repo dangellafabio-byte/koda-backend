@@ -79,6 +79,17 @@ TIER_CYCLE_LENGTH_MONTHS: Dict[str, int] = {
     "annual":    12,
 }
 
+# Massimo cumulato di minuti trasferibili come carryover DENTRO un singolo
+# ciclo di tier. Brief 2026-11-06: l'annuale consente al più 300 min
+# complessivamente riportati, pari a 6 passaggi completi da 50 (o più
+# passaggi parziali che cumulino 300). Monthly=0 (no carry), bimonthly=50
+# (un solo passaggio M1→M2 possibile). Per annual: 300.
+TIER_MAX_CYCLE_CARRYOVER: Dict[str, float] = {
+    "monthly":   0.0,
+    "bimonthly": 50.0,
+    "annual":    300.0,
+}
+
 
 # =============================================================================
 # Utility date-time
@@ -170,6 +181,12 @@ class SubscriptionLedger:
     # FIFO nel consume()), così i minuti "gratis" del piano si consumano
     # per primi e il denaro fresh dell'utente resta il più a lungo possibile.
     topup_minutes_remaining: float = 0.0
+    # === CAP CUMULATO CARRYOVER NEL CICLO (Fabio 2026-11-06) ================
+    # Somma dei minuti trasferiti come carryover DENTRO il ciclo corrente
+    # (resetta ad ogni renewal del tier). Enforcement in advance_period():
+    # se il nuovo slot farebbe superare TIER_MAX_CYCLE_CARRYOVER[plan],
+    # viene troncato al margine residuo. Garantisce il tetto annuale 300.
+    cycle_carryover_generated: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -192,6 +209,7 @@ class SubscriptionLedger:
             last_rollover_check_iso=str(d["last_rollover_check_iso"]),
             # Backfill 0.0 per ledger creati prima del 2026-06 (no topup key)
             topup_minutes_remaining=float(d.get("topup_minutes_remaining", 0.0)),
+            cycle_carryover_generated=float(d.get("cycle_carryover_generated", 0.0)),
         )
 
 
@@ -224,6 +242,7 @@ def create_ledger(plan: str, purchase_date: Optional[datetime] = None) -> Subscr
         carryover_slots=[],
         last_rollover_check_iso=_iso(now),
         topup_minutes_remaining=0.0,
+        cycle_carryover_generated=0.0,
     )
 
 
@@ -303,14 +322,21 @@ def advance_period(ledger: SubscriptionLedger, now: Optional[datetime] = None) -
         # A fine ciclo, il residuo del mese N=cycle_length viene comunque scartato
         # perché tutti gli slot vengono azzerati.
         if slot_cap > 0 and slot_lifetime > 0 and not is_cycle_end and leftover > 0:
-            new_slot_expires = _add_months(_parse_iso(old_period_end_iso), slot_lifetime)
-            new_slot = CarryoverSlot(
-                origin_month_index=old_period_index,
-                origin_period_end_iso=old_period_end_iso,
-                minutes_remaining=min(leftover, slot_cap),
-                expires_at_iso=_iso(new_slot_expires),
-            )
-            ledger.carryover_slots.append(new_slot)
+            # Cap cumulato per ciclo (Fabio 2026-11-06): non superare
+            # TIER_MAX_CYCLE_CARRYOVER[plan] nel ciclo corrente.
+            cycle_cap = TIER_MAX_CYCLE_CARRYOVER.get(plan, 0.0)
+            remaining_cycle_budget = max(0.0, cycle_cap - ledger.cycle_carryover_generated)
+            slot_minutes = min(leftover, slot_cap, remaining_cycle_budget)
+            if slot_minutes > 1e-9:
+                new_slot_expires = _add_months(_parse_iso(old_period_end_iso), slot_lifetime)
+                new_slot = CarryoverSlot(
+                    origin_month_index=old_period_index,
+                    origin_period_end_iso=old_period_end_iso,
+                    minutes_remaining=slot_minutes,
+                    expires_at_iso=_iso(new_slot_expires),
+                )
+                ledger.carryover_slots.append(new_slot)
+                ledger.cycle_carryover_generated += slot_minutes
 
         # Fase 4 — advance del periodo
         new_period_start = _parse_iso(ledger.current_period_end_iso)
@@ -321,6 +347,7 @@ def advance_period(ledger: SubscriptionLedger, now: Optional[datetime] = None) -
             ledger.carryover_slots = []
             ledger.cycle_start_iso = _iso(new_period_start)
             ledger.current_period_index = 1
+            ledger.cycle_carryover_generated = 0.0
         else:
             ledger.current_period_index = next_period_index
 
