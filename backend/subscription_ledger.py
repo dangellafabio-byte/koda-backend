@@ -39,37 +39,37 @@ from dateutil.relativedelta import relativedelta
 # Approvate da Fabio 2026-08-14. Modificare qui, non in server.py.
 
 TIER_BASE_MINUTES: Dict[str, float] = {
-    # 2026-06-15 (Fabio) — Nuovo pricing definitivo per lancio.
-    # Tutti i tier hanno 500 min/mese (uniforme). Differenziazione tra
-    # tier avviene su prezzo, durata impegno, e sopravvivenza dei residui
-    # (carryover): monthly=no, bimonthly=1 mese, annual=2 mesi.
-    # Vecchi valori 2026-09-06 (200/230/230) → sostituiti con 500 per
-    # tutti in coerenza col paywall commerciale finale.
-    "monthly":   500.0,
-    "bimonthly": 500.0,
-    "annual":    500.0,
+    # 2026-11-06 (Fabio) — Pricing definitivo per lancio:
+    #   Monthly    29,90 €/mese  — 300 min, no carryover
+    #   Bimonthly  59,90 €/2 mesi — 300 min/mese, max 50 carry M1→M2
+    #   Annual    354,90 €/anno  — 300 min/mese, max 50 carry per passaggio
+    #                              mensile (6 passaggi max, 300 totali nell'annualità)
+    # Saldo massimo disponibile in un mese: 300 base + 50 carry = 350 min.
+    "monthly":   300.0,
+    "bimonthly": 300.0,
+    "annual":    300.0,
 }
 
 # Massimo minuti trasferibili come carryover DA UN SINGOLO MESE.
-# Formula prodotto (Fabio 2026-06): carryover = min(saldo_fine_mese, 500).
-# Se l'utente arriva a fine mese con 300 min non usati → 300 di carryover.
-# Se l'utente ha usato 0 min → 500 di carryover (cap = piena mensilità).
-# NB annual: il ledger può contenere fino a 2 slot attivi contemporaneamente
-# (residui di 2 mesi diversi), ciascuno cap 500 → theoric max disponibile
-# in un mese = 500 (base) + 500 + 500 (2 slot) = 1500 min. In pratica
-# raro perché slot=1 mese di vita, il secondo slot generato scarta il primo.
+# Formula (Fabio 2026-11-06): carryover = min(saldo_fine_mese, 50).
+# Il riporto NON aggiunge minuti alla quota pagata: l'annuale assegna
+# complessivamente 3.600 minuti, non 3.900 — il massimo spendibile in
+# un mese è 350 (300 base + 50 slot), ma il totale annuo resta 3.600.
 TIER_MAX_CARRYOVER_PER_SLOT: Dict[str, float] = {
-    "monthly":   0.0,     # nessun carryover — piano corto, no residui
-    "bimonthly": 500.0,   # 1 slot solo, cap 500 = intera mensilità, vive 1 mese
-    "annual":    500.0,   # slot multipli (fino a 2), ciascuno cap 500, vivono 2 mesi
+    "monthly":   0.0,     # nessun carryover — piano corto
+    "bimonthly": 50.0,    # 1 slot M1→M2, poi rinnovo cancella tutto
+    "annual":    50.0,    # slot ogni mese, ciascuno vive SOLO il mese successivo
 }
 
 # Numero di mesi in cui uno slot resta "spendibile" dopo la sua creazione.
 # monthly=0 significa "non si genera slot".
+# Brief 2026-11-06: "I minuti trasferiti valgono ESCLUSIVAMENTE nel periodo
+# mensile immediatamente successivo: NON possono essere riportati di nuovo."
+# → slot_lifetime = 1 per TUTTI i tier che hanno carryover.
 TIER_SLOT_LIFETIME_MONTHS: Dict[str, int] = {
     "monthly":   0,
     "bimonthly": 1,
-    "annual":    2,
+    "annual":    1,
 }
 
 # Durata del ciclo di tier (dopo N mesi si rinnova e tutti gli slot muoiono).

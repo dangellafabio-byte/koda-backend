@@ -8615,13 +8615,38 @@ async def api_subscription_webhook(request: Request):
     evt_type = event.get("type", "")
     entitlements = event.get("entitlements", {}) or {}
     active_ents = [k for k, v in entitlements.items() if (v or {}).get("active")]
+    # === ENTITLEMENT MAPPING (Fabio 2026-11-06) ===========================
+    # Tre piani definitivi monthly/bimonthly/annual. Ogni piano ha il suo
+    # entitlement RevenueCat. Il tier interno combacia esattamente col
+    # ledger (`subscription_ledger.TIER_BASE_MINUTES`). Priorità nel caso
+    # di più entitlement attivi contemporaneamente (dovrebbe essere raro):
+    # annual > bimonthly > monthly, tier più lungo = quello che l'utente
+    # ha scelto come impegno finale.
     tier = None
-    if "plus_access" in active_ents:
-        tier = "plus"
-    elif "daily_access" in active_ents:
-        tier = "daily"
-    elif "essential_access" in active_ents:
-        tier = "essential"
+    if "ollenya_annual" in active_ents:
+        tier = "annual"
+    elif "ollenya_bimonthly" in active_ents:
+        tier = "bimonthly"
+    elif "ollenya_monthly" in active_ents:
+        tier = "monthly"
+    # === DEDUP WEBHOOK (Fabio 2026-11-06) =================================
+    # RevenueCat può ripetere lo stesso evento (retry su timeout). Il
+    # transaction_id è la chiave di idempotenza. Se l'abbiamo già
+    # processato, torniamo 200 OK senza riapplicare (evita doppi accrediti).
+    tx_id = (
+        event.get("transaction_id")
+        or event.get("original_transaction_id")
+        or event.get("id")
+    )
+    if tx_id:
+        try:
+            already = await db.rc_webhook_events.find_one({"_id": str(tx_id)})
+            if already:
+                logger.info(f"[rc-webhook] dedup: skip tx_id={tx_id}")
+                return {"ok": True, "deduped": True}
+        except Exception as _dd:
+            logger.warning(f"[rc-webhook] dedup check failed: {_dd}")
+
     is_active = bool(active_ents) and evt_type not in ("EXPIRATION", "CANCELLATION")
     expires_at = event.get("expiration_at_ms")
     expires_iso = None
@@ -8634,16 +8659,47 @@ async def api_subscription_webhook(request: Request):
     # Per ora il single-user è "me" — quando avremo auth multi-user
     # mapperemo rc_app_user_id → user_id.
     target_uid = app_user_id or "me"
+    update = {
+        "subscription_active": is_active,
+        "subscription_tier": tier,
+        "subscription_expires_at": expires_iso,
+    }
+    # === LEDGER LIFECYCLE SUI WEBHOOK ======================================
+    # INITIAL_PURCHASE / RENEWAL con tier valido → crea/rinnova ledger
+    #   ma SOLO se cambia il tier (per non azzerare consumo in-cycle).
+    # CANCELLATION / EXPIRATION → NON toccare il ledger: la cancellazione
+    #   vale alla scadenza. Il tier resta attivo fino a expires_at.
+    if tier in _PAID_TIERS and evt_type in ("INITIAL_PURCHASE", "RENEWAL", "PRODUCT_CHANGE"):
+        try:
+            existing = await db.taccuino_profile.find_one(
+                {"id": target_uid}, {"ledger_state": 1}
+            )
+            existing_state = (existing or {}).get("ledger_state")
+            if not isinstance(existing_state, dict) or existing_state.get("plan") != tier:
+                fresh = _sub_ledger.create_ledger(tier)
+                update["ledger_state"] = fresh.to_dict()
+                update["minutes_used_this_month"] = 0.0
+                update["monthly_reset_date"] = _this_month_utc_str()
+        except Exception as _le:
+            logger.warning(f"[rc-webhook] ledger init failed: {_le}")
+
     await db.taccuino_profile.update_one(
         {"id": target_uid},
-        {"$set": {
-            "subscription_active": is_active,
-            "subscription_tier": tier,
-            "subscription_expires_at": expires_iso,
-        }},
+        {"$set": update},
         upsert=False,
     )
-    logger.info(f"[rc-webhook] {evt_type} app_user={app_user_id} active={is_active} tier={tier}")
+    if tx_id:
+        try:
+            await db.rc_webhook_events.insert_one({
+                "_id": str(tx_id),
+                "evt_type": evt_type,
+                "app_user_id": app_user_id,
+                "tier": tier,
+                "processed_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as _dd2:
+            logger.warning(f"[rc-webhook] dedup insert failed: {_dd2}")
+    logger.info(f"[rc-webhook] {evt_type} app_user={app_user_id} active={is_active} tier={tier} tx={tx_id}")
     return {"ok": True}
 
 

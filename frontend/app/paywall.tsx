@@ -54,23 +54,23 @@ const PLANS: PlanInfo[] = [
   {
     id: "monthly",
     label: "Mensile",
-    price: "19,99 €",
+    price: "29,90 €",
     priceUnit: "/mese",
-    minutesLine: "500 minuti al mese",
+    minutesLine: "300 minuti al mese",
   },
   {
     id: "bimonthly",
     label: "Bimestrale",
-    price: "35,99 €",
+    price: "59,90 €",
     priceUnit: "/2 mesi",
-    minutesLine: "500 min/mese · carryover 50 min (singolo)",
+    minutesLine: "300 min/mese · fino a 50 min di riporto al 2° mese",
   },
   {
     id: "yearly",
     label: "Annuale",
-    price: "209,99 €",
+    price: "354,90 €",
     priceUnit: "/anno",
-    minutesLine: "500 min/mese · 50 min di carryover/mese (max 6 mesi, non cumulabili)",
+    minutesLine: "300 min/mese · fino a 50 min di riporto per passaggio (max 300 l'anno)",
   },
 ];
 
