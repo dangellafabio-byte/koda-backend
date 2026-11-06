@@ -153,6 +153,39 @@ async def main():
     ok_all &= c6
     print(f"  {'✓' if c6 else '✗'} EXPIRATION: active=False, tier=None")
 
+    # 8. Ricreo stato: INITIAL monthly, poi BILLING_ISSUE → NON revoca
+    post(ev("6_reinit", "INITIAL_PURCHASE"))
+    code, body = post(ev("7_billing", "BILLING_ISSUE", ents=("ollenya_monthly",)))
+    doc = await read_profile()
+    c7 = (code == 200 and doc.get("subscription_active") is True
+          and doc.get("subscription_tier") == "monthly")
+    ok_all &= c7
+    print(f"  {'✓' if c7 else '✗'} BILLING_ISSUE: NON revoca (grace period)")
+
+    # 9. SUBSCRIPTION_PAUSED → NON revoca
+    code, body = post(ev("8_paused", "SUBSCRIPTION_PAUSED", ents=("ollenya_monthly",)))
+    doc = await read_profile()
+    c8 = (code == 200 and doc.get("subscription_active") is True)
+    ok_all &= c8
+    print(f"  {'✓' if c8 else '✗'} SUBSCRIPTION_PAUSED: NON revoca")
+
+    # 10. PRODUCT_CHANGE con effective_at_ms futuro → pending, no cambio immediato
+    future_ms = 2**40  # molto futuro
+    code, body = post({"event": {
+        "id": f"{TEST_UID}_9_chg_future",
+        "transaction_id": f"tx_{TEST_UID}_9",
+        "type": "PRODUCT_CHANGE", "app_user_id": TEST_UID,
+        "product_id": "ollenya_annual",
+        "entitlements": {"ollenya_annual": {"active": True}},
+        "expiration_at_ms": future_ms,
+        "product_change_at_ms": future_ms,  # decorrenza futura
+    }})
+    doc = await read_profile()
+    c9 = (code == 200 and doc.get("pending_tier") == "annual"
+          and doc.get("subscription_tier") == "monthly")  # NON ancora cambiato
+    ok_all &= c9
+    print(f"  {'✓' if c9 else '✗'} PRODUCT_CHANGE downgrade/futuro: pending_tier salvato, tier corrente invariato")
+
     print("=" * 60)
     if ok_all:
         print("ALL OK")

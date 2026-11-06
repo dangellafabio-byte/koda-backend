@@ -87,7 +87,7 @@ class InworldVoiceParams:
     delivery_mode: str = "CREATIVE"  # CREATIVE | EXPRESSIVE | STANDARD | CALM | NEUTRAL
     # Modello default allineato a scelta Fabio 2026-10-30: TTS-2 Flash
     # (variante a latenza bassa / costo contenuto).
-    model_id: str = "inworld-tts-2-flash"
+    model_id: str = "inworld-tts-2"
     audio_encoding: str = "MP3"
 
     def to_payload(
