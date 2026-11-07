@@ -13,6 +13,8 @@ Due operazioni:
    — default "elevenlabs" se nessun doc. Il resolver fa anche doppio
      controllo whitelist (defense in depth): se un utente NON autorizzato
      per qualche ragione avesse un doc con ``inworld``, il resolver
+"""
+import os
      restituisce comunque ``elevenlabs``.
  * ``consume_switch_token(db, uid, token) -> {provider, consumed}``
    — i token sono rilasciati da ``issue_switch_token`` con TTL 10 min,
@@ -35,7 +37,11 @@ PREFS_COLLECTION = "koda_tts_provider_prefs"
 TOKENS_COLLECTION = "koda_tts_switch_tokens"
 
 ALLOWED_PROVIDERS = frozenset({"elevenlabs", "inworld"})
-DEFAULT_PROVIDER = "elevenlabs"
+# 2026-11-07 (Fabio): TEST env → Inworld come default (via env var).
+# Produzione resta "elevenlabs" finché non viene impostata l'env var.
+DEFAULT_PROVIDER = (os.environ.get("KODA_TTS_DEFAULT_PROVIDER") or "elevenlabs").lower().strip()
+if DEFAULT_PROVIDER not in ALLOWED_PROVIDERS:
+    DEFAULT_PROVIDER = "elevenlabs"
 
 # TTL dei token one-shot (minuti). Volontariamente breve.
 TOKEN_TTL_MINUTES = 10

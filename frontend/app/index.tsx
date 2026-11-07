@@ -4252,6 +4252,11 @@ export default function Taccuino() {
       console.log(`[OLLENYA_TIMING] UPLOAD_START @${_kt_upload_start} audio_bytes=${_kt_audio_bytes}`);
       // Fase 4 Step 1: usiamo Deepgram Nova-3 (più veloce e accurato di Whisper).
       // Fallback automatico a /transcribe (Whisper) se Deepgram fallisce.
+      // === 2026-11-07 (Fabio) — STT PRIMARY = Inworld STT-1 ================
+      // /transcribe-inworld è il nuovo primary. Se fallisce (403/5xx), il
+      // flusso cade automaticamente nel path di fallback a /transcribe
+      // (Whisper via Emergent) che già esisteva. Deepgram resta disponibile
+      // ma non è più chiamato come primary.
       // === P0 FIX 2026-06-27 (timeout 44s su cold-start Bluetooth) ===
       // Aggiungiamo client-side timeout via AbortController: se la richiesta
       // si pianta (TLS cold-start, cellular ballerino, Deepgram down), dopo
@@ -4261,7 +4266,7 @@ export default function Taccuino() {
       const _stt_timer = setTimeout(() => _stt_controller.abort(), 12000);
       let r: Response;
       try {
-        r = await fetch(`${API_BASE}/transcribe-deepgram`, {
+        r = await fetch(`${API_BASE}/transcribe-inworld`, {
           method: "POST",
           body: fd,
           signal: _stt_controller.signal,
@@ -4269,7 +4274,7 @@ export default function Taccuino() {
       } catch (e: any) {
         clearTimeout(_stt_timer);
         const isAbort = e?.name === "AbortError";
-        console.warn(`[transcribe] Deepgram ${isAbort ? "TIMEOUT 12s" : "network error"}: ${e?.message || e}`);
+        console.warn(`[transcribe] Inworld ${isAbort ? "TIMEOUT 12s" : "network error"}: ${e?.message || e}`);
         // Fallback rapido a Whisper con nuova FormData + nuovo timeout
         const fd_fb = buildFormData(res);
         const _wh_controller = new AbortController();
@@ -4287,9 +4292,9 @@ export default function Taccuino() {
         clearTimeout(_stt_timer);
       }
       const _kt_deepgram_done = Date.now();
-      console.log(`[OLLENYA_TIMING] UPLOAD_END+DEEPGRAM_END @${_kt_deepgram_done} (upload+stt_ms=${_kt_deepgram_done - _kt_upload_start})`);
+      console.log(`[OLLENYA_TIMING] UPLOAD_END+STT_END @${_kt_deepgram_done} (upload+stt_ms=${_kt_deepgram_done - _kt_upload_start})`);
       if (!r.ok) {
-        console.warn(`[transcribe] Deepgram failed (${r.status}), fallback to Whisper`);
+        console.warn(`[transcribe] Inworld failed (${r.status}), fallback to Whisper`);
         // Ricreo FormData perché il body è già stato consumato
         const fd2 = buildFormData(res);
         const _wh2_controller = new AbortController();

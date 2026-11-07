@@ -2696,6 +2696,155 @@ async def voice_warmup():
     }
 
 
+# ============ INWORLD STT-1 TRANSCRIPTION (Fabio 2026-11-07) ================
+# Drop-in sostitutivo di /transcribe-deepgram. Stesso contract:
+#   POST multipart audio=<file>, language=<it|en|...>
+#   → {"text": "...", "confidence": null}  (Inworld non espone confidence)
+# L'audio in arrivo è tipicamente m4a (iOS) o webm (Android/web). Converto
+# al volo in LINEAR16 WAV 16kHz mono con ffmpeg (binary via imageio_ffmpeg,
+# no apt deps), poi chiamo /stt/v1/transcribe REST multipart.
+# ============================================================================
+def _get_ffmpeg_bin() -> Optional[str]:
+    """Lazy resolver del binary ffmpeg via imageio_ffmpeg. Robusto a uvicorn
+    --reload che reimporta il modulo in stati parziali."""
+    try:
+        import imageio_ffmpeg as _iio_ffmpeg
+        return _iio_ffmpeg.get_ffmpeg_exe()
+    except Exception as e:
+        logger.warning(f"[inworld-stt] imageio_ffmpeg not usable: {e!r}")
+        return None
+
+
+try:
+    import imageio_ffmpeg as _iio_ffmpeg
+    _FFMPEG_BIN = _iio_ffmpeg.get_ffmpeg_exe()
+    logger.info(f"[inworld-stt] ffmpeg binary: {_FFMPEG_BIN}")
+except Exception as _ff_err:
+    _FFMPEG_BIN = None
+    logger.warning(f"[inworld-stt] imageio_ffmpeg not usable: {_ff_err!r}")
+
+
+async def _ffmpeg_to_linear16_wav(raw: bytes, sample_rate: int = 16000) -> bytes:
+    """Converte audio arbitrario → WAV PCM16 mono N kHz via ffmpeg.
+    Per MP4/m4a serve un file temporaneo (il muxer MP4 ha bisogno di seek
+    nell'header, cosa che stdin non supporta).
+    """
+    ffbin = _FFMPEG_BIN or _get_ffmpeg_bin()
+    if not ffbin:
+        raise RuntimeError("ffmpeg binary non disponibile (imageio_ffmpeg mancante)")
+    import asyncio as _aio
+    import tempfile, os as _os
+    tmp_in = tempfile.NamedTemporaryFile(suffix=".bin", delete=False)
+    try:
+        tmp_in.write(raw)
+        tmp_in.flush()
+        tmp_in.close()
+        proc = await _aio.create_subprocess_exec(
+            ffbin,
+            "-hide_banner", "-loglevel", "error",
+            "-i", tmp_in.name,
+            "-ac", "1",
+            "-ar", str(sample_rate),
+            "-acodec", "pcm_s16le",
+            "-f", "wav",
+            "pipe:1",
+            stdout=_aio.subprocess.PIPE,
+            stderr=_aio.subprocess.PIPE,
+        )
+        out, err = await proc.communicate()
+        if proc.returncode != 0 or len(out) < 44:
+            raise RuntimeError(
+                f"ffmpeg decode rc={proc.returncode}: {err.decode(errors='replace')[:200]}"
+            )
+        return out
+    finally:
+        try:
+            _os.unlink(tmp_in.name)
+        except Exception:
+            pass
+
+
+@api_router.post("/transcribe-inworld")
+async def transcribe_inworld(audio: UploadFile = File(...), language: str = Form("it")):
+    """Trascrizione via Inworld STT-1. Drop-in per /transcribe-deepgram."""
+    import json as _json
+    key = os.environ.get("INWORLD_API_KEY", "")
+    if not key:
+        raise HTTPException(status_code=500, detail="INWORLD_API_KEY not set")
+    try:
+        _t_read = time.time()
+        raw = await audio.read()
+        if len(raw) == 0:
+            raise HTTPException(status_code=400, detail="Empty audio")
+        _ms_read = int((time.time() - _t_read) * 1000)
+
+        _t_decode = time.time()
+        wav = await _ffmpeg_to_linear16_wav(raw, sample_rate=16000)
+        _ms_decode = int((time.time() - _t_decode) * 1000)
+
+        cfg = {
+            "modelId": "inworld/inworld-stt-1",
+            "languageCode": (language or "it").split("-")[0],
+            "audioEncoding": "LINEAR16",
+            "sampleRateHertz": 16000,
+            "audioChannelCount": 1,
+        }
+        _t_stt = time.time()
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=90.0) as client:
+            r = await client.post(
+                "https://api.inworld.ai/stt/v1/transcribe",
+                headers={"Authorization": f"Basic {key}"},
+                files={
+                    "transcribeConfig": (None, _json.dumps(cfg), "application/json"),
+                    "file": ("audio.wav", wav, "audio/wav"),
+                },
+            )
+        _ms_stt = int((time.time() - _t_stt) * 1000)
+
+        if r.status_code != 200:
+            logger.error(f"[inworld-stt] {r.status_code}: {r.text[:300]}")
+            raise HTTPException(status_code=502, detail=f"Inworld STT {r.status_code}")
+
+        data = r.json()
+        # Parse robusto: Inworld può ritornare `transcription` dict o `results` list
+        transcript = ""
+        try:
+            if isinstance(data.get("transcription"), dict):
+                transcript = data["transcription"].get("transcript") or ""
+            elif isinstance(data.get("transcript"), str):
+                transcript = data["transcript"]
+            elif isinstance(data.get("results"), list) and data["results"]:
+                transcript = data["results"][0].get("transcript") or data["results"][0].get("text") or ""
+        except Exception:
+            pass
+        cleaned = _clean_whisper_output((transcript or "").strip())
+
+        # Durata audio PCM16 (informativa per telemetria)
+        audio_duration_s = max(0.0, (len(wav) - 44) / 2 / 16000.0) if len(wav) > 44 else None
+
+        logger.info(
+            f"[inworld-stt] bytes_in={len(raw)} bytes_pcm={len(wav)} "
+            f"audio_s={audio_duration_s:.2f} "
+            f"ms_read={_ms_read} ms_decode={_ms_decode} ms_stt={_ms_stt} "
+            f"text={cleaned[:120]!r}"
+        )
+        return {
+            "text": cleaned,
+            "confidence": None,
+            "provider": "inworld",
+            "audio_duration_s": audio_duration_s,
+            "timings_ms": {"read": _ms_read, "decode": _ms_decode, "stt": _ms_stt},
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[inworld-stt] exc: {e}")
+        raise HTTPException(status_code=500, detail=f"Inworld STT error: {str(e)[:200]}")
+
+
+
+
 @api_router.post("/transcribe-deepgram")
 async def transcribe_deepgram(audio: UploadFile = File(...), language: str = Form("it")):
     """
