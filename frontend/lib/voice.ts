@@ -556,7 +556,11 @@ export async function startRecording(): Promise<Recorder> {
   // basata su dati grezzi, non teorie.
   // ⚠️ RIMUOVERE quando la diagnosi è completa (genera ~200 log per
   // registrazione di 14s — entro i 500 eventi del pannello diag).
-  const VAD_TRACE_ENABLED = true;
+  // === FIX 2026-11-06 (Honor X8b) ===
+  // Disabilitato: ~200 console.log per registrazione × 3 cicli = 600 log
+  // sulla JS bridge. Su dispositivi Honor/MagicOS con bridge più lento,
+  // questo carico cumulativo contribuiva al freeze del 3° ciclo voiceprint.
+  const VAD_TRACE_ENABLED = false;
 
   // === IMPORTANT: `stopped` deve essere dichiarata PRIMA del setInterval
   // perché il guard sotto la controlla (insieme a vadStopped/vadPaused).
@@ -746,8 +750,32 @@ export async function startRecording(): Promise<Recorder> {
     // in-flight quando arriviamo qui.
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
 
+    // === FIX 2026-11-06 (Honor X8b freeze 3° voiceprint) ===
+    // ROOT CAUSE sospetta: su Honor/MagicOS, dopo 2-3 cicli consecutivi
+    // di record→stop con audioSource="voice_communication", la chiamata
+    // nativa `recorder.stop()` può restare appesa indefinitamente (bug
+    // dell'audio HAL Honor con voice_communication release). Il Promise
+    // non risolve e non rejecta → `await` sopra si blocca per sempre →
+    // `setIsRecording(false)` non viene mai chiamato → UI congelata.
+    //
+    // FIX: wrappiamo recorder.stop() in Promise.race con timeout 3s.
+    // Se scatta il timeout, procediamo comunque a leggere l'URI e
+    // chiamare release() — l'audio è già fisicamente scritto sul disco
+    // dal buffer nativo nel momento in cui stop() viene invocato, anche
+    // se la Promise JS non rifinalizza mai. Cross-platform safe: su iOS
+    // e Android sani stop() risolve in 50-200ms, quindi il timeout non
+    // si attiva mai.
     try {
-      await recorder.stop();
+      const stopPromise = recorder.stop();
+      const timeoutPromise = new Promise<"timeout">((resolve) =>
+        setTimeout(() => resolve("timeout"), 3000)
+      );
+      const result = await Promise.race([stopPromise, timeoutPromise]);
+      if (result === "timeout") {
+        console.warn(
+          "[voice] recorder.stop() timeout 3s — probabile Honor/MagicOS HAL bug, procedo in forzato"
+        );
+      }
     } catch (e) {
       console.warn("[voice] recorder.stop() error", e);
     }

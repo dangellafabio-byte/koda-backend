@@ -139,3 +139,11 @@ Il wiring è completo e tutti i test automatici passano, MA nessun agente ha tes
 
 ### Push
 - **Non eseguito**. Attendo clic utente su "Save to GitHub" nella UI Emergent (PAT CLI non disponibile).
+
+## 2026-11-07 — Fix freeze voiceprint Honor X8b
+Problema: dopo il 3° stop del voiceprint, UI congelata su Honor/MagicOS (iOS e Xiaomi funzionanti).
+Fix applicati (chirurgici, zero cambi di logica):
+1. `voice.ts/safeStop`: `recorder.stop()` ora wrappato in Promise.race con timeout 3s → bypassa l'hang dell'audio HAL Honor con `audioSource=voice_communication`.
+2. `OllenyaIntro.tsx/stopVoiceprintRecording`: `setIsRecording(false)` garantito in `finally` + messaggio di retry se URI vuoto → UI mai bloccata.
+3. `VAD_TRACE_ENABLED=false`: rimossi ~600 console.log per sessione voiceprint (3 record × 200 log) che caricavano la JS bridge su device lenti.
+Status: codice in place, serve pubblicare la build per testarlo sul telefono Honor.
