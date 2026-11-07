@@ -21,7 +21,7 @@ Due operazioni:
 MAI loggato il token nel chiaro.
 """
 from __future__ import annotations
-
+import os
 import datetime as _dt
 import hashlib
 import logging
@@ -35,7 +35,11 @@ PREFS_COLLECTION = "koda_tts_provider_prefs"
 TOKENS_COLLECTION = "koda_tts_switch_tokens"
 
 ALLOWED_PROVIDERS = frozenset({"elevenlabs", "inworld"})
-DEFAULT_PROVIDER = "elevenlabs"
+# 2026-11-07 (Fabio): TEST env → Inworld come default (via env var).
+# Produzione resta "elevenlabs" finché non viene impostata l'env var.
+DEFAULT_PROVIDER = (os.environ.get("KODA_TTS_DEFAULT_PROVIDER") or "elevenlabs").lower().strip()
+if DEFAULT_PROVIDER not in ALLOWED_PROVIDERS:
+    DEFAULT_PROVIDER = "elevenlabs"
 
 # TTL dei token one-shot (minuti). Volontariamente breve.
 TOKEN_TTL_MINUTES = 10

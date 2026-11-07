@@ -1,29 +1,37 @@
 """
-Unit tests per subscription_ledger.py
+Unit tests per subscription_ledger.py — allineati al pricing finale
+(Fabio 2026-11-06):
+  Monthly    29,90 €/mese    300 min, no carryover
+  Bimonthly  59,90 €/2 mesi  300 min/mese, cap 50 carry M1→M2
+  Annual    354,90 €/anno    300 min/mese, cap 50 carry per passaggio mensile
+                             (slot_lifetime=1 per TUTTI: il carryover vale SOLO
+                             nel mese immediatamente successivo)
 
-Coverage completa degli scenari approvati con Fabio (2026-08-14):
-- Monthly: consumo + fine mese senza carryover
-- Bimonthly M1→M2: creazione slot con cap 50
+Scenari testati:
+- Monthly: consumo + reset a fine mese senza carryover
+- Bimonthly M1→M2: creazione slot con cap 50, peak M2 = 350
 - Bimonthly renewal: reset totale a fine M2
-- Annual peak M3: 230 base + 50 (da M1) + 50 (da M2) = 330 max disponibile
-- Annual FIFO: consumo eccessivo scala prima gli slot più vecchi
-- Annual slot expiration: slot da M1 scade a fine M3
-- Annual renewal (fine M12): tutti gli slot vengono scartati
+- Annual: lo slot creato a fine M_N è disponibile SOLO in M_(N+1), poi scade
+- Annual FIFO: consumo pesante scala prima gli slot carryover
+- Annual renewal: fine M12 scarta tutti gli slot e reset a M1
 - Consume oltre budget: unfulfilled > 0
 - Consume zero: no-op
 - Edge case Feb 30: relativedelta clampa correttamente
+- Serializzazione round-trip MongoDB
 """
 
 import sys
 import pathlib
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from subscription_ledger import (  # noqa: E402
     TIER_BASE_MINUTES,
     TIER_MAX_CARRYOVER_PER_SLOT,
+    TIER_SLOT_LIFETIME_MONTHS,
     TIER_CYCLE_LENGTH_MONTHS,
+    TIER_MAX_CYCLE_CARRYOVER,
     CarryoverSlot,
     SubscriptionLedger,
     create_ledger,
@@ -35,12 +43,12 @@ from subscription_ledger import (  # noqa: E402
 )
 
 
-# ==============================================================================
-# Helpers
-# ==============================================================================
+BASE = 300.0
+CAP = 50.0
+MAX_PERIOD = BASE + CAP  # 350
 
-def _dt(y: int, m: int, d: int, h: int = 12, minute: int = 0) -> datetime:
-    """Helper to build UTC datetimes concisely."""
+
+def _dt(y, m, d, h=12, minute=0):
     return datetime(y, m, d, h, minute, tzinfo=timezone.utc)
 
 
@@ -50,276 +58,211 @@ def _assert(cond, msg):
     print(f"  ✓ {msg}")
 
 
-# ==============================================================================
-# TEST 1 — Monthly: nessun carryover, reset totale a fine mese
-# ==============================================================================
+# ======================================================================
+# TEST 0 — Costanti pricing allineate al brief 2026-11-06
+# ======================================================================
+def test_pricing_constants():
+    print("\n[TEST 0] Costanti pricing")
+    _assert(TIER_BASE_MINUTES["monthly"] == BASE, "monthly base = 300")
+    _assert(TIER_BASE_MINUTES["bimonthly"] == BASE, "bimonthly base = 300")
+    _assert(TIER_BASE_MINUTES["annual"] == BASE, "annual base = 300")
+    _assert(TIER_MAX_CARRYOVER_PER_SLOT["monthly"] == 0.0, "monthly carry = 0")
+    _assert(TIER_MAX_CARRYOVER_PER_SLOT["bimonthly"] == CAP, "bimonthly cap = 50")
+    _assert(TIER_MAX_CARRYOVER_PER_SLOT["annual"] == CAP, "annual cap = 50")
+    _assert(TIER_SLOT_LIFETIME_MONTHS["monthly"] == 0, "monthly slot lifetime = 0")
+    _assert(TIER_SLOT_LIFETIME_MONTHS["bimonthly"] == 1, "bimonthly slot lifetime = 1")
+    _assert(TIER_SLOT_LIFETIME_MONTHS["annual"] == 1,
+            "annual slot lifetime = 1 (NON 2) — il carryover vale solo nel mese successivo")
+    _assert(TIER_CYCLE_LENGTH_MONTHS["annual"] == 12, "annual cycle = 12 mesi")
 
+
+# ======================================================================
+# TEST 1 — Monthly: nessun carryover
+# ======================================================================
 def test_monthly_no_carryover():
     print("\n[TEST 1] Monthly: nessun carryover, reset a fine mese")
+    ledger = create_ledger("monthly", purchase_date=_dt(2026, 1, 15))
 
-    purchase = _dt(2026, 1, 15)
-    ledger = create_ledger("monthly", purchase_date=purchase)
-
-    # Consumo 60 min in M1 (residuo 30, ma monthly=0 carryover)
-    result = consume(ledger, 60.0, now=_dt(2026, 2, 1))
+    result = consume(ledger, 60.0, now=_dt(2026, 1, 20))
     _assert(result.total_consumed == 60.0, "consumo 60 min riuscito")
-    _assert(result.consumed_from_slots == 0.0, "nessun consumo da slot (non esistono)")
     _assert(result.consumed_from_base == 60.0, "tutto da base")
     _assert(ledger.base_minutes_used == 60.0, "base_minutes_used = 60")
 
-    # Avanza a fine mese (dopo il 14 febbraio) → nuovo periodo M1 nuovo ciclo (monthly cycle=1)
     advance_period(ledger, now=_dt(2026, 2, 20))
     _assert(len(ledger.carryover_slots) == 0, "nessun slot generato (monthly)")
-    _assert(ledger.base_minutes_used == 0.0, "base resettato a 0")
-    _assert(ledger.current_period_index == 1, "index resettato a M1 (nuovo ciclo)")
+    _assert(ledger.base_minutes_used == 0.0, "base resettato")
+    _assert(ledger.current_period_index == 1, "reset a M1 nuovo ciclo")
 
-    # Nuovo mese: budget pieno 200
     summary = remaining_summary(ledger, now=_dt(2026, 2, 20))
-    _assert(summary["base_minutes_remaining"] == 200.0, "budget pieno nel nuovo mese")
+    _assert(summary["base_minutes_remaining"] == BASE, "budget pieno (300) nel nuovo mese")
     _assert(summary["carryover_minutes_total"] == 0.0, "carryover 0")
 
 
-# ==============================================================================
-# TEST 2 — Bimonthly M1→M2: slot creato con cap 50
-# ==============================================================================
-
+# ======================================================================
+# TEST 2 — Bimonthly M1→M2: slot cap 50
+# ======================================================================
 def test_bimonthly_slot_creation():
-    print("\n[TEST 2] Bimonthly M1→M2: slot creato con cap 50")
+    print("\n[TEST 2] Bimonthly M1→M2: slot cap 50")
+    ledger = create_ledger("bimonthly", purchase_date=_dt(2026, 1, 15))
 
-    purchase = _dt(2026, 1, 15)
-    ledger = create_ledger("bimonthly", purchase_date=purchase)
-
-    # M1: consumo 30 min → leftover 200 (ma cap 50)
     consume(ledger, 30.0, now=_dt(2026, 1, 20))
-    _assert(ledger.base_minutes_used == 30.0, "M1: base_used = 30")
-
-    # Avanza a M2
     advance_period(ledger, now=_dt(2026, 2, 20))
+
     _assert(ledger.current_period_index == 2, "siamo in M2")
     _assert(len(ledger.carryover_slots) == 1, "1 slot creato")
-    _assert(ledger.carryover_slots[0].minutes_remaining == 50.0,
-            "slot ha 50 min (capped, non 200)")
+    _assert(ledger.carryover_slots[0].minutes_remaining == CAP,
+            f"slot cap 50 (non 270 residuo) — got {ledger.carryover_slots[0].minutes_remaining}")
     _assert(ledger.carryover_slots[0].origin_month_index == 1, "slot da M1")
 
-    # Verifica scadenza slot = fine M2
     summary = remaining_summary(ledger, now=_dt(2026, 2, 20))
-    _assert(summary["total_available_minutes"] == 280.0, "M2 ha 230 base + 50 slot = 280")
+    _assert(summary["total_available_minutes"] == MAX_PERIOD,
+            f"M2 ha 300 base + 50 slot = 350 (got {summary['total_available_minutes']})")
 
 
-# ==============================================================================
-# TEST 3 — Bimonthly renewal: fine M2 scarta tutto e resetta a M1
-# ==============================================================================
-
+# ======================================================================
+# TEST 3 — Bimonthly renewal: fine M2 scarta tutto
+# ======================================================================
 def test_bimonthly_renewal():
     print("\n[TEST 3] Bimonthly renewal: fine M2 scarta tutto")
+    ledger = create_ledger("bimonthly", purchase_date=_dt(2026, 1, 15))
 
-    purchase = _dt(2026, 1, 15)
-    ledger = create_ledger("bimonthly", purchase_date=purchase)
-
-    # M1: consumo 30, avanza a M2 (crea slot 50)
     consume(ledger, 30.0, now=_dt(2026, 1, 20))
     advance_period(ledger, now=_dt(2026, 2, 20))
     _assert(len(ledger.carryover_slots) == 1, "M2: slot presente")
 
-    # M2: consumo 20 (leftover 80, ma bimonthly ha 1 slot solo, M2→ciclo nuovo)
     consume(ledger, 20.0, now=_dt(2026, 2, 25))
-
-    # Renewal: avanza oltre fine M2
     advance_period(ledger, now=_dt(2026, 3, 20))
+
     _assert(ledger.current_period_index == 1, "reset a M1 nuovo ciclo")
     _assert(len(ledger.carryover_slots) == 0, "TUTTI gli slot scartati al renewal")
     _assert(ledger.base_minutes_used == 0.0, "base resettato")
 
 
-# ==============================================================================
-# TEST 4 — Annual peak M3: 330 min disponibili SE M2 non ha consumo
-# ==============================================================================
-# La specifica dice "picco 330 al mese 3" come MASSIMO CUMULABILE. Con
-# carryover-first, il picco 330 si materializza solo se M2 non tocca gli
-# slot vecchi. Test 5b copre lo scenario "60/60 moderato" invece.
+# ======================================================================
+# TEST 4 — Annual: slot vive SOLO il mese immediatamente successivo
+# ======================================================================
+def test_annual_slot_rolling_one_month():
+    print("\n[TEST 4] Annual: slot creato a fine M_N vive solo in M_(N+1)")
+    ledger = create_ledger("annual", purchase_date=_dt(2026, 1, 15))
 
-def test_annual_peak_m3():
-    print("\n[TEST 4] Annual peak M3: 230 base + 50 (M1) + 50 (M2) = 330 (M2 senza consumo)")
-
-    purchase = _dt(2026, 1, 15)
-    ledger = create_ledger("annual", purchase_date=purchase)
-
-    # M1: consumo 60 → residuo 170 → slot A (cap 50, expires end M3)
+    # M1: consumo 60 → leftover 240 → slot A (cap 50) valido in M2
     consume(ledger, 60.0, now=_dt(2026, 1, 20))
     advance_period(ledger, now=_dt(2026, 2, 20))
-    _assert(len(ledger.carryover_slots) == 1, "M2: 1 slot (da M1)")
-    _assert(ledger.carryover_slots[0].minutes_remaining == 50.0, "slot M1 = 50")
+    _assert(len(ledger.carryover_slots) == 1, "M2: slot M1 presente")
+    _assert(ledger.carryover_slots[0].origin_month_index == 1, "slot M1")
+    _assert(ledger.carryover_slots[0].minutes_remaining == CAP, "cap 50")
 
-    # M2: NESSUN consumo → residuo base 230 → slot B (cap 50, expires end M4)
-    # Slot A resta intatto perché non è stato toccato.
+    # M2: NON consumo → slot M1 NON toccato, poi avanzo a M3.
+    # Fine M2: slot M1 scade (lifetime=1), nasce slot M2 (nuovo, cap 50).
     advance_period(ledger, now=_dt(2026, 3, 20))
-    _assert(len(ledger.carryover_slots) == 2, "M3: 2 slot attivi (da M1 e M2)")
+    active_indexes = sorted(s.origin_month_index for s in ledger.carryover_slots)
+    _assert(1 not in active_indexes, "slot M1 SCADUTO (lifetime=1, non arriva in M3)")
+    _assert(2 in active_indexes, "slot M2 attivo in M3")
+    _assert(len(active_indexes) == 1, f"esattamente 1 slot in M3, got {active_indexes}")
 
-    # Verifica origin indexes
-    slot_indexes = sorted(s.origin_month_index for s in ledger.carryover_slots)
-    _assert(slot_indexes == [1, 2], "slot da M1 e M2 presenti")
-
-    # Verifica peak disponibile in M3
     summary = remaining_summary(ledger, now=_dt(2026, 3, 20))
-    _assert(summary["total_available_minutes"] == 330.0,
-            f"M3 peak = 330 (got {summary['total_available_minutes']})")
-    _assert(summary["carryover_minutes_total"] == 100.0, "100 min totali negli slot")
-    _assert(summary["base_minutes_remaining"] == 230.0, "base intatto in M3")
+    _assert(summary["total_available_minutes"] == MAX_PERIOD,
+            f"M3 peak = 350 (300 base + 50 slot M2), got {summary['total_available_minutes']}")
 
 
-# ==============================================================================
-# TEST 5 — Annual FIFO: consumo pesante scala prima gli slot più vecchi
-# ==============================================================================
-# Preludio identico a Test 4 (M2 senza consumo), poi in M3 consumo 130 e
-# verifico che FIFO svuoti prima Slot A, poi Slot B, poi base.
-
+# ======================================================================
+# TEST 5 — Annual FIFO: slot carryover consumato PRIMA del base
+# ======================================================================
 def test_annual_fifo_consumption():
-    print("\n[TEST 5] Annual FIFO: carryover-first, slot più vecchio first")
+    print("\n[TEST 5] Annual FIFO: carryover-first")
+    ledger = create_ledger("annual", purchase_date=_dt(2026, 1, 15))
 
-    purchase = _dt(2026, 1, 15)
-    ledger = create_ledger("annual", purchase_date=purchase)
+    consume(ledger, 60.0, now=_dt(2026, 1, 20))     # M1
+    advance_period(ledger, now=_dt(2026, 2, 20))    # → M2 con slot M1(50)
+    _assert(len(ledger.carryover_slots) == 1, "setup: 1 slot in M2")
 
-    # Setup: arriva a M3 con 2 slot da 50 (M2 senza consumo, come test 4)
-    consume(ledger, 60.0, now=_dt(2026, 1, 20))
-    advance_period(ledger, now=_dt(2026, 2, 20))
-    # NB: NON consumiamo in M2, così arriviamo in M3 con 2 slot pieni
-    advance_period(ledger, now=_dt(2026, 3, 20))
-    _assert(len(ledger.carryover_slots) == 2, "M3 setup: 2 slot pieni")
-
-    # M3: consumo 130 → attesa: 50 da slot M1 (svuota), 50 da slot M2 (svuota), 30 da base
-    result = consume(ledger, 130.0, now=_dt(2026, 3, 25))
-    _assert(result.consumed_from_slots == 100.0, "100 dagli slot")
+    # M2: consumo 80 → 50 da slot, 30 da base
+    result = consume(ledger, 80.0, now=_dt(2026, 2, 25))
+    _assert(result.consumed_from_slots == CAP, "50 dallo slot")
     _assert(result.consumed_from_base == 30.0, "30 dal base")
-    _assert(result.total_consumed == 130.0, "totale 130")
-    _assert(len(ledger.carryover_slots) == 0, "entrambi gli slot svuotati e rimossi")
+    _assert(result.total_consumed == 80.0, "totale 80")
+    _assert(len(ledger.carryover_slots) == 0, "slot svuotato e rimosso")
     _assert(ledger.base_minutes_used == 30.0, "base = 30")
-
-    # Verifica ordine FIFO: primo slot toccato deve essere M1
-    _assert(result.slots_touched[0]["origin_month_index"] == 1, "primo touched = M1")
-    _assert(result.slots_touched[1]["origin_month_index"] == 2, "secondo touched = M2")
+    _assert(result.slots_touched[0]["origin_month_index"] == 1, "FIFO: slot M1 first")
 
 
-# ==============================================================================
-# TEST 5b — Annual uso moderato 60/60: slot rigenera OGNI mese
-# ==============================================================================
-# Scenario esplicito richiesto da Fabio (2026-08-14):
-#   Uso moderato costante di 60 min ogni mese. Regola chiave verificata:
-#   il NUOVO slot per mese N+1 dipende SOLO dal residuo del BASE di
-#   mese N, MAI da quanto residua negli slot vecchi. Quindi anche se
-#   Slot A viene svuotato in M2 (FIFO carryover-first), Slot B nasce
-#   pieno (50) perché il base di M2 è stato consumato solo per 10 min.
-
+# ======================================================================
+# TEST 5b — Annual moderato 60/60: slot rigenera OGNI mese
+# ======================================================================
 def test_annual_moderate_usage_60_per_month():
-    print("\n[TEST 5b] Annual 60/60: nuovo slot NON ridotto dal consumo di slot vecchi")
+    print("\n[TEST 5b] Annual 60/60: nuovo slot pieno ogni mese (regola stabile)")
+    ledger = create_ledger("annual", purchase_date=_dt(2026, 1, 15))
 
-    purchase = _dt(2026, 1, 15)
-    ledger = create_ledger("annual", purchase_date=purchase)
-
-    # M1: consumo 60 dal base → residuo base 170 → Slot A (50, cap)
     consume(ledger, 60.0, now=_dt(2026, 1, 20))
-    _assert(ledger.base_minutes_used == 60.0, "M1: base_used = 60")
-
-    # Transizione M1→M2
     advance_period(ledger, now=_dt(2026, 2, 20))
-    _assert(len(ledger.carryover_slots) == 1, "M2 start: Slot A presente")
-    _assert(ledger.carryover_slots[0].minutes_remaining == 50.0, "Slot A = 50")
+    _assert(ledger.carryover_slots[0].minutes_remaining == CAP, "M2 start: Slot A = 50")
 
-    # M2: consumo 60 → carryover-first: 50 da Slot A (svuotato), 10 dal base
+    # M2: consumo 60 → 50 dallo slot (svuotato), 10 dal base
     result_m2 = consume(ledger, 60.0, now=_dt(2026, 2, 25))
-    _assert(result_m2.consumed_from_slots == 50.0, "M2: 50 min da Slot A")
-    _assert(result_m2.consumed_from_base == 10.0, "M2: 10 min dal base")
-    _assert(ledger.base_minutes_used == 10.0,
-            f"M2: base_used = 10 (SOLO base consumption, non Slot A) — got {ledger.base_minutes_used}")
-    _assert(len(ledger.carryover_slots) == 0, "M2: Slot A svuotato e rimosso")
+    _assert(result_m2.consumed_from_slots == CAP, "M2: 50 dallo slot")
+    _assert(result_m2.consumed_from_base == 10.0, "M2: 10 dal base")
+    _assert(ledger.base_minutes_used == 10.0, "M2: base_used = 10 (non 60)")
 
-    # Transizione M2→M3 — REGOLA CHIAVE:
-    # leftover base M2 = 230 - 10 = 220 → capped 50 → Slot B(50, PIENO)
-    # Il nuovo slot NON è ridotto dal fatto che Slot A sia stato consumato.
+    # M2→M3: leftover base M2 = 300-10 = 290 → capped a 50 → Slot B pieno
     advance_period(ledger, now=_dt(2026, 3, 20))
-    _assert(len(ledger.carryover_slots) == 1, "M3 start: Slot B presente")
+    _assert(len(ledger.carryover_slots) == 1, "M3 start: 1 slot (Slot B)")
     slot_b = ledger.carryover_slots[0]
     _assert(slot_b.origin_month_index == 2, "Slot B origin = M2")
-    _assert(slot_b.minutes_remaining == 50.0,
-            f"Slot B PIENO a 50 (non ridotto dal consumo di Slot A) — got {slot_b.minutes_remaining}")
+    _assert(slot_b.minutes_remaining == CAP, "Slot B pieno a 50")
 
-    # Disponibile in M3 = 230 base + 50 Slot B = 280
     summary_m3 = remaining_summary(ledger, now=_dt(2026, 3, 20))
-    _assert(summary_m3["total_available_minutes"] == 280.0,
-            f"M3: 280 min disponibili (230 base + 50 Slot B) — got {summary_m3['total_available_minutes']}")
+    _assert(summary_m3["total_available_minutes"] == MAX_PERIOD,
+            f"M3: 350 disponibili, got {summary_m3['total_available_minutes']}")
 
-    # M3: consumo 60 → 50 da Slot B (svuotato), 10 dal base → Slot C(50) a fine M3
+    # M3: consumo 60 → 50 slot, 10 base; a fine M3 nasce Slot C pieno
     consume(ledger, 60.0, now=_dt(2026, 3, 25))
-    _assert(ledger.base_minutes_used == 10.0, "M3: base_used = 10")
-
     advance_period(ledger, now=_dt(2026, 4, 20))
-    _assert(len(ledger.carryover_slots) == 1, "M4 start: Slot C presente")
-    _assert(ledger.carryover_slots[0].minutes_remaining == 50.0,
-            "Slot C PIENO a 50 (regola stabile mese dopo mese)")
+    _assert(len(ledger.carryover_slots) == 1, "M4: 1 slot (Slot C)")
     _assert(ledger.carryover_slots[0].origin_month_index == 3, "Slot C origin = M3")
+    _assert(ledger.carryover_slots[0].minutes_remaining == CAP, "Slot C pieno")
 
-    # M4: consumo 60 → stesso pattern → Slot D(50)
-    consume(ledger, 60.0, now=_dt(2026, 4, 25))
-    advance_period(ledger, now=_dt(2026, 5, 20))
-    _assert(len(ledger.carryover_slots) == 1, "M5 start: Slot D presente")
-    _assert(ledger.carryover_slots[0].minutes_remaining == 50.0, "Slot D pieno")
-    _assert(ledger.carryover_slots[0].origin_month_index == 4, "Slot D origin = M4")
-
-    print("  ✅ regola verificata: uso moderato costante rigenera slot pieno ogni mese")
+    print("  ✅ regola stabile: 6 passaggi mensili consecutivi possibili nell'annuale")
 
 
-# ==============================================================================
-# TEST 6 — Annual slot expiration: slot M1 scade a fine M3
-# ==============================================================================
-
+# ======================================================================
+# TEST 6 — Annual: slot M1 scade a fine M2 (lifetime=1)
+# ======================================================================
 def test_annual_slot_expiration():
-    print("\n[TEST 6] Annual slot expiration: slot M1 scade a fine M3, non arriva in M4")
+    print("\n[TEST 6] Annual slot expiration: slot M1 scade a fine M2")
+    ledger = create_ledger("annual", purchase_date=_dt(2026, 1, 15))
 
-    purchase = _dt(2026, 1, 15)
-    ledger = create_ledger("annual", purchase_date=purchase)
-
-    # M1: consumo 60 → slot A (50, expires end M3)
     consume(ledger, 60.0, now=_dt(2026, 1, 20))
     advance_period(ledger, now=_dt(2026, 2, 20))
     _assert(len(ledger.carryover_slots) == 1, "M2: slot M1 presente")
 
-    # M2: NON consumo → residuo 230 → slot B (50, expires end M4)
+    # Nessun consumo in M2 → leftover 300 → nuovo slot M2 (50)
     advance_period(ledger, now=_dt(2026, 3, 20))
-    _assert(len(ledger.carryover_slots) == 2, "M3: 2 slot")
-
-    # M3: NON consumo → residuo 230 → slot C (50, expires end M5)
-    advance_period(ledger, now=_dt(2026, 4, 20))
-
-    # M4: slot A (da M1) deve essere scaduto (expires end M3 = ~15 apr)
-    # slot B (da M2) ancora valido (expires end M4 = ~15 mag)
-    # slot C (da M3) ancora valido (expires end M5 = ~15 giu)
-    active_indexes = sorted(s.origin_month_index for s in ledger.carryover_slots)
-    _assert(1 not in active_indexes, "slot M1 SCADUTO (non più in ledger)")
-    _assert(2 in active_indexes, "slot M2 ancora presente")
-    _assert(3 in active_indexes, "slot M3 ancora presente")
-    _assert(len(active_indexes) == 2, f"esattamente 2 slot attivi, got {active_indexes}")
+    active = sorted(s.origin_month_index for s in ledger.carryover_slots)
+    _assert(1 not in active, "slot M1 SCADUTO")
+    _assert(active == [2], f"solo slot M2 in M3, got {active}")
 
 
-# ==============================================================================
+# ======================================================================
 # TEST 7 — Annual renewal: fine M12 scarta tutti gli slot
-# ==============================================================================
-
+# ======================================================================
 def test_annual_renewal():
     print("\n[TEST 7] Annual renewal: fine M12 scarta TUTTI gli slot")
+    ledger = create_ledger("annual", purchase_date=_dt(2026, 1, 15))
 
-    purchase = _dt(2026, 1, 15)
-    ledger = create_ledger("annual", purchase_date=purchase)
+    # Avanza 11 mesi con consumo moderato
+    for i in range(11):
+        year = 2026
+        month = 1 + i
+        consume(ledger, 60.0, now=_dt(year, month, 20))
+        nxt_month = month + 1
+        nxt_year = year
+        if nxt_month > 12:
+            nxt_month -= 12
+            nxt_year += 1
+        advance_period(ledger, now=_dt(nxt_year, nxt_month, 16))
 
-    # Simula anno intero: avanza direttamente a M12 con consumo minimo
-    # Un modo semplice: consumo 1 min ogni mese per generare qualche slot
-    for month_offset in range(11):  # M1 a M11
-        now = _dt(2026, 1 + month_offset, 20) if month_offset < 11 else _dt(2026, 12, 20)
-        consume(ledger, 60.0, now=now)
-        advance_period(ledger, now=_dt(2026, 2 + month_offset, 16) if month_offset < 11 else _dt(2026, 12, 20))
-
-    # Ora dovremmo essere in M12 con vari slot ancora vivi (M10, M11)
     _assert(ledger.current_period_index == 12, f"in M12, got {ledger.current_period_index}")
 
-    # Consuma poco in M12, poi avanza oltre fine M12 (rinnovo annuale = ~15 gennaio 2027)
     consume(ledger, 30.0, now=_dt(2026, 12, 20))
     advance_period(ledger, now=_dt(2027, 1, 20))
 
@@ -328,66 +271,53 @@ def test_annual_renewal():
     _assert(ledger.base_minutes_used == 0.0, "base resettato")
 
 
-# ==============================================================================
+# ======================================================================
 # TEST 8 — Consume oltre budget: unfulfilled > 0
-# ==============================================================================
-
+# ======================================================================
 def test_consume_over_budget():
-    print("\n[TEST 8] Consume oltre budget disponibile: unfulfilled > 0")
-
+    print("\n[TEST 8] Consume oltre budget: unfulfilled > 0")
     ledger = create_ledger("monthly", purchase_date=_dt(2026, 1, 15))
-    result = consume(ledger, 300.0, now=_dt(2026, 1, 20))
+    result = consume(ledger, 400.0, now=_dt(2026, 1, 20))
 
-    _assert(result.consumed_from_base == 200.0, "consumati max base (200)")
-    _assert(result.total_consumed == 200.0, "totale = 200")
-    _assert(result.unfulfilled == 100.0, "unfulfilled = 300-200 = 100")
-    _assert(ledger.base_minutes_used == 200.0, "base saturato")
+    _assert(result.consumed_from_base == BASE, f"consumati max base ({BASE})")
+    _assert(result.total_consumed == BASE, f"totale = {BASE}")
+    _assert(result.unfulfilled == 100.0, "unfulfilled = 400-300 = 100")
+    _assert(ledger.base_minutes_used == BASE, "base saturato")
 
 
-# ==============================================================================
+# ======================================================================
 # TEST 9 — Consume zero: no-op
-# ==============================================================================
-
+# ======================================================================
 def test_consume_zero():
-    print("\n[TEST 9] Consume 0 minuti: no-op ma advance_period comunque chiamato")
-
+    print("\n[TEST 9] Consume 0 minuti: no-op")
     ledger = create_ledger("monthly", purchase_date=_dt(2026, 1, 15))
     result = consume(ledger, 0.0, now=_dt(2026, 1, 20))
-
     _assert(result.total_consumed == 0.0, "nessun consumo")
     _assert(result.unfulfilled == 0.0, "nessun unfulfilled")
     _assert(ledger.base_minutes_used == 0.0, "base intatto")
 
 
-# ==============================================================================
-# TEST 10 — Feb 30 edge case: relativedelta clampa
-# ==============================================================================
-
+# ======================================================================
+# TEST 10 — Feb edge case: relativedelta clampa
+# ======================================================================
 def test_feb_edge_case():
-    print("\n[TEST 10] Feb 30 edge case: acquisto 31 gennaio → M2 clamps a 28 feb")
-
-    # Acquisto 31 gennaio 2026 (Feb 2026 = 28 giorni, non è bisestile)
-    purchase = _dt(2026, 1, 31)
-    ledger = create_ledger("monthly", purchase_date=purchase)
-
+    print("\n[TEST 10] Feb edge case: acquisto 31 gen → M2 clamps a 28 feb")
+    ledger = create_ledger("monthly", purchase_date=_dt(2026, 1, 31))
     end_m1 = _parse_iso(ledger.current_period_end_iso)
     _assert(end_m1.month == 2 and end_m1.day == 28,
             f"M1 finisce 28 feb (got {end_m1.date()})")
 
-    # Avanza a M2 (dopo 28 feb)
     advance_period(ledger, now=_dt(2026, 3, 5))
     end_m2 = _parse_iso(ledger.current_period_end_iso)
     _assert(end_m2.month == 3 and end_m2.day == 28,
             f"M2 finisce 28 mar (got {end_m2.date()})")
 
 
-# ==============================================================================
-# TEST 11 — Serializzazione round-trip (MongoDB persistence)
-# ==============================================================================
-
+# ======================================================================
+# TEST 11 — Serializzazione round-trip
+# ======================================================================
 def test_serialization_roundtrip():
     print("\n[TEST 11] Serializzazione round-trip via to_dict/from_dict")
-
     ledger = create_ledger("annual", purchase_date=_dt(2026, 1, 15))
     consume(ledger, 60.0, now=_dt(2026, 1, 20))
     advance_period(ledger, now=_dt(2026, 2, 20))
@@ -399,46 +329,89 @@ def test_serialization_roundtrip():
     restored = SubscriptionLedger.from_dict(d)
     _assert(restored.plan == ledger.plan, "plan preservato")
     _assert(restored.current_period_index == ledger.current_period_index, "index preservato")
-    _assert(len(restored.carryover_slots) == len(ledger.carryover_slots),
-            "numero slot preservato")
+    _assert(len(restored.carryover_slots) == len(ledger.carryover_slots), "numero slot preservato")
     _assert(restored.carryover_slots[0].minutes_remaining ==
             ledger.carryover_slots[0].minutes_remaining, "slot data preservato")
+    _assert(restored.cycle_carryover_generated == ledger.cycle_carryover_generated,
+            "cycle_carryover_generated preservato")
 
 
-# ==============================================================================
-# TEST 12 — Ciclo mobile: la data anchor si mantiene
-# ==============================================================================
+# ======================================================================
+# TEST 13 — Annual: cap aggregato 300 min nell'annualità
+# ======================================================================
+def test_annual_max_6_carryovers_in_cycle():
+    print("\n[TEST 13] Annual: 6 passaggi × 50 = 300 totali trasferiti")
+    ledger = create_ledger("annual", purchase_date=_dt(2026, 1, 15))
+    for i in range(6):
+        year, month = 2026, 1 + i
+        consume(ledger, 60.0, now=_dt(year, month, 20))
+        nxt = (month + 1, year) if month < 12 else (1, year + 1)
+        advance_period(ledger, now=_dt(nxt[1], nxt[0], 16))
+    _assert(ledger.cycle_carryover_generated == 300.0,
+            f"cycle_carryover_generated = 300 (got {ledger.cycle_carryover_generated})")
 
+
+# ======================================================================
+# TEST 14 — Annual: cap aggregato blocca il 7° riporto
+# ======================================================================
+def test_annual_cycle_cap_blocks_7th_carryover():
+    print("\n[TEST 14] Annual: dopo 300 min riportati, il 7° slot NON viene creato")
+    ledger = create_ledger("annual", purchase_date=_dt(2026, 1, 15))
+    # 6 mesi consecutivi con residuo generoso → 6 slot da 50
+    for i in range(7):
+        year, month = 2026, 1 + i
+        consume(ledger, 60.0, now=_dt(year, month, 20))
+        nxt = (month + 1, year) if month < 12 else (1, year + 1)
+        advance_period(ledger, now=_dt(nxt[1], nxt[0], 16))
+    # Sul 7° giro il cap aggregato (300) è esaurito → nessun nuovo slot
+    _assert(ledger.cycle_carryover_generated == 300.0,
+            f"il 7° riporto è stato bloccato dal cap annuale (got {ledger.cycle_carryover_generated})")
+    # L'ultimo slot NON dovrebbe essere origin_month_index=7 (bloccato)
+    origins = [s.origin_month_index for s in ledger.carryover_slots]
+    _assert(7 not in origins, f"slot M7 NON creato (origins={origins})")
+
+
+# ======================================================================
+# TEST 15 — Annual: riporti parziali contano solo i minuti effettivi
+# ======================================================================
+def test_annual_partial_carryover_counts_actuals():
+    print("\n[TEST 15] Annual: riporti parziali (10 min) consumano SOLO 10 dal cap, non 50")
+    ledger = create_ledger("annual", purchase_date=_dt(2026, 1, 15))
+    # M1: consumo 290 su 300 → leftover 10 → slot M1 cap 10 (non 50)
+    consume(ledger, 290.0, now=_dt(2026, 1, 20))
+    advance_period(ledger, now=_dt(2026, 2, 16))
+    _assert(len(ledger.carryover_slots) == 1, "slot M1 creato")
+    _assert(ledger.carryover_slots[0].minutes_remaining == 10.0,
+            f"slot M1 = 10 (leftover), got {ledger.carryover_slots[0].minutes_remaining}")
+    _assert(ledger.cycle_carryover_generated == 10.0,
+            f"cycle counter = 10 (non 50), got {ledger.cycle_carryover_generated}")
+    # Verifica: con 10 min già consumati dal cap 300, ne restano 290 per futuri passaggi
+    remaining_cycle = TIER_MAX_CYCLE_CARRYOVER["annual"] - ledger.cycle_carryover_generated
+    _assert(remaining_cycle == 290.0,
+            f"budget residuo ciclo = 290 (got {remaining_cycle})")
+
+
+# ======================================================================
+# TEST 12 — Ciclo mobile: anchor day mantenuto
+# ======================================================================
 def test_mobile_cycle_anchor():
-    print("\n[TEST 12] Ciclo mobile: anchor day mantenuto attraverso i mesi")
-
-    purchase = _dt(2026, 1, 15, 14, 30)
-    ledger = create_ledger("bimonthly", purchase_date=purchase)
-
-    # M1: 15 gen → 15 feb
-    m1_start = _parse_iso(ledger.current_period_start_iso)
+    print("\n[TEST 12] Ciclo mobile: anchor day mantenuto")
+    ledger = create_ledger("bimonthly", purchase_date=_dt(2026, 1, 15, 14, 30))
     m1_end = _parse_iso(ledger.current_period_end_iso)
-    _assert(m1_start.day == 15, f"M1 inizia il 15 (got {m1_start.day})")
-    _assert(m1_end.day == 15, f"M1 finisce il 15 feb (got {m1_end.day})")
+    _assert(m1_end.day == 15, f"M1 finisce il 15 feb, got {m1_end.day}")
 
-    # M2
     advance_period(ledger, now=_dt(2026, 2, 20))
-    m2_start = _parse_iso(ledger.current_period_start_iso)
     m2_end = _parse_iso(ledger.current_period_end_iso)
-    _assert(m2_start.day == 15, "M2 inizia il 15 feb")
-    _assert(m2_end.day == 15, "M2 finisce il 15 mar")
+    _assert(m2_end.day == 15, f"M2 finisce il 15 mar, got {m2_end.day}")
 
-
-# ==============================================================================
-# Runner
-# ==============================================================================
 
 if __name__ == "__main__":
     tests = [
+        test_pricing_constants,
         test_monthly_no_carryover,
         test_bimonthly_slot_creation,
         test_bimonthly_renewal,
-        test_annual_peak_m3,
+        test_annual_slot_rolling_one_month,
         test_annual_fifo_consumption,
         test_annual_moderate_usage_60_per_month,
         test_annual_slot_expiration,
@@ -448,8 +421,10 @@ if __name__ == "__main__":
         test_feb_edge_case,
         test_serialization_roundtrip,
         test_mobile_cycle_anchor,
+        test_annual_max_6_carryovers_in_cycle,
+        test_annual_cycle_cap_blocks_7th_carryover,
+        test_annual_partial_carryover_counts_actuals,
     ]
-
     failed = []
     for t in tests:
         try:
@@ -460,7 +435,6 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"  ✗ EXCEPTION in {t.__name__}: {e!r}")
             failed.append(t.__name__)
-
     print("\n" + "=" * 70)
     if failed:
         print(f"❌ {len(failed)} test FAILED: {failed}")

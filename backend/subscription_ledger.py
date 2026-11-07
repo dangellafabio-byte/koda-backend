@@ -39,37 +39,37 @@ from dateutil.relativedelta import relativedelta
 # Approvate da Fabio 2026-08-14. Modificare qui, non in server.py.
 
 TIER_BASE_MINUTES: Dict[str, float] = {
-    # 2026-06-15 (Fabio) — Nuovo pricing definitivo per lancio.
-    # Tutti i tier hanno 500 min/mese (uniforme). Differenziazione tra
-    # tier avviene su prezzo, durata impegno, e sopravvivenza dei residui
-    # (carryover): monthly=no, bimonthly=1 mese, annual=2 mesi.
-    # Vecchi valori 2026-09-06 (200/230/230) → sostituiti con 500 per
-    # tutti in coerenza col paywall commerciale finale.
-    "monthly":   500.0,
-    "bimonthly": 500.0,
-    "annual":    500.0,
+    # 2026-11-06 (Fabio) — Pricing definitivo per lancio:
+    #   Monthly    29,90 €/mese  — 300 min, no carryover
+    #   Bimonthly  59,90 €/2 mesi — 300 min/mese, max 50 carry M1→M2
+    #   Annual    354,90 €/anno  — 300 min/mese, max 50 carry per passaggio
+    #                              mensile (6 passaggi max, 300 totali nell'annualità)
+    # Saldo massimo disponibile in un mese: 300 base + 50 carry = 350 min.
+    "monthly":   300.0,
+    "bimonthly": 300.0,
+    "annual":    300.0,
 }
 
 # Massimo minuti trasferibili come carryover DA UN SINGOLO MESE.
-# Formula prodotto (Fabio 2026-06): carryover = min(saldo_fine_mese, 500).
-# Se l'utente arriva a fine mese con 300 min non usati → 300 di carryover.
-# Se l'utente ha usato 0 min → 500 di carryover (cap = piena mensilità).
-# NB annual: il ledger può contenere fino a 2 slot attivi contemporaneamente
-# (residui di 2 mesi diversi), ciascuno cap 500 → theoric max disponibile
-# in un mese = 500 (base) + 500 + 500 (2 slot) = 1500 min. In pratica
-# raro perché slot=1 mese di vita, il secondo slot generato scarta il primo.
+# Formula (Fabio 2026-11-06): carryover = min(saldo_fine_mese, 50).
+# Il riporto NON aggiunge minuti alla quota pagata: l'annuale assegna
+# complessivamente 3.600 minuti, non 3.900 — il massimo spendibile in
+# un mese è 350 (300 base + 50 slot), ma il totale annuo resta 3.600.
 TIER_MAX_CARRYOVER_PER_SLOT: Dict[str, float] = {
-    "monthly":   0.0,     # nessun carryover — piano corto, no residui
-    "bimonthly": 500.0,   # 1 slot solo, cap 500 = intera mensilità, vive 1 mese
-    "annual":    500.0,   # slot multipli (fino a 2), ciascuno cap 500, vivono 2 mesi
+    "monthly":   0.0,     # nessun carryover — piano corto
+    "bimonthly": 50.0,    # 1 slot M1→M2, poi rinnovo cancella tutto
+    "annual":    50.0,    # slot ogni mese, ciascuno vive SOLO il mese successivo
 }
 
 # Numero di mesi in cui uno slot resta "spendibile" dopo la sua creazione.
 # monthly=0 significa "non si genera slot".
+# Brief 2026-11-06: "I minuti trasferiti valgono ESCLUSIVAMENTE nel periodo
+# mensile immediatamente successivo: NON possono essere riportati di nuovo."
+# → slot_lifetime = 1 per TUTTI i tier che hanno carryover.
 TIER_SLOT_LIFETIME_MONTHS: Dict[str, int] = {
     "monthly":   0,
     "bimonthly": 1,
-    "annual":    2,
+    "annual":    1,
 }
 
 # Durata del ciclo di tier (dopo N mesi si rinnova e tutti gli slot muoiono).
@@ -77,6 +77,17 @@ TIER_CYCLE_LENGTH_MONTHS: Dict[str, int] = {
     "monthly":   1,
     "bimonthly": 2,
     "annual":    12,
+}
+
+# Massimo cumulato di minuti trasferibili come carryover DENTRO un singolo
+# ciclo di tier. Brief 2026-11-06: l'annuale consente al più 300 min
+# complessivamente riportati, pari a 6 passaggi completi da 50 (o più
+# passaggi parziali che cumulino 300). Monthly=0 (no carry), bimonthly=50
+# (un solo passaggio M1→M2 possibile). Per annual: 300.
+TIER_MAX_CYCLE_CARRYOVER: Dict[str, float] = {
+    "monthly":   0.0,
+    "bimonthly": 50.0,
+    "annual":    300.0,
 }
 
 
@@ -170,6 +181,12 @@ class SubscriptionLedger:
     # FIFO nel consume()), così i minuti "gratis" del piano si consumano
     # per primi e il denaro fresh dell'utente resta il più a lungo possibile.
     topup_minutes_remaining: float = 0.0
+    # === CAP CUMULATO CARRYOVER NEL CICLO (Fabio 2026-11-06) ================
+    # Somma dei minuti trasferiti come carryover DENTRO il ciclo corrente
+    # (resetta ad ogni renewal del tier). Enforcement in advance_period():
+    # se il nuovo slot farebbe superare TIER_MAX_CYCLE_CARRYOVER[plan],
+    # viene troncato al margine residuo. Garantisce il tetto annuale 300.
+    cycle_carryover_generated: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -192,6 +209,7 @@ class SubscriptionLedger:
             last_rollover_check_iso=str(d["last_rollover_check_iso"]),
             # Backfill 0.0 per ledger creati prima del 2026-06 (no topup key)
             topup_minutes_remaining=float(d.get("topup_minutes_remaining", 0.0)),
+            cycle_carryover_generated=float(d.get("cycle_carryover_generated", 0.0)),
         )
 
 
@@ -224,6 +242,7 @@ def create_ledger(plan: str, purchase_date: Optional[datetime] = None) -> Subscr
         carryover_slots=[],
         last_rollover_check_iso=_iso(now),
         topup_minutes_remaining=0.0,
+        cycle_carryover_generated=0.0,
     )
 
 
@@ -303,14 +322,21 @@ def advance_period(ledger: SubscriptionLedger, now: Optional[datetime] = None) -
         # A fine ciclo, il residuo del mese N=cycle_length viene comunque scartato
         # perché tutti gli slot vengono azzerati.
         if slot_cap > 0 and slot_lifetime > 0 and not is_cycle_end and leftover > 0:
-            new_slot_expires = _add_months(_parse_iso(old_period_end_iso), slot_lifetime)
-            new_slot = CarryoverSlot(
-                origin_month_index=old_period_index,
-                origin_period_end_iso=old_period_end_iso,
-                minutes_remaining=min(leftover, slot_cap),
-                expires_at_iso=_iso(new_slot_expires),
-            )
-            ledger.carryover_slots.append(new_slot)
+            # Cap cumulato per ciclo (Fabio 2026-11-06): non superare
+            # TIER_MAX_CYCLE_CARRYOVER[plan] nel ciclo corrente.
+            cycle_cap = TIER_MAX_CYCLE_CARRYOVER.get(plan, 0.0)
+            remaining_cycle_budget = max(0.0, cycle_cap - ledger.cycle_carryover_generated)
+            slot_minutes = min(leftover, slot_cap, remaining_cycle_budget)
+            if slot_minutes > 1e-9:
+                new_slot_expires = _add_months(_parse_iso(old_period_end_iso), slot_lifetime)
+                new_slot = CarryoverSlot(
+                    origin_month_index=old_period_index,
+                    origin_period_end_iso=old_period_end_iso,
+                    minutes_remaining=slot_minutes,
+                    expires_at_iso=_iso(new_slot_expires),
+                )
+                ledger.carryover_slots.append(new_slot)
+                ledger.cycle_carryover_generated += slot_minutes
 
         # Fase 4 — advance del periodo
         new_period_start = _parse_iso(ledger.current_period_end_iso)
@@ -321,6 +347,7 @@ def advance_period(ledger: SubscriptionLedger, now: Optional[datetime] = None) -
             ledger.carryover_slots = []
             ledger.cycle_start_iso = _iso(new_period_start)
             ledger.current_period_index = 1
+            ledger.cycle_carryover_generated = 0.0
         else:
             ledger.current_period_index = next_period_index
 

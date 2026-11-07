@@ -40,8 +40,123 @@ def _claude_extra_body(messages=None) -> dict:
     return body
 
 
+class _InworldStreamIterator:
+    """Async iterator compatibile `litellm` streaming chunks.
+
+    Legge SSE da Inworld /v1/chat/completions e yielda oggetti con
+    dot-access `.choices[0].delta.content` e, nell'ultimo chunk,
+    `.usage.{prompt_tokens, completion_tokens, total_tokens}`.
+    Fabio 2026-11-06.
+    """
+
+    def __init__(self, payload: dict, api_key: str, timeout: float):
+        self.payload = payload
+        self.api_key = api_key
+        self.timeout = timeout
+        self._client = None
+        self._response_cm = None
+        self._lines_gen = None
+
+    def __aiter__(self):
+        return self
+
+    async def _ensure_started(self):
+        if self._lines_gen is not None:
+            return
+        import httpx
+        self._client = httpx.AsyncClient(timeout=self.timeout)
+        self._response_cm = self._client.stream(
+            "POST",
+            "https://api.inworld.ai/v1/chat/completions",
+            headers={"Content-Type": "application/json",
+                      "Authorization": f"Basic {self.api_key}"},
+            json=self.payload,
+        )
+        self._response = await self._response_cm.__aenter__()
+        if self._response.status_code != 200:
+            body = await self._response.aread()
+            await self._cleanup()
+            raise RuntimeError(
+                f"inworld stream {self._response.status_code}: {body.decode(errors='replace')[:300]}"
+            )
+        self._lines_gen = self._response.aiter_lines()
+
+    async def _cleanup(self):
+        try:
+            if self._response_cm is not None:
+                await self._response_cm.__aexit__(None, None, None)
+        except Exception:
+            pass
+        try:
+            if self._client is not None:
+                await self._client.aclose()
+        except Exception:
+            pass
+        self._client = None
+        self._response_cm = None
+        self._lines_gen = None
+
+    async def __anext__(self):
+        import json as _json
+        import types as _types
+
+        def _to_obj(d):
+            if isinstance(d, dict):
+                o = _types.SimpleNamespace()
+                for k, v in d.items():
+                    setattr(o, k, _to_obj(v))
+                o.__dict__["_raw"] = d
+                if "delta" in d and isinstance(d["delta"], dict) and "content" not in d["delta"]:
+                    o.delta.content = None
+                return o
+            if isinstance(d, list):
+                return [_to_obj(x) for x in d]
+            return d
+
+        await self._ensure_started()
+        try:
+            async for raw_line in self._lines_gen:
+                line = (raw_line or "").strip()
+                if not line:
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                data_str = line[len("data:"):].strip()
+                if data_str == "[DONE]":
+                    await self._cleanup()
+                    raise StopAsyncIteration
+                try:
+                    data = _json.loads(data_str)
+                except Exception:
+                    continue
+                return _to_obj(data)
+        except StopAsyncIteration:
+            raise
+        except Exception:
+            await self._cleanup()
+            raise
+        await self._cleanup()
+        raise StopAsyncIteration
+
+
+
+
 async def _claude_acompletion(*, messages, **kwargs):
+    """Chiama Haiku 5.5. Provider configurabile via `OLLENYA_LLM_PROVIDER`:
+      - "inworld" (default se INWORLD_API_KEY valida): usa Inworld
+        /v1/chat/completions con Basic auth.
+      - "emergent": vecchio proxy Emergent via litellm (fallback).
+
+    Ritorna un oggetto *litellm-like* con dot-access `.choices[0].message.content`
+    e `.usage.{prompt_tokens, completion_tokens, total_tokens}` per compat.
+    Fabio 2026-11-06.
+    """
     import copy
+    provider = (os.getenv("OLLENYA_LLM_PROVIDER") or "inworld").strip().lower()
+    if provider == "inworld":
+        return await _inworld_acompletion(
+            messages=copy.deepcopy(messages), **kwargs
+        )
     import litellm
     return await litellm.acompletion(
         model=CLAUDE_PROXY_MODEL_ID,
@@ -49,6 +164,95 @@ async def _claude_acompletion(*, messages, **kwargs):
         extra_body=_claude_extra_body(messages),
         **kwargs,
     )
+
+async def _haiku_oneshot(*, system_message: str, user_text: str,
+                           max_tokens: int = 200, temperature: Optional[float] = None,
+                           timeout: float = 20.0) -> str:
+    """Helper one-shot per chiamate ausiliarie Haiku. Sostituisce il pattern
+    `LlmChat(...).with_model("anthropic", CLAUDE_MODEL_ID).send_message(UserMessage(text=X))`
+    routando automaticamente via `_claude_acompletion` (quindi Inworld
+    quando `OLLENYA_LLM_PROVIDER=inworld`). Restituisce la stringa di
+    risposta (vuota in caso di errore/formato inatteso).
+    Fabio 2026-11-06.
+    """
+    kw: Dict[str, Any] = {"max_tokens": max_tokens, "timeout": timeout}
+    if temperature is not None:
+        kw["temperature"] = temperature
+    try:
+        resp = await _claude_acompletion(
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_text},
+            ],
+            **kw,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        logger.warning(f"[_haiku_oneshot] error: {e}")
+        return ""
+
+
+
+
+
+async def _inworld_acompletion(*, messages, **kwargs):
+    """Wrapper Inworld /v1/chat/completions con firma compatibile litellm.
+    Supporta: `max_tokens`, `temperature`, `top_p`, `stream`, `tools` sono
+    ignorate silenziosamente se non supportate (non le usiamo con Haiku).
+    """
+    import httpx
+    import types
+    key = os.environ.get("INWORLD_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("INWORLD_API_KEY missing")
+    # Model: CLAUDE_MODEL_ID è "claude-haiku-5-5" oppure "claude-haiku-4-5-20251001"
+    model = f"anthropic/{CLAUDE_MODEL_ID}"
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+    }
+    # passa params compatibili OpenAI
+    for k in ("max_tokens", "temperature", "top_p", "stop"):
+        if k in kwargs and kwargs[k] is not None:
+            payload[k] = kwargs[k]
+
+    # NB: stream supportato via SSE compatibile OpenAI (vedi sotto).
+    stream_requested = bool(kwargs.get("stream"))
+    timeout = float(kwargs.get("timeout", 60.0))
+
+    if stream_requested:
+        payload["stream"] = True
+        # Optional: Inworld supporta stream_options.include_usage come OpenAI
+        if "stream_options" in kwargs and kwargs["stream_options"]:
+            payload["stream_options"] = kwargs["stream_options"]
+        return _InworldStreamIterator(payload, key, timeout)
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        r = await client.post(
+            "https://api.inworld.ai/v1/chat/completions",
+            headers={"Content-Type": "application/json",
+                      "Authorization": f"Basic {key}"},
+            json=payload,
+        )
+        if r.status_code != 200:
+            raise RuntimeError(
+                f"inworld chat_completions {r.status_code}: {r.text[:300]}"
+            )
+        data = r.json()
+
+    # === COMPAT WRAPPER ======================================================
+    # I consumer usano sia `resp["choices"][0]["message"]["content"]` (dict)
+    # sia `resp.choices[0].message.content` (dot). Serve supporto ibrido.
+    class _HybridResp(dict):
+        def __getattr__(self, name):
+            v = self.get(name)
+            if isinstance(v, dict):
+                return _HybridResp(v)
+            if isinstance(v, list):
+                return [_HybridResp(x) if isinstance(x, dict) else x for x in v]
+            return v
+    return _HybridResp(data)
 
 
 def _claude_max_tokens(previous_limit: int) -> int:
@@ -355,6 +559,62 @@ async def api_health():
         "ts": datetime.now(timezone.utc).isoformat(),
         "version": _KODA_BACKEND_VERSION,
     }
+
+
+# === INWORLD SMOKE TESTS (Fabio 2026-11-06) ================================
+# Endpoint diagnostici *solo* per confermare l'inferenza di Haiku 5.5
+# via Inworld prima della migrazione effettiva dei call-site. Richiedono
+# header X-Admin-Token = REVENUECAT_WEBHOOK_AUTH (lo riutilizziamo come
+# segreto admin; non è pubblico). NON sono usati dall'app client.
+@api_router.post("/debug/inworld-chat")
+async def api_debug_inworld_chat(request: Request):
+    """Chiama Haiku 5.5 via Inworld /v1/chat/completions.
+    Body: {"prompt": "ciao"}. Response: {"ok","text","usage","latency_ms"}.
+    """
+    admin = request.headers.get("X-Admin-Token", "")
+    expected = os.getenv("OLLENYA_ADMIN_TOKEN", "").strip()
+    if not expected or admin != expected:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    prompt = (body.get("prompt") or "Scrivi solo: pong.").strip()[:400]
+    model = body.get("model", "anthropic/claude-haiku-5-5")
+
+    inworld_key = os.environ.get("INWORLD_API_KEY", "")
+    if not inworld_key:
+        raise HTTPException(status_code=503, detail="INWORLD_API_KEY missing")
+
+    import httpx
+    import time as _t
+    t0 = _t.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                "https://api.inworld.ai/v1/chat/completions",
+                headers={"Content-Type": "application/json",
+                          "Authorization": f"Basic {inworld_key}"},
+                json={"model": model,
+                      "messages": [{"role": "user", "content": prompt}],
+                      "max_tokens": 64, "stream": False},
+            )
+            latency_ms = int((_t.monotonic() - t0) * 1000)
+            if r.status_code != 200:
+                return {"ok": False, "status": r.status_code,
+                         "body": r.text[:600], "latency_ms": latency_ms}
+            data = r.json()
+            text = ""
+            usage = data.get("usage") or {}
+            try:
+                text = data["choices"][0]["message"]["content"]
+            except Exception:
+                pass
+            return {"ok": True, "text": text, "usage": usage,
+                     "latency_ms": latency_ms, "model": model}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200],
+                 "latency_ms": int((_t.monotonic() - t0) * 1000)}
 
 
 # === DOWNLOAD DOCUMENTO LEGALE (temp, Fabio 2026-06-24) =====================
@@ -2434,6 +2694,155 @@ async def voice_warmup():
         "deepgram": dg,
         "total_ms": int((time.time() - started) * 1000),
     }
+
+
+# ============ INWORLD STT-1 TRANSCRIPTION (Fabio 2026-11-07) ================
+# Drop-in sostitutivo di /transcribe-deepgram. Stesso contract:
+#   POST multipart audio=<file>, language=<it|en|...>
+#   → {"text": "...", "confidence": null}  (Inworld non espone confidence)
+# L'audio in arrivo è tipicamente m4a (iOS) o webm (Android/web). Converto
+# al volo in LINEAR16 WAV 16kHz mono con ffmpeg (binary via imageio_ffmpeg,
+# no apt deps), poi chiamo /stt/v1/transcribe REST multipart.
+# ============================================================================
+def _get_ffmpeg_bin() -> Optional[str]:
+    """Lazy resolver del binary ffmpeg via imageio_ffmpeg. Robusto a uvicorn
+    --reload che reimporta il modulo in stati parziali."""
+    try:
+        import imageio_ffmpeg as _iio_ffmpeg
+        return _iio_ffmpeg.get_ffmpeg_exe()
+    except Exception as e:
+        logger.warning(f"[inworld-stt] imageio_ffmpeg not usable: {e!r}")
+        return None
+
+
+try:
+    import imageio_ffmpeg as _iio_ffmpeg
+    _FFMPEG_BIN = _iio_ffmpeg.get_ffmpeg_exe()
+    logger.info(f"[inworld-stt] ffmpeg binary: {_FFMPEG_BIN}")
+except Exception as _ff_err:
+    _FFMPEG_BIN = None
+    logger.warning(f"[inworld-stt] imageio_ffmpeg not usable: {_ff_err!r}")
+
+
+async def _ffmpeg_to_linear16_wav(raw: bytes, sample_rate: int = 16000) -> bytes:
+    """Converte audio arbitrario → WAV PCM16 mono N kHz via ffmpeg.
+    Per MP4/m4a serve un file temporaneo (il muxer MP4 ha bisogno di seek
+    nell'header, cosa che stdin non supporta).
+    """
+    ffbin = _FFMPEG_BIN or _get_ffmpeg_bin()
+    if not ffbin:
+        raise RuntimeError("ffmpeg binary non disponibile (imageio_ffmpeg mancante)")
+    import asyncio as _aio
+    import tempfile, os as _os
+    tmp_in = tempfile.NamedTemporaryFile(suffix=".bin", delete=False)
+    try:
+        tmp_in.write(raw)
+        tmp_in.flush()
+        tmp_in.close()
+        proc = await _aio.create_subprocess_exec(
+            ffbin,
+            "-hide_banner", "-loglevel", "error",
+            "-i", tmp_in.name,
+            "-ac", "1",
+            "-ar", str(sample_rate),
+            "-acodec", "pcm_s16le",
+            "-f", "wav",
+            "pipe:1",
+            stdout=_aio.subprocess.PIPE,
+            stderr=_aio.subprocess.PIPE,
+        )
+        out, err = await proc.communicate()
+        if proc.returncode != 0 or len(out) < 44:
+            raise RuntimeError(
+                f"ffmpeg decode rc={proc.returncode}: {err.decode(errors='replace')[:200]}"
+            )
+        return out
+    finally:
+        try:
+            _os.unlink(tmp_in.name)
+        except Exception:
+            pass
+
+
+@api_router.post("/transcribe-inworld")
+async def transcribe_inworld(audio: UploadFile = File(...), language: str = Form("it")):
+    """Trascrizione via Inworld STT-1. Drop-in per /transcribe-deepgram."""
+    import json as _json
+    key = os.environ.get("INWORLD_API_KEY", "")
+    if not key:
+        raise HTTPException(status_code=500, detail="INWORLD_API_KEY not set")
+    try:
+        _t_read = time.time()
+        raw = await audio.read()
+        if len(raw) == 0:
+            raise HTTPException(status_code=400, detail="Empty audio")
+        _ms_read = int((time.time() - _t_read) * 1000)
+
+        _t_decode = time.time()
+        wav = await _ffmpeg_to_linear16_wav(raw, sample_rate=16000)
+        _ms_decode = int((time.time() - _t_decode) * 1000)
+
+        cfg = {
+            "modelId": "inworld/inworld-stt-1",
+            "languageCode": (language or "it").split("-")[0],
+            "audioEncoding": "LINEAR16",
+            "sampleRateHertz": 16000,
+            "audioChannelCount": 1,
+        }
+        _t_stt = time.time()
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=90.0) as client:
+            r = await client.post(
+                "https://api.inworld.ai/stt/v1/transcribe",
+                headers={"Authorization": f"Basic {key}"},
+                files={
+                    "transcribeConfig": (None, _json.dumps(cfg), "application/json"),
+                    "file": ("audio.wav", wav, "audio/wav"),
+                },
+            )
+        _ms_stt = int((time.time() - _t_stt) * 1000)
+
+        if r.status_code != 200:
+            logger.error(f"[inworld-stt] {r.status_code}: {r.text[:300]}")
+            raise HTTPException(status_code=502, detail=f"Inworld STT {r.status_code}")
+
+        data = r.json()
+        # Parse robusto: Inworld può ritornare `transcription` dict o `results` list
+        transcript = ""
+        try:
+            if isinstance(data.get("transcription"), dict):
+                transcript = data["transcription"].get("transcript") or ""
+            elif isinstance(data.get("transcript"), str):
+                transcript = data["transcript"]
+            elif isinstance(data.get("results"), list) and data["results"]:
+                transcript = data["results"][0].get("transcript") or data["results"][0].get("text") or ""
+        except Exception:
+            pass
+        cleaned = _clean_whisper_output((transcript or "").strip())
+
+        # Durata audio PCM16 (informativa per telemetria)
+        audio_duration_s = max(0.0, (len(wav) - 44) / 2 / 16000.0) if len(wav) > 44 else None
+
+        logger.info(
+            f"[inworld-stt] bytes_in={len(raw)} bytes_pcm={len(wav)} "
+            f"audio_s={audio_duration_s:.2f} "
+            f"ms_read={_ms_read} ms_decode={_ms_decode} ms_stt={_ms_stt} "
+            f"text={cleaned[:120]!r}"
+        )
+        return {
+            "text": cleaned,
+            "confidence": None,
+            "provider": "inworld",
+            "audio_duration_s": audio_duration_s,
+            "timings_ms": {"read": _ms_read, "decode": _ms_decode, "stt": _ms_stt},
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[inworld-stt] exc: {e}")
+        raise HTTPException(status_code=500, detail=f"Inworld STT error: {str(e)[:200]}")
+
+
 
 
 @api_router.post("/transcribe-deepgram")
@@ -8019,13 +8428,12 @@ async def _safety_llm_classify(text: str) -> Optional[Dict[str, Any]]:
             "ATTENZIONE: espressioni colloquiali NON sono rischi (es. 'muoio di fame', "
             "'mi ammazzo di lavoro', 'che noia mortale'). Concentrati sull'intento reale."
         )
-        chat = LlmChat(
-            api_key=key,
-            session_id=session_id,
+        reply = await _haiku_oneshot(
             system_message=system_prompt,
-        ).with_model("anthropic", CLAUDE_MODEL_ID).with_params(
-            max_tokens=_claude_max_tokens(80), extra_body=_claude_extra_body())
-        reply = await chat.send_message(UserMessage(text=text[:1500]))
+            user_text=text[:1500],
+            max_tokens=80,
+            timeout=15,
+        )
         # Estrai JSON
         import re as _re
         import json as _json
@@ -8596,55 +9004,266 @@ async def api_subscription_status():
 @api_router.post("/subscription/webhook")
 async def api_subscription_webhook(request: Request):
     """Webhook RevenueCat. Riceve eventi INITIAL_PURCHASE, RENEWAL,
-    CANCELLATION, EXPIRATION, etc. Aggiorna Profile.subscription_*.
+    PRODUCT_CHANGE, CANCELLATION, EXPIRATION, BILLING_ISSUE, REFUND,
+    SUBSCRIPTION_PAUSED, etc. Aggiorna Profile.subscription_*.
 
-    Auth: header Authorization deve matchare REVENUECAT_WEBHOOK_AUTH.
+    Hardening 2026-11-06 (Fabio):
+      - Auth OBBLIGATORIA: se `REVENUECAT_WEBHOOK_AUTH` non è configurata
+        o l'header non combacia → 401. Nessun comportamento aperto.
+      - Dedup su `event.id` (fallback `transaction_id` solo se event.id
+        manca). Protezione atomica tramite insert con _id unico.
+      - Rinnovi aggiornano `expires_at` anche a tier invariato, SENZA
+        duplicare accrediti (ledger ricreato solo se cambia il plan).
+      - CANCELLATION = non-renew: accesso resta fino a `expires_at`.
+      - EXPIRATION/BILLING_ISSUE/REFUND/SUBSCRIPTION_PAUSED → disattiva.
+      - PRODUCT_CHANGE: nuovo tier PENDING fino a decorrenza store
+        (`expiration_at_ms` presente). Non resetta subito il consumo.
+      - Mapping separato product_id ↔ entitlement_ids.
+
+    Ref: https://www.revenuecat.com/docs/integrations/webhooks/event-types-and-fields
     """
-    expected = os.getenv("REVENUECAT_WEBHOOK_AUTH", "")
-    if expected:
-        auth = request.headers.get("Authorization", "")
-        if auth != expected:
-            raise HTTPException(status_code=401, detail="invalid webhook auth")
+    # === AUTH (obbligatoria, no comportamento aperto) ======================
+    expected = os.getenv("REVENUECAT_WEBHOOK_AUTH", "").strip()
+    if not expected:
+        logger.error("[rc-webhook] REVENUECAT_WEBHOOK_AUTH not configured → refusing request (401)")
+        raise HTTPException(status_code=401, detail="webhook auth not configured")
+    auth = request.headers.get("Authorization", "")
+    if auth != expected:
+        raise HTTPException(status_code=401, detail="invalid webhook auth")
+
     try:
         payload = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="invalid json")
 
     event = payload.get("event", {}) if isinstance(payload, dict) else {}
-    app_user_id = event.get("app_user_id", "")
-    evt_type = event.get("type", "")
+    app_user_id = event.get("app_user_id") or event.get("original_app_user_id") or ""
+    evt_type = (event.get("type") or "").upper()
+    product_id = event.get("product_id") or event.get("new_product_id") or ""
     entitlements = event.get("entitlements", {}) or {}
-    active_ents = [k for k, v in entitlements.items() if (v or {}).get("active")]
-    tier = None
-    if "plus_access" in active_ents:
-        tier = "plus"
-    elif "daily_access" in active_ents:
-        tier = "daily"
-    elif "essential_access" in active_ents:
-        tier = "essential"
-    is_active = bool(active_ents) and evt_type not in ("EXPIRATION", "CANCELLATION")
-    expires_at = event.get("expiration_at_ms")
-    expires_iso = None
-    if expires_at:
+    # entitlements può arrivare come dict{id:{...}} oppure come list[str]
+    if isinstance(entitlements, dict):
+        active_ents = [k for k, v in entitlements.items() if (v or {}).get("active") is not False]
+    elif isinstance(entitlements, list):
+        active_ents = list(entitlements)
+    else:
+        active_ents = []
+    entitlement_ids = event.get("entitlement_ids") or event.get("entitlement_id")
+    if entitlement_ids and not active_ents:
+        active_ents = entitlement_ids if isinstance(entitlement_ids, list) else [entitlement_ids]
+
+    # === MAPPING ESPLICITO product_id ↔ entitlement_id ↔ tier interno ======
+    # Source of truth: brief 2026-11-06.
+    PRODUCT_TO_ENTITLEMENT: Dict[str, str] = {
+        "ollenya_monthly":   "ollenya_monthly",
+        "ollenya_bimonthly": "ollenya_bimonthly",
+        "ollenya_annual":    "ollenya_annual",
+    }
+    ENTITLEMENT_TO_TIER: Dict[str, str] = {
+        "ollenya_annual":    "annual",
+        "ollenya_bimonthly": "bimonthly",
+        "ollenya_monthly":   "monthly",
+    }
+    # Priority: annual > bimonthly > monthly (contratto più lungo vince)
+    tier: Optional[str] = None
+    for ent_priority in ("ollenya_annual", "ollenya_bimonthly", "ollenya_monthly"):
+        if ent_priority in active_ents:
+            tier = ENTITLEMENT_TO_TIER[ent_priority]
+            break
+
+    # === DEDUP via event.id (chiave idempotenza RevenueCat) ================
+    # RevenueCat docs: `event.id` è unico per singolo evento (non per
+    # transazione). Due eventi distinti (es. INITIAL_PURCHASE + RENEWAL)
+    # sulla stessa transaction condividono transaction_id ma hanno event.id
+    # diversi. Uso event.id come key, fallback a transaction_id SOLO se manca.
+    # IDEMPOTENZA RESILIENTE: se il doc esiste ma è `failed:true` (retry
+    # precedente fallita), lo "reset" a processing e processiamo di nuovo.
+    dedup_key = event.get("id") or event.get("event_id") or event.get("transaction_id") or ""
+    if dedup_key:
         try:
-            expires_iso = datetime.fromtimestamp(int(expires_at) / 1000, tz=timezone.utc).isoformat()
+            existing_evt = await db.rc_webhook_events.find_one({"_id": str(dedup_key)})
+            if existing_evt and not existing_evt.get("failed"):
+                # già processato con successo → dedup silent
+                logger.info(f"[rc-webhook] dedup: skip event.id={dedup_key} type={evt_type}")
+                return {"ok": True, "deduped": True}
+            if existing_evt and existing_evt.get("failed"):
+                # retry: resetta flag
+                await db.rc_webhook_events.update_one(
+                    {"_id": str(dedup_key)},
+                    {"$set": {"failed": False, "retry_count":
+                                (existing_evt.get("retry_count", 0) + 1),
+                                "retried_at": datetime.now(timezone.utc).isoformat()}},
+                )
+            else:
+                await db.rc_webhook_events.insert_one({
+                    "_id": str(dedup_key),
+                    "evt_type": evt_type,
+                    "app_user_id": app_user_id,
+                    "tier": tier,
+                    "product_id": product_id,
+                    "received_at": datetime.now(timezone.utc).isoformat(),
+                    "processed": False,
+                })
+        except Exception as _dup:
+            logger.warning(f"[rc-webhook] dedup insert err: {_dup}")
+
+    # === SEMANTICA EVENTO ==================================================
+    # INITIAL_PURCHASE, RENEWAL, UNCANCELLATION, TRIAL_CONVERSION → active
+    # PRODUCT_CHANGE → applica alla DECORRENZA store, non necessariamente
+    #   immediata (upgrade=immediato, downgrade=fine periodo). Fabio
+    #   2026-11-06: se store indica decorrenza futura via `product_change_at_ms`
+    #   oppure se `expiration_at_ms` di arrivo > (existing expires_at) di ~1
+    #   periodo, consideriamo la decorrenza PENDING; salviamo `pending_tier`
+    #   e cambiamo tier effettivo solo dopo la data store.
+    # CANCELLATION → active=True, auto-renew disattivato (accesso fino a
+    #   scadenza).
+    # BILLING_ISSUE → grazie al grace period di Apple: NON revochiamo
+    #   immediato. L'accesso resta valido fino a `expiration_at_ms` (se
+    #   presente). Verrà poi revocato da EXPIRATION.
+    # SUBSCRIPTION_PAUSED → Android/Play pause programmata: resta attivo
+    #   fino a `auto_resume_at_ms`; non revochiamo immediatamente.
+    # EXPIRATION → revoca effettiva (fine periodo pagato).
+    # REFUND → revoca immediata (soldi restituiti).
+    # TRANSFER → revoca se target è diverso app_user_id.
+    ACTIVATING = {"INITIAL_PURCHASE", "RENEWAL", "UNCANCELLATION",
+                  "TRIAL_CONVERSION"}
+    SOFT_CANCEL = {"CANCELLATION", "BILLING_ISSUE", "SUBSCRIPTION_PAUSED"}
+    HARD_REVOKE = {"EXPIRATION", "REFUND", "TRANSFER"}
+
+    is_active = False
+    if evt_type in ACTIVATING and tier:
+        is_active = True
+    elif evt_type == "PRODUCT_CHANGE" and tier:
+        is_active = True  # il piano corrente resta attivo; il nuovo subentra alla decorrenza
+    elif evt_type in SOFT_CANCEL:
+        is_active = True   # resta attivo fino a expires_at / auto_resume_at
+    elif evt_type in HARD_REVOKE:
+        is_active = False
+
+    expires_at_ms = event.get("expiration_at_ms") or event.get("expires_at_ms")
+    expires_iso: Optional[str] = None
+    if expires_at_ms:
+        try:
+            expires_iso = datetime.fromtimestamp(
+                int(expires_at_ms) / 1000, tz=timezone.utc
+            ).isoformat()
         except Exception:
             pass
 
-    # Per ora il single-user è "me" — quando avremo auth multi-user
-    # mapperemo rc_app_user_id → user_id.
     target_uid = app_user_id or "me"
-    await db.taccuino_profile.update_one(
+
+    # Fetch stato esistente per decidere se rinnovare o rifare ledger
+    existing = await db.taccuino_profile.find_one(
         {"id": target_uid},
-        {"$set": {
-            "subscription_active": is_active,
-            "subscription_tier": tier,
-            "subscription_expires_at": expires_iso,
-        }},
-        upsert=False,
+        {"ledger_state": 1, "subscription_tier": 1,
+          "subscription_expires_at": 1, "pending_tier": 1}
+    ) or {}
+    existing_tier = existing.get("subscription_tier")
+    existing_state = existing.get("ledger_state") if isinstance(existing.get("ledger_state"), dict) else None
+
+    update: Dict[str, Any] = {}
+    if expires_iso:
+        update["subscription_expires_at"] = expires_iso
+
+    if evt_type in ACTIVATING and tier:
+        update["subscription_tier"] = tier
+        update["subscription_active"] = True
+        same_plan = (existing_tier == tier and existing_state and existing_state.get("plan") == tier)
+        if evt_type == "INITIAL_PURCHASE" or not same_plan:
+            fresh = _sub_ledger.create_ledger(tier)
+            update["ledger_state"] = fresh.to_dict()
+            update["minutes_used_this_month"] = 0.0
+            update["monthly_reset_date"] = _this_month_utc_str()
+        # RENEWAL stesso piano → aggiorna solo expires_at; NON ricreare il ledger.
+        # Nota: il ledger ha il proprio rollover mensile interno via
+        # advance_period() — il RENEWAL store (fine ciclo annuale/bi) si
+        # allinea quando l'app chiama consume/remaining_summary e il
+        # cycle scade. Niente doppio accredito.
+        # Clear pending_tier se il piano effettivo lo raggiunge
+        if existing.get("pending_tier") == tier:
+            update["pending_tier"] = None
+            update["pending_tier_effective_at"] = None
+    elif evt_type == "PRODUCT_CHANGE" and tier:
+        # Applica alla decorrenza effettiva, non subito.
+        effective_ms = (event.get("product_change_at_ms")
+                        or event.get("effective_at_ms"))
+        if effective_ms:
+            try:
+                eff_iso = datetime.fromtimestamp(
+                    int(effective_ms) / 1000, tz=timezone.utc).isoformat()
+            except Exception:
+                eff_iso = None
+        else:
+            # Se lo store NON indica decorrenza futura → applica subito solo
+            # se è un upgrade (annual > bimonthly > monthly), altrimenti
+            # salva come pending con effective = expires_iso (fine periodo).
+            PRIO = {"monthly": 1, "bimonthly": 2, "annual": 3}
+            is_upgrade = tier and existing_tier and PRIO.get(tier, 0) > PRIO.get(existing_tier, 0)
+            eff_iso = None if is_upgrade else expires_iso
+        if eff_iso:
+            # PENDING: salva ma non cambiare tier/ledger ora
+            update["pending_tier"] = tier
+            update["pending_tier_effective_at"] = eff_iso
+            update["subscription_active"] = True
+        else:
+            # Immediato (upgrade senza data futura)
+            update["subscription_tier"] = tier
+            update["subscription_active"] = True
+            fresh = _sub_ledger.create_ledger(tier)
+            update["ledger_state"] = fresh.to_dict()
+            update["minutes_used_this_month"] = 0.0
+            update["monthly_reset_date"] = _this_month_utc_str()
+    elif evt_type in SOFT_CANCEL:
+        # Nessuna revoca: accesso continua fino a scadenza o auto_resume.
+        update["subscription_active"] = True
+    elif evt_type in HARD_REVOKE:
+        update["subscription_active"] = False
+        update["subscription_tier"] = None
+        update["ledger_state"] = None
+        update["pending_tier"] = None
+        update["pending_tier_effective_at"] = None
+
+    # === IDEMPOTENZA RESILIENTE =============================================
+    # Avvolge la scrittura del profilo: se fallisce, marchiamo l'evento
+    # come `failed:true` (soft-delete) e la retry di RevenueCat può essere
+    # processata di nuovo (la dedup check ignora gli event failed).
+    try:
+        await db.taccuino_profile.update_one(
+            {"id": target_uid},
+            {"$set": update},
+            upsert=False,
+        )
+    except Exception as _upd_err:
+        logger.error(f"[rc-webhook] profile update failed: {_upd_err}")
+        if dedup_key:
+            try:
+                await db.rc_webhook_events.update_one(
+                    {"_id": str(dedup_key)},
+                    {"$set": {"failed": True,
+                               "failed_at": datetime.now(timezone.utc).isoformat(),
+                               "failed_reason": str(_upd_err)[:200]}},
+                )
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail="update failed; retry allowed")
+
+    # Marca l'evento `processed:true` solo dopo update OK
+    if dedup_key:
+        try:
+            await db.rc_webhook_events.update_one(
+                {"_id": str(dedup_key)},
+                {"$set": {"processed": True,
+                           "processed_at": datetime.now(timezone.utc).isoformat()}},
+            )
+        except Exception:
+            pass
+
+    logger.info(
+        f"[rc-webhook] {evt_type} user={app_user_id[:16] if app_user_id else '(none)'} "
+        f"product={product_id} tier={tier} active={is_active} expires={expires_iso} "
+        f"evt_id={dedup_key[:16] if dedup_key else '(none)'}"
     )
-    logger.info(f"[rc-webhook] {evt_type} app_user={app_user_id} active={is_active} tier={tier}")
-    return {"ok": True}
+    return {"ok": True, "evt_type": evt_type, "tier": tier}
 
 
 # === FIX 2026-07-02 (Fabio) — Rimosso endpoint /profile/background ===
@@ -10767,13 +11386,12 @@ async def api_ghost(req: GhostRequest):
                 "intime'. Rispondi SOLO con la frase, niente prefissi tipo 'Insegnamento:'. "
                 "Se non c'è nulla di significativo da imparare, rispondi NULL."
             )
-            chat = LlmChat(
-                api_key=EMERGENT_LLM_KEY,
-                session_id=str(uuid.uuid4()),
+            raw = await _haiku_oneshot(
                 system_message=sys,
-            ).with_model("anthropic", CLAUDE_MODEL_ID).with_params(
-                max_tokens=_claude_max_tokens(200), extra_body=_claude_extra_body())
-            raw = await chat.send_message(UserMessage(text=entry.text[:1500]))
+                user_text=entry.text[:1500],
+                max_tokens=200,
+                timeout=20,
+            )
             cand = (raw or "").strip().strip('"').strip()
             if cand and cand.upper() not in {"NULL", "NONE"}:
                 lesson = cand[:200]
@@ -10831,13 +11449,12 @@ async def api_recap(period: str = "today"):
         "Rispondi SOLO con il testo del recap, niente JSON."
     )
     try:
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=str(uuid.uuid4()),
+        out = await _haiku_oneshot(
             system_message=sys,
-        ).with_model("anthropic", CLAUDE_MODEL_ID).with_params(
-            max_tokens=_claude_max_tokens(400), extra_body=_claude_extra_body())
-        out = await chat.send_message(UserMessage(text=history))
+            user_text=history,
+            max_tokens=400,
+            timeout=25,
+        )
     except Exception as e:
         logger.error(f"recap error: {e}")
         raise HTTPException(status_code=500, detail="Recap generation failed")
@@ -11837,16 +12454,12 @@ async def api_intro_gender_from_name(req: IntroGenderRequest):
             "confidence=0.8. Ma se hai il minimo dubbio, preferisci 'ambiguous'.\n"
             "Non spiegare. Solo JSON."
         )
-        chat = (
-            LlmChat(
-                api_key=EMERGENT_LLM_KEY,
-                session_id=session_id,
-                system_message=system_prompt,
-            )
-            .with_model("anthropic", CLAUDE_MODEL_ID)
-            .with_params(max_tokens=_claude_max_tokens(60), extra_body=_claude_extra_body())
+        reply = await _haiku_oneshot(
+            system_message=system_prompt,
+            user_text=name,
+            max_tokens=60,
+            timeout=12,
         )
-        reply = await chat.send_message(UserMessage(text=name))
         import re as _re
         import json as _json
         m = _re.search(r"\{[^{}]*\}", reply or "")
