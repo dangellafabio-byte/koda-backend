@@ -13,8 +13,6 @@ Due operazioni:
    — default "elevenlabs" se nessun doc. Il resolver fa anche doppio
      controllo whitelist (defense in depth): se un utente NON autorizzato
      per qualche ragione avesse un doc con ``inworld``, il resolver
-"""
-import os
      restituisce comunque ``elevenlabs``.
  * ``consume_switch_token(db, uid, token) -> {provider, consumed}``
    — i token sono rilasciati da ``issue_switch_token`` con TTL 10 min,
@@ -23,7 +21,7 @@ import os
 MAI loggato il token nel chiaro.
 """
 from __future__ import annotations
-
+import os
 import datetime as _dt
 import hashlib
 import logging
