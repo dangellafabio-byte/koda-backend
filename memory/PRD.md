@@ -147,3 +147,13 @@ Fix applicati (chirurgici, zero cambi di logica):
 2. `OllenyaIntro.tsx/stopVoiceprintRecording`: `setIsRecording(false)` garantito in `finally` + messaggio di retry se URI vuoto → UI mai bloccata.
 3. `VAD_TRACE_ENABLED=false`: rimossi ~600 console.log per sessione voiceprint (3 record × 200 log) che caricavano la JS bridge su device lenti.
 Status: codice in place, serve pubblicare la build per testarlo sul telefono Honor.
+
+## 2026-11-07 — Honor X8b freeze orb rosa (fix VERO, no dead code)
+Scoperta: le modifiche precedenti erano state applicate a OllenyaIntro.tsx che è dead code dal 22/08/2026. Il vero onboarding attivo è OnboardingV4.tsx via /intro-v3.
+Sintomo (produzione, Honor X8b): orb rosa (thinking) bloccato dopo scambio vocale.
+ROOT CAUSE: api.converse() può restare in sospeso su Honor/MagicOS con audio session non rilasciata; il try non completa, il catch non parte, speak() non viene mai chiamato → orb pink forever.
+Fix applicati (OnboardingV4.tsx, chirurgici):
+1. `handleVoiceReply`: Promise.race con timeout 15s su api.converse(). Fallback a frase di raccordo e avanzamento step. Orb esce sempre da "thinking".
+2. `speak`: top-level safety-net 25s che chiude player e avanza step se fetch/blob/createAudioPlayer si bloccano prima della safety-net player (60s). 60s mantenuta come backup.
+NOTE: in current preview il path di handleVoiceReply NON è attivo (step_voice_a è stato rifatto in v67.10). Il fix serve alla build di produzione ancora su codice pre-v67.10.
+Deadlock secret live: ANCORA ATTIVO. Per pubblicare serve aggiornare INWORLD_API_KEY, KODA_TTS_DEFAULT_PROVIDER, REVENUECAT_WEBHOOK_AUTH, OLLENYA_ADMIN_TOKEN in live.

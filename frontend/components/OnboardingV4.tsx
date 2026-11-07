@@ -301,14 +301,31 @@ export default function OnboardingV4() {
     opts?: { silent?: boolean }
   ) => {
     let doneCalled = false;
+    let topLevelSafetyTimer: ReturnType<typeof setTimeout> | null = null;
     const safeDone = () => {
       if (doneCalled) return;
       doneCalled = true;
       clearTimer();
+      if (topLevelSafetyTimer) { clearTimeout(topLevelSafetyTimer); topLevelSafetyTimer = null; }
       onDone();
     };
     if (!opts?.silent) setSubtitle(text);
     setOrbStatus("speaking");
+    // === FIX 2026-11-07 (Honor X8b — orb bloccato) ===
+    // Top-level safety-net 25s: anche se fetch/blob/createAudioPlayer
+    // si bloccano su Honor PRIMA di arrivare alla safety-net player (60s),
+    // questa garantisce che onDone venga chiamato comunque e lo step
+    // avanzi. 25s copre anche gli scrim più lunghi (~28s è troncato ok).
+    // La safety-net player a 60s rimane come backup per casi estremi.
+    topLevelSafetyTimer = setTimeout(() => {
+      if (mountedRef.current && !doneCalled) {
+        console.warn(`${TAG} speak top-level safety-net 25s`);
+        try { currentPlayerRef.current?.pause?.(); } catch {}
+        try { currentPlayerRef.current?.remove?.(); } catch {}
+        currentPlayerRef.current = null;
+        safeDone();
+      }
+    }, 25_000);
     try {
       const tok = getAuthToken();
       console.log(`${TAG} speak: "${text.slice(0, 60)}…"`);
@@ -918,31 +935,47 @@ export default function OnboardingV4() {
 
   // Helper interno: chiama /api/converse in demo_mode e fa parlare Ollenya
   // la risposta AI. Silent perché è dialogo diretto.
+  //
+  // === FIX 2026-11-07 (Honor X8b — orb rosa congelato) ===
+  // Sintomo riportato in produzione: su Honor/MagicOS l'orb diventava rosa
+  // ("thinking") e restava fermo all'infinito dopo 1-2 scambi vocali.
+  // ROOT CAUSE: `api.converse()` su connessioni Honor con audio session
+  // non rilasciata correttamente può non risolvere mai (né risolve, né
+  // rejecta). Il `try` non completava, il `catch` non partiva, `speak()`
+  // non veniva mai chiamato → orb bloccato su "thinking" per sempre.
+  // FIX: Promise.race con timeout 15s. Se scade, fallback a speak() di
+  // raccordo e avanzamento allo step successivo. Cross-platform safe:
+  // su device sani converse() risolve in 1-3s, il timeout non si attiva.
   const handleVoiceReply = useCallback(
     async (userText: string, nextStep: Step) => {
       if (!mountedRef.current) return;
       setOrbStatus("thinking");
+      let aiText: string | null = null;
       try {
-        const resp = await api.converse(userText, undefined, {
+        const conversePromise = api.converse(userText, undefined, {
           is_voice_turn: true,
           demo_mode: true,
         });
-        const aiText =
-          (resp?.ai_entry as any)?.text ||
-          (resp?.ai_entry as any)?.text_clean ||
-          "Ho capito.";
-        if (!mountedRef.current) return;
-        speak(aiText, () => {
-          if (mountedRef.current) setStep(nextStep);
-        }, { silent: true });
+        const timeoutPromise = new Promise<"timeout">((resolve) =>
+          setTimeout(() => resolve("timeout"), 15000)
+        );
+        const resp = (await Promise.race([conversePromise, timeoutPromise])) as any;
+        if (resp === "timeout") {
+          console.warn(`${TAG} voice mini exchange converse timeout 15s`);
+        } else {
+          aiText =
+            (resp?.ai_entry as any)?.text ||
+            (resp?.ai_entry as any)?.text_clean ||
+            null;
+        }
       } catch (e) {
         console.warn(`${TAG} voice mini exchange converse failed:`, e);
-        if (mountedRef.current) {
-          speak("Ci sarò comunque.", () => {
-            if (mountedRef.current) setStep(nextStep);
-          }, { silent: true });
-        }
       }
+      if (!mountedRef.current) return;
+      const finalText = aiText || "Ci sarò comunque.";
+      speak(finalText, () => {
+        if (mountedRef.current) setStep(nextStep);
+      }, { silent: true });
     },
     [speak]
   );

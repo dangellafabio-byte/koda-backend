@@ -548,44 +548,27 @@ export default function OllenyaIntro({ voices = [], currentVoiceId, onDone, onCa
 
   const stopVoiceprintRecording = useCallback(async () => {
     if (!isRecording || !recorder) return;
-    // === FIX 2026-11-06 (Honor X8b freeze 3° voiceprint) ===
-    // Safety-net duplicato rispetto al timeout aggiunto in voice.ts/safeStop:
-    // qui GARANTIAMO che `setIsRecording(false)` e `setRecorder(null)`
-    // vengano sempre eseguiti anche se qualcosa va storto nella catena
-    // native→JS. Senza questo, sul telefono Honor l'UI restava congelata
-    // dopo il 3° stop (bottone "Fermati quando hai finito" permanente).
-    let result: any = null;
-    let stopError: any = null;
     try {
-      result = await recorder.stop();
-    } catch (e: any) {
-      stopError = e;
-      console.warn("[koda-intro] stop recording failed:", e);
-    } finally {
+      const result = await recorder.stop();
       setIsRecording(false);
       setRecorder(null);
-    }
-    if (stopError) return;
-    if (result?.uri) {
-      const next = [...voiceprintUris, result.uri];
-      setVoiceprintUris(next);
-      if (voiceprintIdx + 1 < VOICEPRINT_PHRASES.length) {
-        setVoiceprintIdx(voiceprintIdx + 1);
-      } else {
-        // Tutte 3 raccolte → upload al backend in background
-        uploadVoiceprint(next).catch((e) =>
-          console.warn("[koda-intro] voiceprint upload failed:", e)
-        );
+      if (result?.uri) {
+        const next = [...voiceprintUris, result.uri];
+        setVoiceprintUris(next);
+        if (voiceprintIdx + 1 < VOICEPRINT_PHRASES.length) {
+          setVoiceprintIdx(voiceprintIdx + 1);
+        } else {
+          // Tutte 3 raccolte → upload al backend in background
+          uploadVoiceprint(next).catch((e) =>
+            console.warn("[koda-intro] voiceprint upload failed:", e)
+          );
+        }
       }
-    } else {
-      // === FIX 2026-11-06 (Honor X8b) ===
-      // Se dopo lo stop non abbiamo URI (durata < 500ms o Honor HAL ha
-      // mangiato il file dopo il timeout forzato), NON lasciamo l'utente
-      // bloccato: mostriamo un messaggio breve e re-abilitiamo il tap.
-      // In questo modo il flusso riparte subito senza congelamento della UI.
-      setError("Non ho sentito bene, riprova tenendo il tocco un attimo in più.");
+    } catch (e: any) {
+      console.warn("[koda-intro] stop recording failed:", e);
+      setIsRecording(false);
     }
-  }, [isRecording, recorder, voiceprintUris, voiceprintIdx, uploadVoiceprint]);
+  }, [isRecording, recorder, voiceprintUris, voiceprintIdx]);
 
   const uploadVoiceprint = useCallback(async (uris: string[]) => {
     try {
