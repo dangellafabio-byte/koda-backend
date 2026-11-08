@@ -9,7 +9,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "postinstall": "node ./scripts/purge-sentry.js"
+    "postinstall": "node ./scripts/purge-sentry.js",
+"eas-build-post-install": "node -e \"if(process.env.EAS_BUILD_PLATFORM==='android'){const fs=require('fs'),p='android/gradle/wrapper/gradle-wrapper.properties';let s=fs.readFileSync(p,'utf8');s=s.replace(/^networkTimeout=.*$/gm,'');fs.writeFileSync(p,s+'\\nnetworkTimeout=120000\\n');}\""
   },
   "dependencies": {
     "@babel/runtime": "^7.20.6",
