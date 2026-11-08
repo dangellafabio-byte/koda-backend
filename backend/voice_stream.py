@@ -1147,12 +1147,16 @@ async def voice_stream_handler(
     # il client può mostrare all'utente. Il gate è duplicato lato /api/converse
     # per il flow legacy — questo copre il flow "fast" (hands-free/streaming).
     try:
-        from server import _current_user_id, db  # type: ignore
+        from server import _current_user_id, db
         _uid_gate = _current_user_id.get() if _current_user_id is not None else None
         if _uid_gate and _uid_gate != "me":
             _prof_gate = await db.taccuino_profile.find_one({"id": _uid_gate}, {"subscription_tier": 1})
             _tier_gate = (_prof_gate or {}).get("subscription_tier")
             _paid_gate = _tier_gate in ("monthly", "bimonthly", "annual", "unlimited")
+            if not _paid_gate:
+                from server import _uid_email_from_session_or_profile, is_user_unlimited
+                _email_gate = await _uid_email_from_session_or_profile(_uid_gate)
+                _paid_gate, _reason_gate = await is_user_unlimited(_email_gate, _uid_gate)
             if not _paid_gate:
                 logger.info(
                     f"[voice_gate sess={short_id}] Free user uid={_uid_gate[:8]} tier={_tier_gate} — closing WS 4402"
