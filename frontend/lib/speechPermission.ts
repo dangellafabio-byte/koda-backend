@@ -35,7 +35,9 @@ const PRE_PROMPT_TITLE = "Un attimo";
 const PRE_PROMPT_BODY =
   "Per parlarti serve che io ti capisca davvero. Un permesso in più, poi si parte.";
 const SETTINGS_BODY_SUFFIX =
-  " iOS non mi permette di chiederlo di nuovo — apri le Impostazioni per attivarlo.";
+  Platform.OS === "ios"
+    ? " iOS non mi permette di chiederlo di nuovo — apri le Impostazioni per attivarlo."
+    : " Il permesso del microfono non è disponibile — apri le Impostazioni per attivarlo.";
 
 export type EnsurePermissionResult = {
   granted: boolean;

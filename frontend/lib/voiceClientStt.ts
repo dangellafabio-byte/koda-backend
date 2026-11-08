@@ -141,17 +141,13 @@ export class VoiceClientSttSession {
   private subResult: { remove: () => void } | null = null;
   private subError: { remove: () => void } | null = null;
   private subEnd: { remove: () => void } | null = null;
+  private subRecognitionStart: { remove: () => void } | null = null;
   private subSpeechStart: { remove: () => void } | null = null;
 
-  // === FIX 2026-07-26 v64.0 — Watchdog Android mic silent-fail ===
-  // Su Google SpeechRecognizer (Android), specialmente al 2° turno,
-  // ExpoSpeechRecognitionModule.start() può risolvere silenziosamente
-  // senza mai attivare l'hardware mic: nessun evento speechstart, error
-  // o end viene emesso. La sessione resta zombie: UI mostra "recording"
-  // ma il microfono è morto. Il watchdog rileva questo caso e
-  // propaga un errore all'upper layer così il HF backoff può reagire.
+  // Android startup watchdog observes native readiness, not speech detection.
+  // A silent user must not be mistaken for a failed microphone startup.
   private micWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
-  private speechStartReceived = false;
+  private recognitionReady = false;
 
   // === FIX 2026-07-26 v64.1 — no-speech tracking (utente silenzioso) ===
   // Google SpeechRecognizer emette `error no-speech` se l'utente non
@@ -486,7 +482,7 @@ export class VoiceClientSttSession {
 
   private async startRecognition(profileLang: string): Promise<void> {
     const lang = profileLang === "it" ? "it-IT" : profileLang;
-    console.log(`[${TAG}] startRecognition lang=${lang} ondevice=true`);
+    console.log(`[${TAG}] startRecognition lang=${lang} platform=${Platform.OS} requiresOnDevice=${Platform.OS === "ios"}`);
 
     // === FIX 2026-07-26 v64.0 — Pre-abort Android reset ===
     // Su Google SpeechRecognizer (Android), specialmente sui turni
@@ -508,20 +504,30 @@ export class VoiceClientSttSession {
       await new Promise((r) => setTimeout(r, 80));
     }
     // Reset watchdog state
-    this.speechStartReceived = false;
+    this.recognitionReady = false;
     // Reset no-speech flag (v64.1)
     this.noSpeechReceived = false;
 
+    // A stop can arrive during the asynchronous Android recognizer reset.
+    if (this.stopRequested || this.doneReceived) return;
+
     // Registra listeners prima di start()
-    this.subSpeechStart = ExpoSpeechRecognitionModule.addListener(
-      "speechstart",
-      () => {
-        this.speechStartMs = Date.now();
-        this.speechStartReceived = true;
+    if (Platform.OS === "android") {
+      this.subRecognitionStart = ExpoSpeechRecognitionModule.addListener("start", () => {
+        if (this.doneReceived || this.stopRequested || this.dispatched || this.recognitionReady) return;
+        this.recognitionReady = true;
         if (this.micWatchdogTimer) {
           clearTimeout(this.micWatchdogTimer);
           this.micWatchdogTimer = null;
         }
+        console.log(`[${TAG}] recognition ready platform=android mode=standard`);
+        try { this.callbacks.onRecognitionActive?.(); } catch {}
+      });
+    }
+    this.subSpeechStart = ExpoSpeechRecognitionModule.addListener(
+      "speechstart",
+      () => {
+        this.speechStartMs = Date.now();
         console.log(`[${TAG}] speechstart`);
       }
     );
@@ -529,6 +535,7 @@ export class VoiceClientSttSession {
     this.subResult = ExpoSpeechRecognitionModule.addListener(
       "result",
       (evt: ExpoSpeechRecognitionResultEvent) => {
+        if (this.doneReceived || this.dispatched) return;
         const norm = this.normalizeResult(evt);
         if (!norm) return;
         // Salva la trascrizione corrente (verrà usata sia per interim che final)
@@ -558,6 +565,7 @@ export class VoiceClientSttSession {
     this.subError = ExpoSpeechRecognitionModule.addListener(
       "error",
       (evt: ExpoSpeechRecognitionErrorEvent) => {
+        if (this.doneReceived || this.dispatched) return;
         console.log(
           `[${TAG}] error code=${evt.error} message="${evt.message || ""}"`
         );
@@ -598,6 +606,12 @@ export class VoiceClientSttSession {
           /560557684|!act|not active|session/i.test(msg) ||
           /audio/i.test(String(evt.error || ""));
         // Fire-and-forget, non aspettiamo (l'utente ha già ricevuto errore)
+        if (Platform.OS === "android") {
+          // Tear down before notifying the caller: the next turn must not
+          // inherit listeners or a delayed global audio recovery from this one.
+          this.finishAndroidRecognitionError(`client_stt_${evt.error}`);
+          return;
+        }
         this.performAudioSessionRecoveryCycle(
           evt.error,
           msg,
@@ -613,7 +627,7 @@ export class VoiceClientSttSession {
     this.subEnd = ExpoSpeechRecognitionModule.addListener("end", () => {
       // iOS può emettere "end" più volte per sessione (specialmente dopo
       // isFinal). Il guard `dispatched` previene safety net multipli.
-      if (this.dispatched) {
+      if (this.dispatched || this.doneReceived) {
         // Log molto leggero per non spammare
         return;
       }
@@ -663,6 +677,10 @@ export class VoiceClientSttSession {
         this.removeListeners();
         this.stopKeepalive();
         this.forceCloseWs();
+      } else if (Platform.OS === "android" && !this.currentTranscript && !this.doneReceived) {
+        // Some services emit end without a preceding error. Never leave an
+        // already-ended recognizer looking active with an open WebSocket.
+        this.finishAndroidRecognitionError("client_stt_ended_without_transcript");
       }
     });
 
@@ -680,36 +698,14 @@ export class VoiceClientSttSession {
       //   `androidRecognitionServicePackage` non lo forziamo: il default
       //   di sistema (Google) è quello che vogliamo.
       //
-      // === FIX 2026-07-26 v64.1 — Beep sistema + timeout troppo corto ===
-      //
-      // PROBLEMA #1 (Fabio 26/07): Google SpeechRecognizer emette un
-      // beep di sistema all'apertura/chiusura del mic. iPhone non ce l'ha.
-      // Soluzione (documentata nel codice nativo di expo-speech-recognition,
-      // ExpoSpeechService.kt:278): usare `continuous: true` su Android 13+
-      // fa passare il modulo attraverso `EXTRA_AUDIO_SOURCE` con audio
-      // recorder custom, bypassando il beep di sistema.
-      //
-      // PROBLEMA #2: Google chiude troppo velocemente su silenzio (~2s).
-      // Se l'utente ci mette un attimo a rispondere, no-speech scatta e
-      // la sessione si blocca in "recording" senza mai finire.
-      // Soluzione: allungare le soglie via androidIntentOptions.
-      //   - EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 4000ms
-      //     (era 2000ms default) — tolleranza per pause naturali.
-      //   - EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 3000ms
-      //   - EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 500ms
-      //     (permette turni brevi tipo "sì" / "no")
-      //
-      // Nota su continuous:true: NON cambia il flow lato client — Google
-      // emette ancora `result isFinal` + `end` quando l'utente smette di
-      // parlare (grazie alle soglie qui sopra). L'unica differenza reale
-      // è il beep soppresso.
+      // Use the standard service-owned microphone. continuous:true in
+      // expo-speech-recognition 3.1.3 selects a custom AudioRecord pipe on
+      // Android 13+. Support varies by recognition service; ordinary
+      // conversation turns do not require this custom capture path.
       const startOpts: any = {
         lang,
         interimResults: true,
-        // continuous: true solo su Android per bypassare il beep di sistema.
-        // Su iOS resta false (comportamento invariato, SFSpeechRecognizer
-        // non emette mai beep).
-        continuous: Platform.OS === "android",
+        continuous: false, // Android compatibility: let the recognition service own the microphone.
         maxAlternatives: 1,
         addsPunctuation: true,
         // On-device: preferito su entrambe, ma richiesto SOLO su iOS
@@ -735,58 +731,36 @@ export class VoiceClientSttSession {
       }
       ExpoSpeechRecognitionModule.start(startOpts);
       console.log(`[${TAG}] ExpoSpeechRecognitionModule.start() OK (v64.1 continuous=${startOpts.continuous})`);
-      // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
-      // Segnaliamo all'upper layer che il microfono REALE è ora attivo.
-      // Da qui in poi un tap dell'utente su onBigButton è un legittimo
-      // stop. Prima di questo momento (startup async 1-2s), un tap
-      // aborterebbe la sessione prima che il mic parta → cascata
-      // Xiaomi osservata (vedi Fix A sopra).
-      try {
-        this.callbacks.onRecognitionActive?.();
-      } catch (cbErr: any) {
-        console.log(`[${TAG}] onRecognitionActive callback error (non-fatal): ${cbErr?.message || cbErr}`);
+      // Android readiness is confirmed by native onReadyForSpeech ("start"),
+      // not by start() returning: it only posts work to the Android main thread.
+      if (this.doneReceived || this.stopRequested || this.dispatched) return;
+      if (Platform.OS !== "android") {
+        try { this.callbacks.onRecognitionActive?.(); } catch {}
       }
 
-      // === FIX 2026-07-26 v64.0 — Android silent-fail watchdog ===
-      // Su Android (Google SpeechRecognizer), al 2° turno la start()
-      // può risolvere silenziosamente senza mai attivare il mic HW —
-      // nessun evento viene emesso. Il watchdog rileva questo caso.
-      //
-      // Timeout scelto empiricamente:
-      //   • 5000ms → sufficiente per hardware slow (Huawei Kirin ~2s)
-      //   • ma abbastanza corto da non far aspettare un utente vivo
-      //     (che di solito comincia a parlare entro 3s dal tap).
-      //
-      // Se `speechstart` non arriva entro 5s, la sessione è considerata
-      // zombie. Emettiamo error e HF backoff mette in pausa il loop.
+      // Readiness watchdog: no native "start" means startup failed.
+      // Do not time out merely because the user has not begun speaking.
       if (Platform.OS === "android") {
         if (this.micWatchdogTimer) {
           clearTimeout(this.micWatchdogTimer);
         }
         this.micWatchdogTimer = setTimeout(() => {
           this.micWatchdogTimer = null;
-          if (this.speechStartReceived) return;
+          if (this.recognitionReady) return;
           if (this.doneReceived || this.stopRequested || this.dispatched) return;
           console.log(
-            `[${TAG}] MIC_WATCHDOG_TIMEOUT — speechstart never received (5s) — session zombie, propagating error`
+            `[${TAG}] MIC_WATCHDOG_TIMEOUT — native start never received (5s) — session zombie, propagating error`
           );
-          // Force reset dell'hw recognizer
-          try { ExpoSpeechRecognitionModule.abort(); } catch {}
-          this.notifiedUpperOnClose = true;
-          this.doneReceived = true;
-          try {
-            this.callbacks.onError?.("android_mic_silent_fail");
-          } catch {}
-          try {
-            this.forceCloseWs();
-          } catch {}
+          this.finishAndroidRecognitionError("android_mic_silent_fail");
         }, 5_000);
       }
     } catch (e: any) {
       console.log(`[${TAG}] start() FAILED: ${e?.message || e}`);
-      try {
-        this.callbacks.onError?.(`client_stt_start_failed:${e?.message || e}`);
-      } catch {}
+      if (Platform.OS === "android") {
+        this.finishAndroidRecognitionError(`client_stt_start_failed:${e?.message || e}`);
+      } else {
+        try { this.callbacks.onError?.(`client_stt_start_failed:${e?.message || e}`); } catch {}
+      }
     }
   }
 
@@ -1354,6 +1328,18 @@ export class VoiceClientSttSession {
     }
   }
 
+  private finishAndroidRecognitionError(code: string): void {
+    if (this.doneReceived || this.dispatched) return;
+    this.doneReceived = true;
+    this.notifiedUpperOnClose = true;
+    this.removeListeners();
+    this.stopKeepalive();
+    try { ExpoSpeechRecognitionModule.abort(); } catch {}
+    this.forceCloseWs();
+    console.log(`[${TAG}] recognition failed platform=android code=${code}`);
+    try { this.callbacks.onError?.(code); } catch {}
+  }
+
   private removeListeners(): void {
     // === FIX 2026-07-26 v64.0 — Clear mic watchdog on teardown ===
     if (this.micWatchdogTimer) {
@@ -1376,5 +1362,7 @@ export class VoiceClientSttSession {
     this.subError = null;
     this.subEnd = null;
     this.subSpeechStart = null;
+    try { this.subRecognitionStart?.remove(); } catch {}
+    this.subRecognitionStart = null;
   }
 }

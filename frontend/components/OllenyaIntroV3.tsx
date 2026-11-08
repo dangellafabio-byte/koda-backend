@@ -545,7 +545,7 @@ export default function OllenyaIntroV3() {
       } = {
         lang: "it-IT",
         interimResults: true,
-        continuous: Platform.OS === "android",
+        continuous: false, // Android compatibility: let the recognition service own the microphone.
         maxAlternatives: 1,
         addsPunctuation: true,
         requiresOnDeviceRecognition: Platform.OS === "ios",

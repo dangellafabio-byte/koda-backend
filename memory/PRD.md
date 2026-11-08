@@ -157,3 +157,15 @@ Fix applicati (OnboardingV4.tsx, chirurgici):
 2. `speak`: top-level safety-net 25s che chiude player e avanza step se fetch/blob/createAudioPlayer si bloccano prima della safety-net player (60s). 60s mantenuta come backup.
 NOTE: in current preview il path di handleVoiceReply NON è attivo (step_voice_a è stato rifatto in v67.10). Il fix serve alla build di produzione ancora su codice pre-v67.10.
 Deadlock secret live: ANCORA ATTIVO. Per pubblicare serve aggiornare INWORLD_API_KEY, KODA_TTS_DEFAULT_PROVIDER, REVENUECAT_WEBHOOK_AUTH, OLLENYA_ADMIN_TOKEN in live.
+
+## 2026-11-08 — Patch sviluppatore applicata (STT Android compatibility)
+Patch ricevuta dallo sviluppatore (`ollenya-android-fix.zip`), applicata e integrata con i fix precedenti.
+Modifiche principali:
+- **ROOT CAUSE identificata**: in expo-speech-recognition 3.1.3 su Android 13+, `continuous:true` attiva una pipeline AudioRecord custom via EXTRA_AUDIO_SOURCE che non è supportata da tutti i servizi di riconoscimento. Honor X8b (MagicOS 8 = Android 13+) cade esattamente su questo caso.
+- **Fix**: `continuous:false` su Android in TUTTI i componenti STT (OnboardingV4, OllenyaIntroV3, OllenyaIntroConversational, MicroDemoOllenya, voiceClientStt.ts). Lascia il servizio di riconoscimento Android gestire il mic. iOS invariato.
+- Watchdog nativo `start` (onReadyForSpeech) invece di `speechstart` → distingue utente silenzioso da mic morto.
+- Teardown pulito al termine Android, nessun ciclo di recovery asincrono che inquinava il turno successivo.
+- Testo permessi Android corretto (prima citava iOS).
+Test: 11/11 passati con node tests/android-stt-lifecycle.cjs.
+Fix precedenti preservati: timeout 15s handleVoiceReply + safety-net 25s speak() + fix syntax koda_tts_prefs.py.
+Status: pronto per redeploy + OTA Android sul canale APK installato.
