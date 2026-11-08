@@ -25,6 +25,7 @@ const CAPTURE_PREFIXES = [
   "[KODA_",        // Tutti gli eventi nuovi del sistema diagnostico Ollenya
   "[VAD_",         // Legacy: [VAD_TRACE], [VAD_CALIB] emessi prima del rename
   "[AUDIO_HONESTY", // Honesty Phase 1
+  "[OLLENYA_",     // Diagnostica handsfree (Fabio 2026-11-08): cattura [OLLENYA_HF_*]
 ];
 function _matchesCapture(s: string): boolean {
   for (const p of CAPTURE_PREFIXES) {
