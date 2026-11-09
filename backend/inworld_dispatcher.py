@@ -45,7 +45,7 @@ _TONE_DIRECTIONS = {
     "warm": "Speak warmly and conversationally, with natural pitch variation and relaxed phrasing",
     "calm": "Speak calmly and reassuringly, with relaxed energy and gentle, measured phrasing",
     "concerned": "Speak with sincere, gentle empathy, restrained energy and unhurried pauses, without theatrical sadness",
-    "energetic": "Speak with genuine cheerful enthusiasm, brighter energy and lively intonation, without shouting",
+    "energetic": "Speak with an unmistakable burst of joyful excitement, a broad expressive pitch range, bright energy and animated phrasing, as a close friend celebrating wonderful news",
     "urgent": "Speak with clear, focused urgency, firm articulation and purposeful pacing, without shouting",
     "neutral": "Speak naturally and conversationally, with clear articulation and natural sentence intonation",
     "paced": "Speak with deliberate, clear phrasing and short natural pauses between ideas",

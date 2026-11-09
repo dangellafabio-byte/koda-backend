@@ -78,17 +78,16 @@ DEFAULT_STREAM_TOTAL_TIMEOUT_S = 120.0
 class InworldVoiceParams:
     """Parametri vocali Inworld — immutabili per request.
 
-    Default: voce aggiornata 2026-11-04 su richiesta Fabio
-    (``vivid-feather-7719__design-voice-0245caaf``, ``it-IT``, rate 1.05,
+    Default: voce approvata da Fabio nel Playground il 2026-11-09
+    (``vivid-feather-7719__design-voice-5b1e4d68``, ``it-IT``, rate 1.05,
     delivery ``CREATIVE``).
     """
 
-    voice_id: str = "vivid-feather-7719__design-voice-0245caaf"
+    voice_id: str = "vivid-feather-7719__design-voice-5b1e4d68"
     language: str = "it-IT"
     speaking_rate: float = 1.05
     delivery_mode: str = "CREATIVE"  # CREATIVE | EXPRESSIVE | STANDARD | CALM | NEUTRAL
-    # Modello default allineato a scelta Fabio 2026-10-30: TTS-2 Flash
-    # (variante a latenza bassa / costo contenuto).
+    # TTS-2 standard: supporta le istruzioni espressive; Flash le ignora.
     model_id: str = "inworld-tts-2"
     audio_encoding: str = "MP3"
 
