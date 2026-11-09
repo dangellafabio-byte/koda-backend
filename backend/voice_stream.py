@@ -59,6 +59,7 @@ Constraint Emergent rispettati:
 """
 from __future__ import annotations
 
+from voice_pipeline_lifecycle import run_until_disconnect
 import asyncio
 import io
 import json
@@ -1512,7 +1513,7 @@ async def voice_stream_handler(
                         return
                     # === Pipeline LLM+TTS (identica al percorso Deepgram) ===
                     try:
-                        await run_pipeline_for_text(
+                        completed = await run_until_disconnect(websocket, run_pipeline_for_text(
                             text=text_raw,
                             ephemeral=ephemeral,
                             audio_duration_ms=dur_int,
@@ -1525,7 +1526,11 @@ async def voice_stream_handler(
                             stt_source=engine,
                             # === FIX v64.4 — client-authoritative voice ===
                             client_voice_id=client_voice_id,
-                        )
+                        ))
+                        if not completed:
+                            client_alive = False
+                            logger.info(f"[KODA_STREAM sess={short_id}] disconnected: cancelled pipeline")
+                            return
                         if client_alive:
                             await emit_to_client({"type": "done"})
                     except Exception as e:

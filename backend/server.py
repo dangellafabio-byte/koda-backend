@@ -40,6 +40,59 @@ def _claude_extra_body(messages=None) -> dict:
     return body
 
 
+def _normalise_llm_usage(usage) -> dict:
+    """Read provider counters; never turn unreported cache usage into zero."""
+    def field(value, name):
+        return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
+
+    def count(value):
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+    prompt = count(field(usage, 'prompt_tokens'))
+    output = count(field(usage, 'completion_tokens'))
+    details = field(usage, 'prompt_tokens_details')
+    read = count(field(usage, 'cache_read_input_tokens'))
+    write = count(field(usage, 'cache_creation_input_tokens'))
+    nested_read = count(field(details, 'cached_tokens'))
+    if read is None:
+        read = nested_read
+    if write is None:
+        write = count(field(details, 'cache_write_tokens'))
+        # Documented Inworld chat format omits cache_write_tokens on hits.
+        if write is None and nested_read is not None and field(details, 'cache_write_tokens') is None:
+            write = 0
+    reported = read is not None and write is not None
+    fresh = (prompt - read - write if reported and prompt is not None
+             and prompt >= read + write else None)
+    status = 'UNKNOWN'
+    if reported:
+        status = ('PARTIAL' if read and write else 'HIT' if read else
+                  'MISS' if write else 'NONE')
+    return {
+        'prompt_tokens': prompt,
+        'completion_tokens': output,
+        'reasoning_tokens': count(field(field(usage, 'completion_tokens_details'), 'reasoning_tokens')),
+        'cache_read_input_tokens': read,
+        'cache_creation_input_tokens': write,
+        'cache_metrics_reported': reported,
+        'cache_status': status,
+        'tokens_input_fresh': fresh,
+    }
+
+
+
+def _require_voice_reply(reply: str, *, completion_tokens=None,
+                         reasoning_tokens=None, finish_reason=None) -> str:
+    """A completed transport is not a successful conversational response."""
+    reply = reply.strip()
+    if not reply:
+        raise RuntimeError(
+            f"llm_empty_reply finish={finish_reason or 'unknown'} "
+            f"completion_tokens={completion_tokens} reasoning_tokens={reasoning_tokens}"
+        )
+    return reply
+
+
 class _InworldStreamIterator:
     """Async iterator compatibile `litellm` streaming chunks.
 
@@ -129,6 +182,8 @@ class _InworldStreamIterator:
                     data = _json.loads(data_str)
                 except Exception:
                     continue
+                if isinstance(data.get("usage"), dict):
+                    data["usage"].update(_normalise_llm_usage(data["usage"]))
                 return _to_obj(data)
         except StopAsyncIteration:
             raise
@@ -212,6 +267,9 @@ async def _inworld_acompletion(*, messages, **kwargs):
         "messages": messages,
         "stream": False,
     }
+    # Same explicit non-thinking policy as the legacy proxy. The direct
+    # Inworld path previously bypassed _claude_extra_body entirely.
+    payload.update(_claude_extra_body())
     # passa params compatibili OpenAI
     for k in ("max_tokens", "temperature", "top_p", "stop"):
         if k in kwargs and kwargs[k] is not None:
@@ -240,6 +298,8 @@ async def _inworld_acompletion(*, messages, **kwargs):
                 f"inworld chat_completions {r.status_code}: {r.text[:300]}"
             )
         data = r.json()
+        if isinstance(data.get("usage"), dict):
+            data["usage"].update(_normalise_llm_usage(data["usage"]))
 
     # === COMPAT WRAPPER ======================================================
     # I consumer usano sia `resp["choices"][0]["message"]["content"]` (dict)
@@ -5265,6 +5325,7 @@ async def debug_last_turn_timing():
         items = []
     return {
         "count": len(items),
+        "cache_metrics_version": 2,
         "note": "Ultimi 10 turni. Ordine: dal piu' vecchio al piu' recente.",
         "turns": items,
     }
@@ -6251,8 +6312,10 @@ def _build_cacheable_messages(sys_prompt: str, user_payload: str, session_id: st
                'cache_control': {'type': 'ephemeral'}}]
     if variable:
         blocks.append({'type': 'text', 'text': variable})
-    logger.info("[CACHE_SPLIT] sid=%s stable=%sch volatile=%sch",
-                session_id[:8], len(stable), len(variable))
+    import hashlib as _cache_hashlib
+    logger.info("[CACHE_SPLIT] sid=%s prefix=%s stable=%sch volatile=%sch",
+                session_id[:8], _cache_hashlib.sha256(stable.encode()).hexdigest()[:16],
+                len(stable), len(variable))
     return [{'role': 'system', 'content': blocks},
             {'role': 'user', 'content': user_payload}]
 
@@ -16793,6 +16856,7 @@ async def _fast_pipeline_task(
     su Mongo (usato dall'endpoint WebSocket per evitare il delay di polling).
     """
     t0 = time.time()
+    sentence_tasks: List[asyncio.Task] = []
 
     async def _publish(event: dict, audio_bytes: Optional[bytes] = None):
         # Mongo persist (long-poll fallback) + optional direct emit (WS path).
@@ -17431,6 +17495,8 @@ async def _fast_pipeline_task(
         # con i dati Claude reali (usage arriva SOLO nell'ultimo chunk con
         # stream_options.include_usage=True).
         _claude_final_usage: Dict[str, Any] = {}  # popolato in loop
+        _claude_finish_reason = None
+        _claude_reasoning_chars = 0
         _claude_wall_ms_container: List[Optional[int]] = [None]  # popolato a fine loop
 
         t_llm_start = time.time()
@@ -18494,7 +18560,6 @@ async def _fast_pipeline_task(
             except Exception as e:
                 logger.error(f"[fast] sentence gen error: {e}")
 
-        sentence_tasks: List[asyncio.Task] = []
         # === FIX 2026-07-02 (Fabio "voce bipolare") — Opzione A prosodia unificata ===
         # Il modello eleven_v3 NON supporta `previous_text` per continuità
         # prosodica: se mandiamo sentence 1, 2, 3, 4 come chiamate separate,
@@ -18552,12 +18617,18 @@ async def _fast_pipeline_task(
                 # Salvo campi cruciali in dict così _LAST_TIMING_SUMMARIES può
                 # leggerli anche se l'oggetto Usage viene garbage-collected.
                 try:
-                    _claude_final_usage['prompt_tokens'] = getattr(_u, 'prompt_tokens', None)
-                    _claude_final_usage['completion_tokens'] = getattr(_u, 'completion_tokens', None)
-                    _claude_final_usage['cache_creation_input_tokens'] = getattr(_u, 'cache_creation_input_tokens', 0) or 0
-                    _claude_final_usage['cache_read_input_tokens'] = getattr(_u, 'cache_read_input_tokens', 0) or 0
+                    _claude_final_usage.update(_normalise_llm_usage(_u))
                 except Exception:
                     pass
+
+            try:
+                _choice = chunk.choices[0]
+                _claude_finish_reason = getattr(_choice, 'finish_reason', None) or _claude_finish_reason
+                _reasoning = getattr(_choice.delta, 'reasoning', None)
+                if isinstance(_reasoning, str):
+                    _claude_reasoning_chars += len(_reasoning)
+            except (AttributeError, IndexError):
+                pass
 
             try:
                 piece = chunk.choices[0].delta.content or ''
@@ -18715,8 +18786,8 @@ async def _fast_pipeline_task(
                 # Manteniamo 0 (già default), ma marcamo la sorgente come
                 # `tiktoken_fallback` così la telemetria non conta questi 0
                 # come "cache miss reale".
-                _claude_final_usage.setdefault("cache_creation_input_tokens", 0)
-                _claude_final_usage.setdefault("cache_read_input_tokens", 0)
+                _claude_final_usage.setdefault("cache_creation_input_tokens", None)
+                _claude_final_usage.setdefault("cache_read_input_tokens", None)
                 logger.info(
                     f"[OLLENYA_TIMING] USAGE_FALLBACK sid={session_id[:8]} "
                     f"source=tiktoken sys_toks={_sys_toks} user_toks={_user_toks} "
@@ -18726,6 +18797,14 @@ async def _fast_pipeline_task(
             except Exception as _fb_e:
                 logger.warning(f"[OLLENYA_TIMING] tiktoken fallback failed: {_fb_e}")
         _claude_final_usage["usage_source"] = _usage_source
+        logger.info(
+            "[OLLENYA_CACHE] sid=%s source=%s status=%s prompt=%s read=%s write=%s fresh=%s",
+            session_id[:8], _usage_source, _claude_final_usage.get('cache_status', 'UNKNOWN'),
+            _claude_final_usage.get('prompt_tokens'),
+            _claude_final_usage.get('cache_read_input_tokens'),
+            _claude_final_usage.get('cache_creation_input_tokens'),
+            _claude_final_usage.get('tokens_input_fresh'),
+        )
 
         logger.info(
             f"[OLLENYA_TIMING] CLAUDE_WALL sid={session_id[:8]} "
@@ -18844,28 +18923,25 @@ async def _fast_pipeline_task(
         # Se per qualche motivo non c'è entry (nessun audio generato) → skip
         # silente (nessun crash).
         try:
-            if _LAST_TIMING_SUMMARIES:
-                _last = _LAST_TIMING_SUMMARIES[-1]
-                # Assicura che sia la nostra entry (matching sid) — evita race
-                # condition con altri turni concorrenti sullo stesso deque.
-                if _last.get('sid') == session_id[:8]:
-                    _last['claude_wall_ms'] = _claude_wall_ms_container[0]
-                    _last['user_payload_tokens'] = _user_payload_tokens
-                    _last['prompt_tokens'] = _claude_final_usage.get('prompt_tokens')
-                    _last['completion_tokens'] = _claude_final_usage.get('completion_tokens')
-                    _last['cache_creation_input_tokens'] = _claude_final_usage.get('cache_creation_input_tokens', 0)
-                    _last['cache_read_input_tokens'] = _claude_final_usage.get('cache_read_input_tokens', 0)
-                    # Cache HIT ratio: se cache_read > 0 e cache_creation == 0 → HIT pulito
-                    _cr = _last.get('cache_read_input_tokens', 0) or 0
-                    _cc = _last.get('cache_creation_input_tokens', 0) or 0
-                    if _cr > 0 and _cc == 0:
-                        _last['cache_status'] = 'HIT'
-                    elif _cc > 0 and _cr == 0:
-                        _last['cache_status'] = 'MISS'
-                    elif _cr > 0 and _cc > 0:
-                        _last['cache_status'] = 'PARTIAL'
-                    else:
-                        _last['cache_status'] = 'NONE'
+            _last = next((item for item in reversed(_LAST_TIMING_SUMMARIES)
+                          if item.get('sid') == session_id[:8]), None)
+            if _last is not None:
+                _last['claude_wall_ms'] = _claude_wall_ms_container[0]
+                _last['finish_reason'] = _claude_finish_reason
+                _last['reasoning_chars'] = _claude_reasoning_chars
+                _last['reasoning_tokens'] = _claude_final_usage.get('reasoning_tokens')
+                _last['user_payload_tokens'] = _user_payload_tokens
+                for key in ('prompt_tokens', 'completion_tokens',
+                            'cache_creation_input_tokens', 'cache_read_input_tokens',
+                            'cache_metrics_reported', 'tokens_input_fresh', 'usage_source'):
+                    _last[key] = _claude_final_usage.get(key)
+                _last['cache_status'] = _claude_final_usage.get('cache_status', 'UNKNOWN')
+                _stable_prefix, _boundary, _ = sys_prompt.partition(_CACHE_CONTEXT_BOUNDARY)
+                _last['cache_prefix_hash'] = (
+                    hashlib.sha256(_stable_prefix.encode()).hexdigest()[:16]
+                    if _boundary else None
+                )
+                _last['cache_prefix_chars'] = len(_stable_prefix) if _boundary else None
         except Exception as _patch_e:
             logger.warning(f"[OLLENYA_CLAUDE_PATCH] failed to patch last summary: {_patch_e}")
 
@@ -18895,20 +18971,11 @@ async def _fast_pipeline_task(
         # sono interi (anche 0 valido).
         try:
             _turn_id = str(session_id)
-            _usage_src = "proxy" if _claude_final_usage else "unknown"
-            if _usage_src == "unknown":
-                _fresh = None
-                _cr = None
-                _cc = None
-                _ct = None
-            else:
-                _pt = _claude_final_usage.get("prompt_tokens") or 0
-                _ct = _claude_final_usage.get("completion_tokens") or 0
-                _cc = _claude_final_usage.get("cache_creation_input_tokens") or 0
-                _cr = _claude_final_usage.get("cache_read_input_tokens") or 0
-                # Il proxy riporta prompt_tokens come SOMMA (fresh + cache).
-                # Deriviamo il fresh per differenza, min 0.
-                _fresh = max(0, int(_pt) - int(_cr) - int(_cc))
+            _usage_src = _claude_final_usage.get('usage_source', 'unknown')
+            _fresh = _claude_final_usage.get('tokens_input_fresh')
+            _cr = _claude_final_usage.get('cache_read_input_tokens')
+            _cc = _claude_final_usage.get('cache_creation_input_tokens')
+            _ct = _claude_final_usage.get('completion_tokens')
             _tel_event = {
                 "turn_id": _turn_id,
                 "user_id": getattr(profile, "id", None),
@@ -18926,7 +18993,25 @@ async def _fast_pipeline_task(
         except Exception as _tel_err:
             logger.warning(f"[turn_telemetry] fast_voice hook failed: {_tel_err!r}")
 
-        full_reply = ''.join(full_reply_chars).strip() or "..."
+        # Never silently mark a zero-text/zero-audio turn as successful.
+        _reply_candidate = ''.join(full_reply_chars)
+        if not _reply_candidate.strip():
+            _LAST_TIMING_SUMMARIES.append({
+                'sid': session_id[:8],
+                'at_iso': datetime.now(timezone.utc).isoformat(),
+                'outcome': 'llm_empty_reply',
+                'claude_wall_ms': _claude_wall_ms_container[0],
+                'finish_reason': _claude_finish_reason,
+                'reasoning_chars': _claude_reasoning_chars,
+                'raw_content_chars': len(extractor.full_buffer),
+                **_claude_final_usage,
+            })
+        full_reply = _require_voice_reply(
+            _reply_candidate,
+            completion_tokens=_claude_final_usage.get('completion_tokens'),
+            reasoning_tokens=_claude_final_usage.get('reasoning_tokens'),
+            finish_reason=_claude_finish_reason,
+        )
         # === GENDER SAFETY-NET (Fabio 2026-06) ================================
         # Post-processor puro: se ai_gender è m/f e Claude Haiku ha scivolato
         # nel genere opposto parlando di sé ("sono contento" con ai_gender=f),
@@ -19386,6 +19471,15 @@ async def _fast_pipeline_task(
             await _publish({"type": "error", "message": str(e)[:200]})
         finally:
             await _fast_session_mark_done(session_id)
+    finally:
+        # Cancellation during the LLM stream happens before the normal gather.
+        # Do not leave detached TTS generations running after this turn exits.
+        pending_tts = [task for task in sentence_tasks if not task.done()]
+        for task in pending_tts:
+            task.cancel()
+        if pending_tts:
+            await asyncio.gather(*pending_tts, return_exceptions=True)
+
 
 
 class FastStartRequest(BaseModel):

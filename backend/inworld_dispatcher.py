@@ -24,6 +24,7 @@ Zero import di server.py → nessun ciclo.
 from __future__ import annotations
 
 import asyncio
+from contextlib import aclosing
 import logging
 import time
 import uuid
@@ -35,6 +36,49 @@ import koda_tts_events as _ev
 import koda_tts_prefs as _prefs
 
 logger = logging.getLogger(__name__)
+
+
+# Inworld does not consume ElevenLabs settings or our internal [TONE:...] tag.
+# TTS-2 accepts English stage directions in brackets, even for Italian speech.
+# Keep the approved voice, model, locale and base rate; direct delivery only.
+_TONE_DIRECTIONS = {
+    "warm": "Speak warmly and conversationally, with natural pitch variation and relaxed phrasing",
+    "calm": "Speak calmly and reassuringly, with relaxed energy and gentle, measured phrasing",
+    "concerned": "Speak with sincere, gentle empathy, restrained energy and unhurried pauses, without theatrical sadness",
+    "energetic": "Speak with genuine cheerful enthusiasm, brighter energy and lively intonation, without shouting",
+    "urgent": "Speak with clear, focused urgency, firm articulation and purposeful pacing, without shouting",
+    "neutral": "Speak naturally and conversationally, with clear articulation and natural sentence intonation",
+    "paced": "Speak with deliberate, clear phrasing and short natural pauses between ideas",
+}
+
+
+def _directed_text(text: str, tone: Optional[str], params, request_id: str) -> str:
+    """Translate trusted tone metadata into native TTS-2 steering.
+
+    Do not turn blank input into speech, inject arbitrary metadata as a tag,
+    truncate spoken words, or send unsupported steering to Flash.
+    """
+    selected = (tone or "neutral").strip().lower()
+    if selected not in _TONE_DIRECTIONS:
+        selected = "neutral"
+    if not (text or "").strip() or params.model_id != "inworld-tts-2":
+        return text
+    direction = _TONE_DIRECTIONS[selected]
+    if params.language.lower().split("-")[0] == "it":
+        direction += ". Use natural Italian pronunciation, stress and phrasing"
+    directed = f"[{direction}] {text}"
+    # The provider limit includes the instructions and counts UTF-16 units.
+    # Preserve a long existing request rather than truncate it or make it fail.
+    applied = len(directed.encode("utf-16-le")) // 2 <= 2000
+    logger.log(
+        logging.INFO if applied else logging.WARNING,
+        "[OLLENYA_TTS_DIRECTION] request=%s version=1 tone=%s model=%s "
+        "language=%s steering=%s reason=%s",
+        request_id, selected, params.model_id, params.language,
+        "applied" if applied else "omitted",
+        "tone_mapping" if applied else "text_limit",
+    )
+    return directed if applied else text
 
 
 class InworldVoiceNotAvailable(_ad.InworldTTSError):
@@ -97,6 +141,7 @@ async def generate_non_streaming(
 
     event_id = str(uuid.uuid4())
     params = _ad.DEFAULT_VOICE_PARAMS
+    synthesis_text = _directed_text(text, tone, params, event_id)
 
     # === SYNTHESIS CONTEXT (Fabio 2026-11-04) ===========================
     # Dietro flag INWORLD_SEND_CONTEXT=1. Legge dal buffer per-utente gli
@@ -118,15 +163,17 @@ async def generate_non_streaming(
 
     try:
         res = await _ad.synthesize_non_streaming(
-            text,
+            synthesis_text,
             params,
             previous_requests=prev_requests_for_payload,
+            user_id=user_id,
         )
     except _ad.InworldTTSError as e:
         # Record tentativo fallito. Se è un timeout o un'auth error,
         # l'addebito è incerto → chars_billed=None, billable=True
         # (potenzialmente fatturato), estimated_cost su chars_sent.
-        chars_sent = len(text or "")
+        chars_sent = len(synthesis_text or "")
+        submitted = not isinstance(e, _ad.InworldTTSQueueError)
         await _ev.record_tts_event(db, _ev.KodaTTSEvent(
             event_id=event_id,
             user_id=user_id,
@@ -143,8 +190,8 @@ async def generate_non_streaming(
             chars_sent=chars_sent,
             chars_billed=None,
             rate_per_1m_chars_usd=_ad._rate_per_1m_usd(),
-            estimated_cost_usd=_ad._estimate_cost_usd(chars_sent),
-            billable=True,  # addebito incerto, non assumiamo zero
+            estimated_cost_usd=_ad._estimate_cost_usd(chars_sent) if submitted else 0.0,
+            billable=submitted,  # local queue rejection never reached Inworld
             api_duration_ms=0,
             first_chunk_ms=None,
             audio_duration_ms=None,
@@ -259,19 +306,21 @@ async def stream_mp3(
 
     event_id = str(uuid.uuid4())
     params = _ad.DEFAULT_VOICE_PARAMS
-    stream_result = _ad.InworldStreamResult(chars_sent=len(text or ""))
+    synthesis_text = _directed_text(text, tone, params, event_id)
+    stream_result = _ad.InworldStreamResult(chars_sent=len(synthesis_text or ""))
     audio_accum = bytearray()  # per stima durata audio alla fine
     cancelled = False
     error_class: Optional[str] = None
     error_msg: Optional[str] = None
 
     try:
-        async for chunk in _ad.stream_synthesize(
-            text, params, result_out=stream_result
-        ):
-            audio_accum.extend(chunk)
-            yield chunk
-    except asyncio.CancelledError:
+        async with aclosing(_ad.stream_synthesize(
+            synthesis_text, params, result_out=stream_result, user_id=user_id
+        )) as upstream:
+            async for chunk in upstream:
+                audio_accum.extend(chunk)
+                yield chunk
+    except (asyncio.CancelledError, GeneratorExit):
         cancelled = True
         raise
     except _ad.InworldTTSError as e:
@@ -310,8 +359,11 @@ async def stream_mp3(
                 chars_sent=stream_result.chars_sent,
                 chars_billed=stream_result.chars_billed,
                 rate_per_1m_chars_usd=_ad._rate_per_1m_usd(),
-                estimated_cost_usd=_ad._estimate_cost_usd(chars_for_cost),
-                billable=True,
+                estimated_cost_usd=(
+                    _ad._estimate_cost_usd(chars_for_cost)
+                    if stream_result.upstream_started else 0.0
+                ),
+                billable=stream_result.upstream_started,
                 api_duration_ms=stream_result.api_duration_ms,
                 first_chunk_ms=stream_result.first_chunk_ms,
                 audio_duration_ms=audio_dur_ms,

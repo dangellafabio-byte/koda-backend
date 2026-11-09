@@ -49,6 +49,8 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 import httpx
+from contextlib import asynccontextmanager
+import inworld_concurrency as _concurrency
 
 
 # =============================================================================
@@ -166,6 +168,19 @@ class InworldTTSRateLimitError(InworldTTSError):
     """Rate limit upstream (HTTP 429)."""
 
 
+class InworldTTSQueueError(InworldTTSError):
+    """Local admission failed; no request was sent or billed upstream."""
+
+
+@asynccontextmanager
+async def _generation_slot(user_id):
+    try:
+        async with _concurrency.QUEUE.slot(user_id):
+            yield
+    except _concurrency.QueueUnavailable as error:
+        raise InworldTTSQueueError(str(error)) from error
+
+
 class InworldTTSBadResponseError(InworldTTSError):
     """Risposta malformata (JSON mancante, audioContent assente,
     NDJSON non parsabile)."""
@@ -211,6 +226,7 @@ class InworldStreamResult:
     request_id: Optional[str] = None
     http_status: Optional[int] = None
     estimated_cost_usd: float = 0.0
+    upstream_started: bool = False
     cancelled: bool = False
     error: Optional[str] = None  # messaggio succinto, nessun contenuto testo
 
@@ -324,6 +340,7 @@ async def synthesize_non_streaming(
     *,
     timeout_s: float = DEFAULT_NON_STREAM_TIMEOUT_S,
     previous_requests: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
 ) -> InworldSynthesisResult:
     """Chiamata TTS Inworld non-streaming. Un single-shot, 0 retry.
 
@@ -355,12 +372,13 @@ async def synthesize_non_streaming(
 
     t0 = time.perf_counter()
     try:
-        async with httpx.AsyncClient(timeout=timeout_s) as client:
-            resp = await client.post(
-                INWORLD_ENDPOINT_NON_STREAMING,
-                headers=_auth_headers(api_key),
-                content=json.dumps(payload).encode("utf-8"),
-            )
+        async with _generation_slot(user_id):
+            async with httpx.AsyncClient(timeout=timeout_s) as client:
+                resp = await client.post(
+                    INWORLD_ENDPOINT_NON_STREAMING,
+                    headers=_auth_headers(api_key),
+                    content=json.dumps(payload).encode("utf-8"),
+                )
     except httpx.TimeoutException as e:
         raise InworldTTSTimeoutError(f"timeout dopo {timeout_s}s") from e
     except httpx.HTTPError as e:
@@ -430,6 +448,7 @@ async def stream_synthesize(
     *,
     total_timeout_s: float = DEFAULT_STREAM_TOTAL_TIMEOUT_S,
     result_out: Optional[InworldStreamResult] = None,
+    user_id: Optional[str] = None,
 ) -> AsyncIterator[bytes]:
     """Async generator di bytes **MP3 puri** (NO NDJSON, NO Base64).
 
@@ -467,104 +486,106 @@ async def stream_synthesize(
     first_chunk_time: Optional[float] = None
 
     try:
-        async with httpx.AsyncClient(timeout=total_timeout_s) as client:
-            async with client.stream(
-                "POST",
-                INWORLD_ENDPOINT_STREAMING,
-                headers=_auth_headers(api_key),
-                content=json.dumps(payload).encode("utf-8"),
-            ) as resp:
-                result_out.http_status = resp.status_code
-                result_out.request_id = (
-                    resp.headers.get("x-inworld-request-id")
-                    or resp.headers.get("x-request-id")
-                )
-
-                if resp.status_code == 401 or resp.status_code == 403:
-                    raise InworldTTSAuthError(
-                        f"auth refused: HTTP {resp.status_code}"
-                    )
-                if resp.status_code == 429:
-                    raise InworldTTSRateLimitError(
-                        f"rate limited: HTTP 429 req_id="
-                        f"{result_out.request_id or '?'}"
-                    )
-                if resp.status_code >= 400:
-                    raise InworldTTSError(
-                        f"upstream HTTP {resp.status_code} "
-                        f"req_id={result_out.request_id or '?'}"
+        async with _generation_slot(user_id):
+            async with httpx.AsyncClient(timeout=total_timeout_s) as client:
+                result_out.upstream_started = True
+                async with client.stream(
+                    "POST",
+                    INWORLD_ENDPOINT_STREAMING,
+                    headers=_auth_headers(api_key),
+                    content=json.dumps(payload).encode("utf-8"),
+                ) as resp:
+                    result_out.http_status = resp.status_code
+                    result_out.request_id = (
+                        resp.headers.get("x-inworld-request-id")
+                        or resp.headers.get("x-request-id")
                     )
 
-                # NDJSON parsing: ogni linea è un JSON separato con
-                # ``{"result": {"audioContent": "<base64>"}}`` oppure
-                # ``{"audioContent": "<base64>"}`` + eventuale ``usage``
-                # nell'ultimo frame.
-                buf = b""
-                async for raw in resp.aiter_bytes():
-                    if not raw:
-                        continue
-                    buf += raw
-                    while True:
-                        nl = buf.find(b"\n")
-                        if nl < 0:
-                            break
-                        line = buf[:nl].strip()
-                        buf = buf[nl + 1:]
-                        if not line:
-                            continue
-                        try:
-                            frame = json.loads(line.decode("utf-8"))
-                        except Exception:
-                            # linea malformata → skip ma non abortire:
-                            # Inworld può emettere pulse/keepalive
-                            continue
-                        # Estrai audioContent da entrambe le forme
-                        audio_b64 = (
-                            frame.get("audioContent")
-                            or (frame.get("result") or {}).get("audioContent")
-                            or ""
+                    if resp.status_code == 401 or resp.status_code == 403:
+                        raise InworldTTSAuthError(
+                            f"auth refused: HTTP {resp.status_code}"
                         )
-                        if audio_b64:
-                            try:
-                                mp3_chunk = base64.b64decode(audio_b64)
-                            except Exception:
+                    if resp.status_code == 429:
+                        raise InworldTTSRateLimitError(
+                            f"rate limited: HTTP 429 req_id="
+                            f"{result_out.request_id or '?'}"
+                        )
+                    if resp.status_code >= 400:
+                        raise InworldTTSError(
+                            f"upstream HTTP {resp.status_code} "
+                            f"req_id={result_out.request_id or '?'}"
+                        )
+
+                    # NDJSON parsing: ogni linea è un JSON separato con
+                    # ``{"result": {"audioContent": "<base64>"}}`` oppure
+                    # ``{"audioContent": "<base64>"}`` + eventuale ``usage``
+                    # nell'ultimo frame.
+                    buf = b""
+                    async for raw in resp.aiter_bytes():
+                        if not raw:
+                            continue
+                        buf += raw
+                        while True:
+                            nl = buf.find(b"\n")
+                            if nl < 0:
+                                break
+                            line = buf[:nl].strip()
+                            buf = buf[nl + 1:]
+                            if not line:
                                 continue
-                            if mp3_chunk:
-                                if first_chunk_time is None:
-                                    first_chunk_time = time.perf_counter()
-                                    result_out.first_chunk_ms = int(
-                                        (first_chunk_time - t0) * 1000
-                                    )
-                                result_out.audio_bytes_total += len(mp3_chunk)
-                                result_out.chunks_count += 1
-                                yield mp3_chunk
-                        # usage può arrivare nell'ultimo frame
-                        billed = _extract_billed_chars(frame)
-                        if billed is not None:
-                            result_out.chars_billed = billed
-                # Flush buffer finale (se Inworld non manda newline finale)
-                tail = buf.strip()
-                if tail:
-                    try:
-                        frame = json.loads(tail.decode("utf-8"))
-                        audio_b64 = (
-                            frame.get("audioContent")
-                            or (frame.get("result") or {}).get("audioContent")
-                            or ""
-                        )
-                        if audio_b64:
-                            mp3_chunk = base64.b64decode(audio_b64)
-                            if mp3_chunk:
-                                result_out.audio_bytes_total += len(mp3_chunk)
-                                result_out.chunks_count += 1
-                                yield mp3_chunk
-                        billed = _extract_billed_chars(frame)
-                        if billed is not None:
-                            result_out.chars_billed = billed
-                    except Exception:
-                        pass
-    except asyncio.CancelledError:
-        # Consumer ha cancellato lo stream → telemetria "cancelled"
+                            try:
+                                frame = json.loads(line.decode("utf-8"))
+                            except Exception:
+                                # linea malformata → skip ma non abortire:
+                                # Inworld può emettere pulse/keepalive
+                                continue
+                            # Estrai audioContent da entrambe le forme
+                            audio_b64 = (
+                                frame.get("audioContent")
+                                or (frame.get("result") or {}).get("audioContent")
+                                or ""
+                            )
+                            if audio_b64:
+                                try:
+                                    mp3_chunk = base64.b64decode(audio_b64)
+                                except Exception:
+                                    continue
+                                if mp3_chunk:
+                                    if first_chunk_time is None:
+                                        first_chunk_time = time.perf_counter()
+                                        result_out.first_chunk_ms = int(
+                                            (first_chunk_time - t0) * 1000
+                                        )
+                                    result_out.audio_bytes_total += len(mp3_chunk)
+                                    result_out.chunks_count += 1
+                                    yield mp3_chunk
+                            # usage può arrivare nell'ultimo frame
+                            billed = _extract_billed_chars(frame)
+                            if billed is not None:
+                                result_out.chars_billed = billed
+                    # Flush buffer finale (se Inworld non manda newline finale)
+                    tail = buf.strip()
+                    if tail:
+                        try:
+                            frame = json.loads(tail.decode("utf-8"))
+                            audio_b64 = (
+                                frame.get("audioContent")
+                                or (frame.get("result") or {}).get("audioContent")
+                                or ""
+                            )
+                            if audio_b64:
+                                mp3_chunk = base64.b64decode(audio_b64)
+                                if mp3_chunk:
+                                    result_out.audio_bytes_total += len(mp3_chunk)
+                                    result_out.chunks_count += 1
+                                    yield mp3_chunk
+                            billed = _extract_billed_chars(frame)
+                            if billed is not None:
+                                result_out.chars_billed = billed
+                        except Exception:
+                            pass
+    except (asyncio.CancelledError, GeneratorExit):
+        # Consumer ha cancellato o chiuso lo stream → telemetria "cancelled"
         result_out.cancelled = True
         result_out.api_duration_ms = int((time.perf_counter() - t0) * 1000)
         chars_for_cost = (
@@ -622,4 +643,7 @@ def health_check_config() -> dict:
         "rate_per_1m_chars_usd": _rate_per_1m_usd(),
         "non_stream_timeout_s": DEFAULT_NON_STREAM_TIMEOUT_S,
         "stream_total_timeout_s": DEFAULT_STREAM_TOTAL_TIMEOUT_S,
+        "tts_max_active_per_process": _concurrency.QUEUE.limit,
+        "tts_max_active_per_user": 1,
+        "tts_queue_timeout_s": _concurrency.QUEUE.wait_seconds,
     }
