@@ -38,20 +38,44 @@ import koda_tts_prefs as _prefs
 logger = logging.getLogger(__name__)
 
 
-# The approved voice's design supplies its natural speaking style.
-# Keep tone metadata for UI/telemetry, but do not translate it into stage
-# directions. Retain this helper/signature for callers and older deployments.
+# Preserve the approved voice's base character. Direct only the emotional
+# intent, without instructions about breath, pauses, pitch or slower speech.
+_LIGHT_TONE_CUES = {
+    "concerned": "speak with attentive warmth at a natural conversational pace",
+    "calm": "speak reassuringly in a clear conversational voice",
+    "paced": "speak with attentive warmth at a natural conversational pace",
+    "energetic": "speak with joyful enthusiasm",
+    "urgent": "speak with clear urgency",
+}
+
+
 def _directed_text(
     text: str, tone: Optional[str], params, request_id: str,
     *, previous_tone: Optional[str] = None,
 ) -> str:
-    """Native voice baseline: send spoken text without added performance tags."""
+    """Keep ordinary delivery native; use one brief cue when tone changes."""
+    selected = (tone or "neutral").strip().lower()
+    previous = (previous_tone or "").strip().lower()
+    cue = _LIGHT_TONE_CUES.get(selected)
+    if previous in {"concerned", "calm", "paced"} and selected == "energetic":
+        cue = "speak with a gently brightening, pleased tone"
+    elif previous == "energetic" and selected in {"concerned", "calm", "paced"}:
+        cue = "ease into attentive warmth at a natural conversational pace"
+    # Concerned always means mild warmth, including directly after joy.
+    # No separate 'sad performance', and no progressive slowing across turns.
+    if params.model_id != "inworld-tts-2" or not (text or "").strip():
+        cue = None
+    directed = f"[{cue}] {text}" if cue else text
+    if len((directed or "").encode("utf-16-le")) // 2 > 2000:
+        directed = text  # preserve words rather than truncate for a cue
+        cue = None
     logger.info(
-        "[OLLENYA_TTS_DIRECTION] request=%s version=3 model=%s language=%s "
-        "steering=disabled reason=native_voice_baseline",
-        request_id, params.model_id, params.language,
+        "[OLLENYA_TTS_DIRECTION] request=%s version=5 model=%s language=%s "
+        "tone=%s steering=%s reason=light_intent_only",
+        request_id, params.model_id, params.language, selected,
+        "light" if cue else "native",
     )
-    return text
+    return directed
 
 
 class InworldVoiceNotAvailable(_ad.InworldTTSError):

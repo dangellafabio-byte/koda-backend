@@ -78,18 +78,21 @@ DEFAULT_STREAM_TOTAL_TIMEOUT_S = 120.0
 class InworldVoiceParams:
     """Parametri vocali Inworld — immutabili per request.
 
-    Default: voce approvata da Fabio nel Playground il 2026-11-09
-    (``vivid-feather-7719__design-voice-5b1e4d68``, ``it-IT``, rate 1.05,
+    Default: voce approvata da Fabio nel Playground il 2026-11-10
+    (``vivid-feather-7719__design-voice-12d0f668``, ``it-IT``, rate 1.05,
     delivery ``CREATIVE``).
     """
 
-    voice_id: str = "vivid-feather-7719__design-voice-5b1e4d68"
+    voice_id: str = "vivid-feather-7719__design-voice-12d0f668"
     language: str = "it-IT"
     speaking_rate: float = 1.05
     delivery_mode: str = "CREATIVE"  # CREATIVE | EXPRESSIVE | STANDARD | CALM | NEUTRAL
     # TTS-2 standard: supporta le istruzioni espressive; Flash le ignora.
     model_id: str = "inworld-tts-2"
     audio_encoding: str = "MP3"
+    # Automatic delivery direction did not meet the listening target.
+    # Keep it opt-in; use the dispatcher's minimal, calibrated tone cues.
+    reasoning_enabled: bool = False
 
     def to_payload(
         self,
@@ -120,14 +123,18 @@ class InworldVoiceParams:
             "modelId": self.model_id,
             "voiceId": self.voice_id,
             "language": self.language,
-            "speakingRate": self.speaking_rate,
             "deliveryMode": self.delivery_mode,
-            "audioConfig": {"audioEncoding": self.audio_encoding},
+            "audioConfig": {
+                "audioEncoding": self.audio_encoding,
+                "speakingRate": self.speaking_rate,
+            },
         }
         # Apply saved workspace pronunciations (when present) in the app too.
         # Language remains explicit; this does not invent dictionary entries.
         if self.model_id == "inworld-tts-2":
             payload["enableCustomPronunciation"] = True
+            if self.reasoning_enabled:
+                payload["synthesisContext"] = {"reasoning": "REASONING_ON"}
         if previous_requests:
             # Sanity check: rispettiamo i limiti documentati, non li
             # ridimensioniamo silenziosamente. Chi passa più di 5 o
@@ -146,9 +153,9 @@ class InworldVoiceParams:
                     f"synthesisContext.previousRequests: max 2000 char "
                     f"combinati (ricevuti {total_chars})"
                 )
-            payload["synthesisContext"] = {
-                "previousRequests": [{"text": t} for t in previous_requests],
-            }
+            payload.setdefault("synthesisContext", {})["previousRequests"] = [
+                {"text": t} for t in previous_requests
+            ]
         return payload
 
 
@@ -643,6 +650,10 @@ def health_check_config() -> dict:
         "default_speaking_rate": DEFAULT_VOICE_PARAMS.speaking_rate,
         "default_delivery_mode": DEFAULT_VOICE_PARAMS.delivery_mode,
         "default_model_id": DEFAULT_VOICE_PARAMS.model_id,
+        "delivery_reasoning_enabled": (
+            DEFAULT_VOICE_PARAMS.model_id == "inworld-tts-2"
+            and DEFAULT_VOICE_PARAMS.reasoning_enabled
+        ),
         "rate_per_1m_chars_usd": _rate_per_1m_usd(),
         "non_stream_timeout_s": DEFAULT_NON_STREAM_TIMEOUT_S,
         "stream_total_timeout_s": DEFAULT_STREAM_TOTAL_TIMEOUT_S,
