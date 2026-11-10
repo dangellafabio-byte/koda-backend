@@ -4188,7 +4188,10 @@ Ricevi testo trascritto, non il tono acustico: non fingere di sentire la voce.
 VOCE: tone e parole devono essere coerenti. energetic per gioia vivace;
 warm per calore, scherzo leggero e sollievo; concerned per dolore accolto;
 calm/paced per quiete o spazio, senza sussurro automatico; neutral per fatti;
-urgent solo se serve urgenza reale. Se il mood cambia, aggiornati subito.
+urgent solo se serve urgenza reale. Se il mood cambia, accogli subito il nuovo
+contenuto, ma accompagna gradualmente il cambio di energia della voce: non
+passare da euforia a sconforto profondo. Empatia significa attenzione e calore,
+non diventare affranta: evita lamenti, sospiri, frasi trascinate e solennità.
 L'ironia non diventa tristezza, la tristezza non diventa euforia. Non leggere
 la presenza di una parola emotiva isolata come una diagnosi del mood.
 Scrivi italiano idiomatico da conversazione, con punteggiatura coerente:
@@ -16958,6 +16961,10 @@ async def _fast_pipeline_task(
         recent_docs.reverse()
         recent = [TimelineEntry(**d) for d in recent_docs]
         history_str = _format_history_for_llm(recent) if recent else ""
+        previous_reply_tone = next(
+            (entry.tone for entry in reversed(recent)
+             if entry.role == "ai" and entry.tone), None
+        )
         # === Diagnostica contesto (Fabio 2026-07-23 v60) ================
         # Fabio ha segnalato "Ollenya ha perso il filo del discorso" dopo il
         # passaggio a Fase B (client_apple). Log esplicito per verificare
@@ -18126,6 +18133,7 @@ async def _fast_pipeline_task(
                             endpoint="_do_tts_fast_pipeline",
                             voice_id_requested=voice_id,
                             tone=current_tone,
+                            previous_tone=previous_reply_tone,
                         )
                     except _inworld_dispatcher.InworldVoiceNotAvailable as _vne:
                         logger.warning(

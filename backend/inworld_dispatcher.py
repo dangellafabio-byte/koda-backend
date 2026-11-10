@@ -43,16 +43,19 @@ logger = logging.getLogger(__name__)
 # Keep the approved voice, model, locale and base rate; direct delivery only.
 _TONE_DIRECTIONS = {
     "warm": "Speak warmly and conversationally, with natural pitch variation and relaxed phrasing",
-    "calm": "Speak calmly and reassuringly, with relaxed energy and gentle, measured phrasing",
-    "concerned": "Speak with sincere, gentle empathy, restrained energy and unhurried pauses, without theatrical sadness",
+    "calm": "Speak calmly and reassuringly at a natural conversational pace, with a clear, supported voice",
+    "concerned": "Speak with sincere, gentle empathy at a normal conversational pace, with a warm, clear, supported voice; convey care rather than personal sadness",
     "energetic": "Speak with an unmistakable burst of joyful excitement, a broad expressive pitch range, bright energy and animated phrasing, as a close friend celebrating wonderful news",
     "urgent": "Speak with clear, focused urgency, firm articulation and purposeful pacing, without shouting",
     "neutral": "Speak naturally and conversationally, with clear articulation and natural sentence intonation",
-    "paced": "Speak with deliberate, clear phrasing and short natural pauses between ideas",
+    "paced": "Speak with clear conversational phrasing and brief pauses between ideas, keeping a natural pace within each phrase",
 }
 
 
-def _directed_text(text: str, tone: Optional[str], params, request_id: str) -> str:
+def _directed_text(
+    text: str, tone: Optional[str], params, request_id: str,
+    *, previous_tone: Optional[str] = None,
+) -> str:
     """Translate trusted tone metadata into native TTS-2 steering.
 
     Do not turn blank input into speech, inject arbitrary metadata as a tag,
@@ -64,6 +67,28 @@ def _directed_text(text: str, tone: Optional[str], params, request_id: str) -> s
     if not (text or "").strip() or params.model_id != "inworld-tts-2":
         return text
     direction = _TONE_DIRECTIONS[selected]
+    # The caller supplies the preceding AI turn's tone from conversation
+    # history. It stays identical for every audio segment in the current turn.
+    # No mutable per-user state: no races, cross-user leakage or worker drift.
+    previous = (previous_tone or "").strip().lower()
+    transition = "none"
+    if previous == "energetic" and selected in {"concerned", "calm", "paced"}:
+        transition = "ease_down"
+        direction = (
+            "Respond with caring attention immediately, but ease the vocal energy "
+            "down gently from the previous upbeat delivery. Stay conversational "
+            "and moderately warm, with normal pacing and a clear supported voice; "
+            "do not jump to a mournful or deeply subdued performance"
+        )
+    elif previous in {"concerned", "calm", "paced"} and selected == "energetic":
+        transition = "ease_up"
+        direction = (
+            "Let genuine joy emerge with bright, lively intonation. Raise vocal "
+            "energy gently from the previous quiet delivery, growing warmer and "
+            "more animated rather than starting with a sudden explosive exclamation"
+        )
+    if selected in {"concerned", "calm", "paced"}:
+        direction += "; no audible sighs, whispering, breathy delivery or drawn-out syllables"
     if params.language.lower().split("-")[0] == "it":
         direction += (
             ". Use idiomatic Italian pronunciation and lexical stress. "
@@ -77,11 +102,12 @@ def _directed_text(text: str, tone: Optional[str], params, request_id: str) -> s
     applied = len(directed.encode("utf-16-le")) // 2 <= 2000
     logger.log(
         logging.INFO if applied else logging.WARNING,
-        "[OLLENYA_TTS_DIRECTION] request=%s version=1 tone=%s model=%s "
-        "language=%s steering=%s reason=%s",
+        "[OLLENYA_TTS_DIRECTION] request=%s version=2 tone=%s model=%s "
+        "language=%s steering=%s reason=%s transition=%s",
         request_id, selected, params.model_id, params.language,
         "applied" if applied else "omitted",
         "tone_mapping" if applied else "text_limit",
+        transition,
     )
     return directed if applied else text
 
@@ -101,6 +127,7 @@ async def generate_non_streaming(
     endpoint: str,
     voice_id_requested: Optional[str] = None,
     tone: Optional[str] = None,
+    previous_tone: Optional[str] = None,
 ) -> bytes:
     """Genera MP3 bytes completi via Inworld. Registra telemetria."""
     # Guard voce Vento (non implementata in Inworld fase 1)
@@ -146,7 +173,7 @@ async def generate_non_streaming(
 
     event_id = str(uuid.uuid4())
     params = _ad.DEFAULT_VOICE_PARAMS
-    synthesis_text = _directed_text(text, tone, params, event_id)
+    synthesis_text = _directed_text(text, tone, params, event_id, previous_tone=previous_tone)
 
     # === SYNTHESIS CONTEXT (Fabio 2026-11-04) ===========================
     # Dietro flag INWORLD_SEND_CONTEXT=1. Legge dal buffer per-utente gli
@@ -269,6 +296,7 @@ async def stream_mp3(
     endpoint: str,
     voice_id_requested: Optional[str] = None,
     tone: Optional[str] = None,
+    previous_tone: Optional[str] = None,
 ) -> AsyncIterator[bytes]:
     """Yielda bytes MP3 puri. Registra telemetria al termine (ok/cancel/error)."""
     if _prefs.is_vento_voice(voice_id_requested):
@@ -311,7 +339,7 @@ async def stream_mp3(
 
     event_id = str(uuid.uuid4())
     params = _ad.DEFAULT_VOICE_PARAMS
-    synthesis_text = _directed_text(text, tone, params, event_id)
+    synthesis_text = _directed_text(text, tone, params, event_id, previous_tone=previous_tone)
     stream_result = _ad.InworldStreamResult(chars_sent=len(synthesis_text or ""))
     audio_accum = bytearray()  # per stima durata audio alla fine
     cancelled = False
