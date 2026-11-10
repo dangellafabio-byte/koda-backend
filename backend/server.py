@@ -18200,7 +18200,9 @@ async def _fast_pipeline_task(
                 # arrivavano tutti a -16). Ora chunk 0 stabilisce il riferimento
                 # naturale del turno, chunk 1+ vengono allineati SOLO a QUELLO.
                 # Turni diversi mantengono livelli naturali diversi.
-                if audio_bytes:
+                # Preserve the approved Inworld output unchanged. Relative
+                # loudness normalization remains on the ElevenLabs path only.
+                if audio_bytes and _tts_segment_provider != "inworld":
                     _t_norm = time.time()
                     audio_bytes = await asyncio.to_thread(
                         _normalize_chunk_relative, audio_bytes, turn_loudness_ref,
