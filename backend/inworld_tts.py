@@ -124,6 +124,10 @@ class InworldVoiceParams:
             "deliveryMode": self.delivery_mode,
             "audioConfig": {"audioEncoding": self.audio_encoding},
         }
+        # Apply saved workspace pronunciations (when present) in the app too.
+        # Language remains explicit; this does not invent dictionary entries.
+        if self.model_id == "inworld-tts-2":
+            payload["enableCustomPronunciation"] = True
         if previous_requests:
             # Sanity check: rispettiamo i limiti documentati, non li
             # ridimensioniamo silenziosamente. Chi passa più di 5 o

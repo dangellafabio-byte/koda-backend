@@ -65,7 +65,12 @@ def _directed_text(text: str, tone: Optional[str], params, request_id: str) -> s
         return text
     direction = _TONE_DIRECTIONS[selected]
     if params.language.lower().split("-")[0] == "it":
-        direction += ". Use natural Italian pronunciation, stress and phrasing"
+        direction += (
+            ". Use idiomatic Italian pronunciation and lexical stress. "
+            "Follow the meaning and punctuation: keep unfinished clauses open, "
+            "resolve completed thoughts naturally, and use Italian question "
+            "intonation only for genuine questions. Avoid a repetitive sing-song contour"
+        )
     directed = f"[{direction}] {text}"
     # The provider limit includes the instructions and counts UTF-16 units.
     # Preserve a long existing request rather than truncate it or make it fail.
