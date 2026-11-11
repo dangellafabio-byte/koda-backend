@@ -2435,6 +2435,7 @@ export async function voiceStreamConverse(opts: {
       // status torna idle, e HF_LOOP può ripartire per un nuovo tentativo
       // (comportamento simile a iPhone "non ti ho sentito" → retry).
       if (msg === "no_speech") {
+        if (Platform.OS === "android") pipelineError = "android_no_speech";
         console.log("[OLLENYA_STREAM_CLIENT] no_speech from client — graceful close (no error)");
         pipelineDone = true;
         notify();

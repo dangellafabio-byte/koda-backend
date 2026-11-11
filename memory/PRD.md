@@ -182,3 +182,30 @@ Verifica: `python frontend/scripts/verify_mobile_source.py` → PASS
 Build tag: `build-v70.2-honor-diag-resume` presente nella costante OLLENYA_BUILD_SHORT_TAG (index.tsx:529) e passato al prop `buildTag` in Settings (index.tsx:7561).
 App carica correttamente in preview.
 Status: codice pronto per build Android Honor. Bug Honor da verificare sul dispositivo dopo install.
+
+## 2026-11-11 — Pacchetto v70.3-android-utterance applicato
+Backup: /tmp/ollenya-backup-v703-20261111-191644
+Applicati 9 artefatti:
+- frontend/app/index.tsx (build-v70.3-android-utterance)
+- frontend/lib/speech.ts
+- frontend/lib/voiceClientStt.ts (emette "v70.3 continuous=X endpoint=3000ms" al start)
+- frontend/lib/androidUtterance.ts (NUOVO — accumula segmenti finali + parziale, endpoint 3000ms, continuous=true su Android)
+- frontend/lib/diagLogger.ts
+- frontend/mobile-source-manifest.json
+- frontend/scripts/verify_mobile_source.py
+- frontend/scripts/test-android-utterance.cjs (NUOVO)
+- frontend/scripts/test-resume-recovery.cjs (NUOVO)
+Test:
+- verify_mobile_source.py → PASS (build-v70.3-android-utterance)
+- test-android-utterance.cjs → PASS (native session handlers, segmented speech, pause, readiness, cancellation, early end, iOS)
+- test-resume-recovery.cjs → PASS (resume recovery, flicker guard, stale fetch, old reply, abort wake-up)
+Lint pulito su androidUtterance.ts, voiceClientStt.ts, diagLogger.ts.
+App carica in preview.
+Fix principali (da istruzioni sviluppatore):
+- Android: continuous=true; final nativo NON chiude turno; invio unico dopo 3000ms endpoint
+- iOS: comportamento invariato (invia sul final nativo)
+- End prematuro → errore esplicito + pausa HF, niente retry a raffica
+- Stop durante 80ms pre-reset non riavvia mic
+- Readiness da evento nativo "start", non dal return di start()
+- Recupero Thinking + cattura log [OLLENYA_*] conservati
+Status: pronto per build Android. Prova Honor ancora da fare sul dispositivo.

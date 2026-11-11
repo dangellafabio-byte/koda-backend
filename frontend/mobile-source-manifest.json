@@ -1,12 +1,13 @@
 {
-  "source_base": "f23393cc7b18ce2f34e82da0bc7117974b6fe02f",
-  "build_tag": "build-v70.2-honor-diag-resume",
+  "source_base": "d83e96543d298529b906177372b3a64b5e059de5",
+  "build_tag": "build-v70.3-android-utterance",
   "files": {
-    "frontend/app/index.tsx": "064f074793fb7fc953a46121d99091cf6f5dd52c914f97f1b4d8a33ce5c03710",
-    "frontend/lib/speech.ts": "38a6ff7c5c5f371e6c220eb934ec1603a1c7e065cb43f4ed42d135551c748c75",
-    "frontend/lib/voiceClientStt.ts": "b9ab3364af48b0b046c680040cddc77146157de5ccaaedd2f35e02da5a20dc2b",
+    "frontend/app/index.tsx": "eab7f86b8e27ff1f78a319b7abe711d1bd1bd3f78e43057f205a60866f305db6",
+    "frontend/lib/speech.ts": "cfa0240c528f7eb01f8dba0840f8724095f15bee2bfd9cf41dc94d01dc5c98f2",
+    "frontend/lib/voiceClientStt.ts": "18e902478628a826f8f3ea31e90dcb44ee9ac5200faa63e500312eae4da1f46d",
+    "frontend/lib/androidUtterance.ts": "1c0c2e9eb08051ad0d7960e3547bdfcf2b5361b0b8cb454ac0d8eb9d58f2ecbc",
     "frontend/lib/diagLogger.ts": "c883fa5b7203dfb16da56b05aac29bebadd2c838eedb1247e68a9806e138af6f"
   },
   "status": "prepared_locally_not_synced_not_built",
-  "verification": "Syntax checks and mocked lifecycle checks only; Honor microphone not device-tested."
+  "verification": "Native handlers tested with mocked recognizer and fake clock. No Honor device test."
 }

@@ -70,6 +70,7 @@ import {
 } from "./voiceStream";
 import { kodaBackendWsUrl } from "./backendUrl";
 import { getAuthToken } from "./authToken";
+import { AndroidUtterance } from "./androidUtterance";
 
 const TAG = "KODA_CLIENT_STT";
 
@@ -142,6 +143,8 @@ export class VoiceClientSttSession {
   private subError: { remove: () => void } | null = null;
   private subEnd: { remove: () => void } | null = null;
   private subSpeechStart: { remove: () => void } | null = null;
+  private subRecognitionStart: { remove: () => void } | null = null;
+  private recognitionStarted = false;
 
   // === FIX 2026-07-26 v64.0 — Watchdog Android mic silent-fail ===
   // Su Google SpeechRecognizer (Android), specialmente al 2° turno,
@@ -161,6 +164,7 @@ export class VoiceClientSttSession {
   // finita per "utente ha finito di parlare" o "utente ha taciuto".
   // Ora traccciamo il flag così `end` può fare graceful close.
   private noSpeechReceived = false;
+  private androidUtterance: AndroidUtterance | null = null;
 
   // Route audio (rilevata prima di start)
   private audioRoute: "bluetooth" | "wired" | "builtin" | "unknown" = "unknown";
@@ -486,7 +490,7 @@ export class VoiceClientSttSession {
 
   private async startRecognition(profileLang: string): Promise<void> {
     const lang = profileLang === "it" ? "it-IT" : profileLang;
-    console.log(`[${TAG}] startRecognition lang=${lang} ondevice=true`);
+    console.log(`[${TAG}] startRecognition lang=${lang} platform=${Platform.OS} requiresOnDevice=${Platform.OS === "ios"}`);
 
     // === FIX 2026-07-26 v64.0 — Pre-abort Android reset ===
     // Su Google SpeechRecognizer (Android), specialmente sui turni
@@ -507,15 +511,35 @@ export class VoiceClientSttSession {
       } catch {}
       await new Promise((r) => setTimeout(r, 80));
     }
+    if (this.stopRequested || this.doneReceived || this.dispatched) return;
+    if (Platform.OS === "android") {
+      this.androidUtterance = new AndroidUtterance((text) => {
+        if (this.stopRequested || this.doneReceived || this.dispatched) return;
+        this.currentTranscript = text;
+        console.log("[OLLENYA_ANDROID_ENDPOINT] quiet interval complete → dispatch once");
+        this.dispatchFinalToBackend().catch((e: any) =>
+          console.log(`[${TAG}] dispatchFinal error: ${e?.message || e}`));
+      });
+    }
     // Reset watchdog state
     this.speechStartReceived = false;
     // Reset no-speech flag (v64.1)
     this.noSpeechReceived = false;
+    this.recognitionStarted = false;
 
     // Registra listeners prima di start()
+    this.subRecognitionStart = ExpoSpeechRecognitionModule.addListener("start", () => {
+      if (this.stopRequested || this.doneReceived || this.dispatched) return;
+      this.recognitionStarted = true;
+      if (this.micWatchdogTimer) clearTimeout(this.micWatchdogTimer);
+      this.micWatchdogTimer = null;
+      console.log("[OLLENYA_ANDROID_ENDPOINT] recognizer ready");
+      this.callbacks.onRecognitionActive?.();
+    });
     this.subSpeechStart = ExpoSpeechRecognitionModule.addListener(
       "speechstart",
       () => {
+        this.androidUtterance?.speechStarted();
         this.speechStartMs = Date.now();
         this.speechStartReceived = true;
         if (this.micWatchdogTimer) {
@@ -532,18 +556,21 @@ export class VoiceClientSttSession {
         const norm = this.normalizeResult(evt);
         if (!norm) return;
         // Salva la trascrizione corrente (verrà usata sia per interim che final)
-        this.currentTranscript = norm.transcript;
+        this.currentTranscript = this.androidUtterance
+          ? this.androidUtterance.result(norm.transcript, norm.isFinal)
+          : norm.transcript;
         this.currentConfidence = norm.confidence;
 
         // Notifica interim al caller (UI live transcript)
         try {
-          this.callbacks.onInterim?.(norm.transcript, norm.isFinal);
+          this.callbacks.onInterim?.(this.currentTranscript, norm.isFinal);
         } catch {}
 
         if (norm.isFinal) {
           console.log(
             `[${TAG}] result FINAL text="${norm.transcript}" conf=${norm.confidence}`
           );
+          if (this.androidUtterance) return; // final segment, not end of user turn
           this.dispatchFinalToBackend().catch((e: any) =>
             console.log(`[VoiceClientSttSession] dispatchFinal error: ${e?.message || e}`)
           );
@@ -574,6 +601,7 @@ export class VoiceClientSttSession {
           return;
         }
         if (evt.error === "aborted") return;
+        this.androidUtterance?.cancel();
 
         // === FIX 2026-07-23 v60.4 — AudioSession recovery cycle ============
         // Fabio (23/07 post-checkpoint): il bug 560557684 (`!act`) del vecchio
@@ -618,6 +646,18 @@ export class VoiceClientSttSession {
         return;
       }
       console.log(`[${TAG}] end event (noSpeech=${this.noSpeechReceived})`);
+      if (this.androidUtterance && !this.doneReceived && !this.stopRequested) {
+        if (this.androidUtterance.serviceEnded()) return;
+        // Native recognition really disconnected. Do not pretend an incomplete
+        // utterance was final and do not trigger repeated HF retries.
+        this.doneReceived = true;
+        this.notifiedUpperOnClose = true;
+        this.removeListeners();
+        this.stopKeepalive();
+        this.forceCloseWs();
+        this.callbacks.onError?.("android_recognition_ended_early");
+        return;
+      }
       // Se non abbiamo ancora inviato final ma abbiamo un transcript accumulato,
       // consideriamolo final (safety net per casi in cui iOS chiude senza
       // isFinal=true).
@@ -680,29 +720,9 @@ export class VoiceClientSttSession {
       //   `androidRecognitionServicePackage` non lo forziamo: il default
       //   di sistema (Google) è quello che vogliamo.
       //
-      // === FIX 2026-07-26 v64.1 — Beep sistema + timeout troppo corto ===
-      //
-      // PROBLEMA #1 (Fabio 26/07): Google SpeechRecognizer emette un
-      // beep di sistema all'apertura/chiusura del mic. iPhone non ce l'ha.
-      // Soluzione (documentata nel codice nativo di expo-speech-recognition,
-      // ExpoSpeechService.kt:278): usare `continuous: true` su Android 13+
-      // fa passare il modulo attraverso `EXTRA_AUDIO_SOURCE` con audio
-      // recorder custom, bypassando il beep di sistema.
-      //
-      // PROBLEMA #2: Google chiude troppo velocemente su silenzio (~2s).
-      // Se l'utente ci mette un attimo a rispondere, no-speech scatta e
-      // la sessione si blocca in "recording" senza mai finire.
-      // Soluzione: allungare le soglie via androidIntentOptions.
-      //   - EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 4000ms
-      //     (era 2000ms default) — tolleranza per pause naturali.
-      //   - EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 3000ms
-      //   - EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 500ms
-      //     (permette turni brevi tipo "sì" / "no")
-      //
-      // Nota su continuous:true: NON cambia il flow lato client — Google
-      // emette ancora `result isFinal` + `end` quando l'utente smette di
-      // parlare (grazie alle soglie qui sopra). L'unica differenza reale
-      // è il beep soppresso.
+      // Android continuous mode produces multiple final SEGMENTS. The
+      // AndroidUtterance controller above accumulates those segments and
+      // owns the conversational endpoint; native end is not a turn boundary.
       const startOpts: any = {
         lang,
         interimResults: true,
@@ -734,18 +754,9 @@ export class VoiceClientSttSession {
         };
       }
       ExpoSpeechRecognitionModule.start(startOpts);
-      console.log(`[${TAG}] ExpoSpeechRecognitionModule.start() OK (v64.1 continuous=${startOpts.continuous})`);
-      // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
-      // Segnaliamo all'upper layer che il microfono REALE è ora attivo.
-      // Da qui in poi un tap dell'utente su onBigButton è un legittimo
-      // stop. Prima di questo momento (startup async 1-2s), un tap
-      // aborterebbe la sessione prima che il mic parta → cascata
-      // Xiaomi osservata (vedi Fix A sopra).
-      try {
-        this.callbacks.onRecognitionActive?.();
-      } catch (cbErr: any) {
-        console.log(`[${TAG}] onRecognitionActive callback error (non-fatal): ${cbErr?.message || cbErr}`);
-      }
+      console.log(`[${TAG}] ExpoSpeechRecognitionModule.start() OK (v70.3 continuous=${startOpts.continuous} endpoint=3000ms)`);
+      // Readiness is reported by the native `start` event above, not by
+      // the synchronous start() invocation returning.
 
       // === FIX 2026-07-26 v64.0 — Android silent-fail watchdog ===
       // Su Android (Google SpeechRecognizer), al 2° turno la start()
@@ -765,7 +776,7 @@ export class VoiceClientSttSession {
         }
         this.micWatchdogTimer = setTimeout(() => {
           this.micWatchdogTimer = null;
-          if (this.speechStartReceived) return;
+          if (this.recognitionStarted || this.speechStartReceived) return;
           if (this.doneReceived || this.stopRequested || this.dispatched) return;
           console.log(
             `[${TAG}] MIC_WATCHDOG_TIMEOUT — speechstart never received (5s) — session zombie, propagating error`
@@ -1361,6 +1372,8 @@ export class VoiceClientSttSession {
   }
 
   private removeListeners(): void {
+    this.androidUtterance?.cancel();
+    this.androidUtterance = null;
     // === FIX 2026-07-26 v64.0 — Clear mic watchdog on teardown ===
     if (this.micWatchdogTimer) {
       clearTimeout(this.micWatchdogTimer);
@@ -1378,9 +1391,11 @@ export class VoiceClientSttSession {
     try {
       this.subSpeechStart?.remove();
     } catch {}
+    try { this.subRecognitionStart?.remove(); } catch {}
     this.subResult = null;
     this.subError = null;
     this.subEnd = null;
     this.subSpeechStart = null;
+    this.subRecognitionStart = null;
   }
 }

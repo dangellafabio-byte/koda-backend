@@ -526,7 +526,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.2-honor-diag-resume";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.3-android-utterance";
   const OLLENYA_BUILD_DATE = "2026-11-11";
   useEffect(() => {
     console.log(
@@ -3813,11 +3813,14 @@ export default function Taccuino() {
         wsFailureCountRef.current += 1;
         const failN = wsFailureCountRef.current;
         console.log(`[OLLENYA_HF_BACKOFF] WS failure #${failN}/${WS_FAIL_THRESHOLD} (err=${result.error})`);
-        if (failN >= WS_FAIL_THRESHOLD) {
+        const recognitionInterrupted = Platform.OS === "android" && /android_recognition_ended_early|android_no_speech|android_mic_silent_fail|client_stt_|aborted_pre_recognition/.test(result.error || "");
+        if (recognitionInterrupted || failN >= WS_FAIL_THRESHOLD) {
           console.log(`[OLLENYA_HF_BACKOFF] threshold reached → pausing HF loop, waiting for user tap`);
           setCloseSessionPause(true);
           closeSessionPauseRef.current = true;
-          setError("Connessione persa. Tocca il cerchio per riprovare.");
+          setError(recognitionInterrupted
+            ? "Il riconoscimento vocale si è interrotto. Tocca il cerchio per riprendere."
+            : "Connessione persa. Tocca il cerchio per riprovare.");
           setTimeout(() => setError(null), 6000);
         } else {
           setError("Connessione voce interrotta. Riprova.");
