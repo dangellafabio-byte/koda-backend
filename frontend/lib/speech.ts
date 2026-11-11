@@ -2160,6 +2160,14 @@ export async function voiceStreamConverse(opts: {
     resolveTokenWait = resolve;
   });
 
+  // A suspended socket may never send another event. Cancel must also wake
+  // the player waiting for its first sentence, not just abort HTTP/playback.
+  const onStreamAbort = () => {
+    pipelineDone = true;
+    notify();
+  };
+  ac.signal.addEventListener("abort", onStreamAbort, { once: true });
+
   const hardTimer = setTimeout(() => {
     try { ac.abort(); } catch {}
     pipelineError = "voice-stream-timeout";
@@ -2518,6 +2526,7 @@ export async function voiceStreamConverse(opts: {
     clearTimeout(hardTimer);
     speakingNow = false;
     try { opts.onSession?.(null); } catch {}
+    ac.signal.removeEventListener("abort", onStreamAbort);
     return { ok: false, error: `voice-stream-start-failed: ${e?.message || e}` };
   }
 
@@ -2734,6 +2743,7 @@ export async function voiceStreamConverse(opts: {
     speakingNow = false;
   }
 
+  ac.signal.removeEventListener("abort", onStreamAbort);
   if (ac.signal.aborted) return { ok: false, error: "aborted" };
   if (pipelineError) return { ok: false, error: pipelineError, meta: metaCaptured };
   return { ok: true, meta: metaCaptured };
