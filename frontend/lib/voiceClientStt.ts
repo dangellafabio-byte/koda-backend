@@ -969,6 +969,12 @@ export class VoiceClientSttSession {
   }
 
   async stop(): Promise<void> {
+    // No transcript/token: retain the caller needed to diagnose early stops.
+    console.log(
+      `[OLLENYA_STT_STOP] requested_before=${this.stopRequested} ` +
+      `dispatched=${this.dispatched} done=${this.doneReceived} ` +
+      `caller=${(new Error().stack || "").split("\n").slice(1, 4).join(" <- ")}`
+    );
     this.stopRequested = true;
     console.log(`[${TAG}] stop() called`);
     try {
