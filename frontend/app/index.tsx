@@ -471,6 +471,8 @@ export default function Taccuino() {
   // Permette di vedere ESATTAMENTE chi mette idle prematuro.
   const statusTraceStartRef = useRef<number>(Date.now());
   const statusRef = useRef<Status>("idle");
+  const voiceTurnEpochRef = useRef(0);
+  const voiceTurnStartedAtRef = useRef(0);
   // === Debug verbose flag (post-debug 2026-06-28) ===
   // Default false: log puliti. Si attiva via EXPO_PUBLIC_KODA_DEBUG_VERBOSE=true
   // in .env per troubleshooting (necessita rebuild).
@@ -524,8 +526,8 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.0-inworld-tts-dispatcher";
-  const OLLENYA_BUILD_DATE = "2026-10-23";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.2-honor-diag-resume";
+  const OLLENYA_BUILD_DATE = "2026-11-11";
   useEffect(() => {
     console.log(
       `[OLLENYA_BUILDTAG] ${OLLENYA_BUILD_SHORT_TAG} v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=${OLLENYA_BUILD_DATE} ` +
@@ -1991,6 +1993,8 @@ export default function Taccuino() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const wasActuallyBackgroundedRef = useRef(false);
+
   // === APP STATE LIFECYCLE ===
   // Quando l'utente mette l'app in background per un po' (telefonata,
   // home, app switcher) e poi torna, iOS spesso rilascia la sessione
@@ -2006,6 +2010,58 @@ export default function Taccuino() {
   //     forza status a idle per il prossimo tap.
   useEffect(() => {
     const sub = AppState.addEventListener("change", (next) => {
+      // Only a real background transition counts: Android's mic privacy
+      // indicator can briefly emit inactive/active while recording.
+      if (next === "background") wasActuallyBackgroundedRef.current = true;
+      const returningFromBackground = next === "active" && wasActuallyBackgroundedRef.current;
+      if (next === "active") wasActuallyBackgroundedRef.current = false;
+      if (returningFromBackground && statusRef.current === "thinking" && streamingSessionRef.current) {
+        console.log("[OLLENYA_RESUME_RECOVERY] recovering interrupted voice turn");
+        // Invalidate callbacks/finally BEFORE stopping the old transport.
+        const epoch = ++voiceTurnEpochRef.current;
+        const turnStartedAt = voiceTurnStartedAtRef.current;
+        const interrupted = streamingSessionRef.current as any;
+        streamingSessionRef.current = null;
+        userInteractedRef.current = false;
+        convActiveRef.current = false;
+        setConvActive(false);
+        closeSessionPauseRef.current = true;
+        setCloseSessionPause(true);
+        micReallyActiveRef.current = false;
+        pendingTapStopRef.current = false;
+        try { Promise.resolve(interrupted.abort?.()).catch(() => {}); } catch {}
+        try { SpeechMod.stop(); } catch {}
+        stopThinkingSound();
+        setStatus("idle", "resume:interrupted-voice");
+        setError("La risposta vocale si è interrotta. Recupero i messaggi: non serve ripetere la domanda.");
+        // Fetch stored text only: never regenerate or silently claim that
+        // background audio was heard. Bound retries for a DB write in flight.
+        (async () => {
+          for (const delay of [0, 800, 1800]) {
+            if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+            if (epoch !== voiceTurnEpochRef.current || statusRef.current !== "idle") return;
+            try {
+              const tl = await api.getTimeline(200);
+              if (epoch !== voiceTurnEpochRef.current || statusRef.current !== "idle") return;
+              if (Array.isArray(tl) && tl.length > 0) {
+                setTimeline(tl);
+                const last = tl[tl.length - 1];
+                if (last.role === "ai" && Date.parse(last.timestamp) >= turnStartedAt) {
+                  setError("Ho recuperato i messaggi. La risposta è disponibile nella chat scritta.");
+                  console.log("[OLLENYA_RESUME_RECOVERY] timeline restored");
+                  return;
+                }
+              }
+            } catch (e) {
+              console.warn("[OLLENYA_RESUME_RECOVERY] timeline refresh failed", e);
+            }
+          }
+          if (epoch === voiceTurnEpochRef.current && statusRef.current === "idle") {
+            setError("La risposta vocale si è interrotta. Puoi riprendere toccando il cerchio.");
+          }
+        })();
+        return;
+      }
       // === FIX 2026-06-28 v32 — Xiaomi/HyperOS Privacy Flicker ===
       // Su Xiaomi HyperOS l'indicatore di privacy del microfono (il dot
       // verde in alto a destra che appare quando il mic è attivo) può
@@ -3010,6 +3066,7 @@ export default function Taccuino() {
       const fromText = !!opts?.fromText;
       const txt = text.trim();
       if (!txt) return;
+      ++voiceTurnEpochRef.current; // supersede any pending resume refresh
       setError(null);
 
       // === FREEMIUM GATE DISABILITATO (richiesta utente giugno 2026) ========
@@ -3562,6 +3619,9 @@ export default function Taccuino() {
       console.log("[OLLENYA_STREAM_GUARD] startTalkStreaming aborted: session already active");
       return;
     }
+    const turnEpoch = ++voiceTurnEpochRef.current;
+    voiceTurnStartedAtRef.current = Date.now();
+    const isCurrentTurn = () => turnEpoch === voiceTurnEpochRef.current;
     setError(null);
     if (!convActiveRef.current) emptyTurnsRef.current = 0;
     unlockSpeech().catch(() => {});
@@ -3585,6 +3645,8 @@ export default function Taccuino() {
     } catch (e) {
       console.warn(`[OLLENYA_STREAM_CLIENT] audio prep failed: ${e}`);
     }
+
+    if (!isCurrentTurn()) return;
 
     // Placeholder optimistic (verrà aggiornato quando arriva stt_final)
     const optimisticId = `local-stream-${Date.now()}`;
@@ -3623,9 +3685,11 @@ export default function Taccuino() {
         // che non veniva mai attivata dal flusso vocale reale. Fix:
         // wiring anche qui in voiceStreamConverse.
         onSpeechActive: (active: boolean) => {
+          if (!isCurrentTurn()) return;
           try { setSpeechActive(!!active); } catch {}
         },
         onSession: (s: any) => {
+          if (!isCurrentTurn()) return;
           streamingSessionRef.current = s;
           // === FIX 2026-07-24 v63.5 (Fix B) — reset mic-active gate ===
           // Nuova sessione: il mic NON è ancora attivo (parte solo dopo
@@ -3657,14 +3721,17 @@ export default function Taccuino() {
           }
         },
         onAudioStart: () => {
+          if (!isCurrentTurn()) return;
           setStatus("speaking");
         },
         // === FIX 2026-07-24 v63.5 (Fix B) — mic really active ===
         onRecognitionActive: () => {
+          if (!isCurrentTurn()) return;
           micReallyActiveRef.current = true;
           console.log(`[OLLENYA_MIC_GATE] mic really active — tap-stop now allowed`);
         },
         onUserFinal: (userText: string, conf: number | null, _dur: number | null) => {
+          if (!isCurrentTurn()) return;
           // === FIX 2026-06-25 v8 ===
           // Quando Deepgram emette stt_final, il microfono di fatto si è già
           // fermato (chunkLoopActive=false dentro voiceStream.ts). Senza
@@ -3708,6 +3775,7 @@ export default function Taccuino() {
           }
         },
         onMeta: (meta: any) => {
+          if (!isCurrentTurn()) return;
           capturedMeta = meta;
           try {
             aiEntryId = `stream-ai-${Date.now()}`;
@@ -3735,6 +3803,7 @@ export default function Taccuino() {
         },
       });
 
+      if (!isCurrentTurn()) return;
       if (!result.ok) {
         console.warn("[stream] failed:", result.error);
         // Se la bolla utente è ancora vuota, rimuoviamo l'optimistic.
@@ -3762,26 +3831,29 @@ export default function Taccuino() {
         }
       }
     } catch (e) {
+      if (!isCurrentTurn()) return;
       console.error("[stream] crash:", e);
       setError("Errore voce streaming.");
       setTimeout(() => setError(null), 4000);
     } finally {
-      setStatus("idle");
-      // === FIX 2026-08-26 v65.2 — HF LOOP RESTART FIX (Fabio) ================
-      // Azzeriamo esplicitamente streamingSessionRef.current. Prima veniva
-      // pulito SOLO su tap-reset (riga ~4042) o back-button (~2676), MAI
-      // sulla chiusura naturale del turno. Risultato: dopo la risposta di
-      // Ollenya, il ref restava puntato alla sessione WS morta e la guardia
-      // dell'HF_LOOP (`if (streamingSessionRef.current) return`) bloccava
-      // il restart automatico → l'utente doveva tappare l'orb ogni volta,
-      // vanificando l'hands-free. La sessione a questo punto è già chiusa
-      // (la promise di voiceStreamConverse ha risolto) quindi il ref è
-      // stantio: azzerarlo è idempotente e sicuro.
-      streamingSessionRef.current = null;
-      // === FIX 2026-07-24 v63.5 (Fix B) — reset mic-active gate ===
-      // Sessione terminata: il mic non è più attivo. Prossima sessione
-      // dovrà re-triggerare onRecognitionActive per riautorizzare i tap.
-      micReallyActiveRef.current = false;
+      if (isCurrentTurn()) {
+        setStatus("idle");
+        // === FIX 2026-08-26 v65.2 — HF LOOP RESTART FIX (Fabio) ================
+        // Azzeriamo esplicitamente streamingSessionRef.current. Prima veniva
+        // pulito SOLO su tap-reset (riga ~4042) o back-button (~2676), MAI
+        // sulla chiusura naturale del turno. Risultato: dopo la risposta di
+        // Ollenya, il ref restava puntato alla sessione WS morta e la guardia
+        // dell'HF_LOOP (`if (streamingSessionRef.current) return`) bloccava
+        // il restart automatico → l'utente doveva tappare l'orb ogni volta,
+        // vanificando l'hands-free. La sessione a questo punto è già chiusa
+        // (la promise di voiceStreamConverse ha risolto) quindi il ref è
+        // stantio: azzerarlo è idempotente e sicuro.
+        streamingSessionRef.current = null;
+        // === FIX 2026-07-24 v63.5 (Fix B) — reset mic-active gate ===
+        // Sessione terminata: il mic non è più attivo. Prossima sessione
+        // dovrà re-triggerare onRecognitionActive per riautorizzare i tap.
+        micReallyActiveRef.current = false;
+      }
       // === FIX 2026-06-28 v26 (P0 cascata WebSocket — log diag iPhone/Android) ===
       // Il vecchio re-trigger esplicito [OLLENYA_HF_EXPLICIT] è stato RIMOSSO.
       // Causava una CASCATA ESPONENZIALE di sessioni WebSocket:
@@ -7486,7 +7558,7 @@ export default function Taccuino() {
                 cards={orderedSettingsCards}
                 onClose={() => closeSettings()}
                 version={Constants.expoConfig?.version || "1.0.1"}
-                buildTag={isAdmin ? OLLENYA_BUILD_SHORT_TAG : undefined}
+                buildTag={OLLENYA_BUILD_SHORT_TAG}
                 runtimeInfo={isAdmin ? `rt:${Constants.expoConfig?.runtimeVersion || "?"} · vc:${Constants.expoConfig?.android?.versionCode ?? Constants.expoConfig?.ios?.buildNumber ?? "?"}` : undefined}
                 onVersionTap={handleDevMenuTap}
               />
