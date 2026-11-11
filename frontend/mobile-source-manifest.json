@@ -1,0 +1,12 @@
+{
+  "source_base": "f23393cc7b18ce2f34e82da0bc7117974b6fe02f",
+  "build_tag": "build-v70.2-honor-diag-resume",
+  "files": {
+    "frontend/app/index.tsx": "064f074793fb7fc953a46121d99091cf6f5dd52c914f97f1b4d8a33ce5c03710",
+    "frontend/lib/speech.ts": "38a6ff7c5c5f371e6c220eb934ec1603a1c7e065cb43f4ed42d135551c748c75",
+    "frontend/lib/voiceClientStt.ts": "b9ab3364af48b0b046c680040cddc77146157de5ccaaedd2f35e02da5a20dc2b",
+    "frontend/lib/diagLogger.ts": "c883fa5b7203dfb16da56b05aac29bebadd2c838eedb1247e68a9806e138af6f"
+  },
+  "status": "prepared_locally_not_synced_not_built",
+  "verification": "Syntax checks and mocked lifecycle checks only; Honor microphone not device-tested."
+}
