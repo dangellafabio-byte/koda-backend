@@ -169,3 +169,16 @@ Modifiche principali:
 Test: 11/11 passati con node tests/android-stt-lifecycle.cjs.
 Fix precedenti preservati: timeout 15s handleVoiceReply + safety-net 25s speak() + fix syntax koda_tts_prefs.py.
 Status: pronto per redeploy + OTA Android sul canale APK installato.
+
+## 2026-11-11 — Pacchetto sviluppatore v70.2-honor-diag-resume
+Applicati 6 file dal pacchetto sviluppatore (backup in /tmp/ollenya-backup-20261111-180149):
+- frontend/app/index.tsx (recupero Thinking + diagnostica mic)
+- frontend/lib/speech.ts
+- frontend/lib/voiceClientStt.ts
+- frontend/lib/diagLogger.ts
+- frontend/mobile-source-manifest.json
+- frontend/scripts/verify_mobile_source.py
+Verifica: `python frontend/scripts/verify_mobile_source.py` → PASS
+Build tag: `build-v70.2-honor-diag-resume` presente nella costante OLLENYA_BUILD_SHORT_TAG (index.tsx:529) e passato al prop `buildTag` in Settings (index.tsx:7561).
+App carica correttamente in preview.
+Status: codice pronto per build Android Honor. Bug Honor da verificare sul dispositivo dopo install.

@@ -22,10 +22,10 @@ const MAX_EVENTS = 500;
 // anche se in passato è stato emesso con prefisso vecchio (es. [VAD_TRACE]
 // senza "KODA_" davanti — bug del 2026-06-23 in voice.ts).
 const CAPTURE_PREFIXES = [
+  "[OLLENYA_",     // Status, lifecycle and hands-free events
   "[KODA_",        // Tutti gli eventi nuovi del sistema diagnostico Ollenya
   "[VAD_",         // Legacy: [VAD_TRACE], [VAD_CALIB] emessi prima del rename
   "[AUDIO_HONESTY", // Honesty Phase 1
-  "[OLLENYA_",     // Diagnostica handsfree (Fabio 2026-11-08): cattura [OLLENYA_HF_*]
 ];
 function _matchesCapture(s: string): boolean {
   for (const p of CAPTURE_PREFIXES) {
