@@ -89,6 +89,21 @@ function harness(os = 'android') {
   h = harness();await h.start();h.result('Frase');h.session.removeListeners();h.tick(6000);
   assert.equal(h.calls.dispatch.length, 0, 'teardown cancels deferred dispatch');
 
+  h = harness();await h.start();h.emit('start');
+  for (let i = 0; i < 6; i++) {h.emit('speechstart');h.tick(2000);}
+  assert.deepEqual(h.calls.errors, ['android_transcript_stalled'], 'sound without transcription cannot keep recording forever');
+  assert.equal(h.calls.dispatch.length, 0);
+
+  h = harness();h.session.autoEndpoint = false;await h.start();h.emit('start');
+  h.result('Una frase detta piano');h.tick(6000);
+  assert.equal(h.calls.dispatch.length, 0, 'PTT must wait for release, not an automatic endpoint');
+  await h.session.stop();
+  assert.deepEqual(h.calls.dispatch, ['Una frase detta piano'], 'manual stop submits recognized text immediately');
+
+  h = harness();await h.start();h.emit('start');h.result('Risultato');
+  h.tick(2000);h.result('Risultato');h.tick(1000);
+  assert.deepEqual(h.calls.dispatch, ['Risultato'], 'unchanged interim events must not extend the endpoint');
+
   h = harness('ios');await h.start();h.result('Frase completa', true);
   assert.deepEqual(h.calls.dispatch, ['Frase completa'], 'iOS final path remains immediate');
   assert.equal(h.calls.starts[0].continuous, false);
@@ -98,12 +113,31 @@ function harness(os = 'android') {
   const screen = fs.readFileSync(path.join(__dirname, '../app/index.tsx'), 'utf8');
   const start = screen.indexOf('        const recognitionInterrupted = ');
   const end = screen.indexOf('\n      } else {\n        // Successo', start);
-  for (const error of ['android_recognition_ended_early', 'android_no_speech', 'client_stt_audio-capture']) {
+  for (const error of ['android_recognition_ended_early', 'android_no_speech', 'android_transcript_stalled', 'client_stt_audio-capture']) {
     const ctx = {Platform: {OS: 'android'}, result: {error}, failN: 1, WS_FAIL_THRESHOLD: 3,
       console: {log() {}}, setCloseSessionPause() {}, closeSessionPauseRef: {current: false},
       setError() {}, setTimeout() {}};
     vm.createContext(ctx);vm.runInContext(screen.slice(start, end), ctx);
     assert.equal(ctx.closeSessionPauseRef.current, true, error + ' must stop automatic re-entry');
   }
+
+  // Execute the actual screen stopTalk handler: streaming has no recRef.
+  const ast = ts.createSourceFile('index.tsx', screen, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let stopDeclaration;
+  function find(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'stopTalk') stopDeclaration = node;
+    ts.forEachChild(node, find);
+  }
+  find(ast);assert(stopDeclaration);
+  const stopJs = ts.transpileModule('const ' + stopDeclaration.getText(ast) + '; exports.stop = stopTalk;',
+    {compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}}).outputText;
+  let stops = 0;
+  const stopCtx = {exports: {}, streamingSessionRef: {current: {stop: async () => {stops++;}}},
+    recRef: {current: null}, pendingTapStopRef: {current: false}, statusRef: {current: 'recording'},
+    setStatus() {}, console: {log() {}}, Promise};
+  vm.createContext(stopCtx);vm.runInContext(stopJs, stopCtx);
+  await stopCtx.exports.stop();assert.equal(stops, 1, 'PTT release must call the live streaming session stop');
+  stopCtx.streamingSessionRef.current = null;
+  await stopCtx.exports.stop();assert.equal(stopCtx.pendingTapStopRef.current, true, 'early release is retained until a session exists');
   console.log('PASS: actual native session handlers, segmented speech, pause, readiness, cancellation, early end and iOS');
 })().catch(e => {console.error(e);process.exitCode=1;});

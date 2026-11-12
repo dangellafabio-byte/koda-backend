@@ -2024,6 +2024,7 @@ export const SpeechMod = {
 //  - ritorna quando arriva onDone (o errore/timeout)
 // =============================================================
 export async function voiceStreamConverse(opts: {
+  autoEndpoint?: boolean;
   ephemeral?: boolean;
   profileLang?: string;
   timeoutMs?: number;
@@ -2516,6 +2517,7 @@ export async function voiceStreamConverse(opts: {
     try { opts.onSession?.(session); } catch {}
 
     await session.start({
+      autoEndpoint: opts.autoEndpoint,
       ephemeral: opts.ephemeral,
       profileLang: opts.profileLang || "it",
       locationCity: locCity,

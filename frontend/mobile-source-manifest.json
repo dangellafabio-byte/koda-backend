@@ -1,13 +1,13 @@
 {
   "source_base": "d83e96543d298529b906177372b3a64b5e059de5",
-  "build_tag": "build-v70.3-android-utterance",
+  "build_tag": "build-v70.4-ptt-stop-timeouts",
   "files": {
-    "frontend/app/index.tsx": "eab7f86b8e27ff1f78a319b7abe711d1bd1bd3f78e43057f205a60866f305db6",
-    "frontend/lib/speech.ts": "cfa0240c528f7eb01f8dba0840f8724095f15bee2bfd9cf41dc94d01dc5c98f2",
-    "frontend/lib/voiceClientStt.ts": "18e902478628a826f8f3ea31e90dcb44ee9ac5200faa63e500312eae4da1f46d",
-    "frontend/lib/androidUtterance.ts": "1c0c2e9eb08051ad0d7960e3547bdfcf2b5361b0b8cb454ac0d8eb9d58f2ecbc",
+    "frontend/app/index.tsx": "4c2f41e28e0afef258cdf5375fd0e2e0f2dfbf16d7716b8db5cd0020715b61b0",
+    "frontend/lib/speech.ts": "39503737a03750fbb5b0c39c8c510c2ab375544c4f490dc3a45f251324dd8967",
+    "frontend/lib/voiceClientStt.ts": "149757b170d11e2093036eba0668ffb7f297b5bb012cf811abb5be13f034e5fa",
+    "frontend/lib/androidUtterance.ts": "198dc0ca3eda1eba66e3137ad07d002b280c5b682837a01f07b2d9a376b62517",
     "frontend/lib/diagLogger.ts": "c883fa5b7203dfb16da56b05aac29bebadd2c838eedb1247e68a9806e138af6f"
   },
   "status": "prepared_locally_not_synced_not_built",
-  "verification": "Native handlers tested with mocked recognizer and fake clock. No Honor device test."
+  "verification": "Mocked native handlers and actual UI stopTalk executed. No physical Honor microphone or sensitivity verification."
 }

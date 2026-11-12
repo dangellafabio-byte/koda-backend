@@ -526,7 +526,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.3-android-utterance";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.4-ptt-stop-timeouts";
   const OLLENYA_BUILD_DATE = "2026-11-11";
   useEffect(() => {
     console.log(
@@ -3666,6 +3666,7 @@ export default function Taccuino() {
     try {
       const { voiceStreamConverse } = require("../lib/speech");
       const result = await voiceStreamConverse({
+        autoEndpoint: handsFreeRef.current,
         ephemeral: confessionalMode,
         profileLang: "it",
         // === FIX 2026-07-26 v64.4 — voiceId client-authoritative ===
@@ -3813,7 +3814,7 @@ export default function Taccuino() {
         wsFailureCountRef.current += 1;
         const failN = wsFailureCountRef.current;
         console.log(`[OLLENYA_HF_BACKOFF] WS failure #${failN}/${WS_FAIL_THRESHOLD} (err=${result.error})`);
-        const recognitionInterrupted = Platform.OS === "android" && /android_recognition_ended_early|android_no_speech|android_mic_silent_fail|client_stt_|aborted_pre_recognition/.test(result.error || "");
+        const recognitionInterrupted = Platform.OS === "android" && /android_recognition_ended_early|android_transcript_stalled|android_no_speech|android_mic_silent_fail|client_stt_|aborted_pre_recognition/.test(result.error || "");
         if (recognitionInterrupted || failN >= WS_FAIL_THRESHOLD) {
           console.log(`[OLLENYA_HF_BACKOFF] threshold reached → pausing HF loop, waiting for user tap`);
           setCloseSessionPause(true);
@@ -4085,6 +4086,21 @@ export default function Taccuino() {
   };
 
   const stopTalk = async () => {
+    const stream = streamingSessionRef.current;
+    if (stream) {
+      pendingTapStopRef.current = false;
+      setStatus("transcribing", "stopTalk:stream-release");
+      console.log("[OLLENYA_PTT] release → streaming stop");
+      await stream.stop();
+      return;
+    }
+    if (!recRef.current && statusRef.current === "recording") {
+      // Released while the transport is still opening. onSession consumes
+      // this intent; do not silently lose a PTT release before the ref exists.
+      pendingTapStopRef.current = true;
+      console.log("[OLLENYA_PTT] release queued during streaming startup");
+      return;
+    }
     // Use recRef.current as single source of truth (status check would create
     // stale-closure bugs when called from the silence-detection callback)
     const current = recRef.current;

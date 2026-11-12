@@ -165,6 +165,8 @@ export class VoiceClientSttSession {
   // Ora traccciamo il flag così `end` può fare graceful close.
   private noSpeechReceived = false;
   private androidUtterance: AndroidUtterance | null = null;
+  private autoEndpoint = true;
+  private subVolume: { remove: () => void } | null = null;
 
   // Route audio (rilevata prima di start)
   private audioRoute: "bluetooth" | "wired" | "builtin" | "unknown" = "unknown";
@@ -253,6 +255,7 @@ export class VoiceClientSttSession {
     // leggerlo dal profilo (dove può essere out-of-sync per bug auth-
     // bridge o migration/reverse-sync). Client-side source of truth.
     voiceId?: string;
+    autoEndpoint?: boolean;
   }): Promise<void> {
     // === OPZIONE B (2026-07-24): PORTING ANDROID NATIVE ===
     // Prima accettava solo iOS. Ora accetta Android tramite Google
@@ -262,6 +265,7 @@ export class VoiceClientSttSession {
       throw new Error("client_stt_mobile_only");
     }
     this.startedAt = Date.now();
+    this.autoEndpoint = opts?.autoEndpoint !== false;
     this.stopRequested = false;
     this.sessionReady = false;
     this.doneReceived = false;
@@ -513,12 +517,21 @@ export class VoiceClientSttSession {
     }
     if (this.stopRequested || this.doneReceived || this.dispatched) return;
     if (Platform.OS === "android") {
+      try {
+        const module: any = ExpoSpeechRecognitionModule;
+        const service = module.getDefaultRecognitionService?.();
+        const services = module.getSpeechRecognitionServices?.() || [];
+        console.log(`[OLLENYA_ANDROID_INPUT] default_service=${service?.packageName || "unknown"} available=${services.join(",") || "unknown"}`);
+      } catch {}
       this.androidUtterance = new AndroidUtterance((text) => {
         if (this.stopRequested || this.doneReceived || this.dispatched) return;
         this.currentTranscript = text;
         console.log("[OLLENYA_ANDROID_ENDPOINT] quiet interval complete → dispatch once");
         this.dispatchFinalToBackend().catch((e: any) =>
           console.log(`[${TAG}] dispatchFinal error: ${e?.message || e}`));
+      }, 3000, {
+        autoEndpoint: this.autoEndpoint,
+        onStalled: () => this.failAndroidRecognition("android_transcript_stalled"),
       });
     }
     // Reset watchdog state
@@ -536,6 +549,18 @@ export class VoiceClientSttSession {
       console.log("[OLLENYA_ANDROID_ENDPOINT] recognizer ready");
       this.callbacks.onRecognitionActive?.();
     });
+    if (Platform.OS === "android") {
+      let samples = 0, min = Infinity, max = -Infinity, windowStart = Date.now();
+      this.subVolume = ExpoSpeechRecognitionModule.addListener("volumechange", (event) => {
+        const value = Number(event.value);
+        if (!Number.isFinite(value)) return;
+        samples++; min = Math.min(min, value); max = Math.max(max, value);
+        if (Date.now() - windowStart >= 2000) {
+          console.log(`[OLLENYA_ANDROID_INPUT] samples=${samples} min=${min.toFixed(1)} max=${max.toFixed(1)}`);
+          samples = 0; min = Infinity; max = -Infinity; windowStart = Date.now();
+        }
+      });
+    }
     this.subSpeechStart = ExpoSpeechRecognitionModule.addListener(
       "speechstart",
       () => {
@@ -650,12 +675,7 @@ export class VoiceClientSttSession {
         if (this.androidUtterance.serviceEnded()) return;
         // Native recognition really disconnected. Do not pretend an incomplete
         // utterance was final and do not trigger repeated HF retries.
-        this.doneReceived = true;
-        this.notifiedUpperOnClose = true;
-        this.removeListeners();
-        this.stopKeepalive();
-        this.forceCloseWs();
-        this.callbacks.onError?.("android_recognition_ended_early");
+        this.failAndroidRecognition("android_recognition_ended_early");
         return;
       }
       // Se non abbiamo ancora inviato final ma abbiamo un transcript accumulato,
@@ -745,6 +765,7 @@ export class VoiceClientSttSession {
         };
       }
       if (Platform.OS === "android") {
+        startOpts.volumeChangeEventOptions = { enabled: true, intervalMillis: 300 };
         // Silence timeouts più lunghi per tolleranza pause naturali
         // (vedi commento sopra Fix v64.1 PROBLEMA #2).
         startOpts.androidIntentOptions = {
@@ -754,7 +775,7 @@ export class VoiceClientSttSession {
         };
       }
       ExpoSpeechRecognitionModule.start(startOpts);
-      console.log(`[${TAG}] ExpoSpeechRecognitionModule.start() OK (v70.3 continuous=${startOpts.continuous} endpoint=3000ms)`);
+      console.log(`[${TAG}] ExpoSpeechRecognitionModule.start() OK (v70.4 continuous=${startOpts.continuous} endpoint=${this.autoEndpoint ? "auto-3000ms" : "manual-release"})`);
       // Readiness is reported by the native `start` event above, not by
       // the synchronous start() invocation returning.
 
@@ -1392,10 +1413,23 @@ export class VoiceClientSttSession {
       this.subSpeechStart?.remove();
     } catch {}
     try { this.subRecognitionStart?.remove(); } catch {}
+    try { this.subVolume?.remove(); } catch {}
     this.subResult = null;
     this.subError = null;
     this.subEnd = null;
     this.subSpeechStart = null;
     this.subRecognitionStart = null;
+    this.subVolume = null;
+  }
+
+  private failAndroidRecognition(reason: string): void {
+    if (this.dispatched || this.doneReceived || this.stopRequested) return;
+    this.doneReceived = true;
+    this.notifiedUpperOnClose = true;
+    this.removeListeners();
+    this.stopKeepalive();
+    try { ExpoSpeechRecognitionModule.abort(); } catch {}
+    try { this.callbacks.onError?.(reason); } catch {}
+    this.forceCloseWs();
   }
 }

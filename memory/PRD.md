@@ -209,3 +209,28 @@ Fix principali (da istruzioni sviluppatore):
 - Readiness da evento nativo "start", non dal return di start()
 - Recupero Thinking + cattura log [OLLENYA_*] conservati
 Status: pronto per build Android. Prova Honor ancora da fare sul dispositivo.
+
+## 2026-11-11 (sera) — Pacchetto v70.4-ptt-stop-timeouts applicato
+Backup: /tmp/ollenya-backup-v704-20261111-222148
+Applicati 8 file (5 sorgente + 1 manifest + 2 script test):
+- frontend/app/index.tsx (4c2f41e2…)
+- frontend/lib/speech.ts (39503737…)
+- frontend/lib/voiceClientStt.ts (149757b1…)
+- frontend/lib/androidUtterance.ts (198dc0ca…)
+- frontend/lib/diagLogger.ts (c883fa5b… — invariato dal v70.3)
+- frontend/mobile-source-manifest.json (build-v70.4-ptt-stop-timeouts)
+- frontend/scripts/test-android-utterance.cjs
+- frontend/scripts/test-resume-recovery.cjs
+Test:
+- verify_mobile_source.py → PASS (build-v70.4-ptt-stop-timeouts)
+- test-android-utterance.cjs → PASS
+- test-resume-recovery.cjs → PASS
+Lint pulito su voiceClientStt.ts, androidUtterance.ts, diagLogger.ts.
+Fix verificati nel codice:
+- stopTalk ora ferma streamingSessionRef prima del guard su recRef (index.tsx:4088-4096)
+- Rilascio PTT durante startup: pendingTapStopRef consuma l'intento appena arriva la session
+- autoEndpoint: true solo in HF (handsFreeRef.current) → PTT decide col rilascio utente (index.tsx:3669)
+- Log OLLENYA_ANDROID_INPUT: servizio effettivo + available all'avvio (voiceClientStt.ts:524), volumechange min/max ogni 2s (voiceClientStt.ts:559)
+- Log avvio: "v70.4 continuous=X endpoint=auto-3000ms|manual-release" (voiceClientStt.ts:778)
+App carica in preview.
+Status: pronto per build Android. Sensibilità acustica Honor NON risolvibile da codice: resta da testare sul device.
