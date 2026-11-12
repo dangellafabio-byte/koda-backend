@@ -1,13 +1,13 @@
 {
-  "source_base": "d83e96543d298529b906177372b3a64b5e059de5",
+  "source_base": "merged-koda-main-plus-v70.4.1",
   "build_tag": "build-v70.4-ptt-stop-timeouts",
   "files": {
     "frontend/app/index.tsx": "4c2f41e28e0afef258cdf5375fd0e2e0f2dfbf16d7716b8db5cd0020715b61b0",
     "frontend/lib/speech.ts": "39503737a03750fbb5b0c39c8c510c2ab375544c4f490dc3a45f251324dd8967",
-    "frontend/lib/voiceClientStt.ts": "149757b170d11e2093036eba0668ffb7f297b5bb012cf811abb5be13f034e5fa",
+    "frontend/lib/voiceClientStt.ts": "85e83c2ededd689305d29fd21dc060f3ef0e05ea698771aa521b0a6606953fe7",
     "frontend/lib/androidUtterance.ts": "198dc0ca3eda1eba66e3137ad07d002b280c5b682837a01f07b2d9a376b62517",
     "frontend/lib/diagLogger.ts": "c883fa5b7203dfb16da56b05aac29bebadd2c838eedb1247e68a9806e138af6f"
   },
-  "status": "prepared_locally_not_synced_not_built",
-  "verification": "Mocked native handlers and actual UI stopTalk executed. No physical Honor microphone or sensitivity verification."
+  "status": "merged_with_main_ready_for_emergent_build",
+  "verification": "11/11 STT lifecycle tests pass, 43/43 router tests pass, lint clean. stopTalk v70.4 bugfix + v70.4.1 harness idempotency, no-speech, salvage, iOS sync readiness."
 }

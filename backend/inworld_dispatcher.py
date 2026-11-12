@@ -24,6 +24,7 @@ Zero import di server.py → nessun ciclo.
 from __future__ import annotations
 
 import asyncio
+from contextlib import aclosing
 import logging
 import time
 import uuid
@@ -35,6 +36,46 @@ import koda_tts_events as _ev
 import koda_tts_prefs as _prefs
 
 logger = logging.getLogger(__name__)
+
+
+# Preserve the approved voice's base character. Direct only the emotional
+# intent, without instructions about breath, pauses, pitch or slower speech.
+_LIGHT_TONE_CUES = {
+    "concerned": "speak with attentive warmth at a natural conversational pace",
+    "calm": "speak reassuringly in a clear conversational voice",
+    "paced": "speak with attentive warmth at a natural conversational pace",
+    "energetic": "speak with joyful enthusiasm",
+    "urgent": "speak with clear urgency",
+}
+
+
+def _directed_text(
+    text: str, tone: Optional[str], params, request_id: str,
+    *, previous_tone: Optional[str] = None,
+) -> str:
+    """Keep ordinary delivery native; use one brief cue when tone changes."""
+    selected = (tone or "neutral").strip().lower()
+    previous = (previous_tone or "").strip().lower()
+    cue = _LIGHT_TONE_CUES.get(selected)
+    if previous in {"concerned", "calm", "paced"} and selected == "energetic":
+        cue = "speak with a gently brightening, pleased tone"
+    elif previous == "energetic" and selected in {"concerned", "calm", "paced"}:
+        cue = "ease into attentive warmth at a natural conversational pace"
+    # Concerned always means mild warmth, including directly after joy.
+    # No separate 'sad performance', and no progressive slowing across turns.
+    if params.model_id != "inworld-tts-2" or not (text or "").strip():
+        cue = None
+    directed = f"[{cue}] {text}" if cue else text
+    if len((directed or "").encode("utf-16-le")) // 2 > 2000:
+        directed = text  # preserve words rather than truncate for a cue
+        cue = None
+    logger.info(
+        "[OLLENYA_TTS_DIRECTION] request=%s version=5 model=%s language=%s "
+        "tone=%s steering=%s reason=light_intent_only",
+        request_id, params.model_id, params.language, selected,
+        "light" if cue else "native",
+    )
+    return directed
 
 
 class InworldVoiceNotAvailable(_ad.InworldTTSError):
@@ -52,6 +93,7 @@ async def generate_non_streaming(
     endpoint: str,
     voice_id_requested: Optional[str] = None,
     tone: Optional[str] = None,
+    previous_tone: Optional[str] = None,
 ) -> bytes:
     """Genera MP3 bytes completi via Inworld. Registra telemetria."""
     # Guard voce Vento (non implementata in Inworld fase 1)
@@ -97,6 +139,7 @@ async def generate_non_streaming(
 
     event_id = str(uuid.uuid4())
     params = _ad.DEFAULT_VOICE_PARAMS
+    synthesis_text = _directed_text(text, tone, params, event_id, previous_tone=previous_tone)
 
     # === SYNTHESIS CONTEXT (Fabio 2026-11-04) ===========================
     # Dietro flag INWORLD_SEND_CONTEXT=1. Legge dal buffer per-utente gli
@@ -118,15 +161,17 @@ async def generate_non_streaming(
 
     try:
         res = await _ad.synthesize_non_streaming(
-            text,
+            synthesis_text,
             params,
             previous_requests=prev_requests_for_payload,
+            user_id=user_id,
         )
     except _ad.InworldTTSError as e:
         # Record tentativo fallito. Se è un timeout o un'auth error,
         # l'addebito è incerto → chars_billed=None, billable=True
         # (potenzialmente fatturato), estimated_cost su chars_sent.
-        chars_sent = len(text or "")
+        chars_sent = len(synthesis_text or "")
+        submitted = not isinstance(e, _ad.InworldTTSQueueError)
         await _ev.record_tts_event(db, _ev.KodaTTSEvent(
             event_id=event_id,
             user_id=user_id,
@@ -143,8 +188,8 @@ async def generate_non_streaming(
             chars_sent=chars_sent,
             chars_billed=None,
             rate_per_1m_chars_usd=_ad._rate_per_1m_usd(),
-            estimated_cost_usd=_ad._estimate_cost_usd(chars_sent),
-            billable=True,  # addebito incerto, non assumiamo zero
+            estimated_cost_usd=_ad._estimate_cost_usd(chars_sent) if submitted else 0.0,
+            billable=submitted,  # local queue rejection never reached Inworld
             api_duration_ms=0,
             first_chunk_ms=None,
             audio_duration_ms=None,
@@ -217,6 +262,7 @@ async def stream_mp3(
     endpoint: str,
     voice_id_requested: Optional[str] = None,
     tone: Optional[str] = None,
+    previous_tone: Optional[str] = None,
 ) -> AsyncIterator[bytes]:
     """Yielda bytes MP3 puri. Registra telemetria al termine (ok/cancel/error)."""
     if _prefs.is_vento_voice(voice_id_requested):
@@ -259,19 +305,21 @@ async def stream_mp3(
 
     event_id = str(uuid.uuid4())
     params = _ad.DEFAULT_VOICE_PARAMS
-    stream_result = _ad.InworldStreamResult(chars_sent=len(text or ""))
+    synthesis_text = _directed_text(text, tone, params, event_id, previous_tone=previous_tone)
+    stream_result = _ad.InworldStreamResult(chars_sent=len(synthesis_text or ""))
     audio_accum = bytearray()  # per stima durata audio alla fine
     cancelled = False
     error_class: Optional[str] = None
     error_msg: Optional[str] = None
 
     try:
-        async for chunk in _ad.stream_synthesize(
-            text, params, result_out=stream_result
-        ):
-            audio_accum.extend(chunk)
-            yield chunk
-    except asyncio.CancelledError:
+        async with aclosing(_ad.stream_synthesize(
+            synthesis_text, params, result_out=stream_result, user_id=user_id
+        )) as upstream:
+            async for chunk in upstream:
+                audio_accum.extend(chunk)
+                yield chunk
+    except (asyncio.CancelledError, GeneratorExit):
         cancelled = True
         raise
     except _ad.InworldTTSError as e:
@@ -310,8 +358,11 @@ async def stream_mp3(
                 chars_sent=stream_result.chars_sent,
                 chars_billed=stream_result.chars_billed,
                 rate_per_1m_chars_usd=_ad._rate_per_1m_usd(),
-                estimated_cost_usd=_ad._estimate_cost_usd(chars_for_cost),
-                billable=True,
+                estimated_cost_usd=(
+                    _ad._estimate_cost_usd(chars_for_cost)
+                    if stream_result.upstream_started else 0.0
+                ),
+                billable=stream_result.upstream_started,
                 api_duration_ms=stream_result.api_duration_ms,
                 first_chunk_ms=stream_result.first_chunk_ms,
                 audio_duration_ms=audio_dur_ms,

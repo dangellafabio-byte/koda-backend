@@ -59,6 +59,7 @@ Constraint Emergent rispettati:
 """
 from __future__ import annotations
 
+from voice_pipeline_lifecycle import run_until_disconnect
 import asyncio
 import io
 import json
@@ -1147,12 +1148,16 @@ async def voice_stream_handler(
     # il client può mostrare all'utente. Il gate è duplicato lato /api/converse
     # per il flow legacy — questo copre il flow "fast" (hands-free/streaming).
     try:
-        from server import _current_user_id, db  # type: ignore
+        from server import _current_user_id, db
         _uid_gate = _current_user_id.get() if _current_user_id is not None else None
         if _uid_gate and _uid_gate != "me":
             _prof_gate = await db.taccuino_profile.find_one({"id": _uid_gate}, {"subscription_tier": 1})
             _tier_gate = (_prof_gate or {}).get("subscription_tier")
             _paid_gate = _tier_gate in ("monthly", "bimonthly", "annual", "unlimited")
+            if not _paid_gate:
+                from server import _uid_email_from_session_or_profile, is_user_unlimited
+                _email_gate = await _uid_email_from_session_or_profile(_uid_gate)
+                _paid_gate, _reason_gate = await is_user_unlimited(_email_gate, _uid_gate)
             if not _paid_gate:
                 logger.info(
                     f"[voice_gate sess={short_id}] Free user uid={_uid_gate[:8]} tier={_tier_gate} — closing WS 4402"
@@ -1508,7 +1513,7 @@ async def voice_stream_handler(
                         return
                     # === Pipeline LLM+TTS (identica al percorso Deepgram) ===
                     try:
-                        await run_pipeline_for_text(
+                        completed = await run_until_disconnect(websocket, run_pipeline_for_text(
                             text=text_raw,
                             ephemeral=ephemeral,
                             audio_duration_ms=dur_int,
@@ -1521,7 +1526,11 @@ async def voice_stream_handler(
                             stt_source=engine,
                             # === FIX v64.4 — client-authoritative voice ===
                             client_voice_id=client_voice_id,
-                        )
+                        ))
+                        if not completed:
+                            client_alive = False
+                            logger.info(f"[KODA_STREAM sess={short_id}] disconnected: cancelled pipeline")
+                            return
                         if client_alive:
                             await emit_to_client({"type": "done"})
                     except Exception as e:

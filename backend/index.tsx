@@ -1,0 +1,9526 @@
+import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+  ActivityIndicator,
+  Animated,
+  Easing,
+  Platform,
+  Modal,
+  KeyboardAvoidingView,
+  Pressable,
+  Keyboard,
+  Image,
+  ImageBackground,
+  useWindowDimensions,
+  Dimensions,
+  Alert,
+  AppState,
+  Switch,
+  Linking,
+  BackHandler,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { TouchableOpacity as GHTouchableOpacity } from "react-native-gesture-handler";
+import { Ionicons } from "@expo/vector-icons";
+import HandsFreeOrb from "../components/HandsFreeOrb";
+import LasciaAndareIntroModal from "../components/LasciaAndareIntroModal";
+import SubscriptionStatus from "../components/SubscriptionStatus";
+import VoiceOfOllenyaCard from "../components/VoiceOfOllenyaCard";
+import SettingsWalletStack, { type SettingsCard } from "../components/SettingsWalletStack";
+import MinutesWarningBanner from "../components/MinutesWarningBanner";
+import { FlashList } from "@shopify/flash-list";
+import LatencyOverlay from "../components/LatencyOverlay";
+import { traceStart, traceMark } from "../lib/latencyTracer";
+import * as ImagePicker from "expo-image-picker";
+import * as WebBrowser from "expo-web-browser";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
+import { LinearGradient } from "expo-linear-gradient";
+import {
+  api,
+  API_BASE,
+  BACKEND,
+  TimelineEntry,
+  Profile,
+  toneStyle,
+  domainBadge,
+  Domain,
+  Action,
+  VoiceOption,
+  Tone,
+} from "../lib/api";
+import { ensureSpeechPermission } from "../lib/speechPermission";
+import { useLiveCountdown } from "../lib/freeCountdown";
+import FreeLimitOverlay from "../components/FreeLimitOverlay";
+import FreeOverlay from "../components/FreeOverlay";
+import PremiumTeaserToast from "../components/PremiumTeaserToast";
+import { startRecording, buildFormData, Recorder, prewarmMic } from "../lib/voice";
+import { checkHasSpeech, logGateDecision } from "../lib/silenceGate";
+import { SpeechMod, unlockSpeech, setDefaultVoiceId, preloadFillerPool } from "../lib/speech";
+// Rimosso import kodaAudioOutput (Modalità Telefono rollback 2026-07-13)
+import { preloadOfflineClips, isOfflineNow, playRandomOfflineClip } from "../lib/offlineClips";
+import { startThinkingSound, stopThinkingSound } from "../lib/thinkingSound";
+import {
+  loadProfileCache,
+  saveProfileCache,
+  clearProfileCache,
+  loadTimelineCache,
+  saveTimelineCache,
+} from "../lib/localCache";
+import Constants from "expo-constants";
+import * as Updates from "expo-updates";
+// import { BUILD_VERSION, BUILD_NOTES } from "../lib/buildInfo";
+// ↑ Rimosso dall'UI Impostazioni pre-lancio (2026-07-24): il changelog
+//   tecnico non deve trapelare in produzione. buildInfo.ts resta come
+//   file di riferimento interno per debug/log, ma non è più renderizzato.
+// === BLOCCO A (2026-08-25) — notifications & ProactiveOffer RIMOSSI =====
+// I moduli `lib/notifications` e `components/ProactiveOffer` sono stati
+// eliminati per rispettare il manifesto "no needy Ollenya". Non riabilitare
+// senza riscrivere UX contract nel PRD.
+// import { scheduleAt, scheduleCheckin, cancelAllCheckins, cancelCheckin } from "../lib/notifications";
+import { useTheme, THEME_LIST, ThemeName, Palette } from "../lib/theme";
+import { useAuth } from "../lib/auth";
+import AppIcon from "../lib/AppIcon";
+import Orb, { OrbTone } from "../components/Orb";
+import EclipseOrb from "../components/EclipseOrb";
+import MirrorPool from "../components/MirrorPool";
+// V1 OllenyaIntro import RIMOSSO (Fabio 2026-08-22): la V1 non ha più path
+// di ingresso — il file OllenyaIntro.tsx resta in vita come dead code, non
+// va toccato ma nessuno lo importa più.
+// import OllenyaIntro, { KodaIntroResult } from "../components/OllenyaIntro";
+// Type alias per KodaIntroResult mantenuto perché ancora referenziato da
+// dismissColorIntro(result?: KodaIntroResult) — non più chiamato, ma
+// tipo utile per non spezzare la firma legacy.
+type KodaIntroResult = { launch_tour?: boolean };
+import OllenyaSplash from "../components/OllenyaSplash";
+import OllenyaTour, { TourStep } from "../components/OllenyaTour";
+import DisclaimerScreen from "../components/DisclaimerScreen";
+import * as ScreenDimmer from "../lib/screenDimmer";
+import * as SecureStore from "expo-secure-store";
+import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
+import NeonBorder, { NeonBorderStatus } from "../components/NeonBorder";
+import ActivationPulse from "../components/ActivationPulse";
+import RadialGlow from "../components/RadialGlow";
+import InfoModal from "../components/InfoModal";
+import SafetyAlert from "../components/SafetyAlert";
+import FreemiumCounter from "../components/FreemiumCounter";
+import { OllenyaFeedbackMenu } from "../components/OllenyaFeedbackMenu";
+// import ProactiveOffer from "../components/ProactiveOffer";  // Blocco A: rimosso
+import {
+  loadBorderCalibration,
+  saveBorderCalibration,
+  resetBorderCalibration,
+  ALT_IDLE_COLOR,
+  DEFAULT_CALIBRATION,
+  estimateCornerRadius,
+  type BorderCalibration,
+} from "../lib/borderCalibration";
+import { useRouter, usePathname, useLocalSearchParams } from "expo-router";
+import IntroPremiumFinalStep from "../components/IntroPremiumFinalStep";
+import {
+  getLastDecidedKey,
+  markRouterDecided,
+  getSessionHasShownSplash,
+  markSessionSplashShown,
+  resetLastDecidedKey,
+  resetRouterGlobalState,
+  setConvVoiceActive,
+  isConvVoiceActive,
+  markPaidTierSeen,
+  isPaidTierRecent,
+} from "../lib/routerGlobalState";
+import type { SafetyCheckResult, FreemiumStatus as FreemiumStatusType } from "../lib/api";
+import { useOrbAmbient } from "../lib/useOrbAmbient";
+import { useRenderCounter, startFpsMonitor } from "../lib/perfDiag";
+import {
+  handleQuotaExhausted,
+  isQuotaExhaustedError,
+  isQuotaExhaustedSession,
+  resetQuotaExhaustedSession,
+} from "../lib/quotaExhaustedAudio";
+import { useFonts } from "expo-font";
+import { ECLIPSE_MAX_DIAMETER } from "../lib/eclipseConstants";
+// === Caveat font (Fabio 2026-06-21 v15): caricato via expo-font + file
+// .ttf locali in assets/fonts/. Sostituisce @expo-google-fonts/caveat che
+// era vietato dal sistema Emergent (build pipeline lo blocca). Stesso
+// risultato visivo, zero dipendenza da package esterno.
+// === Zero-Knowledge Confessional crypto === RIMOSSO (Blocco B — Confessionale cancellato)
+
+
+type Status = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
+
+// === Day separator helper
+function dayLabelFor(d: Date): string {
+  const today = new Date();
+  const yest = new Date();
+  yest.setDate(today.getDate() - 1);
+  const sameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+  if (sameDay(d, today)) return "Oggi";
+  if (sameDay(d, yest)) return "Ieri";
+  const days = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"];
+  const months = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
+  // Capitalize first letter
+  const dn = days[d.getDay()];
+  return `${dn[0].toUpperCase()}${dn.slice(1)} ${d.getDate()} ${months[d.getMonth()]}`;
+}
+
+const LANGUAGES = [
+  { code: "it", label: "Italiano", emoji: "🇮🇹" },
+  { code: "en", label: "English", emoji: "🇬🇧" },
+  { code: "es", label: "Español", emoji: "🇪🇸" },
+  { code: "fr", label: "Français", emoji: "🇫🇷" },
+  { code: "de", label: "Deutsch", emoji: "🇩🇪" },
+];
+
+function detectDeviceLang(): string {
+  try {
+    if (typeof navigator !== "undefined" && navigator.language) {
+      const code = navigator.language.slice(0, 2).toLowerCase();
+      if (LANGUAGES.find((l) => l.code === code)) return code;
+    }
+  } catch {}
+  return "it";
+}
+
+// Mappa nomi italiani → HEX per i comandi vocali "cambia colore in [nome]"
+const NAMED_COLORS: Record<string, string> = {
+  rosso: "#EF4444", red: "#EF4444",
+  blu: "#3B82F6", blue: "#3B82F6",
+  giallo: "#FACC15", yellow: "#FACC15",
+  verde: "#22C55E", green: "#22C55E",
+  rosa: "#EC4899", pink: "#EC4899",
+  viola: "#8B5CF6", purple: "#8B5CF6",
+  arancione: "#F97316", orange: "#F97316",
+  azzurro: "#38BDF8", celeste: "#7DD3FC",
+  nero: "#1F2937", black: "#1F2937",
+  bianco: "#F3F4F6", white: "#F3F4F6",
+  marrone: "#92400E", brown: "#92400E",
+  ambra: "#FBBF24", magenta: "#D946EF",
+  turchese: "#14B8A6", oro: "#FBBF24", argento: "#D1D5DB",
+  fucsia: "#E11D48", lilla: "#C4B5FD", indaco: "#6366F1",
+};
+
+// === VOICE → SPEAKING COLOR (2026-06) ===
+// Mappa l'identità della voce scelta al colore mostrato durante "speaking".
+// Il colore diventa l'identità visiva della voce: niente nomi sul selettore,
+// solo cerchi colorati. Tocca = preview audio.
+//
+//   Acqua (femminile)  → viola elettrico  #BD10E0
+//   Vento (maschile)   → cobalto vivo     #2563EB
+//
+// Gli stati Recording (#00F5D4 tiffany) e Thinking (#EC4899 ciclamino)
+// restano FISSI per garantire la leggibilità dello stato a colpo d'occhio.
+// Solo "speaking" cambia colore in base alla voce.
+const VOICE_ID_ACQUA = "6TngzmzM89jJ3Y2Yiywr";
+const VOICE_ID_VENTO = "ll9WG7PDTuyHwgC5MD6g";
+const VOICE_ID_CIELO = "POuqf18evoXOKIqV2Px7"; // 2026-07-13: nuova voce femminile ufficiale Ollenya
+
+const VOICE_SPEAKING_COLORS: Record<string, string> = {
+  [VOICE_ID_ACQUA]: "#BD10E0", // viola elettrico (default storico)
+  [VOICE_ID_VENTO]: "#2563EB", // cobalto vivo
+  [VOICE_ID_CIELO]: "#BD10E0", // viola elettrico (voce femminile Cielo — allineato a schema femminile=viola)
+};
+
+// Palette [bright, mid, deep] per l'EclipseOrb durante speaking.
+// Acqua = palette warm originale (viola). Vento = palette cobalto.
+const VOICE_SPEAKING_PALETTES: Record<string, [string, string, string]> = {
+  [VOICE_ID_ACQUA]: ["#E9D5FF", "#BD10E0", "#7E22CE"],
+  [VOICE_ID_VENTO]: ["#93BBFD", "#2563EB", "#1E3A8A"],
+  [VOICE_ID_CIELO]: ["#E9D5FF", "#BD10E0", "#7E22CE"], // stessa palette viola di Acqua
+};
+
+function getVoiceSpeakingColor(voiceId: string | undefined | null): string | undefined {
+  if (!voiceId) return undefined;
+  return VOICE_SPEAKING_COLORS[voiceId];
+}
+function getVoiceSpeakingPalette(voiceId: string | undefined | null): [string, string, string] | null {
+  if (!voiceId) return null;
+  return VOICE_SPEAKING_PALETTES[voiceId] || null;
+}
+
+// Rimuove i tag [TONE:xxx], gli [audio tags], le *narrazioni* tra
+// asterischi (es. *sighs*, *laughs*) e le (azioni) tra parentesi dal
+// testo per la visualizzazione in chat. Difensivo: il backend già
+// pulisce, ma vecchi dati o race possono far arrivare il prefisso
+// grezzo (es. "[TONE:warm] ...", "*sighs* Ciao...").
+function stripDisplayTags(text: string): string {
+  if (!text) return text;
+  return text
+    // [TONE:warm] e simili
+    .replace(/\[\s*TONE\s*:\s*[a-zA-Z_\-]+\s*\]\s*/gi, "")
+    // [audio tags] generici (sospira, ride, gently, ecc.)
+    .replace(/\[[a-zA-Zàèéìòùç '_,/-]{1,40}\]/g, "")
+    // *azioni in asterischi* tipiche di output LLM "narrato"
+    // (es. *sighs*, *laughs*, *sospira*, *sorride*)
+    .replace(/\*[^*\n]{1,60}\*/g, "")
+    // (azioni in parentesi tonde) — solo se sembrano descrizioni d'azione,
+    // cioè brevi e in minuscolo/verbo (es. "(laughs)", "(sospira)").
+    // Conservativo: max 30 char, no cifre.
+    .replace(/\(\s*[a-zàèéìòùç' ]{2,30}\s*\)/gi, "")
+    .replace(/  +/g, " ")
+    .replace(/\s+([,.;!?])/g, "$1")
+    .trim();
+}
+
+// === FIX #11 (2026-06-22 v8) ===
+// Variante "soft" di stripDisplayTags per il PERCORSO TTS DEL REPLAY.
+// Quando ri-giochi un messaggio AI già nella timeline, vogliamo che
+// ElevenLabs riproduca con la STESSA prosody della prima riproduzione,
+// inclusi gli audio tags `[sigh]`, `[laughs]`, `[whispered]` che il
+// backend mette esplicitamente in `voice_text` (vedi server.py:1009).
+// stripDisplayTags rimuoveva TUTTI i bracket tag → prosody piatta al replay.
+// Questa funzione rimuove SOLO il meta-marker `[TONE:xxx]` (= nostro tag
+// interno, non interpretato da ElevenLabs) preservando gli audio tags.
+function stripToneMarkerOnly(text: string): string {
+  if (!text) return text;
+  return text
+    .replace(/\[\s*TONE\s*:\s*[a-zA-Z_\-]+\s*\]\s*/gi, "")
+    .replace(/  +/g, " ")
+    .trim();
+}
+
+// === FIX 2026-07-03 v45 CLIENT-SIDE (Fabio "Sentiamo dopo non chiude") ===
+// Heuristica close_session lato CLIENT — defense-in-depth per quando il
+// backend non ha ancora ricevuto il fix v45 (redeploy pending o problemi
+// deployment Emergent). Il client, ricevendo `stt_final` con la
+// trascrizione, checka se contiene un pattern di congedo inequivocabile.
+// Se sì, forziamo `closeSessionPauseRef.current = true` — così il
+// HF_LOOP guard blocca la ripartenza automatica del mic anche se il
+// backend manda `close_session: false`.
+// NOTA: la logica va lasciata in sync con `close_patterns` in
+// backend/server.py (`_fast_pipeline_task`, ~riga 9385). Se aggiungi
+// pattern nuovi qui, aggiungili anche là (e viceversa).
+function detectCloseSessionClientSide(text: string | null | undefined): boolean {
+  if (!text || typeof text !== "string") return false;
+  const userLc = " " + text.toLowerCase().trim() + " ";
+  // === FIX 2026-07-24 — false positive "ciao koda" ===
+  // Alcuni pattern sono ambigui: "ciao koda" può essere APERTURA o CHIUSURA.
+  // Se il testo intero è LUNGO (>4 parole con contenuto oltre al saluto),
+  // è quasi certamente un'apertura ("ciao koda come stai? volevo dirti...").
+  // Solo se il testo è breve (max 3-4 parole totali) consideriamo "ciao/notte
+  // koda/coda" come saluto di chiusura reale.
+  const wordCount = text.trim().split(/\s+/).length;
+  const isShortUtterance = wordCount <= 4;
+  const patterns: RegExp[] = [
+    /\bci sentiamo (dopo|più tardi|poi|domani)\b/,
+    /\bsentiamo (dopo|poi|domani|più tardi|dopo dai|dopo grazie)\b/,
+    /\brisentiamo (dopo|poi|domani|più tardi)\b/,
+    /\b(ok |va bene )?ci risentiamo\b/,
+    /\ba dopo\b/,
+    /\ba più tardi\b/,
+    /\ba presto\b/,
+    /\ba domani\b/,
+    /\bci aggiorniamo\b/,
+    /\bbuonanotte\b/,
+    /\bbuona notte\b/,
+    /\bbuona giornata\b/,
+    /\bbuona serata\b/,
+    /\bvado a (letto|dormire|riposare)\b/,
+    /\bvado che (ho|devo)\b/,
+    /\bora (vado|scappo|chiudo)\b/,
+    /\bbasta per (oggi|ora|adesso)\b/,
+    /\bmi fermo qui\b/,
+    /\bchiudo qui\b/,
+    /\bgrazie (koda|coda),? (ora )?chiudo\b/,
+    /\b(ok|va bene|vabbè) (dai )?ci sentiamo\b/,
+    /\bgrazie di tutto\b/,
+    /\bgrazie (mille )?(davvero |per )?(tutto|ora)\b/,
+    /\b(ok |va bene |vabbè )?dai ciao\b/,
+    /\bora ti saluto\b/,
+    /\bti saluto (koda|coda|adesso|ora)?\b/,
+    /\bok basta (dai|per )?(oggi|ora|adesso)?\b/,
+    /\b(ci vediamo|ci becchiamo) (dopo|domani|poi|più tardi)\b/,
+    /\bstacco (ora|adesso|qui)?\b/,
+    /\btelefono dopo\b/,
+    /\bchiamo dopo\b/,
+    /\bti richiamo\b/,
+    /\bmi lasci (in pace|solo|un attimo)\b/,
+    /\bok basta parlare\b/,
+    /\btaci (un attimo|un po|per favore)?\b/,
+  ];
+  // Pattern AMBIGUI — solo se short utterance (evita false positive tipo
+  // "ciao coda come stai" o "grazie coda mi hai aiutato tanto")
+  const ambiguousPatterns: RegExp[] = [
+    // === FIX 2026-08-27 v65.3 — "ciao koda/coda" NON è più commiato (Fabio) ==
+    // "Ciao Ollenya" è un SALUTO DI APERTURA nel 99% dei casi. Prima del fix,
+    // dire "Ciao, coda" (STT storpia "koda") triggerava close_session=true
+    // → HF loop bloccato al primo turno. Rimosso dal set commiato: se
+    // qualcuno vuole davvero chiudere dice "buonanotte" / "ci sentiamo dopo"
+    // / "a dopo" / ecc. — tutti pattern non-ambigui già presenti.
+    // /\bciao (koda|coda)\b/,   ← RIMOSSO
+    /\bnotte (koda|coda)\b/,
+    /\barrivederci (koda|coda)?\b/,
+    /\bgrazie (koda|coda)$/,
+    /\bok grazie (koda|coda)?\b/,
+  ];
+  for (const pat of patterns) {
+    if (pat.test(userLc)) return true;
+  }
+  if (isShortUtterance) {
+    for (const pat of ambiguousPatterns) {
+      if (pat.test(userLc)) return true;
+    }
+  }
+  return false;
+}
+
+
+// === PUNTO 3 — DEDUPE GLOBALE DEL ROUTER FREE/PREMIUM (Fabio 2026-08-17) ===
+// Il ref locale `hasRedirectedFreeUserRef` sopravvive ai re-render ma NON al
+// re-mount del componente <Taccuino>. Se qualcosa nell'albero React (es.
+// TrialWatcher polling che cambia stato, AuthProvider refresh, ripristino
+// da background) causa un unmount+remount della Home page, il ref torna
+// a false e il router condizionale ri-scatta → loop di redirect osservato
+// da Fabio in build v64.20.
+//
+// FIX: memoria "per-profile" a livello di modulo, ora estratta in
+// `lib/routerGlobalState.ts` per essere condivisa con `lib/auth.tsx`
+// (che la resetta esplicitamente in signOut → Opzione Y).
+// Vedi `lib/routerGlobalState.ts` per la semantica completa.
+
+
+export default function Taccuino() {
+  // === v64.14 PROFILING — conta render del root e attiva FPS monitor
+  // (attivi solo con EXPO_PUBLIC_KODA_PERF_DIAG=1)
+  useRenderCounter("KODA_PERF_ROOT");
+  useEffect(() => {
+    startFpsMonitor();
+  }, []);
+  const insets = useSafeAreaInsets();
+  const { theme, themeName, setThemeName, setHours, dayStart, nightStart } = useTheme();
+  const styles = useMemo(() => makeStyles(theme), [theme]);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  // === FIX Bug 1 A2 (Fabio 2026-08-23) — hydration source flag ==============
+  // La cache locale (fastPathHydrate) popola `profile` in modo istantaneo
+  // ma con dati potenzialmente STALE (es. subscription_tier vecchio pre-
+  // Premium). I router condizionali sotto NON devono decidere finché
+  // `profileHydrated !== "network"` — altrimenti un utente Premium vede
+  // Intro V3 perché la cache non riflette ancora il tier corrente.
+  // Semantica:
+  //   "empty"   → nessun profile disponibile (cold start, nemmeno cache)
+  //   "cache"   → profile letto da cache locale (POTENZIALMENTE stale)
+  //   "network" → profile fresco dal backend, tier affidabile
+  const [profileHydrated, setProfileHydrated] = useState<
+    "empty" | "cache" | "network"
+  >("empty");
+  const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
+  // === FEEDBACK LOOP STATE (Fabio 2026-09-11) ===
+  // Il long-press su una bolla AI setta l'event_id qui → OllenyaFeedbackMenu
+  // si apre. null → menu chiuso. Non persistito: sopravvive solo alla
+  // sessione app corrente.
+  const [feedbackEventId, setFeedbackEventId] = useState<string | null>(null);
+  // === FEEDBACK MENU — reference alla entry attiva ===
+  // Necessario per passare `bubbleText` e `onDelete` a OllenyaFeedbackMenu
+  // (le voci Copia/Elimina lavorano sulla bolla su cui l'utente ha fatto
+  // long-press, non su una qualsiasi).
+  const [feedbackEntry, setFeedbackEntry] = useState<TimelineEntry | null>(null);
+  // === FEEDBACK MENU readOnly flag (Fabio + Neo 2026-09-11 B-bis) =========
+  // Bolle AI pre-deploy del feedback loop non hanno event_id. In quel caso
+  // il menu si apre lo stesso ma con le 2 CTA feedback disabilitate e
+  // subtitle "Feedback disponibile solo sui messaggi nuovi". Zero id lato
+  // client → nessun rischio privacy, nessun 404 di rete.
+  const [feedbackReadOnly, setFeedbackReadOnly] = useState(false);
+
+  // === ORB MEASURE 2026-08 (debug parity home ↔ intro) ===
+  // measureInWindow ci dà le coordinate assolute dell'orb rispetto alla
+  // viewport. Utente le legge sull'overlay in basso a sinistra e me le
+  // riporta per calcolare l'offset esatto rispetto all'intro. NON stimare,
+  // MISURARE.
+  // === Rimozione debug orb-measure (Fabio 2026-08-12) ==========
+  // Prima c'era un overlay in basso a sinistra che mostrava y/h/cY
+  // dell'orb Home per calibrare la posizione. Non serve più: layout
+  // ora è stabile. Rimosso overlay, state, callback e ref associati.
+
+  // === DISCLAIMER blocking overlay (Fabio 2026-07-28, riveduto 2026-09-06) ==
+  // `disclaimerState`:
+  //   'loading'       → chiamata /legal/disclaimer/status in corso o retry
+  //                     con backoff in coda (nascondi UI, mostra spinner)
+  //   'blocking'      → utente non ha accettato → mostra overlay
+  //   'accepted'      → utente ha accettato la versione corrente
+  //   'network_error' → dopo N retry falliti, mostra UI blocking con
+  //                     bottone "Riprova". MAI silent fail-open (2026-09-06):
+  //                     un utente con rete instabile NON deve poter
+  //                     bypassare il disclaimer legale obbligatorio.
+  // Al boot facciamo GET /legal/disclaimer/status con retry 3×
+  // (backoff 1s/2s/4s). Se tutti falliscono → 'network_error'.
+  const [disclaimerState, setDisclaimerState] = useState<
+    "loading" | "blocking" | "accepted" | "network_error"
+  >("loading");
+  const [status, _setStatusRaw] = useState<Status>("idle");
+  // === ORB SILENCE SYNC (Task 2 — Fabio 2026-08) ===
+  // Toggle in tempo reale che segue i silenzi RMS della TTS di Ollenya.
+  // `true` = sta parlando davvero → orb pulsa normale.
+  // `false` = silenzio percepito (respiro/pausa) → orb smorza la pulsazione.
+  // Fallback: se il server non manda `speech_timeline` questo resta `true`
+  // per tutto il turno → orb comportamento attuale (nessuna regressione).
+  const [speechActive, setSpeechActive] = useState<boolean>(true);
+  // === FIX 2026-06-28 v32 — DIAG STATUS TRACING ===
+  // Wrapper su setStatus per loggare OGNI transizione di stato con
+  // timestamp + caller. Cruciale per diagnosticare il bug Android
+  // "l'orb torna a idle subito senza mai mostrare thinking/speaking".
+  // Il log esce nel formato:
+  //   [OLLENYA_STATUS] prev=recording → next=idle caller=finally:voiceStreamConverse t+12345ms
+  // Permette di vedere ESATTAMENTE chi mette idle prematuro.
+  const statusTraceStartRef = useRef<number>(Date.now());
+  const statusRef = useRef<Status>("idle");
+  const voiceTurnEpochRef = useRef(0);
+  const voiceTurnStartedAtRef = useRef(0);
+  // === Debug verbose flag (post-debug 2026-06-28) ===
+  // Default false: log puliti. Si attiva via EXPO_PUBLIC_KODA_DEBUG_VERBOSE=true
+  // in .env per troubleshooting (necessita rebuild).
+  const OLLENYA_DEBUG_VERBOSE =
+    process.env.EXPO_PUBLIC_KODA_DEBUG_VERBOSE === "true";
+  const setStatus = useCallback((next: Status, caller?: string) => {
+    const prev = statusRef.current;
+    if (prev !== next) {
+      try {
+        // Stack trace: 1 riga in produzione, 4 righe in debug verbose.
+        const stack = new Error().stack || "";
+        const lines = stack.split("\n")
+          .slice(1, OLLENYA_DEBUG_VERBOSE ? 6 : 3)
+          .map((s) => s.trim().slice(0, 100))
+          .filter((s) => s.length > 0);
+        const tag = caller || (
+          OLLENYA_DEBUG_VERBOSE
+            ? lines.slice(0, 4).join(" ← ")
+            : (lines[1] || lines[0] || "?")
+        );
+        console.log(
+          `[OLLENYA_STATUS] ${prev} → ${next} t+${Date.now() - statusTraceStartRef.current}ms caller=${tag}`
+        );
+      } catch {}
+    }
+    statusRef.current = next;
+    _setStatusRaw(next);
+  }, [OLLENYA_DEBUG_VERBOSE]);
+
+  // === ORB SILENCE SYNC — reset speechActive quando Ollenya smette di
+  // parlare. Se il turno finisce a metà (per errore/interrupt/close),
+  // vogliamo comunque tornare all'orb "attivo" così il prossimo turno
+  // parta pulito, non con una pulsazione smorzata residua.
+  useEffect(() => {
+    if (status !== "speaking" && speechActive === false) {
+      setSpeechActive(true);
+    }
+  }, [status, speechActive]);
+
+  // === BUILD VERSION TAG 2026-06-28 v35 ===
+  // Logga una sola volta all'avvio una stringa identificativa della build.
+  // Se vediamo questa riga nei log diag, sappiamo che l'APK installato
+  // contiene davvero le modifiche v35 (BYPASS + TTS_STOP + TTS_LOOP +
+  // AppState guard + verbose AppState log + anomaly detection).
+  // Se NON vediamo questa riga, l'APK è stantio o la build non ha
+  // inglobato l'ultimo commit.
+  //
+  // 🚨 IMPORTANTE (Fabio 2026-07-29): la costante OLLENYA_BUILD_SHORT_TAG viene
+  // usata SIA nel console.log SIA nel display in Impostazioni (~riga 6552).
+  // In passato c'era una stringa hardcoded separata in Impostazioni che
+  // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
+  // buildtag → l'utente pensava che la build non contenesse i fix mentre
+  // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.1-resume-recovery";
+  const OLLENYA_BUILD_DATE = "2026-11-11";
+  useEffect(() => {
+    console.log(
+      `[OLLENYA_BUILDTAG] ${OLLENYA_BUILD_SHORT_TAG} v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=${OLLENYA_BUILD_DATE} ` +
+        `verbose=${OLLENYA_DEBUG_VERBOSE} ` +
+        `features=ANOMALY,STATUS,APPSTATE_GUARD,TAP_STOP_SERVER_WAIT,TAP_STOP_EARLY_REF,LONGPRESS_KILLSWITCH,MANUAL_AUDIO_OUTPUT_BUTTON_2STATE,STT_MODE_DEFAULT_V54,LATENCY_FIX_NO_SETACTIVE_TOGGLE,SPEAKER_OVERRIDE_REAPPLY_V55,BG_AUDIO_IOS,WHISPER1_FALLBACK,ANTI_HALLUCINATION_V3,PROFILE_DATETIME_COERCION_V57,SYNTHETIC_DONE_V57,AUTH_REFRESH_NO_WIPE_V57,PREVIEW_URL_V57,RAILWAY_URL_HARDCODED_V60,BANDPASS_300_3400HZ_V60,VOICECHAT_MODE_V56,KODA_GET_AUDIO_STATE_V63_3,PLUGIN_LOUD_FAIL_V63_4,ABORT_PRE_RECOGNITION_V63_5_FIX_A,MIC_ACTIVATION_GATE_V63_5_FIX_B,GPS_CACHE_FIRST_V63_7,TTS_AUDIOFOCUS_CYCLE_V63_8_FIX_C1,PRE_STT_AUDIOFOCUS_CYCLE_V63_9_FIX_C2,BREATH_REENABLED_V64_0,TAP_TO_RESET_UNIFIED_V64_0,ANDROID_MIC_WATCHDOG_V64_0,ANDROID_STT_PRE_ABORT_V64_0,KEEP_AWAKE_STABLE_SESSION_V64_0,NEONBORDER_SLOW_ANDROID_V64_1,ANDROID_CONTINUOUS_NO_BEEP_V64_1,ANDROID_SILENCE_TIMEOUT_LONGER_V64_1,ANDROID_NOSPEECH_GRACEFUL_V64_1,PREVIEW_AUDIO_FOCUS_REACQUIRE_V64_1,INTRO_VOICE_PREVIEW_FOCUS_V64_1,LASCIA_ANDARE_ORB_ALWAYS_RECORDING_V64_2,VOICE_ID_KODA_VOICE_SYNC_V64_2,DISCLAIMER_OVERLAY_V64_5,SCREEN_DIMMER_V2_FIX_V64_6,NOSPEECH_BACKOFF_V64_7,NEONBORDER_STATIC_V64_10,NEONBORDER_NO_ELEVATION_V64_11,NEONBORDER_DYNAMIC_RADIUS_V64_11,DIAGNOSTICS_SAFEAREA_XIAOMI_V64_12,NEONBORDER_INSTANT_COLOR_SYNC_V64_13,BUBBLE_MEMO_V64_14,PERF_DIAG_V64_14,SCROLLPEEK_REF_FIX_V64_15,RADIALGLOW_OFF_ANDROID_V64_16,RADIALGLOW_NO_PULSE_V64_17${OLLENYA_DEBUG_VERBOSE ? ",BYPASS,TTS_LOOP,TTS_STOP" : ""}`
+    );
+  }, []);
+
+  // === DISCLAIMER — check al boot (Fabio 2026-07-28, retry 2026-09-06) ======
+  // Chiama /legal/disclaimer/status per capire se mostrare l'overlay blocking.
+  // 2026-09-06 (Fabio): NO fail-open silenzioso. Retry 3× con backoff
+  // esponenziale (1s/2s/4s), poi stato 'network_error' con UI di retry
+  // manuale. Rischio legale (utente bypassa disclaimer con rete instabile)
+  // vince sul rischio UX (utente vede spinner qualche secondo in più).
+  const disclaimerRetryTokenRef = useRef<number>(0);
+  const runDisclaimerCheck = useCallback(async () => {
+    const token = ++disclaimerRetryTokenRef.current;
+    setDisclaimerState("loading");
+    const backoffMs = [0, 1000, 2000, 4000]; // 4 tentativi totali
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < backoffMs.length; attempt++) {
+      if (token !== disclaimerRetryTokenRef.current) return; // superseded
+      if (backoffMs[attempt] > 0) {
+        await new Promise((r) => setTimeout(r, backoffMs[attempt]));
+        if (token !== disclaimerRetryTokenRef.current) return;
+      }
+      try {
+        const st = await api.getDisclaimerStatus();
+        if (token !== disclaimerRetryTokenRef.current) return;
+        setDisclaimerState(st.needs_acceptance ? "blocking" : "accepted");
+        console.log(
+          `[DISCLAIMER] check OK attempt=${attempt + 1} needs_acceptance=${st.needs_acceptance}`
+        );
+        return;
+      } catch (e) {
+        lastErr = e;
+        console.warn(
+          `[DISCLAIMER] status check attempt=${attempt + 1}/${backoffMs.length} failed:`,
+          e
+        );
+      }
+    }
+    if (token !== disclaimerRetryTokenRef.current) return;
+    console.warn("[DISCLAIMER] all retries exhausted → network_error", lastErr);
+    setDisclaimerState("network_error");
+  }, []);
+  useEffect(() => {
+    runDisclaimerCheck();
+    return () => {
+      // Invalida qualsiasi retry in coda al momento dell'unmount
+      disclaimerRetryTokenRef.current++;
+    };
+  }, [runDisclaimerCheck]);
+  const [textInput, setTextInput] = useState("");
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  // === KODA INTRO ===
+  // Presentazione conversazionale di Ollenya al primo avvio. Sostituisce
+  // sia il vecchio onboarding modale che il tutorial colori. Ollenya si
+  // presenta in prima persona, chiede tutte le info che gli servono
+  // (nome, gender, voce, check-in, parola segreta, voiceprint) e poi
+  // si congeda. Persistito in SecureStore con `koda_intro_seen=1`.
+  // `null` = ancora da verificare; `true` = mostra; `false` = nascondi.
+  const [showColorIntro, setShowColorIntro] = useState<boolean | null>(null);
+  // === LASCIA ANDARE — Intro Modal state (Fabio 2026-08-14 P1) ==============
+  // Flag persistito server-side (Mongo `lascia_andare_intro_seen_at`), quindi
+  // sopravvive a reinstall/cambio device. `pendingLasciaAndareVoice` custodisce
+  // il voice param calcolato al tap, così quando l'utente conferma "Entra"
+  // navighiamo con lo stesso voice senza doverlo ricalcolare.
+  const [showLasciaAndareIntro, setShowLasciaAndareIntro] = useState<boolean>(false);
+  const [pendingLasciaAndareVoice, setPendingLasciaAndareVoice] = useState<string | null>(null);
+  // Splash screen all'apertura (4 sec) per mascherare la latenza di boot e
+  // dare un'identità visiva forte: eclissi che respira colori + nome AI.
+  // === PUNTO 2 (Fabio 2026-08-20) — SKIP SPLASH ON REMOUNT ===============
+  // Il default `true` mostrava OllenyaSplash ad ogni mount della Home. Con il
+  // router condizionale Free→LA (Punto 3), la Home viene ri-montata quando
+  // il free user esce da Lascia Andare via X → lo splash ripartiva creando
+  // l'impressione di un secondo boot. Ora leggiamo dal modulo globale se il
+  // splash è già stato mostrato in questa sessione app: se sì, partiamo
+  // direttamente in `false`. Al cold boot il modulo è vuoto → splash normale.
+  const [showSplash, setShowSplash] = useState<boolean>(!getSessionHasShownSplash());
+  const [voiceList, setVoiceList] = useState<Array<any>>([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      // === SKIP-SPLASH-AFTER-INTRO (2026-08-11, Fabio) ===
+      // Se l'utente arriva dall'Intro V2 (che ha appena vissuto 10 minuti di
+      // esperienza identitaria), skippa il OllenyaSplash da 10s per non
+      // interrompere la continuità. Il flag è un timestamp con TTL 60s:
+      // se troppo vecchio (crash tra fine intro e boot, o normale apertura
+      // dopo giorni), viene ignorato. In OGNI caso il flag viene cancellato
+      // qui, così non può restare appeso oltre il primo boot successivo.
+      try {
+        const raw = await SecureStore.getItemAsync("ollenya_intro_completed_at");
+        if (raw) {
+          // Cancella SEMPRE (anche se ignoriamo poi il valore): garanzia
+          // one-shot che sopravvive a qualsiasi race/crash.
+          try { await SecureStore.deleteItemAsync("ollenya_intro_completed_at"); } catch {}
+          const ts = parseInt(raw, 10);
+          if (!Number.isNaN(ts) && Date.now() - ts < 60_000) {
+            if (!cancelled) {
+              setShowSplash(false);
+              markSessionSplashShown(); // Punto 2: marca session-shown anche per skip-after-intro
+            }
+          }
+        }
+      } catch {
+        // safe fallback: splash normale
+      }
+      // === FIX 2026-08-27 v65.4 — V1 OllenyaIntro DEAD, force showColorIntro=false ===
+      // La V1 è stata rimossa dal render (riga 7271). Nessuno setta più
+      // `koda_intro_seen=1`, quindi al boot su fresh install/reinstall/reset
+      // `showColorIntro` restava `true` per sempre → la guardia HF_LOOP
+      // (riga ~2560) bloccava l'hands-free ad ogni turno su iOS. Confermato
+      // dai log iOS di Fabio (2026-08-27):
+      //   [OLLENYA_HF_GUARD] blocked: showColorIntro=true
+      // Forziamo sempre `false` e scriviamo "1" in SecureStore per pulizia
+      // idempotente (così anche gli altri check che leggono la chiave
+      // — se ne restano — non falliscono).
+      try {
+        await SecureStore.setItemAsync("ollenya_intro_seen", "1");
+      } catch {}
+      if (!cancelled) setShowColorIntro(false);
+      // Carica le voci ElevenLabs disponibili per la scelta automatica
+      try {
+        const r = await fetch(`${API_BASE}/voices`);
+        if (r.ok) {
+          const v = await r.json();
+          // === FIX 2026-06-27 v18 (Android Xiaomi: Impostazioni mostra solo Acqua) ===
+          // Il backend ritorna `{"voices": [...], "enabled": true}` (oggetto)
+          // ma il client controllava `Array.isArray(v)` direttamente sul body
+          // → il check falliva → `voiceList` restava vuoto → la UI di
+          // Impostazioni mostrava solo la voce di default (Acqua) senza
+          // possibilità di scegliere Vento. Ora supportiamo entrambi i
+          // formati per retrocompatibilità.
+          let voices: any[] = [];
+          if (Array.isArray(v)) {
+            voices = v;
+          } else if (v && Array.isArray(v.voices)) {
+            voices = v.voices;
+          }
+          if (!cancelled && voices.length > 0) setVoiceList(voices);
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  // === ACTIVATION PULSE (idea 1) ===
+  // Effetto "sistema attivo" all'avvio dell'app: linea neon viola traccia
+  // il perimetro dello schermo in 1.5s, poi svanisce. Mostrato SOLO al
+  // cold start. State `false` significa "ancora da mostrare".
+  const [activationPulseDone, setActivationPulseDone] = useState(false);
+
+  // === TOUR GUIDATO (spotlight) ===
+  // Si attiva dopo che OllenyaIntro termina (campo `launch_tour: true` nel
+  // result). Mostra un overlay scuro sopra la home con un anello luminoso
+  // attorno a ciascun elemento UI, mentre Ollenya parla a voce spiegando
+  // cosa fa. Auto-avanzamento al termine di ogni voce.
+  const [tourActive, setTourActive] = useState(false);
+
+  // === ADMIN WHITELIST MINI-PANEL (2026-07-24 pre-paywall) ===
+  // Solo l'owner (Fabio) vede la sezione admin nelle Impostazioni per
+  // gestire la whitelist "unlimited". Verificato via GET /api/admin/whoami
+  // al boot; is_admin=false per tutti gli altri. Vedi PAYWALL_POLICY.md.
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [adminUnlimitedList, setAdminUnlimitedList] = useState<
+    Array<{ email: string; uid: string; added_by: string; added_at: string; note?: string | null }>
+  >([]);
+  const [adminAddEmail, setAdminAddEmail] = useState<string>("");
+  const [adminAddNote, setAdminAddNote] = useState<string>("");
+  const [adminBusy, setAdminBusy] = useState<boolean>(false);
+  const [adminError, setAdminError] = useState<string | null>(null);
+  const [tourSteps, setTourSteps] = useState<TourStep[]>([]);
+  // === Tour step tracker (giugno 2026, round 5) ===
+  // Sappiamo quale step del tour è attivo per sincronizzare gli
+  // overlay nella pagina di lettura (messaggi finti + simulazione
+  // tieni-premuto) col narrato di Ollenya.
+  const [tourCurrentStep, setTourCurrentStep] = useState<{ idx: number; label?: string; page?: string } | null>(null);
+  const tourDims = useWindowDimensions();
+  // Mirror del tourActive in ref — serve per leggere il valore aggiornato
+  // dentro setTimeout/closure che sono stati schedulati PRIMA che il tour
+  // partisse (es. l'auto-mic-open timeout da 450ms): senza questo controllo
+  // il mic si apriva nel gap tra "OllenyaIntro chiusa" e "tourActive=true".
+  const tourActiveRef = useRef(false);
+  useEffect(() => { tourActiveRef.current = tourActive; }, [tourActive]);
+
+  /** Costruisce gli step del tour usando le coordinate REALI della home
+   *  in base a insets e dimensioni schermo. Va chiamato al momento del
+   *  lancio per avere coordinate aggiornate (rotazione/foldable safe). */
+  /** Misura le coordinate REALI di un elemento UI tramite measureInWindow.
+   *  Risolve null se il nodo non è montato/misurabile.
+   *  RETRY (giugno 2026): su iOS native (TestFlight) il measureInWindow a
+   *  volte ritorna 0/0/0/0 al primo tentativo perché il layout non è
+   *  ancora stabilizzato. Riproviamo fino a 4 volte con backoff di 120ms.*/
+  const measureRef = useCallback(
+    (ref: React.RefObject<any>): Promise<{ x: number; y: number; w: number; h: number } | null> =>
+      new Promise((resolve) => {
+        const attempt = (n: number) => {
+          const node = ref?.current;
+          if (!node || typeof node.measureInWindow !== "function") {
+            resolve(null);
+            return;
+          }
+          let settled = false;
+          try {
+            node.measureInWindow((x: number, y: number, w: number, h: number) => {
+              settled = true;
+              if (w > 0 && h > 0 && (x !== 0 || y !== 0 || n >= 3)) {
+                resolve({ x, y, w, h });
+              } else if (n < 3) {
+                // Retry: layout non ancora pronto
+                setTimeout(() => attempt(n + 1), 120);
+              } else {
+                resolve(w > 0 && h > 0 ? { x, y, w, h } : null);
+              }
+            });
+          } catch {
+            resolve(null);
+            return;
+          }
+          setTimeout(() => {
+            if (!settled) {
+              if (n < 3) attempt(n + 1);
+              else resolve(null);
+            }
+          }, 400);
+        };
+        attempt(0);
+      }),
+    []
+  );
+
+  /** Costruisce gli step del tour. Le coordinate degli elementi della pagina
+   *  voce sono MISURATE dai veri nodi UI (measureInWindow) — prima erano
+   *  calcolate a mano e risultavano decentrate. Fallback al calcolo
+   *  geometrico se la misura non è disponibile. Le aree della pagina lettura
+   *  (non montate al momento del lancio) restano approssimazioni geometriche. */
+  const buildTourSteps = useCallback(async (): Promise<TourStep[]> => {
+    const W = tourDims.width;
+    const H = tourDims.height;
+    const headerCY = Math.max(insets.top + 28, 70) + 22;
+    const userNameRaw = (profile?.user_name || "").trim();
+    // === FIX 2026-07 (utente) — niente più fallback "amico" nei testi tour ===
+    // Prima usavamo `profile?.user_name || "amico"`. Se l'utente non aveva
+    // ancora inserito il nome, il tour lo chiamava "amico" — sensazione
+    // fredda e generica. Ora costruiamo un vocativo opzionale che si
+    // aggiunge SOLO se il nome è davvero presente.
+    const userName = userNameRaw || "";
+    const nameVocative = userNameRaw ? `, ${userNameRaw}` : "";
+    const orbSize = ECLIPSE_MAX_DIAMETER;
+    // === FIX ECLISSI CENTRATA (Fabio 2026-08-24) =========================
+    // Prima: H * 0.46 (46% dall'alto) → fallback per il coach-mark quando
+    // measureRef fallisce. Ora l'orb reale è centrato a H/2 esatto → il
+    // fallback deve rispecchiarlo per non spostare il OllenyaTour label.
+    const orbCY = H / 2;
+    const [hf, conf, menu, orb, hint] = await Promise.all([
+      measureRef(handsFreeBtnRef),
+      measureRef(confessionaleBtnRef),
+      measureRef(menuBtnRef),
+      measureRef(orbBtnRef),
+      measureRef(scrollHintRef),
+    ]);
+    const hfRect = hf || { x: 14, y: headerCY - 22, w: 44, h: 44 };
+    const confRect = conf || { x: W / 2 - 95, y: Math.max(insets.top + 100, 150), w: 190, h: 44 };
+    const menuRect = menu || { x: W - 58, y: headerCY - 22, w: 44, h: 44 };
+    const orbRect = orb || { x: W / 2 - orbSize / 2, y: orbCY - orbSize / 2, w: orbSize, h: orbSize };
+    const hintRect = hint || { x: W / 2 - 110, y: H * 0.8, w: 220, h: 36 };
+    return [
+      // -------- Pagina VOCE --------
+      // === FIX TESTI TOUR (richiesta utente giugno 2026 round 2) ===
+      // Riscritti: BREVI, EASY, no caramello. 1-2 frasi per step. Tono
+      // amichevole ma diretto, no melenso. Rimosso riferimento "lucchetto"
+      // dal Confessionale (ora non c'è più l'icona). Niente parole doppie
+      // tra step contigui.
+      {
+        page: "voice",
+        rect: hfRect,
+        label: "Hands-free",
+        shape: "circle",
+        speech: `Questa è la modalità mani libere${nameVocative}. Quando è attiva ti ascolto io. Toccala per fermarla.`,
+      },
+      {
+        page: "voice",
+        rect: confRect,
+        // === FIX 2026-07-17 — Rinomina "Stanza dello Sfogo" → "Lascia andare" ===
+        // Nuovo concept "Un posto dove nessuno risponde": zero rete, VAD
+        // locale, orb come feedback silenzioso.
+        label: "Lascia andare",
+        shape: "round",
+        speech: `Lascia andare: un posto dove nessuno risponde. Quello che dici lì non viene trascritto, non esce dal tuo telefono. Sparisce nel silenzio.`,
+      },
+      {
+        page: "voice",
+        rect: menuRect,
+        label: "Menu",
+        shape: "circle",
+        speech: `Da qui: voce, tema, memoria. Tutto quello che vuoi cambiare.`,
+      },
+      {
+        page: "voice",
+        rect: orbRect,
+        // === LABEL VUOTA (utente 2026-07) ===
+        // Il "banner indicatore" al top della card tour (che mostrava
+        // "Eclissi") è stato rimosso su richiesta: quando Ollenya dice
+        // "Eccomi. Toccami per parlarti" non serve un titolo aggiuntivo
+        // — la voce e la sfera bastano. OllenyaTour salta il render del
+        // titolo se label è stringa vuota.
+        label: "",
+        shape: "circle",
+        speech: `Eccomi. Toccami per parlarti, ritoccami per fermarmi.`,
+      },
+      {
+        page: "voice",
+        rect: hintRect,
+        label: "Scorri",
+        shape: "round",
+        speech: `Scorri verso sinistra: trovi tutta la nostra chat scritta.`,
+      },
+      // -------- Pagina LETTURA --------
+      {
+        page: "reading",
+        rect: { x: 8, y: Math.max(insets.top + 70, 110), w: W - 16, h: H * 0.55 },
+        label: "Lettura",
+        shape: "round",
+        speech: `Qui rileggi tutto quello che ci siamo detti. Ogni parola resta tua.`,
+      },
+      {
+        page: "reading",
+        rect: { x: 8, y: Math.max(insets.top + 100, 140), w: W - 16, h: H * 0.50 },
+        label: "Tieni premuto",
+        shape: "round",
+        speech: `Tieni premuto un messaggio per cancellarlo. Sparisce dal mio ricordo.`,
+      },
+      {
+        page: "reading",
+        rect: { x: 8, y: H - Math.max(insets.bottom, 20) - 90, w: W - 16, h: 78 },
+        label: "Scrittura",
+        shape: "round",
+        speech: `Quando non puoi parlare, scrivi qui. Ti rispondo in silenzio.`,
+      },
+      // -------- Chiusura --------
+      {
+        page: "voice",
+        rect: orbRect,
+        // Vedi commento sopra "Eccomi": stessa logica, banner indicatore
+        // rimosso per non doppiare il messaggio vocale.
+        label: "",
+        shape: "circle",
+        speech: userNameRaw
+          ? `Ecco, è tutto. Sono qui, ${userNameRaw}.`
+          : `Ecco, è tutto. Sono qui.`,
+      },
+    ];
+  }, [tourDims.width, tourDims.height, insets.top, insets.bottom, profile?.user_name, measureRef]);
+
+  // === MIC OFF DURANTE INTRO/TOUR ===
+  // Se OllenyaIntro o il Tour si aprono mentre il mic era attivo (hands-free),
+  // chiudi immediatamente il mic per liberare la sessione audio. Senza
+  // questo, l'AVAudioSession resta in "recording" e blocca il TTS di Ollenya
+  // (la voce non parte durante l'intro).
+  useEffect(() => {
+    // === CLEANUP 2026-08-27 v65.9 (Fabio) ===
+    // showColorIntro rimosso dal check: la V1 OllenyaIntro è dead code (vedi
+    // riga 7288+), showColorIntro non può più diventare true (tutti i
+    // setter puntano a false). Guardia residua tolta.
+    const intruderActive = tourActive || showOnboarding;
+    if (intruderActive && recRef.current) {
+      // Mic spento brutalmente — non vogliamo né silenzio rilevato né invio.
+      // Chiamiamo cancel() (fire-and-forget): voice.ts dentro safeStop()
+      // rilascia il recorder e la sessione audio si normalizza al prossimo
+      // startTalk (voice.ts setta allowsRecording:true ogni volta).
+      // NON tocchiamo setAudioModeAsync qui — altrimenti rischiamo di
+      // bloccare la sessione iOS in playback-only e il mic non torna più.
+      const r = recRef.current;
+      recRef.current = null;
+      setStatus("idle");
+      try { r.cancel?.(); } catch {}
+    }
+  }, [showColorIntro, tourActive, showOnboarding]);
+
+  const dismissColorIntro = useCallback(async (result?: KodaIntroResult) => {
+    setShowColorIntro(false);
+    try {
+      await SecureStore.setItemAsync("ollenya_intro_seen", "1");
+    } catch {}
+    // Refresh profile dopo che Ollenya ha salvato i dati
+    try {
+      const p = await api.getProfile();
+      setProfile(p);
+    } catch {}
+    // Se Ollenya ha appena chiuso con "lancia tour", apri il tour visivo
+    // invece di mostrare il banner di conferma.
+    if (result?.launch_tour) {
+      // Costruzione step DOPO che il profilo è stato aggiornato (così il
+      // nome utente nel testo del tour è quello giusto).
+      // DELAY AUMENTATO da 250ms a 600ms (giugno 2026): su iOS native
+      // TestFlight il OllenyaIntro modal impiega ~400ms a fare unmount + il
+      // layout della UI principale necessita di un altro frame per
+      // stabilizzarsi. Con 250ms i measureInWindow tornavano coordinate
+      // sballate → highlights del tour decentrati.
+      setTimeout(async () => {
+        const steps = await buildTourSteps();
+        setTourSteps(steps);
+        setTourActive(true);
+      }, 600);
+      return;
+    }
+    // Mostra il banner di conferma in home — l'utente ha completato la
+    // presentazione (o l'ha rifatta) e i suoi dati sono stati salvati.
+    showSavedBanner();
+  // showSavedBanner è definita sotto ma è stable (useCallback []), OK.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buildTourSteps]);
+  /** Riapri la presentazione di Ollenya (back-door: tap sull'icona ⋯ in alto a destra). */
+  /** V1 reopenKodaIntro RIMOSSO (Fabio 2026-08-22).
+   *  La V1 non è più raggiungibile da alcun path. Il pulsante nelle
+   *  Impostazioni è stato sostituito con "Rivedi Intro Premium" (admin-only). */
+  const reopenIntroPremium = useCallback(async () => {
+    try {
+      await api.devIntroPremiumReset();
+    } catch (e) {
+      console.warn("[reopen-intro-premium] backend reset failed:", e);
+    }
+    try {
+      await SecureStore.deleteItemAsync("intro_premium_seen_at");
+    } catch {}
+    try {
+      router.replace("/intro-premium");
+    } catch (e) {
+      console.warn("[reopen-intro-premium] router replace failed:", e);
+    }
+  }, []);
+  // Banner "Configurazione salvata ✓" — mostrato per ~4 secondi quando
+  // l'utente completa (o ri-completa) OllenyaIntro. Conferma visiva che le
+  // modifiche al profilo sono state registrate. Sparisce automaticamente.
+  const [savedBannerVisible, setSavedBannerVisible] = useState(false);
+  const showSavedBanner = useCallback(() => {
+    setSavedBannerVisible(true);
+    setTimeout(() => setSavedBannerVisible(false), 4000);
+  }, []);
+  /** Esci da OllenyaIntro senza salvare nulla (tap su X).
+   *  Marca comunque `koda_intro_seen=1` così al prossimo avvio non riappare. */
+  const cancelKodaIntro = useCallback(async () => {
+    try { SpeechMod.stop(); } catch {}
+    setShowColorIntro(false);
+    try {
+      await SecureStore.setItemAsync("ollenya_intro_seen", "1");
+    } catch {}
+  }, []);
+  const [showSettings, setShowSettings] = useState(false);
+  // === BORDER CALIBRATION (2026-08-02, Fabio dopo bug Honor curved edges) ===
+  // Alcuni schermi Android (Honor curvo, Xiaomi 4-lati curvi) hanno curve
+  // fisiche che "mangiano" il NeonBorder default → utente calibra da
+  // Impostazioni → Bordo. Persistito in SecureStore locale (per-device),
+  // NON nel profilo cloud: è una preferenza legata alla fisica dello
+  // schermo, non all'identità utente.
+  const [borderCal, setBorderCal] = useState<BorderCalibration>(DEFAULT_CALIBRATION);
+  useEffect(() => {
+    (async () => {
+      try {
+        const cal = await loadBorderCalibration();
+        setBorderCal(cal);
+      } catch {}
+    })();
+  }, []);
+  // === AUDIO PREWARM iOS/Android (2026-08-02, Fabio "primo istante magico") ===
+  // Al mount della home, configuriamo la audio session iOS in modo che il
+  // primo TTS di Ollenya non paghi i 100-200ms di setup iniziale. Impatta
+  // direttamente la percezione delle "prime 3-5 parole" — quelle che
+  // devono stregare l'utente. Idempotente, no-op se già configurato altrove.
+  useEffect(() => {
+    (async () => {
+      try {
+        const { setAudioModeAsync } = await import("expo-audio");
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          allowsRecording: false,
+          shouldPlayInBackground: false,
+          interruptionMode: "duckOthers",
+          interruptionModeAndroid: "duckOthers",
+        });
+        console.log("[HOME] audio session prewarmed (v65 first-word magic)");
+      } catch (e) {
+        console.warn("[HOME] audio prewarm skipped:", e);
+      }
+    })();
+  }, []);
+  // === ROLLBACK 2026-07-13 ===
+  // Rimossa la "Modalità Telefono" (audioOutMode / cycleAudioOutput /
+  // setKodaAudioOutput / getKodaAudioOutput). Vedi
+  // /app/summary/refund_documentation.md per il razionale tecnico.
+  const [showInfo, setShowInfo] = useState(false);
+  const [showVoicePicker, setShowVoicePicker] = useState(false);
+  // === MODALITÀ CONFESSIONALE — RIMOSSA (Blocco B, feature deprecata) ===
+  // Tutta la logica confessionale/fortezza/sealed è stata cancellata.
+  // Manteniamo stub `confessionalMode = false` per far collassare i vecchi
+  // rami di codice inerti che saranno rimossi progressivamente.
+  const confessionalMode = false as const;
+  const confessionalExiting = false as const;
+  const [error, setError] = useState<string | null>(null);
+  // === FREE LIMIT OVERLAY v65.53 (Fabio 2026-06) ==========================
+  // Comparsa al 402 free_limit_exhausted. Il countdown si aggiorna live
+  // via `useLiveCountdown(periodEndsAtIso)`.
+  const [freeLimitOverlay, setFreeLimitOverlay] = useState<{
+    visible: boolean;
+    greeting: string;
+    countdown: string;
+    periodEndsAtIso: string | null;
+  }>({ visible: false, greeting: "", countdown: "", periodEndsAtIso: null });
+  // === HOME TAB v65.53 — kept as no-op for backcompat (v65.56 rimosso chooser) ===
+  const [homeTab, setHomeTab] = useState<"ollenya" | "lascia_andare">("ollenya");
+  // === PREMIUM TEASER TOAST v65.56 (Fabio 2026-09) ============================
+  // Quando un utente Free tocca elementi disabilitati (eclissi, impostazioni,
+  // hands-free), mostriamo un toast breve "Questa è per la versione Premium"
+  // con link al paywall. Auto-dismiss dopo 2500ms. Non bloccante.
+  const [premiumTeaserVisible, setPremiumTeaserVisible] = useState(false);
+  const showPremiumTeaser = useCallback(() => {
+    setPremiumTeaserVisible(true);
+    setTimeout(() => setPremiumTeaserVisible(false), 2500);
+  }, []);
+  // === FREE GATE HELPER v66.1 (Fabio 2026-06-16) =============================
+  // Determina se l'utente corrente è "Free" e deve vedere gli elementi
+  // Premium (Eclissi, Hands-Free, Impostazioni) come SPENTI + tap→teaser.
+  // NOTA: il FreeOverlay full-screen precedente è stato RIMOSSO perché
+  // bloccava lo swipe-right (chat testuale) e oscurava tutta la home.
+  // Ora ogni elemento intercetta il proprio tap e applica il proprio dim.
+  const isFreeGate = useCallback((): boolean => {
+    const tier = (profile as any)?.subscription_tier;
+    const isPaid = tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
+    return !isPaid;
+  }, [profile]);
+  const [recapText, setRecapText] = useState<string | null>(null);
+  const [showRecap, setShowRecap] = useState(false);
+
+  // === SAFETY ALERT (giugno 2026) ============================================
+  // Quando /api/safety/check rileva rischio: blocca l'invio normale, mostra
+  // overlay con risorse italiane verificate.
+  const [safetyResult, setSafetyResult] = useState<SafetyCheckResult | null>(null);
+  const [safetyVisible, setSafetyVisible] = useState(false);
+
+  // === FREEMIUM 3 MESSAGGI (giugno 2026) =====================================
+  const router = useRouter();
+  const auth = useAuth();
+  const [freemium, setFreemium] = useState<FreemiumStatusType | null>(null);
+  const freemiumRef = useRef<FreemiumStatusType | null>(null);
+  useEffect(() => { freemiumRef.current = freemium; }, [freemium]);
+
+  // Carica stato freemium al mount + ogni volta che il profilo cambia
+  useEffect(() => {
+    let cancelled = false;
+    api.freemiumStatus()
+      .then((s) => { if (!cancelled) setFreemium(s); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [profile?.id]);
+
+  // === ROUTER PRIMO BOOT V3 (Fabio 2026-08-22) ================================
+  // Al primissimo boot dell'app (nessun `intro_v3_completed_at` in SecureStore),
+  // reindirizza a `/intro-v3` PRIMA di qualsiasi altra logica routing (free/paid).
+  // Dopo il completamento della sequenza narrativa (OllenyaIntroV3 → doSaveAndHandoff),
+  // il flag viene scritto e questo redirect non scatta più → l'utente atterra
+  // sempre a /lascia-andare via il router free/premium sotto.
+  //
+  // Perché in un useEffect separato: `SecureStore.getItemAsync` è async, non
+  // possiamo bloccare il render. Usiamo uno stato `introV3State` che parte
+  // "checking" → "needed" | "completed" e agisce di conseguenza.
+  const [introV3State, setIntroV3State] = useState<"checking" | "needed" | "completed">("checking");
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const flag = await SecureStore.getItemAsync("intro_v3_completed_at");
+        if (cancelled) return;
+        setIntroV3State(flag ? "completed" : "needed");
+      } catch {
+        if (!cancelled) setIntroV3State("completed"); // safe fallback: no redirect
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  // === FIX 2026-08-21 (Fabio, TDZ crash "Cannot access 'bottomBarHeight' before initialization") ===
+  // Questa useState era dichiarata a metà del componente (~riga 4912) ma
+  // veniva referenziata da un useEffect molto più in alto (deps array).
+  // Spostata qui in cima con le altre state per evitare il crash TDZ.
+  const [bottomBarHeight, setBottomBarHeight] = useState(140);
+  // === FIX 2026-08-21 (Fabio, TDZ crash "Cannot access 'pathname' before initialization") ===
+  // `pathname` era dichiarato molto più in basso (accanto al router free/premium),
+  // ma questo useEffect KODA_ROUTER_V3 lo referenzia già qui → TDZ error al primo render
+  // → l'app crashava immediatamente per gli utenti autenticati (LoginScreen mascherava
+  // il bug quando non c'era ancora un token). Spostato in cima al primo utilizzo.
+  const pathname = usePathname();
+  const hasRedirectedIntroV3Ref = useRef<boolean>(false);
+  // === FIX Bug 1 A2 (Fabio 2026-08-23) — keyed invalidation ref =============
+  // Memorizza la chiave `${profileId}:${tier}` per cui il router V3 ha già
+  // deciso. Se il tier cambia in-session (es. dev panel "Simula Premium",
+  // o RevenueCat purchase), la chiave cambia → invalidiamo il ref booleano
+  // per permettere una nuova decisione coerente col tier corrente.
+  const lastV3DecidedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (pathname !== "/") return;
+    if (introV3State !== "needed") return;
+    // Aspetta che disclaimer sia accepted e profilo caricato — coerenza con
+    // il router free/premium sotto (non redirigiamo su stato incompleto)
+    if (!profile) return;
+    // FIX Bug 1 A2 (2026-08-23): il profile cached può essere STALE (tier
+    // vecchio). Aspettiamo che la rete abbia sincronizzato → altrimenti
+    // un utente Premium vede Intro V3 perché la cache non riflette ancora
+    // il tier corrente. Con questo guard, il router V3 decide SOLO su
+    // dati network-fresh.
+    if (profileHydrated !== "network") return;
+    if (disclaimerState !== "accepted") return;
+    if (showSplash) return;
+    // === FIX A2 (Fabio 2026-08-22) — Premium salta V3 ==========================
+    // V3 è la sequenza narrativa di ingresso per utenti Free (primissimo
+    // utilizzo, prima di sottoscrivere). Un utente che boota già Premium
+    // NON deve mai vedere V3 → salta direttamente all'Intro Premium.
+    const tierV3 = ((profile as any)?.subscription_tier as string | null) || null;
+    const isPaidV3 = tierV3 === "monthly" || tierV3 === "bimonthly" || tierV3 === "annual" || tierV3 === "unlimited";
+    // Keyed invalidation: se la key è cambiata (cambio tier in-session),
+    // permetti nuova decisione.
+    const currentKey = `${(profile as any)?.id || "none"}:${tierV3 ?? "free"}`;
+    if (
+      lastV3DecidedKeyRef.current !== null &&
+      lastV3DecidedKeyRef.current !== currentKey
+    ) {
+      hasRedirectedIntroV3Ref.current = false;
+      lastV3DecidedKeyRef.current = null;
+      console.log(`[OLLENYA_ROUTER_V3] tier changed in-session → re-evaluate`);
+    }
+    if (hasRedirectedIntroV3Ref.current) return;
+    if (isPaidV3) {
+      hasRedirectedIntroV3Ref.current = true;
+      lastV3DecidedKeyRef.current = currentKey;
+      setIntroV3State("completed"); // sblocca i guard downstream (Intro Premium)
+      try {
+        // Persistiamo per idempotenza cross-boot: se paid al primo boot,
+        // marca V3 come "vista" così anche se un domani torna Free non
+        // rivedrà V3 (design intenzionale: paga → salta rituale ingresso).
+        SecureStore.setItemAsync("intro_v3_completed_at", String(Date.now())).catch(() => {});
+      } catch {}
+      console.log(`[OLLENYA_ROUTER_V3] paid user (tier=${tierV3}) → skip V3, mark completed`);
+      return;
+    }
+    hasRedirectedIntroV3Ref.current = true;
+    lastV3DecidedKeyRef.current = currentKey;
+    // v66.3 (Fabio 2026-06-16): PRIMA di /intro-v3 controlliamo il consenso
+    // legale. Se assente → /legal-consent. Il route /legal-consent, al tap
+    // di "Iniziamo" (con checkbox spuntato), scrive `legal_consent_at` in
+    // SecureStore e router.replace verso /intro-v3.
+    (async () => {
+      try {
+        const legalFlag = await SecureStore.getItemAsync("legal_consent_at");
+        if (!legalFlag) {
+          console.log("[OLLENYA_ROUTER_V3] no legal_consent → /legal-consent");
+          setShowColorIntro(false);
+          router.replace("/legal-consent");
+          return;
+        }
+        console.log(`[OLLENYA_ROUTER_V3] fresh install (intro_v3_completed_at=absent) → replace to /intro-v3`);
+        setShowColorIntro(false);
+        router.replace("/intro-v3");
+      } catch (e) {
+        console.warn("[OLLENYA_ROUTER_V3] legal_consent check failed → intro-v3:", e);
+        setShowColorIntro(false);
+        try { router.replace("/intro-v3"); } catch {}
+      }
+    })();
+  }, [introV3State, profile, profileHydrated, disclaimerState, showSplash, pathname, router]);
+
+  // === ROUTER CONDIZIONALE FREE/PREMIUM (Punto 3, Fabio 2026-08-17) ==========
+  // Nuova architettura Free/Premium:
+  //   - Free (nessun abbonamento) → Lascia Andare è la landing di default,
+  //     è il CUORE del prodotto. Al primo mount della home Ollenya conv, se il
+  //     profilo non ha un tier paid, redirigiamo verso /lascia-andare.
+  //   - Premium (subscription_tier ∈ monthly/bimonthly/annual/unlimited) →
+  //     restano su Ollenya conversazionale (comportamento attuale, zero attrito).
+  //
+  // === TRIPLA DIFESA CONTRO IL LOOP DI REDIRECT (fix 2026-08-17 v2) ==========
+  // Il primo tentativo (v64.20) usava solo un `useRef` locale. Fabio ha
+  // osservato loop: LA → Home flash → LA → ripete. Diagnosi: il ref è
+  // locale al componente <Taccuino>; se qualcosa nell'albero React fa
+  // unmount+remount della Home (TrialWatcher polling, AuthProvider refresh,
+  // resume da background), il ref torna a false → redirect ri-scatta.
+  //
+  // Tre livelli di difesa combinati:
+  //   A) usePathname() → se non siamo attualmente sulla route "/", non
+  //      redirigere. Se Home è ri-montata mentre siamo su /lascia-andare,
+  //      pathname sarà "/lascia-andare" → early return.
+  //   B) hasRedirectedFreeUserRef (useRef locale) → dedupe intra-mount se
+  //      le dependency cambiano più volte prima che pathname si aggiorni.
+  //   C) __kodaFreeUserRouter_lastDecidedProfileId (module-level) →
+  //      persiste tra unmount+remount della Home. Si resetta automaticamente
+  //      su cambio profileId (login/logout/switch account).
+  //
+  // Vincoli mantenuti dalla versione precedente:
+  //   - Non redirigiamo finché il disclaimer legale è "blocking" o "loading"
+  //   - Non redirigiamo finché il profilo non è caricato
+  //   - Non redirigiamo se lo splash è ancora visibile
+  //   - Non redirigiamo se OllenyaIntro è attivo (primo lancio: la presentazione
+  //     ha priorità sull'atterraggio Lascia Andare)
+  //
+  // NON tocchiamo il trial state / subscription_tier machinery: quelli
+  // servono per gating Ollenya conversazionale.
+  // === Nota 2026-08-21 (Fabio) ===
+  // `pathname` è già dichiarato sopra (fix TDZ) — qui non lo ridichiariamo.
+  const hasRedirectedFreeUserRef = useRef<boolean>(false);
+  // === v65.27 — DIMMER SWALLOW REF (deterministic, expiry-based) ============
+  // Ref timestamp fino a quando il prossimo tap sul big button deve essere
+  // SILENZIATO (perché era stato usato solo per ripristinare la luminosità).
+  // Settato dal root View onStartShouldSetResponder QUANDO il dimmer è in
+  // stato dimmed/dimming AL MOMENTO del touch — timing deterministico,
+  // niente race condition su state="restoring" residuale.
+  // TTL 500ms: coerente con FADE_UP_MS=300ms del ScreenDimmer + margine.
+  const swallowNextBigButtonTapUntilRef = useRef<number>(0);
+  // === FIX BUG CACHE TIER IN-SESSIONE (Fabio 2026-08-24) ===================
+  // Keyed invalidation locale, coerente con V3 e Intro Premium router.
+  // PRIMA: `hasRedirectedFreeUserRef` non veniva mai resettato → cambio tier
+  // in-session (dev panel, RevenueCat) non ridecideva → utente Free bloccato
+  // sulla Home invece di essere rediretto a /lascia-andare.
+  // ADESSO: se la chiave `${profileId}:${tier}` cambia rispetto all'ultima
+  // decisione locale, reset del ref + del key locale + del key module-level
+  // → il router ridecide con dati freschi.
+  const lastFreePremiumDecidedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    // A) Guard pathname: se non siamo attualmente sulla route "/", non
+    //    fare nulla. Se Home è "sotto" nello stack mentre siamo su LA,
+    //    il pathname corrente è "/lascia-andare" → early return.
+    if (pathname !== "/") return;
+
+    // Guard di completezza dati:
+    if (!profile) return; // profilo ancora null → aspetta caricamento
+    // FIX Bug 1 A2 (2026-08-23): aspetta profile network-fresh prima di
+    // qualunque decisione — la cache può servire tier stale e causare
+    // redirect errati (Premium → /lascia-andare invece di stay).
+    if (profileHydrated !== "network") return;
+    if (disclaimerState !== "accepted") return;
+    if (showSplash) return;
+    // === CLEANUP 2026-08-27 v65.9 — guardia showColorIntro rimossa =========
+    // V1 OllenyaIntro dead code (~riga 7288). showColorIntro non diventa mai
+    // true, guardia inutile.
+    // === GUARD V3 (Fabio 2026-08-22) ===
+    // Se stiamo ancora controllando o serve introdurre l'utente al Cuore,
+    // il router V3 sopra prende la priorità → early return qui.
+    if (introV3State !== "completed") return;
+
+    const currentProfileId = (profile as any)?.id || null;
+    const tier = ((profile as any)?.subscription_tier as string | null) || null;
+    const isPaid = tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
+    const currentKey = currentProfileId === null ? null : `${currentProfileId}:${tier ?? "free"}`;
+
+    // === v65.13 (2026-08-28) — MEMORIA "PAID VISTO DI RECENTE" =============
+    // Ogni volta che vediamo un tier paid, marchiamo il timestamp. Serve
+    // per rilevare cambi paid→free sospetti (transient DB failure lato
+    // backend) e deferire la decisione invece di kickare l'utente.
+    if (isPaid) {
+      markPaidTierSeen();
+    }
+
+    // === v65.13 (2026-08-28) — GUARD SESSIONE VOCE ATTIVA ==================
+    // Se l'utente è in un turno hands-free live (convActive=true), NON
+    // possiamo replace() verso /lascia-andare: sovrapporremmo due schermate
+    // e uccideremmo lo stream vocale. Il router ridecide appena la sessione
+    // si chiude naturalmente (convActive=false → cambio dep → re-run).
+    if (isConvVoiceActive() && !isPaid) {
+      console.log(
+        `[OLLENYA_ROUTER] convActive=true → DEFER decision (tier=${tier || "none"}, ` +
+        `pid=${currentProfileId ? currentProfileId.slice(0, 8) : "null"}). ` +
+        `Router non farà replace durante sessione voce attiva.`
+      );
+      return;
+    }
+
+    // === v65.13 (2026-08-28) — GRACE PERIOD paid→free =====================
+    // Se il current tier è free/null MA meno di 60s fa era paid, è un
+    // sintomo di transient failure lato backend (whitelist patch fallita,
+    // DB temporarily unavailable). Deferisci: al prossimo tick (network
+    // refresh su resume, TrialWatcher, altro trigger) il tier tornerà
+    // corretto e il router ridecide con dati stabili.
+    if (!isPaid && isPaidTierRecent(60_000)) {
+      console.warn(
+        `[OLLENYA_ROUTER] SUSPICIOUS DOWNGRADE (tier=${tier || "none"} ma paid<60s fa) ` +
+        `→ DEFER + trigger refresh profilo. Non tocco la route.`
+      );
+      // Trigger fetch profile ri-verifica (fire-and-forget). Se il backend
+      // ora restituisce di nuovo il tier paid, setProfile aggiorna e questo
+      // useEffect rigira col tier corretto (guard qui sopra scatta).
+      (async () => {
+        try {
+          const p = await api.getProfile();
+          if (p && p.id) {
+            setProfile(p);
+          }
+        } catch (e) {
+          console.warn("[OLLENYA_ROUTER] grace-period refetch failed:", e);
+        }
+      })();
+      return;
+    }
+
+    // === FIX BUG CACHE TIER IN-SESSIONE — Keyed invalidation locale =========
+    // Se il tier è cambiato dall'ultima decisione locale, RESETTA il ref
+    // così il router può ridecidere per la nuova chiave (anche se avevamo
+    // già rediretto). Questo fixa: "cambio tier via dev panel richiede
+    // restart dell'app per prendere effetto".
+    if (
+      lastFreePremiumDecidedKeyRef.current !== null &&
+      lastFreePremiumDecidedKeyRef.current !== currentKey
+    ) {
+      const prevKey = lastFreePremiumDecidedKeyRef.current;
+      hasRedirectedFreeUserRef.current = false;
+      lastFreePremiumDecidedKeyRef.current = null;
+      console.log(`[OLLENYA_ROUTER] tier changed in-session → re-evaluate (was ${prevKey}, now ${currentKey})`);
+    }
+
+    // B) Guard intra-mount: se abbiamo già preso una decisione in questo
+    //    mount del componente (per la stessa chiave), non ripetere.
+    if (hasRedirectedFreeUserRef.current) return;
+
+    // C) Guard module-level cross-mount con TIER incluso (Fabio 2026-08-22).
+    //    PRIMA la cache memorizzava solo profileId → cambio tier non
+    //    invalidava → utente Premium "Torna Free" restava sulla home.
+    //    ADESSO la chiave è profileId:tier → ogni cambio tier ridecide.
+    if (currentKey !== null && getLastDecidedKey() === currentKey) {
+      hasRedirectedFreeUserRef.current = true;
+      lastFreePremiumDecidedKeyRef.current = currentKey;
+      return;
+    }
+
+    // Marca la decisione PRIMA di eventuali navigazioni async, sia sul ref
+    // locale sia sul flag module-level (per-profile:tier).
+    hasRedirectedFreeUserRef.current = true;
+    lastFreePremiumDecidedKeyRef.current = currentKey;
+    markRouterDecided(currentProfileId, tier);
+
+    if (isPaid) {
+      console.log(`[OLLENYA_ROUTER] paid user (tier=${tier}, pid=${currentProfileId}) → stay on Ollenya conversazionale`);
+      return;
+    }
+
+    // === FREE TIER LANDING v65.53 (Fabio 2026-06) =========================
+    // NUOVO MODELLO: Free users atterrano su Home `/` (con tab "Ollenya" +
+    // "Lascia Andare"). NIENTE redirect automatico a /lascia-andare.
+    // Il gate 5 turni ogni 3 giorni è imposto server-side; il client mostra
+    // il badge contatore e gestisce il 402 free_limit_exhausted.
+    // Se l'utente vuole solo sfogarsi senza risposta, tocca la tab
+    // "Lascia Andare" dall'header.
+    console.log(`[OLLENYA_ROUTER] free user (tier=${tier || "none"}, pid=${currentProfileId}) → stay on Home (tab Ollenya di default)`);
+    return;
+  }, [profile, profileHydrated, disclaimerState, showSplash, showColorIntro, router, pathname, introV3State]);
+
+
+  // === ROUTER INTRO PREMIUM (Fabio 2026-08-22) ==============================
+  // Al PRIMO boot di un utente Premium sulla home Ollenya conv "/", reindirizza
+  // a /intro-premium (nuova esperienza: voce + 3 coach-mark). Persistenza
+  // ibrida: SecureStore (istantaneo) + backend (sopravvive a reinstall).
+  //
+  // Ordine di verifica (priorità cache → rete):
+  //   1) SecureStore.intro_premium_seen_at != null → SKIP (già vista)
+  //   2) altrimenti chiama /api/intro-premium/state → se seen=true, scrivi
+  //      il mirror in SecureStore e SKIP (l'utente ha reinstallato)
+  //   3) altrimenti → introPremiumState = "needed" → redirect a /intro-premium
+  //
+  // NON tocca V3: se V3 non è ancora completata, il router V3 sopra ha
+  // priorità (guard `introV3State === "completed"` qui sotto).
+
+  // === FIX 2026-08-27 v65.7 — dichiarati QUI per uso in intro-premium router
+  // (guard "sto mostrando il final overlay" al ~riga 1278). Prima erano più
+  // in basso al ~riga 1548, ma il router li referenzia in closure → TDZ.
+  const introParams = useLocalSearchParams<{ intro?: string }>();
+  const [showIntroFinal, setShowIntroFinal] = useState(false);
+
+  const [introPremiumState, setIntroPremiumState] = useState<
+    "checking" | "needed" | "completed"
+  >("checking");
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        // 1) SecureStore first — fast path senza rete
+        const local = await SecureStore.getItemAsync("intro_premium_seen_at");
+        if (cancelled) return;
+        if (local) {
+          setIntroPremiumState("completed");
+          return;
+        }
+        // 2) Backend veto (reinstall / cambio device / cross-device)
+        try {
+          const st = await api.getIntroPremiumState();
+          if (cancelled) return;
+          if (st?.seen) {
+            // Scrivi il mirror locale per non richiedere di nuovo la rete
+            try {
+              await SecureStore.setItemAsync(
+                "intro_premium_seen_at",
+                st.seen_at || String(Date.now())
+              );
+            } catch {}
+            setIntroPremiumState("completed");
+            return;
+          }
+        } catch (e) {
+          console.warn("[OLLENYA_ROUTER_INTRO_PREMIUM] state fetch failed:", e);
+          // Fail-closed: se il backend non risponde al boot, NON forziamo
+          // l'intro (rischio di riproporla a chi l'ha già vista). L'utente
+          // la vedrà al prossimo boot con backend raggiungibile.
+          setIntroPremiumState("completed");
+          return;
+        }
+        // 3) Mai vista, né locale né server → needed
+        if (!cancelled) setIntroPremiumState("needed");
+      } catch {
+        if (!cancelled) setIntroPremiumState("completed"); // safe default
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const hasRedirectedIntroPremiumRef = useRef<boolean>(false);
+  // FIX Bug 1 A2 (Fabio 2026-08-23) — keyed invalidation ref (stesso pattern
+  // del router V3): permette ri-decisione se il tier cambia in-session.
+  const lastIntroPremiumDecidedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (pathname !== "/") return;
+    if (introPremiumState !== "needed") return;
+    // === FIX 2026-08-27 v65.7 — Guard finale step (Fabio/Stefania) =========
+    // Se stiamo mostrando l'overlay finale (arrivato via ?intro=writing_final)
+    // NON redirigere: significa che l'utente ha appena finito l'intro e sta
+    // per vedere l'ultima card. Redirigere qui causa il loop osservato
+    // su Android in produzione (2026-08-27).
+    if (showIntroFinal || introParams?.intro === "writing_final") return;
+    // Guard di completezza dati — stessi guard degli altri router
+    if (!profile) return;
+    // FIX Bug 1 A2 (2026-08-23): aspetta profile network-fresh
+    if (profileHydrated !== "network") return;
+    if (disclaimerState !== "accepted") return;
+    if (showSplash) return;
+    // V3 deve essere completata (altrimenti V3 ha priorità)
+    if (introV3State !== "completed") return;
+    // Solo Premium: se free, il router free/premium sopra ha già redirettuto
+    // a /lascia-andare, ma questa guard è "belt & suspenders".
+    const tier = ((profile as any)?.subscription_tier as string | null) || null;
+    const isPaid =
+      tier === "monthly" ||
+      tier === "bimonthly" ||
+      tier === "annual" ||
+      tier === "unlimited";
+    if (!isPaid) return;
+    // === CLEANUP 2026-08-27 v65.9 — guardia showColorIntro rimossa =========
+    // V1 OllenyaIntro dead code; showColorIntro non diventa mai true.
+
+    // Keyed invalidation coerente con router V3.
+    const currentKey = `${(profile as any)?.id || "none"}:${tier ?? "free"}`;
+    if (
+      lastIntroPremiumDecidedKeyRef.current !== null &&
+      lastIntroPremiumDecidedKeyRef.current !== currentKey
+    ) {
+      hasRedirectedIntroPremiumRef.current = false;
+      lastIntroPremiumDecidedKeyRef.current = null;
+      console.log(`[OLLENYA_ROUTER_INTRO_PREMIUM] tier changed in-session → re-evaluate`);
+    }
+    if (hasRedirectedIntroPremiumRef.current) return;
+
+    hasRedirectedIntroPremiumRef.current = true;
+    lastIntroPremiumDecidedKeyRef.current = currentKey;
+    console.log(
+      `[OLLENYA_ROUTER_INTRO_PREMIUM] first paid boot → replace to /intro-premium`
+    );
+    try {
+      router.replace("/intro-premium");
+    } catch (e) {
+      console.warn("[OLLENYA_ROUTER_INTRO_PREMIUM] replace failed:", e);
+    }
+  }, [
+    introPremiumState,
+    profile,
+    profileHydrated,
+    disclaimerState,
+    showSplash,
+    introV3State,
+    showColorIntro,
+    pathname,
+    router,
+    // v65.7: aggiunti per evitare stale closure durante handoff
+    showIntroFinal,
+    introParams?.intro,
+  ]);
+
+
+  const inputMode = (profile?.settings?.input_mode === "text"
+    ? "text"
+    : profile?.settings?.input_mode === "both"
+      ? "both"
+      : "voice") as "voice" | "text" | "both";
+  const conversationOn = !!profile?.settings?.conversation_mode;
+  // Tracks "we are inside an active hands-free conversation loop"
+  const [convActive, setConvActive] = useState(false);
+  // === FIX 2026-06-27 v18 (Android Xiaomi: Impostazioni mostrava solo Acqua) ===
+  // Su Android, per motivi non chiari (probabilmente race condition al mount
+  // o errore di fetch silenzioso), lo state `voices` restava vuoto e l'utente
+  // non vedeva la scelta tra Acqua e Vento. Su iOS funzionava regolarmente.
+  // Soluzione robusta: inizializziamo `voices` con il fallback hardcoded
+  // delle DUE voci ufficiali (allineato a CURATED_VOICES nel backend).
+  // Se poi la fetch al backend riesce, sovrascrive con la risposta server
+  // (consente di aggiungere nuove voci in futuro senza ricompilare il client).
+  const _DEFAULT_VOICES: VoiceOption[] = [
+    { voice_id: "POuqf18evoXOKIqV2Px7", name: "Cielo", description: "La voce femminile di Ollenya.", gender: "femminile" as any, accent: "italiano" } as any,
+    { voice_id: "ll9WG7PDTuyHwgC5MD6g", name: "Vento", description: "La voce maschile di Ollenya.", gender: "maschile" as any, accent: "italiano" } as any,
+  ];
+  const [voices, setVoices] = useState<VoiceOption[]>(_DEFAULT_VOICES);
+  const [voicesEnabled, setVoicesEnabled] = useState(true);
+
+  // === Rimosso 2026-07-09: OTA update check pulsante ===
+  // Il pulsante "Controlla aggiornamenti" non funzionava sulla pipeline
+  // OTA Emergent (checkForUpdateAsync non rispondeva). Stato e handler
+  // rimossi completamente per pulizia.
+  const [voicePreviewLoading, setVoicePreviewLoading] = useState<string | null>(null);
+  const convActiveRef = useRef(false);
+  useEffect(() => {
+    convActiveRef.current = convActive;
+    // v65.13 (2026-08-28): sync anche il flag module-level letto dal
+    // router useEffect qui sopra (dichiarato prima del state convActive
+    // → non può accedere direttamente al ref locale).
+    setConvVoiceActive(convActive);
+  }, [convActive]);
+  // v65.13: al unmount della Home, azzeriamo il flag globale — altrimenti
+  // un remount rischia di partire con convVoiceActive=true stale.
+  useEffect(() => {
+    return () => {
+      setConvVoiceActive(false);
+    };
+  }, []);
+
+  // === HANDS-FREE MODE ===
+  // Default ON. Quando attivo, il microfono si apre da solo non appena Coda
+  // entra in idle (dopo aver finito di parlare). Il VAD chiude il mic dopo
+  // 800ms di silenzio. Disattivabile a voce ("Coda modalità manuale",
+  // "disattiva mani libere") o dal toggle in alto a sinistra dell'header.
+  // Persistito in profile.settings.hands_free.
+  const handsFree = (profile?.settings as any)?.hands_free !== false; // default true
+  const handsFreeRef = useRef(handsFree);
+  useEffect(() => { handsFreeRef.current = handsFree; }, [handsFree]);
+  // Quando l'utente disattiva via voce mostriamo un toast di conferma breve.
+  const [handsFreeToast, setHandsFreeToast] = useState<string | null>(null);
+  // === Banner "Dimmi, ti ascolto" ===
+  // Mostrato la prima volta che entriamo in passive-listen (sessione hands-free
+  // appena partita). Sparisce dopo 3.5s o appena l'utente parla davvero.
+  const [listenBanner, setListenBanner] = useState<string | null>(null);
+  const firstListenShownRef = useRef(false);
+  const listenBannerTimerRef = useRef<any>(null);
+
+  // === CLOSE SESSION PAUSE (fix regressione 2026-06-20) ===
+  // Quando l'utente saluta per chiudere ("ci sentiamo dopo", "ciao Ollenya",
+  // "buonanotte"…) il backend imposta `close_session=true` nel meta event.
+  // Il client DEVE smettere di ascoltare automaticamente per NON entrare
+  // nel loop "non ti sento, parla pure" anche dopo che l'utente se n'è
+  // andato. Reset solo quando l'utente tappa di nuovo l'orb (intent
+  // esplicito di riprendere la conversazione).
+  const [closeSessionPause, setCloseSessionPause] = useState(false);
+  const closeSessionPauseRef = useRef(false);
+  useEffect(() => { closeSessionPauseRef.current = closeSessionPause; }, [closeSessionPause]);
+  const setHandsFreeMode = useCallback(async (on: boolean) => {
+    if (!profile) return;
+    // === GATE VOCE = PREMIUM v65.55 (Fabio 2026-09) =========================
+    // La voce di Ollenya è funzione Premium. Un utente Free che tenta di
+    // attivare il mani libere deve essere reindirizzato al paywall — MAI
+    // permettergli di aprire il mic (né turno voce né turno hands-free).
+    // Se spegniamo (on=false), lasciamo passare — sempre lecito. Il gate
+    // è duplicato lato backend (/api/converse voice-turn + WS voice/stream)
+    // come safety net anti-bypass.
+    if (on) {
+      const tier = (profile as any)?.subscription_tier;
+      const isPaid = tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
+      if (!isPaid) {
+        console.log("[voice_gate] Free user tried hands-free → redirect paywall");
+        try { router.push("/paywall"); } catch {}
+        return;
+      }
+    }
+    // === PERMESSO SPEECH RECOGNITION (Fabio 2026-08-22) =====================
+    // Se stiamo ATTIVANDO il mani libere, verifichiamo il permesso: senza,
+    // l'STT non parte mai e l'utente vede solo un toggle che si accende
+    // ma non fa nulla. Se nega, non attiviamo (silenzioso, il pre-prompt
+    // ha già spiegato). Se stiamo disattivando (on=false), niente check —
+    // spegnere è sempre lecito.
+    if (on) {
+      try {
+        const perm = await ensureSpeechPermission();
+        if (!perm.granted) {
+          console.log(`[HF_TOGGLE_PERM] blocked: path=${perm.path}`);
+          return;
+        }
+      } catch (e) {
+        console.warn("[HF_TOGGLE_PERM] ensureSpeechPermission threw:", e);
+        // Fail-open
+      }
+    }
+    const next = {
+      ...profile,
+      settings: { ...profile.settings, hands_free: on } as any,
+    };
+    setProfile(next);
+    handsFreeRef.current = on;
+    // Reset banner state: se riattiviamo dopo essere stati spenti, mostra
+    // di nuovo "Dimmi, ti ascolto" al primo avvio.
+    if (on) firstListenShownRef.current = false;
+    setHandsFreeToast(on ? "Hands-free attivo" : "Modalità manuale — tocca per parlare");
+    setTimeout(() => setHandsFreeToast(null), 2500);
+    try {
+      await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+  }, [profile]);
+
+  const recRef = useRef<Recorder | null>(null);
+  // === FASE 1 STREAMING (giugno 2026) ===
+  // Ref alla sessione voice streaming attiva. Permette il tap-to-stop sul
+  // big button anche quando il flusso voce è streaming (non c'è recRef).
+  const streamingSessionRef = useRef<{ stop: () => Promise<void> } | null>(null);
+  // === FIX 2026-07-11 v52 — TAP_STOP EARLY (race pre-session) ===
+  // Race conosciuta: l'utente preme il big button, `setStatus("recording")`
+  // fira subito, ma voiceStreamConverse (async) impiega ~1-5s ad aprire
+  // la WS e chiamare onSession() → durante quel gap, streamingSessionRef
+  // è ancora null. Se l'utente ri-tocca il button (tap-stop) in quella
+  // finestra, il vecchio codice settava solo status=transcribing e non
+  // fermava nulla — poi la sessione partiva comunque e i chunk continuavano
+  // fino al termine naturale.
+  //
+  // FIX: pendingTapStopRef=true quando tap-stop avviene senza sessione.
+  // Nel callback onSession(s), se pendingTapStopRef è true chiamiamo
+  // immediatamente s.stop() e resettiamo il flag. Cosi il "graceful stop"
+  // funziona anche durante l'apertura della WS.
+  const pendingTapStopRef = useRef<boolean>(false);
+
+  // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
+  // BUG OSSERVATO nel log Xiaomi: setStatus("recording") fira IMMEDIATAMENTE
+  // in startTalkStreaming (linea ~2846), ma il microfono REALE parte solo
+  // ~1s dopo (dopo setAudioModeAsync + detectAudioRoute + warmup + openWs
+  // + startRecognition). In quel gap, l'orb sembra in ascolto ma il mic
+  // non registra nulla; se l'utente tocca l'orb (impaziente o pensando
+  // che il tap serva ad ATTIVARE), viene interpretato come stop-utente,
+  // stopRequested=true, la sessione aborta prima di startRecognition
+  // → nessun audio catturato. Combinato al bug HF_LOOP (Fix A), 156
+  // sessioni abortite in 4s.
+  //
+  // Fix: teniamo traccia se il mic è REALMENTE attivo. Il callback
+  // onRecognitionActive (voiceClientStt.ts, chiamato dopo
+  // ExpoSpeechRecognitionModule.start() OK) lo mette a true. Un tap
+  // durante status="recording" ma micReallyActiveRef=false viene
+  // IGNORATO (log-only, no UI change per ora). Diventa false al termine
+  // della sessione (onDone/onError/finally).
+  const micReallyActiveRef = useRef<boolean>(false);
+
+  // === FIX 2026-07-14 v56 — HF LOOP BACKOFF su WS failures consecutivi ===
+  // Se il backend si riavvia o è irraggiungibile, il vecchio HF loop
+  // martella all'infinito aprendo WS che si chiudono subito con code=0.
+  // Ogni fallimento incrementa questo counter. Al 3° fail consecutivo
+  // pausiamo il loop, mostriamo errore chiaro e aspettiamo tap manuale.
+  // Il counter si azzera su qualsiasi ciclo che completa con successo
+  // (result.ok=true) o su tap manuale utente.
+  const wsFailureCountRef = useRef<number>(0);
+  const WS_FAIL_THRESHOLD = 3;
+  // === MUTEX 2026-06-28 — P0 race condition fix (handoff diag log) ===
+  // Su iPhone + Android, due meccanismi di restart hands-free firavano
+  // entro ~50ms l'uno dall'altro:
+  //   • KODA_HF_LOOP (useEffect + setTimeout 450ms)
+  //   • KODA_HF_EXPLICIT (setTimeout 500ms nel finally di voiceStream)
+  // Entrambi passavano i guard (recRef=null) e chiamavano startTalkInternal
+  // in parallelo → due sessioni WebSocket /api/voice/stream aperte
+  // simultaneamente che si killavano a vicenda (codici 1000/1006).
+  // Sintomo utente: voce si ferma dopo ~1s quando cambia voce nello Sfogo
+  // o tra un turno e l'altro.
+  // FIX: debounce timestamp-based 800ms sull'INGRESSO di startTalkInternal.
+  // Il secondo call entro 800ms viene scartato. JS single-threaded → safe.
+  // 800ms copre la finestra di parallelismo (50-100ms) con margine ampio
+  // ma NON impatta gli avvii legittimi (turni successivi distano 30s+).
+  const lastStartTalkAtRef = useRef<number>(0);
+  // === RECORDING DURATION TRACKING (sprint giugno 2026 v11) ===
+  // Catturiamo il timestamp di avvio recording così possiamo includerlo
+  // nel [OLLENYA_SUMMARY] come recording_duration_ms. Permette di distinguere
+  // a colpo d'occhio: A) registrazione troppo breve (utente non parla
+  // abbastanza prima della chiusura VAD); B) pipeline lenta (recording
+  // ok ma backend impiega tempo). Senza questa metrica devi correlare
+  // [OLLENYA_TIMING] VOICE_END con [OLLENYA_SUMMARY] = laborioso.
+  const recordingStartedAtRef = useRef<number | null>(null);
+  const lastRecordingDurationMsRef = useRef<number | null>(null);
+  // === AUDIO HONESTY (Fabio 2026-06-23) ============================
+  // Confidence Deepgram dell'ULTIMA trascrizione completata. Viene
+  // propagata al backend nella chiamata /converse-fast/start (vedi
+  // SpeechMod.fastConverse(..., sttConfidence: ...)). Se < 0.7 il
+  // backend inietterà una direttiva nel prompt → Ollenya si comporta
+  // come amico onesto: riconosce l'audio rumoroso, chiede contesto.
+  const lastSttConfidenceRef = useRef<number | null>(null);
+  const scrollRef = useRef<FlashList<any>>(null);
+  // === FIRST-TAP GATE (richiesto utente 2026-05-23) ===
+  // Regola: ad ogni cold-start dell'app E ad ogni ritorno dal background,
+  // la PRIMA attivazione del microfono deve essere fatta a mano (tap
+  // sull'orb). Solo DOPO la prima interazione manuale dell'utente in
+  // questa "sessione foreground", il loop hands-free riparte da solo.
+  //
+  // Motivo: l'auto-mic-open immediato al cold start spesso incappava in
+  // una sessione AVAudioSession iOS "incantata" (specie dopo lunghi
+  // background), causando l'orb bloccato sul verde/tiffany e mic morto.
+  // Con il primo tap esplicito siamo certi che l'utente è presente, il
+  // sistema audio è "caldo" e tutto parte pulito.
+  const userInteractedRef = useRef<boolean>(false);
+  // Timer per debounce del release del wake-lock (60s post-idle senza
+  // nuovi turni). Vedi FIX v64.0 sul flash schermo Honor/Huawei.
+  const keepAwakeReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Pager horizontale: pagina 0 = voce zen, pagina 1 = lettura.
+  const pagerRef = useRef<ScrollView>(null);
+  // Refs ai veri elementi UI della pagina voce — usati dal Tour guidato per
+  // misurare le coordinate REALI (measureInWindow) invece di calcolarle a
+  // mano (che risultavano decentrate). Vedi buildTourSteps.
+  const handsFreeBtnRef = useRef<any>(null);
+  const menuBtnRef = useRef<any>(null);
+  const confessionaleBtnRef = useRef<any>(null);
+  const orbBtnRef = useRef<any>(null);
+  const scrollHintRef = useRef<any>(null);
+  const [viewMode, setViewMode] = useState<"voice" | "reading">("voice");
+  // === FIX TDZ (Fabio 2026-08-24) — dimensions dichiarato PRIMA dell'useEffect
+  // che lo referenzia in `dimensions?.width` (dep array + body). Prima era
+  // dichiarato ~15 righe più sotto → TDZ ReferenceError al primo render.
+  const dimensions = useWindowDimensions();
+  // Use window width with sensible fallback (Dimensions.get) for first render
+  const windowWidth = dimensions.width || Dimensions.get("window").width || 390;
+  // === INTRO PREMIUM — FASE FINALE (handoff da /intro-premium) =============
+  // Quando l'utente arriva sulla home Ollenya conv con query param
+  // ?intro=writing_final, montiamo l'overlay <IntroPremiumFinalStep>
+  // sopra la Page 1 (reading) e chiudiamo la sequenza con la clip audio
+  // di chiusura Cielo + doppio mark-seen.
+  // v65.7: introParams + showIntroFinal state ora dichiarati più in alto
+  // (~riga 1225) per essere usabili nel router intro-premium senza TDZ.
+  useEffect(() => {
+    if (introParams?.intro === "writing_final" && !showIntroFinal) {
+      setShowIntroFinal(true);
+      // Forza viewMode a "reading" e scrolla a Page 1 con animazione (simula lo swipe)
+      setViewMode("reading");
+      // pagerRef potrebbe non essere ancora montato al primissimo tick — retry
+      const doScroll = (attemptsLeft: number) => {
+        if (pagerRef.current) {
+          const w = dimensions?.width || 390;
+          try { pagerRef.current.scrollTo({ x: w, y: 0, animated: true }); } catch {}
+        } else if (attemptsLeft > 0) {
+          setTimeout(() => doScroll(attemptsLeft - 1), 80);
+        }
+      };
+      doScroll(6);
+    }
+  }, [introParams?.intro, showIntroFinal, dimensions?.width]);
+  const dismissIntroFinal = useCallback(() => {
+    setShowIntroFinal(false);
+    // Pulisce il query param senza rimontare la home
+    try {
+      // router.replace("/") toglie il query param mantenendo la home.
+      // A questo punto pagerRef è su Page 1 (l'utente è libero di scorrere).
+      router.replace("/");
+    } catch (e) {
+      console.warn("[intro-premium-final] cleanup replace failed:", e);
+    }
+  }, [router]);
+  // === Keyboard height tracking (richiesta utente 2026-06) ===
+  // Su iOS, anche con KeyboardAvoidingView, una `bottomBar` con
+  // position:"absolute" non si solleva automaticamente quando la tastiera
+  // appare. Teniamo un piccolo stato `kbHeight` aggiornato dagli eventi
+  // nativi, e lo aggiungiamo come marginBottom alla bottomBar in modo che
+  // l'input rimanga sempre visibile sopra la tastiera.
+  const [kbHeight, setKbHeight] = useState<number>(0);
+  useEffect(() => {
+    const showEvt = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvt = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const showSub = Keyboard.addListener(showEvt, (e) => {
+      const h = e?.endCoordinates?.height ?? 0;
+      setKbHeight(h);
+    });
+    const hideSub = Keyboard.addListener(hideEvt, () => setKbHeight(0));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+  const pulse = useRef(new Animated.Value(1)).current;
+  const breathe = useRef(new Animated.Value(0)).current;
+  // Live meter value (dB) shown as debug visualization during recording
+  const [meterDb, setMeterDb] = useState<number | null>(null);
+  const [meterThreshold, setMeterThreshold] = useState<number | null>(null);
+
+  // Initial load
+  useEffect(() => {
+    // === FIX 2026-07: caricamento RESILIENTE con timeout e retry ===
+    // PRIMA: profile e timeline erano in serie senza timeout. Se la rete iOS
+    // al cold start era lenta (DNS pigro), getProfile poteva bloccarsi per
+    // MINUTI → la timeline non veniva mai caricata → "messaggi non caricati".
+    // ORA: profile e timeline INDIPENDENTI, ciascuno con timeout 4s e retry
+    // automatico. Se rete non risponde, riprova ogni 3s in background fino
+    // a successo. L'app mostra UI subito, i dati arrivano appena possibile.
+    let cancelled = false;
+
+    const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T> =>
+      Promise.race([
+        p,
+        new Promise<T>((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), ms)
+        ),
+      ]);
+
+    const loadProfile = async () => {
+      let attempt = 0;
+      while (!cancelled) {
+        try {
+          const p = await withTimeout(api.getProfile(), 4000);
+          if (cancelled) return;
+          setProfile(p);
+          // FIX Bug 1 A2: marca profile come network-hydrated → sblocca i
+          // router condizionali che aspettano dati freschi (non cached).
+          setProfileHydrated("network");
+          // CACHE: salva il profile aggiornato sul filesystem locale
+          // (cold start prossimo = UI istantanea)
+          saveProfileCache(p).catch(() => {});
+          const tName = (p.settings?.theme as ThemeName) || "notte";
+          if (tName !== themeName) setThemeName(tName);
+          if (
+            typeof p.settings?.day_start_hour === "number" ||
+            typeof p.settings?.night_start_hour === "number"
+          ) {
+            setHours(p.settings?.day_start_hour ?? 7, p.settings?.night_start_hour ?? 20);
+          }
+          if (p.settings?.tts_voice_id) {
+            setDefaultVoiceId(p.settings.tts_voice_id);
+            // === SYNC ai_gender ← voce (2026-07-24 pre-lancio) ===
+            // Rimosso il selettore esplicito "Ollenya è…" dalle Impostazioni:
+            // il genere grammaticale di Ollenya è determinato univocamente
+            // dalla voce scelta. Se il profilo ha ai_gender desincronizzato
+            // (edge case: profilo migrato o cambio voce lato server), lo
+            // riallineiamo silenziosamente qui al boot.
+            //   Cielo (POuqf…Px7) → f
+            //   Vento (ll9WG…MD6g) → m
+            try {
+              const vid = String(p.settings.tts_voice_id || "");
+              const derivedGender =
+                vid === "POuqf18evoXOKIqV2Px7" ? "f"
+                : vid === "ll9WG7PDTuyHwgC5MD6g" ? "m"
+                : null;
+              if (derivedGender && p.ai_gender !== derivedGender) {
+                api.updateProfile({ ai_gender: derivedGender }).catch(() => {});
+              }
+            } catch {}
+            // FILLER RIMOSSO (giugno 2026 v6): niente più preload pool —
+            // la prima frase reale arriva in ~1.5-2s, basta lo stato
+            // visuale dell'orb durante l'attesa.
+            // === OFFLINE CLIPS (sprint 2026-06-20) ===
+            // Pre-scarica le 3 clip "sono qui, ma offline" per la voce
+            // attiva. Funziona solo se il primo avvio è online. Idempotente.
+            try {
+              preloadOfflineClips(p.settings.tts_voice_id).catch(() => {});
+            } catch {}
+          }
+          // === SPEC 2026-08-22 (Fabio) — NIENTE MODAL "BENVENUTO" LINGUA ===
+          // Rimosso: `if (!p.onboarded) setShowOnboarding(true);`
+          // Il vecchio Modal è obsoleto (categoria E). Se `!p.onboarded`, il
+          // router V3 (useEffect qui sotto) redirige a /intro-v3 dove parte
+          // la nuova sequenza narrativa. Se `p.onboarded=true` (post-intro V3)
+          // e la voce è in modalità voce (non text), pre-scaldiamo il mic.
+          if (p.onboarded && p.settings?.input_mode !== "text") {
+            prewarmMic().catch(() => {});
+          }
+          // === GEOLOCATION ONE-SHOT (P2 Fabio 2026-06-20) ===
+          // Se l'utente ha abilitato il toggle nelle Impostazioni,
+          // facciamo UN getCurrentPosition + reverse-geocode → invio
+          // città al backend come key_fact. Strategia:
+          //  - silenzioso (no Alert se permesso negato — l'utente l'ha
+          //    già scelto attivando il toggle, sa cosa fa)
+          //  - non-blocking (parallelo, fire-and-forget)
+          //  - una sola volta per cold-start dell'app (no watchPosition)
+          if ((p.settings as any)?.geolocation_enabled === true) {
+            (async () => {
+              try {
+                const { fetchLocationOnce } = await import("../lib/geolocation");
+                const res = await fetchLocationOnce();
+                console.log(`[OLLENYA_GEO] boot result: ${JSON.stringify(res).slice(0, 200)}`);
+              } catch (e) {
+                console.warn("[OLLENYA_GEO] boot fetch failed:", e);
+              }
+            })();
+          }
+          // === ADMIN WHITELIST CHECK (2026-07-24 pre-paywall) ===
+          // Chiediamo al backend se l'uid corrente è admin. Se sì, il
+          // mini-panel in Impostazioni diventa visibile. Silenzioso su
+          // errore (utenti normali riceveranno is_admin=false comunque).
+          (async () => {
+            try {
+              const who = await api.adminWhoAmI();
+              setIsAdmin(!!who?.is_admin);
+            } catch (e) {
+              // Silenzioso — un errore qui non deve interrompere il boot
+              setIsAdmin(false);
+            }
+          })();
+          return; // success
+        } catch (e) {
+          attempt++;
+          if (attempt > 30) return; // giveup dopo ~90s
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+      }
+    };
+
+    const loadTimeline = async () => {
+      let attempt = 0;
+      while (!cancelled) {
+        try {
+          const t = await withTimeout(api.getTimeline(200), 5000);
+          if (cancelled) return;
+          setTimeline(t);
+          // CACHE: salva la timeline aggiornata (esclude entries fortezza)
+          saveTimelineCache(t).catch(() => {});
+          return; // success
+        } catch (e) {
+          attempt++;
+          if (attempt > 30) return; // giveup dopo ~90s
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+      }
+    };
+
+    // === COLD START FAST-PATH (cache locale) ===
+    // Prima del network, leggi la cache locale e popola lo stato così
+    // l'utente vede SUBITO nome, sfondo e ultimi messaggi anche se il
+    // backend è lento o addormentato. La race è gestita: se il network
+    // torna prima della cache, vince il network e non sovrascriviamo.
+    const fastPathHydrate = async () => {
+      try {
+        const [cachedProfile, cachedTimeline] = await Promise.all([
+          loadProfileCache<Profile>(),
+          loadTimelineCache<TimelineEntry>(),
+        ]);
+        if (cancelled) return;
+        // Hydrate SOLO se non abbiamo già dati freschi dal network
+        if (cachedProfile) {
+          setProfile((current) => (current ? current : cachedProfile));
+          // FIX Bug 1 A2: marca come "cache" SOLO se non è già arrivata
+          // la rete (che scrive "network" e ha precedenza per il routing).
+          setProfileHydrated((cur) => (cur === "empty" ? "cache" : cur));
+          const tName = (cachedProfile.settings?.theme as ThemeName) || "notte";
+          setThemeName((cur) => (cur === tName ? cur : tName));
+        }
+        if (cachedTimeline && cachedTimeline.length > 0) {
+          setTimeline((current) => (current.length > 0 ? current : cachedTimeline));
+        }
+      } catch {
+        // ignore: cache best-effort
+      }
+    };
+
+    // Lancia in PARALLELO: il timeline NON aspetta più il profile.
+    // Fast-path cache parte per primo per UI istantanea.
+    fastPathHydrate();
+    loadProfile();
+    loadTimeline();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const wasActuallyBackgroundedRef = useRef(false);
+
+  // === APP STATE LIFECYCLE ===
+  // Quando l'utente mette l'app in background per un po' (telefonata,
+  // home, app switcher) e poi torna, iOS spesso rilascia la sessione
+  // audio. Lo stato React però rimane com'era → utente vede vecchi
+  // errori ("Errore nella trascrizione" persistente) e il microfono
+  // sembra "morto" perché recRef punta a un registratore ormai invalido.
+  //
+  // Doppio fix:
+  // (A) BACKGROUND / INACTIVE → ferma subito eventuale registrazione,
+  //     resetta il flag "ho interagito" così al ritorno il loop
+  //     hands-free NON parte automaticamente (richiede tap esplicito).
+  // (B) ACTIVE (ritorno) → pulisce errori vecchi, recRef fantasma,
+  //     forza status a idle per il prossimo tap.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (next) => {
+      // Only a real background transition counts: Android's mic privacy
+      // indicator can briefly emit inactive/active while recording.
+      if (next === "background") wasActuallyBackgroundedRef.current = true;
+      const returningFromBackground = next === "active" && wasActuallyBackgroundedRef.current;
+      if (next === "active") wasActuallyBackgroundedRef.current = false;
+      if (returningFromBackground && statusRef.current === "thinking" && streamingSessionRef.current) {
+        console.log("[OLLENYA_RESUME_RECOVERY] recovering interrupted voice turn");
+        // Invalidate callbacks/finally BEFORE stopping the old transport.
+        const epoch = ++voiceTurnEpochRef.current;
+        const turnStartedAt = voiceTurnStartedAtRef.current;
+        const interrupted = streamingSessionRef.current as any;
+        streamingSessionRef.current = null;
+        userInteractedRef.current = false;
+        convActiveRef.current = false;
+        setConvActive(false);
+        closeSessionPauseRef.current = true;
+        setCloseSessionPause(true);
+        micReallyActiveRef.current = false;
+        pendingTapStopRef.current = false;
+        try { Promise.resolve(interrupted.abort?.()).catch(() => {}); } catch {}
+        try { SpeechMod.stop(); } catch {}
+        stopThinkingSound();
+        setStatus("idle", "resume:interrupted-voice");
+        setError("La risposta vocale si è interrotta. Recupero i messaggi: non serve ripetere la domanda.");
+        // Fetch stored text only: never regenerate or silently claim that
+        // background audio was heard. Bound retries for a DB write in flight.
+        (async () => {
+          for (const delay of [0, 800, 1800]) {
+            if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+            if (epoch !== voiceTurnEpochRef.current || statusRef.current !== "idle") return;
+            try {
+              const tl = await api.getTimeline(200);
+              if (epoch !== voiceTurnEpochRef.current || statusRef.current !== "idle") return;
+              if (Array.isArray(tl) && tl.length > 0) {
+                setTimeline(tl);
+                const last = tl[tl.length - 1];
+                if (last.role === "ai" && Date.parse(last.timestamp) >= turnStartedAt) {
+                  setError("Ho recuperato i messaggi. La risposta è disponibile nella chat scritta.");
+                  console.log("[OLLENYA_RESUME_RECOVERY] timeline restored");
+                  return;
+                }
+              }
+            } catch (e) {
+              console.warn("[OLLENYA_RESUME_RECOVERY] timeline refresh failed", e);
+            }
+          }
+          if (epoch === voiceTurnEpochRef.current && statusRef.current === "idle") {
+            setError("La risposta vocale si è interrotta. Puoi riprendere toccando il cerchio.");
+          }
+        })();
+        return;
+      }
+      // === FIX 2026-06-28 v32 — Xiaomi/HyperOS Privacy Flicker ===
+      // Su Xiaomi HyperOS l'indicatore di privacy del microfono (il dot
+      // verde in alto a destra che appare quando il mic è attivo) può
+      // causare brevi transizioni AppState: active → inactive → active
+      // durante una sessione di registrazione. Senza guard, ogni "active"
+      // ri-resetta lo status a idle e azzera userInteractedRef → l'orb
+      // visivamente torna a idle dopo <1s anche se i chunk continuano a
+      // essere registrati e inviati al backend.
+      // Skip TUTTI gli azzeramenti se c'è una sessione streaming/recorder
+      // attiva. Lo status reale è governato dal flusso voiceStreamConverse.
+      const streamingAlive = !!streamingSessionRef.current;
+      const recorderAlive = !!recRef.current;
+      const sessionActive = streamingAlive || recorderAlive;
+      // === FIX 2026-06-28 v33 — Logging AppState ===
+      // Verbose (default OFF): log dettagliato con status, userInteracted, decisione.
+      // Conciso (default ON): solo cambio + skip/handled.
+      if (OLLENYA_DEBUG_VERBOSE) {
+        console.log(
+          `[OLLENYA_APPSTATE] next=${next} streaming=${streamingAlive} ` +
+            `recorder=${recorderAlive} status=${statusRef.current} ` +
+            `userInteracted=${userInteractedRef.current} ` +
+            `=> ${sessionActive ? "skipped (session alive)" : "handled"}`
+        );
+      } else if (sessionActive) {
+        // In produzione: solo i casi di skip (utili per capire flicker)
+        console.log(`[OLLENYA_APPSTATE] next=${next} skipped (session alive)`);
+      }
+      if (sessionActive) {
+        return;
+      }
+      if (next === "background" || next === "inactive") {
+        // App va in background: ferma TUTTO subito.
+        userInteractedRef.current = false;
+        // === AUTO-DIM (2026-07-28) — stop e restore brightness ==============
+        // Quando l'app va in background dobbiamo ripristinare la brightness
+        // originale (iOS resetta comunque da solo ma noi puliamo lo stato
+        // interno per non applicare fade "fantasma" al ritorno).
+        try { ScreenDimmer.stopWatching(); } catch {}
+        if (recRef.current) {
+          try { recRef.current.cancel?.(); } catch {}
+          recRef.current = null;
+        }
+        try { SpeechMod.stop(); } catch {}
+        // === FIX 2026-07-06 v46 (Fabio "iOS mic globale bruciato") ===
+        // Rilascio ESPLICITO dell'AVAudioSession quando l'app va
+        // background/inactive. Senza questo, iOS lasciava la sessione
+        // audio "hot" (allowsRecording=true) → dopo il ritorno
+        // foreground `prepareToRecordAsync` falliva 5/5 volte E
+        // BLOCCAVA IL MIC GLOBALE del telefono (fotocamera/WhatsApp
+        // non funzionavano più finché non riavviavi l'iPhone).
+        // Rilascio async fire-and-forget (non blocchiamo il main
+        // thread mentre l'app sta chiudendo).
+        (async () => {
+          try {
+            const { setAudioModeAsync, setIsAudioActiveAsync } =
+              (await import("expo-audio")) as any;
+            // Priorità: disattivare la sessione (release del lock)
+            try {
+              if (typeof setIsAudioActiveAsync === "function") {
+                await setIsAudioActiveAsync(false);
+              }
+            } catch {}
+            try {
+              await setAudioModeAsync({
+                allowsRecording: false,
+                playsInSilentMode: false,
+                shouldPlayInBackground: false,
+              } as any);
+            } catch {}
+            console.log(
+              `[OLLENYA_APPSTATE] AudioSession released (background/inactive)`
+            );
+          } catch (e: any) {
+            console.log(
+              `[OLLENYA_APPSTATE] AudioSession release failed: ${e?.message || e}`
+            );
+          }
+        })();
+      } else if (next === "active") {
+        // === FIX 2026-06-27 RESUME COLD ===
+        // Quando l'app torna foreground DOPO essere stata in background
+        // (anche solo 1-2 minuti), iOS sospende: AVAudioSession scollegata,
+        // network reset, eventuali update in DB non sincronizzati.
+        // Sintomi osservati dall'utente: "apro dopo qualche tempo e non
+        // registra + schermata scrittura senza conversazione caricata".
+        // Soluzione: al ritorno facciamo TRE cose chirurgiche:
+        //   1. prewarmMic() → riattiva audio session iOS
+        //   2. refresh timeline → niente schermata vuota
+        //   3. refresh profile → cattura eventuali cambi (settings, memoria)
+        setError(null);
+        if (recRef.current) {
+          try { recRef.current.cancel?.(); } catch {}
+          recRef.current = null;
+        }
+        setStatus("idle");
+        // === Fabio 2026-06 iter 6 — SPLASH ON LONG-RESUME =====================
+        // Se l'app torna foreground e il TTL splash è scaduto (>5 min),
+        // il getter torna false → mostriamo il OllenyaSplash. Sensazione app
+        // fresca all'utente che ha rilasciato la app da tempo. Se resume
+        // rapido (<5 min), skippa (nessun disturbo).
+        if (!getSessionHasShownSplash()) {
+          setShowSplash(true);
+        }
+        // Audio session warm-up (async, fire-and-forget — non blocchiamo UI).
+        (async () => {
+          try {
+            await prewarmMic();
+          } catch (e) {
+            console.warn("[resume] prewarmMic failed:", e);
+          }
+        })();
+        // Timeline + profile refresh in parallelo, non blocking.
+        (async () => {
+          try {
+            const tl = await api.getTimeline(200);
+            if (Array.isArray(tl) && tl.length > 0) {
+              setTimeline(tl);
+            }
+          } catch (e) {
+            console.warn("[resume] timeline refresh failed:", e);
+          }
+        })();
+        (async () => {
+          try {
+            const p = await api.getProfile();
+            // Aggiorna solo se ID matches (evita race con onboarding)
+            if (p && p.id) setProfile(p);
+          } catch (e) {
+            console.warn("[resume] profile refresh failed:", e);
+          }
+        })();
+      }
+    });
+    return () => {
+      try { sub.remove(); } catch {}
+    };
+  }, []);
+
+  // === FORCE-ON dei comportamenti core (2026-05-25) ===
+  // Dopo aver rimosso i 3 toggle dall'UI (AI attiva / Risposta vocale /
+  // Modalità conversazione), forziamo questi 3 valori a TRUE al boot.
+  // Motivo: prima si "spegnevano" da soli (default backend false, oppure
+  // reset memoria li portava a false) → utente vedeva l'app sembrare
+  // rotta perché AI non rispondeva, Ollenya muta, hands-free off.
+  // Adesso sono SEMPRE TRUE: l'utente non può più sbagliare.
+  useEffect(() => {
+    if (!profile?.id) return;
+    const s = profile.settings || ({} as any);
+    const needs =
+      s.ai_enabled !== true ||
+      s.voice_response !== true ||
+      s.conversation_mode !== true;
+    if (!needs) return;
+    const next = {
+      ...profile,
+      settings: {
+        ...s,
+        ai_enabled: true,
+        voice_response: true,
+        conversation_mode: true,
+      },
+    };
+    setProfile(next);
+    api.updateProfile({ settings: next.settings } as any).catch(() => {});
+  }, [profile?.id]);
+
+
+  // === QUOTA EXHAUSTED SESSION RESET (Fabio 2026-06) =========================
+  // Quando il profilo torna a uno stato paid attivo (aggiunta minuti, cambio
+  // tier, dev button, top-up completato) → resettiamo la session flag
+  // `sessionQuotaExhausted` così l'utente può ricominciare a parlare senza
+  // dover ricaricare l'app. Il check è deterministico: se abbiamo un ledger
+  // con base_remaining + carryover + topup > 0 → non exhausted.
+  useEffect(() => {
+    if (!profile) return;
+    const tier = profile.subscription_tier || null;
+    const ls: any = (profile as any).ledger_state;
+    // Se non è paid, o unlimited → mai exhausted. Reset se era attivo.
+    if (tier === "unlimited" || !tier || !["monthly", "bimonthly", "annual"].includes(tier)) {
+      if (isQuotaExhaustedSession()) resetQuotaExhaustedSession();
+      return;
+    }
+    if (!ls) return;
+    const baseMax = { monthly: 500, bimonthly: 500, annual: 500 }[tier as "monthly" | "bimonthly" | "annual"] || 500;
+    const baseRem = Math.max(0, baseMax - (ls.base_minutes_used || 0));
+    const carry = (ls.carryover_slots || []).reduce(
+      (acc: number, s: any) => acc + (s?.minutes_remaining || 0),
+      0
+    );
+    const topup = Math.max(0, ls.topup_minutes_remaining || 0);
+    const total = baseRem + carry + topup;
+    if (total > 0.5 && isQuotaExhaustedSession()) {
+      console.log("[quota] profile refreshed → quota available again → reset session flag");
+      resetQuotaExhaustedSession();
+    }
+  }, [profile]);
+
+
+  // === KEEP SCREEN AWAKE durante conversazione attiva ===
+  // === FIX 2026-07-26 v64.0 — HONOR/HUAWEI SCREEN FLASH FIX ===
+  //
+  // PROBLEMA (log utente 25/07):
+  //   Su Honor/Huawei (EMUI/HarmonyOS) lo schermo lampeggia ~ogni 7s
+  //   durante una conversazione. Test diagnostico ha escluso breath
+  //   animation, JS timers, network polling.
+  //
+  // ROOT CAUSE:
+  //   Il vecchio useEffect chiamava activateKeepAwakeAsync /
+  //   deactivateKeepAwake AD OGNI transizione di status
+  //   (idle→recording→transcribing→thinking→speaking→idle). Su EMUI il
+  //   ciclo del wake-lock viene gestito dal power manager di Huawei che
+  //   emette un brief refresh dello schermo ad ogni riattivazione.
+  //   Con 4-5 status transitions per turno, e turni ogni 5-10s in
+  //   hands-free, il pattern osservato dall'utente (flash ~7s) matcha
+  //   perfettamente.
+  //
+  // FIX:
+  //   1. Attiviamo keep-awake UNA VOLTA quando la sessione diventa
+  //      attiva (userInteractedRef=true, ovvero dopo il primo tap).
+  //   2. NON lo disattiviamo su ogni transizione idle. Restiamo attivi
+  //      per l'intera sessione foreground.
+  //   3. Deactivate solo su:
+  //        - App background/blur (via useFocusEffect cleanup)
+  //        - Debounce di 60s post-idle SENZA nuovi turni (utente ha
+  //          davvero smesso di parlare da un minuto → possiamo lasciare
+  //          spegnere lo schermo).
+  //   4. Su iOS resta identico al comportamento precedente perché iOS
+  //      non ha il problema (AVFoundation non tocca la brightness).
+  //
+  // Su Android il wake-lock resta attivo continuo mentre la app è in
+  // primo piano dopo il primo tap → zero cicli → zero flash.
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    const TAG = "koda-conversation";
+    // Attiva su qualsiasi stato non-idle O sfogo attivo
+    const isActive = status === "recording" || status === "transcribing" ||
+                     status === "thinking" || status === "speaking" ||
+                     confessionalMode;
+    if (isActive) {
+      // Attiva subito. Idempotente lato nativo — chiamarla mentre già
+      // attivo è no-op quindi zero flash da "riattivazione".
+      try {
+        activateKeepAwakeAsync(TAG).catch(() => {});
+      } catch {}
+      // Se avevamo schedulato un release-debounce, cancellalo — l'utente
+      // è tornato attivo prima dei 60s.
+      if (keepAwakeReleaseTimerRef.current) {
+        clearTimeout(keepAwakeReleaseTimerRef.current);
+        keepAwakeReleaseTimerRef.current = null;
+      }
+      return;
+    }
+    // Idle: NON deattivare subito. Schedula un release fra 60s. Se
+    // nel frattempo l'utente riparte con un nuovo turno, il release
+    // viene cancellato (vedi sopra). In hands-free tra un turno e
+    // l'altro passano 2-5s → non arriviamo MAI ai 60s → wake-lock
+    // stabile continuo → zero flash EMUI.
+    if (keepAwakeReleaseTimerRef.current) {
+      clearTimeout(keepAwakeReleaseTimerRef.current);
+    }
+    keepAwakeReleaseTimerRef.current = setTimeout(() => {
+      try {
+        deactivateKeepAwake(TAG);
+        console.log("[OLLENYA_WAKELOCK] released after 60s idle debounce");
+      } catch {}
+      keepAwakeReleaseTimerRef.current = null;
+    }, 60_000);
+    return () => {
+      // NB: NON deattivare qui su cleanup di dep change — la cleanup
+      // funziona solo quando l'effect ri-run (che avviene tantissimo).
+      // Lasciamo che il debounce/unmount se ne occupino.
+    };
+  }, [status, confessionalMode]);
+
+  // Cleanup finale su unmount: rilascia il wake-lock indipendentemente
+  // dal debounce timer.
+  useEffect(() => {
+    return () => {
+      if (Platform.OS === "web") return;
+      if (keepAwakeReleaseTimerRef.current) {
+        clearTimeout(keepAwakeReleaseTimerRef.current);
+        keepAwakeReleaseTimerRef.current = null;
+      }
+      try {
+        deactivateKeepAwake("koda-conversation");
+      } catch {}
+    };
+  }, []);
+
+  // === AUTO-DIM SCHERMO durante hands-free (Fabio 2026-07-28, fix 2026-07-29) =
+  // Riduce il consumo batteria/calore su iPhone durante conversazione hands-free
+  // quando l'utente non sta toccando lo schermo (sta solo ascoltando/parlando).
+  //
+  // Regola concordata:
+  //   - Trigger: `convActive` (sessione hands-free in corso). Questo è un
+  //     segnale STABILE per l'intera durata della conversazione, NON cicla
+  //     con lo status (recording/thinking/speaking). Prima usavamo `status`
+  //     e il timer di 35s si resettava ad ogni turno → il dim non firava mai.
+  //   - Dopo 35s di inattività touch → fade graduale a 50% (2s)
+  //   - Al primo touch → restore rapido al 100% originale (300ms)
+  //   - Su uscita hands-free (convActive=false) → restore automatico
+  //   - Un solo livello di dim (50%, non ulteriori scaglioni sotto)
+  //
+  // Il monitoraggio del touch avviene sul View root via onStartShouldSetResponder
+  // (vedi return principale) → chiama ScreenDimmer.noteInteraction() ad ogni tap.
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    // === v65.37 diagnostic (Fabio 2026-09-10) ===
+    // Log ESPLICITO di conversationOn per capire se il dimmer non parte
+    // perché l'utente è in tap-to-talk (conversationOn=false → convActive
+    // resta false per design → dimmer non parte MAI). In tal caso non è
+    // un bug ma il comportamento voluto.
+    if (convActive) {
+      console.log(
+        `[OLLENYA_DIMMER] convActive=true → startWatching ` +
+          `(conversationOn=${conversationOn}, status=${status})`
+      );
+      ScreenDimmer.startWatching().catch(() => {});
+    } else {
+      console.log(
+        `[OLLENYA_DIMMER] convActive=false → stopWatching ` +
+          `(conversationOn=${conversationOn}, status=${status})`
+      );
+      ScreenDimmer.stopWatching().catch(() => {});
+    }
+  }, [convActive]);
+
+  // Cleanup finale del dimmer su unmount — safety net per assicurare
+  // che la brightness sia sempre restaurata, anche in caso di crash/exit.
+  useEffect(() => {
+    return () => {
+      ScreenDimmer.stopWatching().catch(() => {});
+    };
+  }, []);
+
+  const saveTheme = async (name: ThemeName) => {
+    if (!profile) return;
+    setThemeName(name);
+    const next = { ...profile, settings: { ...profile.settings, theme: name } };
+    setProfile(next);
+    try {
+      await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+  };
+
+  // === AVATAR: Eclissi vs Specchio d'acqua (richiesta utente 2026-06) ===
+  // Persistito in profile.settings.avatar. Default: "eclipse" (la
+  // signature storica). "mirror" = nuovo specchio d'acqua scuro.
+  const avatar: "eclipse" | "mirror" =
+    (profile?.settings as any)?.avatar === "mirror" ? "mirror" : "eclipse";
+  const saveAvatar = async (next: "eclipse" | "mirror") => {
+    if (!profile) return;
+    const updated = {
+      ...profile,
+      settings: { ...profile.settings, avatar: next } as any,
+    };
+    setProfile(updated);
+    try {
+      await api.updateProfile({ settings: updated.settings } as any);
+    } catch {}
+  };
+
+  const saveHours = async (d: number, n: number) => {
+    if (!profile) return;
+    setHours(d, n);
+    const next = {
+      ...profile,
+      settings: { ...profile.settings, day_start_hour: d, night_start_hour: n },
+    };
+    setProfile(next);
+    try {
+      await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+  };
+
+  const saveBackgroundDim = async (dim: number) => {
+    if (!profile) return;
+    const next = {
+      ...profile,
+      settings: { ...profile.settings, background_dim: dim } as any,
+    };
+    setProfile(next);
+    try {
+      await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+  };
+
+  // === FIX 2026-07-02 (Fabio) — Rimosse pickAiAvatar/removeAiAvatar (dead code) ===
+  // Le funzioni erano definite ma nessun bottone UI le chiamava. Il campo
+  // settings.ai_avatar era vuoto per tutti i profili in DB e il componente
+  // Bubble riceveva la prop `aiAvatar` senza mai usarla internamente.
+  // Se in futuro serve un avatar per Ollenya: NON salvare base64 nel profilo
+  // (stesso problema del background). Usare asset locale + selettore preset.
+
+  const setBubbleColor = async (key: string) => {
+    if (!profile) return;
+    const next = { ...profile, settings: { ...profile.settings, bubble_color: key } as any };
+    setProfile(next);
+    try { await api.updateProfile({ settings: next.settings } as any); } catch {}
+  };
+
+  const setBubbleStyle = async (style: "glass" | "solid") => {
+    if (!profile) return;
+    const next = { ...profile, settings: { ...profile.settings, bubble_style: style } as any };
+    setProfile(next);
+    try { await api.updateProfile({ settings: next.settings } as any); } catch {}
+  };
+
+  const setTextSize = async (size: number) => {
+    if (!profile) return;
+    const next = { ...profile, settings: { ...profile.settings, text_size: size } as any };
+    setProfile(next);
+    try { await api.updateProfile({ settings: next.settings } as any); } catch {}
+  };
+
+  // === FIX 2026-07-02 (Fabio) — Rimossa feature "sfondo custom da galleria" ===
+  // saveBackground / pickBackgroundFromGallery erano dead code (bottone UI
+  // già rimosso). Ora gli sfondi sono solo i preset di Ollenya. Se in futuro
+  // servisse riabilitare custom background: NON salvare base64 dentro
+  // profile.settings (esplode il DB). Usare invece asset locale o upload
+  // separato in blob storage.
+
+  const sendTestNotification = async () => {
+    // === BLOCCO A (2026-08-25) — notifiche RIMOSSE ===
+    // Ollenya non manda più notifiche di prova. Se qualcuno preme un bottone
+    // ancora aggrappato a questa fn (non dovrebbe esistere), mostriamo un
+    // messaggio soft senza fallire.
+    setError("Notifiche disabilitate — Ollenya non ti scrive mai per primo.");
+    setTimeout(() => setError(null), 4000);
+  };
+
+  // Gentle continuous breathing — always active, feels alive
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(breathe, {
+          toValue: 1,
+          duration: 2600,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(breathe, {
+          toValue: 0,
+          duration: 2600,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [breathe]);
+
+  // Pulse animation for the big button
+  useEffect(() => {
+    let loop: Animated.CompositeAnimation | null = null;
+    if (status === "recording" || status === "thinking" || status === "speaking") {
+      loop = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulse, {
+            toValue: 1.15,
+            duration: 700,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulse, {
+            toValue: 1,
+            duration: 700,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      loop.start();
+    } else {
+      pulse.setValue(1);
+    }
+    return () => {
+      if (loop) loop.stop();
+    };
+  }, [status, pulse]);
+
+  // Auto-scroll to bottom on new entries
+  // === FIX BOUNCE LOOP (2026-06-22) ===
+  // Prima usavamo animated:true con setTimeout 80ms. Risultato: durante lo
+  // streaming dei messaggi (tone/content updates), più scrollToEnd animati
+  // si sovrapponevano misurando height vecchie → la timeline rimbalzava
+  // su/giù all'infinito. Ora:
+  //   - animated:false → snap istantaneo, no intersezioni di animazione
+  //   - solo se l'utente è già vicino al fondo (rispetta chi legge sopra)
+  //   - re-fired anche su onContentSizeChange per messaggi che crescono
+  useEffect(() => {
+    // === FIX #4 FORCE SCROLL ON USER SEND (2026-06-22 v6) ===
+    // Se siamo nella finestra "force scroll" (utente ha appena inviato),
+    // scrolla COMUNQUE in fondo anche se l'utente era scrollato indietro.
+    // Altrimenti rispetta isNearBottom (= solo scroll passivo).
+    const inForceWindow = Date.now() < forceScrollUntilRef.current;
+    if (!inForceWindow && !isNearBottomRef.current) return;
+    const id = setTimeout(() => {
+      try {
+        scrollRef.current?.scrollToEnd({ animated: false });
+        // Se eravamo in force-window, ora siamo certi di essere in fondo
+        if (inForceWindow) {
+          isNearBottomRef.current = true;
+          setIsNearBottom(true);
+        }
+      } catch {}
+    }, 30);
+    return () => clearTimeout(id);
+  }, [timeline.length]);
+
+  // === FIX KEYBOARD SHIFT (2026-06-22 v4) ===
+  // Quando la tastiera si apre/chiude o cambia altezza (suggerimenti,
+  // emoji panel, ecc.), il paddingBottom della timeline si aggiorna ma
+  // la posizione di scroll resta la stessa → l'ultimo messaggio finisce
+  // dietro l'input. Re-scroll se l'utente era vicino al fondo, così
+  // l'ultima bolla resta SEMPRE visibile sopra la barra di scrittura.
+  useEffect(() => {
+    if (!isNearBottomRef.current) return;
+    const id = setTimeout(() => {
+      try {
+        scrollRef.current?.scrollToEnd({ animated: false });
+      } catch {}
+    }, 50);
+    return () => clearTimeout(id);
+  }, [kbHeight, bottomBarHeight]);
+
+  // === STATE WATCHDOG ===
+  // Se la macchina a stati rimane in recording/transcribing/thinking/speaking
+  // per più del massimo ragionevole, la ripristiniamo. CRITICO: in stato
+  // "recording" NON scartiamo l'audio — chiamiamo stopTalk() che lo
+  // processa via Whisper. Senza questa logica il watchdog faceva sembrare
+  // che l'AI "non rispondesse mai" (audio buttato via).
+  useEffect(() => {
+    if (status === "idle") return;
+    const max: Record<string, number> = {
+      // 90s recording: con expo-audio (nuova architettura SharedObject) il
+      // mic non si "incolla" più, quindi possiamo permettere monologhi lunghi
+      // senza il timeout aggressivo di 18s che spezzava le frasi a metà.
+      // 90s è abbastanza per qualsiasi turno realistico; oltre, è verosimile
+      // un bug e preferiamo comunque processare l'audio raccolto piuttosto
+      // che scartarlo.
+      recording: 90_000,
+      transcribing: 25_000, // 25s STT max
+      thinking: 25_000,     // 25s LLM max (con web search)
+      speaking: 60_000,     // 60s playback max (lunghi)
+    };
+    const ms = max[status] || 30_000;
+    const t = setTimeout(async () => {
+      console.warn(`[watchdog] status '${status}' stuck for ${ms}ms`);
+      if (status === "recording" && recRef.current) {
+        // FIX: NON scartiamo l'audio. Lo processiamo via stopTalk → Whisper.
+        // L'utente avrà o una risposta vera, o un feedback "Non ti ho sentito"
+        // — mai un buco di silenzio che fa pensare "l'app non funziona".
+        console.warn(`[watchdog] forcing stopTalk to process audio`);
+        try { await stopTalk(); } catch (e) {
+          console.warn("[watchdog] stopTalk failed", e);
+          setStatus("idle");
+        }
+        return;
+      }
+      // Per altri stati (transcribing/thinking/speaking) reset duro:
+      try { SpeechMod.stop(); } catch {}
+      const cur = recRef.current;
+      if (cur) {
+        try {
+          await Promise.race([
+            cur.stop(),
+            new Promise((r) => setTimeout(r, 3000)),
+          ]);
+        } catch {}
+        recRef.current = null;
+      }
+      const wasSpeaking = status === "speaking";
+      setStatus("idle");
+      // Mostra l'errore SOLO se siamo rimasti bloccati prima/durante l'elaborazione.
+      // Se eravamo in "speaking", il TTS è già stato consegnato all'utente —
+      // mostrare "si è bloccato" è un falso positivo che spaventa inutilmente.
+      if (!wasSpeaking) {
+        setError("Si è bloccato un attimo, riprova pure.");
+      }
+    }, ms);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
+
+  // === THINKING SOUND (richiesta utente 2026-06) =====================
+  // Quando Ollenya sta elaborando (transcribing/thinking) parte il jingle
+  // "Gentle Pause": 4 note morbide pentatoniche con sottofondo caldo.
+  // Utile se l'utente non sta guardando il telefono (altra app, schermo
+  // bloccato). Si ferma appena Ollenya inizia a parlare o torna idle.
+  //
+  // RICHIESTA 2026-06 (#7) v2: in MODALITÀ SCRITTURA l'utente NON vuole
+  // sentire alcun suono. Il problema era che `inputMode` può essere
+  // "voice"/"text"/"both"; in "both" l'utente entra nel pannello scrittura
+  // (viewMode === "reading") ma inputMode resta "both" → suono partiva.
+  // Correzione: usiamo viewMode che riflette davvero LA PAGINA in cui si
+  // trova l'utente. Se sta nel pannello reading/chat, niente suono.
+  useEffect(() => {
+    const isThinking = status === "transcribing" || status === "thinking";
+    const userIsInTextScreen = viewMode === "reading" || inputMode === "text";
+    if (isThinking && !userIsInTextScreen) {
+      startThinkingSound();
+    } else {
+      stopThinkingSound();
+    }
+    return () => {
+      stopThinkingSound();
+    };
+  }, [status, inputMode, viewMode]);
+
+
+  const speakIfEnabled = useCallback(
+    async (text: string, tone: TimelineEntry["tone"], opts?: { fromText?: boolean }) => {
+      // === FIX #5 STATUS STUCK ON THINKING (2026-06-22 v6) ===
+      // Bug: dopo che Ollenya ha terminato la risposta, status restava su
+      // "thinking" → TypingDots continuavano a pulsare → dopo 25s il
+      // watchdog faceva apparire un finto errore "Si è bloccato".
+      // Causa: nei due early-return sotto (fromText o voice_response off)
+      // non resettavamo lo status, lasciandolo a "thinking" dal sendText.
+      // Fix: marca esplicitamente idle prima di uscire.
+      // FIX 2026-07: se la richiesta proviene dalla tastiera (input testo),
+      // NON parlare. L'utente probabilmente è in un contesto dove non vuole
+      // audio (notte, pubblico). Risponde solo a video.
+      if (opts?.fromText) {
+        setStatus("idle");
+        return;
+      }
+      if (!profile?.settings.voice_response) {
+        // PIANO A: auto-reopen del mic disabilitato. L'utente tappa per parlare.
+        setStatus("idle");
+        return;
+      }
+      const lang = profile?.language || "it";
+      const langTag = lang === "it" ? "it-IT" : lang === "en" ? "en-US" : lang;
+
+      // === QUOTA EXHAUSTED GUARD (Fabio 2026-06) =========================
+      // Se in questa sessione il backend ha già segnalato paid_quota_exhausted,
+      // NON chiamiamo TTS (che ritornerebbe 402 con fallback silente a
+      // expo-speech robotica). Il messaggio pre-registrato è già stato
+      // riprodotto una volta in handleQuotaExhausted() al momento del gate.
+      if (isQuotaExhaustedSession()) {
+        setStatus("idle");
+        return;
+      }
+
+      // PIANO A: SEMPRE modalità sequenziale push-to-talk.
+      // L'AI parla → finisce → torna idle → l'utente tappa per parlare.
+      // Il conversation_mode hands-free è disabilitato (causa di freeze su iOS).
+      // Arriverà nella Fase 4 con Deepgram + dev build.
+      setStatus("speaking");
+      traceMark("tts:request");
+      await SpeechMod.speak(text, { language: langTag, tone });
+      traceMark("tts:end");
+      setStatus("idle");
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [profile]
+  );
+
+  // Execute side-effects requested by the AI (e.g. schedule notifications)
+  const runActions = useCallback(async (actions: Action[] | null | undefined) => {
+    if (!actions || actions.length === 0) return;
+    for (const a of actions) {
+      try {
+        if (a.type === "schedule_notification" && a.when_iso) {
+          // === BLOCCO A (2026-08-25) — schedule_notification IGNORATO ===
+          // Ollenya non schedula più notifiche. Se Claude genera ancora una
+          // action di questo tipo (residuo di prompt), la ignoriamo
+          // silenziosamente. Non facciamo error UI: non è un fallimento.
+          continue;
+        }
+        // === CONFIG ACTION (Coda configura se stessa via voce) ===
+        else if ((a as any).type === "config") {
+          const key = (a as any).key as string;
+          const value = (a as any).value;
+          if (!key) continue;
+          // Mappa key → patch profile
+          const patch: any = {};
+          if (key === "ai_name" && typeof value === "string") {
+            patch.ai_name = value.slice(0, 30);
+          } else if (key === "ai_gender" && (value === "m" || value === "f" || value === "n")) {
+            patch.ai_gender = value;
+          } else if (key === "user_gender" && (value === "m" || value === "f" || value === "n")) {
+            patch.user_gender = value;
+          } else if (key === "user_name" && typeof value === "string") {
+            patch.name = value.slice(0, 30);
+          } else if (key === "brevity" && (value === "short" || value === "detailed")) {
+            patch.style_preferences = { ...(profile?.style_preferences || {}), brevity: value };
+          } else if (key === "no_pet_names" && typeof value === "boolean") {
+            patch.style_preferences = { ...(profile?.style_preferences || {}), no_pet_names: value };
+          } else if (key === "speech_speed" && (value === "slow" || value === "fast" || value === "normal")) {
+            patch.style_preferences = { ...(profile?.style_preferences || {}), speech_speed: value };
+          } else if (key === "tone_pref" && typeof value === "string") {
+            patch.style_preferences = { ...(profile?.style_preferences || {}), tone_pref: value };
+          } else if (key === "confessional" && typeof value === "boolean") {
+            // Feature Confessionale RIMOSSA (Blocco B). Il comando vocale
+            // viene ignorato silenziosamente per backward-compat con
+            // eventuali risposte cached di Claude.
+          } else if (key === "notifications" && typeof value === "boolean") {
+            // === BLOCCO A (2026-08-25) — comando vocale "notifiche" IGNORATO ===
+            // Ollenya non ha più notifiche schedulate. Il comando vocale
+            // viene ignorato silenziosamente per backward-compat.
+            continue;
+          } else if (key === "checkin_morning" && typeof value === "string") {
+            patch.settings = { ...(profile?.settings || {}), checkin_morning: value };
+          } else if (key === "checkin_evening" && typeof value === "string") {
+            patch.settings = { ...(profile?.settings || {}), checkin_evening: value };
+          } else if (key === "summary_freq" && typeof value === "string") {
+            patch.settings = { ...(profile?.settings || {}), summary_freq: value };
+          } else if (key === "theme" && typeof value === "string") {
+            // === TEMA UNICO (2026-08-04) ===
+            // Ollenya ora è dark-only. Qualsiasi comando vocale "cambia tema
+            // in X" viene ignorato lato UI — salviamo comunque "notte" nel
+            // profilo per idempotenza. Il ThemeProvider ha setThemeName
+            // come no-op, ma manteniamo la chiamata per compatibilità.
+            patch.settings = { ...(profile?.settings || {}), theme: "notte" };
+            try { setThemeName("notte" as ThemeName); } catch {}
+          } else if ((key === "color_recording" || key === "color_speaking" || key === "color_thinking" || key === "color_idle") && typeof value === "string") {
+            // Salva il colore dello stato nella mappa profile.style_preferences.palette
+            const stateKey = key.replace("color_", ""); // "recording" | "speaking" | ...
+            const hex = value.startsWith("#") ? value : (NAMED_COLORS[value.toLowerCase()] || null);
+            if (hex) {
+              const currentPal = (profile?.style_preferences || {})?.palette || {};
+              patch.style_preferences = {
+                ...(profile?.style_preferences || {}),
+                palette: { ...currentPal, [stateKey]: hex },
+              };
+            }
+          } else if (key === "ghost_last" && value === true) {
+            // Ghost the last user message (recent one in timeline)
+            const lastUser = [...timeline].reverse().find((e) => e.role === "user");
+            if (lastUser?.id && !lastUser.id.startsWith("local-")) {
+              try {
+                await api.ghost(lastUser.id);
+                setTimeline((prev) => prev.filter((e) => e.id !== lastUser.id));
+              } catch (e) { console.warn("ghost last failed", e); }
+            }
+          } else if (key === "ghost_topic" && typeof value === "string") {
+            // Server-side topic ghost (richiede endpoint /ghost?topic=...)
+            // Per ora: best-effort, rimuove dal memory_summary lato server
+            try {
+              await fetch(`${API_BASE}/ghost/topic`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ topic: value }),
+              });
+            } catch (e) { console.warn("ghost topic failed", e); }
+          } else if (key === "reset_history" && value === "CONFIRMED") {
+            try {
+              await fetch(`${API_BASE}/reset_history`, { method: "POST" });
+              setTimeline([]);
+            } catch (e) { console.warn("reset history failed", e); }
+          } else if (key === "list_voices" && value === true) {
+            setShowVoicePicker(true);
+          }
+          // Applica la patch al profilo se c'è qualcosa
+          if (Object.keys(patch).length > 0) {
+            try {
+              const updated = await api.updateProfile(patch);
+              setProfile(updated);
+            } catch (e) { console.warn("config patch failed", e); }
+          }
+        }
+      } catch (e) {
+        console.warn("action exec error", e);
+      }
+    }
+  }, [profile, timeline]);
+
+  // === HANDS-FREE AUTO-LISTEN LOOP ===
+  // Quando hands-free è attivo e siamo in idle (Coda ha finito di parlare
+  // o è appena partita l'app), riapri automaticamente il microfono dopo
+  // una breve pausa di respiro (350ms). Il VAD interno chiuderà il mic
+  // da solo dopo 800ms di silenzio.
+  //
+  // GUARDIE per NON aprire il mic:
+  //   - modale di onboarding/OllenyaIntro/SealSetup aperto
+  //   - input_mode forzato a "text"
+  //   - confessionale in attesa di sblocco
+  //   - registratore già attivo
+  //   - error visibile (l'utente sta leggendo un feedback)
+  useEffect(() => {
+    // === FIX 2026-06-27 v18 (diag hands-free Android) ===
+    // L'utente Xiaomi ha riportato che dopo aver pubblicato i fix di oggi,
+    // hands-free NON auto-restarta dopo una risposta di Ollenya — bisogna
+    // tappare ogni volta. Il diag log mostra gap di 5-8s fra "session ref
+    // cleared" e "audio prep done", contro i ~450ms attesi.
+    // Aggiungiamo log per OGNI guardia che blocca: al prossimo test
+    // sappiamo subito quale flag sta impedendo il restart su Android.
+    // Prefisso unico KODA_HF_GUARD così è facilmente filtrabile nel diag.
+    if (!handsFree) {
+      if (status === "idle") console.log("[OLLENYA_HF_GUARD] blocked: handsFree=false");
+      return;
+    }
+    // === FIRST-TAP GATE ===
+    // Il loop hands-free non parte FINCHÉ l'utente non ha toccato l'orb
+    // almeno una volta in questa sessione foreground. Questo elimina
+    // tutta una serie di problemi di sessione audio iOS al cold-start
+    // / ritorno dal background. Vedi commenti su `userInteractedRef`.
+    if (!userInteractedRef.current) {
+      if (status === "idle") console.log("[OLLENYA_HF_GUARD] blocked: userInteractedRef=false (first-tap gate)");
+      return;
+    }
+    if (status !== "idle") return;
+    if (!profile) {
+      console.log("[OLLENYA_HF_GUARD] blocked: profile=null");
+      return;
+    }
+    // === CLOSE SESSION PAUSE (fix regressione 2026-06-20) ===
+    // L'utente ha appena salutato per chiudere ("ci sentiamo dopo", "ciao
+    // Ollenya"…). Il backend ha settato close_session=true e il client lo ha
+    // catturato. NON riaccendere il mic automaticamente. L'utente deve
+    // tappare esplicitamente l'orb per riprendere. Senza questa guardia
+    // il loop hands-free riapriva il mic dopo 450ms e poi mostrava
+    // "non ti sento" anche se l'utente era già andato via.
+    if (closeSessionPauseRef.current) {
+      console.log("[OLLENYA_HF_GUARD] blocked: closeSessionPause=true (waiting for user tap)");
+      return;
+    }
+    if (showOnboarding) {
+      console.log("[OLLENYA_HF_GUARD] blocked: showOnboarding=true");
+      return;
+    }
+    // === FIX 2026-08-27 v65.4 — showColorIntro guard TRULY REMOVED (Fabio) ==
+    // Precedente v65.3 aveva "rimosso" solo il commento ma lasciato la
+    // guardia attiva → HF_LOOP continuava a fallire su iOS perché
+    // showColorIntro restava `true` in memoria (koda_intro_seen mai
+    // scritto dopo la rimozione della V1). Ora la guardia è VERAMENTE
+    // eliminata: la V1 non renderizza più (vedi riga 7271), quindi non
+    // può esserci un intruso visivo da schermo. L'audio focus di
+    // eventuali intro futuri verrà gestito dal loro componente.
+    // (Nessuna guardia showColorIntro qui.)
+    if (tourActive) {
+      console.log("[OLLENYA_HF_GUARD] blocked: tourActive=true");
+      return;
+    }
+    if (showSettings) {
+      console.log("[OLLENYA_HF_GUARD] blocked: showSettings=true");
+      return;
+    }
+    if (profile.settings?.input_mode === "text") {
+      console.log("[OLLENYA_HF_GUARD] blocked: input_mode=text");
+      return;
+    }
+    if (recRef.current) {
+      console.log("[OLLENYA_HF_GUARD] blocked: recRef.current is non-null (recorder still alive?)");
+      return;
+    }
+    // === FIX 2026-06-28 v26 — guard su streamingSessionRef ===
+    // Il flusso voiceStream usa `streamingSessionRef`, NON `recRef`. Senza
+    // questo check, mentre una sessione streaming era attiva l'useEffect
+    // poteva firare e aprire una SECONDA WebSocket in parallelo → cascata.
+    if (streamingSessionRef.current) {
+      console.log("[OLLENYA_HF_GUARD] blocked: streamingSessionRef.current is non-null (stream already active)");
+      return;
+    }
+    // === NO-SPEECH BACKOFF LOGIC (Fabio 2026-07-29) =========================
+    // Se il turno appena chiuso NON ha avuto parlato reale (no_speech
+    // timeout, WS chiusa senza transcript), incrementa il counter e applica
+    // il delay progressivo. Dopo 5 no_speech consecutivi, FERMA il loop
+    // (richiede tap utente) — evita che il mic continui a riaprirsi per
+    // ore se l'utente ha dimenticato l'app aperta (batteria + AudioSession iOS).
+    let scheduleDelayMs = 450;
+    const turnWasSilent = !turnHadSpeechRef.current;
+    if (turnWasSilent) {
+      noSpeechCountRef.current += 1;
+      if (noSpeechCountRef.current >= MAX_NO_SPEECH_ATTEMPTS) {
+        // Soglia raggiunta: pausiamo il loop, serve tap dell'utente
+        console.log(
+          `[OLLENYA_HF_BACKOFF_NOSPEECH] ${noSpeechCountRef.current} no_speech consecutivi → STOP loop (richiede tap utente)`
+        );
+        setCloseSessionPause(true);
+        closeSessionPauseRef.current = true;
+        noSpeechCountRef.current = 0; // reset per la prossima sessione manuale
+        return; // NON schedulare startTalkInternal
+      }
+      // Applica delay progressivo (indice = count - 1: 1° no-speech → 450ms)
+      scheduleDelayMs =
+        NO_SPEECH_BACKOFF_DELAYS_MS[noSpeechCountRef.current - 1] ?? 5000;
+      console.log(
+        `[OLLENYA_HF_BACKOFF_NOSPEECH] no_speech #${noSpeechCountRef.current}/${MAX_NO_SPEECH_ATTEMPTS} → riapri fra ${scheduleDelayMs}ms`
+      );
+    }
+
+    // Tutte le guardie superate — schedula il restart.
+    console.log(`[OLLENYA_HF_LOOP] all guards passed — scheduling startTalkInternal in ${scheduleDelayMs}ms`);
+    // breve pausa di respiro per evitare di registrare la coda del TTS
+    // e per dare al sistema audio iOS il tempo di switchare la sessione.
+    const t = setTimeout(() => {
+      if (!handsFreeRef.current) {
+        console.log("[OLLENYA_HF_LOOP] aborted in timeout: handsFreeRef=false");
+        return;
+      }
+      if (recRef.current) {
+        console.log("[OLLENYA_HF_LOOP] aborted in timeout: recRef became non-null");
+        return;
+      }
+      // CRITICAL: re-check tourActive in closure. Senza questo, nel piccolo
+      // gap fra "OllenyaIntro chiusa" e "tourActive=true" il setTimeout era
+      // già stato schedulato e apriva il mic durante il tour.
+      if (tourActiveRef.current) {
+        console.log("[OLLENYA_HF_LOOP] aborted in timeout: tourActiveRef=true");
+        return;
+      }
+      console.log("[OLLENYA_HF_LOOP] firing startTalkInternal(true)");
+      // Re-check status in closure
+      startTalkInternal(true).catch((e) => {
+        console.log(`[OLLENYA_HF_LOOP] startTalkInternal threw: ${e?.message || e}`);
+      });
+    }, scheduleDelayMs);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, handsFree, profile?.id, showOnboarding, showColorIntro, showSettings, tourActive]);
+
+  // === ANDROID BACK BUTTON HANDLER (2026-06-27 v18) ===
+  // Su Android l'utente può premere il tasto/gesto "back" hardware. Senza
+  // gestione esplicita, il default è uscire dall'app — comportamento che
+  // diventa pericoloso in tre casi:
+  //   1) Stanza dello Sfogo aperta → l'utente esce per errore e perde la
+  //      sessione effimera senza nemmeno un avviso. Rompe la fiducia in
+  //      un prodotto che si presenta come "amico attento".
+  //   2) Microfono attivo (recording/processing) → il back lascerebbe il
+  //      registratore aperto in background o in stato corrotto.
+  //   3) Ollenya sta parlando (speaking) → il TTS continua mentre l'utente
+  //      pensa di aver chiuso l'app.
+  // Inoltre, intercettiamo i modali aperti (Impostazioni, Onboarding,
+  // SealSetup, ConfessionalIntro, Tour) e li chiudiamo invece di uscire.
+  //
+  // Restituire `true` = abbiamo gestito il back, NON propagare al sistema.
+  // Restituire `false` = comportamento di default (chiude l'app).
+  // Solo Android: su iOS questo hook è no-op (BackHandler non spara mai).
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+
+    const onBack = (): boolean => {
+      // --- Tier 1: chiudi modali (priorità alta) ---
+      if (showSettings) {
+        setShowSettings(false);
+        return true;
+      }
+      if (tourActive) {
+        // Tour visivo: chiude il tour, non l'app
+        try { setTourActive(false); } catch {}
+        return true;
+      }
+      // Onboarding: NON permettiamo di scappare via back (l'utente deve
+      // completare il flow), quindi semplicemente ignoriamo.
+      // v65.9: rimossa condizione showColorIntro (V1 dead code).
+      if (showOnboarding) {
+        return true;
+      }
+
+      // --- Tier 3: Microfono attivo ---
+      // Back durante "recording" o "processing" = STOP, non chiusura app.
+      // Replica il comportamento del tap sull'orb durante registrazione.
+      if (status === "recording" || status === "processing") {
+        try {
+          if (streamingSessionRef.current) {
+            const s = streamingSessionRef.current as any;
+            streamingSessionRef.current = null;
+            try { s.abort?.().catch?.(() => {}); } catch {}
+          }
+        } catch {}
+        try { SpeechMod.stop(); } catch {}
+        setStatus("idle");
+        return true;
+      }
+
+      // --- Tier 4: Ollenya sta parlando (TTS playback) ---
+      // Back = fermala con grazia, ma resta nell'app.
+      if (status === "speaking") {
+        try { SpeechMod.stop(); } catch {}
+        setStatus("idle");
+        return true;
+      }
+
+      // --- Default: comportamento di sistema (esce dall'app) ---
+      return false;
+    };
+
+    const sub = BackHandler.addEventListener("hardwareBackPress", onBack);
+    return () => {
+      try { sub.remove(); } catch {}
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    showSettings, tourActive,
+    showOnboarding, showColorIntro, status,
+  ]);
+
+  const sendText = useCallback(
+    async (text: string, opts?: { fromText?: boolean }) => {
+      // === #9 LATENCY TRACE (2026-06-22 v8) ===
+      // T0 = momento esatto in cui parte l'intento di invio.
+      traceStart();
+      traceMark("sendText:enter");
+      // FIX 2026-07: se l'utente sta SCRIVENDO (input da tastiera),
+      // Ollenya risponde anche lei SOLO IN TESTO — niente TTS.
+      // Motivo: se l'utente scrive, è probabile in contesto pubblico/notte
+      // dove non può/vuole parlare ad alta voce → Ollenya fa lo stesso.
+      const fromText = !!opts?.fromText;
+      const txt = text.trim();
+      if (!txt) return;
+      ++voiceTurnEpochRef.current; // supersede any pending resume refresh
+      setError(null);
+
+      // === FREEMIUM GATE DISABILITATO (richiesta utente giugno 2026) ========
+      // L'utente non ha ancora collegato RevenueCat, quindi il redirect al
+      // paywall lo bloccherebbe impedendogli di provare l'app. Il gate è
+      // disattivato: il counter "messaggi di prova" resta visibile, ma non
+      // blocca mai. Riattivare quando RevenueCat sarà integrato.
+      const isFortezzaTurn = false;
+      // (gate al paywall volutamente rimosso)
+
+      // === OPTIMISTIC UI FIRST (Fix #10 — 2026-06-22 v8) ===
+      // PRIMA mostriamo la bolla all'utente (latenza visiva = zero come
+      // WhatsApp), POI facciamo il safety check in parallelo. Se la
+      // safety blocca, rimuoviamo la bolla con animazione + alert.
+      // Vecchio comportamento: await safety PRIMA di setTimeline → ritardo
+      // visivo di 200-500ms tra il tap e l'apparizione del messaggio.
+      const optimistic: TimelineEntry = {
+        id: `local-${Date.now()}`,
+        role: "user",
+        text: txt,
+        timestamp: new Date().toISOString(),
+      };
+      // === FIX #4 (2026-06-22 v6) ===
+      // Marca l'inizio di una "force scroll window": il messaggio utente
+      // E la risposta successiva (anche se tarda 10-15s) devono SEMPRE
+      // far scrollare in fondo, anche se l'utente stava rileggendo i
+      // messaggi vecchi. Override del check "isNearBottom" passivo.
+      requestForceScroll();
+      setTimeline((prev) => [...prev, optimistic]);
+      setStatus("thinking");
+      traceMark("optimistic_shown");
+
+      // === SAFETY PRE-FLIGHT (post-optimistic) ===
+      // SOLO per chat normale (non Confessionale: in Confessionale la regola
+      // è "tutto svanisce", quindi safety è gestito dentro lo stesso flusso
+      // sealed con prompt injection). Per la chat normale facciamo check
+      // BLOCCANTE: se rischio rilevato, NON inviamo nulla a /converse,
+      // RIMUOVIAMO la bolla optimistic e mostriamo SafetyAlert.
+      if (!isFortezzaTurn) {
+        try {
+          traceMark("safety:request");
+          const sc = await api.safetyCheck(txt, false);
+          traceMark("safety:response");
+          if (sc.risk_detected) {
+            // Rimuovi la bolla optimistic (l'utente vedrà la sua bolla
+            // sparire con il default unmount della FlashList, e subito
+            // l'alert di safety prende il focus)
+            setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
+            setStatus("idle");
+            setSafetyResult(sc);
+            setSafetyVisible(true);
+            return; // STOP: niente invio a Claude, niente counter increment
+          }
+        } catch (e) {
+          // Safety check fallisce → degradiamo gracefully (continuiamo).
+          // Il prompt injection lato server.py rimane attivo come failsafe.
+        }
+      }
+      // NB: la creazione di optimistic + setTimeline è già avvenuta sopra.
+      // Da qui in poi si procede col flusso di invio vero e proprio.
+      try {
+        // === DEBUG TRACE (dev only) ===
+        const _trace = (step: string, extra?: string) => {
+          if (!__DEV__) return;
+          try {
+            fetch(`${API_BASE}/dbg-trace`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ step, extra: extra ?? "" }),
+            }).catch(() => {});
+          } catch {}
+        };
+        // === FAST PATH (sub-2s latency) — 2026-06 ===
+        // POST /api/converse-fast/start + long-poll → token MP3 statici
+        // riprodotti in sequenza. iOS AVPlayer è happy (Content-Length +
+        // Range). Time-to-first-audio target: 1.0-1.7s server + ~200ms rete.
+        //
+        // Funziona sia in normale che in confessionale-soft (ephemeral).
+        // Sealed/cifrato passa per il branch sopra (mai per qui).
+        const useFastPath = !fromText && (profile?.settings.voice_response !== false);
+        if (useFastPath) {
+          try {
+            // Watchdog: se entro 25s non parte l'audio, abortiamo.
+            let speakingStarted = false;
+            let watchdogTriggered = false;
+            const watchdog = setTimeout(() => {
+              if (!speakingStarted) {
+                watchdogTriggered = true;
+                try { SpeechMod.stop(); } catch {}
+                setStatus("idle");
+                setError("Ollenya ci sta mettendo troppo. Riprova tra un attimo.");
+                setTimeout(() => setError(null), 4000);
+              }
+            }, 25000);
+
+            // Cattura immediata del meta per aggiornare la chat appena
+            // arriva (di solito poco dopo il primo token audio).
+            let capturedMeta: any = null;
+
+            const result = await (async () => {
+              // === FASE 1 (giugno 2026): WebSocket OPT-IN tramite env var ===
+              // EXPO_PUBLIC_USE_WS_CONVERSE=true → tenta WS; altrimenti
+              // HTTP polling diretto (path stabile, comportamento storico).
+              //
+              // Il WS è disattivato di default finché non confermiamo che
+              // wss:// passa attraverso l'infra Emergent / Cloudflare in
+              // produzione. Quando fallisce sotto Cloudflare, l'utente
+              // aspettava il timeout intero (~25s) prima del fallback.
+              //
+              // Quando ON: fail-fast a 1.5s. Se entro 1.5s NON arriva
+              // almeno un frame dal server, droppiamo il WS e cadiamo
+              // immediatamente su HTTP poll (~1.7s totali invece di 25s).
+              const useWS = String(process.env.EXPO_PUBLIC_USE_WS_CONVERSE || "").toLowerCase() === "true";
+              if (useWS) {
+                try {
+                  const wsResult = await SpeechMod.fastConverseWS(txt, {
+                    ephemeral: confessionalMode,
+                    timeoutMs: 1500,
+                    sttConfidence: lastSttConfidenceRef.current ?? undefined,
+                    onAudioStart: () => {
+                      speakingStarted = true;
+                      clearTimeout(watchdog);
+                      setStatus("speaking");
+                      // Reset a "attivo" quando comincia una nuova sentence.
+                      setSpeechActive(true);
+                    },
+                    // === ORB SILENCE SYNC (Task 2, Fabio 2026-08) ===
+                    // Attiva la desincronizzazione orb ↔ voce reale sui
+                    // silenzi. L'evento arriva ~200-400ms dopo il
+                    // `sentence`, calcolato server-side via RMS parsing
+                    // del MP3. Ignoriamo update dopo `speaking` finito.
+                    onSpeechActive: (active) => {
+                      try { setSpeechActive(!!active); } catch {}
+                    },
+                    onMeta: (meta) => {
+                      capturedMeta = meta;
+                      try {
+                        const userFinal: TimelineEntry = {
+                          ...optimistic,
+                          id: `fast-u-${Date.now()}`,
+                        };
+                        const aiEntry: TimelineEntry = {
+                          id: `fast-ai-${Date.now()}`,
+                          role: "ai",
+                          text: stripDisplayTags(meta.reply || ""),
+                          voice_text: meta.voice_text || undefined,
+                          tone: (meta.tone as Tone) || "warm",
+                          timestamp: new Date().toISOString(),
+                          actions: meta.actions || undefined,
+                          event_id: meta.event_id || null,
+                        };
+                        setTimeline((prev) => {
+                          const filtered = prev.filter((e) => e.id !== optimistic.id);
+                          return [...filtered, userFinal, aiEntry];
+                        });
+                        if (Array.isArray(meta.actions) && meta.actions.length > 0) {
+                          runActions(meta.actions as any[]);
+                        }
+                        // === CLOSE SESSION (path WS — fix 2026-06-20) ===
+                        if (meta.close_session) {
+                          console.log("[OLLENYA_CLOSE_SESSION] (ws) meta.close_session=true → pausing hands-free loop");
+                          setCloseSessionPause(true);
+                          closeSessionPauseRef.current = true;
+                        }
+                      } catch (e) {
+                        console.warn("[ws] onMeta handler error:", e);
+                      }
+                    },
+                  });
+                  if (wsResult.ok) return wsResult;
+                  console.warn("[ws] failed (", wsResult.error, ") → falling back to HTTP poll");
+                  if (speakingStarted) return wsResult;
+                } catch (e) {
+                  console.warn("[ws] exception (", String(e), ") → falling back to HTTP poll");
+                }
+              }
+              // HTTP path (default + fallback)
+              return await SpeechMod.fastConverse(txt, {
+                ephemeral: confessionalMode,
+                recordingDurationMs: lastRecordingDurationMsRef.current ?? undefined,
+                sttConfidence: lastSttConfidenceRef.current ?? undefined,
+                onAudioStart: () => {
+                  speakingStarted = true;
+                  clearTimeout(watchdog);
+                  setStatus("speaking");
+                },
+                onMeta: (meta) => {
+                  capturedMeta = meta;
+                  try {
+                    const userFinal: TimelineEntry = {
+                      ...optimistic,
+                      id: `fast-u-${Date.now()}`,
+                    };
+                    const aiEntry: TimelineEntry = {
+                      id: `fast-ai-${Date.now()}`,
+                      role: "ai",
+                      text: stripDisplayTags(meta.reply || ""),
+                      voice_text: meta.voice_text || undefined,
+                      tone: (meta.tone as Tone) || "warm",
+                      timestamp: new Date().toISOString(),
+                      actions: meta.actions || undefined,
+                      event_id: meta.event_id || null,
+                    };
+                    setTimeline((prev) => {
+                      const filtered = prev.filter((e) => e.id !== optimistic.id);
+                      return [...filtered, userFinal, aiEntry];
+                    });
+                    if (Array.isArray(meta.actions) && meta.actions.length > 0) {
+                      runActions(meta.actions as any[]);
+                    }
+                    // === CLOSE SESSION (fix regressione 2026-06-20) ===
+                    // Backend ha rilevato un saluto di chiusura. Sospendi
+                    // il loop hands-free: il prossimo `useEffect` che
+                    // valuta `closeSessionPauseRef` non riaccenderà il mic.
+                    // L'utente dovrà tappare l'orb per riprendere.
+                    if (meta.close_session) {
+                      console.log("[OLLENYA_CLOSE_SESSION] meta.close_session=true → pausing hands-free loop");
+                      setCloseSessionPause(true);
+                      closeSessionPauseRef.current = true;
+                    }
+                  } catch (e) {
+                    console.warn("[fast] onMeta handler error:", e);
+                  }
+                },
+              });
+            })();
+            clearTimeout(watchdog);
+            if (watchdogTriggered) return;
+            if (!result.ok) {
+              // Fast fallito — vado al flusso standard sotto.
+              console.warn("[fast] failed:", result.error, "— falling back to /converse");
+              setStatus("thinking");
+              // Continua col blocco standard sotto.
+            } else {
+              // === BUG FIX 2026-06-26 ROOT CAUSE ===
+              // PRIMA qui c'era `setProfile(await api.getProfile())` dopo
+              // OGNI conversazione per sincronizzare counters/memory_summary
+              // dal backend. CONSEGUENZA: setProfile triggera rerender →
+              // inputMode (computed da profile) ricomputa → TextInput
+              // rimonta perdendo il focus → tastiera si chiude. Inoltre
+              // lo scroll listener riceve un evento layout-time che fa
+              // snappare il pager a Page 0 (home).
+              // Risultato osservato dall'utente: "l'app fa la home a modo
+              // suo" + "la pagina della scrittura non scrive".
+              // FIX: il profilo NON serve aggiornato dopo ogni turno.
+              // Counters/memory si rileggono al prossimo boot o quando
+              // l'utente apre Settings. Eliminato il refetch.
+              setStatus("idle");
+              // === FREEMIUM COUNTER (giugno 2026) ===
+              // Incremento SOLO se NON in Confessionale (Confessionale è
+              // sempre escluso dal counter — privacy/marketing first).
+              if (!isFortezzaTurn) {
+                api.freemiumIncrement()
+                  .then((s) => setFreemium(s))
+                  .catch(() => {});
+              }
+              return;
+            }
+          } catch (e: any) {
+            console.warn("[fast] threw, falling back:", e);
+            setStatus("thinking");
+          }
+        }
+        // === STANDARD FLOW (fallback) ===
+        // is_voice_turn: !fromText → il gate `paid_quota_exhausted` scatta
+        // solo sui turni voce. Chat scritta (fromText=true) resta sempre
+        // illimitata come da policy prodotto (Fabio 2026-06).
+        const res = await api.converse(txt, undefined, {
+          ephemeral: false,
+          is_voice_turn: !fromText,
+        });
+        traceMark("converse:response");
+        // Replace optimistic with real, then add AI entry.
+        setTimeline((prev) => {
+          const filtered = prev.filter((e) => e.id !== optimistic.id);
+          return [...filtered, res.user_entry, res.ai_entry];
+        });
+        setProfile(res.profile);
+        // Execute any actions (notifications, etc.) requested by the AI
+        runActions(res.ai_entry.actions || []);
+        await speakIfEnabled(res.ai_entry.voice_text || res.ai_entry.text, res.ai_entry.tone || "neutral", { fromText });
+        // === FREEMIUM COUNTER (standard flow) ===
+        if (!isFortezzaTurn) {
+          api.freemiumIncrement()
+            .then((s) => setFreemium(s))
+            .catch(() => {});
+        }
+      } catch (e: any) {
+        const msg = String(e?.message || "");
+        // === GATE MINUTI ESAURITI (Fabio 2026-06) =========================
+        // === VOICE PREMIUM ONLY v65.55 (Fabio 2026-09) ====================
+        // Se il backend risponde HTTP 402 `voice_premium_only`, l'utente è
+        // Free e ha tentato un turno voce (bypass sanitario nel raro caso
+        // in cui il gate frontend non abbia scattato — es. hands-free già
+        // attivo prima del downgrade). Reindirizziamo al paywall.
+        try {
+          const errMsg = String((e as any)?.message || "");
+          if (/voice_premium_only|La voce di Ollenya è una funzione Premium/i.test(errMsg)) {
+            console.log("[voice_gate] Free tentato voice turn → paywall");
+            setTimeline((prev) => prev.filter((entry) => entry.id !== optimistic.id));
+            setStatus("idle");
+            try { router.push("/paywall"); } catch {}
+            return;
+          }
+        } catch {}
+
+        // Il backend ritorna HTTP 402 `paid_quota_exhausted` quando l'utente
+        // ha finito i minuti voce. Il client:
+        //   1. Riproduce il messaggio audio pre-registrato (una sola volta
+        //      per sessione — vedi lib/quotaExhaustedAudio.ts)
+        //   2. Attiva la sessione "quota exhausted" → prossimi turni voce
+        //      bloccati automaticamente
+        //   3. Mostra il messaggio Ollenya in timeline come AI entry sintetica
+        //      così l'utente ha ANCHE la controparte scritta
+        //   4. NON mostra Alert modal — il banner viola in home + audio
+        //      bastano
+        if (isQuotaExhaustedError(e)) {
+          console.log("[quota] voice turn blocked (paid_quota_exhausted) → play pre-recorded audio");
+          try {
+            await handleQuotaExhausted();
+          } catch (playErr) {
+            console.warn("[quota] handleQuotaExhausted threw:", String(playErr).slice(0, 120));
+          }
+          // Rimuovi optimistic user message (non fu processato dal backend)
+          setTimeline((prev) => {
+            const filtered = prev.filter((e) => e.id !== optimistic.id);
+            // Se il turno era voce (STT), l'input dell'utente NON viene
+            // salvato dal backend (402 pre-Claude) → cancelliamo l'ottimistica.
+            // Se era testo (non dovrebbe accadere perché is_voice_turn=false
+            // sui text turn, ma difensivamente), teniamo l'utente.
+            if (!fromText) return filtered;
+            return [...filtered, optimistic];
+          });
+          // Sintetizza una AI entry con il testo del messaggio pre-registrato
+          // così l'utente vede ANCHE per iscritto il perché del blocco.
+          const quotaAiEntry: TimelineEntry = {
+            id: `quota-${Date.now()}`,
+            role: "ai",
+            text:
+              "Hai finito i minuti voce di questo mese. Continuiamo in chat scritta, sono qui. " +
+              "Se vuoi, aggiungi trenta minuti dalla home.",
+            tone: "warm",
+            timestamp: new Date().toISOString(),
+          };
+          setTimeline((prev) => [...prev, quotaAiEntry]);
+          setStatus("idle");
+          return;
+        }
+        // === FREE LIMIT EXHAUSTED v65.53 (Fabio 2026-06) ==================
+        // 5 turni Free consumati nel periodo. Il backend ritorna 402 con:
+        //   { error: "free_limit_exhausted", message, greeting, countdown_it, free_status }
+        // Il client:
+        //   1. Rimuove il messaggio ottimistico (non ancora inviato → non
+        //      accreditato)
+        //   2. Mostra overlay elegante con countdown live + CTA Premium
+        //   3. Aggiorna il profile.free_status dal payload
+        try {
+          const errStr = String(e || "");
+          const isFreeLimitErr =
+            errStr.includes("free_limit_exhausted") || errStr.includes('"402"') || errStr.includes("HTTP 402");
+          const isPremiumHardcapErr =
+            errStr.includes("premium_daily_hardcap") || errStr.includes('"429"') || errStr.includes("HTTP 429");
+          if (isFreeLimitErr || isPremiumHardcapErr) {
+            // Prova a fare parse del detail dal messaggio d'errore
+            let detail: any = null;
+            try {
+              const m = errStr.match(/\{[\s\S]*\}/);
+              if (m) detail = JSON.parse(m[0]);
+              if (detail && detail.detail) detail = detail.detail;
+            } catch {}
+            console.log(`[gate] limit exhausted (${isPremiumHardcapErr ? "premium" : "free"}) → show overlay`, detail);
+            setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
+            if (isPremiumHardcapErr) {
+              // v65.54 — Premium hardcap: overlay minimalista, no CTA Premium
+              // (già Premium!), solo dismiss e countdown al reset locale.
+              const premiumStatus = detail?.premium_status || null;
+              const nameForMsg = ((profile as any)?.name || "").trim();
+              const greeting = nameForMsg
+                ? `Per oggi ci fermiamo qui, ${nameForMsg}.`
+                : "Per oggi ci fermiamo qui.";
+              setFreeLimitOverlay({
+                visible: true,
+                greeting,
+                countdown: premiumStatus?.reset_countdown_it || "tra poco",
+                // Nessun periodEndsAtIso perché è "prossima mezzanotte"
+                // — countdown statico basato sulla stringa restituita.
+                periodEndsAtIso: null,
+              });
+            } else {
+              // Aggiorna free_status dal payload se disponibile
+              if (detail?.free_status && profile) {
+                setProfile({ ...profile, free_status: detail.free_status });
+              }
+              setFreeLimitOverlay({
+                visible: true,
+                greeting: detail?.greeting || "Per questo periodo ci fermiamo qui.",
+                countdown: detail?.countdown_it || "tra poco",
+                periodEndsAtIso: detail?.free_status?.period_ends_at_iso || null,
+              });
+            }
+            setStatus("idle");
+            return;
+          }
+        } catch {}
+        if (msg.includes("Parola Segreta")) {
+          setError("Parola Segreta non sbloccata. Tocca il lucchetto per riprovare.");
+        } else {
+          setError("Ops, qualcosa non funziona. Riprova.");
+        }
+        setStatus("idle");
+        // Remove optimistic
+        setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
+      }
+    },
+    [speakIfEnabled, runActions, profile]
+  );
+
+  // === CODA CONSAPEVOLE ===
+  // Rileva trascrizioni vuote/sospette/allucinazioni di Whisper e fa parlare
+  // Coda con frasi varie invece di stallare silenziosamente.
+  const emptyTurnsRef = useRef(0); // n. vuoti consecutivi nel loop conversazione
+  const lastAwarenessIdx = useRef(-1);
+
+  // === NO-SPEECH BACKOFF (Fabio 2026-07-29) =================================
+  // Se l'utente lascia l'app aperta ma smette di parlare, il loop hands-free
+  // rischia di ciclare all'infinito (open mic → 5s silenzio → no_speech →
+  // reopen mic → ...) consumando batteria e stressando l'AudioSession iOS
+  // (osservato errore `OSStatus 560557684` dopo troppi cicli rapidi).
+  //
+  // SPEC (concordata con Fabio):
+  //   - Contatore `noSpeechCountRef` incrementa ad ogni turno vuoto (no_speech)
+  //   - Reset a 0 quando l'utente parla davvero (onUserFinal riceve testo)
+  //   - Delay progressivi per riaprire il mic dopo un no_speech:
+  //       1° → 450ms, 2° → 2s, 3° → 5s, 4° → 5s, 5° → 5s
+  //   - Dopo 5 no_speech consecutivi → STOP: torna idle, richiede tap utente.
+  //     (evita che il mic continui ad aprirsi per ore se dimentichi l'app aperta)
+  //   - `turnHadSpeechRef` è il flag interno: settato a false all'apertura di
+  //     ogni sessione, a true quando arriva un `onUserFinal` con testo valido.
+  const NO_SPEECH_BACKOFF_DELAYS_MS = [450, 2000, 5000, 5000, 5000] as const;
+  const MAX_NO_SPEECH_ATTEMPTS = 5;
+  const noSpeechCountRef = useRef(0);
+  const turnHadSpeechRef = useRef(false);
+
+  // === OFFLINE CLIPS ANTI-LOOP (sprint 2026-06-20) ===
+  // Conta clip offline consecutive riprodotte senza che la rete sia tornata.
+  // Dopo N=3 clip consecutive l'utente ha capito che è offline → usciamo dal
+  // loop hands-free per non bombardarlo di clip. Tornerà a parlare quando
+  // vuole con un tap manuale dell'orb.
+  const offlineClipsInRowRef = useRef(0);
+  const MAX_OFFLINE_CLIPS_IN_ROW = 3;
+
+  // Frasi varie per "non ho sentito" — ruotiamo per non sembrare un bot
+  const awarenessLinesNoAudio = [
+    "[gently] Scusa, non ti ho sentito bene. Puoi ripetere?",
+    "[softly] Eh, non ho capito — c'è un po' di rumore qui?",
+    "[warmly] Aspetta, riprova — non ho sentito bene.",
+    "[thoughtful] Mmh, ho sentito solo silenzio. Dimmi pure.",
+    "[gently] Ti sento appena. Avvicinati o riprova quando puoi.",
+  ];
+  const awarenessLinesGarbled = [
+    "[thoughtful] Ho sentito qualcosa ma non chiaro — puoi ripetere?",
+    "[gently] Mi sembra che ci sia rumore. Riprova quando puoi.",
+    "[softly] Non ho capito bene — dimmi di nuovo?",
+  ];
+  const awarenessLinesPartial = (what: string) => [
+    `[thoughtful] Ho sentito solo "${what}" — è quello che hai detto?`,
+    `[gently] Mi è arrivato solo "${what}". Era così o ho perso qualcosa?`,
+  ];
+  const awarenessLoopExit = [
+    "[warmly] Sono qui, ma non ti sento. Tocca quando sei pronto.",
+    "[gently] Ti aspetto — tocca quando vuoi parlare.",
+    "[softly] Resto in attesa. Tocca per riprendere.",
+  ];
+
+  function pickLine(lines: string[]): string {
+    let idx = Math.floor(Math.random() * lines.length);
+    // Evita di ripetere la stessa subito
+    if (idx === lastAwarenessIdx.current && lines.length > 1) {
+      idx = (idx + 1) % lines.length;
+    }
+    lastAwarenessIdx.current = idx;
+    return lines[idx];
+  }
+
+  // Pattern noti di allucinazioni Whisper su audio rumoroso/vuoto
+  // SOLO i pattern CHIARAMENTE allucinati. Tutto il resto → manda a Coda.
+  const WHISPER_HALLUCINATIONS = [
+    /^[\s\.,!?…]*$/,                            // solo punteggiatura/spazi
+    /sottotitoli.{0,30}q-?t?-?s?-?s/i,           // "Sottotitoli e revisione a cura di Q-T-S-S"
+    /sottotitoli.{0,30}cura di/i,
+    /grazie per l'?\s*attenzione/i,
+    /grazie per aver guardato/i,
+    /^[\s]*\[\s*musica\s*\][\s]*$/i,             // SOLO [musica] da sola
+    /^(\.{2,}|…+)$/,                              // solo puntini
+  ];
+
+  function classifyTranscript(txt: string): "ok" | "empty" | "garbled" | "partial" {
+    const t = (txt || "").trim();
+    if (!t) return "empty";
+    for (const re of WHISPER_HALLUCINATIONS) {
+      if (re.test(t)) return "garbled";
+    }
+    // SOPPRESSA la classificazione "partial" — anche 1-2 parole brevi sono
+    // valide (es: "sì", "no", "okay", "ahah", "mmh sì"). Whisper trascrive
+    // solo se ha sentito qualcosa di concreto, e Claude sa gestire input brevi.
+    return "ok";
+  }
+
+  async function speakAwareness(text: string) {
+    // Strip audio tags per chat display
+    const clean = text.replace(/\[[a-zA-Zàèéìòùç '_,/-]{1,40}\]/g, "").replace(/  +/g, " ").trim();
+    setTimeline((prev) => [
+      ...prev,
+      {
+        id: `aware-${Date.now()}`,
+        role: "ai",
+        text: clean,
+        voice_text: text,
+        tone: "warm",
+        timestamp: new Date().toISOString(),
+      },
+    ]);
+    setStatus("speaking");
+    try {
+      await SpeechMod.speak(text, { language: "it-IT", tone: "warm" });
+    } catch {}
+    setStatus("idle");
+  }
+
+  // ============================================================
+  // FASE 1 STREAMING — Voice WS opt-in (giugno 2026)
+  // ============================================================
+  // Quando EXPO_PUBLIC_USE_WS_VOICE_STREAM=true, l'orb attiva questa
+  // pipeline al posto del flusso classico (record → upload → STT → fastConverse).
+  // Vantaggi:
+  //  • Endpointing intelligente Deepgram → niente VAD volumetrico (cieco
+  //    su Xiaomi MIUI, ingannato dal rumore di motore nel furgone)
+  //  • Latenza: niente upload-then-wait di 14s su rete mobile lenta
+  //  • Cross-platform: stesso codice JS iOS+Android
+  // Cambia solo la fonte audio/STT — la timeline UI, la safety, le actions,
+  // e il TTS playback rimangono identici al flusso esistente.
+  // ============================================================
+  const startTalkStreaming = async () => {
+    if (status !== "idle" && status !== "speaking") return;
+    // === GUARD 2026-06-28 v26 — protezione cascata ===
+    // Anche se startTalkInternal ha già fatto i suoi check, blocchiamo
+    // qui in caso il chiamante salti il debounce. Sintomo visto nei log:
+    // 6+ sessioni WS in apertura allo stesso ms con showSettings=true.
+    if (streamingSessionRef.current) {
+      console.log("[OLLENYA_STREAM_GUARD] startTalkStreaming aborted: session already active");
+      return;
+    }
+    const turnEpoch = ++voiceTurnEpochRef.current;
+    voiceTurnStartedAtRef.current = Date.now();
+    const isCurrentTurn = () => turnEpoch === voiceTurnEpochRef.current;
+    setError(null);
+    if (!convActiveRef.current) emptyTurnsRef.current = 0;
+    unlockSpeech().catch(() => {});
+
+    // === FIX 2026-06-24 v3 (post-troubleshoot review) ===
+    // Setup audio session — DELEGA TUTTO a prewarmMic() come fa
+    // startTalkInternal. Prima facevo doppia setAudioModeAsync (qui +
+    // dentro chunkLoop) creando 3 chiamate sovrapposte → race condition
+    // sull'AudioSession che causava il blocco silenzioso. Ora una sola
+    // chiamata, dentro prewarmMic, identica al flusso esistente.
+    try {
+      const ttsPlaying = SpeechMod.isSpeaking();
+      if (status !== "speaking" && !ttsPlaying) {
+        try { SpeechMod.stop(); } catch {}
+      }
+      // prewarmMic gestisce permessi + setAudioModeAsync + _nativeReady
+      if (Platform.OS !== "web") {
+        await prewarmMic();
+      }
+      console.log(`[OLLENYA_STREAM_CLIENT] audio prep done (via prewarmMic)`);
+    } catch (e) {
+      console.warn(`[OLLENYA_STREAM_CLIENT] audio prep failed: ${e}`);
+    }
+
+    if (!isCurrentTurn()) return;
+
+    // Placeholder optimistic (verrà aggiornato quando arriva stt_final)
+    const optimisticId = `local-stream-${Date.now()}`;
+    const optimistic: TimelineEntry = {
+      id: optimisticId,
+      role: "user",
+      text: "…",
+      timestamp: new Date().toISOString(),
+    };
+    requestForceScroll();
+    setTimeline((prev) => [...prev, optimistic]);
+    setStatus("recording");
+
+    let capturedMeta: any = null;
+    let aiEntryId: string | null = null;
+
+    try {
+      const { voiceStreamConverse } = require("../lib/speech");
+      const result = await voiceStreamConverse({
+        ephemeral: confessionalMode,
+        profileLang: "it",
+        // === FIX 2026-07-26 v64.4 — voiceId client-authoritative ===
+        // Passiamo esplicitamente il voice_id corrente scelto dall'utente.
+        // Il server lo usa per la TTS di questa sessione, bypassando la
+        // lettura del profilo (che può avere bug di sync su iPhone).
+        // Fallback: se undefined, server usa _resolve_voice_id(profile).
+        voiceId: profile?.settings?.tts_voice_id || undefined,
+        // === FIX 2026-06-26 v18: timeout dinamico chat vs sfogo ===
+        // Allineato a STREAM_HARD_CAP_MS_* + 60s margine pipeline.
+        // - chat normale: 180s + 60s = 240s
+        // - Stanza dello Sfogo: 300s + 60s = 360s
+        timeoutMs: confessionalMode ? 360_000 : 240_000,
+        // === ORB SILENCE SYNC (Task 2, Fix Bug #2 — Fabio 2026-08-13) ===
+        // QUESTA è la path REALE del microfono su iPhone. La versione
+        // aggiunta in fastConverseWS (riga 2737 sotto) è un'altra path
+        // che non veniva mai attivata dal flusso vocale reale. Fix:
+        // wiring anche qui in voiceStreamConverse.
+        onSpeechActive: (active: boolean) => {
+          if (!isCurrentTurn()) return;
+          try { setSpeechActive(!!active); } catch {}
+        },
+        onSession: (s: any) => {
+          if (!isCurrentTurn()) return;
+          streamingSessionRef.current = s;
+          // === FIX 2026-07-24 v63.5 (Fix B) — reset mic-active gate ===
+          // Nuova sessione: il mic NON è ancora attivo (parte solo dopo
+          // startRecognition, ~1s più tardi). Da qui in poi ignoriamo
+          // i tap sull'orb finché onRecognitionActive non arriva.
+          micReallyActiveRef.current = false;
+          console.log(
+            `[OLLENYA_STREAM_CLIENT] session ref ${s ? "stored" : "cleared"}`
+          );
+          // === FIX 2026-07-11 v52 — TAP_STOP EARLY consumption ===
+          // Se l'utente ha premuto tap-stop DURANTE la fase async pre-WS
+          // (mentre stream stava aprendo la connessione), onBigButton ha
+          // settato pendingTapStopRef=true perché non aveva ancora la
+          // sessione. Ora che l'abbiamo, fermiamo subito con stop() →
+          // il server processerà l'audio già inviato e risponderà,
+          // NON continuiamo a registrare chunk aggiuntivi.
+          if (s && pendingTapStopRef.current) {
+            pendingTapStopRef.current = false;
+            console.log(
+              `[OLLENYA_STREAM_CLIENT] pendingTapStopRef consumed → calling s.stop() now`
+            );
+            try {
+              if (typeof s.stop === "function") {
+                s.stop().catch?.(() => {});
+              } else if (typeof s.abort === "function") {
+                s.abort().catch?.(() => {});
+              }
+            } catch {}
+          }
+        },
+        onAudioStart: () => {
+          if (!isCurrentTurn()) return;
+          setStatus("speaking");
+        },
+        // === FIX 2026-07-24 v63.5 (Fix B) — mic really active ===
+        onRecognitionActive: () => {
+          if (!isCurrentTurn()) return;
+          micReallyActiveRef.current = true;
+          console.log(`[OLLENYA_MIC_GATE] mic really active — tap-stop now allowed`);
+        },
+        onUserFinal: (userText: string, conf: number | null, _dur: number | null) => {
+          if (!isCurrentTurn()) return;
+          // === FIX 2026-06-25 v8 ===
+          // Quando Deepgram emette stt_final, il microfono di fatto si è già
+          // fermato (chunkLoopActive=false dentro voiceStream.ts). Senza
+          // questa transizione, l'UI rimaneva in "recording" per i ~3-5s
+          // che impiega Claude a generare la risposta + TTS — l'utente
+          // pensava che stesse ancora registrando.
+          setStatus("thinking");
+          // === NO-SPEECH BACKOFF (2026-07-29) — parlato vero → reset ===
+          // L'utente ha parlato davvero (transcript non vuoto arriva qui).
+          // Marca il turno come "aveva parlato" così l'HF loop NON incrementa
+          // il contatore no-speech, e resetta il contatore così i prossimi
+          // eventuali no_speech ripartono dal delay più corto (450ms).
+          turnHadSpeechRef.current = true;
+          if (noSpeechCountRef.current > 0) {
+            console.log(`[OLLENYA_HF_BACKOFF_NOSPEECH] user parlato → reset counter (era ${noSpeechCountRef.current})`);
+            noSpeechCountRef.current = 0;
+          }
+          // Aggiorna la bolla utente col testo trascritto reale.
+          setTimeline((prev) =>
+            prev.map((e) =>
+              e.id === optimisticId ? { ...e, text: userText } : e
+            )
+          );
+          if (typeof conf === "number") {
+            lastSttConfidenceRef.current = conf;
+            console.log(
+              `[OLLENYA_STREAM_CLIENT] user_final conf=${conf.toFixed(3)} text=${JSON.stringify(userText)}`
+            );
+          }
+          // === FIX 2026-07-03 v45 CLIENT-SIDE close_session heuristic ===
+          // Se l'utente ha detto un saluto di congedo, pausiamo il HF loop
+          // SUBITO — non aspettiamo `meta.close_session` dal backend
+          // (che potrebbe non arrivare se il deploy non è aggiornato).
+          // Questo funziona sempre appena c'è il testo trascritto.
+          if (detectCloseSessionClientSide(userText)) {
+            console.log(
+              `[OLLENYA_CLOSE_SESSION] (client heuristic) matched → pausing HF loop | text=${JSON.stringify(userText)}`
+            );
+            setCloseSessionPause(true);
+            closeSessionPauseRef.current = true;
+          }
+        },
+        onMeta: (meta: any) => {
+          if (!isCurrentTurn()) return;
+          capturedMeta = meta;
+          try {
+            aiEntryId = `stream-ai-${Date.now()}`;
+            const aiEntry: TimelineEntry = {
+              id: aiEntryId,
+              role: "ai",
+              text: stripDisplayTags(meta.reply || ""),
+              voice_text: meta.voice_text || undefined,
+              tone: (meta.tone as Tone) || "warm",
+              timestamp: new Date().toISOString(),
+              actions: meta.actions || undefined,
+            };
+            setTimeline((prev) => [...prev, aiEntry]);
+            if (Array.isArray(meta.actions) && meta.actions.length > 0) {
+              runActions(meta.actions as any[]);
+            }
+            if (meta.close_session) {
+              console.log("[OLLENYA_CLOSE_SESSION] (stream) meta.close_session=true → pausing hands-free loop");
+              setCloseSessionPause(true);
+              closeSessionPauseRef.current = true;
+            }
+          } catch (e) {
+            console.warn("[stream] onMeta handler error:", e);
+          }
+        },
+      });
+
+      if (!isCurrentTurn()) return;
+      if (!result.ok) {
+        console.warn("[stream] failed:", result.error);
+        // Se la bolla utente è ancora vuota, rimuoviamo l'optimistic.
+        setTimeline((prev) => prev.filter((e) => e.id !== optimisticId || (e as any).text !== "…"));
+
+        // === FIX 2026-07-14 v56 — Backoff HF loop su WS failures consecutivi ===
+        wsFailureCountRef.current += 1;
+        const failN = wsFailureCountRef.current;
+        console.log(`[OLLENYA_HF_BACKOFF] WS failure #${failN}/${WS_FAIL_THRESHOLD} (err=${result.error})`);
+        if (failN >= WS_FAIL_THRESHOLD) {
+          console.log(`[OLLENYA_HF_BACKOFF] threshold reached → pausing HF loop, waiting for user tap`);
+          setCloseSessionPause(true);
+          closeSessionPauseRef.current = true;
+          setError("Connessione persa. Tocca il cerchio per riprovare.");
+          setTimeout(() => setError(null), 6000);
+        } else {
+          setError("Connessione voce interrotta. Riprova.");
+          setTimeout(() => setError(null), 4000);
+        }
+      } else {
+        // Successo → azzera il counter dei fallimenti consecutivi
+        if (wsFailureCountRef.current > 0) {
+          console.log(`[OLLENYA_HF_BACKOFF] resetting counter (was ${wsFailureCountRef.current})`);
+          wsFailureCountRef.current = 0;
+        }
+      }
+    } catch (e) {
+      if (!isCurrentTurn()) return;
+      console.error("[stream] crash:", e);
+      setError("Errore voce streaming.");
+      setTimeout(() => setError(null), 4000);
+    } finally {
+      if (isCurrentTurn()) {
+        setStatus("idle");
+        // === FIX 2026-08-26 v65.2 — HF LOOP RESTART FIX (Fabio) ================
+        // Azzeriamo esplicitamente streamingSessionRef.current. Prima veniva
+        // pulito SOLO su tap-reset (riga ~4042) o back-button (~2676), MAI
+        // sulla chiusura naturale del turno. Risultato: dopo la risposta di
+        // Ollenya, il ref restava puntato alla sessione WS morta e la guardia
+        // dell'HF_LOOP (`if (streamingSessionRef.current) return`) bloccava
+        // il restart automatico → l'utente doveva tappare l'orb ogni volta,
+        // vanificando l'hands-free. La sessione a questo punto è già chiusa
+        // (la promise di voiceStreamConverse ha risolto) quindi il ref è
+        // stantio: azzerarlo è idempotente e sicuro.
+        streamingSessionRef.current = null;
+        // === FIX 2026-07-24 v63.5 (Fix B) — reset mic-active gate ===
+        // Sessione terminata: il mic non è più attivo. Prossima sessione
+        // dovrà re-triggerare onRecognitionActive per riautorizzare i tap.
+        micReallyActiveRef.current = false;
+      }
+      // === FIX 2026-06-28 v26 (P0 cascata WebSocket — log diag iPhone/Android) ===
+      // Il vecchio re-trigger esplicito [OLLENYA_HF_EXPLICIT] è stato RIMOSSO.
+      // Causava una CASCATA ESPONENZIALE di sessioni WebSocket:
+      //   1. Sessione finisce → finally → setTimeout(500ms) re-trigger
+      //   2. Nessun controllo su showSettings, streamingSessionRef, o stato
+      //      reale dell'audio → re-trigger fira anche con Impostazioni aperte
+      //   3. Nuovo startTalkInternal → nuova WS → se fallisce subito (es.
+      //      utente in Settings, voice change), finally rifira → cascata
+      //   4. Ogni iterazione: N sessioni → N finally → N retrigger → 2N sess.
+      // Risultato osservato nei log: 6+ WebSocket aperte allo stesso ms.
+      // Soluzione: AFFIDIAMOCI ESCLUSIVAMENTE all'useEffect [OLLENYA_HF_LOOP],
+      // che ha tutti i guard corretti (showSettings, showColorIntro,
+      // tourActive, sealUnlocking, streamingSessionRef, recRef, ecc.) e
+      // viene triggerato automaticamente quando status → idle.
+      // Se l'utente segnala "hands-free non riparte" su qualche caso edge,
+      // si affronta lì — NON con un secondo trigger parallelo.
+    }
+  };
+
+  // Push-to-talk (or hands-free)
+  const startTalkInternal = async (autoStopOnSilence: boolean) => {
+    // === PERMESSO SPEECH RECOGNITION (Fabio 2026-08-22) =====================
+    // Chiamato PRIMA di qualunque debounce/mutex. Se il permesso non c'è
+    // (o è stato negato durante l'Intro Premium), mostra il pre-prompt
+    // rituale coerente con tutta l'app. Se l'utente concede → prosegue
+    // normalmente. Se nega → return silenzioso (nessun errore visibile),
+    // il flow resta invariato e ripartirà al prossimo tap.
+    // Idempotente quando già granted → zero attrito.
+    try {
+      const perm = await ensureSpeechPermission();
+      if (!perm.granted) {
+        console.log(`[OLLENYA_STT_PERM] startTalk blocked: path=${perm.path}`);
+        return;
+      }
+    } catch (e) {
+      console.warn("[OLLENYA_STT_PERM] ensureSpeechPermission threw:", e);
+      // Fail-open: se l'helper esplode non blocchiamo l'utente
+    }
+
+    // === MUTEX 2026-06-28 — P0 race condition fix ===
+    // KODA_HF_LOOP (useEffect+timeout 450ms) e KODA_HF_EXPLICIT (timeout 500ms
+    // dentro voiceStream finally) firavano in parallelo entro ~50-100ms,
+    // entrambi passavano i guard (recRef=null in entrambi i closure) e
+    // aprivano due WebSocket simultanee verso /api/voice/stream → si
+    // killavano a vicenda (codici 1000/1006) → la voce si fermava dopo 1s.
+    // Debounce timestamp-based 800ms: il primo passa, il secondo (entro
+    // 800ms) viene scartato. Tra turni reali (30s+) entrambi sono OK.
+    const now = Date.now();
+    const sinceLast = now - lastStartTalkAtRef.current;
+    if (sinceLast < 800) {
+      console.log(`[OLLENYA_HF_LOCK] startTalkInternal debounced (${sinceLast}ms since last call) — duplicate trigger blocked`);
+      return;
+    }
+    lastStartTalkAtRef.current = now;
+
+    // === FIX 2026-07-11 v52 — Reset pendingTapStop su nuova sessione ===
+    // Se un tap-stop precedente aveva settato il flag ma non è mai stato
+    // consumato (es. voiceStreamConverse fallì prima di onSession), la
+    // nuova sessione verrebbe stoppata immediatamente. Reset qui.
+    pendingTapStopRef.current = false;
+
+    // === NO-SPEECH BACKOFF (2026-07-29) — reset flag "aveva parlato" ===
+    // All'inizio di ogni sessione mic, resettiamo il flag turnHadSpeechRef.
+    // Se durante la sessione arriva un `onUserFinal` con testo, il flag
+    // diventa true e il counter no-speech si azzera. Se invece la sessione
+    // si chiude senza mai vedere parlato (es. no_speech timeout, WS chiusa
+    // senza transcript), il flag resta false e l'HF loop incrementerà il
+    // counter e userà il delay progressivo alla prossima riapertura.
+    turnHadSpeechRef.current = false;
+
+    // === GUARD STREAMING SESSION (2026-06-28 v26 — diag log iPhone cascata) ===
+    // Se una sessione WebSocket è già attiva, non aprirne un'altra. Questo
+    // catch è la difesa decisiva contro la cascata di WS osservata nei log
+    // (6+ sessioni aperte allo stesso millisecondo).
+    if (streamingSessionRef.current) {
+      console.log("[OLLENYA_HF_LOCK] startTalkInternal blocked: streamingSessionRef.current is non-null (stream active)");
+      return;
+    }
+
+    if (status !== "idle" && status !== "speaking") return;
+
+    // === FASE 1 STREAMING OPT-IN (env flag, giugno 2026) ===
+    // === FIX 2026-06-27 v19 (Android Xiaomi: bundle OTA non propaga env) ===
+    // L'utente ha verificato sperimentalmente che `EXPO_PUBLIC_USE_WS_VOICE_STREAM=true`
+    // nel .env NON arriva al bundle Android via OTA update (anche dopo
+    // disinstalla + reinstall). Diag log Android mostra ancora il vecchio
+    // path: [OLLENYA_VAD_TRACE], [OLLENYA_REC_CTX], [OLLENYA_POLL], con metering
+    // db=-100 costante (bug Xiaomi MIUI) → hands-free non chiude mai.
+    // Su iPhone invece l'env arriva correttamente e WS streaming funziona.
+    // Soluzione pragmatica: hardcoded a true. Il flag env resta letto per
+    // retrocompatibilità futura, ma il default fallback è ora `true` invece
+    // di stringa vuota. Mobile (iOS+Android) usa SEMPRE WS streaming.
+    const envFlag = String(process.env.EXPO_PUBLIC_USE_WS_VOICE_STREAM || "true").toLowerCase();
+    const useVoiceStream = envFlag !== "false"; // default true se assente nel bundle
+    // === FIX 2026-06-27 v19 DIAG ===
+    // Log esplicito così nel prossimo diag log Android possiamo verificare
+    // se il fallback hardcoded sta funzionando. Se vedi questa riga col
+    // valore true significa che il nuovo bundle è arrivato sul device.
+    console.log(`[OLLENYA_FLAG] useVoiceStream=${useVoiceStream} (env="${process.env.EXPO_PUBLIC_USE_WS_VOICE_STREAM ?? "<missing>"}", platform=${Platform.OS})`);
+    if (useVoiceStream && Platform.OS !== "web") {
+      return startTalkStreaming();
+    }
+
+    setError(null);
+    // Reset contatore "vuoti" quando l'utente attiva manualmente (non in loop)
+    if (!convActiveRef.current) emptyTurnsRef.current = 0;
+    // Unlock speech engine on first user interaction (web only)
+    unlockSpeech().catch(() => {});
+    try {
+      // FIX 4 (RCA): controlliamo `SpeechMod.isSpeaking()` direttamente,
+      // non lo stato React (che può essere stantio). Se il TTS sta
+      // ancora suonando, NON dobbiamo fermarlo né cambiare l'audio
+      // session: la sua naturale conclusione gestirà già la transizione.
+      const ttsPlaying = SpeechMod.isSpeaking();
+      if (status !== "speaking" && !ttsPlaying) {
+        SpeechMod.stop();
+      }
+      // CRITICAL FREEZE FIX: ensure any leftover audio session is fully
+      // released before starting a new recording. Without this, after a
+      // few turns the recording fails to start silently and the blob
+      // appears "stuck listening".
+      if (Platform.OS !== "web" && status !== "speaking" && !ttsPlaying) {
+        try {
+          const { setAudioModeAsync } = require("expo-audio");
+          await setAudioModeAsync({
+            allowsRecording: false,
+            playsInSilentMode: true,
+            interruptionMode: "duckOthers",
+            shouldPlayInBackground: false,
+            shouldRouteThroughEarpiece: false,
+          });
+          await new Promise((r) => setTimeout(r, 30));
+        } catch {}
+      }
+      // === COLD-START GATE (fix 2026-06: "primo messaggio perso") ===
+      // RCA documentato: dopo un cold-start (swipe-up kill + riapertura),
+      // se l'utente tocca SUBITO l'orb, AudioSession non è ancora
+      // completamente inizializzata → il recorder cattura silenzio nei
+      // primi 200-500ms → Deepgram restituisce transcript vuoto → tutto
+      // si perde silenziosamente.
+      // Soluzione: prima di startRecording, attendiamo SINCRONO che
+      // prewarmMic() finisca. Se già pronta (campo _nativeReady), il
+      // metodo restituisce immediatamente: zero costo nei turni
+      // successivi.
+      if (Platform.OS !== "web") {
+        await prewarmMic();
+      }
+      const rec = await startRecording();
+      recRef.current = rec;
+      // === RECORDING DURATION (sprint v11) ===
+      // Cattura timestamp avvio per misura recording_duration_ms nel SUMMARY.
+      recordingStartedAtRef.current = Date.now();
+      // Wire live meter for debug visualization
+      if (rec.onMeter) {
+        rec.onMeter((db: number, threshold?: number | null) => {
+          if (recRef.current === rec) {
+            setMeterDb(db);
+            if (typeof threshold === "number") setMeterThreshold(threshold);
+          }
+        });
+      }
+      // PASSIVE LISTEN: in hands-free l'orb mostra subito "recording" appena
+      // il mic si apre, così l'utente VEDE che può parlare. Il VAD continua
+      // comunque a fare il suo lavoro per fermare la registrazione su
+      // silenzio.
+      // (Prima il design era: orb idle → recording solo dopo VAD detect.
+      // L'utente non sapeva mai se l'app lo stava ascoltando. Vedi log:
+      // "perché non si vede quando stai registrando".)
+      if (status !== "speaking") setStatus("recording");
+      // Mostra il banner "Dimmi, ti ascolto" solo la prima volta che la
+      // sessione hands-free parte (al cold start o dopo riattivazione).
+      // Sparisce automaticamente dopo 3s o quando l'utente parla davvero.
+      // (Prima qui c'era `passiveListen` non dichiarato → ReferenceError
+      //  silenziato dal try/catch che a sua volta bloccava il wiring del
+      //  VAD onSilence sotto. Ora usiamo la semantica originale:
+      //  "siamo in ascolto passivo hands-free" = handsFreeRef + autoStop.)
+      const passiveListening = handsFreeRef.current && autoStopOnSilence;
+      if (passiveListening && !firstListenShownRef.current) {
+        firstListenShownRef.current = true;
+        setListenBanner("Dimmi, ti ascolto");
+        // auto-dismiss dopo 3.5s
+        if (listenBannerTimerRef.current) clearTimeout(listenBannerTimerRef.current);
+        listenBannerTimerRef.current = setTimeout(() => {
+          setListenBanner(null);
+        }, 3500) as any;
+      }
+      if (autoStopOnSilence && rec.onSilence) {
+        rec.onSilence(() => {
+          if (recRef.current === rec) stopTalk();
+        });
+        // ABSOLUTE safety net: if the analyser-based silence detection in
+        // voice.ts somehow fails entirely AND its own internal hard cap
+        // (60s) doesn't fire either, force-stop after 65s. This is a true
+        // last-resort fallback — it should NEVER fire under normal use.
+        // (Was 9s, which was way too aggressive and cut users off mid-thought.)
+        setTimeout(() => {
+          if (recRef.current === rec) {
+            stopTalk();
+          }
+        }, 65000);
+      }
+      if (rec.onSpeechStart) {
+        rec.onSpeechStart(() => {
+          // BARGE-IN: user started talking — kill any AI speech immediately
+          try { SpeechMod.stop(); } catch {}
+          if (recRef.current === rec) setStatus("recording");
+          // L'utente ha cominciato a parlare → nascondi il banner subito.
+          if (listenBannerTimerRef.current) {
+            clearTimeout(listenBannerTimerRef.current);
+            listenBannerTimerRef.current = null;
+          }
+          setListenBanner(null);
+        });
+      }
+    } catch (e) {
+      setError("Microfono non disponibile. Controlla i permessi.");
+      // Auto-clear dopo 4s: se l'utente riprova, non vede l'errore vecchio.
+      setTimeout(() => setError(null), 4000);
+    }
+  };
+
+  const startTalk = async () => {
+    // HANDS-FREE: se attivo, il VAD chiude il mic da solo dopo 800ms di silenzio.
+    // In modalità manuale (hands-free off) → tap-to-talk classico.
+    return startTalkInternal(handsFreeRef.current);
+  };
+
+  const stopTalk = async () => {
+    // Use recRef.current as single source of truth (status check would create
+    // stale-closure bugs when called from the silence-detection callback)
+    const current = recRef.current;
+    if (!current) return;
+    // === RECORDING DURATION (sprint v11) ===
+    // Capture duration at the EXACT moment of stop, before any async work.
+    // Used by [OLLENYA_SUMMARY] downstream.
+    if (recordingStartedAtRef.current !== null) {
+      lastRecordingDurationMsRef.current = Date.now() - recordingStartedAtRef.current;
+      recordingStartedAtRef.current = null;
+    }
+    // FIX 2 (RCA): NON azzeriamo recRef.current PRIMA dell'await.
+    // Prima nullavamo subito, ma se current.stop() lancia/blocca, la
+    // sessione audio iOS resta in playAndRecord → la prossima registrazione
+    // fallisce silenziosamente ("stuck recording" persistente).
+    // Lo azzeriamo SOLO dopo che l'unload è andato a buon fine (o fallito
+    // in modo controllato — voice.ts in tal caso forza setAudioModeAsync).
+    setStatus("transcribing");
+    setMeterDb(null);
+    setMeterThreshold(null);
+    try {
+      const res = await current.stop();
+      // Ora possiamo liberare il ref: l'audio session è stata rilasciata.
+      if (recRef.current === current) recRef.current = null;
+      // CRITICAL: switch the audio session out of "recording" mode IMMEDIATELY
+      // so that the AI's TTS playback can run unhindered. Without this, on
+      // iOS the session can stay in playAndRecord mode and Audio.Sound
+      // playback fails silently → user hears no AI voice.
+      if (Platform.OS !== "web") {
+        try {
+          const { setAudioModeAsync } = require("expo-audio");
+          await setAudioModeAsync({
+            allowsRecording: false,
+            playsInSilentMode: true,
+            interruptionMode: "duckOthers",
+            shouldPlayInBackground: false,
+            shouldRouteThroughEarpiece: false,
+          });
+        } catch {}
+      }
+      if (!res) {
+        // Audio scartato dalla guardia client-side (no vera voce continua).
+        // In conversation mode: contiamo il "vuoto". Dopo 4 vuoti, esci.
+        if (convActiveRef.current) {
+          emptyTurnsRef.current += 1;
+          if (emptyTurnsRef.current >= 4) {
+            // ANTI-LOOP: 4 vuoti di fila → Coda parla e esce dal loop
+            setConvActive(false);
+            emptyTurnsRef.current = 0;
+            await speakAwareness(pickLine(awarenessLoopExit));
+            return;
+          }
+          // Vuoto: feedback breve e riapri
+          setError("Non ti ho sentito 👂");
+          setTimeout(() => setError(null), 2000);
+          setStatus("idle");
+          if (profile?.settings?.input_mode !== "text") {
+            setTimeout(() => {
+              if (convActiveRef.current && !recRef.current) {
+                startTalkInternal(true).catch(() => {});
+              }
+            }, 600);
+          }
+          return;
+        }
+        // Non in conversation mode → solo feedback breve, no parlato
+        setError("Non ti ho sentito bene 👂");
+        setTimeout(() => setError(null), 2500);
+        setStatus("idle");
+        return;
+      }
+      const fd = buildFormData(res);
+      // === SILERO VAD GATE — DISATTIVATO (Fabio 2026-06-27) ============
+      // Il backend /api/vad/probe è uno STUB FAIL-OPEN: ritorna sempre
+      // speech_ratio=1.0 perché `services.vad_silero` non è disponibile
+      // (onnxruntime bloccato dai limiti CPU/RAM del cluster Emergent).
+      // Lasciare attivo il gate significava uploadare il file audio COMPLETO
+      // al backend per ottenere SEMPRE "PASS" — spreco netto di 2.5-7s
+      // sulla rete cellulare in furgone (misurato in log reali Fabio
+      // 2026-06-23: SILERO_GATE_MS=6812 / 3071 / 2523).
+      //
+      // FILTRAGGIO RUMORE: ora delegato esclusivamente a:
+      //   1) Voice Processing iOS / voice_communication Android (chip DSP)
+      //   2) VAD volumetrico client-side in voice.ts (CALIBRATION_MS)
+      // Quando/se il backend riavrà Silero attivo, bastera rimettere
+      // `gate = await checkHasSpeech({...})` qui sotto. Il flag esiste.
+      // ================================================================
+      const SILERO_GATE_DISABLED = true; // hardcoded finché backend è stub
+      const sileroGateEnabled = !SILERO_GATE_DISABLED && (profile?.settings as any)?.silero_gate_enabled !== false;
+      const _kt_gate_start = Date.now();
+      const gate = sileroGateEnabled
+        ? await checkHasSpeech({
+            uri: res.uri,
+            blob: res.blob,
+            mime: res.mime,
+            filename: res.filename,
+            threshold: 0.15,
+            timeoutMs: 8000,
+            enabled: true,
+            durationMs: lastRecordingDurationMsRef.current ?? undefined,
+            bypassIfDurationMsAbove: 20000,
+          })
+        : {
+            hasSpeech: true as const,
+            reason: "fallback-disabled" as const,
+            probe: null,
+            latency_ms: 0,
+          };
+      logGateDecision(gate);
+      console.log(`[OLLENYA_TIMING] SILERO_GATE_MS=${Date.now() - _kt_gate_start}`);
+
+      if (!gate.hasSpeech) {
+        // Silero certifica: era rumore di sottofondo, non voce. Non
+        // disturbiamo l'utente con un "Non ti ho sentito" pesante —
+        // semplicemente rilanciamo il listen (hands-free) o usciamo
+        // (manual mode). Same path della guardia client-side "no audio".
+        console.log(
+          `[OLLENYA_VAD_GATE] BLOCKED — ratio=${gate.probe?.speech_ratio.toFixed(3)} ` +
+          `(threshold=0.15). Skipping STT/LLM/TTS.`
+        );
+        if (convActiveRef.current) {
+          // Non conta come "vuoto" pieno (sappiamo che era solo rumore),
+          // ma incrementiamo lo stesso il counter per evitare loop infiniti
+          // in casi degeneri (microfono guasto, ambiente troppo rumoroso).
+          emptyTurnsRef.current += 1;
+          if (emptyTurnsRef.current >= 4) {
+            setConvActive(false);
+            emptyTurnsRef.current = 0;
+            await speakAwareness(pickLine(awarenessLoopExit));
+            return;
+          }
+          // Feedback breve specifico per "solo rumore"
+          setError("Solo rumore, non ho sentito una voce 🤔");
+          setTimeout(() => setError(null), 2000);
+          setStatus("idle");
+          if (profile?.settings?.input_mode !== "text") {
+            setTimeout(() => {
+              if (convActiveRef.current && !recRef.current) {
+                startTalkInternal(true).catch(() => {});
+              }
+            }, 600);
+          }
+          return;
+        }
+        // Manual mode: feedback breve, niente parlato
+        setError("Solo rumore, non ho sentito una voce 🤔");
+        setTimeout(() => setError(null), 2500);
+        setStatus("idle");
+        return;
+      }
+      // === FINE SILERO GATE ===
+      // === OFFLINE INTERCEPT (sprint 2026-06-20) ===
+      // Prima di tentare STT/LLM, verifico se siamo offline. Se sì, NON
+      // chiamiamo Deepgram (fallirebbe con un timeout di 30s), ma riproduco
+      // una delle 3 clip offline pre-cachate. Mantiene l'illusione di
+      // presenza: Ollenya non scompare, dice "sono qui, ma offline".
+      //
+      // ANTI-LOOP (Claude PM feedback 2026-06-20): dopo
+      // MAX_OFFLINE_CLIPS_IN_ROW clip consecutive senza che la rete sia
+      // tornata, esco dal loop hands-free. L'utente ha capito, non lo
+      // bombardiamo. Riprenderà con un tap manuale.
+      //
+      // CASO PRIMO AVVIO OFFLINE: se le clip non sono ancora cachate
+      // (l'app è stata avviata per la prima volta senza rete) NON
+      // resto in loop — esco subito da hands-free e mostro banner
+      // chiaro "Niente connessione — riprova quando sei online".
+      try {
+        if (await isOfflineNow()) {
+          const voiceId = (profile?.settings as any)?.tts_voice_id || "";
+          console.log("[OfflineClips] detected offline before STT — playing clip");
+          setStatus("speaking");
+          const played = await playRandomOfflineClip(voiceId);
+          setStatus("idle");
+
+          if (!played) {
+            // Clip non disponibili (primo avvio offline). Banner persistente
+            // + esci da hands-free per evitare un loop vuoto.
+            console.log("[OfflineClips] no cached clips — exiting hands-free with banner");
+            setConvActive(false);
+            offlineClipsInRowRef.current = 0;
+            setError("Niente connessione — Ollenya è offline. Riprova quando torni online.");
+            setTimeout(() => setError(null), 4500);
+            return;
+          }
+
+          // Clip riprodotta. Conta e decide se continuare il loop.
+          offlineClipsInRowRef.current += 1;
+          if (offlineClipsInRowRef.current >= MAX_OFFLINE_CLIPS_IN_ROW) {
+            // Abbiamo già detto N volte "sono offline". Basta.
+            console.log("[OfflineClips] max clips reached — exiting hands-free");
+            setConvActive(false);
+            offlineClipsInRowRef.current = 0;
+            setError("Sei offline 📡 — tocca l'orb quando torna la connessione.");
+            setTimeout(() => setError(null), 4500);
+            return;
+          }
+
+          // Auto-restart hands-free per il prossimo turno.
+          if (profile?.settings?.input_mode !== "text" && convActiveRef.current) {
+            setTimeout(() => {
+              if (convActiveRef.current && !recRef.current) {
+                startTalkInternal(true).catch(() => {});
+              }
+            }, 800);
+          }
+          return;
+        }
+        // Siamo online — reset counter offline (utile se l'utente ha avuto
+        // un mini-blackout e poi è tornato online).
+        if (offlineClipsInRowRef.current > 0) {
+          offlineClipsInRowRef.current = 0;
+        }
+      } catch (e) {
+        // Se il check offline fallisce per qualunque motivo, continuiamo
+        // normalmente (la rete è il caso più comune).
+        console.warn("[OfflineClips] offline check failed:", e);
+      }
+
+      // === KODA TIMING (ChatGPT sprint giugno 2026) ===
+      // Marker temporale per misurare upload + Deepgram. Lo log usa
+      // performance.now() per precisione sub-millisecondo. Stampato come
+      // "[OLLENYA_TIMING] LABEL Xms" così è grep-abile sui log device.
+      const _kt_upload_start = Date.now();
+      // === P0 FIX 2026-06-27: log dimensione audio per correlare upload lenti ===
+      // Permette di capire se i 44s erano dovuti a un file grande su 4G ballerino
+      // (es. 500KB/s ⇒ 1MB = 2s) o a un cold-start TLS / Deepgram bloccato.
+      let _kt_audio_bytes = -1;
+      try {
+        if (res.blob) {
+          _kt_audio_bytes = res.blob.size;
+        } else if (res.uri && typeof require !== "undefined") {
+          // RN FileSystem path: leggi size solo se è veloce (best-effort)
+          const FS = require("expo-file-system/legacy");
+          const info = await FS.getInfoAsync(res.uri, { size: true });
+          if (info?.exists && typeof info.size === "number") {
+            _kt_audio_bytes = info.size;
+          }
+        }
+      } catch {}
+      console.log(`[OLLENYA_TIMING] UPLOAD_START @${_kt_upload_start} audio_bytes=${_kt_audio_bytes}`);
+      // Fase 4 Step 1: usiamo Deepgram Nova-3 (più veloce e accurato di Whisper).
+      // Fallback automatico a /transcribe (Whisper) se Deepgram fallisce.
+      // === 2026-11-07 (Fabio) — STT PRIMARY = Inworld STT-1 ================
+      // /transcribe-inworld è il nuovo primary. Se fallisce (403/5xx), il
+      // flusso cade automaticamente nel path di fallback a /transcribe
+      // (Whisper via Emergent) che già esisteva. Deepgram resta disponibile
+      // ma non è più chiamato come primary.
+      // === P0 FIX 2026-06-27 (timeout 44s su cold-start Bluetooth) ===
+      // Aggiungiamo client-side timeout via AbortController: se la richiesta
+      // si pianta (TLS cold-start, cellular ballerino, Deepgram down), dopo
+      // 12s ABORT-iamo e cadiamo in fallback Whisper. Senza questo,
+      // l'utente vedeva attese di 30-44s prima di un eventuale errore.
+      const _stt_controller = new AbortController();
+      const _stt_timer = setTimeout(() => _stt_controller.abort(), 12000);
+      let r: Response;
+      try {
+        r = await fetch(`${API_BASE}/transcribe-inworld`, {
+          method: "POST",
+          body: fd,
+          signal: _stt_controller.signal,
+        });
+      } catch (e: any) {
+        clearTimeout(_stt_timer);
+        const isAbort = e?.name === "AbortError";
+        console.warn(`[transcribe] Inworld ${isAbort ? "TIMEOUT 12s" : "network error"}: ${e?.message || e}`);
+        // Fallback rapido a Whisper con nuova FormData + nuovo timeout
+        const fd_fb = buildFormData(res);
+        const _wh_controller = new AbortController();
+        const _wh_timer = setTimeout(() => _wh_controller.abort(), 15000);
+        try {
+          r = await fetch(`${API_BASE}/transcribe`, {
+            method: "POST",
+            body: fd_fb,
+            signal: _wh_controller.signal,
+          });
+        } finally {
+          clearTimeout(_wh_timer);
+        }
+      } finally {
+        clearTimeout(_stt_timer);
+      }
+      const _kt_deepgram_done = Date.now();
+      console.log(`[OLLENYA_TIMING] UPLOAD_END+STT_END @${_kt_deepgram_done} (upload+stt_ms=${_kt_deepgram_done - _kt_upload_start})`);
+      if (!r.ok) {
+        console.warn(`[transcribe] Inworld failed (${r.status}), fallback to Whisper`);
+        // Ricreo FormData perché il body è già stato consumato
+        const fd2 = buildFormData(res);
+        const _wh2_controller = new AbortController();
+        const _wh2_timer = setTimeout(() => _wh2_controller.abort(), 15000);
+        try {
+          r = await fetch(`${API_BASE}/transcribe`, {
+            method: "POST",
+            body: fd2,
+            signal: _wh2_controller.signal,
+          });
+        } finally {
+          clearTimeout(_wh2_timer);
+        }
+      }
+      if (!r.ok) throw new Error("transcribe");
+      const data = await r.json();
+      const txt = (data.text || "").trim();
+      // === AUDIO HONESTY (Fabio 2026-06-23) =====================
+      // Catturiamo la confidence Deepgram per propagarla al backend nella
+      // chiamata /converse-fast/start. Se < 0.7 il backend inietterà una
+      // direttiva nel system prompt → Ollenya riconosce apertamente l'audio
+      // rumoroso e chiede dove si trova l'utente invece di indovinare.
+      const _stt_confidence: number | null =
+        typeof data?.confidence === "number" ? data.confidence : null;
+      lastSttConfidenceRef.current = _stt_confidence;
+      if (_stt_confidence !== null) {
+        console.log(`[AUDIO_HONESTY_CLIENT] stt_confidence=${_stt_confidence.toFixed(3)}`);
+      }
+      // === KODA_STT CLIENT LOG (sprint giugno 2026 — RCA "Ollenya parla spagnolo") ===
+      // Il backend logga [OLLENYA_STT] con text+lang+confidence, MA quei log
+      // sono Python (server-side) e l'utente non li vede su /diagnostics.
+      // Qui logghiamo lo stesso text lato client così è copiabile dal
+      // pannello diagnostics dell'app. Se vediamo:
+      //   [OLLENYA_STT_CLIENT] text="hola como estas" → Deepgram sbaglia foneticamente
+      //   [OLLENYA_STT_CLIENT] text="ciao come stai" → STT OK, problema nel prompt LLM
+      console.log(`[OLLENYA_STT_CLIENT] text=${JSON.stringify(txt)} chars=${txt.length}`);
+      const cls = classifyTranscript(txt);
+      if (cls !== "ok") {
+        // === DIAGNOSTIC LOG (fix 2026-06 cold-start) ===
+        console.warn(`[stopTalk] empty/garbled transcript. convActive=${convActiveRef.current}, txt="${txt}", cls=${cls}`);
+        // CODA CONSAPEVOLE: spiegale all'utente cosa è successo
+        if (convActiveRef.current) emptyTurnsRef.current += 1;
+        let line: string;
+        if (cls === "empty") line = pickLine(awarenessLinesNoAudio);
+        else /* garbled */ line = pickLine(awarenessLinesGarbled);
+        // Se ancora più tollerante: 4 vuoti consecutivi prima di uscire
+        if (convActiveRef.current && emptyTurnsRef.current >= 4) {
+          setConvActive(false);
+          emptyTurnsRef.current = 0;
+          await speakAwareness(pickLine(awarenessLoopExit));
+          return;
+        }
+        // === VISIBILITÀ FIX 2026-06 ("primo messaggio perso") ===
+        // Quando NON siamo in conversation mode (= primo tap manuale),
+        // aggiungiamo SEMPRE una bolla visibile nella timeline con
+        // l'awareness line. Così, anche se il TTS fallisce o l'utente
+        // swipa via prima di ascoltare, vede comunque cosa è successo
+        // nella schermata di lettura. Niente più "ho parlato ma è
+        // sparito tutto nel nulla".
+        if (!convActiveRef.current) {
+          setTimeline((prev) => [
+            ...prev,
+            {
+              id: `ai-empty-${Date.now()}`,
+              role: "ai",
+              text: line,
+              tone: "calm",
+              timestamp: new Date().toISOString(),
+            },
+          ]);
+        }
+        await speakAwareness(line);
+        // Se ancora in conv mode, riapri mic dopo la frase
+        if (convActiveRef.current && profile?.settings?.input_mode !== "text") {
+          setTimeout(() => {
+            if (convActiveRef.current && !recRef.current) {
+              startTalkInternal(true).catch(() => {});
+            }
+          }, 350);
+        }
+        return;
+      }
+      // Trascrizione OK → reset contatore vuoti e procedi
+      emptyTurnsRef.current = 0;
+
+      // === VOICE COMMAND: Hands-Free toggle ===
+      // Intercettiamo qui i comandi vocali per disattivare/riattivare il
+      // hands-free senza coinvolgere Claude (zero latenza, zero crediti).
+      // Match flessibile italiano + inglese, con tolleranza punteggiatura.
+      const lower = txt.toLowerCase().replace(/[.,!?;:]/g, " ").replace(/\s+/g, " ").trim();
+      const isDisableHF = /\b(stop|disattiv\w*|ferm\w*|spegn\w*|esci\w*|chiud\w*)\b.{0,20}\b(hands?[\s-]?free|mani[\s-]?libere|ascolto continuo|modalit[aà] vocale)\b/.test(lower)
+        || /\b(modalit[aà])\s+(manuale|push[\s-]?to[\s-]?talk|tap|tocco)\b/.test(lower)
+        || /\b(passa|entra|metti).{0,15}(manuale|tap|tocco)\b/.test(lower);
+      const isEnableHF = /\b(attiv\w*|riattiv\w*|riprend\w*|accend\w*)\b.{0,20}\b(hands?[\s-]?free|mani[\s-]?libere|ascolto continuo|modalit[aà] vocale)\b/.test(lower)
+        || /\b(modalit[aà])\s+(hands?[\s-]?free|automatica|vocale|continua)\b/.test(lower);
+      if (isDisableHF && handsFreeRef.current) {
+        // Disattiva hands-free, NON chiamare il backend. Coda dà conferma vocale breve.
+        await setHandsFreeMode(false);
+        // Frase di conferma breve, niente LLM call
+        const confirm = "Va bene, sono in modalità manuale. Tocca quando vuoi parlare.";
+        setTimeline((prev) => [
+          ...prev,
+          { id: `u-cmd-${Date.now()}`, role: "user", text: txt, timestamp: new Date().toISOString() },
+          { id: `ai-cmd-${Date.now()}`, role: "ai", text: confirm, tone: "warm", timestamp: new Date().toISOString() },
+        ]);
+        await speakAwareness(`[gently] ${confirm}`);
+        return;
+      }
+      if (isEnableHF && !handsFreeRef.current) {
+        await setHandsFreeMode(true);
+        const confirm = "Hands-free attivo. Parla pure quando vuoi.";
+        setTimeline((prev) => [
+          ...prev,
+          { id: `u-cmd-${Date.now()}`, role: "user", text: txt, timestamp: new Date().toISOString() },
+          { id: `ai-cmd-${Date.now()}`, role: "ai", text: confirm, tone: "warm", timestamp: new Date().toISOString() },
+        ]);
+        await speakAwareness(`[warmly] ${confirm}`);
+        return;
+      }
+
+      // Send to converse
+      await sendText(txt);
+    } catch (e) {
+      // FIX 2 (RCA): assicuriamoci che recRef sia nullato anche in caso
+      // d'errore, altrimenti lo stato resta "stuck" sul prossimo tap.
+      if (recRef.current === current) recRef.current = null;
+      setError("Errore nella trascrizione.");
+      // Auto-clear dopo 4s: prima l'errore restava visibile per sempre.
+      // Quando l'utente backgroundava e foregroundava l'app, lo vedeva
+      // ancora a schermo a confonderlo (vedi screenshot 2026-05-23 22:24).
+      setTimeout(() => setError(null), 4000);
+      setStatus("idle");
+    }
+  };
+
+  // === PUSH-TO-TALK HANDLERS (v67.11 Fabio 2026-06-24) ========================
+  // Richiesta esplicita utente: quando "Mani libere" è DISATTIVATO, il tasto
+  // orb deve funzionare come walkie-talkie:
+  //   • TIENI PREMUTO per registrare
+  //   • RILASCIA per terminare e inviare
+  // Non più tap-toggle (apri/chiudi).
+  //
+  // Quando "Mani libere" è ATTIVO: lasciamo invariato il comportamento
+  // precedente (onPress = onBigButton con hard-stop/riavvio, onLongPress =
+  // kill switch).
+  //
+  // Guardia pttRecordingRef = true tra onPressIn e onPressOut → ci dice
+  // SICURAMENTE se è stato un gesto PTT (non un tap in HF).
+  const pttRecordingRef = useRef(false);
+
+  const onBigButtonPressIn = () => {
+    // In HF ON l'input è gestito da onPress (toggle classico). PressIn non-op.
+    if (handsFreeRef.current) return;
+    if (isFreeGate()) return; // paywall gestito su onPress
+    // Dimmer swallow — se il tap serve solo a riaccendere la luminosità,
+    // NON avviare registrazione.
+    if (Date.now() < swallowNextBigButtonTapUntilRef.current) {
+      swallowNextBigButtonTapUntilRef.current = 0;
+      console.log(`[OLLENYA_PTT] swallow first-tap — screen dim`);
+      return;
+    }
+    userInteractedRef.current = true;
+    pttRecordingRef.current = true;
+    console.log(`[OLLENYA_PTT] press-in → start recording (status=${status})`);
+    if (status !== "idle") {
+      // Ollenya sta parlando/pensando: hard-stop poi start.
+      // onBigButton ha già tutta la logica di hard-stop → riusiamo.
+      try { onBigButton(); } catch {}
+      setTimeout(() => {
+        if (pttRecordingRef.current) {
+          // Reset debounce lock come fa il tap manuale.
+          lastStartTalkAtRef.current = 0;
+          startTalk();
+        }
+      }, 60);
+    } else {
+      lastStartTalkAtRef.current = 0;
+      startTalk();
+    }
+  };
+
+  const onBigButtonPressOut = () => {
+    if (handsFreeRef.current) return;
+    if (!pttRecordingRef.current) return;
+    pttRecordingRef.current = false;
+    console.log(`[OLLENYA_PTT] press-out → stop & send (status=${status})`);
+    // stopTalk processa l'audio e lo invia. Se recRef è null (es.
+    // registrazione mai partita per permessi), è un no-op.
+    stopTalk().catch((e) => {
+      console.warn(`[OLLENYA_PTT] stopTalk failed:`, e);
+    });
+  };
+
+  const onBigButton = () => {
+    // === FIX v65.27 (2026-09-07) — DIMMER SWALLOW FIRST-TAP (deterministic) ==
+    // Se al momento del touch il dimmer era dimmed/dimming, il root View ha
+    // settato `swallowNextBigButtonTapUntilRef` a `now + 500ms` PRIMA di
+    // chiamare noteInteraction (che cambia lo state). Qui controlliamo il
+    // timestamp: se il tap arriva entro la window, è "consumato" per il
+    // solo restore luminosità → return early SENZA hard-stop.
+    // Il check è timing-based, NON dipende dallo state corrente del dimmer
+    // → nessun race condition su "restoring" residuale (che nella v65.26
+    // poteva restare bloccato e paralizzava permanentemente il tap-to-stop).
+    if (Date.now() < swallowNextBigButtonTapUntilRef.current) {
+      swallowNextBigButtonTapUntilRef.current = 0; // consuma la window
+      console.log(
+        `[OLLENYA_TAP_RESET] SWALLOW first-tap — screen was dim, restore-only (no hard-stop)`
+      );
+      return;
+    }
+
+    // === FIRST-TAP GATE ===
+    // Qualsiasi tap dell'utente sul big button marca "ho interagito in
+    // questa sessione foreground". Da qui in poi, il loop hands-free
+    // può ripartire da solo (vedi useEffect di auto-listen più sopra).
+    // Verrà resettato a false quando l'app va in background.
+    userInteractedRef.current = true;
+
+    // === FIX 2026-07-26 v64.0 — TAP-TO-RESET UNIFICATO (richiesta utente) ===
+    //
+    // COMPORTAMENTO PRECEDENTE (v63.5+):
+    //   • Tap durante `recording` → session.stop() (graceful, invia "end"
+    //     al server e aspetta la risposta di Ollenya).
+    //   • Tap durante `speaking/thinking/transcribing` → HARD_STOP (kill
+    //     tutto → idle).
+    //
+    // PROBLEMA:
+    //   1. Comportamento inconsistente (a volte reset, a volte "send").
+    //   2. La gate micReallyActiveRef bloccava il tap durante startup →
+    //      su Android, quando il mic si blocca al 2° turno (bug hardware
+    //      Google SpeechRecognizer post-stop), l'utente non poteva
+    //      MAI riprendere il controllo (visivamente "recording" ma tap
+    //      ignorato per sempre).
+    //
+    // NUOVO COMPORTAMENTO (richiesta esplicita Fabio 26/07):
+    //   • Tap durante QUALSIASI stato non-idle (recording, transcribing,
+    //     thinking, speaking) → HARD_STOP totale → idle. NIENTE gate mic.
+    //   • Tap durante idle → avvia nuovo turno (comportamento invariato).
+    //
+    //   Il tap DEVE SEMPRE funzionare come escape universale. Se il mic
+    //   non è ancora attivo perché il HW è in startup, killiamo lo
+    //   stesso la sessione — costa zero (WS abort è idempotente) e
+    //   sblocca situazioni degenerate.
+    //
+    // La logica di kill è la stessa del vecchio HARD_STOP (abort WS,
+    // stop recorder, stop TTS, ecc.), applicata a TUTTI gli stati.
+    if (status !== "idle") {
+      console.log(`[OLLENYA_TAP_RESET] tap → hard stop | state=${status} convActive=${convActiveRef.current} micActive=${micReallyActiveRef.current}`);
+      // 1) Abort streaming session (chiude WS HARD, niente "end" → niente pipeline server-side)
+      if (streamingSessionRef.current) {
+        const s = streamingSessionRef.current as any;
+        streamingSessionRef.current = null;
+        try {
+          if (typeof s.abort === "function") {
+            s.abort().catch?.(() => {});
+          } else if (typeof s.stop === "function") {
+            s.stop().catch?.(() => {});
+          }
+        } catch {}
+      }
+      // 2) Reset flag pendenti (nel caso il tap arrivi durante lo startup async)
+      pendingTapStopRef.current = false;
+      micReallyActiveRef.current = false;
+      // 3) Stop file-based recorder se attivo (legacy non-streaming path)
+      if (recRef.current) {
+        try {
+          const r = recRef.current as any;
+          recRef.current = null;
+          r.stopAndUnloadAsync?.().catch?.(() => {});
+        } catch {}
+      }
+      // 4) Stop TTS playback in corso + cancel HTTP requests in volo
+      try { SpeechMod.stop(); } catch {}
+      // 5) Disabilita loop hands-free conversazionale
+      setConvActive(false);
+      convActiveRef.current = false;
+      // 6) Blocca auto-listen post hard-stop finché l'utente non ri-tappa.
+      // Vedi FIX 2026-06-26 v13 — senza questo, il HF loop rilevava
+      // status="idle" e ripartiva da solo dopo 450ms ("ho schiacciato
+      // il pulsante ma non fa niente"). Il tap successivo (branch idle
+      // in fondo a questa funzione) resetta closeSessionPauseRef.
+      setCloseSessionPause(true);
+      closeSessionPauseRef.current = true;
+      // 7) UI immediatamente in idle
+      setStatus("idle");
+      // === FIX v65.26 (2026-09-07) — AUDIO SESSION RESET post hard-stop ====
+      // BUG (segnalato Fabio 2026-09-07): dopo aver premuto tap-to-stop,
+      // ri-tappare per riprendere la conversazione fa partire "recording"
+      // ma il mic non sente nulla (3 tentativi, poi → idle). Solo il kill
+      // completo dell'app ripristina.
+      // ROOT CAUSE: SpeechMod.stop() ferma il TTS ma il flag
+      // `setIsAudioActiveAsync=true` (attivato per la playback TTS) rimane
+      // acceso. Al prossimo startTalk, setAudioModeAsync(record) modifica
+      // la config ma non chiama setActive(false)→setActive(true) → la
+      // sessione iOS resta in stato residuale playAndRecord "sporco" →
+      // il mic hardware non riparte davvero.
+      // FIX: fire-and-forget setIsAudioActiveAsync(false) qui, senza await
+      // (non blocchiamo l'UI). Il prossimo startTalk in voiceStream/voice.ts
+      // ri-attiverà la sessione con setActive(true) da uno stato pulito.
+      if (Platform.OS !== "web") {
+        (async () => {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const Audio: any = require("expo-audio");
+            if (typeof Audio.setIsAudioActiveAsync === "function") {
+              await Audio.setIsAudioActiveAsync(false);
+              console.log(`[OLLENYA_TAP_RESET] audio session deactivated — next tap will re-activate clean`);
+            }
+          } catch (e: any) {
+            console.log(`[OLLENYA_TAP_RESET] setIsAudioActiveAsync(false) failed: ${e?.message || e}`);
+          }
+        })();
+      }
+      return;
+    }
+
+    // === FIRST TAP (status === "idle") ===
+    // Avvia la conversazione: abilita conv mode se configurato, sblocca
+    // eventuale pausa close-session, e parte la registrazione.
+    if (conversationOn) setConvActive(true);
+    if (closeSessionPauseRef.current) {
+      console.log("[OLLENYA_CLOSE_SESSION] user tapped — resuming hands-free loop");
+      setCloseSessionPause(false);
+      closeSessionPauseRef.current = false;
+      // === FIX 2026-07-14 v56 — reset backoff counter on manual tap ===
+      if (wsFailureCountRef.current > 0) {
+        console.log(`[OLLENYA_HF_BACKOFF] user tap → reset WS failure counter (was ${wsFailureCountRef.current})`);
+        wsFailureCountRef.current = 0;
+      }
+    }
+    // === FIX 2026-06-28 (mutex bypass) ===
+    // Tap esplicito dell'utente sull'orb: resetta il debounce così se
+    // l'utente vuole riavviare subito dopo un hard-stop (entro 800ms),
+    // il nuovo startTalkInternal NON viene scartato. Il debounce serve
+    // solo a bloccare i DUPLICATI del loop hands-free, non i tap manuali.
+    lastStartTalkAtRef.current = 0;
+    startTalk();
+  };
+
+  // === LONG-PRESS HARD STOP 2026-07-08 (privacy kill-switch) ===
+  // Trigger: tieni premuto l'orb per ~500ms in QUALSIASI stato non-idle.
+  // Effetto: silenzio totale immediato — abort WS senza processing,
+  // stop TTS, disattiva conversation mode, blocca hands-free loop.
+  // Use case: l'utente è nel furgone, entra qualcuno, deve far sparire
+  // tutto SUBITO senza che Ollenya risponda a quello che ha appena detto.
+  // Il tap breve invece è il "walkie-talkie stop" (chiama session.stop()).
+  const onBigButtonLongPress = () => {
+    userInteractedRef.current = true;
+    if (status === "idle") return;
+    console.log(`[OLLENYA_HARD_STOP] long-press kill-switch state=${status}`);
+    if (streamingSessionRef.current) {
+      const s = streamingSessionRef.current as any;
+      streamingSessionRef.current = null;
+      try {
+        if (typeof s.abort === "function") {
+          s.abort().catch?.(() => {});
+        } else if (typeof s.stop === "function") {
+          s.stop().catch?.(() => {});
+        }
+      } catch {}
+    }
+    if (recRef.current) {
+      try {
+        const r = recRef.current as any;
+        recRef.current = null;
+        r.stopAndUnloadAsync?.().catch?.(() => {});
+      } catch {}
+    }
+    try { SpeechMod.stop(); } catch {}
+    setConvActive(false);
+    convActiveRef.current = false;
+    setCloseSessionPause(true);
+    closeSessionPauseRef.current = true;
+    setStatus("idle");
+    // Feedback aptico (se disponibile). Su iOS/Android nativi vibra
+    // brevemente per confermare all'utente che il kill switch ha agito.
+    try {
+      // Import lazy per non appesantire l'entry.
+      const Haptics = require("expo-haptics");
+      Haptics?.notificationAsync?.(Haptics.NotificationFeedbackType.Warning).catch?.(() => {});
+    } catch {}
+  };
+
+  // Mantieni le ref del gesture composto sincronizzate con la closure
+  // corrente di onBigButton e con lo stato disabled (transcribing/thinking).
+  // (Rimosso: ora il long-press è gestito via header invisibile.)
+
+  // Debounce per evitare doppio-invio quando passiamo a onPressIn (vedi
+  // commento sul TouchableOpacity del send button).
+  const lastSendRef = useRef<number>(0);
+  const sendTextFromBox = (overrideText?: string) => {
+    // Anti-doppio-tap: ignora i tentativi a meno di 300ms l'uno dall'altro.
+    const now = Date.now();
+    if (now - lastSendRef.current < 300) return;
+    lastSendRef.current = now;
+    // === FIX ENTER DA TASTIERA (2026-06-22 v6) ===
+    // Prima leggevamo `textInput` via closure dopo un setTimeout(0). Il
+    // closure ha il valore di un render OLD, e in combinazione con
+    // setTextInput(clean) prima del setTimeout, su iOS multiline poteva
+    // succedere che il send non partisse o partisse col valore sbagliato.
+    // Ora accettiamo un override opzionale: l'handler dell'Enter passa
+    // direttamente la stringa pulita, senza dipendere dallo state.
+    const txt = (overrideText !== undefined ? overrideText : textInput);
+    if (!txt.trim()) return;
+    setTextInput("");
+    Keyboard.dismiss();
+    // FIX 2026-07: marca come "from text" → Ollenya risponde SOLO in testo,
+    // niente TTS. Coerente con l'azione dell'utente che ha scelto di scrivere.
+    sendText(txt, { fromText: true });
+  };
+
+  const askRecap = async () => {
+    setRecapText(null);
+    setShowRecap(true);
+    try {
+      const r = await api.recap("today");
+      setRecapText(r.recap);
+    } catch (e) {
+      setRecapText("Non riesco a creare il sunto adesso.");
+    }
+  };
+
+  const finishOnboarding = async (lang: string) => {
+    try {
+      const p = await api.updateProfile({ language: lang, onboarded: true } as any);
+      setProfile(p);
+      setShowOnboarding(false);
+      // Pre-warm mic permission so first tap goes straight to recording
+      prewarmMic().catch(() => {});
+      // Unlock speech engine NOW (this is a user gesture; required for browser TTS)
+      unlockSpeech().catch(() => {});
+      // Greet
+      const greeting =
+        lang === "it"
+          ? "Ciao. Da ora ti ascolto. Premi e parla quando vuoi."
+          : lang === "en"
+            ? "Hi. I'm listening from now. Press and talk anytime."
+            : lang === "es"
+              ? "Hola. Te escucho. Pulsa y habla cuando quieras."
+              : lang === "fr"
+                ? "Salut. Je t'écoute. Appuie et parle quand tu veux."
+                : "Hi. Press to talk anytime.";
+      const localEntry: TimelineEntry = {
+        id: `welcome-${Date.now()}`,
+        role: "ai",
+        text: greeting,
+        tone: "warm",
+        timestamp: new Date().toISOString(),
+      };
+      setTimeline((prev) => [...prev, localEntry]);
+      speakIfEnabled(greeting, "warm");
+    } catch (e) {
+      console.warn("onboard error", e);
+    }
+  };
+
+  // === DEV MENU QA — 5 tap sul numero versione (Fabio 2026-06) ============
+  // Attivazione nascosta agli utenti finali. Testabile senza terminale.
+  // Uso: apri Impostazioni → scroll fino a "Ollenya v..." → 5 tap veloci
+  // (entro 3s) → si apre Alert QA con 3 azioni distruttive/di test.
+  // Il contatore si azzera dopo 3s di inattività così un utente che tocca
+  // per caso il footer non entra mai nel Dev Menu.
+  const devMenuTapCountRef = useRef(0);
+  const devMenuTapResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleDevMenuTap = useCallback(() => {
+    if (devMenuTapResetTimerRef.current) {
+      clearTimeout(devMenuTapResetTimerRef.current);
+      devMenuTapResetTimerRef.current = null;
+    }
+    devMenuTapCountRef.current += 1;
+    if (devMenuTapCountRef.current < 5) {
+      devMenuTapResetTimerRef.current = setTimeout(() => {
+        devMenuTapCountRef.current = 0;
+      }, 3000);
+      return;
+    }
+    // 5° tap → apri Dev Menu, azzera counter
+    devMenuTapCountRef.current = 0;
+    console.log("[DevMenu] 5-tap unlock — opening QA menu");
+    Alert.alert(
+      "Dev Menu QA",
+      "Solo per test. Ogni azione richiede riapertura app per prendere effetto pulito.",
+      [
+        {
+          text: "Reset onboarding + microdemo",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              // 1. Reset server (profilo, timeline, chiavi biografiche)
+              await api.devFirstBootReset();
+            } catch (e) {
+              console.warn("[DevMenu] devFirstBootReset failed:", String(e).slice(0, 120));
+            }
+            try {
+              // 2. Reset SecureStore locale
+              await SecureStore.deleteItemAsync("microdemo_last_at").catch(() => {});
+              await SecureStore.deleteItemAsync("ollenya_intro_completed_at").catch(() => {});
+              await SecureStore.deleteItemAsync("ollenya_text_only_mode").catch(() => {});
+              await SecureStore.deleteItemAsync("intro_v3_completed_at").catch(() => {});
+            } catch (e) {
+              console.warn("[DevMenu] SecureStore cleanup failed:", String(e).slice(0, 120));
+            }
+            Alert.alert(
+              "Reset completato",
+              "Chiudi e riapri l'app per vedere il flow completo (Setup → Intro V2 → MicroDemo → Paywall).",
+              [{ text: "OK" }]
+            );
+          },
+        },
+        {
+          text: "Force Premium (monthly)",
+          onPress: async () => {
+            try {
+              const r = await api.devSetTier("monthly");
+              // === FIX 2026-06 — refetch profile dopo cambio tier ===========
+              // Senza questo, il componente SubscriptionStatus in Impostazioni
+              // continua a mostrare il vecchio profilo (senza ledger_state
+              // fresco appena creato dal backend). Utente vedeva 500 min
+              // sempre pieni e "Prossimo rinnovo: —".
+              try {
+                const p = await api.getProfile();
+                setProfile(p);
+              } catch (fe) {
+                console.warn("[DevMenu] refetch profile failed:", String(fe).slice(0, 120));
+              }
+              Alert.alert(
+                "Premium attivo",
+                `Tier: ${r.subscription_tier || "monthly"}. Riapri l'app per prendere effetto pulito.`,
+                [{ text: "OK" }]
+              );
+            } catch (e) {
+              Alert.alert("Errore", String(e).slice(0, 160), [{ text: "OK" }]);
+            }
+          },
+        },
+        {
+          text: "Simula ledger (250 usati + 200 carry + 30 topup)",
+          onPress: async () => {
+            try {
+              const r = await api.devSeedLedger("bimonthly", 250, 200, 30);
+              try {
+                const p = await api.getProfile();
+                setProfile(p);
+              } catch (fe) {
+                console.warn("[DevMenu] refetch profile failed:", String(fe).slice(0, 120));
+              }
+              const s = r?.summary || {};
+              Alert.alert(
+                "Ledger simulato",
+                `Bimestrale attivo.\n` +
+                  `Base rimanente: ${Math.round(s.base_minutes_remaining || 0)} min\n` +
+                  `Carryover: ${Math.round(s.carryover_minutes_total || 0)} min\n` +
+                  `Top-up: ${Math.round(s.topup_minutes_remaining || 0)} min\n` +
+                  `Base usato: ${Math.round(s.base_minutes_used || 0)} min\n\n` +
+                  `Apri Impostazioni per vedere la barra a 4 segmenti.`,
+                [{ text: "OK" }]
+              );
+            } catch (e) {
+              Alert.alert("Errore", String(e).slice(0, 160), [{ text: "OK" }]);
+            }
+          },
+        },
+        {
+          text: "🟡 Banner 85% (425/500 usati)",
+          onPress: async () => {
+            try {
+              await api.devSeedLedger("monthly", 425, 0, 0);
+              try {
+                const p = await api.getProfile();
+                setProfile(p);
+              } catch {}
+              Alert.alert(
+                "Banner 85% attivo",
+                `Mensile · 425/500 usati (85%).\nApri Home per vedere il banner giallo.`,
+                [{ text: "OK" }]
+              );
+            } catch (e) {
+              Alert.alert("Errore", String(e).slice(0, 160), [{ text: "OK" }]);
+            }
+          },
+        },
+        {
+          text: "🟠 Banner 95% (475/500 usati)",
+          onPress: async () => {
+            try {
+              await api.devSeedLedger("monthly", 475, 0, 0);
+              try {
+                const p = await api.getProfile();
+                setProfile(p);
+              } catch {}
+              Alert.alert(
+                "Banner 95% attivo",
+                `Mensile · 475/500 usati (95%).\nApri Home per vedere il banner rosso + CTA top-up.`,
+                [{ text: "OK" }]
+              );
+            } catch (e) {
+              Alert.alert("Errore", String(e).slice(0, 160), [{ text: "OK" }]);
+            }
+          },
+        },
+        {
+          text: "🔴 Banner 100% (500/500 esauriti)",
+          onPress: async () => {
+            try {
+              await api.devSeedLedger("monthly", 500, 0, 0);
+              try {
+                const p = await api.getProfile();
+                setProfile(p);
+              } catch {}
+              Alert.alert(
+                "Banner 100% attivo",
+                `Mensile · 500/500 esauriti.\nApri Home per vedere il banner viola "Minuti finiti".`,
+                [{ text: "OK" }]
+              );
+            } catch (e) {
+              Alert.alert("Errore", String(e).slice(0, 160), [{ text: "OK" }]);
+            }
+          },
+        },
+        {
+          text: "Force Free",
+          onPress: async () => {
+            try {
+              const r = await api.devSetTier(null);
+              // Refetch anche qui — vedi commento sopra.
+              try {
+                const p = await api.getProfile();
+                setProfile(p);
+              } catch (fe) {
+                console.warn("[DevMenu] refetch profile failed:", String(fe).slice(0, 120));
+              }
+              Alert.alert(
+                "Free attivo",
+                `Tier: ${r.subscription_tier || "null"}. Riapri l'app per prendere effetto pulito.`,
+                [{ text: "OK" }]
+              );
+            } catch (e) {
+              Alert.alert("Errore", String(e).slice(0, 160), [{ text: "OK" }]);
+            }
+          },
+        },
+        {
+          text: "Vedi ultimi errori server",
+          onPress: async () => {
+            try {
+              const r = await api.devLastErrors(5);
+              if (r.count === 0) {
+                Alert.alert("Nessun errore recente", "Il server non ha registrato eccezioni.", [{ text: "OK" }]);
+                return;
+              }
+              const lines = r.errors
+                .slice(-3)
+                .reverse()
+                .map((e) => `• ${e.where} → ${e.type}: ${e.message}`.slice(0, 240))
+                .join("\n\n");
+              Alert.alert(
+                `Ultimi ${r.count} errori`,
+                lines || "vuoto",
+                [{ text: "OK" }]
+              );
+              // Log completo (con traceback) su console per copia veloce
+              console.log("[DevMenu] last errors:", JSON.stringify(r.errors, null, 2));
+            } catch (e) {
+              Alert.alert("Errore", String(e).slice(0, 200), [{ text: "OK" }]);
+            }
+          },
+        },
+        { text: "Annulla", style: "cancel" },
+      ],
+      { cancelable: true }
+    );
+  }, []);
+
+  const resetMemory = async () => {
+    // === FIX 2026-06-30 — Doppia conferma (Fabio "rischio cliccare per sbaglio") ===
+    // Prima il bottone "Cancella tutta la memoria" partiva DIRETTAMENTE al
+    // wipe → un tap accidentale cancellava tutto, irreversibile. Ora
+    // richiediamo DUE conferme esplicite via Alert nativi:
+    //  1. "Sei sicuro?" — primo livello di consapevolezza (Annulla di default)
+    //  2. "Ultima conferma: davvero tutto?" — seconda barriera, intenzione
+    //     espressa due volte. Bottone distruttivo a destra, in rosso
+    //     (style: "destructive" su iOS), Annulla sempre prominente a sinistra.
+    // Solo dopo entrambi gli OK procediamo con resetEverything().
+    // Cancel di entrambi gli Alert = nessun reset, nessun side effect.
+    const doWipe = async () => {
+      // === SPEC 2026-08-22 (Fabio) — RESET COMPLETO INCLUDE FLAG SECURESTORE ==
+      // Il DELETE /api/profile azzera solo Mongo. Ma la nuova architettura V3
+      // usa flag SecureStore LOCALI ("intro_v3_completed_at",
+      // "heart_reveal_dismissed_at", "microdemo_last_at", "ollenya_intro_seen",
+      // "user_display_name") per gating della prima esperienza. Se non li
+      // azzeriamo qui, dopo "Cancella tutta la memoria" l'utente NON rivede
+      // la sequenza di primo utilizzo (Ollenya che si presenta, cuore, provalo,
+      // reveal). Cancelliamo TUTTI i flag della prima esperienza prima di
+      // ricaricare il profilo, così il router V3 riparte da zero.
+      try {
+        await api.resetEverything();
+        setTimeline([]);
+        // Azzeramento flag "prima volta" locali (SecureStore) — fire-and-forget.
+        // Silenzia errori: se un flag non esiste, deleteItemAsync è no-op.
+        await Promise.all([
+          SecureStore.deleteItemAsync("intro_v3_completed_at").catch(() => {}),
+          SecureStore.deleteItemAsync("intro_premium_seen_at").catch(() => {}),
+          SecureStore.deleteItemAsync("heart_reveal_dismissed_at").catch(() => {}),
+          SecureStore.deleteItemAsync("microdemo_last_at").catch(() => {}),
+          SecureStore.deleteItemAsync("ollenya_intro_seen").catch(() => {}),
+          SecureStore.deleteItemAsync("user_display_name").catch(() => {}),
+        ]);
+        const p = await api.getProfile();
+        setProfile(p);
+        // FIX Bug 1 A2 (2026-08-23): mark network-hydrated after resetEverything
+        setProfileHydrated("network");
+        // === SPEC 2026-08-22 (Fabio) — NIENTE PIÙ MODAL "BENVENUTO" LINGUA ===
+        // Il vecchio Modal onboarding con selezione lingua è stato rimosso
+        // (categoria E: obsoleta). L'app è "solo italiano ora"; multi-lingua
+        // rimane come direzione futura ma NON è nella prima esperienza V3.
+        // Rimosso: `if (!p.onboarded) setShowOnboarding(true);`
+        //
+        // === FIX RACE CONDITION V1 ↔ V3 (Fabio 2026-08-22) =====================
+        // BUG PRECEDENTE: dopo `router.replace("/")` (no-op se già su /),
+        // il componente <Taccuino> NON si rimontava → gli useEffect([]) di
+        // `showColorIntro` (riga 508) e `introV3State` (riga 933) non
+        // ri-leggevano SecureStore. Al cold restart successivo invece SÌ,
+        // ma con race condition: `showColorIntro` legge `koda_intro_seen=null`
+        // → setta `true` PRIMA che il router V3 abbia passato tutte le sue
+        // 3 guard asincrone (profile, disclaimer, splash). Il return early
+        // di riga 6655 `if (showColorIntro === true) return <OllenyaIntro/>`
+        // scatta → l'utente vede V1 al posto di V3.
+        //
+        // SOLUZIONE: forziamo lo stato locale ATOMICAMENTE prima di
+        // navigare e andiamo DIRETTAMENTE a /intro-v3, bypassando il
+        // router V3 (che resta come fallback per il cold restart).
+        setShowColorIntro(false);            // ← blocca return early V1 (riga 6655)
+        setIntroV3State("needed");           // ← allinea lo stato V3
+        hasRedirectedIntroV3Ref.current = false; // ← permetti nuovo redirect V3
+        lastV3DecidedKeyRef.current = null;  // ← FIX 2026-08-23: reset keyed ref V3
+        hasRedirectedIntroPremiumRef.current = false; // ← reset anche IntroPremium
+        lastIntroPremiumDecidedKeyRef.current = null; // ← reset keyed ref IntroPremium
+        setShowSettings(false);
+        try {
+          router.replace("/intro-v3");
+        } catch (e) {
+          console.warn("[resetEverything] router push failed:", e);
+        }
+      } catch (e) {
+        console.warn("[resetEverything] failed:", e);
+        setShowSettings(false);
+      }
+    };
+
+    Alert.alert(
+      "Cancellare tutta la memoria?",
+      "Questo eliminerà profilo, taccuino, ricordi e ogni conversazione. L'operazione è IRREVERSIBILE.",
+      [
+        { text: "Annulla", style: "cancel" },
+        {
+          text: "Continua",
+          style: "destructive",
+          onPress: () => {
+            // Seconda conferma — barriera contro il "doppio tap" accidentale.
+            Alert.alert(
+              "Sei davvero sicuro?",
+              "Ultima conferma: tutti i tuoi dati spariranno per sempre. Tornerai alla schermata della lingua iniziale.",
+              [
+                { text: "No, annulla", style: "cancel" },
+                {
+                  text: "Sì, cancella tutto",
+                  style: "destructive",
+                  onPress: () => { void doWipe(); },
+                },
+              ],
+              { cancelable: true }
+            );
+          },
+        },
+      ],
+      { cancelable: true }
+    );
+  };
+
+  // === EXPORT DATI GDPR (giugno 2026) ======================================
+  // Scarica TUTTI i dati dell'utente dal backend (/api/export) come JSON.
+  // Web: download diretto via blob. Native: salva in cache + share sheet.
+  // Le voci del Confessionale arrivano ANCORA CIFRATE (zero-knowledge).
+  const [exportingData, setExportingData] = useState(false);
+  const downloadMyData = async () => {
+    if (exportingData) return;
+    setExportingData(true);
+    try {
+      const r = await fetch(`${API_BASE}/export`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const jsonText = await r.text();
+      const filename = `koda_dati_${new Date().toISOString().slice(0, 10)}.json`;
+      if (Platform.OS === "web") {
+        // @ts-ignore — DOM disponibile solo su web
+        const blob = new Blob([jsonText], { type: "application/json" });
+        // @ts-ignore
+        const url = URL.createObjectURL(blob);
+        // @ts-ignore
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        // @ts-ignore
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // @ts-ignore
+        URL.revokeObjectURL(url);
+      } else {
+        const fileUri = `${FileSystem.cacheDirectory}${filename}`;
+        await FileSystem.writeAsStringAsync(fileUri, jsonText, {
+          encoding: FileSystem.EncodingType.UTF8,
+        });
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(fileUri, {
+            mimeType: "application/json",
+            dialogTitle: "I tuoi dati Ollenya",
+          });
+        } else {
+          Alert.alert("Export pronto", `File salvato: ${filename}`);
+        }
+      }
+    } catch (e) {
+      console.warn("gdpr export failed", e);
+      Alert.alert(
+        "Export non riuscito",
+        "Non sono riuscito a scaricare i tuoi dati. Controlla la connessione e riprova."
+      );
+    } finally {
+      setExportingData(false);
+    }
+  };
+
+  const toggleAi = async () => {
+    if (!profile) return;
+    const next = { ...profile, settings: { ...profile.settings, ai_enabled: !profile.settings.ai_enabled } };
+    setProfile(next);
+    try {
+      await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+  };
+
+  const toggleVoice = async () => {
+    if (!profile) return;
+    const next = { ...profile, settings: { ...profile.settings, voice_response: !profile.settings.voice_response } };
+    setProfile(next);
+    try {
+      await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+  };
+
+  const toggleConversation = async () => {
+    if (!profile) return;
+    const next = {
+      ...profile,
+      settings: { ...profile.settings, conversation_mode: !profile.settings.conversation_mode },
+    };
+    setProfile(next);
+    try {
+      await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+    // Pre-warm so first auto-listen is instant
+    if (!profile.settings.conversation_mode) {
+      prewarmMic().catch(() => {});
+      unlockSpeech().catch(() => {});
+    }
+  };
+
+  const setInputMode = async (mode: "voice" | "text" | "both") => {
+    if (!profile) return;
+    const next = { ...profile, settings: { ...profile.settings, input_mode: mode } };
+    setProfile(next);
+    try {
+      await api.updateProfile({ settings: next.settings } as any);
+    } catch {}
+    if (mode === "voice" || mode === "both") {
+      // pre-warm so first tap = direct recording
+      prewarmMic().catch(() => {});
+    }
+  };
+
+  // === FIX 2026-07-08 (Settings lag) ===
+  // Forziamo input_mode = "both" a livello profilo. Prima veniva fatto con
+  // un IIFE dentro il render del ScrollView delle Impostazioni, che
+  // chiamava setInputMode() durante il rendering → re-render loop → scroll
+  // laggava pesantemente. Ora è un useEffect one-shot che parte al caricamento
+  // del profile e SOLO se il valore corrente non è già "both".
+  useEffect(() => {
+    if (profile && profile.settings?.input_mode !== "both") {
+      setInputMode("both" as any).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.settings?.input_mode]);
+
+  // Load available voices (curated + custom)
+  useEffect(() => {
+    (async () => {
+      try {
+        const v = await api.listVoices();
+        setVoices(v.voices || []);
+        setVoicesEnabled(v.enabled);
+      } catch {}
+    })();
+  }, []);
+
+  // === Proactive Check-in scheduling ===========================
+  // BLOCCO A (2026-08-25): RIMOSSO. Ollenya non schedula più check-in
+  // proattivi. Il vecchio useEffect chiamava cancelAllCheckins / scheduleCheckin
+  // dal modulo `lib/notifications` (ora rimosso) e generava messaggi via
+  // /api/checkin/generate (endpoint rimosso). Nessun sostituto.
+
+  // === Tap-on-checkin-notification handler =====================
+  // BLOCCO A (2026-08-25): RIMOSSO. Nessuna notifica di check-in esiste
+  // più, quindi nessun tap da gestire. `expo-notifications` non è più
+  // referenziato da nessuna parte in questa vista.
+
+  const setVoice = async (voiceId: string) => {
+    if (!profile) return;
+
+    // === FIX 2026-07-26 v64.1 — Sync koda_voice with voice choice ===
+    //
+    // PROBLEMA (Fabio 26/07 iPhone):
+    //   Utente cambia voce da femminile (Cielo) a maschile (Vento) in
+    //   Impostazioni. Il preview riproduce la voce nuova. MA nella
+    //   conversazione reale la voce resta Cielo (femminile). Su tutti
+    //   i device — non solo iPhone.
+    //
+    // ROOT CAUSE (server.py getMe migration):
+    //   Al prossimo GET /profile il server esegue una sync automatica:
+    //     canonical_vid = _resolve_voice_id(p)  # ← dipende SOLO da p.koda_voice
+    //     if p.settings.tts_voice_id != canonical_vid:
+    //         p.settings.tts_voice_id = canonical_vid   # ← SOVRASCRIVE!
+    //   Perché? Storicamente la fonte di verità era koda_voice (scelto in
+    //   onboarding, "lockato"). Il campo tts_voice_id doveva restarci
+    //   allineato. Cambiare solo tts_voice_id lato client viene "corretto"
+    //   dal server al prossimo profile fetch.
+    //
+    // FIX:
+    //   Quando l'utente cambia voce, mandiamo AL SERVER ANCHE koda_voice
+    //   ("aria" per femminile / "theo" per maschile). Così la sync legge
+    //   koda_voice=theo → resolve → maschile → tts_voice_id resta maschile.
+    //
+    //   Mappa voice_id → koda_voice (sync con backend server.py KODA_VOICES):
+    //     POuqf18evoXOKIqV2Px7 (Cielo)  → "aria"
+    //     ll9WG7PDTuyHwgC5MD6g (Vento) → "theo"
+    //   Per voice_id non mappati (custom / futuri) non mandiamo koda_voice
+    //   e ci fidiamo che il server abbia la mappatura giusta.
+    const VOICE_ID_TO_KODA_VOICE: Record<string, "aria" | "theo"> = {
+      "POuqf18evoXOKIqV2Px7": "aria",  // Cielo — femminile
+      "ll9WG7PDTuyHwgC5MD6g": "theo",  // Vento — maschile
+    };
+    const kodaVoice = VOICE_ID_TO_KODA_VOICE[voiceId];
+
+    // === DIAG v64.2 — log traccia completa cambio voce ===
+    console.log(
+      `[OLLENYA_VOICE_CHANGE] user picked voice_id=${voiceId} → mapped koda_voice=${kodaVoice || "UNMAPPED"} | ` +
+      `current_profile: koda_voice=${(profile as any)?.koda_voice ?? "?"} tts_voice_id=${profile.settings?.tts_voice_id ?? "?"}`
+    );
+
+    const next = {
+      ...profile,
+      settings: { ...profile.settings, tts_voice_id: voiceId },
+      ...(kodaVoice ? { koda_voice: kodaVoice } : {}),
+    };
+    setProfile(next);
+    setDefaultVoiceId(voiceId);
+    // === FIX 2026-06-28 v26 — chiusura sessione attiva al cambio voce ===
+    // Se l'utente cambia voce mentre una sessione streaming è in volo (es.
+    // nella Stanza dello Sfogo con hands-free attivo), la sessione attuale
+    // sta ancora ricevendo TTS con la VECCHIA voce. Senza chiudere prima la
+    // sessione, il nuovo turno si scontra col vecchio audio → conflitto.
+    // Chiudiamo la sessione corrente: il prossimo restart hands-free la
+    // userà la voce nuova.
+    if (streamingSessionRef.current) {
+      const s = streamingSessionRef.current as any;
+      streamingSessionRef.current = null;
+      try {
+        if (typeof s.abort === "function") s.abort().catch?.(() => {});
+        else if (typeof s.stop === "function") s.stop().catch?.(() => {});
+      } catch {}
+    }
+    // === OFFLINE CLIPS — preload per la nuova voce (idempotente) ===
+    try { preloadOfflineClips(voiceId).catch(() => {}); } catch {}
+    try {
+      const updateBody: any = {
+        settings: next.settings,
+        // Includi koda_voice se noto per prevenire la sync server-side che
+        // altrimenti sovrascriverebbe tts_voice_id (v64.1 fix voce iPhone).
+        ...(kodaVoice ? { koda_voice: kodaVoice } : {}),
+      };
+      console.log(
+        `[OLLENYA_VOICE_CHANGE] PUT /profile body=${JSON.stringify({
+          tts_voice_id: updateBody.settings?.tts_voice_id,
+          koda_voice: updateBody.koda_voice ?? null,
+        })}`
+      );
+      const resp: any = await api.updateProfile(updateBody);
+      console.log(
+        `[OLLENYA_VOICE_CHANGE] PUT /profile OK — server returned: ` +
+        `koda_voice=${resp?.koda_voice ?? "?"} tts_voice_id=${resp?.settings?.tts_voice_id ?? "?"} ai_gender=${resp?.ai_gender ?? "?"}`
+      );
+    } catch (e: any) {
+      console.log(
+        `[OLLENYA_VOICE_CHANGE] PUT /profile FAILED: ${e?.message || String(e)}`
+      );
+    }
+  };
+
+  // When settings closes, re-prime mic recording mode so the next press of
+  // the big button doesn't fail with "Microfono non disponibile" (after
+  // previewing voices the audio session is in playback-only mode).
+  const closeSettings = () => {
+    setShowSettings(false);
+    SpeechMod.stop();
+    if (profile?.settings?.input_mode !== "text") {
+      prewarmMic().catch(() => {});
+    }
+  };
+
+  // === Rimosso 2026-07-09: OTA UPDATE CHECK HANDLER ===
+  // Handler `checkForOtaUpdate` rimosso su richiesta utente: non funzionava
+  // sulla pipeline OTA di Emergent (Updates.checkForUpdateAsync restava
+  // appeso senza rispondere). Pulsante corrispondente rimosso dalla UI.
+
+  // === RIMOZIONE RIASCOLTO BOLLA (Fabio 2026-11-04) ======================
+  // Il tap sulla bolla di Ollenya NON riproduce più alcun audio e non
+  // chiama alcun generatore. La risposta viene pronunciata una sola volta
+  // durante la conversazione; il testo resta scritto nella timeline.
+  // Il long-press per il feedback resta attivo (gestito dentro `BubbleImpl`
+  // tramite la prop `onLongPressFeedback`). Il tap mostra/nasconde l'orario
+  // del messaggio come fallback leggero.
+  // (Funzione `replayMessage` e stato `playingMsgId*` rimossi.)
+
+  // === GHOST handler ("Dimentica il fatto, ricorda l'insegnamento")
+  // Long-press su una bolla → conferma → POST /api/ghost.
+  // Il backend cancella l'entry dal DB, e (se è user message significativo)
+  // estrae 1 frase di insegnamento da Claude per fonderla nel memory_summary.
+  // Localmente rimuoviamo subito la bolla per feedback istantaneo, e
+  // ricarichiamo il profilo se è arrivato un nuovo lesson nel memory_summary.
+  const ghostMessage = useCallback(async (entry: TimelineEntry) => {
+    if (!entry?.id) return;
+    // Optimistic UI: rimuovi subito la bolla
+    setTimeline((prev) => prev.filter((e) => e.id !== entry.id));
+    try {
+      const res = await api.ghost(entry.id, true);
+      // Se è stato preservato un insegnamento, ricarica il profilo per
+      // sincronizzare il memory_summary (e mostrare confidence aggiornata).
+      if (res?.lesson_preserved && profile?.id) {
+        try {
+          const fresh = await api.getProfile();
+          setProfile(fresh);
+        } catch {}
+      }
+    } catch (e) {
+      // Rollback se il delete fallisce: ricarica timeline
+      try {
+        const tl = await api.getTimeline(200);
+        setTimeline(tl);
+      } catch {}
+    }
+  }, [profile?.id]);
+
+  /**
+  /**
+   * Tap-on-voice-card handler: select the voice AND immediately play a short
+   * preview using that voice. One gesture, no separate play button.
+   *
+   * === Rimozione nomi voce dalla preview (Fabio 2026-08-12) ================
+   * Prima: la preview diceva "Ciao, sono ${name}. Sarò io a parlarti..."
+   * dove name = "Cielo"/"Vento". L'utente NON deve mai sentire questi nomi
+   * (decisione già presa per paywall/UI, estesa qui alla preview vocale).
+   * Ora: frase generica identica per entrambe le voci. L'utente riconosce
+   * la voce dal SUONO, non dal nome.
+   */
+  const selectAndPreviewVoice = async (voiceId: string, _name: string) => {
+    // Update selection (saves to profile, sets default)
+    await setVoice(voiceId);
+    // Stop any current playback and play preview with the new voice
+    SpeechMod.stop();
+    try {
+      setVoicePreviewLoading(voiceId);
+      // Make sure browser audio is unlocked (web)
+      await unlockSpeech();
+      await SpeechMod.speak(
+        `Ciao. Sarò io a parlarti, da adesso.`,
+        { language: "it-IT", tone: "warm", voiceId }
+      );
+    } finally {
+      setVoicePreviewLoading(null);
+    }
+  };
+
+  const statusLabel = (() => {
+    switch (status) {
+      case "recording":
+        return "Ti ascolto...";
+      case "transcribing":
+        return "Sto leggendo...";
+      case "thinking":
+        return "Sto pensando...";
+      case "speaking":
+        // In conversation mode, the mic is opened in parallel after 250ms,
+        // so the user CAN interrupt by talking. Make this discoverable in
+        // the UI label.
+        if (convActiveRef.current && recRef.current) {
+          return "Sto parlando — interrompimi pure";
+        }
+        return "Sto parlando...";
+      default:
+        return "Premi e parla";
+    }
+  })();
+
+  const aiPaused = profile && !profile.settings.ai_enabled;
+  const bubbleAccent = useMemo(
+    () => resolveBubbleColors((profile?.settings as any)?.bubble_color),
+    [(profile?.settings as any)?.bubble_color]
+  );
+  // Last AI tone — used to color the Orb during "speaking" state so the
+  // visual matches the emotional tone of the AI reply (warm/calm/concerned…).
+  const lastAiTone: OrbTone | null = useMemo(() => {
+    for (let i = timeline.length - 1; i >= 0; i--) {
+      const e = timeline[i];
+      if (e.role === "ai" && e.tone) return e.tone as OrbTone;
+    }
+    return null;
+  }, [timeline]);
+
+  // === Orb Ambient — derives warmth, dim and time-of-day palette purely
+  //     from the timeline + current hour. No persistent state needed.
+  const ambient = useOrbAmbient(timeline);
+
+  // === v64.15 (2026-08-01) PERF FIX — scrollPeek convertito da useState a useRef ===
+  // Prima: `useState(0)` chiamato dentro onTimelineScroll (~30 volte/s).
+  // Ogni setState triggerava un re-render del root Taccuino (8000 righe).
+  // Il root re-render invalidava anche le Bubble (memo shallow-check falliva
+  // sui callback e derivati inline creati ogni render).
+  // Risultato misurato v64.14: FPS 13-20 durante scroll, 285 Bubble render/s.
+  //
+  // scrollPeek NON è letto da nessuna parte nel render → era dead state.
+  // Convertito a useRef: i calcoli restano identici (velocity smoothing per
+  // eventuale futuro utilizzo Orb-lean), ma zero re-render del root.
+  const scrollPeekRef = useRef(0);
+  const lastScrollY = useRef(0);
+  const scrollDecayTimer = useRef<any>(null);
+  // === SCROLL-TO-BOTTOM FAB STATE (Fix 2026-06-22) ===
+  // Tracciamo se l'utente è vicino al fondo della timeline. Se SÌ →
+  // auto-scroll sui nuovi messaggi (idempotente, animated:false → niente
+  // intersezione di animazioni → niente bounce loop). Se NO → mostriamo
+  // un FAB "↓" e NON forziamo lo scroll (rispettiamo l'utente che sta
+  // leggendo i messaggi vecchi).
+  const [isNearBottom, setIsNearBottom] = useState(true);
+  const isNearBottomRef = useRef(true);
+  // === FORCE SCROLL WINDOW (Fix #4 — 2026-06-22 v6) ===
+  // Quando l'utente invia un messaggio (o riceve una risposta dopo un
+  // suo invio), VUOLE vedere il nuovo messaggio anche se stava
+  // scrollando indietro a rileggere. Apriamo una "finestra" di 15s
+  // dall'invio durante la quale ogni setTimeline forza lo scroll in
+  // fondo, ignorando il check isNearBottom (che vale solo per i
+  // messaggi "passivi", es. risposta inattesa quando l'utente non sta
+  // scrivendo). La finestra si chiude appena status → idle.
+  const forceScrollUntilRef = useRef<number>(0);
+  const requestForceScroll = useCallback(() => {
+    forceScrollUntilRef.current = Date.now() + 15000;
+  }, []);
+
+  // === #9 DEBUG LATENZA (Fix 2026-06-22 v8) ===
+  // Overlay nascosto attivabile con 5 tap rapidi sul contatore Freemium
+  // (sempre visibile in alto). Mostra la timeline T0..T_end del turno
+  // corrente, utile per misurare la latenza reale nel furgone senza Mac.
+  const [latencyDebugVisible, setLatencyDebugVisible] = useState(false);
+  const tapCountRef = useRef(0);
+  const tapFirstAtRef = useRef(0);
+  const onSecretDebugTap = useCallback(() => {
+    const now = Date.now();
+    if (now - tapFirstAtRef.current > 2000) {
+      // Reset finestra di 2s
+      tapCountRef.current = 0;
+      tapFirstAtRef.current = now;
+    }
+    tapCountRef.current += 1;
+    if (tapCountRef.current >= 5) {
+      tapCountRef.current = 0;
+      setLatencyDebugVisible((v) => !v);
+    }
+  }, []);
+  // === MISURAZIONE BOTTOM BAR (Fix 2026-06-22 v3) ===
+  // Nota 2026-08-21: la dichiarazione di `bottomBarHeight` è stata spostata
+  // in cima al componente per risolvere un TDZ crash. Qui resta solo il
+  // commento originale a scopo di contesto.
+  const onTimelineScroll = useCallback((e: any) => {
+    const y = e?.nativeEvent?.contentOffset?.y ?? 0;
+    const layoutH = e?.nativeEvent?.layoutMeasurement?.height ?? 0;
+    const contentH = e?.nativeEvent?.contentSize?.height ?? 0;
+    const delta = y - lastScrollY.current;
+    lastScrollY.current = y;
+    // Coda peeks UP when user scrolls up (looking back), DOWN when scrolling down.
+    // v64.15: aggiorna ref invece di setState → zero re-render root
+    scrollPeekRef.current = Math.max(-100, Math.min(100, scrollPeekRef.current * 0.6 + delta * 1.4));
+    if (scrollDecayTimer.current) clearTimeout(scrollDecayTimer.current);
+    scrollDecayTimer.current = setTimeout(() => {
+      scrollPeekRef.current = 0;
+    }, 350);
+    // distanza dal fondo: se >120px → mostra FAB, altrimenti nascondilo.
+    // isNearBottom RESTA state perché è letto nel render (mostra/nasconde FAB),
+    // ma cambia raramente (solo al passaggio della soglia dei 120px).
+    const distFromBottom = Math.max(0, contentH - (y + layoutH));
+    const near = distFromBottom < 120;
+    if (near !== isNearBottomRef.current) {
+      isNearBottomRef.current = near;
+      setIsNearBottom(near);
+    }
+  }, []);
+  // Handler per scroll-to-bottom manuale (FAB tap)
+  // === FIX SCROLL "A STEP" — RISOLTO ALLA RADICE (2026-06-22 v5) ===
+  // Prima con FlatList: scrollToEnd raggiungeva solo l'ultimo item
+  // RENDERIZZATO (initialNumToRender=20) → ogni tap caricava 10-12 items
+  // → step-scrolling fastidioso.
+  // Ora con FlashList: cell recycling invece di mount/unmount.
+  // scrollToEnd raggiunge sempre il fondo reale in UN colpo. Niente
+  // workaround multi-round, niente setTimeout — basta una chiamata.
+  const scrollToBottom = useCallback((animated = true) => {
+    const fl = scrollRef.current;
+    if (!fl) return;
+    try {
+      isNearBottomRef.current = true;
+      setIsNearBottom(true);
+      fl.scrollToEnd({ animated });
+    } catch {}
+  }, []);
+
+  // === Caveat handwritten font — used for AI replies to evoke "diary
+  //     written together with a friend". User text stays system-default
+  //     (more neutral, like a clean note).
+  // FABIO 2026-06-21 v15: caricato via expo-font + file .ttf locali in
+  // assets/fonts/ (sostituito @expo-google-fonts/caveat, vietato dal pipeline).
+  const [fontsLoaded] = useFonts({
+    Caveat_400Regular: require("../assets/fonts/Caveat_400Regular.ttf"),
+    Caveat_500Medium: require("../assets/fonts/Caveat_500Medium.ttf"),
+  });
+  const aiFontFamily = fontsLoaded ? "Caveat_500Medium" : undefined;
+  const bubbleStyle: "glass" | "solid" =
+    ((profile?.settings as any)?.bubble_style === "solid") ? "solid" : "glass";
+  const textSize: number = (() => {
+    const v = (profile?.settings as any)?.text_size;
+    return typeof v === "number" && v >= 0.7 && v <= 1.6 ? v : 1.0;
+  })();
+  // Text color uniform across both user & AI bubbles, derived from theme.
+  // Light themes (carta/aurora etc.) → dark text; dark themes → light text.
+  const textOnBubble = theme.text;
+
+  // === Build timeline w/ day separators ===
+  // PRIVACY CONFESSIONALE: i messaggi creati durante il Confessionale (flag
+  // `confessional: true`) sono VISIBILI solo quando il toggle confessionale
+  // è attivo. Quando lo disattivi, scompaiono dalla schermata di testo —
+  // così se qualcuno apre l'app non può leggerli. Quando lo riattivi,
+  // ricompaiono colorati in violetto (vedi ChatBubble) per essere
+  // immediatamente riconoscibili come "messaggi protetti".
+  const timelineWithSeparators = useMemo(() => {
+    const out: Array<{ kind: "sep"; key: string; label: string } | { kind: "msg"; entry: TimelineEntry } | { kind: "msg-mock"; entry: TimelineEntry; held?: boolean }> = [];
+    let lastDay = "";
+    for (const e of timeline) {
+      // (filtro entry confessional rimosso — Blocco B)
+      const d = new Date(e.timestamp);
+      const dayKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      if (dayKey !== lastDay) {
+        out.push({ kind: "sep", key: `sep-${dayKey}`, label: dayLabelFor(d) });
+        lastDay = dayKey;
+      }
+      out.push({ kind: "msg", entry: e });
+    }
+    // === MESSAGGI FINTI TOUR (richiesta utente giugno 2026 round 5) ===
+    // Quando il tour è attivo nella pagina di lettura, mostriamo 3 bolle
+    // d'esempio realistiche così l'highlight di "tieni premuto" ha qualcosa
+    // di concreto su cui appoggiarsi (e non un cerchio finto su area vuota).
+    // Lo step "Tieni premuto" attiva l'animazione held sulla 2a bolla.
+    if (tourActive && tourCurrentStep?.page === "reading") {
+      const nowTs = new Date().toISOString();
+      const heldNow = tourCurrentStep.label === "Tieni premuto";
+      const mocks: TimelineEntry[] = [
+        { id: "mock-tour-1", role: "user",  text: "Stanotte non ho dormito.",        timestamp: nowTs, tone: "neutral", actions: [] } as any,
+        { id: "mock-tour-2", role: "ai",    text: "Mi spiace. Vuoi raccontarmi?",    timestamp: nowTs, tone: "warm",    actions: [] } as any,
+        { id: "mock-tour-3", role: "user",  text: "Sì, mi sento solo ultimamente.",  timestamp: nowTs, tone: "neutral", actions: [] } as any,
+      ];
+      // Solo se il timeline reale è vuoto, prepende un separatore "Oggi".
+      if (out.length === 0) {
+        out.push({ kind: "sep", key: "sep-tour", label: "Oggi" });
+      }
+      for (const m of mocks) {
+        out.push({ kind: "msg-mock", entry: m, held: heldNow && m.id === "mock-tour-3" });
+      }
+    }
+    return out;
+  }, [timeline, confessionalMode, confessionalExiting, tourActive, tourCurrentStep]);
+
+  // === OLED DIM OVERLAY RIMOSSO (richiesta utente giugno 2026) =============
+  // La riduzione di luminosità per risparmio energetico è stata eliminata
+  // completamente: copriva lo schermo con un velo nero, era percepita come
+  // un bug e non aveva un comportamento corretto. Nessun overlay, nessun
+  // timer.
+
+  // Build the screen wrapper. Il tema (giorno/notte/auto-orario) è
+  // l'unica fonte del colore di sfondo. I vecchi override (BG_PRESETS,
+  // Liquid, Aurora, immagini custom) sono stati rimossi il 2026-08-04.
+  // === SETTINGS WALLET CARDS (Fabio 2026-06) ===============================
+  // Dati per il nuovo Settings modal in stile Apple Wallet (verticale).
+  // Ogni card è una sezione autonoma con controlli inline.
+  const settingsCards = useMemo<SettingsCard[]>(() => [
+    // Card 1: Il mio piano (subscription status con barra minuti)
+    {
+      key: "plan",
+      icon: "💎",
+      title: "Il mio piano",
+      description: "Piano attivo, minuti disponibili e rinnovo.",
+      count: 1,
+      body: <SubscriptionStatus profile={profile as any} />,
+    },
+    // Card 2: Comportamento (SOLO Ricerca web — Situation Tracking spostato in Memoria v65.50)
+    {
+      key: "behavior",
+      icon: "💬",
+      title: "Comportamento",
+      description: "Come Ollenya si comporta durante le conversazioni.",
+      count: 1,
+      body: (
+        <>
+            {/* === RICERCA WEB (Tavily) — toggle privacy ====================
+                Quando attivo: se l'utente fa domande fattuali (meteo, notizie,
+                prezzi), Ollenya esegue una ricerca su fonti italiane certificate
+                (ANSA, Repubblica, Corriere, Wikipedia, meteo.it, ecc.) PRIMA
+                di rispondere. Solo la query corrente viene inviata, nessun
+                dato personale. Quando OFF: Ollenya usa SOLO la sua conoscenza
+                statica, nessuna comunicazione esterna oltre l'LLM. MAI
+                attivo nel Confessionale a prescindere dal toggle. */}
+            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8, marginTop: 14 }]}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingLabel}>🌐 Ricerca web</Text>
+                  <Text style={styles.settingHint}>
+                    Permetti a Ollenya di consultare fonti certificate (ANSA,
+                    Repubblica, Wikipedia, meteo.it…) per meteo, notizie e fatti
+                    recenti. In Lascia andare resta sempre spento.
+                  </Text>
+                </View>
+                <Switch
+                  value={(profile?.settings as any)?.web_search_enabled !== false}
+                  onValueChange={async (on) => {
+                    if (!profile) return;
+                    const nextSettings = { ...profile.settings, web_search_enabled: on } as any;
+                    setProfile({ ...profile, settings: nextSettings });
+                    try {
+                      await api.updateProfile({ settings: nextSettings });
+                    } catch {}
+                  }}
+                  trackColor={{ false: theme.muted + "55", true: bubbleAccent.color }}
+                  thumbColor="#fff"
+                />
+              </View>
+            </View>
+        </>
+      ),
+    },
+    // Card 3: Voce (v65.50 Fabio — RIMOSSA barra Confidenza; label M/F al posto dei nomi Cielo/Vento)
+    {
+      key: "voice",
+      icon: "🎙️",
+      title: "Voce",
+      description: "Scegli la voce con cui Ollenya ti parla.",
+      count: 1,
+      body: (
+        <>
+            {/* === V65.50 REFACTOR (Fabio) ==============================
+                RIMOSSO: barra Confidenza (era cosmetica, cresceva sola,
+                l'utente non poteva modificarla — creava solo confusione).
+                Il confidence_level resta calcolato server-side e usato
+                internamente nel prompt (_confidence_phase); semplicemente
+                non è più esposto in UI.
+                RIMOSSI ANCHE: nomi voci ("Cielo", "Vento"). Le due voci
+                ora appaiono soltanto come "Femminile" e "Maschile"
+                (mapping automatico dal campo `gender` del backend
+                CURATED_VOICES). Il sistema tecnico resta predisposto per
+                più voice_id in futuro.
+                ========================================================= */}
+            <View style={styles.voicesList}>
+              <Text style={[styles.settingsSubtitle, { marginTop: 4, marginBottom: 6 }]}>
+                🎙️ Scegli la voce
+              </Text>
+              {(() => {
+                const voiceLocked = status !== "idle";
+                const lockHint = (() => {
+                  switch (status) {
+                    case "recording":
+                      return "🎙️ Aspetta che finisca di ascoltarti per cambiare voce";
+                    case "transcribing":
+                      return "✍️ Sto leggendo… cambierai voce tra un attimo";
+                    case "thinking":
+                      return "💭 Sto pensando… cambierai voce tra un attimo";
+                    case "speaking":
+                      return "🔊 Aspetta che finisca di parlare per cambiare voce";
+                    default:
+                      return "Tocca per ascoltare";
+                  }
+                })();
+                // Mappa gender backend → label italiano UI (fallback al nome
+                // originale se il backend non espone il campo gender).
+                const labelForVoice = (v: any): string => {
+                  const g = String(v?.gender || "").toLowerCase();
+                  if (g === "femminile" || g === "female" || g === "f") return "Femminile";
+                  if (g === "maschile" || g === "male" || g === "m") return "Maschile";
+                  return v?.name || "Voce";
+                };
+                return (
+                  <>
+                    <Text style={styles.voicePickerHint}>{lockHint}</Text>
+                    <View style={styles.voicePickerRow}>
+                      {voices.map((v) => {
+                        const selected = profile?.settings?.tts_voice_id === v.voice_id;
+                        const loading = voicePreviewLoading === v.voice_id;
+                        const voiceColor =
+                          VOICE_SPEAKING_COLORS[v.voice_id] || theme.primary;
+                        return (
+                          <TouchableOpacity
+                            key={v.voice_id}
+                            onPress={() => selectAndPreviewVoice(v.voice_id, v.name)}
+                            style={[
+                              styles.voiceCircleWrap,
+                              voiceLocked && { opacity: 0.45 },
+                            ]}
+                            testID={`voice-${v.voice_id}`}
+                            activeOpacity={0.75}
+                            disabled={voiceLocked}
+                            accessibilityState={{ disabled: voiceLocked }}
+                          >
+                            {/* Glow soft attorno al cerchio */}
+                            <View
+                              style={[
+                                styles.voiceCircleGlow,
+                                {
+                                  backgroundColor: voiceColor,
+                                  opacity: selected ? 0.45 : 0.22,
+                                },
+                              ]}
+                            />
+                            {/* Cerchio principale */}
+                            <View
+                              style={[
+                                styles.voiceCircle,
+                                {
+                                  backgroundColor: voiceColor,
+                                  borderColor: selected ? "#FFFFFF" : "transparent",
+                                  borderWidth: selected ? 3 : 0,
+                                  shadowColor: voiceColor,
+                                },
+                              ]}
+                            >
+                              {loading ? (
+                                <ActivityIndicator size="small" color="#FFFFFF" />
+                              ) : selected ? (
+                                <Ionicons name="checkmark" size={28} color="#FFFFFF" />
+                              ) : null}
+                            </View>
+                            {/* Label Femminile/Maschile (v65.50 Fabio) */}
+                            <Text
+                              style={{
+                                color: theme.text + (selected ? "FF" : "AA"),
+                                fontSize: 13,
+                                fontWeight: selected ? "600" : "500",
+                                marginTop: 6,
+                                textAlign: "center",
+                              }}
+                            >
+                              {labelForVoice(v)}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </>
+                );
+              })()}
+            </View>
+        </>
+      ),
+    },
+    // Card 4: Aspetto (rinominata da Schermo — v65.50)
+    {
+      key: "voice_provider",
+      icon: "🎙️",
+      title: "Voce di Ollenya",
+      description: "Scegli il provider e la voce di Ollenya.",
+      count: 1,
+      body: (
+        <VoiceOfOllenyaCard
+          textColor={theme.text}
+          mutedColor={theme.textMuted}
+          accentColor={bubbleAccent.color}
+          cardBg={theme.surfaceAlt}
+          disabled={isFreeGate()}
+        />
+      ),
+    },
+    {
+      key: "border",
+      icon: "📱",
+      title: "Aspetto",
+      description: "Adatta il bordo colorato al tuo telefono.",
+      count: 1,
+      body: (
+        <>
+            {/* === BORDO — Calibrazione con auto-stima (2026-08-02 / 2026-06 v2) ==
+                iOS e Android non espongono il corner radius fisico del display.
+                Fix v2 (Fabio 2026-06): auto-stimiamo il radius dal safe-area
+                top inset (correlato al design del device: notch, Dynamic
+                Island, rettangolare). Il valore auto-stimato è il DEFAULT.
+                Lo slider resta disponibile perché nessun auto-detect è
+                perfetto (device con schermi curvi anomali tipo Honor/OnePlus)
+                — se la stima non basta, l'utente può regolare a mano. */}
+            <View style={styles.divider} />
+            <Text style={styles.settingsSubtitle}>📱 Bordo dello schermo</Text>
+            <Text style={styles.settingsHint}>
+              Il raggio degli angoli si adatta al tuo telefono automaticamente.
+              Se il bordo colorato non si vede bene, regola qui.
+            </Text>
+
+            {/* Slider raggio angoli con auto-stima */}
+            <View style={{ marginTop: 12 }}>
+              <Text style={styles.settingsHint}>
+                {(() => {
+                  const autoR = estimateCornerRadius(insets.top || 0, Platform.OS);
+                  const isAuto = borderCal.radius === null;
+                  const displayR = isAuto ? autoR : borderCal.radius;
+                  return `Raggio angoli: ${displayR} px${isAuto ? " (auto)" : ""}`;
+                })()}
+              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
+                <TouchableOpacity
+                  onPress={async () => {
+                    // Se era in modalità auto, parti dal valore stimato — così
+                    // il tap del "-" fa un delta relativo alla stima invece che
+                    // resettare a un hardcoded arbitrario.
+                    const autoR = estimateCornerRadius(insets.top || 0, Platform.OS);
+                    const cur = borderCal.radius ?? autoR;
+                    const next: BorderCalibration = { ...borderCal, radius: Math.max(0, cur - 4) };
+                    setBorderCal(next);
+                    await saveBorderCalibration(next);
+                  }}
+                  style={[styles.modeBtn, { paddingHorizontal: 14, minHeight: 40 }]}
+                  accessibilityLabel="Riduci raggio bordo"
+                >
+                  <Text style={{ color: theme.text, fontSize: 18, fontWeight: "600" }}>−</Text>
+                </TouchableOpacity>
+                <View style={{ flex: 1, height: 6, backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 3 }}>
+                  {(() => {
+                    const autoR = estimateCornerRadius(insets.top || 0, Platform.OS);
+                    const shownR = borderCal.radius ?? autoR;
+                    return (
+                      <View
+                        style={{
+                          height: "100%",
+                          width: `${Math.min(100, (shownR / 70) * 100)}%`,
+                          backgroundColor: bubbleAccent.color,
+                          borderRadius: 3,
+                        }}
+                      />
+                    );
+                  })()}
+                </View>
+                <TouchableOpacity
+                  onPress={async () => {
+                    const autoR = estimateCornerRadius(insets.top || 0, Platform.OS);
+                    const cur = borderCal.radius ?? autoR;
+                    const next: BorderCalibration = { ...borderCal, radius: Math.min(70, cur + 4) };
+                    setBorderCal(next);
+                    await saveBorderCalibration(next);
+                  }}
+                  style={[styles.modeBtn, { paddingHorizontal: 14, minHeight: 40 }]}
+                  accessibilityLabel="Aumenta raggio bordo"
+                >
+                  <Text style={{ color: theme.text, fontSize: 18, fontWeight: "600" }}>+</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Pulsante "Torna all'auto" — visibile SOLO se l'utente ha
+                  regolato manualmente. Riporta a null → riparte la stima. */}
+              {borderCal.radius !== null ? (
+                <TouchableOpacity
+                  onPress={async () => {
+                    const next: BorderCalibration = { ...borderCal, radius: null };
+                    setBorderCal(next);
+                    await saveBorderCalibration(next);
+                  }}
+                  style={{
+                    marginTop: 10,
+                    paddingVertical: 8,
+                    paddingHorizontal: 12,
+                    alignSelf: "flex-start",
+                    borderRadius: 8,
+                    backgroundColor: "rgba(255,255,255,0.06)",
+                  }}
+                  accessibilityLabel="Torna alla regolazione automatica"
+                >
+                  <Text style={{ color: theme.text + "cc", fontSize: 12 }}>
+                    ↺ Torna all&apos;automatica
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+        </>
+      ),
+    },
+    // Card 5: Privacy e dati (rinominata da Dati e Città — v65.50)
+    {
+      key: "privacy_data",
+      icon: "🔒",
+      title: "Privacy e dati",
+      description: "Città per meteo/eventi. Scarica i tuoi dati (GDPR).",
+      count: 2,
+      body: (
+        <>
+            {/* === GEOLOCATION TOGGLE (P2 Fabio 2026-06-20) ===
+                Quando attivo: al boot dell'app il client chiede il
+                permesso location (UNA volta) e fa una getCurrentPosition
+                + reverse-geocode → invia la città al backend come key_fact
+                di categoria "luogo_geo". Permette a Ollenya di rispondere
+                a "che ore sono qui?" o "che tempo fa?" usando la città
+                giusta.
+                Default OFF — l'utente abilita esplicitamente per privacy.
+                Strategia ONE-SHOT: nessun watchPosition, nessun tracking
+                in background. Solo 1 fix per sessione foreground. */}
+            <View style={[styles.settingRow, { flexDirection: "row", alignItems: "center", justifyContent: "space-between" }]}>
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text style={styles.settingLabel}>📍 Condividi la mia città</Text>
+                <Text style={styles.settingHint}>
+                  Una volta sola all'avvio. Ollenya saprà solo la città (es. Pavia),
+                  non la posizione esatta. Serve per risposte tipo "che ore sono
+                  qui?". Tutto resta locale.
+                </Text>
+              </View>
+              <Switch
+                value={(profile?.settings as any)?.geolocation_enabled === true}
+                onValueChange={async (on) => {
+                  if (!profile) return;
+                  const nextSettings = { ...profile.settings, geolocation_enabled: on } as any;
+                  setProfile({ ...profile, settings: nextSettings });
+                  try {
+                    await api.updateProfile({ settings: nextSettings });
+                  } catch {}
+                  // === Trigger immediato quando l'utente attiva il toggle ===
+                  // Se attiva ORA, chiediamo subito permesso + città (non
+                  // serve aspettare il prossimo cold-start). Se rifiuta,
+                  // il toggle resta visivamente ON nelle impostazioni ma
+                  // la chiamata fallirà gentilmente al prossimo boot.
+                  if (on) {
+                    try {
+                      const { fetchLocationOnce } = await import("../lib/geolocation");
+                      const res = await fetchLocationOnce({ forceRequest: true });
+                      if (res.ok) {
+                        console.log(`[OLLENYA_GEO] location attivata: ${res.city}`);
+                      } else if (res.reason === "blocked") {
+                        // Mostriamo un alert con bottone "Apri Impostazioni"
+                        Alert.alert(
+                          "Permesso bloccato",
+                          "Per condividere la città devi abilitare la posizione di Ollenya nelle Impostazioni del telefono.",
+                          [
+                            { text: "Annulla", style: "cancel" },
+                            { text: "Apri Impostazioni", onPress: () => Linking.openSettings() },
+                          ]
+                        );
+                      } else if (res.reason === "denied") {
+                        console.log("[OLLENYA_GEO] permesso negato");
+                      }
+                    } catch (e) {
+                      console.warn("[OLLENYA_GEO] fetchLocationOnce error:", e);
+                    }
+                  }
+                }}
+                trackColor={{ false: "rgba(255,255,255,0.18)", true: "#0E7C7B" }}
+                thumbColor="#FFFFFF"
+              />
+            </View>
+
+            <View style={styles.divider} />
+
+            {/* === SCARICA I MIEI DATI (GDPR Art. 20) ===
+                Esporta profilo, conversazioni, ricordi e voci del
+                Confessionale (queste ultime restano cifrate) in un JSON. */}
+            <TouchableOpacity
+              onPress={downloadMyData}
+              disabled={exportingData}
+              style={[styles.settingRow, { paddingVertical: 14 }]}
+              testID="gdpr-export-btn"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>📦 Scarica i miei dati</Text>
+                <Text style={styles.settingHint}>
+                  Esporta tutto in un file JSON (GDPR): profilo, conversazioni,
+                  ricordi. Lascia andare non finisce mai nell'export — non
+                  esiste sul server.
+                </Text>
+              </View>
+              {exportingData ? (
+                <ActivityIndicator size="small" color={theme.primary} />
+              ) : (
+                <Ionicons name="download-outline" size={18} color={theme.text + "88"} />
+              )}
+            </TouchableOpacity>
+
+            <View style={styles.divider} />
+        </>
+      ),
+    },
+    // Card 6: Memoria (v65.50 Fabio — UNIFICATA: situation tracking + ricordi
+    // semantici + azzera memoria. Admin buttons SPOSTATI in card "test").
+    {
+      key: "memory",
+      icon: "🧠",
+      title: "Memoria",
+      description: "Cosa Ollenya ricorda di te.",
+      count: 3,
+      body: (
+        <>
+            {/* --- Toggle MEMORIA (master switch, v67.10) --- */}
+            <View style={[styles.settingRow, { flexDirection: "column", alignItems: "stretch", gap: 8, marginTop: 14 }]}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingLabel}>🧠 Memoria attiva</Text>
+                  <Text style={styles.settingHint}>
+                    Se attiva, Ollenya ricorda temi e situazioni di cui le hai parlato.
+                    Se la disattivi, parte da zero a ogni conversazione.
+                  </Text>
+                </View>
+                <Switch
+                  value={(profile?.settings as any)?.situation_tracking_enabled === true}
+                  onValueChange={async (on) => {
+                    if (!profile) return;
+                    const nextSettings = { ...profile.settings, situation_tracking_enabled: on } as any;
+                    setProfile({ ...profile, settings: nextSettings });
+                    try {
+                      await api.updateProfile({ settings: nextSettings });
+                    } catch {}
+                  }}
+                  trackColor={{ false: theme.muted + "55", true: bubbleAccent.color }}
+                  thumbColor="#fff"
+                />
+              </View>
+            </View>
+
+            {/* --- Riepilogo UNICO di quello che Ollenya sa di te
+                (v67.10: unificato "Vedi situazioni" + "I miei ricordi") --- */}
+            <TouchableOpacity
+              onPress={() => {
+                setShowSettings(false);
+                setTimeout(() => { router.push("/memories"); }, 220);
+              }}
+              style={{
+                marginTop: 10,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.14)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+              }}
+              testID="open-memories"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.settingLabel, { fontSize: 14 }]}>📖 Riepilogo di quello che Ollenya sa di te</Text>
+                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>
+                  Tocca per vedere tutto: situazioni, ricordi, storia.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+            </TouchableOpacity>
+
+            {/* --- Azzera tutta la memoria (destructive, doppia conferma) --- */}
+            <View style={styles.divider} />
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  "Azzera la memoria di Ollenya?",
+                  "Cancellerà TUTTO ciò che Ollenya ricorda di te:\n\n• i tuoi ricordi\n• le situazioni tracciate\n• la storia relazionale (timeline)\n• eventuale voiceprint\n\nL'account resta, ma Ollenya ripartirà da zero. Non si può annullare.",
+                  [
+                    { text: "Annulla", style: "cancel" },
+                    {
+                      text: "Continua",
+                      style: "destructive",
+                      onPress: () => {
+                        Alert.alert(
+                          "Ne sei sicuro?",
+                          "Ultima conferma. Se prosegui, Ollenya dimenticherà tutto.",
+                          [
+                            { text: "Annulla", style: "cancel" },
+                            {
+                              text: "Azzera memoria",
+                              style: "destructive",
+                              onPress: () => resetMemory(),
+                            },
+                          ],
+                        );
+                      },
+                    },
+                  ],
+                );
+              }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(220, 40, 40, 0.10)",
+                borderWidth: 1,
+                borderColor: "rgba(220, 40, 40, 0.35)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                marginTop: 6,
+              }}
+              testID="reset-memory-btn"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.settingLabel, { color: "#FF6B6B" }]}>🗑️ Azzera la memoria di Ollenya</Text>
+                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>
+                  Cancella ricordi, situazioni e storia relazionale. Non annullabile.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#FF6B6B" />
+            </TouchableOpacity>
+        </>
+      ),
+    },
+    // Card 7: Legale
+    {
+      key: "legal",
+      icon: "⚖️",
+      title: "Legale",
+      description: "Privacy Policy e Termini di Servizio.",
+      count: 2,
+      body: (
+        <>
+            {/* === INFORMAZIONI LEGALI 2026-06 v65.48 (Fabio) ================
+                Link diretti al backend (/api/legal/privacy e /api/legal/terms
+                servono le pagine HTML pubbliche). Aperti in in-app browser
+                via expo-web-browser (App Store 5.1.1 compliant).
+                =============================================================== */}
+            <View style={styles.divider} />
+            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>⚖️ Informazioni legali</Text>
+
+            <TouchableOpacity
+              onPress={async () => {
+                try {
+                  await WebBrowser.openBrowserAsync(`${BACKEND}/api/legal/privacy`, {
+                    dismissButtonStyle: "close",
+                    presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
+                  });
+                } catch (e) {
+                  Alert.alert("Privacy Policy", "Impossibile aprire la pagina. Riprova più tardi.");
+                }
+              }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.14)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                marginTop: 6,
+              }}
+              testID="privacy-policy-btn"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>📄 Privacy Policy</Text>
+                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>Apri il documento completo</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={async () => {
+                try {
+                  await WebBrowser.openBrowserAsync(`${BACKEND}/api/legal/terms`, {
+                    dismissButtonStyle: "close",
+                    presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
+                  });
+                } catch (e) {
+                  Alert.alert("Termini di Servizio", "Impossibile aprire la pagina. Riprova più tardi.");
+                }
+              }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.14)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                marginTop: 8,
+              }}
+              testID="terms-btn"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>📜 Termini di Servizio</Text>
+                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>Apri il documento completo</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+            </TouchableOpacity>
+        </>
+      ),
+    },
+    // Card 9: Account
+    {
+      key: "account",
+      icon: "👤",
+      title: "Account",
+      description: "Info account, Esci e Elimina account.",
+      count: 3,
+      body: (
+        <>
+            {/* === ACCOUNT 2026-08-27 v65.8 (Fabio) ============================
+                Logout + Elimina Account. Logout: doppia conferma via Alert,
+                poi useAuth().signOut() + router.replace login. Elimina
+                Account: TRIPLA conferma (Alert.alert con 3 step), poi
+                DELETE /api/account → signOut(). Coerente con Apple
+                Guideline 5.1.1(v) — cancellazione DEVE essere accessibile
+                dentro l'app, non solo via email/web. */}
+            <View style={styles.divider} />
+            <Text style={[styles.settingsSubtitle, { marginTop: 0 }]}>👤 Account</Text>
+
+            {/* Info email loggato (best-effort — dal profilo se presente) */}
+            {(() => {
+              const emailShown =
+                (profile as any)?.email ||
+                (profile as any)?.auth_email ||
+                (profile as any)?.user_email ||
+                null;
+              if (!emailShown) return null;
+              return (
+                <View style={{ paddingHorizontal: 4, marginBottom: 10 }}>
+                  <Text style={[styles.settingHint, { fontSize: 13 }]}>
+                    Loggato come: {emailShown}
+                  </Text>
+                </View>
+              );
+            })()}
+
+            {/* Logout — conferma singola */}
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  "Uscire da Ollenya?",
+                  "La tua memoria resta al sicuro. Puoi rientrare quando vuoi con la stessa email.",
+                  [
+                    { text: "Annulla", style: "cancel" },
+                    {
+                      text: "Esci",
+                      style: "destructive",
+                      onPress: async () => {
+                        try {
+                          setShowSettings(false);
+                          await new Promise((r) => setTimeout(r, 150));
+                          await auth.signOut();
+                        } catch (e) {
+                          console.warn("[logout] failed:", e);
+                          Alert.alert("Errore", "Non sono riuscito a uscire. Riprova.");
+                        }
+                      },
+                    },
+                  ],
+                );
+              }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.14)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+              }}
+              testID="logout-btn"
+            >
+              <Text style={styles.settingLabel}>🚪 Esci</Text>
+              <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+            </TouchableOpacity>
+
+            {/* Elimina account — tripla conferma */}
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  "Elimina il tuo account",
+                  "Cancellerai per SEMPRE il tuo profilo, tutta la memoria di Ollenya su di te, le sessioni attive e ogni traccia sul server. Non si può annullare.",
+                  [
+                    { text: "Annulla", style: "cancel" },
+                    {
+                      text: "Continua",
+                      style: "destructive",
+                      onPress: () => {
+                        Alert.alert(
+                          "Ne sei davvero sicuro?",
+                          "Ultimo controllo. Se procedi ora, dovrai ricreare tutto da zero se un giorno vorrai tornare.",
+                          [
+                            { text: "Annulla", style: "cancel" },
+                            {
+                              text: "Elimina tutto",
+                              style: "destructive",
+                              onPress: async () => {
+                                try {
+                                  setShowSettings(false);
+                                  await new Promise((r) => setTimeout(r, 150));
+                                  const res = await api.deleteAccount();
+                                  console.log("[deleteAccount] result:", res);
+                                  await auth.signOut();
+                                } catch (e: any) {
+                                  console.warn("[deleteAccount] failed:", e);
+                                  Alert.alert(
+                                    "Errore",
+                                    `Non sono riuscito a completare la cancellazione: ${e?.message || e}`,
+                                  );
+                                }
+                              },
+                            },
+                          ],
+                        );
+                      },
+                    },
+                  ],
+                );
+              }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: "rgba(220, 40, 40, 0.10)",
+                borderWidth: 1,
+                borderColor: "rgba(220, 40, 40, 0.35)",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                marginTop: 10,
+              }}
+              testID="delete-account-btn"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.settingLabel, { color: "#FF6B6B" }]}>🗑️ Elimina il mio account</Text>
+                <Text style={[styles.settingHint, { fontSize: 12, marginTop: 2 }]}>
+                  Cancella per sempre profilo, memoria e sessioni. Non annullabile.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#FF6B6B" />
+            </TouchableOpacity>
+        </>
+      ),
+    },
+    // Card 8: Aiuto e supporto (v65.50 — Cancella memoria SPOSTATA in card Memoria)
+    {
+      key: "help",
+      icon: "🆘",
+      title: "Aiuto e supporto",
+      description: "Segnala un problema tecnico.",
+      count: 1,
+      body: (
+        <>
+            {/* === AIUTO / SEGNALA UN PROBLEMA (2026-07-24 pre-lancio) ===
+                Reframing del vecchio bottone "Diagnostica" — stessa funzione
+                tecnica sotto (raccolta log [OLLENYA_VAD] [OLLENYA_TIMING]
+                [OLLENYA_SUMMARY] + copia/condividi) ma presentata in modo
+                comprensibile per l'utente finale. */}
+            <TouchableOpacity
+              style={{
+                marginTop: 16,
+                paddingVertical: 12,
+                paddingHorizontal: 14,
+                backgroundColor: theme.text + "0c",
+                borderRadius: 10,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+              onPress={() => {
+                closeSettings();
+                setTimeout(() => router.push("/diagnostics"), 200);
+              }}
+              testID="report-problem-btn"
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+                <Ionicons name="help-buoy-outline" size={18} color={theme.text + "99"} />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: theme.text + "cc", fontSize: 14, fontWeight: "500" }}>
+                    Segnala un problema
+                  </Text>
+                  <Text style={{ color: theme.text + "66", fontSize: 11, marginTop: 2 }}>
+                    Invia una segnalazione tecnica per aiutarci a capire cos&apos;è successo.
+                  </Text>
+                </View>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={theme.text + "66"} />
+            </TouchableOpacity>
+        </>
+      ),
+    },
+    // Card 10: Strumenti di test — ADMIN ONLY (v65.50 Fabio)
+    // Card intera non renderizzata se !isAdmin. Doppia protezione: frontend
+    // + backend (endpoint /api/dev/* richiedono bearer KODA_ADMIN_TOKEN).
+    ...(isAdmin ? [{
+      key: "admin_tools" as const,
+      icon: "🛠️",
+      title: "Strumenti di test",
+      description: "Solo admin. Reset intro e bypass whitelist.",
+      count: 2,
+      body: (
+        <>
+            {/* === RIVEDI INTRO PREMIUM — v65.50 spostato qui da card Memoria === */}
+            <TouchableOpacity
+              style={[styles.settingRow, { paddingVertical: 14 }]}
+              onPress={() => {
+                setShowSettings(false);
+                setTimeout(() => { reopenIntroPremium(); }, 220);
+              }}
+              testID="reopen-intro-premium"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>💎 Rivedi Intro Premium</Text>
+                <Text style={styles.settingHint}>
+                  Reset flag + replay della sequenza voce + 5 coach-mark.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+            </TouchableOpacity>
+
+            {/* === TEST INTRO FREE — v65.50 spostato qui da card Memoria === */}
+            <TouchableOpacity
+              style={[styles.settingRow, { paddingVertical: 14 }]}
+              onPress={async () => {
+                try {
+                  const SS = await import("expo-secure-store");
+                  const cur = await SS.getItemAsync("ollenya_dev_force_free_tier");
+                  const isOn = cur === "1" || cur === "true";
+                  if (isOn) {
+                    await SS.deleteItemAsync("ollenya_dev_force_free_tier");
+                    Alert.alert(
+                      "Test Intro Free disattivato",
+                      "Torni al tier normale (unlimited). Riavvia l'app per far ripartire il router.",
+                    );
+                  } else {
+                    await SS.setItemAsync("ollenya_dev_force_free_tier", "1");
+                    Alert.alert(
+                      "Test Intro Free ATTIVATO",
+                      "Al prossimo getProfile() il backend restituirà tier=None → router ti porterà su /lascia-andare (Intro Free). Riavvia l'app.",
+                    );
+                  }
+                } catch (e) {
+                  console.warn("[force-free-toggle] failed:", e);
+                }
+              }}
+              testID="toggle-force-free"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>🧪 Test Intro Free</Text>
+                <Text style={styles.settingHint}>
+                  Toggle bypass whitelist. Tier=Free per testare Lascia Andare senza toccare il DB.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+            </TouchableOpacity>
+
+            {/* === INWORLD A/B TTS — toggle self-serve one-tap (Fabio 2026-10) ===
+                v2: niente più token da copiare. Il bottone usa la sessione
+                autenticata del dispositivo per fare in sequenza
+                issue-token → activate. Zero dipendenza dalla chat. */}
+            <TouchableOpacity
+              style={[styles.settingRow, { paddingVertical: 14 }]}
+              onPress={async () => {
+                try {
+                  const {
+                    activateWithToken,
+                    issueSwitchToken,
+                    readTTSProviderSync,
+                  } = await import("../lib/ttsProviderClient");
+                  const { getAuthToken } = await import("../lib/authToken");
+                  const { KODA_BACKEND_URL } = await import("../lib/backendUrl");
+                  const curProv = readTTSProviderSync();
+                  if (curProv === "inworld") {
+                    Alert.alert(
+                      "TTS Inworld già attivo",
+                      "La voce Cielo è servita da Inworld AI (TTS-2). Per tornare a ElevenLabs usa il tasto qui sotto.",
+                    );
+                    return;
+                  }
+                  const authTok = getAuthToken();
+                  const authHeaders: Record<string, string> = authTok
+                    ? { Authorization: `Bearer ${authTok}` }
+                    : {};
+                  const backend = KODA_BACKEND_URL.replace(/\/$/, "");
+                  const uidFromProfile = String((profile as any)?.id || "");
+                  // Step 1: issue one-shot token con la sessione corrente
+                  const issued = await issueSwitchToken(
+                    backend,
+                    authHeaders,
+                    "inworld",
+                  );
+                  // Step 2: consume immediatamente lo stesso token
+                  await activateWithToken(
+                    backend,
+                    authHeaders,
+                    issued.token,
+                    uidFromProfile,
+                  );
+                  Alert.alert(
+                    "Inworld attivato ✅",
+                    "La voce Cielo passa a Inworld TTS-2 su tutti i percorsi. Chiudi questa schermata, poi usa 'Rivedi Intro Premium' per sentire la differenza.",
+                  );
+                } catch (e: any) {
+                  const msg = String(e?.message || e);
+                  // 401 = sessione scaduta, 403 = non whitelisted
+                  if (msg.includes("401")) {
+                    Alert.alert(
+                      "Sessione scaduta",
+                      "Esci e rifai il login prima di attivare Inworld.",
+                    );
+                  } else if (msg.includes("403")) {
+                    Alert.alert(
+                      "Account non autorizzato",
+                      "Il test A/B Inworld è limitato all'account owner e all'account review.",
+                    );
+                  } else {
+                    Alert.alert("Attivazione fallita", msg);
+                  }
+                  console.warn("[tts-inworld-activate] failed:", e);
+                }
+              }}
+              testID="toggle-tts-inworld-activate"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>🎙️ Attiva TTS Inworld (A/B)</Text>
+                <Text style={styles.settingHint}>
+                  Un tap per passare la voce Cielo a Inworld TTS-2 su intro, LA,
+                  microdemo, paywall, quota e risposte live. Vento resta su
+                  ElevenLabs. Nessun token da copiare.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+            </TouchableOpacity>
+
+            {/* === INWORLD A/B TTS — reset a ElevenLabs (Fabio 2026-10) === */}
+            <TouchableOpacity
+              style={[styles.settingRow, { paddingVertical: 14 }]}
+              onPress={async () => {
+                try {
+                  const { resetProviderOnServer } = await import("../lib/ttsProviderClient");
+                  const { getAuthToken } = await import("../lib/authToken");
+                  const { KODA_BACKEND_URL } = await import("../lib/backendUrl");
+                  const authTok = getAuthToken();
+                  await resetProviderOnServer(
+                    KODA_BACKEND_URL.replace(/\/$/, ""),
+                    authTok ? { Authorization: `Bearer ${authTok}` } : {},
+                  );
+                  Alert.alert(
+                    "TTS tornato a ElevenLabs",
+                    "La preferenza A/B è stata rimossa sia lato device che backend. Riavvia l'app per sentire la voce ElevenLabs standard.",
+                  );
+                } catch (e: any) {
+                  Alert.alert("Reset fallito", String(e?.message || e));
+                }
+              }}
+              testID="toggle-tts-inworld-reset"
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>↩️ TTS → ElevenLabs</Text>
+                <Text style={styles.settingHint}>
+                  Rimuove la preferenza Inworld (device + backend). Nessun effetto per gli altri utenti.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.text + "88"} />
+            </TouchableOpacity>
+        </>
+      ),
+    }] : []),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [profile, isAdmin, adminBusy, status, bubbleAccent, borderCal, insets.top, theme]);
+
+  // v65.50 (Fabio): ordine definitivo card Impostazioni — enforced tramite
+  // sort stabile per chiave, così futuri edit interni ai blocchi non
+  // possono più rompere l'ordine visivo.
+  const OLLENYA_SETTINGS_ORDER = useMemo(
+    () => [
+      "plan",          // 1. Il mio piano
+      "behavior",      // 2. Comportamento
+      "voice",         // 3. Voce
+      "voice_provider", // 3b. Voce di Ollenya (provider + voce)
+      "border",        // 4. Aspetto
+      "memory",        // 5. Memoria
+      "privacy_data",  // 6. Privacy e dati
+      "account",       // 7. Account
+      "help",          // 8. Aiuto e supporto
+      "legal",         // 9. Legale
+      "admin_tools",   // 10. Strumenti di test (solo admin)
+    ],
+    [],
+  );
+  const orderedSettingsCards = useMemo(() => {
+    const idx = (k: string) => {
+      const i = OLLENYA_SETTINGS_ORDER.indexOf(k);
+      return i === -1 ? 999 : i;
+    };
+    return [...settingsCards].sort((a, b) => idx(a.key) - idx(b.key));
+  }, [settingsCards, OLLENYA_SETTINGS_ORDER]);
+
+  const screenInner = (
+    <View style={[styles.screen, { backgroundColor: theme.bg }]}>
+      {/* === ORB MEASURE DEBUG OVERLAY — RIMOSSO (Fabio 2026-08-12) ===
+          L'overlay in basso a sinistra (HOME orb y=... h=... cY=...)
+          serviva a calibrare la posizione dell'orb rispetto a /intro-v2.
+          Rimosso ora che layout è stabile. */}
+      {/* Banner di conferma salvataggio — appare per ~4s dopo che OllenyaIntro
+          si chiude, così l'utente capisce che le modifiche sono andate a
+          buon fine. Posizionato in alto, sopra il flusso normale. */}
+      {savedBannerVisible && (
+        <View
+          style={[
+            styles.savedBanner,
+            { top: Math.max(insets.top + 120, 170) },
+          ]}
+          pointerEvents="none"
+        >
+          <Ionicons name="checkmark-circle" size={20} color="#34D399" />
+          <Text style={styles.savedBannerText}>Configurazione salvata</Text>
+        </View>
+      )}
+      {/* Toast hands-free: conferma visuale rapida quando l'utente
+          attiva/disattiva la modalità (da voce o da toggle).
+          Posizione (Fabio 2026-08-12): centrato nello spazio negativo tra
+          il pill "Lascia andare" (~top 150) e l'orb eclipse (~top 272) —
+          non deve MAI coprire "Lascia andare" né toccare l'orb. */}
+      {handsFreeToast && (
+        <View
+          style={[
+            styles.savedBanner,
+            { top: Math.max(insets.top + 195, 235) },
+          ]}
+          pointerEvents="none"
+        >
+          <Ionicons
+            name={handsFree ? "pulse" : "hand-left"}
+            size={18}
+            color={handsFree ? "#34D399" : "#FBBF24"}
+          />
+          <Text style={styles.savedBannerText}>{handsFreeToast}</Text>
+        </View>
+      )}
+      {/* Banner "Dimmi, ti ascolto" — appare la prima volta che parte la
+          sessione hands-free. Suggerisce all'utente che può iniziare a
+          parlare. Sparisce automaticamente o appena il VAD rileva voce.
+          Stessa posizione del toast per coerenza visiva. */}
+      {listenBanner && !handsFreeToast && (
+        <View
+          style={[
+            styles.savedBanner,
+            { top: Math.max(insets.top + 195, 235) },
+          ]}
+          pointerEvents="none"
+        >
+          <Ionicons name="pulse" size={18} color="#34D399" />
+          <Text style={styles.savedBannerText}>{listenBanner}</Text>
+        </View>
+      )}
+      {/* === HEADER ZEN (richiesta utente 2026-06) ===
+          Riga 1 (alta, vicino al clock): icone laterali (hands-free + menu)
+          Riga 2 (più in basso): toggle Confessionale
+          Tutte e tre le icone restano agganciate con anchor punti distinti
+          per avere LATERALI vicino al clock e CENTRO più in giù. */}
+      <View
+        style={[styles.header, { top: Math.max(insets.top + 28, 70), justifyContent: "space-between" }]}
+        pointerEvents="box-none"
+      >
+        {/* Slot sinistro: toggle Hands-Free.
+            Modello mentale (2026-08-12):
+              - default = automatico (hands-free ON): orb piccolo fermo +
+                arco verde che scorre fluido lungo il perimetro.
+              - tap = passa a manuale: orb resta, l'arco sparisce.
+              - tap di nuovo = torna automatico.
+            L'icona è UNA sola (<HandsFreeOrb>), cambia solo il suo stato
+            visivo tramite la prop `active`. */}
+        <TouchableOpacity
+          ref={handsFreeBtnRef}
+          style={[
+            styles.headerBtn,
+            { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" },
+            // v66.1: se Free, l'icona appare "spenta" (opacity ridotta).
+            isFreeGate() && { opacity: 0.38 },
+          ]}
+          onPress={() => {
+            // v66.1 (Fabio 2026-06-16): Free tier → paywall teaser, no toggle.
+            if (isFreeGate()) {
+              showPremiumTeaser();
+              return;
+            }
+            setHandsFreeMode(!handsFree);
+          }}
+          hitSlop={20}
+          testID="hands-free-toggle"
+          accessibilityLabel={
+            isFreeGate()
+              ? "Modalità mani libere, disponibile con Premium"
+              : handsFree
+                ? "Modalità automatica attiva, tocca per passare a manuale"
+                : "Modalità manuale, tocca per tornare all'automatico"
+          }
+        >
+          {/* v66.1: Free → force active=false per rendering neutro (grigio). */}
+          <HandsFreeOrb active={isFreeGate() ? false : handsFree} size={26} />
+        </TouchableOpacity>
+
+        {/* === TAB PILL FREE RIMOSSA v65.55 → v65.56 =========================
+            Il chooser è stato rimosso. La home tradizionale è ripristinata
+            per tutti. Per il tier Free l'intera home è coperta da un overlay
+            scuro (FreeOverlay sotto), con l'unico elemento attivo = pill
+            "Lascia andare". Tap su eclissi/impostazioni/hands-free →
+            PremiumTeaserToast + link paywall.
+            ============================================================ */}
+
+        {/* Slot destro: Menu impostazioni. Pulsante audio Modalità Telefono
+            rimosso nel rollback 2026-07-13 (regressioni STT). */}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+          <TouchableOpacity
+            ref={menuBtnRef}
+            style={[
+              styles.headerBtn,
+              { minWidth: 44, minHeight: 44, justifyContent: "center", alignItems: "center" },
+              // v66.1: Free → icona spenta.
+              isFreeGate() && { opacity: 0.38 },
+            ]}
+            onPress={() => {
+              // v66.1 (Fabio 2026-06-16): Free tier → paywall teaser.
+              // Impostazioni è Premium (voce/tema/memoria richiedono account attivo).
+              if (isFreeGate()) {
+                showPremiumTeaser();
+                return;
+              }
+              setShowSettings(true);
+              // === FIX 2026-06 — refetch profile all'apertura Impostazioni ==
+              // Serve per far vedere sempre lo stato aggiornato del piano/
+              // consumo minuti (barra SubscriptionStatus). Il consumo avviene
+              // lato backend (fast pipeline WS) ma il profilo client resta
+              // stale finché non refetchiamo. Fire-and-forget: se fallisce,
+              // Impostazioni si apre comunque con dati cachati.
+              api.getProfile()
+                .then((p) => setProfile(p))
+                .catch((e) => console.warn("[settings] profile refetch failed:", String(e).slice(0, 120)));
+            }}
+            hitSlop={20}
+            testID="settings-toggle"
+            accessibilityLabel={isFreeGate() ? "Impostazioni, disponibili con Premium" : "Apri impostazioni"}
+          >
+            <Ionicons
+              name="ellipsis-horizontal"
+              size={22}
+              color={theme.isDark ? "rgba(255,255,255,0.65)" : "rgba(0,0,0,0.65)"}
+            />
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* === BANNER MINUTI IN ESAURIMENTO (Fabio 2026-06) ==========
+          Mostrato SOLO se profile.subscription_tier è paid (monthly/
+          bimonthly/annual) AND base_used >= 85% del piano. Auto-hide
+          via tap X per la sessione corrente (state locale). Non blocca
+          nulla: la chat testuale resta sempre disponibile.
+
+          === FIX 2026-06 (Fabio) — POSIZIONAMENTO ============================
+          Prima top=insets.top+60 (100 min) mentre "Lascia andare" era a
+          insets.top+100 → il banner (specie con CTA +30 min alto ~150px)
+          si sovrapponeva alla pill "Lascia andare" coprendone il testo.
+          Ora il banner sta SOTTO "Lascia andare" (insets.top+160) con
+          un margine di respiro. */}
+      <View style={{ position: "absolute", top: Math.max(insets.top + 160, 210), left: 0, right: 0, zIndex: 10 }} pointerEvents="box-none">
+        <MinutesWarningBanner
+          profile={profile as any}
+          onOpenTopup={() => {
+            // === TOP-UP CTA (Fabio 2026-06) ===================================
+            // Il bottone "+30 min · 2,49€" deve triggerare il Consumable IAP
+            // `koda_topup_30min_249` — NON il paywall abbonamenti (dove il
+            // prezzo 2,49€ non esiste, sono altri tier).
+            // Prima: router.push("/paywall?variant=topup") → apriva paywall
+            // abbonamenti con prezzi mensile/bimestrale/annuale. Confusione.
+            // Ora: placeholder Alert finché RevenueCat non è hookato (P2
+            // backlog). Quando l'integrazione RC sarà attiva, sostituire il
+            // body con: Purchases.purchaseProduct("koda_topup_30min_249").
+            Alert.alert(
+              "Ricarica +30 min · €2,49",
+              "Il pacchetto ricarica sarà attivo appena l'integrazione pagamenti in-app (RevenueCat) sarà pubblicata nella prossima build.\n\nNel frattempo, Ollenya resta a tua disposizione in chat scritta senza limiti.",
+              [{ text: "OK" }]
+            );
+          }}
+        />
+      </View>
+
+      {/* === RIGA 2: TOGGLE "LASCIA ANDARE" (centrato, più in basso) === */}
+      {/* === PILL "Lascia andare" v65.56 (ripristinato) =====================
+          Entry point one-tap alla stanza silenziosa. Per Free è l'UNICO
+          elemento cliccabile della home (tutto il resto è coperto da
+          FreeOverlay che intercetta i tap e mostra PremiumTeaserToast).
+          ============================================================ */}
+      <View
+        style={[styles.confessionaleRow, { top: Math.max(insets.top + 100, 150) }]}
+        pointerEvents="box-none"
+      >
+        <View style={styles.headerCenter} pointerEvents="box-none">
+          <TouchableOpacity
+            ref={confessionaleBtnRef}
+            style={styles.confessionalToggle}
+            onPress={async () => {
+              const VID_TO_KV: Record<string, "aria" | "theo"> = {
+                "POuqf18evoXOKIqV2Px7": "aria",
+                "ll9WG7PDTuyHwgC5MD6g": "theo",
+              };
+              const kv =
+                ((profile as any)?.koda_voice as string | undefined) ||
+                VID_TO_KV[(profile?.settings?.tts_voice_id as string) || ""] ||
+                "aria";
+              let introSeen = true;
+              try {
+                const s = await api.getLasciaAndareIntroState();
+                introSeen = Boolean(s?.seen);
+              } catch (e) {
+                console.warn("[LasciaAndare] intro-state fetch failed, procedo:", e);
+              }
+              if (!introSeen) {
+                setPendingLasciaAndareVoice(kv);
+                setShowLasciaAndareIntro(true);
+                return;
+              }
+              try {
+                router.push(`/lascia-andare?voice=${encodeURIComponent(kv)}`);
+              } catch (e) {
+                console.warn("[LasciaAndare] navigation error:", e);
+              }
+            }}
+            hitSlop={10}
+            testID="lascia-andare-toggle"
+          >
+            <Text style={styles.confessionalToggleText}>Lascia andare</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+
+      {/* === HORIZONTAL PAGER: Voce (zen) | Lettura (timeline) ===
+          Pagina 0 = SOLO la macchia centrale grande, niente testi, come
+          parlare con qualcuno guardandoti negli occhi.
+          Pagina 1 = la timeline (modalità lettura) con la macchia piccola.
+          Lo swipe orizzontale switch tra le due. */}
+      <ScrollView
+        ref={pagerRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        onScroll={(e) => {
+          // === FIX FLASH ORB DURANTE SWIPE (richiesta utente 2026-06) ===
+          // Prima viewMode si aggiornava SOLO al termine del momentum
+          // (onMomentumScrollEnd). Risultato: durante lo swipe da Page 0
+          // a Page 1, viewMode era ancora "voice" e la bottom-bar mostrava
+          // ancora l'orb piccolo per una frazione di secondo → flash visivo
+          // sgradevole. Ora aggiorniamo la modalità appena passiamo la
+          // metà dello schermo: l'orb scompare prima che l'utente lo veda.
+          const x = e.nativeEvent.contentOffset.x;
+          const w = e.nativeEvent.layoutMeasurement.width || windowWidth;
+          if (w === 0) return;
+          const ratio = x / w;
+          const next: "voice" | "reading" = ratio > 0.35 ? "reading" : "voice";
+          if (next !== viewMode) setViewMode(next);
+        }}
+        scrollEventThrottle={16}
+        onScrollEndDrag={(e) => {
+          // === SWIPE FLUIDO (giugno 2026, fix #2) ===
+          // Il fix precedente forzava scrollTo() qui basandosi su x > w/2,
+          // ignorando la VELOCITÀ del gesto. Risultato: uno swipe veloce
+          // ma corto (intent: cambia pagina) veniva rimandato indietro.
+          // Soluzione: leggi il target che iOS ha CALCOLATO DA SOLO con
+          // velocità inclusa (e.nativeEvent.targetContentOffset) — è il
+          // comportamento naturale di iOS pagingEnabled. Noi aggiorniamo
+          // solo il viewMode, NON interferiamo con lo scroll.
+          const target = e.nativeEvent.targetContentOffset?.x;
+          const cur = e.nativeEvent.contentOffset.x;
+          const w = e.nativeEvent.layoutMeasurement.width || windowWidth;
+          if (w === 0) return;
+          const ref = typeof target === "number" ? target : cur;
+          const page = ref > w / 2 ? 1 : 0;
+          setViewMode(page === 0 ? "voice" : "reading");
+        }}
+        onMomentumScrollEnd={(e) => {
+          const x = e.nativeEvent.contentOffset.x;
+          const w = e.nativeEvent.layoutMeasurement.width || windowWidth;
+          if (w === 0) return;
+          const page = Math.round(x / w);
+          // Safety-net: snap SOLO se siamo realmente fuori posizione
+          // (es. re-render killato il momentum). Tolleranza 4px così
+          // non interferiamo con la naturale fine del momentum iOS.
+          if (Math.abs(x - page * w) > 4) {
+            pagerRef.current?.scrollTo({ x: page * w, y: 0, animated: true });
+          }
+          setViewMode(page === 0 ? "voice" : "reading");
+        }}
+        style={{ flex: 1 }}
+        contentContainerStyle={{ flexGrow: 1 }}
+        decelerationRate="fast"
+      >
+        {/* === PAGE 0: VOICE ZEN MODE ============================ */}
+        {/* === FIX ECLISSI CENTRATA (Fabio 2026-08-24) =============
+            paddingTop:90 RIMOSSO → il flex-center puro centra l'orb
+            esattamente a H/2. Lo statusLabel "AI in pausa" e l'hint
+            "scorri per scrivere" sono figli del gruppo interno con
+            gap:18, ma il gruppo è centrato → orb sempre al centro.
+            L'hint "scorri per scrivere" torna VISIBILE SEMPRE
+            (prima era conditional su timeline.length>0). */}
+        <View style={{ width: windowWidth, flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <View style={{ alignItems: "center", justifyContent: "center", flex: 1, paddingHorizontal: 24 }}>
+            {/* === ECLISSI NASCOSTA IN TEXT MODE (richiesta utente 2026-06) ===
+                In modalità scrittura (inputMode === "text") l'utente NON
+                vuole più vedere l'eclissi/orb da nessuna parte: né nella
+                bottom-bar (già rimosso), né in questa Page 0 grande.
+                In text-mode mostriamo solo un saluto minimale; per scrivere
+                l'utente swipa alla Page 1 (reading). */}
+            {inputMode !== "text" ? (
+              <>
+                <Pressable
+                  ref={orbBtnRef}
+                  onPressIn={() => {
+                    // v67.11 (Fabio 2026-06-24): Push-to-Talk quando
+                    // "Mani libere" è OFF. Handler no-op se HF è ON.
+                    onBigButtonPressIn();
+                  }}
+                  onPressOut={() => {
+                    // v67.11: rilascio = stop + invia (solo in HF OFF).
+                    onBigButtonPressOut();
+                  }}
+                  onPress={() => {
+                    // v66.1 (Fabio 2026-06-16): Free tier → paywall teaser.
+                    // Voce completa (STT + LLM + TTS) è funzione Premium.
+                    // Il tap non entra in onBigButton, non parte alcun turno voce.
+                    if (isFreeGate()) {
+                      showPremiumTeaser();
+                      return;
+                    }
+                    // v67.11 (Fabio 2026-06-24): se Mani libere è OFF,
+                    // il gesto è PTT (gestito da onPressIn/onPressOut).
+                    // onPress deve essere NO-OP, altrimenti dopo il rilascio
+                    // partirebbe un turno "fantasma" oltre a quello PTT.
+                    if (!handsFreeRef.current) return;
+                    onBigButton();
+                  }}
+                  onLongPress={() => {
+                    if (isFreeGate()) {
+                      showPremiumTeaser();
+                      return;
+                    }
+                    // v67.11: in PTT mode il long-press È il gesto normale di
+                    // registrazione (tieni-premuto). Il kill-switch resta
+                    // attivo SOLO quando mani libere è ON.
+                    if (!handsFreeRef.current) return;
+                    onBigButtonLongPress();
+                  }}
+                  delayLongPress={500}
+                  // === HARD STOP 2026-06-26: orb sempre tappabile ===
+                  // Prima: disabled durante transcribing/thinking, ma l'utente
+                  // ha chiesto esplicitamente di poter interrompere TUTTO in
+                  // qualsiasi stato (per privacy). Ora il tap funziona sempre.
+                  // === LONG-PRESS 2026-07-08 ===
+                  // Tap breve = graceful stop (ho finito parlare, tocca a te).
+                  // Long-press (500ms) = kill-switch privacy (silenzio totale).
+                  hitSlop={30}
+                  style={({ pressed }) => [
+                    { alignItems: "center", justifyContent: "center" },
+                    pressed && { opacity: 0.85 },
+                    // v66.1: Free → orb visualmente "spento" (glow attenuato).
+                    isFreeGate() && { opacity: 0.38 },
+                  ]}
+                  testID="big-btn-voice"
+                >
+                  <Animated.View
+                    style={{
+                      transform: [
+                        {
+                          scale: Animated.multiply(
+                            pulse,
+                            breathe.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.07] })
+                          ),
+                        },
+                      ],
+                    }}
+                  >
+                    <EclipseOrb
+                      status={isFreeGate() ? "idle" : status}
+                      speechActive={isFreeGate() ? false : speechActive}
+                      // === IDLE = SEMPRE NEUTRAL (verde menta) ===
+                      // Prima rimaneva ciclamino/urgente quando Ollenya era idle
+                      // dopo aver dato una risposta "urgent" → l'utente credeva
+                      // che fosse bloccata in thinking. Ora a riposo è SEMPRE
+                      // verde menta = "pronta, ti ascolto".
+                      tone={
+                        status === "speaking" ? "warm" :
+                        status === "idle" ? null :
+                        lastAiTone
+                      }
+                      // === SPEAKING COLOR LEGATO ALLA VOCE (2026-06) ===
+                      // Acqua = viola (palette warm originale)
+                      // Vento = cobalto vivo (#2563EB)
+                      // Se voiceId è null/sconosciuto → palette null → fallback al tone.
+                      speakingPaletteOverride={getVoiceSpeakingPalette(
+                        (profile?.settings as any)?.tts_voice_id
+                      )}
+                      size={ECLIPSE_MAX_DIAMETER}
+                      meterDb={meterDb}
+                      meterThreshold={meterThreshold}
+                    />
+                </Animated.View>
+                {(status === "transcribing" || status === "thinking") && (
+                  <View style={styles.blobOverlay} pointerEvents="none">
+                    <ActivityIndicator color="#FFFFFFEE" size="large" />
+                  </View>
+                )}
+              </Pressable>
+              </>
+            ) : (
+              <>
+                <Text style={{ color: theme.text, fontSize: 22, fontWeight: "300", textAlign: "center", letterSpacing: 0.5 }}>
+                  {profile?.name ? `Ehi ${profile.name}.` : "Sono qui."}
+                </Text>
+                <Text style={{ color: theme.textMuted, fontSize: 14, textAlign: "center", marginTop: 4 }}>
+                  Scorri a sinistra per scrivermi.
+                </Text>
+              </>
+            )}
+          </View>
+          {/* === FIX ECLISSI CENTRATA (Fabio 2026-08-24) — HINT "scorri per scrivere" ===
+              Position ABSOLUTE al mirror del pill "Lascia andare" (top:
+              Math.max(insets.top+100,150)) rispetto al centro H/2.
+              Distanza dal bordo bottom = stessa del bordo top del pill LA.
+              SEMPRE visibile (non più condizionato a timeline.length). */}
+          {inputMode !== "text" ? (
+            <View
+              ref={scrollHintRef}
+              pointerEvents="none"
+              style={{
+                position: "absolute",
+                bottom: Math.max(insets.bottom + 100, 150),
+                left: 0,
+                right: 0,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                opacity: 0.55,
+              }}
+            >
+              <Ionicons name="chevron-back" size={14} color={theme.text} />
+              <Text style={{ color: theme.text, fontSize: 12 }}>scorri per scrivere</Text>
+            </View>
+          ) : null}
+        </View>
+
+        {/* === PAGE 1: READING MODE (timeline) =================== */}
+        <View style={{ width: windowWidth, flex: 1 }}>
+      {/* Freemium counter discreto in cima alla timeline.
+          Visibile solo se: utente NON abbonato AND non sta facendo
+          Confessionale (per non rompere l'atmosfera). */}
+      {freemium && !freemium.subscription_active && !confessionalMode ? (
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={onSecretDebugTap}
+          style={{ paddingTop: Math.max(insets.top + 6, 50), paddingBottom: 4 }}
+        >
+          <FreemiumCounter
+            visible={true}
+            remaining={freemium.free_messages_remaining}
+            total={freemium.free_messages_limit}
+          />
+        </TouchableOpacity>
+      ) : null}
+      {/* === #9 DEBUG TAP ZONE (Fix 2026-06-22 v8) ===
+          Zona invisibile 60×60 in alto a destra: 5 tap rapidi (entro 2s)
+          aprono/chiudono l'overlay di debug latenza. È un fallback al
+          tap sul Freemium counter (che potrebbe non essere visibile se
+          l'utente è abbonato). */}
+      <TouchableOpacity
+        onPress={onSecretDebugTap}
+        activeOpacity={1}
+        style={{
+          position: "absolute",
+          top: Math.max(insets.top, 20),
+          right: 8,
+          width: 60,
+          height: 60,
+          zIndex: 50,
+        }}
+        accessibilityLabel="debug-tap-zone"
+        testID="debug-tap-zone"
+      />
+      <LatencyOverlay
+        visible={latencyDebugVisible}
+        onClose={() => setLatencyDebugVisible(false)}
+      />
+      {/* === TIMELINE: FlashList (refactor 2026-06-22 v5) ===
+          Migrato da FlatList a @shopify/flash-list per risolvere
+          definitivamente i bug di virtualizzazione:
+          - FAB "a step" (scrollToEnd fermava all'ultimo item renderizzato):
+            FlashList ricicla le celle invece di smontarle, quindi
+            scrollToEnd raggiunge sempre la fine reale in un colpo.
+          - Loop di scroll dopo riapertura app (onContentSizeChange
+            oscillante): niente più mount/unmount continui, niente
+            oscillazioni di altezza.
+          API identica a FlatList — nessuna feature visiva persa. */}
+      <FlashList
+        ref={scrollRef}
+        data={timelineWithSeparators}
+        keyExtractor={(it) => (it.kind === "sep" ? it.key : it.entry.id)}
+        keyboardShouldPersistTaps="handled"
+        renderItem={({ item: it }) =>
+          it.kind === "sep" ? (
+            <View style={styles.daySeparator}>
+              <View style={styles.daySepLine} />
+              <Text style={styles.daySepText}>{it.label}</Text>
+              <View style={styles.daySepLine} />
+            </View>
+          ) : it.kind === "msg-mock" ? (
+            // Bolla finta del tour: stesso look ma con effetto "tenuta premuta"
+            // (scale 0.96 + outline + opacità lampeggiante) quando held=true.
+            <View
+              style={{
+                transform: [{ scale: it.held ? 0.96 : 1 }],
+                opacity: it.held ? 0.92 : 1,
+              }}
+            >
+              <View
+                style={
+                  it.held
+                    ? {
+                        borderWidth: 2,
+                        borderColor: "#FCD34D",
+                        borderRadius: 22,
+                        marginHorizontal: 8,
+                      }
+                    : undefined
+                }
+              >
+                <Bubble
+                  entry={it.entry as any}
+                  onGhost={() => {}}
+                  bubbleAccent={bubbleAccent}
+                  bubbleStyle={bubbleStyle}
+                  textOnBubble={textOnBubble}
+                  textSize={textSize}
+                  aiFontFamily={aiFontFamily}
+                />
+              </View>
+            </View>
+          ) : (
+            // === FIX C 2026-09-11 (Fabio + Neo — no Pressable esterno) =====
+            // Il Pressable esterno che wrappava le bolle AI (Fix B-bis) è
+            // stato RIMOSSO. Motivo: React Native su iOS/Android dà la
+            // precedenza al Pressable figlio quando ha onPress, e il timer
+            // del long-press del parent non parte mai. Risultato: long-press
+            // sulla bolla AI = nessuna reazione (sintomo osservato da Fabio).
+            //
+            // Soluzione: `onLongPressFeedback` passato come prop a Bubble
+            // che lo applica al SUO wrapperPress interno, sullo stesso nodo
+            // di onPress (replay). React Native gestisce nativamente il
+            // conflitto onPress/onLongPress: se rilasci prima di 350ms →
+            // onPress (replay), altrimenti → onLongPress (feedback menu).
+            <Bubble
+              entry={it.entry}
+              onGhost={ghostMessage}
+              onLongPressFeedback={
+                it.entry.role === "ai"
+                  ? (e) => {
+                      setFeedbackEntry(e);
+                      if (e.event_id) {
+                        setFeedbackEventId(e.event_id);
+                        setFeedbackReadOnly(false);
+                      } else {
+                        // Bolla pre-deploy: apri comunque il menu ma readOnly
+                        setFeedbackEventId(null);
+                        setFeedbackReadOnly(true);
+                      }
+                    }
+                  : undefined
+              }
+              bubbleAccent={bubbleAccent}
+              bubbleStyle={bubbleStyle}
+              textOnBubble={textOnBubble}
+              textSize={textSize}
+              aiFontFamily={aiFontFamily}
+            />
+          )
+        }
+        getItemType={(it) =>
+          it.kind === "sep" ? "sep" : it.kind === "msg-mock" ? "mock" : "msg"
+        }
+        contentContainerStyle={{
+          paddingTop: Math.max(insets.top + 70, 130),
+          // === FIX PADDING DINAMICO KEYBOARD-AWARE (2026-06-22 v4) ===
+          // onLayout misura il bottomBar SOLO quando la View cambia
+          // dimensione, NON quando la tastiera la sposta in alto (è solo
+          // un marginBottom). Aggiungiamo kbHeight per coprire l'area
+          // dietro la tastiera quando aperta — così l'ultima bolla resta
+          // sempre sopra l'input qualunque sia lo stato della tastiera.
+          paddingBottom: bottomBarHeight + 12
+            + (kbHeight > 0 ? kbHeight - insets.bottom : 0),
+          paddingHorizontal: 16,
+        }}
+        showsVerticalScrollIndicator={false}
+        testID="timeline"
+        onScroll={onTimelineScroll}
+        scrollEventThrottle={32}
+        ListEmptyComponent={
+          <View style={styles.emptyState}>
+            {/* === FIX DOPPIO ECLISSI ===
+                Niente orb qui: la Page 0 ha già l'orb principale e la
+                bottom bar quello tap-to-talk. Solo testo di benvenuto. */}
+            <Text style={styles.emptyTitle}>
+              {profile?.name ? `Ehi ${profile.name}, sono qui.` : "Sono qui."}
+            </Text>
+            <Text style={styles.emptyText}>
+              Tutto quello che mi dici resta tra noi.{"\n"}Parla — ti ascolto.
+            </Text>
+          </View>
+        }
+        ListFooterComponent={
+          /* Typing indicator a sinistra (stile WhatsApp) — SOLO mentre
+             l'AI pensa o trascrive. Non durante "speaking" (il messaggio
+             è già in timeline a quel punto). */
+          status === "thinking" || status === "transcribing" ? (
+            <View style={[styles.bubbleRow, styles.bubbleRowL]}>
+              <View
+                style={[
+                  styles.bubbleAi,
+                  {
+                    // Colore "thinking" ciclamino (richiesta 2026-06 #7)
+                    backgroundColor: bubbleStyle === "solid" ? "#EC4899" : "rgba(236,72,153,0.18)",
+                    borderColor: "#EC4899",
+                    borderWidth: bubbleStyle === "glass" ? 1 : 0,
+                  },
+                ]}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 4, height: 18 }}>
+                  <TypingDot delay={0} color={bubbleStyle === "solid" ? "#FFFFFF" : "#EC4899"} />
+                  <TypingDot delay={150} color={bubbleStyle === "solid" ? "#FFFFFF" : "#EC4899"} />
+                  <TypingDot delay={300} color={bubbleStyle === "solid" ? "#FFFFFF" : "#EC4899"} />
+                </View>
+              </View>
+            </View>
+          ) : null
+        }
+      />
+
+      {/* === SCROLL-TO-BOTTOM FAB (2026-06-22) ===
+          Visibile SOLO quando l'utente è scrollato verso l'alto (>120px
+          dal fondo). Permette di rientrare in fondo con un tap, senza
+          dover scorrere manualmente la conversazione. Posizionato
+          appena sopra la bottom bar, allineato a destra. */}
+      {!isNearBottom && timeline.length > 0 ? (
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.scrollFabContainer,
+            {
+              // === POSIZIONE FAB DINAMICA (Fix 2026-06-22 v3) ===
+              // Si posiziona sempre 12px sopra la barra di scrittura
+              // misurata realmente (niente più valori magici 88/132).
+              bottom: bottomBarHeight + 12
+                + (kbHeight > 0 ? kbHeight - insets.bottom : 0),
+            },
+          ]}
+        >
+          <GHTouchableOpacity
+            onPress={() => scrollToBottom(true)}
+            activeOpacity={0.85}
+            style={[
+              styles.scrollFab,
+              {
+                backgroundColor: bubbleAccent.color || theme.primary,
+                borderColor: "rgba(255,255,255,0.18)",
+              },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Scorri in basso ai messaggi recenti"
+            testID="scroll-to-bottom-fab"
+          >
+            <Ionicons name="arrow-down" size={22} color={theme.primaryText || "#FFFFFF"} />
+          </GHTouchableOpacity>
+        </View>
+      ) : null}
+
+      {/* Bottom area: voice OR text — chosen via settings */}
+      <View
+        onLayout={(e) => {
+          // === MISURAZIONE BOTTOM BAR (Fix 2026-06-22 v3) ===
+          // Misuriamo l'altezza reale (input + padding + safe area + errori)
+          // così il paddingBottom della FlatList è SEMPRE corretto e
+          // l'ultima bolla non finisce mai dietro la barra di scrittura.
+          const h = e?.nativeEvent?.layout?.height;
+          if (typeof h === "number" && h > 0 && Math.abs(h - bottomBarHeight) > 2) {
+            setBottomBarHeight(h);
+          }
+        }}
+        style={[
+          styles.bottomBar,
+          // === FIX TASTIERA (richiesta utente 2026-06) ===
+          // Quando la tastiera è aperta, su iOS un absolute-bottom non si
+          // alza da solo: aggiungiamo marginBottom = altezza tastiera così
+          // l'utente vede sempre cosa sta scrivendo.
+          { paddingBottom: Math.max(insets.bottom, 14) + (inputMode === "text" ? 0 : 28),
+            marginBottom: kbHeight > 0 ? kbHeight - insets.bottom : 0 },
+        ]}
+      >
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+        {inputMode === "text" ? (
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
+          >
+            <View style={styles.textRow}>
+              <TextInput
+                value={textInput}
+                onChangeText={(t) => {
+                  // === FIX INVIO RAPIDO (richiesta utente 2026-06) ===
+                  // Su iOS, multiline + onSubmitEditing NON scatta col
+                  // tasto invio: il return semplicemente inserisce \n e
+                  // chiude la tastiera. Intercettiamo manualmente il
+                  // newline: appena l'utente preme invio, mandiamo il
+                  // messaggio in un solo tap senza inserire la riga.
+                  if (t.endsWith("\n")) {
+                    const clean = t.replace(/\n+$/, "");
+                    if (clean.trim()) {
+                      // === FIX ENTER (v6) ===
+                      // Passiamo `clean` DIRETTAMENTE a sendTextFromBox
+                      // come override, evitando il race condition tra
+                      // setTextInput async e setTimeout 0 che leggeva il
+                      // valore vecchio via closure.
+                      sendTextFromBox(clean);
+                    } else {
+                      setTextInput("");
+                    }
+                    return;
+                  }
+                  setTextInput(t);
+                }}
+                placeholder="Scrivi qui..."
+                placeholderTextColor="rgba(255,255,255,0.5)"
+                style={styles.textInput}
+                onSubmitEditing={sendTextFromBox}
+                returnKeyType="send"
+                blurOnSubmit={false}
+                multiline
+                testID="text-input"
+              />
+              {/* === SEND BUTTON FIX FINAL (2026-06) ===
+                  Approccio 1 (onPress): inghiottito da iOS keyboard gesture.
+                  Approccio 2 (onPressIn): stesso problema.
+                  Approccio 3 (View+Responder): non sempre cattura su iOS.
+                  Approccio 4 (DEFINITIVO): GHTouchableOpacity da
+                  react-native-gesture-handler. Lavora a livello nativo
+                  via UIGestureRecognizer prioritario, bypassa la dismiss
+                  automatica della tastiera. */}
+              <GHTouchableOpacity
+                onPress={sendTextFromBox}
+                style={[styles.sendBtn, textInput.trim() ? styles.sendBtnActive : null]}
+                disabled={!textInput.trim()}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                testID="send-btn"
+              >
+                <Ionicons
+                  name="arrow-up"
+                  size={22}
+                  color={textInput.trim() ? theme.primaryText : theme.textDim}
+                />
+              </GHTouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        ) : (
+          <View style={styles.bigBtnArea}>
+            {/* === ORB PICCOLO RIMOSSO COMPLETAMENTE (richiesta utente 2026-06) ===
+                Prima qui c'era un secondo EclipseOrb (size 210) che agiva
+                da tap-to-talk. Ma:
+                - In Page 0 (voice zen) c'è già la grande eclissi → l'orb
+                  piccolo era ridondante (due eclissi sovrapposte).
+                - Durante lo swipe Page 0→Page 1 questo piccolo orb
+                  appariva per una frazione di secondo prima di sparire,
+                  creando un flash visivo sgradevole.
+                Soluzione definitiva: lo eliminiamo. L'utente parla dalla
+                Page 0 (orb grande = pulsante), legge/scrive dalla Page 1
+                (timeline + textRow). Nessun flash possibile. */}
+            {viewMode !== "reading" && aiPaused ? (
+              <Text style={[styles.statusLabel, styles.statusLabelOnBg]}>AI in pausa</Text>
+            ) : null}
+            {/* Barra di scrittura: appare SOLO in modalità lettura (Page 1).
+                Nella pagina principale (orb voce zen) l'esperienza resta
+                pulita — niente UI di scrittura, solo l'eclissi. Per scrivere
+                l'utente swipa verso sinistra e va nella pagina di lettura. */}
+            {viewMode === "reading" && (
+              <KeyboardAvoidingView
+                behavior={Platform.OS === "ios" ? "padding" : undefined}
+                style={{ width: "100%", marginTop: 18 }}
+              >
+                <View style={styles.textRow}>
+                  <TextInput
+                    value={textInput}
+                    onChangeText={(t) => {
+                      // Invio rapido — vedi commento nel TextInput sopra.
+                      if (t.endsWith("\n")) {
+                        const clean = t.replace(/\n+$/, "");
+                        if (clean.trim()) {
+                          sendTextFromBox(clean);
+                        } else {
+                          setTextInput("");
+                        }
+                        return;
+                      }
+                      setTextInput(t);
+                    }}
+                    placeholder="Scrivi qui..."
+                    placeholderTextColor="rgba(255,255,255,0.5)"
+                    style={styles.textInput}
+                    onSubmitEditing={sendTextFromBox}
+                    returnKeyType="send"
+                    blurOnSubmit={false}
+                    multiline
+                    testID="text-input-reading"
+                  />
+                  <GHTouchableOpacity
+                    onPress={sendTextFromBox}
+                    style={[styles.sendBtn, textInput.trim() ? styles.sendBtnActive : null]}
+                    disabled={!textInput.trim()}
+                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                    testID="send-btn-reading"
+                  >
+                    <Ionicons
+                      name="arrow-up"
+                      size={22}
+                      color={textInput.trim() ? theme.primaryText : theme.textDim}
+                    />
+                  </GHTouchableOpacity>
+                </View>
+              </KeyboardAvoidingView>
+            )}
+          </View>
+        )}
+        </View>
+        </View>
+      </ScrollView>
+
+      {/* === SPEC 2026-08-22 (Fabio) — MODAL "BENVENUTO" LINGUA RIMOSSO ===
+          Il vecchio Modal onboarding con selezione lingua (categoria E dell'audit
+          narrativo) è stato rimosso fisicamente. Motivi:
+            (1) Sovrapposto graficamente ad altri modal in condizione di reset;
+            (2) Non coerente con la spec V3: "solo italiano ora,
+                multi-lingua è direzione futura ma non nella prima esperienza";
+            (3) Il flag `showOnboarding` non viene più settato a `true` in
+                nessuna parte del codice (rimossi i due `setShowOnboarding(true)`
+                — vedi note nei due punti sopra). La useState viene tenuta come
+                dead-flag inerte per non rompere le altre guard che la
+                referenziano (hands-free block, back-button intercept). */}
+      {/* OLED DIM OVERLAY rimosso (richiesta utente giugno 2026). */}
+
+      {/* Settings modal — WALLET STACK (Fabio 2026-06) ==================
+          Refactor v2: da ScrollView piatta (1600 righe) a wallet stack
+          verticale con card sfalsate stile Apple Wallet. Ogni sezione
+          è una card indipendente, swipe verticale, snap magnetico.
+          Le sezioni admin (Tier Switcher, Whitelist, Situation Tracking,
+          Test Intro Free) restano nel Dev Menu Alert dietro 5-tap sulla
+          version (accesso invariato). */}
+      <Modal
+        visible={showSettings}
+        transparent
+        animationType="slide"
+        onRequestClose={() => closeSettings()}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={{ flex: 1, width: '100%' }}>
+            {showSettings ? (
+              <SettingsWalletStack
+                cards={orderedSettingsCards}
+                onClose={() => closeSettings()}
+                version={Constants.expoConfig?.version || "1.0.1"}
+                buildTag={isAdmin ? OLLENYA_BUILD_SHORT_TAG : undefined}
+                runtimeInfo={isAdmin ? `rt:${Constants.expoConfig?.runtimeVersion || "?"} · vc:${Constants.expoConfig?.android?.versionCode ?? Constants.expoConfig?.ios?.buildNumber ?? "?"}` : undefined}
+                onVersionTap={handleDevMenuTap}
+              />
+            ) : null}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Recap modal */}
+      <Modal
+        visible={showRecap}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowRecap(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.recapCard}>
+            <View style={styles.settingsHeader}>
+              <Text style={styles.settingsTitle}>Sunto al volo</Text>
+              <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+                {recapText ? (
+                  <TouchableOpacity
+                    onPress={async () => {
+                      SpeechMod.stop();
+                      try {
+                        const lang = profile?.language === "it" ? "it-IT" : profile?.language || "it-IT";
+                        await SpeechMod.speak(recapText, { language: lang, tone: "warm" });
+                      } catch {}
+                    }}
+                    style={styles.recapPlayBtn}
+                    testID="recap-play"
+                  >
+                    <Ionicons name="volume-high" size={18} color={theme.primaryText} />
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity onPress={() => { SpeechMod.stop(); setShowRecap(false); }}>
+                  <Ionicons name="close" size={24} color={theme.text} />
+                </TouchableOpacity>
+              </View>
+            </View>
+            {recapText === null ? (
+              <ActivityIndicator color={theme.primary} />
+            ) : (
+              <TouchableOpacity
+                onPress={async () => {
+                  SpeechMod.stop();
+                  try {
+                    const lang = profile?.language === "it" ? "it-IT" : profile?.language || "it-IT";
+                    await SpeechMod.speak(recapText, { language: lang, tone: "warm" });
+                  } catch {}
+                }}
+                activeOpacity={0.7}
+                testID="recap-text"
+              >
+                <Text style={styles.recapText}>{recapText}</Text>
+                <Text style={styles.recapHint}>Tocca per sentirlo a voce</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* InfoModal — esempi dei comandi vocali che puoi chiedere a Coda */}
+      <InfoModal
+        visible={showInfo}
+        onClose={() => setShowInfo(false)}
+        aiName={profile?.ai_name || "Coda"}
+        theme={theme}
+      />
+
+      {/* === FEEDBACK LOOP MENU (Fabio 2026-09-11, B-bis + Fix C) ============
+          Colori HARDCODATI (non ereditati dalla bolla) perché il menu è un
+          modal contestuale a schermo intero: deve essere sempre leggibile
+          indipendentemente dal colore della bolla o dal tema utente. Bug
+          precedente: passare `bubbleAccent` (oggetto) come `bgColor`
+          (stringa) faceva cadere il modal sul default `#1F1F1F` E
+          `textOnBubble` era nero se la bolla era ambra → testo nero su
+          sfondo nero = invisibile. Ora sfondo scuro + testo chiaro fissi. */}
+      <OllenyaFeedbackMenu
+        eventId={feedbackEventId}
+        visibleOverride={feedbackReadOnly}
+        bubbleText={feedbackEntry?.text}
+        onDelete={
+          feedbackEntry
+            ? () => {
+                const e = feedbackEntry;
+                setFeedbackEntry(null);
+                setFeedbackEventId(null);
+                setFeedbackReadOnly(false);
+                ghostMessage(e);
+              }
+            : undefined
+        }
+        onClose={() => {
+          setFeedbackEventId(null);
+          setFeedbackEntry(null);
+          setFeedbackReadOnly(false);
+        }}
+      />
+
+      {/* Seal Setup Modal — RIMOSSO (Blocco B, Confessionale cancellato) */}
+
+      {/* Confessionale Intro Modal — RIMOSSO (Blocco B) */}
+
+      {/* === LASCIA ANDARE INTRO MODAL (Fabio 2026-08-14 P1) ================
+          Presentazione al PRIMO accesso alla stanza "Lascia Andare".
+          Il flag di persistenza è server-side (Mongo), non locale, così
+          sopravvive a reinstall/cambio device. Non riappare mai dopo il
+          primo tap "Entra". */}
+      <LasciaAndareIntroModal
+        visible={showLasciaAndareIntro}
+        onCancel={() => {
+          setShowLasciaAndareIntro(false);
+          setPendingLasciaAndareVoice(null);
+        }}
+        onContinue={async () => {
+          // Marca l'intro come visto server-side (idempotente).
+          // Fire-and-forget: NON blocchiamo la navigazione se fallisce.
+          try {
+            api.markLasciaAndareIntroSeen().catch((e) => {
+              console.warn("[LasciaAndare] markIntroSeen failed:", e);
+            });
+          } catch (e) {
+            console.warn("[LasciaAndare] markIntroSeen failed:", e);
+          }
+          const voice = pendingLasciaAndareVoice || "aria";
+          setShowLasciaAndareIntro(false);
+          setPendingLasciaAndareVoice(null);
+          try {
+            router.push(`/lascia-andare?voice=${encodeURIComponent(voice)}`);
+          } catch (e) {
+            console.warn("[LasciaAndare] navigation error:", e);
+          }
+        }}
+      />
+
+      {/* === INTRO PREMIUM — FASE FINALE (Fabio 2026-08-22) ===================
+          Overlay che disegna il coach-mark sulla barra scrittura VERA
+          della Page 1 + suona la clip di chiusura Cielo. Montato SOLO
+          quando l'IntroPremium ha fatto handoff via ?intro=writing_final.
+          Al termine: dismissIntroFinal pulisce il query param, la home
+          resta libera su Page 1 (l'utente può iniziare a scrivere subito
+          o swipare a destra per tornare all'orb). */}
+      {showIntroFinal && <IntroPremiumFinalStep onComplete={dismissIntroFinal} />}
+
+      {/* RadialGlow — alone radiale che parte dal blob (centro schermo)
+          e si propaga verso i bordi. Coerente coi 3 colori del blob:
+            🟡 Ambra      = idle/recording  (tocca a te / ti ascolto)
+            💧 Verde acqua = thinking        (sto pensando)
+            💜 Magenta    = speaking        (sto parlando io)
+
+          === TEST DIAGNOSTICO 2026-07-30 v64.8 — ESITO NEGATIVO ================
+          Ipotesi: RadialGlow causava il flash + lentezza su Android.
+          Test: disattivato RadialGlow su Android. Verdetto utente: flash
+          ancora presente → RADIALGLOW ESCLUSO come causa. Ripristinato
+          rendering normale su tutte le piattaforme (nessun senso lasciarlo
+          disattivato se non è la causa).
+          ==================================================================== */}
+      {/* v64.17 (2026-08-01) — RadialGlow riscritto senza pulsazione continua.
+          Il vecchio componente aveva Animated.loop useNativeDriver:false che
+          crollava FPS su Android (13 fps). Test v64.16 confermò diagnosi
+          (FPS 13→120 rimuovendo il componente). v64.17 rimuove SOLO la
+          pulsazione (impatto visivo trascurabile su un'aura tenue), mantiene
+          fade colore/opacity su cambio stato. Riabilitato su ENTRAMBE le
+          piattaforme → parità visiva iOS = Android. */}
+      <RadialGlow status={status as any} />
+
+      {/* CONFESSIONALE / FortezzaCloseEffect — RIMOSSO (Blocco B) */}
+
+      {/* === SAFETY ALERT (giugno 2026) ====================================
+          Si apre quando /api/safety/check rileva risk_detected=true.
+          Mostra l'advisory di Ollenya + numeri italiani ufficiali cliccabili. */}
+      <SafetyAlert
+        visible={safetyVisible}
+        result={safetyResult}
+        onClose={() => {
+          setSafetyVisible(false);
+          setStatus("idle");
+        }}
+      />
+    </View>
+  );
+
+  // Wrap the screen in a background image (custom upload) or gradient (preset),
+  // with a dark overlay for legibility. If no background is set, just return
+  // the plain inner view (uses theme.bg).
+  // === SPLASH SCREEN ===
+  // 4 secondi all'apertura: eclissi che respira colori + nome AI + tagline.
+  // Maschera la latenza di boot e dà identità visiva all'app.
+  if (showSplash) {
+    return (
+      <OllenyaSplash
+        aiName={profile?.ai_name || null}
+        duration={12000}
+        onComplete={() => {
+          setShowSplash(false);
+          markSessionSplashShown(); // Punto 2: al termine naturale, marca come mostrato per la sessione
+        }}
+      />
+    );
+  }
+  // === V1 OllenyaIntro RIMOSSA (Fabio 2026-08-22) ==============================
+  // Il return early che renderizzava V1 quando showColorIntro=true è stato
+  // rimosso. La V1 non ha più path di ingresso — vedi Level B della spec
+  // Intro Premium v2. Il file components/OllenyaIntro.tsx resta in vita come
+  // dead code (non toccato per policy "V1 non si tocca") ma nessuno lo
+  // importa più.
+  //   if (showColorIntro === true) return <OllenyaIntro ... />;   ← RIMOSSO
+  // Overlay bordeaux globale quando il confessionale è ATTIVO.
+  // Tinge fortemente tutto lo sfondo (~40% di alpha) così l'utente capisce
+  // a colpo d'occhio di trovarsi in modalità confessionale, anche durante
+  // la conversazione vocale. Quando spegne il confessionale, l'overlay
+  // sparisce e si torna allo sfondo normale.
+  // === NEON BORDER ===
+  // Bordo neon attorno allo schermo, perfettamente sincronizzato all'orb.
+  // Mappatura 1:1 stato → colore (NeonBorder e EclipseOrb leggono dalla
+  // stessa palette, vedi components/NeonBorder.tsx e EclipseOrb.tsx):
+  //   - idle          → verde menta (#7DD3C0)
+  //   - recording     → tiffany neon (#00F5D4)  [include sia manuale sia hands-free]
+  //   - transcribing  → ciclamino (#EC4899)     [come thinking, l'orb usa THINK_PALETTE]
+  //   - thinking      → ciclamino (#EC4899)
+  //   - speaking      → viola elettrico (#BD10E0)
+  // Priorità: stati di interazione > idle.
+  const neonStatus: NeonBorderStatus = (() => {
+    if (status === "recording") return "recording";
+    // Transcribing è visivamente equivalente a thinking (l'orb mostra
+    // THINK_PALETTE in entrambi i casi) — il bordo lo segue.
+    if (status === "transcribing" || status === "thinking") return "thinking";
+    if (status === "speaking") return "speaking";
+    return "idle";
+  })();
+  // Spessore del bordo (in pixel). Il glow vero arriva dal shadow,
+  // non serve un bordo spesso: 2-4px sono perfetti.
+  // Se l'utente ha calibrato un thickness custom (Impostazioni → Bordo),
+  // quello ha priorità assoluta sui default per-stato.
+  const neonThickness = borderCal.thickness ?? (
+    neonStatus === "idle" ? 2 :
+    3
+  );
+  const neonBorderEl = (
+    <NeonBorder
+      // v66.1 (Fabio 2026-06-16): Free → bordo sempre "idle" (nessun colore
+      // di stato vocale) così il neon appare grigio/spento anche se
+      // internamente stiamo cambiando `status` per side-effect.
+      status={isFreeGate() ? "idle" : neonStatus}
+      thickness={neonThickness}
+      speakingColorOverride={getVoiceSpeakingColor(
+        (profile?.settings as any)?.tts_voice_id
+      )}
+      radiusOverride={borderCal.radius ?? estimateCornerRadius(insets.top || 0, Platform.OS)}
+      idleColorOverride={
+        // v66.1: Free → bordo neutro grigio scuro, indipendente da calibrazione.
+        isFreeGate()
+          ? "rgba(120,120,130,0.28)"
+          : (borderCal.useAltIdleColor ? ALT_IDLE_COLOR : undefined)
+      }
+    />
+  );
+
+  // === ACTIVATION PULSE — DISABILITATO (2026-06-27 v21) ===
+  // L'utente ha segnalato che su Android il flash viola al boot
+  // (#8B5CF6) appare ripetutamente "senza far niente" — probabilmente
+  // perché Android killa l'app in background più aggressivamente
+  // di iOS e ad ogni "cold start" il pulse parte di nuovo.
+  // Disabilitato per stabilità visiva. La marca dell'identità Ollenya
+  // viene già comunicata dal NeonBorder champagne perenne in idle.
+  // Se si vuole riabilitare: rimettere il blocco originale qui sotto.
+  const activationPulseEl: React.ReactNode = null;
+  // OLD CODE (mantenuto come commento per ripristino veloce):
+  // const activationPulseEl = (!activationPulseDone && profile && showColorIntro === false && !showOnboarding) ? (
+  //   <ActivationPulse color="#8B5CF6" duration={1500} thickness={3} onComplete={() => setActivationPulseDone(true)} />
+  // ) : null;
+
+  const confessionalTint: React.ReactNode = null;
+
+  // === TOUR OVERLAY ===
+  // Stesso pattern del confessionalTint: variabile JSX da renderizzare in
+  // tutti i rami finali (custom image / preset gradient / plain).
+  const tourOverlay = tourActive ? (
+    <OllenyaTour
+      steps={tourSteps}
+      onStepChange={(idx, step) => {
+        setTourCurrentStep(step ? { idx, label: step.label, page: step.page } : null);
+      }}
+      // === FIX VOCE COERENTE TOUR (richiesta utente giugno 2026) ===
+      // Prima usavamo solo tts_voice_id (campo legacy che OllenyaIntro NON
+      // popola). Ora preferisco la mappatura da koda_voice (campo nuovo,
+      // popolato in onboarding con "aria" o "echo") → ElevenLabs ID.
+      // Fallback a tts_voice_id se koda_voice mancante.
+      voiceId={(() => {
+        const k = ((profile?.settings as any)?.koda_voice || "").toLowerCase();
+        if (k === "aria" || k === "eco") return "6TngzmzM89jJ3Y2Yiywr"; // Ollenya Acqua (femminile, giugno 2026 v4)
+        if (k === "echo" || k === "theo") return "ll9WG7PDTuyHwgC5MD6g"; // Ollenya Vento (maschile, giugno 2026 v4)
+        return (profile?.settings as any)?.tts_voice_id || "6TngzmzM89jJ3Y2Yiywr";
+      })()}
+      onPageChange={(page) => {
+        const w = tourDims.width;
+        try {
+          pagerRef.current?.scrollTo({
+            x: page === "reading" ? w : 0,
+            y: 0,
+            animated: true,
+          });
+        } catch {}
+      }}
+      onComplete={() => {
+        setTourActive(false);
+        setTourSteps([]);
+        // Riporta il pager alla pagina voce (zen) per pulizia.
+        try {
+          pagerRef.current?.scrollTo({ x: 0, y: 0, animated: true });
+        } catch {}
+      }}
+    />
+  ) : null;
+
+  return (
+    <View
+      style={{ flex: 1 }}
+      // === AUTO-DIM SCHERMO — hook touch a livello root (2026-07-28) ===
+      // onStartShouldSetResponder è un handler passivo: fired al primo
+      // tocco senza consumare l'evento (ritorna false → l'evento continua
+      // a propagare ai figli). Ogni volta che l'utente tocca lo schermo:
+      //   - Se siamo dimmerati → ScreenDimmer.noteInteraction() fa fade UP
+      //   - Reset del timer di 35s per il prossimo dim
+      // No-op se ScreenDimmer non è in watching (fuori da hands-free).
+      onStartShouldSetResponder={() => {
+        try {
+          // === v65.27 — dimmer swallow (deterministic) ==================
+          // Se al momento del touch il dimmer è dimmed/dimming, segna che
+          // il PROSSIMO tap sul big button (che arriverà via propagazione)
+          // dev'essere silenziato. Timing deterministic: leggiamo PRIMA
+          // che noteInteraction cambi lo state a "restoring".
+          const st = ScreenDimmer.getDebugState().state;
+          if (st === "dimmed" || st === "dimming") {
+            swallowNextBigButtonTapUntilRef.current = Date.now() + 500;
+          }
+          ScreenDimmer.noteInteraction();
+        } catch {}
+        return false; // Non consumiamo l'evento
+      }}
+    >
+      {screenInner}
+      {confessionalTint}
+      {neonBorderEl}
+      {activationPulseEl}
+      {tourOverlay}
+
+      {/* === PREMIUM TEASER TOAST v66.1 (Fabio 2026-06-16) =================
+          Il vecchio FreeOverlay full-screen è stato RIMOSSO — bloccava
+          lo swipe-right verso la chat testuale e oscurava troppo la home.
+          Ora i tap su Eclissi/Hands-Free/Impostazioni sono intercettati
+          direttamente inline (vedi `isFreeGate()` sui rispettivi Pressable
+          e TouchableOpacity nel render sopra) e triggerano questo toast,
+          che resta l'unico elemento UI di questo blocco.
+          Il pill "Lascia andare" resta sempre cliccabile per Free.
+          =============================================================== */}
+      <PremiumTeaserToast
+        visible={premiumTeaserVisible}
+        onPressLink={() => {
+          setPremiumTeaserVisible(false);
+          try { router.push("/paywall"); } catch {}
+        }}
+      />
+
+      {/* === FREE LIMIT OVERLAY v65.53 (Fabio 2026-06) =====================
+          Compare quando /api/converse ritorna 402 free_limit_exhausted.
+          Testo: "Per questo periodo ci fermiamo qui, {nome}. Torno a
+          scriverti {countdown}." Il countdown è LIVE — si aggiorna via
+          useLiveCountdown(periodEndsAtIso).
+          Due CTA: Passa al Premium (naviga a /paywall) / Va bene, aspetto.
+          Blocca l'input finché non lo chiudi.
+          =============================================================== */}
+      <FreeLimitOverlay
+        visible={freeLimitOverlay.visible}
+        greeting={freeLimitOverlay.greeting}
+        countdown={freeLimitOverlay.countdown}
+        periodEndsAtIso={freeLimitOverlay.periodEndsAtIso}
+        hidePremiumCTA={(() => {
+          const tier = (profile as any)?.subscription_tier;
+          return tier === "monthly" || tier === "bimonthly" || tier === "annual" || tier === "unlimited";
+        })()}
+        onDismiss={() => setFreeLimitOverlay({ visible: false, greeting: "", countdown: "", periodEndsAtIso: null })}
+        onGoPremium={() => {
+          setFreeLimitOverlay({ visible: false, greeting: "", countdown: "", periodEndsAtIso: null });
+          setTimeout(() => { try { router.push("/paywall"); } catch {} }, 40);
+        }}
+      />
+
+      {!tourActive && !confessionalMode ? null : null /* Blocco A: ProactiveOffer RIMOSSO */}
+      {/* === DISCLAIMER blocking overlay (Fabio 2026-07-28) ==================
+          Uso il componente Modal nativo di React Native (non un semplice
+          View absoluteFill) per garantire:
+            - Copertura totale dello schermo (viene reso in una layer
+              nativa separata, sopra QUALSIASI cosa nell'app inclusi
+              elementi con position:absolute e z-index alti)
+            - Blocco degli input sottostanti (touch pass-through impossibile)
+            - Blocco del tasto Back Android (non richiediamo onRequestClose,
+              così è impossibile chiudere senza tap esplicito)
+          statusBarTranslucent=true su Android per estendersi sotto la barra.
+          animationType="fade" per apparizione morbida.
+
+          Bug fix precedente (Fabio 2026-07-28): l'implementazione a View
+          absoluteFill lasciava trapassare pill "Lascia andare", ellipsis
+          impostazioni e bottone hands-free per via del loro zIndex alto.
+          Il Modal risolve alla radice perché è renderizzato in una window
+          nativa separata. */}
+      <Modal
+        visible={disclaimerState === "blocking"}
+        transparent={false}
+        animationType="fade"
+        statusBarTranslucent
+        presentationStyle="fullScreen"
+        hardwareAccelerated
+        // Volutamente niente onRequestClose: l'unica via d'uscita è il
+        // bottone "Ho capito", non il tasto Back Android.
+      >
+        <DisclaimerScreen onAccepted={() => setDisclaimerState("accepted")} />
+      </Modal>
+      {/* === DISCLAIMER network_error retry (Fabio 2026-09-06) ==================
+          Se il check /legal/disclaimer/status ha fallito tutti i retry
+          (3× con backoff 1/2/4s), NON facciamo fail-open silente: mostriamo
+          un overlay bloccante con "Riprova". Motivazione: la Privacy Policy
+          firmata dichiara il disclaimer come step obbligatorio prima di
+          ogni interazione — un fail-open silenzioso è un'esposizione
+          legale reale (bypass del disclaimer con rete instabile).
+          Design allineato al DisclaimerScreen: sfondo nero pieno, testo
+          bianco, singolo CTA. */}
+      <Modal
+        visible={disclaimerState === "network_error"}
+        transparent={false}
+        animationType="fade"
+        statusBarTranslucent
+        presentationStyle="fullScreen"
+        hardwareAccelerated
+      >
+        <View style={disclaimerRetryStyles.wrap}>
+          <Text style={disclaimerRetryStyles.title}>Connessione richiesta</Text>
+          <Text style={disclaimerRetryStyles.body}>
+            Al primo avvio Ollenya deve verificare online il disclaimer legale
+            obbligatorio. La rete non risponde.{"\n\n"}
+            Controlla la connessione e riprova.
+          </Text>
+          <TouchableOpacity
+            testID="disclaimer-retry-btn"
+            style={disclaimerRetryStyles.btn}
+            onPress={runDisclaimerCheck}
+            accessibilityRole="button"
+            accessibilityLabel="Riprova verifica disclaimer"
+          >
+            <Text style={disclaimerRetryStyles.btnText}>Riprova</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+// === Stili overlay retry disclaimer (2026-09-06) =============================
+// Colori hardcoded: overlay legale identico in light/dark, no theme.
+const disclaimerRetryStyles = StyleSheet.create({
+  wrap: {
+    flex: 1,
+    backgroundColor: "#0a0a0a",
+    paddingHorizontal: 32,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: "600",
+    color: "#ffffff",
+    marginBottom: 16,
+    textAlign: "center",
+  },
+  body: {
+    fontSize: 16,
+    lineHeight: 24,
+    color: "#d4d4d4",
+    textAlign: "center",
+    marginBottom: 32,
+  },
+  btn: {
+    minHeight: 48,
+    paddingHorizontal: 32,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: "#ffffff",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  btnText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#0a0a0a",
+  },
+});
+
+// =============== Sub components ===============
+
+function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  const { theme } = useTheme();
+  const styles = useMemo(() => makeStyles(theme), [theme]);
+  return (
+    <TouchableOpacity
+      onPress={onToggle}
+      style={[styles.toggle, on && styles.toggleOn]}
+    >
+      <View style={[styles.toggleKnob, on && styles.toggleKnobOn]} />
+    </TouchableOpacity>
+  );
+}
+
+// Map of preset bubble accent colors. User can pick one in Settings, or use
+// any custom hex via the same field.
+// Il preset "eclissi" è il colore IDENTITARIO di Ollenya: lo stesso viola che
+// l'orb assume in stato idle/neutral (TONE_PALETTES.neutral in EclipseOrb).
+// Vedere la bubble di Ollenya in viola identitario + l'orb in viola = unicità.
+const BUBBLE_PRESETS: Record<string, { name: string; color: string; soft: string }> = {
+  eclissi:      { name: "Eclissi",     color: "#8B5CF6", soft: "rgba(139,92,246,0.18)" },
+  viola:        { name: "Viola",       color: "#7C3AED", soft: "rgba(124,58,237,0.18)" },
+  verde_acqua:  { name: "Verde acqua", color: "#14B8A6", soft: "rgba(20,184,166,0.18)" },
+  rosa:         { name: "Rosa",        color: "#EC4899", soft: "rgba(236,72,153,0.18)" },
+  ambra:        { name: "Ambra",       color: "#F59E0B", soft: "rgba(245,158,11,0.18)" },
+  ghiaccio:     { name: "Ghiaccio",    color: "#3B82F6", soft: "rgba(59,130,246,0.18)" },
+};
+
+function resolveBubbleColors(
+  bubbleColor: string | undefined
+): { color: string; soft: string } {
+  // Default IDENTITARIO: il viola "eclissi" — esattamente il viola idle/
+  // neutral dell'EclipseOrb. Bubble di Ollenya e orb si parlano visivamente.
+  const key = bubbleColor || "eclissi";
+  if (BUBBLE_PRESETS[key]) return BUBBLE_PRESETS[key];
+  // Custom hex: derive a soft variant
+  if (typeof key === "string" && key.startsWith("#")) {
+    return { color: key, soft: key + "30" };
+  }
+  return BUBBLE_PRESETS.eclissi;
+}
+
+// === AIAvatar — round avatar shown next to AI bubbles. Uses a user-uploaded
+// photo (data URI) when set, otherwise falls back to the pulsing MiniOrb.
+function AIAvatar({ photo, color, size = 36 }: { photo?: string | null; color: string; size?: number }) {
+  if (photo) {
+    return (
+      <View
+        style={{
+          width: size, height: size, borderRadius: 999,
+          overflow: "hidden", marginRight: 8, marginBottom: 2,
+          borderWidth: 1.5, borderColor: color,
+          backgroundColor: "#000",
+        }}
+      >
+        <Image source={{ uri: photo }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+      </View>
+    );
+  }
+  return <MiniOrb color={color} />;
+}
+
+// === TypingDot — animated dot for "AI sta scrivendo" indicator
+function TypingDot({ delay, color }: { delay: number; color: string }) {
+  const v = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.delay(delay),
+        Animated.timing(v, { toValue: 1, duration: 350, useNativeDriver: true }),
+        Animated.timing(v, { toValue: 0, duration: 350, useNativeDriver: true }),
+        Animated.delay(150),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [v, delay]);
+  return (
+    <Animated.View
+      style={{
+        width: 7, height: 7, borderRadius: 999, backgroundColor: color,
+        opacity: v.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }),
+        transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [2, -2] }) }],
+      }}
+    />
+  );
+}
+
+// === MiniOrb — signature pulsing orb that brands the AI side of the chat
+function MiniOrb({ color = "#7C3AED" }: { color?: string }) {
+  const pulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 1800, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 1800, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+  const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1.08] });
+  const haloOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.25, 0.6] });
+  return (
+    <View style={{ width: 32, height: 32, alignItems: "center", justifyContent: "center", marginRight: 8, marginBottom: 2 }}>
+      <Animated.View
+        pointerEvents="none"
+        style={{
+          position: "absolute",
+          width: 32, height: 32, borderRadius: 999,
+          backgroundColor: color,
+          opacity: haloOpacity,
+          transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.4] }) }],
+          ...Platform.select({
+            ios: { shadowColor: color, shadowOpacity: 0.9, shadowRadius: 10, shadowOffset: { width: 0, height: 0 } },
+            android: { elevation: 0 },
+            default: { boxShadow: `0 0 14px ${color}` } as any,
+          }),
+        }}
+      />
+      <Animated.View
+        style={{
+          width: 14, height: 14, borderRadius: 999,
+          backgroundColor: color,
+          transform: [{ scale }],
+        }}
+      />
+    </View>
+  );
+}
+
+function BubbleImpl({
+  entry,
+  onGhost,
+  onLongPressFeedback,
+  bubbleAccent,
+  bubbleStyle,
+  textOnBubble,
+  textSize,
+  aiFontFamily,
+}: {
+  entry: TimelineEntry;
+  /** Long-press handler for "Ghost" / "Dimentica questo". */
+  onGhost?: (e: TimelineEntry) => void;
+  /**
+   * === FIX C 2026-09-11 (Fabio + Neo — conflitto onPress/onLongPress) ===
+   * Long-press handler per feedback loop AI. DEVE stare sullo stesso
+   * Pressable di onPress (replay) altrimenti il gesto tap-per-replay
+   * cattura il touch prima che il timer di long-press del parent parta,
+   * e il long-press non scatta mai (sintomo: nessun menu compare).
+   * Passato come prop dal chiamante SOLO per entry.role === "ai".
+   */
+  onLongPressFeedback?: (e: TimelineEntry) => void;
+  bubbleAccent: { color: string; soft: string };
+  bubbleStyle: "glass" | "solid";
+  textOnBubble: string;
+  textSize: number; // scale multiplier (e.g. 0.85 / 1.0 / 1.15 / 1.35)
+  /**
+   * Optional handwritten font (Caveat) loaded async. When ready, AI replies
+   * use it to evoke "scritto a mano da un amico", while the user's text
+   * stays system-default. If not loaded yet, both fall back to system.
+   */
+  aiFontFamily?: string;
+}) {
+  // === v64.14 PROFILING — conta render della Bubble (attivo solo con
+  // EXPO_PUBLIC_KODA_PERF_DIAG=1). Zero overhead se disattivato.
+  useRenderCounter("KODA_PERF_TIMELINE_BUBBLE");
+  const { theme } = useTheme();
+  const styles = useMemo(() => makeStyles(theme), [theme]);
+  const isUser = entry.role === "user";
+  const [showTime, setShowTime] = useState(false);
+
+  // Compute backgrounds for both bubbles based on chosen style.
+  // In SOLID mode both are opaque (block wallpaper for max readability).
+  // In GLASS mode both are translucent (wallpaper shows through subtly).
+  // === COLORE BUBBLE PER INTERLOCUTORE ===
+  // Regola fondamentale: l'UTENTE e l'AI hanno SEMPRE colori distinti, sia
+  // in modalità normale che confessionale, così "a colpo d'occhio" sai chi
+  // ha parlato. In modalità "glass" l'alpha è leggermente più alta del
+  // default per non confondere ambra-utente e viola-AI quando entrambe sono
+  // semi-trasparenti.
+  //
+  // Normale:
+  //   - utente → theme.userBubble (colore "tuo" definito dal tema)
+  //   - Ollenya   → bubbleAccent.color (colore impostato in Impostazioni)
+  const isConfessional = false; // feature Confessionale rimossa (Blocco B)
+  // AI:
+  const aiBg = bubbleStyle === "solid" ? bubbleAccent.color : bubbleAccent.color + "66";
+  // User:
+  const userBg = bubbleStyle === "solid"
+    ? theme.userBubble
+    : theme.userBubble + "77"; // più saturo del precedente "55"
+  const aiBorder = bubbleAccent.color;
+  const userBorder = bubbleStyle === "solid" ? "transparent" : theme.userBubble;
+
+  // === Diary aesthetic: each bubble is rotated by a tiny, deterministic
+  //     amount derived from the entry id. Looks like the bubble was *placed*
+  //     on a table, not aligned by a grid. AI tilts opposite of user so the
+  //     conversation feels alternating.
+  const rot = useMemo(() => {
+    const seed = entry.id || entry.timestamp || "0";
+    let h = 0;
+    for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+    // ±1.2° max — subtle, not gimmicky
+    const base = ((h % 200) - 100) / 100; // -1..1
+    const deg = base * 1.2;
+    // Bias direction by role so AI vs user lean opposite ways
+    return isUser ? Math.abs(deg) : -Math.abs(deg);
+  }, [entry.id, entry.timestamp, isUser]);
+
+  // Handwritten font ONLY for AI text. User text stays system (clean).
+  const aiTextFontProps = aiFontFamily ? { fontFamily: aiFontFamily } : null;
+  // Caveat sits visually larger at the same nominal size — bump line-height
+  // a bit so descenders breathe.
+  const aiTextSizeMultiplier = aiFontFamily ? 1.25 : 1;
+
+  const wrapperPress = (cb: () => void) => ({
+    onPress: cb,
+    // === FIX C 2026-09-11 (Fabio + Neo) ======================================
+    // `onLongPress` DEVE stare sullo stesso Pressable di `onPress` altrimenti
+    // il responder system iOS/Android cattura il touch al primo child con
+    // onPress e il long-press del parent non scatta mai (bug osservato:
+    // long-press sulla bolla AI = nessuna reazione, tap = replay OK).
+    //
+    // - User bubble: onLongPress = Alert.alert "Dimentica" (feature Ghost)
+    // - AI bubble:   onLongPress = handler feedback loop (passato come prop)
+    //                Se il chiamante non lo passa (es. bolle di sistema)
+    //                fallback a "toggle timestamp".
+    onLongPress: isUser
+      ? onGhost
+        ? () => {
+            Alert.alert(
+              "Questo messaggio",
+              "Vuoi che dimentichi questo fatto? Cancellerò il messaggio dal server. Se ha valore, terrò solo l'insegnamento nella memoria.",
+              [
+                { text: "Mostra orario", onPress: () => setShowTime((s) => !s) },
+                {
+                  text: "Dimentica",
+                  style: "destructive",
+                  onPress: () => onGhost(entry),
+                },
+                { text: "Annulla", style: "cancel" },
+              ]
+            );
+          }
+        : () => setShowTime((s) => !s)
+      : onLongPressFeedback
+        ? () => onLongPressFeedback(entry)
+        : () => setShowTime((s) => !s),
+    delayLongPress: 350,
+  });
+
+  return (
+    <View
+      style={[
+        styles.bubbleRow,
+        isUser ? styles.bubbleRowR : styles.bubbleRowL,
+        { transform: [{ rotate: `${rot}deg` }] },
+      ]}
+    >
+      {/* AIAvatar rimosso definitivamente (richiesta utente 2026-06): in
+          text-mode l'avatar mini-orb di fianco ai messaggi di Ollenya non
+          serve. Bilanciamento puro: messaggi Ollenya flush-left, messaggi
+          utente flush-right, simmetria perfetta. */}
+      <View style={{ maxWidth: "82%" }}>
+        {isUser ? (
+          <Pressable
+            {...wrapperPress(() => setShowTime((s) => !s))}
+            style={({ pressed }) => [
+              styles.bubbleUser,
+              { backgroundColor: userBg, borderColor: userBorder, borderWidth: bubbleStyle === "glass" ? 1 : 0 },
+              pressed && { opacity: 0.85 },
+            ]}
+          >
+            <Text style={[styles.bubbleUserText, { color: textOnBubble, fontSize: 15 * textSize, lineHeight: 21 * textSize }]}>{stripDisplayTags(entry.text || "")}</Text>
+          </Pressable>
+        ) : (
+          <Pressable
+            {...wrapperPress(() => {
+              // Rimozione riascolto bolla (Fabio 2026-11-04):
+              // il tap sulla bolla di Ollenya NON riproduce più audio.
+              // Preservata l'azione fallback "mostra orario" per dare
+              // comunque un feedback visivo al tap. Il long-press per il
+              // feedback resta attivo tramite `onLongPressFeedback` nel
+              // wrapperPress sopra.
+              setShowTime((s) => !s);
+            })}
+            style={({ pressed }: any) => [
+              styles.bubbleAi,
+              { backgroundColor: aiBg, borderColor: aiBorder, borderWidth: bubbleStyle === "glass" ? 1 : 0 },
+              pressed && { opacity: 0.78 },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Messaggio di Ollenya. Tieni premuto per il feedback."
+            testID={`replay-${entry.id}`}
+          >
+            <Text
+              style={[
+                styles.bubbleAiText,
+                { color: textOnBubble, fontSize: 15 * textSize * aiTextSizeMultiplier, lineHeight: 21 * textSize * aiTextSizeMultiplier },
+                aiTextFontProps,
+              ]}
+            >
+              {stripDisplayTags(entry.text || "")}
+            </Text>
+            {entry.extracted?.amount ? (
+              <Text style={[styles.extractMeta, { color: textOnBubble, opacity: 0.85 }]}>
+                💶 {entry.extracted.amount}
+                {entry.extracted.currency ? ` ${entry.extracted.currency}` : ""}
+                {entry.extracted.item ? ` · ${entry.extracted.item}` : ""}
+              </Text>
+            ) : null}
+            {entry.actions && entry.actions.length > 0 ? (
+              <View style={styles.actionList}>
+                {entry.actions.map((a, idx) => {
+                  if (a.type !== "schedule_notification") return null;
+                  const when = a.when_iso ? new Date(a.when_iso) : null;
+                  const timeStr = when
+                    ? when.toLocaleString([], {
+                        hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit",
+                      })
+                    : "—";
+                  return (
+                    <View key={idx} style={styles.actionPill}>
+                      <Text style={styles.actionEmoji}>🔔</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.actionTitle, { color: textOnBubble }]}>{a.title || "Promemoria"}</Text>
+                        <Text style={[styles.actionSub, { color: textOnBubble, opacity: 0.75 }]}>
+                          {a.label || timeStr}{a.body ? ` · ${a.body}` : ""}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : null}
+          </Pressable>
+        )}
+        {showTime ? (
+          <Text style={[styles.bubbleTime, isUser ? { textAlign: "right" } : { textAlign: "left" }]}>
+            {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+// === v64.14 — React.memo wrapper con equality check custom ==================
+// Bubble era ridipinta ad ogni render di MainRoot (index.tsx, 8300 righe)
+// perché la sua definizione era `function Bubble(...)` senza memo. Su Android
+// con thread JS più lento questo diventava un collo di bottiglia visibile
+// nello scroll della timeline chat.
+//
+// L'equality check confronta i prop shallow — tutti primitive tranne
+// `entry`, `bubbleAccent` e i callback. Per `entry` confrontiamo per
+// identità di riferimento (accettabile — la timeline non muta gli entry
+// esistenti, ne aggiunge di nuovi). Per `bubbleAccent` confrontiamo il
+// campo `color` che è quello che cambia realmente. I callback devono
+// essere stabili (useCallback lato chiamante) per beneficiare della memo.
+function arePropsEqualBubble(
+  prev: React.ComponentProps<typeof BubbleImpl>,
+  next: React.ComponentProps<typeof BubbleImpl>,
+): boolean {
+  return (
+    prev.entry === next.entry &&
+    prev.bubbleStyle === next.bubbleStyle &&
+    prev.textOnBubble === next.textOnBubble &&
+    prev.textSize === next.textSize &&
+    prev.aiFontFamily === next.aiFontFamily &&
+    prev.bubbleAccent.color === next.bubbleAccent.color &&
+    prev.bubbleAccent.soft === next.bubbleAccent.soft &&
+    prev.onGhost === next.onGhost
+    // === NB (Fabio + Neo 2026-09-11 Fix C) =================================
+    // `onLongPressFeedback` deliberatamente NON incluso nel confronto.
+    // Il callback viene passato inline in TaccuinoScreen ed è ricreato ogni
+    // render, ma cattura solo setter di useState (setFeedbackEntry,
+    // setFeedbackEventId, setFeedbackReadOnly) che React garantisce stabili
+    // per l'intera vita del componente. Il closure "vecchio" della prima
+    // render funziona sempre → nessun bug di stale-state.
+    // Includerlo qui causerebbe re-render inutili di TUTTE le bolle a ogni
+    // render del root (che avviene ~ogni turno di conversazione).
+    // Se in futuro il callback dovesse catturare state variabile, allora sì:
+    // wrappare con useCallback E aggiungerlo qui.
+  );
+}
+
+const Bubble = React.memo(BubbleImpl, arePropsEqualBubble);
+
+const makeStyles = (t: any) => StyleSheet.create({
+  screen: { flex: 1, backgroundColor: t.bg },
+
+  // Header — ABSOLUTELY positioned, transparent. Messages scroll behind it.
+  // NOTE: `top` is set INLINE in the JSX (using Math.max(insets.top + 16, 70))
+  // — never put `top: 0` here, it conflicts with the inline override and
+  // some RN/Expo Go versions don't merge it correctly.
+  header: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    gap: 10,
+    zIndex: 10,
+  },
+  // Riga 2 dell'header — toggle Confessionale isolato e centrato.
+  // Stesso paddingHorizontal della riga 1 per allineamento verticale.
+  confessionaleRow: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 14,
+    // === v65.56 (Fabio 2026-09) ================================
+    // zIndex alzato a 850 per stare SOPRA il FreeOverlay (800).
+    // Il pill "Lascia andare" deve restare l'unico elemento cliccabile
+    // della home per gli utenti Free.
+    zIndex: 850,
+  },
+  // Banner di conferma "Configurazione salvata ✓"
+  savedBanner: {
+    position: "absolute",
+    alignSelf: "center",
+    left: 40,
+    right: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 24,
+    backgroundColor: "rgba(16,185,129,0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(52,211,153,0.5)",
+    zIndex: 50,
+  },
+  savedBannerText: {
+    color: "#A7F3D0",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  headerCenter: { flex: 1, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 },
+  // === Toggle Confessionale (lucchetto al centro dell'header) ===
+  // === FIX 2026-06-27 v20 (richiesta utente: "rosso scarlatto") ===
+  // Allineato al colore del NeonBorder "confessional" (#FF1744), per
+  // coerenza visiva totale: quando l'utente attiva la Stanza, il bordo,
+  // l'orb, il glow e il bottone sono tutti dello stesso identico scarlatto.
+  // È il "Material Red A400" — uno scarlatto vivido, alto contrasto sia
+  // sul grigio sasso del giorno sia sull'indaco notturno. Caldo, intimo,
+  // immediatamente riconoscibile.
+  confessionalToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    // === FIX 2026-06-28 v27 — pill SEMPRE opaca ===
+    // Prima: rgba(255,23,68,0.20) → solo 20% opacità → le bolle della
+    // timeline trasparivano attraverso la pill, parole sovrapposte =
+    // effetto ottico pessimo (segnalato da utente). Ora maroon scuro
+    // opaco al 100%: si stacca sempre dallo sfondo, indipendente dal
+    // tema o dai messaggi dietro.
+    backgroundColor: "#7A1F2E",
+    borderWidth: 1,
+    borderColor: "#FF6B7E",
+  },
+  confessionalToggleOn: {
+    backgroundColor: "#FF1744",
+    borderColor: "#FF8FA3",
+  },
+  confessionalToggleText: {
+    // === FIX 2026-06-28 v27 — testo SEMPRE bianco ===
+    // Prima: condizionale che metteva rgba(0,0,0,0.85) su tema chiaro →
+    // testo quasi nero su sfondo trasparente rosso = illeggibile.
+    // Ora il bg è sempre opaco (maroon o rosso brillante), il bianco
+    // si legge bene in entrambi i casi.
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.3,
+  },
+  dot: { width: 8, height: 8, borderRadius: 999, backgroundColor: t.success },
+  headerTitle: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    letterSpacing: 0.5,
+    fontSize: 14,
+    textShadowColor: "rgba(0,0,0,0.7)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  // Header buttons — totally transparent, no background, no border.
+  // Just the icon (and label for "Sunto") with a soft text shadow for legibility.
+  headerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "transparent",
+    paddingHorizontal: 4,
+    paddingVertical: 6,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOpacity: 0.6,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 1 },
+      },
+      android: { elevation: 0 },
+      default: { textShadow: "0 1px 4px rgba(0,0,0,0.7)" } as any,
+    }),
+  },
+  headerBtnText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "700",
+    textShadowColor: "rgba(0,0,0,0.7)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+
+  // Timeline — ScrollView extends FULL HEIGHT (no top/bottom bar squeezing it).
+  timeline: { flex: 1 },
+  // Top padding so first message doesn't hide under the absolute header.
+  // Bottom padding handled inline (computed from insets + bottom bar height).
+  timelineContent: { paddingHorizontal: 16, paddingTop: 70 },
+
+  emptyState: {
+    alignItems: "center",
+    paddingHorizontal: 30,
+    paddingVertical: 60,
+  },
+  emptyEmoji: { fontSize: 56, marginBottom: 16 },
+  emptyTitle: {
+    color: t.text,
+    fontSize: 18,
+    fontWeight: "700",
+    marginBottom: 10,
+  },
+  emptyText: {
+    color: t.textMuted,
+    fontSize: 14,
+    textAlign: "center",
+    lineHeight: 20,
+  },
+
+  bubbleRow: { marginBottom: 14, flexDirection: "row", alignItems: "flex-end" },
+  bubbleRowL: { justifyContent: "flex-start" },
+  bubbleRowR: { justifyContent: "flex-end" },
+  bubbleUser: {
+    backgroundColor: t.userBubble,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    borderRadius: 22,
+    borderBottomRightRadius: 6,
+    maxWidth: "100%",
+    ...Platform.select({
+      ios: { shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 2 },
+      default: { boxShadow: "0 2px 6px rgba(0,0,0,0.12)" } as any,
+    }),
+  },
+  bubbleAi: {
+    backgroundColor: t.aiBubbleBg,
+    borderWidth: 1,
+    borderColor: t.aiBubbleBorder,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 22,
+    borderBottomLeftRadius: 6,
+    maxWidth: "100%",
+    ...Platform.select({
+      ios: { shadowColor: t.primary, shadowOpacity: 0.18, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 1 },
+      default: { boxShadow: `0 2px 10px ${t.primary}33` } as any,
+    }),
+  },
+  bubbleUserText: { color: t.userBubbleText, fontSize: 15, lineHeight: 21, fontWeight: "500" },
+  bubbleAiText: { color: t.aiBubbleText, fontSize: 15, lineHeight: 21 },
+  bubbleTime: { color: t.textDim, fontSize: 10, marginTop: 4, paddingHorizontal: 4, opacity: 0.7 },
+
+  // Day separator (Oggi / Ieri / Mercoledì 7 maggio)
+  daySeparator: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    marginVertical: 4,
+  },
+  daySepLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: t.divider,
+    opacity: 0.5,
+  },
+  daySepText: {
+    color: t.textMuted,
+    fontSize: 11,
+    fontWeight: "600",
+    letterSpacing: 0.8,
+    textTransform: "lowercase",
+    fontStyle: "italic",
+  },
+
+  domainPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    alignSelf: "flex-start",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+    marginBottom: 8,
+  },
+  domainEmoji: { fontSize: 11 },
+  domainLabel: { fontSize: 10, fontWeight: "700", letterSpacing: 0.6, textTransform: "uppercase" },
+  extractMeta: {
+    color: t.textMuted,
+    fontSize: 12,
+    marginTop: 8,
+    fontWeight: "600",
+  },
+
+  actionList: { marginTop: 10, gap: 6 },
+  actionPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: t.primarySoftBg,
+    borderColor: t.primarySoftBorder,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+  },
+  actionEmoji: { fontSize: 18 },
+  actionTitle: {
+    color: t.primary,
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.4,
+  },
+  actionSub: {
+    color: t.textMuted,
+    fontSize: 11,
+    marginTop: 2,
+  },
+
+  // Bottom bar — quasi sempre trasparente per lasciare scorrere i messaggi
+  // sotto; ma quando l'utente scrive, il textRow ha un suo background opaco
+  // tramite styles.textRow (vedi sotto) per essere sempre leggibile.
+  bottomBar: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 20,
+    backgroundColor: "transparent",
+  },
+  // === SCROLL-TO-BOTTOM FAB (2026-06-22) ===
+  scrollFabContainer: {
+    position: "absolute",
+    right: 18,
+    alignItems: "flex-end",
+  },
+  scrollFab: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 6,
+  },
+  // === FIX 2026-06 (richiesta utente: "Come chiami l'amico nero, mettilo bianco") ===
+  // Lo stile styles.input non era definito → TextInput "Come chiami l'amico"
+  // usava il color default RN (nero) → illeggibile sul tema scuro. Aggiunto.
+  input: {
+    backgroundColor: t.surfaceAlt,
+    borderColor: t.border,
+    borderWidth: 1,
+    color: t.text,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    fontSize: 15,
+  },
+  errorText: { color: t.danger, fontSize: 12, textAlign: "center", marginTop: 8 },
+  bigBtnArea: { alignItems: "center", paddingTop: 20, justifyContent: "center" },
+  blobTap: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 6,
+  },
+  blobOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  statusLabel: {
+    color: t.textDim,
+    fontSize: 13,
+    fontWeight: "500",
+    marginBottom: 18,
+    letterSpacing: 0.3,
+  },
+  // When a custom background is set, give the status label a small dark
+  // outline so it remains readable on light wallpapers.
+  statusLabelOnBg: {
+    color: "#FFFFFF",
+    textShadowColor: "rgba(0,0,0,0.65)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  bigBtnWrap: {
+    width: 200,
+    height: 200,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  // Orb sits behind the mic button — pointer-events none so the button stays
+  // tappable. Centered absolute fill, the Orb itself is sized via prop.
+  orbBehindBtn: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  // Soft neon glow underneath the button — kept tight (no big bloom anymore)
+  neonGlow: {
+    position: "absolute",
+    width: 150,
+    height: 150,
+    borderRadius: 999,
+    backgroundColor: t.primary,
+    // Tighter shadows so the wallpaper isn't covered
+    ...Platform.select({
+      ios: {
+        shadowColor: t.primary,
+        shadowOpacity: 0.7,
+        shadowRadius: 18,
+        shadowOffset: { width: 0, height: 0 },
+      },
+      android: { elevation: 0 },
+      web: {
+        boxShadow: `0 0 22px 4px ${t.primary}`,
+      } as any,
+    }),
+  },
+  neonGlowSoft: {
+    position: "absolute",
+    width: 160,
+    height: 160,
+    borderRadius: 999,
+    backgroundColor: t.primary,
+    ...Platform.select({
+      ios: {
+        shadowColor: t.primary,
+        shadowOpacity: 1.0,
+        shadowRadius: 70,
+        shadowOffset: { width: 0, height: 0 },
+      },
+      android: { elevation: 0 },
+      web: {
+        boxShadow: `0 0 90px 35px ${t.primary}`,
+      } as any,
+    }),
+  },
+  bigBtn: {
+    width: 72,
+    height: 72,
+    borderRadius: 999,
+    backgroundColor: t.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    ...Platform.select({
+      ios: {
+        shadowColor: t.primary,
+        shadowOpacity: 0.6,
+        shadowRadius: 14,
+        shadowOffset: { width: 0, height: 0 },
+      },
+      android: { elevation: 8 },
+      web: {
+        boxShadow: `0 0 18px 2px ${t.primary}`,
+      } as any,
+    }),
+  },
+  bigBtnRec: { backgroundColor: t.danger },
+  altBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  altBtnText: { color: t.textMuted, fontSize: 12 },
+
+  // Text input mode — banda visibile sopra tutto. Ha un proprio
+  // backgroundColor opaco (pill-shape) così che, anche quando galleggia
+  // sopra una timeline scrollabile, sia sempre perfettamente leggibile.
+  textRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingTop: 10,
+    paddingBottom: 10,
+    paddingHorizontal: 10,
+    // === FIX OVERLAP MESSAGGIO/INPUT (2026-07-24 pre-lancio) ===
+    // Prima: rgba(15,23,42,0.92) — 92% opaco → l'ultima bolla utente
+    // scorrendo dietro il campo restava leggermente visibile e "toccava"
+    // il placeholder "Scrivi qui..." creando un fastidioso overlap.
+    // Ora: bg TOTALMENTE OPACO → nessuna trasparenza residua, il testo
+    // dell'ultima bolla non traspare più mai dietro l'input bar.
+    backgroundColor: "rgb(15, 23, 42)",
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    // Shadow: stacca visivamente la banda dallo sfondo (timeline scorre
+    // sotto, ma la banda rimane "in alto" sul piano Z).
+    shadowColor: "#000",
+    shadowOpacity: 0.45,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 12,
+  },
+  textIconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 999,
+    backgroundColor: t.surfaceAlt,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  textInput: {
+    flex: 1,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(255,255,255,0.18)",
+    borderWidth: 1,
+    color: "#FFFFFF",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 22,
+    fontSize: 15,
+    minHeight: 42,
+    maxHeight: 100,
+  },
+  sendBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 999,
+    // === EMPTY STATE (Fabio 2026-06) =========================================
+    // Prima: sfondo sempre t.primary con opacity 0.4 → si vedeva ma sembrava
+    // "attivo" comunque, l'utente non capiva se poteva inviare.
+    // Ora empty: sfondo trasparente + bordo dim + freccia dim → chiaramente
+    // "non pronto". Full: sfondo pieno + freccia chiara + shadow → attivo.
+    backgroundColor: "transparent",
+    borderWidth: 1.5,
+    borderColor: t.textDim,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sendBtnActive: {
+    // === FILLED STATE (giugno 2026 #6 rev Fabio) ============================
+    // Pulsante ora chiaramente evidenziato: background pieno primary +
+    // bordo luminoso + shadow bianca alone → "clicca qui per inviare".
+    backgroundColor: t.primary,
+    borderColor: "rgba(255,255,255,0.5)",
+    shadowColor: t.primary,
+    shadowOpacity: 0.85,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 8,
+  },
+
+  // Modals
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  onboardCard: {
+    backgroundColor: t.surface,
+    borderRadius: 24,
+    padding: 26,
+    width: "100%",
+    maxWidth: 380,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  onboardEmoji: { fontSize: 50, marginBottom: 8 },
+  onboardTitle: {
+    color: t.text,
+    fontSize: 22,
+    fontWeight: "700",
+    marginBottom: 8,
+  },
+  onboardText: {
+    color: t.textMuted,
+    fontSize: 14,
+    textAlign: "center",
+    lineHeight: 20,
+    marginBottom: 22,
+  },
+  langGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: 10,
+    marginBottom: 18,
+  },
+  langBtn: {
+    backgroundColor: t.primarySoftBg,
+    borderColor: t.primarySoftBorder,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 14,
+    alignItems: "center",
+    gap: 4,
+    minWidth: 92,
+  },
+  langEmoji: { fontSize: 22 },
+  langLabel: { color: t.text, fontSize: 12, fontWeight: "600" },
+  onboardFoot: { color: t.textDim, fontSize: 11, textAlign: "center" },
+
+  settingsCard: {
+    backgroundColor: t.surface,
+    borderRadius: 24,
+    padding: 22,
+    width: "100%",
+    maxWidth: 420,
+    borderWidth: 1,
+    borderColor: t.border,
+    maxHeight: "92%",
+  },
+  settingsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 16,
+  },
+  settingsTitle: { color: t.text, fontSize: 18, fontWeight: "700" },
+  // === CARD STYLE (Fabio 2026-06) =========================================
+  // Ogni riga controllo del Settings modal è ora una card visivamente
+  // distinta (background surfaceAlt + border sottile + padding + marginBottom).
+  // Prima le righe erano separate solo da linee divisorie sottili —
+  // leggibilità pessima su mobile. Ora ogni settaggio è un blocco
+  // riconoscibile, come "Piano attivo" ed "Elimina il mio account" che
+  // già seguivano questo pattern.
+  settingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 16,
+    paddingHorizontal: 14,
+    gap: 14,
+    backgroundColor: t.surfaceAlt,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: t.border,
+    marginBottom: 10,
+  },
+  // v57 UI polish (Fabio 2026-07-13): +size, +weight, lineHeight esplicito
+  // per allineamento verticale ottimale con emoji (altrimenti su Android
+  // "🌐" e "🎙️" appaiono spostate in verticale rispetto al testo latino).
+  settingLabel: {
+    color: t.text,
+    fontSize: 16,
+    fontWeight: "700",
+    lineHeight: 22,
+    includeFontPadding: false,
+  },
+  // Hint sotto ogni opzione: +size, +lineHeight, colore più contrastato
+  // (t.text con alpha invece di textDim opaco).
+  settingHint: {
+    color: t.textDim,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 4,
+    opacity: 0.9,
+  },
+  // Divider — con le card, non serve più separatore visibile tra righe
+  // (le card hanno già marginBottom). Lasciato invisibile per compatibilità
+  // con eventuali usi legacy; se il layout richiede spazio extra tra
+  // gruppi, usare marginTop sul primo elemento del gruppo successivo.
+  divider: {
+    height: 0,
+    backgroundColor: "transparent",
+    marginVertical: 6,
+    opacity: 0,
+  },
+
+  // Header sezione: chip con bordo accent sinistro + padding, più visibile
+  // e distinto ("badge" style). Usa colore text pieno invece di textMuted.
+  // === CARD WRAPPER PER GRUPPO SETTAGGI (Fabio 2026-06) =====================
+  // Contenitore che avvolge ogni sezione del Settings modal. Prima i controlli
+  // erano separati solo da linee orizzontali sottili — leggibilità pessima
+  // su mobile. Ora ogni gruppo è una card visivamente distinta (surface +
+  // border sottile + padding + margin verticale).
+  //
+  // Uso:
+  //   <View style={styles.settingsGroup}>
+  //     <Text style={styles.settingsSubtitle}>🔧 Comportamento</Text>
+  //     ... controlli del gruppo ...
+  //   </View>
+  settingsGroup: {
+    backgroundColor: t.surfaceAlt,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  settingsSubtitle: {
+    color: t.text,
+    fontSize: 13,
+    fontWeight: "800",
+    letterSpacing: 1.5,
+    textTransform: "uppercase",
+    marginTop: 22,
+    marginBottom: 12,
+    paddingLeft: 12,
+    paddingVertical: 4,
+    borderLeftWidth: 3,
+    borderLeftColor: t.primary,
+    alignSelf: "flex-start",
+  },
+  settingsMemory: {
+    color: t.text,
+    fontSize: 13,
+    lineHeight: 19,
+    backgroundColor: t.surfaceAlt,
+    padding: 12,
+    borderRadius: 10,
+    minHeight: 50,
+  },
+  confidenceRow: { marginTop: 14 },
+  confidenceLabel: { color: t.textMuted, fontSize: 13, marginBottom: 6, fontWeight: "600" },
+  confidenceBar: {
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: t.surfaceAlt,
+    overflow: "hidden",
+  },
+  confidenceFill: {
+    height: "100%",
+    backgroundColor: t.primary,
+  },
+
+  dangerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: t.isDark ? "rgba(248,113,113,0.08)" : "#FEE2E2",
+    borderColor: t.isDark ? "rgba(248,113,113,0.3)" : "#FCA5A5",
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    justifyContent: "center",
+    marginTop: 6,
+  },
+  dangerBtnText: { color: t.danger, fontWeight: "700", fontSize: 14 },
+  dangerHint: {
+    color: t.textDim,
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: "center",
+    marginTop: 6,
+  },
+  // === Promessa di Ferro: clausola di privacy in app ===
+  promessaBox: {
+    backgroundColor: "rgba(15, 23, 42, 0.45)",
+    borderRadius: 14,
+    padding: 16,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: "rgba(252,165,165,0.25)",
+  },
+  promessaText: {
+    color: t.primaryText,
+    fontSize: 14,
+    lineHeight: 22,
+    opacity: 0.95,
+  },
+
+  toggle: {
+    width: 46,
+    height: 28,
+    borderRadius: 999,
+    backgroundColor: t.surfaceAlt,
+    padding: 3,
+    justifyContent: "center",
+  },
+  toggleOn: { backgroundColor: t.primary },
+  toggleKnob: {
+    width: 22,
+    height: 22,
+    borderRadius: 999,
+    backgroundColor: t.text,
+  },
+  toggleKnobOn: {
+    backgroundColor: t.primaryText,
+    transform: [{ translateX: 18 }],
+  },
+
+  modeRow: { flexDirection: "row", gap: 6, marginTop: 4 },
+
+  // Live meter visualization (debug)
+  meterWrap: {
+    width: 220,
+    alignItems: "center",
+    marginBottom: 12,
+    gap: 4,
+  },
+  meterBar: {
+    width: "100%",
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    overflow: "hidden",
+    position: "relative",
+  },
+  meterFill: {
+    height: "100%",
+    borderRadius: 999,
+  },
+  meterThreshold: {
+    position: "absolute",
+    top: -2,
+    width: 2,
+    height: 12,
+    backgroundColor: "#FFFFFF",
+    opacity: 0.9,
+  },
+  meterLabel: {
+    color: "#FFFFFF",
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+    textShadowColor: "rgba(0,0,0,0.7)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+
+  // Avatar picker (AI photo)
+  avatarRow: { flexDirection: "row", alignItems: "center", gap: 14, marginTop: 8 },
+  avatarPickBtn: { width: 64, height: 64, position: "relative" },
+  avatarPickImg: {
+    width: 64, height: 64, borderRadius: 999,
+    borderWidth: 2, borderColor: t.primary,
+  },
+  avatarEditBadge: {
+    position: "absolute",
+    right: -2,
+    bottom: -2,
+    width: 22,
+    height: 22,
+    borderRadius: 999,
+    backgroundColor: t.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: t.surface,
+  },
+
+  // === Background picker RIMOSSO (2026-08-04) — vedi cleanup dead code.
+  //     Il tema ora determina tutto lo sfondo; niente più chip/preset/dim.
+
+  modeBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    backgroundColor: t.surfaceAlt,
+    borderColor: t.border,
+    borderWidth: 1.5,
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+  },
+  modeBtnActive: {
+    backgroundColor: t.primary,
+    borderColor: t.primary,
+  },
+  modeBtnText: {
+    color: t.text,
+    fontSize: 14,
+    fontWeight: "700",
+    flexShrink: 1,
+  },
+  modeBtnTextActive: {
+    color: t.primaryText,
+  },
+
+  // Voice selector — hint sotto un header sezione (es. "Scegli la voce")
+  // v57 UI polish: +fontSize, +lineHeight per leggibilità.
+  settingsHint: {
+    color: t.textDim,
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 12,
+    marginTop: 4,
+  },
+  voicesList: {
+    gap: 8,
+    marginTop: 4,
+  },
+  voiceCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: t.surfaceAlt,
+    borderColor: t.border,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    gap: 10,
+  },
+  voiceCardActive: {
+    borderColor: t.primary,
+    backgroundColor: t.primarySoftBg,
+  },
+  voiceCardLeft: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  voiceDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 999,
+    borderWidth: 2,
+    borderColor: t.border,
+    backgroundColor: "transparent",
+  },
+  voiceName: {
+    color: t.text,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  voiceGender: {
+    color: t.textMuted,
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  voiceDesc: {
+    color: t.textDim,
+    fontSize: 12,
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  // === NUOVO SELETTORE VOCI (2026-06) ===
+  // Solo cerchi colorati: ogni voce È il suo colore.
+  voicePickerHint: {
+    color: t.textMuted,
+    fontSize: 11,
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
+    textAlign: "center",
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  // === OTA UPDATE BUTTON (2026-06-27 v23) ===
+  // Pulsante "Controlla aggiornamenti" in fondo alle Impostazioni.
+  // Stile minimale, leggermente più evidente del footer versione perché
+  // è un'azione, non solo testo. Bordo soft + icona + label.
+  otaCheckButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: t.border,
+    backgroundColor: t.surfaceAlt,
+    marginTop: 18,
+    marginHorizontal: 8,
+    minHeight: 44,
+  },
+  otaCheckButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    letterSpacing: 0.2,
+  },
+  voicePickerRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 48,
+    paddingVertical: 20,
+    paddingHorizontal: 8,
+  },
+  voiceCircleWrap: {
+    width: 90,
+    height: 90,
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+  },
+  voiceCircleGlow: {
+    position: "absolute",
+    width: 110,
+    height: 110,
+    borderRadius: 999,
+    // boxShadow non gestito uniformemente → ci affidiamo al fill +
+    // opacity. Su iOS e web il risultato è uno halo soft visibile.
+    ...Platform.select({
+      ios: { shadowColor: "#000", shadowOpacity: 0, shadowRadius: 0 },
+      android: {},
+      default: {},
+    }),
+  },
+  voiceCircle: {
+    width: 78,
+    height: 78,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+    ...Platform.select({
+      ios: {
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.55,
+        shadowRadius: 12,
+      },
+      android: { elevation: 6 },
+      default: {},
+    }),
+  },
+  voicePlayBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: t.primarySoftBg,
+    borderWidth: 1,
+    borderColor: t.primarySoftBorder,
+  },
+
+  // Theme picker — 3 chips (Giorno / Notte / Auto) allineati orizzontalmente
+  // con spazio equo. flex:1 per riempire tutta la larghezza; testo più
+  // grande (14/700) per coerenza col resto della pagina impostazioni.
+  themeRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 4,
+  },
+  themeBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+    backgroundColor: t.surfaceAlt,
+    borderColor: t.border,
+    minHeight: 44,
+  },
+  themeBtnActive: {
+    backgroundColor: t.primarySoftBg,
+    borderColor: t.primary,
+  },
+  themeSwatch: {
+    width: 14,
+    height: 14,
+    borderRadius: 999,
+  },
+  themeBtnText: {
+    color: t.text,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+
+  hoursRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 12,
+  },
+  hourBox: {
+    flex: 1,
+    backgroundColor: t.surfaceAlt,
+    borderColor: t.border,
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 12,
+  },
+  hourLabel: {
+    color: t.textMuted,
+    fontSize: 13,
+    fontWeight: "600",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  hourCtrl: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 6,
+  },
+  hourBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 999,
+    backgroundColor: t.primarySoftBg,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  hourValue: {
+    color: t.text,
+    fontSize: 18,
+    fontWeight: "700",
+    flex: 1,
+    textAlign: "center",
+  },
+
+  recapCard: {
+    backgroundColor: t.surface,
+    borderRadius: 24,
+    padding: 22,
+    width: "100%",
+    maxWidth: 420,
+    minHeight: 160,
+    borderWidth: 1,
+    borderColor: t.border,
+  },
+  recapText: { color: t.text, fontSize: 15, lineHeight: 22 },
+  recapHint: { color: t.textDim, fontSize: 12, marginTop: 12, fontStyle: "italic" },
+  recapPlayBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 999,
+    backgroundColor: t.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+});
+
