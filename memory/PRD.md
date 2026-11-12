@@ -234,3 +234,28 @@ Fix verificati nel codice:
 - Log avvio: "v70.4 continuous=X endpoint=auto-3000ms|manual-release" (voiceClientStt.ts:778)
 App carica in preview.
 Status: pronto per build Android. Sensibilità acustica Honor NON risolvibile da codice: resta da testare sul device.
+
+---
+
+## 2026-11-11 — v70.4.1 workspace sync & verifications (pre-build)
+
+**Problema**: APK v1.0.110 sul telefono Honor diceva `build-v70.3-android-utterance` nonostante la workspace Emergent avesse già v70.4 committato. Il push GitHub era rimasto indietro (24 commit di divergenza).
+
+**Verifiche workspace prima della build Android**:
+- `OLLENYA_BUILD_SHORT_TAG = "build-v70.4-ptt-stop-timeouts"` (app/index.tsx:530) ✅
+- `stopTalk()` esegue `await stream.stop()` al rilascio PTT (app/index.tsx:4088–4096) ✅
+- `AndroidUtterance` con autoEndpoint 3000ms quietMs, 8000ms stall, 10000ms initial ✅
+- Timeout Android STT: watchdog mic 5000ms, silence 4000/3000/500ms ✅
+
+**Fix v70.4.1** aggiunti a `lib/voiceClientStt.ts` dopo che i test del dev esterno fallivano:
+1. Guard idempotente su `recognitionStart` → listen multipli non riaprono la UI gate
+2. No-speech graceful close prioritario su `AndroidUtterance.serviceEnded()`
+3. Salvage del parziale su native `end` → dispatch 1 volta sola invece di scartare
+4. iOS: `onRecognitionActive` chiamato sincrono dopo `start()` (Android resta col watchdog)
+5. `removeListeners()` nel path `MIC_WATCHDOG_TIMEOUT` e negli errori non-benigni
+
+**Test**: 11/11 STT lifecycle + 43/43 router PASS. ESLint pulito. Backend `koda_tts_prefs.py` AST-valid.
+
+**Merge con koda/main**: completato localmente (commit `88409519`), 3 conflitti risolti tenendo la v70.4. Push GitHub fallito per PAT scaduto nella URL del remote — da rinnovare.
+
+**Stato build**: workspace pronto per Publish → Build Android.
