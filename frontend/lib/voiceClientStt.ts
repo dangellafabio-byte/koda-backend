@@ -70,6 +70,7 @@ import {
 } from "./voiceStream";
 import { kodaBackendWsUrl } from "./backendUrl";
 import { getAuthToken } from "./authToken";
+import { AndroidUtterance } from "./androidUtterance";
 
 const TAG = "KODA_CLIENT_STT";
 
@@ -114,6 +115,17 @@ export class VoiceClientSttSession {
   private ws: WebSocket | null = null;
   private callbacks: VoiceStreamCallbacks;
   private stopRequested = false;
+  private warmupAbort: AbortController | null = null;
+  private cancelWsOpen: (() => void) | null = null;
+  private audioTasks = new Set<Promise<void>>();
+  private trackAudioTask(task: Promise<void>): Promise<void> {
+    this.audioTasks.add(task);
+    task.then(() => this.audioTasks.delete(task), () => this.audioTasks.delete(task));
+    return task;
+  }
+  private async drainAudioTasks(): Promise<void> {
+    await Promise.all(Array.from(this.audioTasks, task => task.catch(() => {})));
+  }
   private startedAt = 0;
   private sessionReady = false;
   private doneReceived = false;
@@ -142,6 +154,8 @@ export class VoiceClientSttSession {
   private subError: { remove: () => void } | null = null;
   private subEnd: { remove: () => void } | null = null;
   private subSpeechStart: { remove: () => void } | null = null;
+  private subRecognitionStart: { remove: () => void } | null = null;
+  private recognitionStarted = false;
 
   // === FIX 2026-07-26 v64.0 — Watchdog Android mic silent-fail ===
   // Su Google SpeechRecognizer (Android), specialmente al 2° turno,
@@ -161,6 +175,9 @@ export class VoiceClientSttSession {
   // finita per "utente ha finito di parlare" o "utente ha taciuto".
   // Ora traccciamo il flag così `end` può fare graceful close.
   private noSpeechReceived = false;
+  private androidUtterance: AndroidUtterance | null = null;
+  private autoEndpoint = true;
+  private subVolume: { remove: () => void } | null = null;
 
   // Route audio (rilevata prima di start)
   private audioRoute: "bluetooth" | "wired" | "builtin" | "unknown" = "unknown";
@@ -249,6 +266,7 @@ export class VoiceClientSttSession {
     // leggerlo dal profilo (dove può essere out-of-sync per bug auth-
     // bridge o migration/reverse-sync). Client-side source of truth.
     voiceId?: string;
+    autoEndpoint?: boolean;
   }): Promise<void> {
     // === OPZIONE B (2026-07-24): PORTING ANDROID NATIVE ===
     // Prima accettava solo iOS. Ora accetta Android tramite Google
@@ -257,7 +275,9 @@ export class VoiceClientSttSession {
     if (Platform.OS !== "ios" && Platform.OS !== "android") {
       throw new Error("client_stt_mobile_only");
     }
+    if (this.stopRequested || this.doneReceived) throw new Error("voice_stream_start_cancelled");
     this.startedAt = Date.now();
+    this.autoEndpoint = opts?.autoEndpoint !== false;
     this.stopRequested = false;
     this.sessionReady = false;
     this.doneReceived = false;
@@ -269,6 +289,8 @@ export class VoiceClientSttSession {
 
     // 1) Permission check
     const perm = await VoiceClientSttSession.requestPermissions();
+    if (this.stopRequested || this.doneReceived) throw new Error("voice_stream_start_cancelled");
+
     if (!perm.granted) {
       throw new Error(`permission_denied${perm.canAskAgain ? "" : "_permanent"}`);
     }
@@ -330,6 +352,7 @@ export class VoiceClientSttSession {
       }
     }
 
+    if (this.stopRequested || this.doneReceived) throw new Error("voice_stream_start_cancelled");
     // 2) Audio session in record mode PRIMA di detectAudioRoute (stesso trick
     //    di voiceStream.ts riga ~416). Serve perché al turno N+1 la session
     //    può essere in playback-only e detectAudioRoute crasha.
@@ -344,10 +367,13 @@ export class VoiceClientSttSession {
         shouldRouteThroughEarpiece: false,
       });
       console.log(`[${TAG}] setAudioModeAsync(record) OK before detectAudioRoute`);
+    if (this.stopRequested || this.doneReceived) throw new Error("voice_stream_start_cancelled");
+
 
       // Fix C2 step 4: reactivate per record mode (Android only)
       if (Platform.OS === "android") {
         try {
+          if (this.doneReceived || this.stopRequested) return;
           if (typeof setIsAudioActiveAsync === "function") {
             await setIsAudioActiveAsync(true);
             console.log(`[${TAG}] pre-STT focus reactivate (for record) ok (Fix C2 v63.9)`);
@@ -360,6 +386,7 @@ export class VoiceClientSttSession {
       console.log(`[${TAG}] setAudioModeAsync FAILED: ${e?.message || e}`);
     }
 
+    if (this.stopRequested || this.doneReceived) throw new Error("voice_stream_start_cancelled");
     // 3) Detect audio route (per diagnostica backend)
     try {
       const routeInfo: AudioRouteInfo = await Promise.race([
@@ -383,6 +410,7 @@ export class VoiceClientSttSession {
       console.log(`[${TAG}] audio_route detection failed: ${e?.message || e}`);
     }
 
+    if (this.stopRequested || this.doneReceived) throw new Error("voice_stream_start_cancelled");
     // 4) Apri WS
     const url = buildWsUrl();
     // === FIX 2026-07-23 v5 — WARMUP AWAITED PRIMA DI WS =================
@@ -398,8 +426,9 @@ export class VoiceClientSttSession {
     // (dimezzato). Warm case: POST in 100-300ms → WS in 500ms → 500-800ms
     // (invariato rispetto a prima).
     try {
-      const httpUrl = url.replace(/^ws/, "http").replace(/\/api\/voice\/stream$/, "/api/voice/warmup");
+      const httpUrl = url.split("?")[0].replace(/^ws/, "http").replace(/\/api\/voice\/stream$/, "/api/voice/warmup");
       const ctrl = new AbortController();
+      this.warmupAbort = ctrl;
       const t0 = Date.now();
       const timer = setTimeout(() => ctrl.abort(), 5000);
       try {
@@ -413,8 +442,12 @@ export class VoiceClientSttSession {
         // freddo, il WS handshake attenderà quel che resta del boot.
       }
     } catch {}
-    console.log(`[${TAG}] opening WS → ${url} route=${this.audioRoute}`);
+    if (this.stopRequested || this.doneReceived) throw new Error("voice_stream_start_cancelled");
+    this.warmupAbort = null;
+    console.log(`[${TAG}] opening WS route=${this.audioRoute}`);
     await this.openWs(url);
+    if (this.stopRequested || this.doneReceived) throw new Error("voice_stream_start_cancelled");
+
 
     // 5) Frame start → dice al backend: NON aspettare audio binario, aspettare
     //    invece un transcript_from_client. Nuovo campo: stt_source dinamico
@@ -486,7 +519,7 @@ export class VoiceClientSttSession {
 
   private async startRecognition(profileLang: string): Promise<void> {
     const lang = profileLang === "it" ? "it-IT" : profileLang;
-    console.log(`[${TAG}] startRecognition lang=${lang} ondevice=true`);
+    console.log(`[${TAG}] startRecognition lang=${lang} platform=${Platform.OS} requiresOnDevice=${Platform.OS === "ios"}`);
 
     // === FIX 2026-07-26 v64.0 — Pre-abort Android reset ===
     // Su Google SpeechRecognizer (Android), specialmente sui turni
@@ -507,15 +540,57 @@ export class VoiceClientSttSession {
       } catch {}
       await new Promise((r) => setTimeout(r, 80));
     }
+    if (this.stopRequested || this.doneReceived || this.dispatched) return;
+    if (Platform.OS === "android") {
+      try {
+        const module: any = ExpoSpeechRecognitionModule;
+        const service = module.getDefaultRecognitionService?.();
+        const services = module.getSpeechRecognitionServices?.() || [];
+        console.log(`[OLLENYA_ANDROID_INPUT] default_service=${service?.packageName || "unknown"} available=${services.join(",") || "unknown"}`);
+      } catch {}
+      this.androidUtterance = new AndroidUtterance((text) => {
+        if (this.stopRequested || this.doneReceived || this.dispatched) return;
+        this.currentTranscript = text;
+        console.log("[OLLENYA_ANDROID_ENDPOINT] quiet interval complete → dispatch once");
+        this.dispatchFinalToBackend().catch((e: any) =>
+          console.log(`[${TAG}] dispatchFinal error: ${e?.message || e}`));
+      }, 3000, {
+        autoEndpoint: this.autoEndpoint,
+        onStalled: () => this.failAndroidRecognition("android_transcript_stalled"),
+      });
+    }
     // Reset watchdog state
     this.speechStartReceived = false;
     // Reset no-speech flag (v64.1)
     this.noSpeechReceived = false;
+    this.recognitionStarted = false;
 
     // Registra listeners prima di start()
+    this.subRecognitionStart = ExpoSpeechRecognitionModule.addListener("start", () => {
+      if (this.stopRequested || this.doneReceived || this.dispatched || this.recognitionStarted) return;
+      this.recognitionStarted = true;
+      if (this.micWatchdogTimer) clearTimeout(this.micWatchdogTimer);
+      this.micWatchdogTimer = null;
+      console.log("[OLLENYA_ANDROID_ENDPOINT] recognizer ready");
+      this.callbacks.onRecognitionActive?.();
+    });
+    if (Platform.OS === "android") {
+      let samples = 0, min = Infinity, max = -Infinity, windowStart = Date.now();
+      this.subVolume = ExpoSpeechRecognitionModule.addListener("volumechange", (event) => {
+        const value = Number(event.value);
+        if (!Number.isFinite(value)) return;
+        samples++; min = Math.min(min, value); max = Math.max(max, value);
+        if (Date.now() - windowStart >= 2000) {
+          console.log(`[OLLENYA_ANDROID_INPUT] samples=${samples} min=${min.toFixed(1)} max=${max.toFixed(1)}`);
+          samples = 0; min = Infinity; max = -Infinity; windowStart = Date.now();
+        }
+      });
+    }
     this.subSpeechStart = ExpoSpeechRecognitionModule.addListener(
       "speechstart",
       () => {
+        if (this.doneReceived || this.dispatched || this.stopRequested) return;
+        this.androidUtterance?.speechStarted();
         this.speechStartMs = Date.now();
         this.speechStartReceived = true;
         if (this.micWatchdogTimer) {
@@ -529,21 +604,25 @@ export class VoiceClientSttSession {
     this.subResult = ExpoSpeechRecognitionModule.addListener(
       "result",
       (evt: ExpoSpeechRecognitionResultEvent) => {
+        if (this.doneReceived || this.dispatched) return;
         const norm = this.normalizeResult(evt);
         if (!norm) return;
         // Salva la trascrizione corrente (verrà usata sia per interim che final)
-        this.currentTranscript = norm.transcript;
+        this.currentTranscript = this.androidUtterance
+          ? this.androidUtterance.result(norm.transcript, norm.isFinal)
+          : norm.transcript;
         this.currentConfidence = norm.confidence;
 
         // Notifica interim al caller (UI live transcript)
         try {
-          this.callbacks.onInterim?.(norm.transcript, norm.isFinal);
+          this.callbacks.onInterim?.(this.currentTranscript, norm.isFinal);
         } catch {}
 
         if (norm.isFinal) {
           console.log(
             `[${TAG}] result FINAL text="${norm.transcript}" conf=${norm.confidence}`
           );
+          if (this.androidUtterance) return; // final segment, not end of user turn
           this.dispatchFinalToBackend().catch((e: any) =>
             console.log(`[VoiceClientSttSession] dispatchFinal error: ${e?.message || e}`)
           );
@@ -558,6 +637,7 @@ export class VoiceClientSttSession {
     this.subError = ExpoSpeechRecognitionModule.addListener(
       "error",
       (evt: ExpoSpeechRecognitionErrorEvent) => {
+        if (this.doneReceived || this.dispatched) return;
         console.log(
           `[${TAG}] error code=${evt.error} message="${evt.message || ""}"`
         );
@@ -574,6 +654,7 @@ export class VoiceClientSttSession {
           return;
         }
         if (evt.error === "aborted") return;
+        this.androidUtterance?.cancel();
 
         // === FIX 2026-07-23 v60.4 — AudioSession recovery cycle ============
         // Fabio (23/07 post-checkpoint): il bug 560557684 (`!act`) del vecchio
@@ -618,6 +699,13 @@ export class VoiceClientSttSession {
         return;
       }
       console.log(`[${TAG}] end event (noSpeech=${this.noSpeechReceived})`);
+      if (this.androidUtterance && !this.doneReceived && !this.stopRequested) {
+        if (this.androidUtterance.serviceEnded()) return;
+        // Native recognition really disconnected. Do not pretend an incomplete
+        // utterance was final and do not trigger repeated HF retries.
+        this.failAndroidRecognition("android_recognition_ended_early");
+        return;
+      }
       // Se non abbiamo ancora inviato final ma abbiamo un transcript accumulato,
       // consideriamolo final (safety net per casi in cui iOS chiude senza
       // isFinal=true).
@@ -680,29 +768,9 @@ export class VoiceClientSttSession {
       //   `androidRecognitionServicePackage` non lo forziamo: il default
       //   di sistema (Google) è quello che vogliamo.
       //
-      // === FIX 2026-07-26 v64.1 — Beep sistema + timeout troppo corto ===
-      //
-      // PROBLEMA #1 (Fabio 26/07): Google SpeechRecognizer emette un
-      // beep di sistema all'apertura/chiusura del mic. iPhone non ce l'ha.
-      // Soluzione (documentata nel codice nativo di expo-speech-recognition,
-      // ExpoSpeechService.kt:278): usare `continuous: true` su Android 13+
-      // fa passare il modulo attraverso `EXTRA_AUDIO_SOURCE` con audio
-      // recorder custom, bypassando il beep di sistema.
-      //
-      // PROBLEMA #2: Google chiude troppo velocemente su silenzio (~2s).
-      // Se l'utente ci mette un attimo a rispondere, no-speech scatta e
-      // la sessione si blocca in "recording" senza mai finire.
-      // Soluzione: allungare le soglie via androidIntentOptions.
-      //   - EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 4000ms
-      //     (era 2000ms default) — tolleranza per pause naturali.
-      //   - EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 3000ms
-      //   - EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 500ms
-      //     (permette turni brevi tipo "sì" / "no")
-      //
-      // Nota su continuous:true: NON cambia il flow lato client — Google
-      // emette ancora `result isFinal` + `end` quando l'utente smette di
-      // parlare (grazie alle soglie qui sopra). L'unica differenza reale
-      // è il beep soppresso.
+      // Android continuous mode produces multiple final SEGMENTS. The
+      // AndroidUtterance controller above accumulates those segments and
+      // owns the conversational endpoint; native end is not a turn boundary.
       const startOpts: any = {
         lang,
         interimResults: true,
@@ -725,6 +793,7 @@ export class VoiceClientSttSession {
         };
       }
       if (Platform.OS === "android") {
+        startOpts.volumeChangeEventOptions = { enabled: true, intervalMillis: 300 };
         // Silence timeouts più lunghi per tolleranza pause naturali
         // (vedi commento sopra Fix v64.1 PROBLEMA #2).
         startOpts.androidIntentOptions = {
@@ -734,18 +803,9 @@ export class VoiceClientSttSession {
         };
       }
       ExpoSpeechRecognitionModule.start(startOpts);
-      console.log(`[${TAG}] ExpoSpeechRecognitionModule.start() OK (v64.1 continuous=${startOpts.continuous})`);
-      // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
-      // Segnaliamo all'upper layer che il microfono REALE è ora attivo.
-      // Da qui in poi un tap dell'utente su onBigButton è un legittimo
-      // stop. Prima di questo momento (startup async 1-2s), un tap
-      // aborterebbe la sessione prima che il mic parta → cascata
-      // Xiaomi osservata (vedi Fix A sopra).
-      try {
-        this.callbacks.onRecognitionActive?.();
-      } catch (cbErr: any) {
-        console.log(`[${TAG}] onRecognitionActive callback error (non-fatal): ${cbErr?.message || cbErr}`);
-      }
+      console.log(`[${TAG}] ExpoSpeechRecognitionModule.start() OK (v70.4 continuous=${startOpts.continuous} endpoint=${this.autoEndpoint ? "auto-3000ms" : "manual-release"})`);
+      // Readiness is reported by the native `start` event above, not by
+      // the synchronous start() invocation returning.
 
       // === FIX 2026-07-26 v64.0 — Android silent-fail watchdog ===
       // Su Android (Google SpeechRecognizer), al 2° turno la start()
@@ -765,7 +825,7 @@ export class VoiceClientSttSession {
         }
         this.micWatchdogTimer = setTimeout(() => {
           this.micWatchdogTimer = null;
-          if (this.speechStartReceived) return;
+          if (this.recognitionStarted || this.speechStartReceived) return;
           if (this.doneReceived || this.stopRequested || this.dispatched) return;
           console.log(
             `[${TAG}] MIC_WATCHDOG_TIMEOUT — speechstart never received (5s) — session zombie, propagating error`
@@ -813,7 +873,10 @@ export class VoiceClientSttSession {
    * Invia il transcript finale al backend + notifica il caller (onFinal).
    * Idempotente: se già dispatchato o doneReceived, no-op.
    */
-  private async dispatchFinalToBackend(): Promise<void> {
+  private dispatchFinalToBackend(): Promise<void> {
+    return this.trackAudioTask(this.dispatchFinalAndReleaseFocus());
+  }
+  private async dispatchFinalAndReleaseFocus(): Promise<void> {
     if (this.dispatched || this.doneReceived) return;
     // Set flag SUBITO — così ogni chiamata successiva (safety net di end
     // handler, timeout, ecc.) diventa no-op. Evita 30+ duplicati che iOS
@@ -913,6 +976,7 @@ export class VoiceClientSttSession {
     if (Platform.OS === "android") {
       try {
         const Audio: any = await import("expo-audio");
+        if (this.doneReceived) return;
         const t0 = Date.now();
 
         // 1) Deactivate audio session — rilascia AudioFocus nativo
@@ -930,6 +994,7 @@ export class VoiceClientSttSession {
         // dove il release del focus è più lento e il ciclo troppo veloce
         // lasciava lo stato inconsistente, contribuendo al mic-block al 2° turno.
         await new Promise((r) => setTimeout(r, 250));
+        if (this.doneReceived) return;
 
         // 3) Set playback mode (non più record) — matches TTS_PLAY setup
         try {
@@ -947,6 +1012,7 @@ export class VoiceClientSttSession {
           console.log(`[${TAG}] audio focus release step3 FAILED: ${e?.message || e}`);
         }
 
+        if (this.doneReceived) return;
         // 4) Reactivate audio session — riacquisisce focus per media
         try {
           if (typeof Audio.setIsAudioActiveAsync === "function") {
@@ -976,6 +1042,8 @@ export class VoiceClientSttSession {
       `caller=${(new Error().stack || "").split("\n").slice(1, 4).join(" <- ")}`
     );
     this.stopRequested = true;
+    this.warmupAbort?.abort();
+    this.cancelWsOpen?.();
     console.log(`[${TAG}] stop() called`);
     try {
       ExpoSpeechRecognitionModule.stop();
@@ -999,12 +1067,15 @@ export class VoiceClientSttSession {
         this.forceCloseWs();
       }
     }, 40_000);
+    await this.drainAudioTasks();
   }
 
   async abort(): Promise<void> {
     console.log(`[${TAG}] abort() — hard stop`);
     this.stopRequested = true;
     this.doneReceived = true;
+    this.warmupAbort?.abort();
+    this.cancelWsOpen?.();
     this.notifiedUpperOnClose = true;
     try {
       ExpoSpeechRecognitionModule.abort();
@@ -1012,6 +1083,7 @@ export class VoiceClientSttSession {
     this.removeListeners();
     this.stopKeepalive();
     this.forceCloseWs();
+    await this.drainAudioTasks();
   }
 
   /**
@@ -1032,7 +1104,12 @@ export class VoiceClientSttSession {
    * dal listener error che ha già propagato onError all'upper layer. Qui
    * facciamo solo housekeeping della AudioSession per il turno successivo.
    */
-  private async performAudioSessionRecoveryCycle(
+  private performAudioSessionRecoveryCycle(
+    errorCode: string | undefined, errorMsg: string, isZombieCandidate: boolean
+  ): Promise<void> {
+    return this.trackAudioTask(this.runAudioSessionRecoveryCycle(errorCode, errorMsg, isZombieCandidate));
+  }
+  private async runAudioSessionRecoveryCycle(
     errorCode: string | undefined,
     errorMsg: string,
     isZombieCandidate: boolean
@@ -1079,6 +1156,7 @@ export class VoiceClientSttSession {
           `[OLLENYA_AUDIO_ZOMBIE_RECOVERY] step0 setActive(false) FAILED: ${e?.message || e}`
         );
       }
+      if (this.doneReceived || this.stopRequested) return;
       // Step 1: deactivate mode — dice a iOS "rilascia la session, non serve"
       try {
         await setAudioModeAsync({
@@ -1098,6 +1176,7 @@ export class VoiceClientSttSession {
       // 300ms è il valore empirico dal doc audio-robustness: sotto rischi
       // race condition, sopra è overkill.
       await new Promise((r) => setTimeout(r, 300));
+      if (this.doneReceived || this.stopRequested) return;
       // === FIX v65.23 — Reactivate con retry backoff (max 3 tentativi) =====
       // Se il primo reactivate fallisce con `!pri` (categoria audio non
       // ancora liberata da un'altra app / route in transizione), riproviamo
@@ -1111,6 +1190,7 @@ export class VoiceClientSttSession {
         if (backoffMs[attempt] > 0) {
           await new Promise((r) => setTimeout(r, backoffMs[attempt]));
         }
+        if (this.doneReceived || this.stopRequested) return;
         try {
           await setAudioModeAsync({
             allowsRecording: true,
@@ -1159,38 +1239,46 @@ export class VoiceClientSttSession {
   private openWs(url: string): Promise<void> {
     return new Promise((resolve, reject) => {
       let ws: WebSocket;
-      try {
-        ws = new WebSocket(url);
-      } catch (e: any) {
-        return reject(e);
-      }
+      try { ws = new WebSocket(url); } catch (error) { reject(error); return; }
+      this.ws = ws;
       const opened = Date.now();
       let settled = false;
-      ws.onopen = () => {
+      const finish = (error?: Error) => {
+        if (settled) return;
         settled = true;
-        this.ws = ws;
+        clearTimeout(timer);
+        if (this.cancelWsOpen === cancel) this.cancelWsOpen = null;
+        if (error) reject(error); else resolve();
+      };
+      const cancel = () => {
+        finish(new Error("voice_stream_start_cancelled"));
+        try { ws.close(1000); } catch {}
+      };
+      const timer = setTimeout(() => {
+        finish(new Error("ws_open_timeout"));
+        try { ws.close(1000); } catch {}
+      }, 10000);
+      this.cancelWsOpen = cancel;
+      ws.onopen = () => {
+        if (settled || this.stopRequested || this.doneReceived) { cancel(); return; }
         console.log(`[${TAG}] WS opened in ${Date.now() - opened}ms`);
-        resolve();
+        finish();
       };
-      ws.onerror = (e: any) => {
-        console.log(`[${TAG}] WS error: ${JSON.stringify(e)}`);
-        if (!settled) {
-          settled = true;
-          reject(new Error("ws_error"));
-        }
+      ws.onerror = () => {
+        finish(new Error("ws_error"));
+        this.forceCloseWs();
       };
-      ws.onclose = (ev) => {
-        console.log(`[${TAG}] WS closed code=${ev.code} reason=${ev.reason}`);
+      ws.onclose = ev => {
+        finish(new Error(`ws_closed_before_open:${ev.code}`));
+        if (this.ws === ws) this.ws = null;
         this.stopKeepalive();
         this.removeListeners();
         if (!this.doneReceived && !this.notifiedUpperOnClose) {
           this.notifiedUpperOnClose = true;
-          try {
-            this.callbacks.onError?.(`ws_closed_no_done:${ev.code}`);
-          } catch {}
+          this.callbacks.onError?.(`ws_closed_no_done:${ev.code}`);
         }
       };
-      ws.onmessage = (ev: MessageEvent) => this.handleWsMessage(ev);
+      ws.onmessage = ev => this.handleWsMessage(ev);
     });
   }
 
@@ -1361,6 +1449,8 @@ export class VoiceClientSttSession {
   }
 
   private removeListeners(): void {
+    this.androidUtterance?.cancel();
+    this.androidUtterance = null;
     // === FIX 2026-07-26 v64.0 — Clear mic watchdog on teardown ===
     if (this.micWatchdogTimer) {
       clearTimeout(this.micWatchdogTimer);
@@ -1378,9 +1468,24 @@ export class VoiceClientSttSession {
     try {
       this.subSpeechStart?.remove();
     } catch {}
+    try { this.subRecognitionStart?.remove(); } catch {}
+    try { this.subVolume?.remove(); } catch {}
     this.subResult = null;
     this.subError = null;
     this.subEnd = null;
     this.subSpeechStart = null;
+    this.subRecognitionStart = null;
+    this.subVolume = null;
+  }
+
+  private failAndroidRecognition(reason: string): void {
+    if (this.dispatched || this.doneReceived || this.stopRequested) return;
+    this.doneReceived = true;
+    this.notifiedUpperOnClose = true;
+    this.removeListeners();
+    this.stopKeepalive();
+    try { ExpoSpeechRecognitionModule.abort(); } catch {}
+    try { this.callbacks.onError?.(reason); } catch {}
+    this.forceCloseWs();
   }
 }
