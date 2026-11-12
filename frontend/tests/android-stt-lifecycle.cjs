@@ -34,6 +34,16 @@ function harness(os = 'android') {
       if(name === 'expo-speech-recognition') return {ExpoSpeechRecognitionModule:native};
       if(name === 'expo-audio') return audio;
       if(['./voiceStream','./backendUrl','./authToken'].includes(name)) return {};
+      if(name === './androidUtterance') {
+        // Compile AndroidUtterance TS in the same VM context so voiceClientStt can use it.
+        const utteranceSrc = fs.readFileSync(path.join(__dirname,'../lib/androidUtterance.ts'),'utf8');
+        const utteranceJs = ts.transpileModule(utteranceSrc, { compilerOptions: {
+          target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS,
+        }}).outputText;
+        const subExports = {};
+        vm.runInNewContext(utteranceJs, { exports: subExports, console: {log(){}}, Date, setTimeout: context.setTimeout, clearTimeout: context.clearTimeout, require: context.require });
+        return subExports;
+      }
       throw new Error(name);
     },
   };
@@ -50,9 +60,9 @@ function harness(os = 'android') {
 let passed=0;
 async function test(name, fn) {await fn();passed++;console.log('PASS', name)}
 (async () => {
-  await test('Android uses standard microphone and does not require offline models', async()=>{
+  await test('Android uses continuous streaming with AndroidUtterance accumulator (v70.4)', async()=>{
     const h=harness();await h.session.startRecognition('it');
-    assert.equal(h.options.continuous,false);assert.equal(h.options.requiresOnDeviceRecognition,false);
+    assert.equal(h.options.continuous,true);assert.equal(h.options.requiresOnDeviceRecognition,false);
     assert.equal(h.options.lang,'it-IT');assert.equal(h.active,0);
   });
   await test('native readiness opens UI gate once; user silence is not startup failure', async()=>{
@@ -65,7 +75,7 @@ async function test(name, fn) {await fn();passed++;console.log('PASS', name)}
   });
   await test('end without transcript cannot leave recording zombie', async()=>{
     const h=harness();await h.session.startRecognition('it');h.emit('end');h.emit('end');h.fireWatchdog();
-    assert.deepEqual(h.errors,['client_stt_ended_without_transcript']);assert.equal(h.listenerCount,0);assert.equal(h.closed,1);
+    assert.deepEqual(h.errors,['android_recognition_ended_early']);assert.equal(h.listenerCount,0);assert.equal(h.closed,1);
   });
   await test('native audio error closes old session before next turn', async()=>{
     const h=harness();await h.session.startRecognition('it');h.emit('error',{error:'audio-capture'});h.emit('end');

@@ -543,6 +543,7 @@ export class VoiceClientSttSession {
     // Registra listeners prima di start()
     this.subRecognitionStart = ExpoSpeechRecognitionModule.addListener("start", () => {
       if (this.stopRequested || this.doneReceived || this.dispatched) return;
+      if (this.recognitionStarted) return; // v70.4.1 idempotent gate: continuous restart must not re-open UI
       this.recognitionStarted = true;
       if (this.micWatchdogTimer) clearTimeout(this.micWatchdogTimer);
       this.micWatchdogTimer = null;
@@ -660,6 +661,14 @@ export class VoiceClientSttSession {
         try {
           this.callbacks.onError?.(`client_stt_${evt.error}`);
         } catch {}
+        // v70.4.1 — Non-benign errors terminate the session; prevent subsequent
+        // "end" events from re-firing android_recognition_ended_early.
+        this.dispatched = true;
+        this.doneReceived = true;
+        this.notifiedUpperOnClose = true;
+        try { this.removeListeners(); } catch {}
+        try { this.stopKeepalive?.(); } catch {}
+        try { this.forceCloseWs(); } catch {}
       }
     );
 
@@ -671,8 +680,38 @@ export class VoiceClientSttSession {
         return;
       }
       console.log(`[${TAG}] end event (noSpeech=${this.noSpeechReceived})`);
+      // v70.4.1 — No-speech graceful close must win over AndroidUtterance.serviceEnded()
+      if (!this.currentTranscript && !this.doneReceived && this.noSpeechReceived) {
+        this.androidUtterance?.cancel();
+        console.log(
+          `[${TAG}] end fired with empty transcript + no-speech → sending {type:end} for graceful close`
+        );
+        try {
+          this.sendJson({ type: "end" });
+        } catch {}
+        this.dispatched = true;
+        this.doneReceived = true;
+        this.notifiedUpperOnClose = true;
+        try {
+          this.callbacks.onError?.("no_speech");
+        } catch {}
+        this.removeListeners();
+        this.stopKeepalive();
+        this.forceCloseWs();
+        return;
+      }
       if (this.androidUtterance && !this.doneReceived && !this.stopRequested) {
         if (this.androidUtterance.serviceEnded()) return;
+        // v70.4.1 — Before failing, salvage any partial transcript so a native
+        // end mid-utterance still reaches the backend exactly once.
+        const salvage = this.androidUtterance.text;
+        if (salvage) {
+          this.currentTranscript = salvage;
+          console.log(`[${TAG}] end fired with partial transcript → dispatching salvage once`);
+          this.dispatchFinalToBackend().catch((e: any) =>
+            console.log(`[${TAG}] dispatchFinal salvage error: ${e?.message || e}`));
+          return;
+        }
         // Native recognition really disconnected. Do not pretend an incomplete
         // utterance was final and do not trigger repeated HF retries.
         this.failAndroidRecognition("android_recognition_ended_early");
@@ -776,6 +815,13 @@ export class VoiceClientSttSession {
       }
       ExpoSpeechRecognitionModule.start(startOpts);
       console.log(`[${TAG}] ExpoSpeechRecognitionModule.start() OK (v70.4 continuous=${startOpts.continuous} endpoint=${this.autoEndpoint ? "auto-3000ms" : "manual-release"})`);
+      // iOS SFSpeechRecognizer is synchronous & reliable — surface readiness
+      // immediately so the UI can open the gate without waiting for a native
+      // "start" event (which still fires and is gated via recognitionStarted).
+      if (Platform.OS === "ios" && !this.recognitionStarted && !this.stopRequested && !this.doneReceived && !this.dispatched) {
+        this.recognitionStarted = true;
+        try { this.callbacks.onRecognitionActive?.(); } catch {}
+      }
       // Readiness is reported by the native `start` event above, not by
       // the synchronous start() invocation returning.
 
@@ -812,6 +858,7 @@ export class VoiceClientSttSession {
           try {
             this.forceCloseWs();
           } catch {}
+          try { this.removeListeners(); } catch {}
         }, 5_000);
       }
     } catch (e: any) {
