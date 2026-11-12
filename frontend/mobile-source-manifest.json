@@ -1,12 +1,18 @@
 {
-  "source_base": "f23393cc7b18ce2f34e82da0bc7117974b6fe02f",
-  "build_tag": "build-v70.2-honor-diag-resume",
+  "source_base": "v70.4 package; consolidate against actual build workspace",
+  "build_tag": "build-v70.5-audio-lifecycle",
   "files": {
-    "frontend/app/index.tsx": "064f074793fb7fc953a46121d99091cf6f5dd52c914f97f1b4d8a33ce5c03710",
-    "frontend/lib/speech.ts": "38a6ff7c5c5f371e6c220eb934ec1603a1c7e065cb43f4ed42d135551c748c75",
-    "frontend/lib/voiceClientStt.ts": "b9ab3364af48b0b046c680040cddc77146157de5ccaaedd2f35e02da5a20dc2b",
-    "frontend/lib/diagLogger.ts": "c883fa5b7203dfb16da56b05aac29bebadd2c838eedb1247e68a9806e138af6f"
+    "frontend/app/index.tsx": "0741598fcb941a9f6aea03928f0cbef716cb47a2444060767e1d4712cd384ee1",
+    "frontend/lib/speech.ts": "8bff1998f19d2a8d7b21afc7c1cca375f6eb366b4e4bdab28aadd198b9ce5b8e",
+    "frontend/lib/voiceClientStt.ts": "8c227c3e01643df939fc2e3ca0113a438f564ca287782117b1fef70e04cd99b6",
+    "frontend/lib/audioLifecycleGate.ts": "5a2f6a95ad6701729b5b9853a24a131a46cbf7c87475b5f793129d728465b2ec",
+    "frontend/lib/androidUtterance.ts": "198dc0ca3eda1eba66e3137ad07d002b280c5b682837a01f07b2d9a376b62517",
+    "frontend/lib/diagLogger.ts": "c883fa5b7203dfb16da56b05aac29bebadd2c838eedb1247e68a9806e138af6f",
+    "frontend/scripts/test-audio-startup.cjs": "2b78e1b221907fe04d4460a6fa2bed46f83c93b8e1fb224d20745ee8297f42b3",
+    "frontend/scripts/test-stream-startup.cjs": "cba24639666741096518db31686c483c42af73145ebe1f8a8e7656d8dec1d79c",
+    "frontend/scripts/test-android-utterance.cjs": "3698c6ca5b7f7673a477438936da0c2dbb5b8bd27c851c62bcd65dd30d813154",
+    "frontend/scripts/test-resume-recovery.cjs": "9997a77c1c50835a5942fdcc17b0b2f26233aafd4980a0bde6f346e68202f783"
   },
-  "status": "prepared_locally_not_synced_not_built",
-  "verification": "Syntax checks and mocked lifecycle checks only; Honor microphone not device-tested."
+  "status": "prepared_locally_not_pushed_not_built",
+  "verification": "Real source executed with simulated native modules; no physical Honor acoustic test or APK build."
 }
