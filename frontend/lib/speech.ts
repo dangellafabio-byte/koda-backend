@@ -2163,9 +2163,11 @@ export async function voiceStreamConverse(opts: {
 
   // A suspended socket may never send another event. Cancel must also wake
   // the player waiting for its first sentence, not just abort HTTP/playback.
+  let liveSession: any = null;
   const onStreamAbort = () => {
     pipelineDone = true;
     notify();
+    try { Promise.resolve(liveSession?.abort?.()).catch(() => {}); } catch {}
   };
   ac.signal.addEventListener("abort", onStreamAbort, { once: true });
 
@@ -2176,6 +2178,16 @@ export async function voiceStreamConverse(opts: {
     notify();
   }, timeoutMs);
 
+  const clearOwnership = () => {
+    clearTimeout(hardTimer);
+    ac.signal.removeEventListener("abort", onStreamAbort);
+    if (currentAbort === ac) { currentAbort = null; speakingNow = false; }
+  };
+  const cancelled = () => {
+    clearOwnership();
+    try { opts.onSession?.(null); } catch {}
+    return {ok: false, error: "aborted"};
+  };
   // Lazy import per evitare cicli (voiceStream.ts → ... → speech.ts)
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { VoiceStreamSession } = require("./voiceStream");
@@ -2219,6 +2231,7 @@ export async function voiceStreamConverse(opts: {
     console.log(`[OLLENYA_STT_SOURCE] engine=deepgram (feature flag off)`);
   }
 
+  if (ac.signal.aborted) return cancelled();
   const session = new SessionCtor({
     onReady: (sessionId: string) => {
       console.log(`[OLLENYA_STREAM_CLIENT] ready sess=${sessionId.slice(0, 8)}`);
@@ -2457,6 +2470,7 @@ export async function voiceStreamConverse(opts: {
     },
   });
 
+  liveSession = session;
   try {
     // === FIX 2026-06-29 — pesca la città dal GPS cache + auto-refresh ===
     // Approccio "usa quello che hai": leggiamo la posizione direttamente
@@ -2514,7 +2528,9 @@ export async function voiceStreamConverse(opts: {
     // il chunkLoop partiva comunque e continuava all'infinito.
     // Ora il ref è disponibile IMMEDIATAMENTE dopo new VoiceStreamSession(),
     // così stop() può essere invocato in qualsiasi momento durante start().
+    if (ac.signal.aborted) return cancelled();
     try { opts.onSession?.(session); } catch {}
+    if (ac.signal.aborted) return cancelled();
 
     await session.start({
       autoEndpoint: opts.autoEndpoint,
@@ -2526,8 +2542,8 @@ export async function voiceStreamConverse(opts: {
       voiceId: opts.voiceId,
     });
   } catch (e: any) {
-    clearTimeout(hardTimer);
-    speakingNow = false;
+    try { await session.abort?.(); } catch {}
+    clearOwnership();
     try { opts.onSession?.(null); } catch {}
     ac.signal.removeEventListener("abort", onStreamAbort);
     return { ok: false, error: `voice-stream-start-failed: ${e?.message || e}` };
@@ -2730,7 +2746,8 @@ export async function voiceStreamConverse(opts: {
     // il prossimo tap può partire.
     try { opts.onSession?.(null); } catch {}
     try {
-      await Promise.race([
+      if (sttSource === "native") await session.stop();
+      else await Promise.race([
         session.stop(),
         new Promise<void>((_, reject) =>
           setTimeout(() => reject(new Error("session-stop-timeout-5s")), 5000)
@@ -2741,9 +2758,7 @@ export async function voiceStreamConverse(opts: {
         `[voice-stream] session.stop() bailout: ${e?.message || e}`
       );
     }
-    clearTimeout(hardTimer);
-    if (currentAbort === ac) currentAbort = null;
-    speakingNow = false;
+    clearOwnership();
   }
 
   ac.signal.removeEventListener("abort", onStreamAbort);

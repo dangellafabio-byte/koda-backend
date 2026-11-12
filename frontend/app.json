@@ -160,7 +160,10 @@
     },
     "owner": "fabiod.labor",
     "updates": {
-      "url": "https://u.expo.dev/92cf0b6f-ee99-4fbe-8562-10cfc8a786de"
+      "url": "https://u.expo.dev/92cf0b6f-ee99-4fbe-8562-10cfc8a786de",
+      "requestHeaders": {
+        "expo-channel-name": "preview"
+      }
     }
   }
 }

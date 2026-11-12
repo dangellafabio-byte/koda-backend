@@ -1,13 +1,18 @@
 {
-  "source_base": "merged-koda-main-plus-v70.4.1",
-  "build_tag": "build-v70.4-ptt-stop-timeouts",
+  "source_base": "v70.4 package; consolidate against actual build workspace",
+  "build_tag": "build-v70.5-audio-lifecycle",
   "files": {
-    "frontend/app/index.tsx": "4c2f41e28e0afef258cdf5375fd0e2e0f2dfbf16d7716b8db5cd0020715b61b0",
-    "frontend/lib/speech.ts": "39503737a03750fbb5b0c39c8c510c2ab375544c4f490dc3a45f251324dd8967",
-    "frontend/lib/voiceClientStt.ts": "85e83c2ededd689305d29fd21dc060f3ef0e05ea698771aa521b0a6606953fe7",
+    "frontend/app/index.tsx": "0741598fcb941a9f6aea03928f0cbef716cb47a2444060767e1d4712cd384ee1",
+    "frontend/lib/speech.ts": "8bff1998f19d2a8d7b21afc7c1cca375f6eb366b4e4bdab28aadd198b9ce5b8e",
+    "frontend/lib/voiceClientStt.ts": "8c227c3e01643df939fc2e3ca0113a438f564ca287782117b1fef70e04cd99b6",
+    "frontend/lib/audioLifecycleGate.ts": "5a2f6a95ad6701729b5b9853a24a131a46cbf7c87475b5f793129d728465b2ec",
     "frontend/lib/androidUtterance.ts": "198dc0ca3eda1eba66e3137ad07d002b280c5b682837a01f07b2d9a376b62517",
-    "frontend/lib/diagLogger.ts": "c883fa5b7203dfb16da56b05aac29bebadd2c838eedb1247e68a9806e138af6f"
+    "frontend/lib/diagLogger.ts": "c883fa5b7203dfb16da56b05aac29bebadd2c838eedb1247e68a9806e138af6f",
+    "frontend/scripts/test-audio-startup.cjs": "2b78e1b221907fe04d4460a6fa2bed46f83c93b8e1fb224d20745ee8297f42b3",
+    "frontend/scripts/test-stream-startup.cjs": "cba24639666741096518db31686c483c42af73145ebe1f8a8e7656d8dec1d79c",
+    "frontend/scripts/test-android-utterance.cjs": "3698c6ca5b7f7673a477438936da0c2dbb5b8bd27c851c62bcd65dd30d813154",
+    "frontend/scripts/test-resume-recovery.cjs": "9997a77c1c50835a5942fdcc17b0b2f26233aafd4980a0bde6f346e68202f783"
   },
-  "status": "merged_with_main_ready_for_emergent_build",
-  "verification": "11/11 STT lifecycle tests pass, 43/43 router tests pass, lint clean. stopTalk v70.4 bugfix + v70.4.1 harness idempotency, no-speech, salvage, iOS sync readiness."
+  "status": "prepared_locally_not_pushed_not_built",
+  "verification": "Real source executed with simulated native modules; no physical Honor acoustic test or APK build."
 }
