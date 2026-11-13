@@ -10618,6 +10618,13 @@ async def api_converse(req: ConverseRequest):
     # Separate the version with audio tags (for TTS) from the cleaned version (for chat display)
     voice_text_full = raw_reply
     reply_text = _strip_audio_tags(raw_reply)
+    # === FIX LINGUA SPAGNOLA (2026-11-13) chat non-streaming ===
+    reply_text, _chat_es_hits = _sanitize_spanish_leak(reply_text)
+    if _chat_es_hits:
+        logger.warning(
+            f"[OLLENYA_LANG_SANITIZE_CHAT] hits={_chat_es_hits} "
+            f"out_first80={reply_text[:80]!r}"
+        )
     tone = (data.get("tone") or "neutral").lower()
     domain = data.get("domain")
     extracted_raw = data.get("extracted")
@@ -12302,6 +12309,80 @@ def _strip_audio_tags(text: str) -> str:
     # Also strip leading punctuation glue like " ,"
     cleaned = re.sub(r"\s+([,.;!?])", r"\1", cleaned)
     return cleaned
+
+
+# === FIX LINGUA SPAGNOLA — SANITIZER PRE-TTS (Fabio 2026-11-13) =============
+# Il system prompt + rinforzo user_payload già impongono italiano. Claude
+# Haiku 5.5 ci casca comunque ogni tanto ("Hola", "¿cómo estás?", "gracias").
+# La detection post-stream a riga 18998+ logga LANG_MISMATCH ma NON agisce,
+# quindi l'audio spagnolo arriva all'orecchio dell'utente. Qui applichiamo
+# una sanificazione a livello FRASE, prima della sintesi TTS, con sostituzioni
+# punto a punto preservando la capitalizzazione. Nessuna chiamata LLM extra,
+# zero latenza aggiunta. Copre le ~30 parole/frasi spagnole più comuni
+# osservate in diag utente.
+_ES_IT_REPLACEMENTS: List[tuple[re.Pattern, str]] = [
+    # Punteggiatura spagnola → via subito
+    (re.compile(r"[¿¡]"), ""),
+    # Saluti e cortesia (phrase-level per evitare mismatch grammaticali)
+    (re.compile(r"\bbuenos\s+d[ií]as\b", re.IGNORECASE), "Buongiorno"),
+    (re.compile(r"\bbuenas\s+tardes\b", re.IGNORECASE), "Buon pomeriggio"),
+    (re.compile(r"\bbuenas\s+noches\b", re.IGNORECASE), "Buonanotte"),
+    (re.compile(r"\bmuchas\s+gracias\b", re.IGNORECASE), "Grazie mille"),
+    (re.compile(r"\bmuy\s+bien\b", re.IGNORECASE), "molto bene"),
+    (re.compile(r"\bpor\s+favor\b", re.IGNORECASE), "per favore"),
+    (re.compile(r"\bde\s+nada\b", re.IGNORECASE), "prego"),
+    (re.compile(r"\bc[oó]mo\s+est[aá]s\b", re.IGNORECASE), "come stai"),
+    (re.compile(r"\bc[oó]mo\s+est[aá]\b", re.IGNORECASE), "come sta"),
+    (re.compile(r"\best[aá]\s+bien\b", re.IGNORECASE), "va bene"),
+    # Singole parole frequenti (word-boundary stretto)
+    (re.compile(r"\bhola\b", re.IGNORECASE), "Ciao"),
+    (re.compile(r"\bgracias\b", re.IGNORECASE), "grazie"),
+    (re.compile(r"\bperd[oó]n\b", re.IGNORECASE), "scusa"),
+    (re.compile(r"\bperdona\b", re.IGNORECASE), "scusa"),
+    (re.compile(r"\blo\s+siento\b", re.IGNORECASE), "mi dispiace"),
+    (re.compile(r"\bma[ñn]ana\b", re.IGNORECASE), "domani"),
+    (re.compile(r"\bnada\b", re.IGNORECASE), "niente"),
+    (re.compile(r"\bqu[eé]\s+bueno\b", re.IGNORECASE), "che bello"),
+    (re.compile(r"\bbueno\b(?!\s+di)", re.IGNORECASE), "bene"),  # evita "bueno dia"
+    (re.compile(r"\bamig[oa]\b", re.IGNORECASE), "caro"),
+    (re.compile(r"\bentiendo\b", re.IGNORECASE), "capisco"),
+    (re.compile(r"\bsiento\b(?=\s*(?:que|lo))", re.IGNORECASE), "sento"),
+    (re.compile(r"\bestoy\b", re.IGNORECASE), "sono"),
+    (re.compile(r"\best[aá]s\b", re.IGNORECASE), "stai"),
+    (re.compile(r"\bquieres\b", re.IGNORECASE), "vuoi"),
+    (re.compile(r"\bquiero\b", re.IGNORECASE), "voglio"),
+    (re.compile(r"\bpuedes\b", re.IGNORECASE), "puoi"),
+    (re.compile(r"\bpuedo\b", re.IGNORECASE), "posso"),
+    (re.compile(r"\btambi[eé]n\b", re.IGNORECASE), "anche"),
+    (re.compile(r"\bporque\b", re.IGNORECASE), "perché"),
+    (re.compile(r"\bpor\s+qu[eé]\b", re.IGNORECASE), "perché"),
+    (re.compile(r"\bd[oó]nde\b", re.IGNORECASE), "dove"),
+    (re.compile(r"\bcu[aá]ndo\b", re.IGNORECASE), "quando"),
+    # "sí" con accento acuto → "sì" con grave
+    (re.compile(r"\bsí\b"), "sì"),
+    (re.compile(r"\bSí\b"), "Sì"),
+]
+
+def _sanitize_spanish_leak(text: str) -> tuple[str, int]:
+    """Sostituisce le parole/frasi spagnole più comuni con l'equivalente italiano.
+    Ritorna (testo_pulito, numero_di_sostituzioni). Chiamato PRIMA della
+    sintesi TTS su ogni frase streaming. Zero latenza (solo regex).
+    Preserva la capitalizzazione della prima lettera dove ragionevole."""
+    if not text:
+        return text, 0
+    out = text
+    hits = 0
+    for pat, repl in _ES_IT_REPLACEMENTS:
+        new_out, n = pat.subn(repl, out)
+        if n:
+            hits += n
+            out = new_out
+    # Collapse doppi spazi creati da ¿/¡ rimossi
+    if hits:
+        out = re.sub(r"  +", " ", out)
+        out = re.sub(r"\s+([,.;!?])", r"\1", out).strip()
+    return out, hits
+
 
 
 @api_router.get("/voice/options")
@@ -15444,6 +15525,15 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
                             break
                         sentence_buf = rest
                         clean = _strip_audio_tags(sent) or sent
+                        # === FIX LINGUA SPAGNOLA (2026-11-13) ===
+                        # Sanificazione anti-spagnolo PRIMA del TTS per impedire
+                        # che "hola/gracias/¿cómo estás?" raggiungano l'orecchio.
+                        clean, _es_hits = _sanitize_spanish_leak(clean)
+                        if _es_hits:
+                            logger.warning(
+                                f"[OLLENYA_LANG_SANITIZE_FAST] hits={_es_hits} "
+                                f"out_first80={clean[:80]!r}"
+                            )
                         if clean.strip():
                             # Tono ora dinamico: viene dal _ToneDetector (tag LLM
                             # esplicito o heuristic Python su keyword italiane).
@@ -15480,6 +15570,13 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
             tail = sentence_buf.strip()
             if tail:
                 clean = _strip_audio_tags(tail) or tail
+                # === FIX LINGUA SPAGNOLA (2026-11-13) tail flush ===
+                clean, _es_hits = _sanitize_spanish_leak(clean)
+                if _es_hits:
+                    logger.warning(
+                        f"[OLLENYA_LANG_SANITIZE_FAST_TAIL] hits={_es_hits} "
+                        f"out_first80={clean[:80]!r}"
+                    )
                 vs = _voice_settings_for_tone(captured["tone"], None, None)
                 sentence_mp3 = bytearray() if mp3_acc is not None else None
                 async for audio_chunk in _stream_tts_for_sentence(
@@ -15626,6 +15723,15 @@ async def _converse_stream_audio_impl(req: ConverseRequest, result_id: Optional[
         # Reply text with audio tags stripped for chat display.
         voice_text_full = full_reply
         reply_text = _strip_audio_tags(full_reply)
+        # === FIX LINGUA SPAGNOLA (2026-11-13) — bolla chat ================
+        # Anche il testo visualizzato in bolla deve essere sanitizzato,
+        # altrimenti l'utente VEDE "hola" anche se non lo sente.
+        reply_text, _bubble_es_hits = _sanitize_spanish_leak(reply_text)
+        if _bubble_es_hits:
+            logger.warning(
+                f"[OLLENYA_LANG_SANITIZE_BUBBLE_FAST] hits={_bubble_es_hits} "
+                f"out_first80={reply_text[:80]!r}"
+            )
         memory_update = (data.get("memory_update") or "").strip()
 
         ai_entry = TimelineEntry(
@@ -17624,6 +17730,16 @@ async def _fast_pipeline_task(
                     if t_extracted in _VALID_TONES:
                         current_tone = t_extracted
                 clean = _strip_audio_tags(sentence) or sentence
+                # === FIX LINGUA SPAGNOLA (2026-11-13) =============================
+                # Sanitizzazione anti-spagnolo PER-FRASE prima della sintesi TTS:
+                # evita che "hola/gracias/¿cómo estás?" raggiungano l'orecchio
+                # dell'utente anche se Claude Haiku 5.5 li produce occasionalmente.
+                clean, _es_hits = _sanitize_spanish_leak(clean)
+                if _es_hits:
+                    logger.warning(
+                        f"[OLLENYA_LANG_SANITIZE_VOICE] sid={session_id[:8]} "
+                        f"hits={_es_hits} out_first80={clean[:80]!r}"
+                    )
                 if not clean.strip():
                     return
                 # === FIX 2026-11-04 — Gender fix PRIMA del TTS ====================
@@ -19165,6 +19281,13 @@ async def _fast_pipeline_task(
 
         voice_text_full = full_reply
         reply_text = _strip_audio_tags(full_reply)
+        # === FIX LINGUA SPAGNOLA (2026-11-13) voice stream bolla chat ===
+        reply_text, _vs_es_hits = _sanitize_spanish_leak(reply_text)
+        if _vs_es_hits:
+            logger.warning(
+                f"[OLLENYA_LANG_SANITIZE_BUBBLE_VOICE] sid={session_id[:8]} "
+                f"hits={_vs_es_hits} out_first80={reply_text[:80]!r}"
+            )
 
         ai_entry = TimelineEntry(
             role="ai",
