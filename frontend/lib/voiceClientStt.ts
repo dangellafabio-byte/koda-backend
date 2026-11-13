@@ -548,6 +548,17 @@ export class VoiceClientSttSession {
         const services = module.getSpeechRecognitionServices?.() || [];
         console.log(`[OLLENYA_ANDROID_INPUT] default_service=${service?.packageName || "unknown"} available=${services.join(",") || "unknown"}`);
       } catch {}
+    // === FIX 2026-11-04 v70.5 — Android utterance orchestration =============
+    // Se Android gira in continuous mode (true), emette PIÙ segmenti "final"
+    // per un singolo turno. Accumuliamo via AndroidUtterance e dispatchiamo
+    // dopo quietMs di silenzio. Se invece continuous=false (test chirurgico
+    // 2026-11-13 — vedi `useContinuousAndroid` più in basso), Google emette
+    // UN solo final e chiude autonomamente: niente AndroidUtterance, dispatch
+    // diretto dal result handler.
+    // NOTA: questo flag DEVE restare allineato con `useContinuousAndroid`
+    // definito più in basso in start().
+    const USE_CONTINUOUS_ANDROID = false;
+    if (Platform.OS === "android" && USE_CONTINUOUS_ANDROID) {
       this.androidUtterance = new AndroidUtterance((text) => {
         if (this.stopRequested || this.doneReceived || this.dispatched) return;
         this.currentTranscript = text;
@@ -558,6 +569,7 @@ export class VoiceClientSttSession {
         autoEndpoint: this.autoEndpoint,
         onStalled: () => this.failAndroidRecognition("android_transcript_stalled"),
       });
+    }
     }
     // Reset watchdog state
     this.speechStartReceived = false;
@@ -768,16 +780,17 @@ export class VoiceClientSttSession {
       //   `androidRecognitionServicePackage` non lo forziamo: il default
       //   di sistema (Google) è quello che vogliamo.
       //
-      // Android continuous mode produces multiple final SEGMENTS. The
-      // AndroidUtterance controller above accumulates those segments and
-      // owns the conversational endpoint; native end is not a turn boundary.
+      // 2026-11-13 Honor report — TEST CHIRURGICO v70.5.4:
+      // `continuous: false` anche su Android. Prima era true per evitare
+      // il beep di sistema tra turni (v64.1 ANDROID_CONTINUOUS_NO_BEEP),
+      // ma il VAD di Google in continuous mode è meno sensibile all'attivazione
+      // iniziale e più aggressivo nel chiudere. L'utente deve urlare.
+      // Rimettiamo il comportamento pre-v70.3 (il beep torna).
+      const useContinuousAndroid = false;
       const startOpts: any = {
         lang,
         interimResults: true,
-        // continuous: true solo su Android per bypassare il beep di sistema.
-        // Su iOS resta false (comportamento invariato, SFSpeechRecognizer
-        // non emette mai beep).
-        continuous: Platform.OS === "android",
+        continuous: useContinuousAndroid && Platform.OS === "android",
         maxAlternatives: 1,
         addsPunctuation: true,
         // On-device: preferito su entrambe, ma richiesto SOLO su iOS
