@@ -64,11 +64,11 @@ function harness(os = 'android') {
   assert.equal(h.calls.ready, 0, 'start invocation does not prove readiness');
   h.emit('start');assert.equal(h.calls.ready, 1);
   h.tick(6000);assert.equal(h.calls.errors.length, 0, 'ready but quiet is not a dead mic');
-  h.emit('speechstart');h.result('Perché lei cambia');h.tick(2000);
+  h.emit('speechstart');h.result('Perché lei cambia');h.tick(500);
   h.result('Perché lei cambia le impostazioni', true);
   assert.equal(h.calls.dispatch.length, 0, 'final segment must not end a turn');
-  h.tick(2000);h.result('e non riesco');h.tick(2000);
-  h.result('e non riesco a finire', true);h.tick(2999);
+  h.tick(500);h.result('e non riesco');h.tick(500);
+  h.result('e non riesco a finire', true);h.tick(1499);
   assert.equal(h.calls.dispatch.length, 0);
   h.tick(1);assert.deepEqual(h.calls.dispatch, ['Perché lei cambia le impostazioni e non riesco a finire']);
   h.tick(10000);assert.equal(h.calls.dispatch.length, 1);

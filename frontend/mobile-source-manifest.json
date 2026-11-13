@@ -1,6 +1,6 @@
 {
-  "source_base": "v70.4 package; consolidate against actual build workspace",
-  "build_tag": "build-v70.5-audio-lifecycle",
+  "source_base": "v70.5 audio-lifecycle + Honor PTT silence tuning",
+  "build_tag": "build-v70.5.1-fast-endpoint-1500ms",
   "files": {
     "frontend/app/index.tsx": "0741598fcb941a9f6aea03928f0cbef716cb47a2444060767e1d4712cd384ee1",
     "frontend/lib/speech.ts": "8bff1998f19d2a8d7b21afc7c1cca375f6eb366b4e4bdab28aadd198b9ce5b8e",

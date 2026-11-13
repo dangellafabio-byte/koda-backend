@@ -554,7 +554,7 @@ export class VoiceClientSttSession {
         console.log("[OLLENYA_ANDROID_ENDPOINT] quiet interval complete → dispatch once");
         this.dispatchFinalToBackend().catch((e: any) =>
           console.log(`[${TAG}] dispatchFinal error: ${e?.message || e}`));
-      }, 3000, {
+      }, 1500, {
         autoEndpoint: this.autoEndpoint,
         onStalled: () => this.failAndroidRecognition("android_transcript_stalled"),
       });
@@ -797,8 +797,8 @@ export class VoiceClientSttSession {
         // Silence timeouts più lunghi per tolleranza pause naturali
         // (vedi commento sopra Fix v64.1 PROBLEMA #2).
         startOpts.androidIntentOptions = {
-          EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 4000,
-          EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 3000,
+          EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 2000,
+          EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 1500,
           EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 500,
         };
       }
