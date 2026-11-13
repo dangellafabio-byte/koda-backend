@@ -534,7 +534,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.5.1-fast-endpoint-1500ms";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.5.2-mic-sensitivity-rollback";
   const OLLENYA_BUILD_DATE = "2026-11-12";
   useEffect(() => {
     console.log(

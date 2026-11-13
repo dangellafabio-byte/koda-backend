@@ -796,9 +796,17 @@ export class VoiceClientSttSession {
         startOpts.volumeChangeEventOptions = { enabled: true, intervalMillis: 300 };
         // Silence timeouts più lunghi per tolleranza pause naturali
         // (vedi commento sopra Fix v64.1 PROBLEMA #2).
+        //
+        // v70.5.2 (2026-11-13) — ROLLBACK parziale della sensibilità:
+        // nel tentativo di accorciare il tempo di chiusura avevo abbassato
+        // questi a 2000/1500 ma l'utente Honor X8b si sentiva "non ascoltato"
+        // perché Google chiude il mic appena senti una micro-pausa di
+        // respirazione. Rimetto i valori originali che davano una sensazione
+        // naturale. La chiusura veloce è gestita CLIENT-SIDE dal timer
+        // quietMs di AndroidUtterance (1500ms), che è indipendente da Google.
         startOpts.androidIntentOptions = {
-          EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 2000,
-          EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 1500,
+          EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 4000,
+          EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 3000,
           EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 500,
         };
       }
