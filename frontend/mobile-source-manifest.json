@@ -1,6 +1,6 @@
 {
-  "source_base": "v70.5 audio-lifecycle + mic sensitivity rollback",
-  "build_tag": "build-v70.5.2-mic-sensitivity-rollback",
+  "source_base": "v70.5 audio-lifecycle + Honor UX fixes",
+  "build_tag": "build-v70.5.3-ptt-hf-override-nospeech-feedback",
   "files": {
     "frontend/app/index.tsx": "0741598fcb941a9f6aea03928f0cbef716cb47a2444060767e1d4712cd384ee1",
     "frontend/lib/speech.ts": "8bff1998f19d2a8d7b21afc7c1cca375f6eb366b4e4bdab28aadd198b9ce5b8e",

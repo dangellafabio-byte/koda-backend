@@ -534,7 +534,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.5.2-mic-sensitivity-rollback";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.5.3-ptt-hf-override-nospeech-feedback";
   const OLLENYA_BUILD_DATE = "2026-11-12";
   useEffect(() => {
     console.log(
@@ -2930,32 +2930,51 @@ export default function Taccuino() {
       console.log("[OLLENYA_HF_GUARD] blocked: streamingSessionRef.current is non-null (stream already active)");
       return;
     }
-    // === NO-SPEECH BACKOFF LOGIC (Fabio 2026-07-29) =========================
+    // === NO-SPEECH BACKOFF LOGIC (Fabio 2026-07-29, rev 2026-11-13) ===========
     // Se il turno appena chiuso NON ha avuto parlato reale (no_speech
     // timeout, WS chiusa senza transcript), incrementa il counter e applica
-    // il delay progressivo. Dopo 5 no_speech consecutivi, FERMA il loop
-    // (richiede tap utente) — evita che il mic continui a riaprirsi per
-    // ore se l'utente ha dimenticato l'app aperta (batteria + AudioSession iOS).
+    // il delay progressivo. Dopo MAX_NO_SPEECH_ATTEMPTS (2) no_speech consecutivi,
+    // FERMA il loop (richiede tap utente) — evita che il mic continui a
+    // riaprirsi per ore se l'utente ha dimenticato l'app aperta.
+    //
+    // 2026-11-13 Honor report: aggiunto FEEDBACK VOCALE audibile sui no-speech
+    // perché prima la UX era: 5 tentativi silenziosi e l'utente non capiva
+    // se Ollenya lo stesse ascoltando o fosse morta.
     let scheduleDelayMs = 450;
     const turnWasSilent = !turnHadSpeechRef.current;
     if (turnWasSilent) {
       noSpeechCountRef.current += 1;
       if (noSpeechCountRef.current >= MAX_NO_SPEECH_ATTEMPTS) {
-        // Soglia raggiunta: pausiamo il loop, serve tap dell'utente
+        // Soglia raggiunta: pausiamo il loop, serve tap dell'utente. Ollenya
+        // dice "ti aspetto, tocca quando sei pronto" così l'utente sa che
+        // è in pausa volontariamente e non perché l'app è bloccata.
         console.log(
           `[OLLENYA_HF_BACKOFF_NOSPEECH] ${noSpeechCountRef.current} no_speech consecutivi → STOP loop (richiede tap utente)`
         );
         setCloseSessionPause(true);
         closeSessionPauseRef.current = true;
         noSpeechCountRef.current = 0; // reset per la prossima sessione manuale
+        try {
+          await speakAwareness(pickLine(awarenessLoopExit));
+        } catch (e) {
+          console.warn(`[OLLENYA_HF_NOSPEECH_EXIT] speakAwareness error:`, e);
+        }
         return; // NON schedulare startTalkInternal
       }
-      // Applica delay progressivo (indice = count - 1: 1° no-speech → 450ms)
-      scheduleDelayMs =
-        NO_SPEECH_BACKOFF_DELAYS_MS[noSpeechCountRef.current - 1] ?? 5000;
+      // Primo no_speech → Ollenya dice "non ti ho sentita, puoi ripetere?".
+      // Dopo la frase, il loop riaprirà il mic (via scheduleDelayMs).
       console.log(
-        `[OLLENYA_HF_BACKOFF_NOSPEECH] no_speech #${noSpeechCountRef.current}/${MAX_NO_SPEECH_ATTEMPTS} → riapri fra ${scheduleDelayMs}ms`
+        `[OLLENYA_HF_BACKOFF_NOSPEECH] no_speech #${noSpeechCountRef.current}/${MAX_NO_SPEECH_ATTEMPTS} → speak awareness + riapri`
       );
+      try {
+        await speakAwareness(pickLine(awarenessLinesNoAudio));
+      } catch (e) {
+        console.warn(`[OLLENYA_HF_NOSPEECH_PROMPT] speakAwareness error:`, e);
+      }
+      // Dopo la frase TTS siamo già passati da speaking a idle. Applica delay
+      // progressivo breve per dare al sistema audio tempo di switchare.
+      scheduleDelayMs =
+        NO_SPEECH_BACKOFF_DELAYS_MS[noSpeechCountRef.current - 1] ?? 1500;
     }
 
     // Tutte le guardie superate — schedula il restart.
@@ -3512,12 +3531,13 @@ export default function Taccuino() {
   //   - Reset a 0 quando l'utente parla davvero (onUserFinal riceve testo)
   //   - Delay progressivi per riaprire il mic dopo un no_speech:
   //       1° → 450ms, 2° → 2s, 3° → 5s, 4° → 5s, 5° → 5s
-  //   - Dopo 5 no_speech consecutivi → STOP: torna idle, richiede tap utente.
-  //     (evita che il mic continui ad aprirsi per ore se dimentichi l'app aperta)
+  //   - Dopo 2 no_speech consecutivi → STOP: Ollenya parla "non ti ho sentita",
+  //     torna idle, richiede tap utente.
+  //     (richiesta Fabio 2026-11-13: prima erano 5 silenziosi senza feedback)
   //   - `turnHadSpeechRef` è il flag interno: settato a false all'apertura di
   //     ogni sessione, a true quando arriva un `onUserFinal` con testo valido.
-  const NO_SPEECH_BACKOFF_DELAYS_MS = [450, 2000, 5000, 5000, 5000] as const;
-  const MAX_NO_SPEECH_ATTEMPTS = 5;
+  const NO_SPEECH_BACKOFF_DELAYS_MS = [800, 1500] as const;
+  const MAX_NO_SPEECH_ATTEMPTS = 2;
   const noSpeechCountRef = useRef(0);
   const turnHadSpeechRef = useRef(false);
 
@@ -4545,24 +4565,33 @@ export default function Taccuino() {
     }
   };
 
-  // === PUSH-TO-TALK HANDLERS (v67.11 Fabio 2026-06-24) ========================
+  // === PUSH-TO-TALK HANDLERS (v67.11 Fabio 2026-06-24, rev 2026-11-13) =========
   // Richiesta esplicita utente: quando "Mani libere" è DISATTIVATO, il tasto
   // orb deve funzionare come walkie-talkie:
   //   • TIENI PREMUTO per registrare
   //   • RILASCIA per terminare e inviare
   // Non più tap-toggle (apri/chiudi).
   //
-  // Quando "Mani libere" è ATTIVO: lasciamo invariato il comportamento
-  // precedente (onPress = onBigButton con hard-stop/riavvio, onLongPress =
-  // kill switch).
+  // 2026-11-13 Honor report: AGGIUNTO OVERRIDE PTT IN HF MODE. Se tieni
+  // premuto per > HOLD_THRESHOLD_MS anche con Mani libere attivo, parte il
+  // walkie-talkie come sopra. Il tap breve resta il toggle HF di sempre.
+  // Il discriminante hold/tap è il tempo: parte un timer su PressIn, se
+  // scade senza PressOut → modalità PTT attivata, pttRecordingRef=true.
   //
   // Guardia pttRecordingRef = true tra onPressIn e onPressOut → ci dice
   // SICURAMENTE se è stato un gesto PTT (non un tap in HF).
   const pttRecordingRef = useRef(false);
+  const pttHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const PTT_HOLD_THRESHOLD_MS = 350;
+
+  const clearPttHoldTimer = () => {
+    if (pttHoldTimerRef.current) {
+      clearTimeout(pttHoldTimerRef.current);
+      pttHoldTimerRef.current = null;
+    }
+  };
 
   const onBigButtonPressIn = () => {
-    // In HF ON l'input è gestito da onPress (toggle classico). PressIn non-op.
-    if (handsFreeRef.current) return;
     if (isFreeGate()) return; // paywall gestito su onPress
     // Dimmer swallow — se il tap serve solo a riaccendere la luminosità,
     // NON avviare registrazione.
@@ -4571,33 +4600,62 @@ export default function Taccuino() {
       console.log(`[OLLENYA_PTT] swallow first-tap — screen dim`);
       return;
     }
-    userInteractedRef.current = true;
-    pttGestureEpochRef.current++;
-    pttRecordingRef.current = true;
-    console.log(`[OLLENYA_PTT] press-in → start recording (status=${status})`);
-    if (status !== "idle") {
-      // Ollenya sta parlando/pensando: hard-stop poi start.
-      // onBigButton ha già tutta la logica di hard-stop → riusiamo.
-      try { onBigButton(); } catch {}
-      setTimeout(() => {
-        if (pttRecordingRef.current) {
-          // Reset debounce lock come fa il tap manuale.
-          lastStartTalkAtRef.current = 0;
-          startTalk();
-        }
-      }, 60);
-    } else {
-      lastStartTalkAtRef.current = 0;
-      startTalk();
+    // In HF OFF: start PTT immediately on press-in (behavior pre-esistente).
+    if (!handsFreeRef.current) {
+      userInteractedRef.current = true;
+      pttGestureEpochRef.current++;
+      pttRecordingRef.current = true;
+      console.log(`[OLLENYA_PTT] press-in → start recording (status=${status})`);
+      if (status !== "idle") {
+        try { onBigButton(); } catch {}
+        setTimeout(() => {
+          if (pttRecordingRef.current) {
+            lastStartTalkAtRef.current = 0;
+            startTalk();
+          }
+        }, 60);
+      } else {
+        lastStartTalkAtRef.current = 0;
+        startTalk();
+      }
+      return;
     }
+    // In HF ON: arma timer. Se il dito resta sul tasto > PTT_HOLD_THRESHOLD_MS,
+    // attiva PTT come override. Se rilasci prima → tap normale (onPress).
+    clearPttHoldTimer();
+    pttHoldTimerRef.current = setTimeout(() => {
+      pttHoldTimerRef.current = null;
+      userInteractedRef.current = true;
+      pttGestureEpochRef.current++;
+      pttRecordingRef.current = true;
+      console.log(`[OLLENYA_PTT] HF-override: hold > ${PTT_HOLD_THRESHOLD_MS}ms → start recording (status=${status})`);
+      // Se Ollenya sta parlando o in idle, gestisco come il PTT classico.
+      if (status !== "idle") {
+        try { onBigButton(); } catch {}
+        setTimeout(() => {
+          if (pttRecordingRef.current) {
+            lastStartTalkAtRef.current = 0;
+            startTalk();
+          }
+        }, 60);
+      } else {
+        lastStartTalkAtRef.current = 0;
+        startTalk();
+      }
+    }, PTT_HOLD_THRESHOLD_MS);
   };
 
   const onBigButtonPressOut = () => {
-    if (handsFreeRef.current) return;
+    // Se il timer hold non è ancora scattato, era un tap breve in HF: lascia
+    // che onPress gestisca il toggle. Cancella solo il timer.
+    if (pttHoldTimerRef.current) {
+      clearPttHoldTimer();
+      return;
+    }
     if (!pttRecordingRef.current) return;
     pttGestureEpochRef.current++;
     pttRecordingRef.current = false;
-    console.log(`[OLLENYA_PTT] press-out → stop & send (status=${status})`);
+    console.log(`[OLLENYA_PTT] press-out → stop & send (status=${status}, HF=${handsFreeRef.current})`);
     // stopTalk processa l'audio e lo invia. Se recRef è null (es.
     // registrazione mai partita per permessi), è un no-op.
     stopTalk().catch((e) => {
@@ -7073,6 +7131,13 @@ export default function Taccuino() {
                     // onPress deve essere NO-OP, altrimenti dopo il rilascio
                     // partirebbe un turno "fantasma" oltre a quello PTT.
                     if (!handsFreeRef.current) return;
+                    // 2026-11-13: anche in HF, se il PTT-override è appena
+                    // stato attivato (hold > threshold), onPress deve essere
+                    // no-op per non duplicare il turno dopo il rilascio.
+                    if (pttRecordingRef.current) {
+                      console.log(`[OLLENYA_PTT] onPress swallowed — HF-override PTT in corso`);
+                      return;
+                    }
                     onBigButton();
                   }}
                   onLongPress={() => {
