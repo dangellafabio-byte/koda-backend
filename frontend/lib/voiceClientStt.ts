@@ -1097,16 +1097,59 @@ export class VoiceClientSttSession {
     try {
       ExpoSpeechRecognitionModule.stop();
     } catch {}
-    // Se abbiamo trascritto qualcosa ma non lo abbiamo ancora inviato → invia
-    if (this.currentTranscript && !this.doneReceived) {
-      this.dispatchFinalToBackend().catch((e: any) =>
-        console.log(`[VoiceClientSttSession] dispatchFinal error: ${e?.message || e}`)
-      );
-    } else {
-      // Nessuna trascrizione → manda solo type:end così il backend chiude
-      try {
-        this.sendJson({ type: "end" });
-      } catch {}
+    // v70.6.1 (2026-11-14 user spec) — se c'è un parziale ancora in corso
+    // (hadPartial=true senza final successivo), aspetta fino a 1500ms per
+    // il final nativo che Google emette dopo stopListening(). Così la coda
+    // della frase non viene persa.
+    //
+    // Casi gestiti:
+    //   A) Final nativo arriva durante la grace: result handler accumula
+    //      in committed (ignora stopRequested per il result).
+    //   B) End event arriva senza final: handler fa salvage safeText OR
+    //      ask-to-repeat se safeText vuoto.
+    //   C) Grace scade: controlliamo noi stato e decidiamo.
+    if (this.androidUtterance?.hasPendingPartial && !this.doneReceived) {
+      const graceMs = 1500;
+      console.log(`[${TAG}] stop(): partial pending → wait up to ${graceMs}ms for native final`);
+      const graceStart = Date.now();
+      while (
+        Date.now() - graceStart < graceMs &&
+        this.androidUtterance?.hasPendingPartial &&
+        !this.doneReceived &&
+        !this.dispatched
+      ) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      console.log(`[${TAG}] stop(): grace ended — hadPartial=${this.androidUtterance?.hasPendingPartial} dispatched=${this.dispatched}`);
+    }
+    // Decisione post-grace:
+    //  • safeText non vuoto → dispatch committed
+    //  • safeText vuoto + partial non finalizzato → "nomatch" (chiedi ripeti)
+    //  • niente → type:end pulito
+    const safeText = this.androidUtterance?.safeText || "";
+    const stillHasPartial = this.androidUtterance?.hasPendingPartial;
+    if (!this.doneReceived && !this.dispatched) {
+      if (safeText) {
+        this.currentTranscript = safeText;
+        this.dispatchFinalToBackend().catch((e: any) =>
+          console.log(`[VoiceClientSttSession] dispatchFinal error: ${e?.message || e}`)
+        );
+      } else if (stillHasPartial) {
+        console.log(`[${TAG}] stop(): only partial survived → signal nomatch (ask-to-repeat)`);
+        this.dispatched = true;
+        this.doneReceived = true;
+        this.notifiedUpperOnClose = true;
+        try { this.callbacks.onError?.("nomatch"); } catch {}
+        try { this.removeListeners(); } catch {}
+        try { this.sendJson({ type: "end" }); } catch {}
+        try { this.forceCloseWs(); } catch {}
+      } else if (this.currentTranscript) {
+        this.dispatchFinalToBackend().catch((e: any) =>
+          console.log(`[VoiceClientSttSession] dispatchFinal error: ${e?.message || e}`)
+        );
+      } else {
+        try { this.sendJson({ type: "end" }); } catch {}
+      }
     }
     // Safety timeout — se dopo 40s il server non manda done, chiudi WS
     setTimeout(() => {

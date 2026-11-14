@@ -59,12 +59,14 @@ function harness(os = 'android') {
 }
 
 (async () => {
+
   // === v70.6 (2026-11-14) — test riabilitato =============================
   // v70.5.4 aveva disattivato AndroidUtterance temporaneamente. Il test
   // chirurgico ha dimostrato che era la direzione sbagliata: il PTT risultava
   // rotto. v70.6 ripristina continuous=true + AndroidUtterance e questo
   // test certifica il comportamento della pipeline accumulator.
   let h = harness();await h.start();
+
   assert.equal(h.calls.starts[0].continuous, true);
   assert.equal(h.calls.ready, 0, 'start invocation does not prove readiness');
   h.emit('start');assert.equal(h.calls.ready, 1);
@@ -80,32 +82,75 @@ function harness(os = 'android') {
   assert.deepEqual(h.calls.dispatch, ['Perché lei cambia le impostazioni e non riesco a finire']);
   h.tick(10000);assert.equal(h.calls.dispatch.length, 1, 'tick extra non duplicano dispatch');
 
+
   h = harness();await h.start();h.emit('start');h.result('Sto ancora parlando');h.tick(100);
+
   h.emit('end');h.tick(6000);
+
   assert.equal(h.calls.dispatch.length, 0, 'unexpected early end must not send a partial');
   assert.deepEqual(h.calls.errors, ['android_recognition_ended_early']);
+
 
   h = harness();const startup = h.session.startRecognition('it');
   h.session.stopRequested = true;h.tick(80);await startup;
   assert.equal(h.calls.starts.length, 0, 'stop during pre-abort delay cannot start a mic later');
 
+
   h = harness();await h.start();h.emit('start');h.result('Primo segmento', true);
   h.result('Primo segmento', true);h.tick(3000);
   assert.deepEqual(h.calls.dispatch, ['Primo segmento'], 'duplicate final is not duplicated text');
 
+
   h = harness();await h.start();h.result('Frase');h.session.removeListeners();h.tick(6000);
   assert.equal(h.calls.dispatch.length, 0, 'teardown cancels deferred dispatch');
+
 
   h = harness();await h.start();h.emit('start');
   for (let i = 0; i < 6; i++) {h.emit('speechstart');h.tick(2000);}
   assert.deepEqual(h.calls.errors, ['android_transcript_stalled'], 'sound without transcription cannot keep recording forever');
   assert.equal(h.calls.dispatch.length, 0);
 
+
+  // v70.6.1 user spec: in PTT (autoEndpoint=false), partial-only + release
+  // NON deve dispatch (si rischia di perdere coda). Attende 1500ms per un
+  // native final, se non arriva → nomatch (chiedi ripeti).
   h = harness();h.session.autoEndpoint = false;await h.start();h.emit('start');
   h.result('Una frase detta piano');h.tick(6000);
   assert.equal(h.calls.dispatch.length, 0, 'PTT must wait for release, not an automatic endpoint');
-  await h.session.stop();
-  assert.deepEqual(h.calls.dispatch, ['Una frase detta piano'], 'manual stop submits recognized text immediately');
+
+  // v70.6.1 user spec requirement — "PTT mantenuto senza testo per oltre
+  // 10 secondi: nessun arresto automatico per silenzio". In autoEndpoint=false
+  // il progress timer (10s initial) NON deve armarsi. Simula 20s senza
+  // risultato: nessun dispatch, nessun errore stall.
+  const hPtt20s = harness();hPtt20s.session.autoEndpoint = false;await hPtt20s.start();
+  hPtt20s.emit('start');
+  hPtt20s.tick(20000);
+  assert.equal(hPtt20s.calls.errors.length, 0, 'PTT held 20s senza testo: nessun stall');
+  assert.equal(hPtt20s.calls.dispatch.length, 0, 'PTT held 20s senza testo: nessun dispatch');
+  // Launch stop() non-blocking, then advance fake clock through grace window.
+  const stopPromise = h.session.stop();
+  // Simulate grace: advance 1500ms of fake clock to exhaust pending-partial wait.
+  for (let i = 0; i < 40; i++) { h.tick(50); await new Promise(r => setImmediate(r)); }
+  await stopPromise;
+
+  assert.equal(h.calls.dispatch.length, 0, 'PTT release with only partial does NOT dispatch');
+  assert.ok(h.calls.errors.includes('nomatch'), 'PTT release with only partial fires nomatch (ask-to-repeat)');
+
+
+  // v70.6.1 new test: committed + new partial + stop → grace wait → native
+  // final arrives → full dispatch (no coda lost).
+  h = harness();h.session.autoEndpoint = false;await h.start();h.emit('start');
+  h.result('Ciao Ollenya', true); // committed final
+  h.result('come stai'); // new partial started
+  const stopPromise2 = h.session.stop();
+  // During grace, simulate Google emitting the late final:
+  await new Promise(r => setImmediate(r));
+  h.result('Ciao Ollenya come stai?', true);
+  for (let i = 0; i < 40; i++) { h.tick(50); await new Promise(r => setImmediate(r)); }
+  await stopPromise2;
+
+  assert.ok(h.calls.dispatch.length >= 1, 'late final after stop() must be dispatched');
+
 
   h = harness();await h.start();h.emit('start');h.result('Risultato');
   h.tick(2000);h.result('Risultato');h.tick(1000);
@@ -153,4 +198,4 @@ function harness(os = 'android') {
   await stopCtx.exports.stop();
   assert.equal(stopCtx.pendingTapStopRef.current, true, 'release durante preparazione async è ritenuto grazie a releaseIntentRef');
   console.log('PASS: actual native session handlers, segmented speech, pause, readiness, cancellation, early end, release-race, iOS');
-})().catch(e => {console.error(e);process.exitCode=1;});
+})().then(() => process.exit(0)).catch(e => {console.error('FAIL:', e.message || e, e.stack);process.exit(1);});

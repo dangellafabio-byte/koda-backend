@@ -13,7 +13,16 @@ export class AndroidUtterance {
     private readonly onReady: (text: string) => void,
     private readonly quietMs = 3000,
     private readonly options: { autoEndpoint?: boolean; onStalled?: () => void } = {},
-  ) { this.armProgressTimeout(10000); }
+  ) {
+    // v70.6.1 (2026-11-14 user spec) — in PTT (autoEndpoint=false) NON armare
+    // il progress timeout iniziale 10s: l'utente può tenere premuto a lungo
+    // senza parlare (es. in attesa di radunare il pensiero) e la sessione
+    // DEVE rimanere viva fino al rilascio. In HF (autoEndpoint=true) il
+    // timer protegge invece contro riconoscitori bloccati.
+    if (this.options.autoEndpoint !== false) {
+      this.armProgressTimeout(10000);
+    }
+  }
 
   get text(): string {
     return [...this.committed, this.partial].filter(Boolean).join(" ").trim();
@@ -24,6 +33,13 @@ export class AndroidUtterance {
    * imprevisto per salvare SOLO quello che il recognizer ha confermato. */
   get safeText(): string {
     return this.committed.filter(Boolean).join(" ").trim();
+  }
+
+  /** v70.6.1 — true se c'è un parziale non ancora finalizzato.
+   * Usato al rilascio PTT per decidere se aspettare il final dalla stop()
+   * nativa o se chiedere all'utente di ripetere. */
+  get hasPendingPartial(): boolean {
+    return this.hadPartial && !!this.partial;
   }
 
   speechStarted(): void {
