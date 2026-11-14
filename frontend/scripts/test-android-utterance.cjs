@@ -59,30 +59,26 @@ function harness(os = 'android') {
 }
 
 (async () => {
-  // === TEST SKIP NOTE v70.5.4 (2026-11-13) ============================
-  // Questo test valida il comportamento di AndroidUtterance (continuous=true
-  // + accumulator client-side). Nel test chirurgico v70.5.4 abbiamo disattivato
-  // AndroidUtterance per tornare al VAD nativo di Google (continuous=false).
-  // Se il test sul campo conferma che l'ipotesi è giusta, rimuoveremo
-  // AndroidUtterance e questo test. Se invece torniamo indietro, questo
-  // test va riabilitato restaurando il blocco originale.
-  console.log('SKIP test-android-utterance.cjs — AndroidUtterance disabled by surgical test v70.5.4 (continuous=false). See voiceClientStt.ts USE_CONTINUOUS_ANDROID.');
-  process.exit(0);
-  // eslint-disable-next-line no-unreachable
+  // === v70.6 (2026-11-14) — test riabilitato =============================
+  // v70.5.4 aveva disattivato AndroidUtterance temporaneamente. Il test
+  // chirurgico ha dimostrato che era la direzione sbagliata: il PTT risultava
+  // rotto. v70.6 ripristina continuous=true + AndroidUtterance e questo
+  // test certifica il comportamento della pipeline accumulator.
   let h = harness();await h.start();
-  // v70.5.4 (test chirurgico 2026-11-13): Android ora torna a continuous=false
-  // (pre-v70.3), AndroidUtterance è disattivato → Google gestisce il VAD
-  // nativamente. L'asserzione originale (continuous=true) è stata invertita.
-  assert.equal(h.calls.starts[0].continuous, false);
+  assert.equal(h.calls.starts[0].continuous, true);
   assert.equal(h.calls.ready, 0, 'start invocation does not prove readiness');
   h.emit('start');assert.equal(h.calls.ready, 1);
   h.tick(6000);assert.equal(h.calls.errors.length, 0, 'ready but quiet is not a dead mic');
-  // Dato che AndroidUtterance è off, un singolo final deve essere dispatched
-  // immediatamente dal result handler (nessuna accumulation).
+  // Con AndroidUtterance ON (continuous=true) e autoEndpoint default=true,
+  // un final NON scatena dispatch immediato: aspetta quietMs (3000ms).
   h.emit('speechstart');
   h.result('Perché lei cambia le impostazioni e non riesco a finire', true);
+  assert.equal(h.calls.dispatch.length, 0, 'final non deve dispatch immediatamente');
+  h.tick(2999);
+  assert.equal(h.calls.dispatch.length, 0, 'quietMs non ancora scaduto');
+  h.tick(1);
   assert.deepEqual(h.calls.dispatch, ['Perché lei cambia le impostazioni e non riesco a finire']);
-  h.tick(10000);assert.equal(h.calls.dispatch.length, 1, 'extra ticks must not duplicate dispatch');
+  h.tick(10000);assert.equal(h.calls.dispatch.length, 1, 'tick extra non duplicano dispatch');
 
   h = harness();await h.start();h.emit('start');h.result('Sto ancora parlando');h.tick(100);
   h.emit('end');h.tick(6000);
@@ -122,8 +118,8 @@ function harness(os = 'android') {
   // Execute the actual UI error branch, checking that one native failure
   // pauses hands-free immediately; ordinary network backoff is preserved.
   const screen = fs.readFileSync(path.join(__dirname, '../app/index.tsx'), 'utf8');
-  const start = screen.indexOf('        const recognitionInterrupted = ');
-  const end = screen.indexOf('\n      } else {\n        // Successo', start);
+  const start = screen.indexOf('          const recognitionInterrupted = ');
+  const end = screen.indexOf('\n        }\n      } else {\n        // Successo', start);
   for (const error of ['android_recognition_ended_early', 'android_no_speech', 'android_transcript_stalled', 'client_stt_audio-capture']) {
     const ctx = {Platform: {OS: 'android'}, result: {error}, failN: 1, WS_FAIL_THRESHOLD: 3,
       console: {log() {}}, setCloseSessionPause() {}, closeSessionPauseRef: {current: false},
@@ -144,11 +140,17 @@ function harness(os = 'android') {
     {compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}}).outputText;
   let stops = 0;
   const stopCtx = {exports: {}, streamingSessionRef: {current: {stop: async () => {stops++;}}},
-    recRef: {current: null}, pendingTapStopRef: {current: false}, statusRef: {current: 'recording'},
+    recRef: {current: null}, pendingTapStopRef: {current: false},
+    releaseIntentRef: {current: false}, statusRef: {current: 'recording'},
     setStatus() {}, console: {log() {}}, Promise};
   vm.createContext(stopCtx);vm.runInContext(stopJs, stopCtx);
   await stopCtx.exports.stop();assert.equal(stops, 1, 'PTT release must call the live streaming session stop');
   stopCtx.streamingSessionRef.current = null;
-  await stopCtx.exports.stop();assert.equal(stopCtx.pendingTapStopRef.current, true, 'early release is retained until a session exists');
-  console.log('PASS: actual native session handlers, segmented speech, pause, readiness, cancellation, early end and iOS');
+  // v70.6: scenario "release durante preparazione async" (no stream, no recRef,
+  // status=idle, ma releaseIntentRef=true impostato da onPressOut PRIMA degli await).
+  // Deve queuettare pendingTapStopRef, non ritornare silenziosamente.
+  stopCtx.releaseIntentRef.current = true; stopCtx.statusRef.current = 'idle';
+  await stopCtx.exports.stop();
+  assert.equal(stopCtx.pendingTapStopRef.current, true, 'release durante preparazione async è ritenuto grazie a releaseIntentRef');
+  console.log('PASS: actual native session handlers, segmented speech, pause, readiness, cancellation, early end, release-race, iOS');
 })().catch(e => {console.error(e);process.exitCode=1;});

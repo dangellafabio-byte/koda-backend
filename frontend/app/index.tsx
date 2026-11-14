@@ -534,7 +534,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.5.4-android-continuous-off";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.6-ptt-release-intent";
   const OLLENYA_BUILD_DATE = "2026-11-12";
   useEffect(() => {
     console.log(
@@ -1671,6 +1671,41 @@ export default function Taccuino() {
   // immediatamente s.stop() e resettiamo il flag. Cosi il "graceful stop"
   // funziona anche durante l'apertura della WS.
   const pendingTapStopRef = useRef<boolean>(false);
+
+  // === FIX 2026-11-14 — nomatch vs no-speech separation ====================
+  // Se il recognizer ha emesso l'evento "no-match" (utente HA parlato ma
+  // la trascrizione non è stata decifrata), il loop sa che deve pronunciare
+  // "non ho sentito bene, puoi ripetere?" invece di fare retry silenzioso.
+  // Si resetta all'inizio di ogni turno nuovo.
+  const nomatchObservedRef = useRef<boolean>(false);
+
+  // === FIX 2026-11-14 — PTT release intent across async =====================
+  // Il problema: onPressOut azzera pttRecordingRef PRIMA di chiamare
+  // stopTalk, e stopTalk può essere chiamato DURANTE l'apertura async della
+  // sessione (prewarmMic → warmup HTTP → open WS → startRecognition,
+  // ~500-900ms totali). In quel gap:
+  //   • streamingSessionRef.current = null (onSession non è ancora firato)
+  //   • recRef.current = null (siamo in streaming, non in recording classico)
+  //   • statusRef.current = "idle" (setStatus avviene solo DOPO openWs)
+  // Le condizioni di stopTalk fallivano tutte → return silenzioso →
+  // pendingTapStopRef mai settato → al momento in cui onSession si chiama
+  // la sessione resta aperta "fantasma" perché l'utente aveva già rilasciato.
+  //
+  // Soluzione: un ref separato releaseIntentRef, settato PRIMA di clearare
+  // pttRecordingRef in onPressOut. Persiste attraverso l'await di stopTalk.
+  // Viene consumato in stopTalk (per impostare pendingTapStopRef) e ri-
+  // verificato in onSession prima di fare storage della sessione.
+  const releaseIntentRef = useRef<boolean>(false);
+
+  // === FIX 2026-11-14 — gesture epoch for superseded starts =================
+  // Ogni press-in incrementa pttGestureEpochRef (già esistente). Catturiamo
+  // il valore all'inizio di startTalkStreaming e, prima di salvare la
+  // sessione in streamingSessionRef, verifichiamo che nessun release
+  // successivo abbia invalidato il gesto. Questo copre il caso: press-in
+  // (epoch=5) → press-out (releaseIntent=true, epoch=5) → press-in di nuovo
+  // (epoch=6) → onSession del vecchio turno arriva in ritardo → la vecchia
+  // sessione viene abortita immediatamente invece di restare "zombie".
+  const lastPttReleaseEpochRef = useRef<number>(-1);
 
   // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
   // BUG OSSERVATO nel log Xiaomi: setStatus("recording") fira IMMEDIATAMENTE
@@ -2942,7 +2977,19 @@ export default function Taccuino() {
     // se Ollenya lo stesse ascoltando o fosse morta.
     let scheduleDelayMs = 450;
     const turnWasSilent = !turnHadSpeechRef.current;
-    if (turnWasSilent) {
+    // v70.6 (2026-11-14) — nomatch (parlato incomprensibile) ha priorità:
+    // se presente, parla awareness garbled e NON conta come no_speech.
+    // Il flag viene consumato (resettato) qui.
+    const turnWasGarbled = nomatchObservedRef.current && turnWasSilent;
+    if (turnWasGarbled) {
+      nomatchObservedRef.current = false;
+      console.log(`[OLLENYA_HF_NOMATCH] nomatch observed → speak awareness garbled + riapri`);
+      speakAwareness(pickLine(awarenessLinesGarbled)).catch((e) => {
+        console.warn(`[OLLENYA_HF_NOMATCH] speakAwareness error:`, e);
+      });
+      // Delay normale per riapertura (il TTS conclude e poi si riapre).
+      scheduleDelayMs = 450;
+    } else if (turnWasSilent) {
       noSpeechCountRef.current += 1;
       if (noSpeechCountRef.current >= MAX_NO_SPEECH_ATTEMPTS) {
         // Soglia raggiunta: pausiamo il loop, serve tap dell'utente. Ollenya
@@ -3745,10 +3792,16 @@ export default function Taccuino() {
           // sessione. Ora che l'abbiamo, fermiamo subito con stop() →
           // il server processerà l'audio già inviato e risponderà,
           // NON continuiamo a registrare chunk aggiuntivi.
-          if (s && pendingTapStopRef.current) {
+          // v70.6 (2026-11-14): consuma anche releaseIntentRef (PTT release
+          // arrivato durante la preparazione). Entrambi i segnali portano
+          // ad abortire immediatamente la sessione appena aperta.
+          const shouldAbortImmediately =
+            s && (pendingTapStopRef.current || releaseIntentRef.current);
+          if (shouldAbortImmediately) {
             pendingTapStopRef.current = false;
+            releaseIntentRef.current = false;
             console.log(
-              `[OLLENYA_STREAM_CLIENT] pendingTapStopRef consumed → calling s.stop() now`
+              `[OLLENYA_STREAM_CLIENT] release intent consumed in onSession → calling s.stop() now`
             );
             try {
               if (typeof s.stop === "function") {
@@ -3848,22 +3901,42 @@ export default function Taccuino() {
         // Se la bolla utente è ancora vuota, rimuoviamo l'optimistic.
         setTimeline((prev) => prev.filter((e) => e.id !== optimisticId || (e as any).text !== "…"));
 
-        // === FIX 2026-07-14 v56 — Backoff HF loop su WS failures consecutivi ===
-        wsFailureCountRef.current += 1;
-        const failN = wsFailureCountRef.current;
-        console.log(`[OLLENYA_HF_BACKOFF] WS failure #${failN}/${WS_FAIL_THRESHOLD} (err=${result.error})`);
-        const recognitionInterrupted = Platform.OS === "android" && /android_recognition_ended_early|android_transcript_stalled|android_no_speech|android_mic_silent_fail|client_stt_|aborted_pre_recognition/.test(result.error || "");
-        if (recognitionInterrupted || failN >= WS_FAIL_THRESHOLD) {
-          console.log(`[OLLENYA_HF_BACKOFF] threshold reached → pausing HF loop, waiting for user tap`);
-          setCloseSessionPause(true);
-          closeSessionPauseRef.current = true;
-          setError(recognitionInterrupted
-            ? "Il riconoscimento vocale si è interrotto. Tocca il cerchio per riprendere."
-            : "Connessione persa. Tocca il cerchio per riprovare.");
-          setTimeout(() => setError(null), 6000);
+        // === FIX 2026-11-14 — no_speech e nomatch NON sono guasti di rete ====
+        // User explicit requirement: "No-speech non è un errore di rete: non
+        // deve entrare nel ramo che blocca immediatamente il hands-free."
+        // Lo stesso per nomatch (parlato incomprensibile). Entrambi i casi
+        // vengono gestiti dal loop no-speech standard (vedi logica più sotto).
+        // NON incrementiamo wsFailureCountRef, NON settiamo close-session.
+        const errCode = String(result.error || "");
+        const isBenignSttEvent = errCode === "no_speech" || errCode === "nomatch" || errCode === "client_stt_no-speech";
+        if (isBenignSttEvent) {
+          console.log(`[OLLENYA_STT_BENIGN] ${errCode} — turn ended cleanly, no network failure`);
+          // Se nomatch, l'upper layer vedrà currentTranscript="" + un flag
+          // speciale su turnHadSpeechRef: segna il turno come "garbled"
+          // così il ramo stopTalk attiverà awarenessLinesGarbled.
+          if (errCode === "nomatch") {
+            nomatchObservedRef.current = true;
+          }
+          // Lascia che turnHadSpeechRef stay false → il ramo no-speech
+          // standard gestirà retry/stop secondo i 2 tentativi.
         } else {
-          setError("Connessione voce interrotta. Riprova.");
-          setTimeout(() => setError(null), 4000);
+          // === FIX 2026-07-14 v56 — Backoff HF loop su WS failures consecutivi ===
+          wsFailureCountRef.current += 1;
+          const failN = wsFailureCountRef.current;
+          console.log(`[OLLENYA_HF_BACKOFF] WS failure #${failN}/${WS_FAIL_THRESHOLD} (err=${result.error})`);
+          const recognitionInterrupted = Platform.OS === "android" && /android_recognition_ended_early|android_transcript_stalled|android_no_speech|android_mic_silent_fail|client_stt_|aborted_pre_recognition/.test(result.error || "");
+          if (recognitionInterrupted || failN >= WS_FAIL_THRESHOLD) {
+            console.log(`[OLLENYA_HF_BACKOFF] threshold reached → pausing HF loop, waiting for user tap`);
+            setCloseSessionPause(true);
+            closeSessionPauseRef.current = true;
+            setError(recognitionInterrupted
+              ? "Il riconoscimento vocale si è interrotto. Tocca il cerchio per riprendere."
+              : "Connessione persa. Tocca il cerchio per riprovare.");
+            setTimeout(() => setError(null), 6000);
+          } else {
+            setError("Connessione voce interrotta. Riprova.");
+            setTimeout(() => setError(null), 4000);
+          }
         }
       } else {
         // Successo → azzera il counter dei fallimenti consecutivi
@@ -4132,16 +4205,24 @@ export default function Taccuino() {
     const stream = streamingSessionRef.current;
     if (stream) {
       pendingTapStopRef.current = false;
+      releaseIntentRef.current = false;
       setStatus("transcribing", "stopTalk:stream-release");
       console.log("[OLLENYA_PTT] release → streaming stop");
       await stream.stop();
       return;
     }
-    if (!recRef.current && statusRef.current === "recording") {
-      // Released while the transport is still opening. onSession consumes
-      // this intent; do not silently lose a PTT release before the ref exists.
+    // v70.6 (2026-11-14) — rilascio durante la preparazione async:
+    // prima questa condizione richiedeva statusRef.current === "recording",
+    // ma setStatus non è ancora stato chiamato (avviene DOPO openWs).
+    // Usiamo releaseIntentRef, che è stato settato in onPressOut PRIMA di
+    // qualunque await, quindi è l'unico segnale affidabile che l'utente
+    // ha rilasciato intenzionalmente. Viene consumato da onSession quando
+    // la sessione finalmente arriva, abortendola immediatamente.
+    if (!recRef.current && (releaseIntentRef.current || statusRef.current === "recording")) {
       pendingTapStopRef.current = true;
-      console.log("[OLLENYA_PTT] release queued during streaming startup");
+      console.log(
+        `[OLLENYA_PTT] release queued during streaming startup (releaseIntent=${releaseIntentRef.current}, status=${statusRef.current})`
+      );
       return;
     }
     // Use recRef.current as single source of truth (status check would create
@@ -4652,9 +4733,16 @@ export default function Taccuino() {
       return;
     }
     if (!pttRecordingRef.current) return;
+    // v70.6 (2026-11-14) — CRITICAL ORDER: imposta releaseIntent PRIMA di
+    // pulire pttRecordingRef, altrimenti stopTalk esegue durante l'await
+    // asincrono e trova entrambi i ref a false → return silenzioso →
+    // sessione fantasma lasciata aperta. releaseIntentRef persiste
+    // attraverso gli await e viene consumato da stopTalk o da onSession.
+    releaseIntentRef.current = true;
+    lastPttReleaseEpochRef.current = pttGestureEpochRef.current;
     pttGestureEpochRef.current++;
     pttRecordingRef.current = false;
-    console.log(`[OLLENYA_PTT] press-out → stop & send (status=${status}, HF=${handsFreeRef.current})`);
+    console.log(`[OLLENYA_PTT] press-out → stop & send (status=${status}, HF=${handsFreeRef.current}, releasedEpoch=${lastPttReleaseEpochRef.current})`);
     // stopTalk processa l'audio e lo invia. Se recRef è null (es.
     // registrazione mai partita per permessi), è un no-op.
     stopTalk().catch((e) => {

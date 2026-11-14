@@ -549,23 +549,19 @@ export class VoiceClientSttSession {
         console.log(`[OLLENYA_ANDROID_INPUT] default_service=${service?.packageName || "unknown"} available=${services.join(",") || "unknown"}`);
       } catch {}
     // === FIX 2026-11-04 v70.5 — Android utterance orchestration =============
-    // Se Android gira in continuous mode (true), emette PIÙ segmenti "final"
-    // per un singolo turno. Accumuliamo via AndroidUtterance e dispatchiamo
-    // dopo quietMs di silenzio. Se invece continuous=false (test chirurgico
-    // 2026-11-13 — vedi `useContinuousAndroid` più in basso), Google emette
-    // UN solo final e chiude autonomamente: niente AndroidUtterance, dispatch
-    // diretto dal result handler.
-    // NOTA: questo flag DEVE restare allineato con `useContinuousAndroid`
-    // definito più in basso in start().
-    const USE_CONTINUOUS_ANDROID = false;
-    if (Platform.OS === "android" && USE_CONTINUOUS_ANDROID) {
+    // Android gira sempre in continuous mode: Google emette PIÙ segmenti
+    // "final" per un singolo turno. Accumuliamo via AndroidUtterance.
+    // In HF (autoEndpoint=true): dispatchiamo dopo quietMs di silenzio (3s).
+    // In PTT (autoEndpoint=false): nessun timer, dispatch solo al release.
+    // Il valore autoEndpoint=false DISATTIVA il timer quietMs internamente.
+    if (Platform.OS === "android") {
       this.androidUtterance = new AndroidUtterance((text) => {
         if (this.stopRequested || this.doneReceived || this.dispatched) return;
         this.currentTranscript = text;
         console.log("[OLLENYA_ANDROID_ENDPOINT] quiet interval complete → dispatch once");
         this.dispatchFinalToBackend().catch((e: any) =>
           console.log(`[${TAG}] dispatchFinal error: ${e?.message || e}`));
-      }, 1500, {
+      }, 3000, {
         autoEndpoint: this.autoEndpoint,
         onStalled: () => this.failAndroidRecognition("android_transcript_stalled"),
       });
@@ -666,6 +662,22 @@ export class VoiceClientSttSession {
           return;
         }
         if (evt.error === "aborted") return;
+        // === FIX 2026-11-14 — nomatch vs no-speech separation ===========
+        // "no-match" = l'utente HA parlato ma la trascrizione è
+        // incomprensibile per il recognizer. È DIVERSO da no-speech:
+        // qui dobbiamo dire "non ho sentito bene, puoi ripetere?" invece
+        // di fare retry silenzioso. Il backend riceve un codice speciale
+        // che l'upper layer userà per attivare speakAwareness.
+        if (evt.error === "no-match") {
+          console.log(`[${TAG}] no-match → marked as garbled, not silent`);
+          this.dispatched = true;
+          this.doneReceived = true;
+          this.notifiedUpperOnClose = true;
+          try { this.removeListeners(); } catch {}
+          try { this.callbacks.onError?.("nomatch"); } catch {}
+          try { this.forceCloseWs(); } catch {}
+          return;
+        }
         this.androidUtterance?.cancel();
 
         // === FIX 2026-07-23 v60.4 — AudioSession recovery cycle ============
@@ -700,6 +712,15 @@ export class VoiceClientSttSession {
         try {
           this.callbacks.onError?.(`client_stt_${evt.error}`);
         } catch {}
+        // v70.6 (2026-11-14) — Non-benign errors terminate the session;
+        // prevent subsequent "end" events from re-firing
+        // android_recognition_ended_early.
+        this.dispatched = true;
+        this.doneReceived = true;
+        this.notifiedUpperOnClose = true;
+        try { this.removeListeners(); } catch {}
+        try { this.stopKeepalive?.(); } catch {}
+        try { this.forceCloseWs(); } catch {}
       }
     );
 
@@ -711,8 +732,42 @@ export class VoiceClientSttSession {
         return;
       }
       console.log(`[${TAG}] end event (noSpeech=${this.noSpeechReceived})`);
+      // v70.6 (2026-11-14) — PRIORITÀ no-speech: se l'errore no-speech è
+      // stato ricevuto, è un turno vuoto PULITO, non un'interruzione del
+      // recognizer. Deve emettere "no_speech" code PRIMA del fallback
+      // android_recognition_ended_early.
+      if (!this.currentTranscript && !this.doneReceived && this.noSpeechReceived) {
+        console.log(
+          `[${TAG}] end fired with empty transcript + no-speech → sending {type:end} for graceful close`
+        );
+        try { this.androidUtterance?.cancel(); } catch {}
+        try {
+          this.sendJson({ type: "end" });
+        } catch {}
+        this.dispatched = true;
+        this.doneReceived = true;
+        this.notifiedUpperOnClose = true;
+        try {
+          this.callbacks.onError?.("no_speech");
+        } catch {}
+        this.removeListeners();
+        this.stopKeepalive();
+        this.forceCloseWs();
+        return;
+      }
       if (this.androidUtterance && !this.doneReceived && !this.stopRequested) {
         if (this.androidUtterance.serviceEnded()) return;
+        // v70.6 — Recupera SOLO segmenti finalizzati (committed). Il parziale
+        // ancora in corso potrebbe essere incompleto e inviarlo come final
+        // significa troncare parole. Se non ci sono committed, falliamo.
+        const salvage = this.androidUtterance.safeText;
+        if (salvage) {
+          this.currentTranscript = salvage;
+          console.log(`[${TAG}] end fired with committed segments → dispatching safeText once`);
+          this.dispatchFinalToBackend().catch((e: any) =>
+            console.log(`[${TAG}] dispatchFinal salvage error: ${e?.message || e}`));
+          return;
+        }
         // Native recognition really disconnected. Do not pretend an incomplete
         // utterance was final and do not trigger repeated HF retries.
         this.failAndroidRecognition("android_recognition_ended_early");
@@ -730,40 +785,6 @@ export class VoiceClientSttSession {
         );
         return;
       }
-      // === FIX 2026-07-26 v64.1 — Graceful cleanup su no-speech ===
-      //
-      // Se end fira SENZA transcript e c'è stato un no-speech (utente
-      // ha taciuto per > silence threshold), la sessione è morta ma:
-      //   - WS resta aperta
-      //   - Backend non ha ricevuto né transcript_from_client né end
-      //   - Upper layer non riceve mai `done` → status resta "recording"
-      //     per sempre → utente vede UI bloccata (bug 26/07)
-      //
-      // Fix: mandiamo `{type:"end"}` al backend che chiude gracefully
-      // la sessione. Il backend risponderà con `done` (o WS.close) →
-      // pipelineDone=true → status torna idle → HF_LOOP può ripartire
-      // per il prossimo turno (comportamento simile a iPhone "retry").
-      if (!this.currentTranscript && !this.doneReceived && this.noSpeechReceived) {
-        console.log(
-          `[${TAG}] end fired with empty transcript + no-speech → sending {type:end} for graceful close`
-        );
-        try {
-          this.sendJson({ type: "end" });
-        } catch {}
-        // Notifica upper layer che la sessione va chiusa (turno vuoto,
-        // niente TTS in arrivo). Usa un codice speciale "no_speech" che
-        // speech.ts può interpretare per NON considerare come errore
-        // pipeline reale.
-        this.dispatched = true;
-        this.doneReceived = true;
-        this.notifiedUpperOnClose = true;
-        try {
-          this.callbacks.onError?.("no_speech");
-        } catch {}
-        this.removeListeners();
-        this.stopKeepalive();
-        this.forceCloseWs();
-      }
     });
 
     // Start SpeechRecognizer (Apple SFSpeechRecognizer su iOS,
@@ -780,13 +801,11 @@ export class VoiceClientSttSession {
       //   `androidRecognitionServicePackage` non lo forziamo: il default
       //   di sistema (Google) è quello che vogliamo.
       //
-      // 2026-11-13 Honor report — TEST CHIRURGICO v70.5.4:
-      // `continuous: false` anche su Android. Prima era true per evitare
-      // il beep di sistema tra turni (v64.1 ANDROID_CONTINUOUS_NO_BEEP),
-      // ma il VAD di Google in continuous mode è meno sensibile all'attivazione
-      // iniziale e più aggressivo nel chiudere. L'utente deve urlare.
-      // Rimettiamo il comportamento pre-v70.3 (il beep torna).
-      const useContinuousAndroid = false;
+      // 2026-11-14 — Android: continuous=true SEMPRE, l'autoEndpoint runtime
+      // (passato via constructor) decide se il timer quietMs si arma (HF) o
+      // no (PTT). Il test chirurgico v70.5.4 è stato annullato: si lasciava
+      // metà pipeline continuous e metà standard, rompendo il PTT.
+      const useContinuousAndroid = true;
       const startOpts: any = {
         lang,
         interimResults: true,
@@ -827,6 +846,14 @@ export class VoiceClientSttSession {
       console.log(`[${TAG}] ExpoSpeechRecognitionModule.start() OK (v70.4 continuous=${startOpts.continuous} endpoint=${this.autoEndpoint ? "auto-3000ms" : "manual-release"})`);
       // Readiness is reported by the native `start` event above, not by
       // the synchronous start() invocation returning.
+      // v70.6 (2026-11-14) — iOS SFSpeechRecognizer è sincrono e affidabile:
+      // emettiamo readiness subito così la UI apre il gate senza aspettare
+      // l'evento nativo "start" (che ARRIVA comunque e verrà gated da
+      // recognitionStarted).
+      if (Platform.OS === "ios" && !this.recognitionStarted && !this.stopRequested && !this.doneReceived && !this.dispatched) {
+        this.recognitionStarted = true;
+        try { this.callbacks.onRecognitionActive?.(); } catch {}
+      }
 
       // === FIX 2026-07-26 v64.0 — Android silent-fail watchdog ===
       // Su Android (Google SpeechRecognizer), al 2° turno la start()
@@ -861,6 +888,7 @@ export class VoiceClientSttSession {
           try {
             this.forceCloseWs();
           } catch {}
+          try { this.removeListeners(); } catch {}
         }, 5_000);
       }
     } catch (e: any) {

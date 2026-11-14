@@ -19,6 +19,13 @@ export class AndroidUtterance {
     return [...this.committed, this.partial].filter(Boolean).join(" ").trim();
   }
 
+  /** v70.6 — testo "sicuro": solo i segmenti FINALIZED (committed). Esclude
+   * il parziale ancora in corso. Usato al rilascio PTT / end nativo
+   * imprevisto per salvare SOLO quello che il recognizer ha confermato. */
+  get safeText(): string {
+    return this.committed.filter(Boolean).join(" ").trim();
+  }
+
   speechStarted(): void {
     if (this.closed) return;
     this.clearTimer();

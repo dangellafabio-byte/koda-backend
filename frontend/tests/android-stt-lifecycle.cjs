@@ -85,11 +85,25 @@ async function test(name, fn) {await fn();passed++;console.log('PASS', name)}
     const h=harness();await h.session.startRecognition('it');h.emit('error',{error:'no-speech'});h.emit('end');
     assert.deepEqual(h.errors,['no_speech']);assert.equal(h.listenerCount,0);assert.equal(h.closed,1);
   });
-  await test('partial text on native end reaches backend exactly once', async()=>{
+  await test('partial text on native end does NOT reach backend (v70.6 spec: safeText only)', async()=>{
+    // v70.6: user explicit requirement — "al rilascio non inviare
+    // immediatamente un parziale: si rischia di perdere le ultime parole".
+    // Solo segmenti FINAL (committed) possono essere inviati come salvage.
     const h=harness();await h.session.startRecognition('it');
-    h.emit('result',{isFinal:false,results:[{transcript:'Ciao Ollenya',confidence:0.9}]});h.emit('end');h.emit('end');
-    assert.equal(h.frames.filter(f=>f.type==='transcript_from_client').length,1);
-    assert.equal(h.frames[0].text,'Ciao Ollenya');assert.equal(h.frames[0].stt_engine,'google_speechrecognizer');
+    h.emit('result',{isFinal:false,results:[{transcript:'Ciao Ollenya',confidence:0.9}]});
+    h.emit('end');h.emit('end');
+    assert.equal(h.frames.filter(f=>f.type==='transcript_from_client').length,0,'parziale non dispatchiato');
+    assert.deepEqual(h.errors,['android_recognition_ended_early']);
+  });
+  await test('final committed segment on native end IS salvaged (v70.6 spec)', async()=>{
+    // Caso complementare: se un segmento FINAL era già stato emesso, lo
+    // recuperiamo al native end anche senza aver atteso quietMs.
+    const h=harness();await h.session.startRecognition('it');
+    h.emit('result',{isFinal:true,results:[{transcript:'Ciao Ollenya',confidence:0.9}]});
+    h.emit('end');h.emit('end');
+    const dispatched = h.frames.filter(f=>f.type==='transcript_from_client');
+    assert.equal(dispatched.length,1,'segmento final salvato esattamente una volta');
+    assert.equal(dispatched[0].text,'Ciao Ollenya');assert.equal(dispatched[0].stt_engine,'google_speechrecognizer');
   });
   await test('cancel during async Android reset never restarts microphone', async()=>{
     const h=harness();const pending=h.session.startRecognition('it');await h.session.abort();await pending;
