@@ -2954,11 +2954,11 @@ export default function Taccuino() {
         setCloseSessionPause(true);
         closeSessionPauseRef.current = true;
         noSpeechCountRef.current = 0; // reset per la prossima sessione manuale
-        try {
-          await speakAwareness(pickLine(awarenessLoopExit));
-        } catch (e) {
+        // Fire-and-forget: non await in useEffect sincrona (deployer RCA
+        // 2026-11-13, SyntaxError Metro export).
+        speakAwareness(pickLine(awarenessLoopExit)).catch((e) => {
           console.warn(`[OLLENYA_HF_NOSPEECH_EXIT] speakAwareness error:`, e);
-        }
+        });
         return; // NON schedulare startTalkInternal
       }
       // Primo no_speech → Ollenya dice "non ti ho sentita, puoi ripetere?".
@@ -2966,11 +2966,10 @@ export default function Taccuino() {
       console.log(
         `[OLLENYA_HF_BACKOFF_NOSPEECH] no_speech #${noSpeechCountRef.current}/${MAX_NO_SPEECH_ATTEMPTS} → speak awareness + riapri`
       );
-      try {
-        await speakAwareness(pickLine(awarenessLinesNoAudio));
-      } catch (e) {
+      // Fire-and-forget: come sopra, evitiamo await in useEffect sincrona.
+      speakAwareness(pickLine(awarenessLinesNoAudio)).catch((e) => {
         console.warn(`[OLLENYA_HF_NOSPEECH_PROMPT] speakAwareness error:`, e);
-      }
+      });
       // Dopo la frase TTS siamo già passati da speaking a idle. Applica delay
       // progressivo breve per dare al sistema audio tempo di switchare.
       scheduleDelayMs =
