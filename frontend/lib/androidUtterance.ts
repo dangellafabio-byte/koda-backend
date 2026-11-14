@@ -75,8 +75,16 @@ export class AndroidUtterance {
   }
 
   serviceEnded(): boolean {
-    // Only a completed quiet interval can turn an unexpected native end
-    // into a completed utterance. Never send a freshly interrupted partial.
+    // v70.6.2 (P4) — In PTT (autoEndpoint=false) un end nativo arriva mentre
+    // il dito è ancora premuto: NON dobbiamo finalizzare né azzerare
+    // l'accumulatore. Il caller (voiceClientStt) riavvierà il recognizer
+    // nativo e noi continueremo ad accumulare segmenti.
+    if (this.options.autoEndpoint === false) {
+      return false;
+    }
+    // HF path: solo un quiet interval completo può trasformare un end
+    // inatteso in un'utterance completata. Mai inviare un parziale
+    // appena interrotto.
     if (this.text && Date.now() - this.lastActivity >= this.quietMs) {
       this.finish();
       return true;

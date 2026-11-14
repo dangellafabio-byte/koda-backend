@@ -3910,6 +3910,15 @@ export default function Taccuino() {
           // così il ramo stopTalk attiverà awarenessLinesGarbled.
           if (errCode === "nomatch") {
             nomatchObservedRef.current = true;
+            // v70.6.2 — in PTT il loop HF non gira, quindi il flag non
+            // verrebbe mai consumato. Parla awareness garbled subito e
+            // consuma il flag. In HF ci pensa la useEffect del loop.
+            if (!handsFreeRef.current) {
+              speakAwareness(pickLine(awarenessLinesGarbled)).catch((e) => {
+                console.warn(`[OLLENYA_PTT_NOMATCH] speakAwareness error:`, e);
+              });
+              nomatchObservedRef.current = false;
+            }
           }
           // Lascia che turnHadSpeechRef stay false → il ramo no-speech
           // standard gestirà retry/stop secondo i 2 tentativi.
@@ -4037,6 +4046,10 @@ export default function Taccuino() {
     // senza transcript), il flag resta false e l'HF loop incrementerà il
     // counter e userà il delay progressivo alla prossima riapertura.
     turnHadSpeechRef.current = false;
+    // v70.6.2 — flag per-turno: azzeriamo nomatchObservedRef e il counter
+    // dei fallimenti WS all'apertura così un turno nuovo non eredita
+    // stati dal precedente (es. nomatch HF che leakava in un turno PTT).
+    nomatchObservedRef.current = false;
 
     // === GUARD STREAMING SESSION (2026-06-28 v26 — diag log iPhone cascata) ===
     // Se una sessione WebSocket è già attiva, non aprirne un'altra. Questo

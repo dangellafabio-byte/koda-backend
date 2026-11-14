@@ -179,6 +179,13 @@ export class VoiceClientSttSession {
   private autoEndpoint = true;
   private subVolume: { remove: () => void } | null = null;
 
+  // v70.6.2 — Riavvio nativo in PTT mentre il dito è premuto.
+  // Serve `lastStartOptions` per riusare la configurazione del primo start,
+  // e `restartInFlight` per serializzare: se rilascio/abort arriva prima
+  // che il restart differito parta, NON ripartiamo.
+  private lastStartOptions: any = null;
+  private restartInFlight = false;
+
   // Route audio (rilevata prima di start)
   private audioRoute: "bluetooth" | "wired" | "builtin" | "unknown" = "unknown";
 
@@ -678,6 +685,35 @@ export class VoiceClientSttSession {
           try { this.forceCloseWs(); } catch {}
           return;
         }
+        // === v70.6.2 (P9) — "client" durante stopRequested è benigno =======
+        // Google emette ERROR_CLIENT al posto del final quando si chiama
+        // stop() prima che il segmento parziale sia stato chiuso
+        // (jamsch/expo-speech-recognition#158). Se abbiamo già richiesto
+        // lo stop, NON cancelliamo l'accumulatore e NON propaghiamo
+        // l'errore in UI: la decisione finale viene presa da stop()
+        // (grace + finalizeAfterStopRequested) oppure dall'end handler.
+        // Fuori dal contesto stopRequested, l'errore client resta rumoroso
+        // (fallback al ramo generico sotto).
+        if (evt.error === "client" && this.stopRequested) {
+          console.log(`[${TAG}] error "client" during stopRequested → benign (expo #158), accumulator preserved`);
+          return;
+        }
+        // === v70.6.2 (P3) — PTT ancora premuto: errore transitorio ========
+        // In PTT (autoEndpoint=false) con dito ancora giù (!stopRequested)
+        // un errore nativo non deve chiudere il turno: riavviamo il
+        // recognizer mantenendo accumulatore e WS. Il restart è serializzato
+        // da `restartInFlight`; se nel frattempo arriva stop()/abort,
+        // il callback schedulato si auto-annulla.
+        if (
+          this.autoEndpoint === false &&
+          !this.stopRequested &&
+          !this.doneReceived &&
+          !this.dispatched
+        ) {
+          console.log(`[${TAG}] error "${evt.error}" while PTT held → native recognizer restart`);
+          this.restartNativeRecognizerPtt();
+          return;
+        }
         this.androidUtterance?.cancel();
 
         // === FIX 2026-07-23 v60.4 — AudioSession recovery cycle ============
@@ -728,17 +764,37 @@ export class VoiceClientSttSession {
       // iOS può emettere "end" più volte per sessione (specialmente dopo
       // isFinal). Il guard `dispatched` previene safety net multipli.
       if (this.dispatched) {
-        // Log molto leggero per non spammare
         return;
       }
-      console.log(`[${TAG}] end event (noSpeech=${this.noSpeechReceived})`);
-      // v70.6 (2026-11-14) — PRIORITÀ no-speech: se l'errore no-speech è
-      // stato ricevuto, è un turno vuoto PULITO, non un'interruzione del
-      // recognizer. Deve emettere "no_speech" code PRIMA del fallback
-      // android_recognition_ended_early.
+      console.log(`[${TAG}] end event (noSpeech=${this.noSpeechReceived} stopReq=${this.stopRequested} autoEndpoint=${this.autoEndpoint})`);
+
+      // === v70.6.2 (P3+P4) — PTT ancora premuto: riavvia, non chiudere ===
+      // Con autoEndpoint=false e stopRequested=false siamo ancora con il
+      // dito giù. Qualsiasi end nativo (no-speech, pausa lunga, service
+      // kill) va trasformato in un restart del recognizer: WS e
+      // accumulatore restano vivi.
+      if (
+        this.autoEndpoint === false &&
+        !this.stopRequested &&
+        !this.doneReceived
+      ) {
+        this.restartNativeRecognizerPtt();
+        return;
+      }
+
+      // === v70.6.2 (P2/P8/P9) — stopRequested: decisione centralizzata ===
+      // Un'unica politica per stop, end-durante-grace e scadenza-grace:
+      // mai inviare parziali, mai scartare la coda in silenzio.
+      if (this.stopRequested && !this.doneReceived) {
+        this.finalizeAfterStopRequested("end");
+        return;
+      }
+
+      // === HF path (autoEndpoint=true, !stopRequested) ====================
+      // PRIORITÀ no-speech: turno vuoto pulito → "no_speech" code
       if (!this.currentTranscript && !this.doneReceived && this.noSpeechReceived) {
         console.log(
-          `[${TAG}] end fired with empty transcript + no-speech → sending {type:end} for graceful close`
+          `[${TAG}] HF end + no-speech → sending {type:end} for graceful close`
         );
         try { this.androidUtterance?.cancel(); } catch {}
         try {
@@ -755,9 +811,9 @@ export class VoiceClientSttSession {
         this.forceCloseWs();
         return;
       }
-      if (this.androidUtterance && !this.doneReceived && !this.stopRequested) {
+      if (this.androidUtterance && !this.doneReceived) {
         if (this.androidUtterance.serviceEnded()) return;
-        // v70.6 — Recupera SOLO segmenti finalizzati (committed). Il parziale
+        // Recupera SOLO segmenti finalizzati (committed). Il parziale
         // ancora in corso potrebbe essere incompleto e inviarlo come final
         // significa troncare parole. Se non ci sono committed, falliamo.
         const salvage = this.androidUtterance.safeText;
@@ -773,9 +829,7 @@ export class VoiceClientSttSession {
         this.failAndroidRecognition("android_recognition_ended_early");
         return;
       }
-      // Se non abbiamo ancora inviato final ma abbiamo un transcript accumulato,
-      // consideriamolo final (safety net per casi in cui iOS chiude senza
-      // isFinal=true).
+      // Safety net iOS: chiude senza isFinal=true
       if (this.currentTranscript && !this.doneReceived) {
         console.log(
           `[${TAG}] end fired without isFinal → treating currentTranscript as final`
@@ -842,6 +896,7 @@ export class VoiceClientSttSession {
           EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 500,
         };
       }
+      this.lastStartOptions = startOpts;
       ExpoSpeechRecognitionModule.start(startOpts);
       console.log(`[${TAG}] ExpoSpeechRecognitionModule.start() OK (v70.4 continuous=${startOpts.continuous} endpoint=${this.autoEndpoint ? "auto-3000ms" : "manual-release"})`);
       // Readiness is reported by the native `start` event above, not by
@@ -897,6 +952,94 @@ export class VoiceClientSttSession {
         this.callbacks.onError?.(`client_stt_start_failed:${e?.message || e}`);
       } catch {}
     }
+  }
+
+  /**
+   * v70.6.2 (P3) — Riavvio del recognizer nativo mentre PTT è premuto.
+   * Serializzato con `restartInFlight` per evitare restart concorrenti e
+   * per onorare un rilascio/abort arrivato durante il delay di 80ms.
+   * NON tocca l'accumulatore AndroidUtterance: committed e partial già
+   * raccolti restano vivi tra i segmenti.
+   */
+  private restartNativeRecognizerPtt(): void {
+    if (this.restartInFlight) return;
+    if (this.stopRequested || this.doneReceived || this.dispatched) return;
+    if (this.autoEndpoint !== false) return; // solo PTT
+    if (!this.lastStartOptions) return;
+    this.restartInFlight = true;
+    try { ExpoSpeechRecognitionModule.abort(); } catch {}
+    setTimeout(() => {
+      this.restartInFlight = false;
+      // Ri-controllo DOPO il delay: se nel frattempo è arrivato stop/abort
+      // o il turno si è chiuso, non rilanciare.
+      if (this.stopRequested || this.doneReceived || this.dispatched) {
+        console.log(`[${TAG}] PTT restart cancelled (state changed during 80ms delay)`);
+        return;
+      }
+      if (this.autoEndpoint !== false) return;
+      this.recognitionStarted = false;
+      this.speechStartReceived = false;
+      this.noSpeechReceived = false;
+      try {
+        ExpoSpeechRecognitionModule.start(this.lastStartOptions);
+        console.log(`[${TAG}] native recognizer restarted (PTT held)`);
+      } catch (e: any) {
+        console.log(`[${TAG}] PTT restart failed: ${e?.message || e}`);
+      }
+    }, 80);
+  }
+
+  /**
+   * v70.6.2 (P2/P8/P9) — Decisione post-stop unificata.
+   * Chiamata da: fine del grace di stop(), ramo end-durante-stopRequested,
+   * ramo client-benigno (indirettamente via end). Regole:
+   *   • parziale pendente (con o senza committed) → nomatch, no dispatch
+   *     (la coda non confermata non deve essere scartata in silenzio);
+   *   • solo committed (parziale è stato finalizzato) → dispatch una volta;
+   *   • nulla → {type:end} pulito.
+   */
+  private finalizeAfterStopRequested(reason: string): void {
+    if (this.doneReceived || this.dispatched) return;
+    const hadPartial = !!this.androidUtterance?.hasPendingPartial;
+    const safe = this.androidUtterance?.safeText || "";
+    console.log(`[${TAG}] finalizeAfterStopRequested(${reason}) hadPartial=${hadPartial} safeLen=${safe.length}`);
+
+    if (hadPartial) {
+      // Coda non confermata → chiedi ripetizione, niente dispatch.
+      this.dispatched = true;
+      this.doneReceived = true;
+      this.notifiedUpperOnClose = true;
+      try { this.androidUtterance?.cancel(); } catch {}
+      try { this.callbacks.onError?.("nomatch"); } catch {}
+      try { this.removeListeners(); } catch {}
+      try { this.sendJson({ type: "end" }); } catch {}
+      try { this.stopKeepalive(); } catch {}
+      try { this.forceCloseWs(); } catch {}
+      return;
+    }
+    if (safe) {
+      this.currentTranscript = safe;
+      this.dispatchFinalToBackend().catch((e: any) =>
+        console.log(`[${TAG}] dispatchFinal (finalize) error: ${e?.message || e}`)
+      );
+      return;
+    }
+    // Fallback: niente committed, niente partial. Chiusura pulita.
+    if (this.currentTranscript) {
+      // iOS: currentTranscript è popolato dal result handler anche senza
+      // AndroidUtterance. Lo consideriamo final qui.
+      this.dispatchFinalToBackend().catch((e: any) =>
+        console.log(`[${TAG}] dispatchFinal (finalize/ios) error: ${e?.message || e}`)
+      );
+      return;
+    }
+    this.dispatched = true;
+    this.doneReceived = true;
+    this.notifiedUpperOnClose = true;
+    try { this.sendJson({ type: "end" }); } catch {}
+    try { this.removeListeners(); } catch {}
+    try { this.stopKeepalive(); } catch {}
+    try { this.forceCloseWs(); } catch {}
   }
 
   /**
@@ -1122,34 +1265,11 @@ export class VoiceClientSttSession {
       }
       console.log(`[${TAG}] stop(): grace ended — hadPartial=${this.androidUtterance?.hasPendingPartial} dispatched=${this.dispatched}`);
     }
-    // Decisione post-grace:
-    //  • safeText non vuoto → dispatch committed
-    //  • safeText vuoto + partial non finalizzato → "nomatch" (chiedi ripeti)
-    //  • niente → type:end pulito
-    const safeText = this.androidUtterance?.safeText || "";
-    const stillHasPartial = this.androidUtterance?.hasPendingPartial;
+    // Decisione post-grace unificata (v70.6.2): stessa politica del ramo
+    // end-durante-stopRequested. Mai inviare parziali, mai scartare la
+    // coda in silenzio.
     if (!this.doneReceived && !this.dispatched) {
-      if (safeText) {
-        this.currentTranscript = safeText;
-        this.dispatchFinalToBackend().catch((e: any) =>
-          console.log(`[VoiceClientSttSession] dispatchFinal error: ${e?.message || e}`)
-        );
-      } else if (stillHasPartial) {
-        console.log(`[${TAG}] stop(): only partial survived → signal nomatch (ask-to-repeat)`);
-        this.dispatched = true;
-        this.doneReceived = true;
-        this.notifiedUpperOnClose = true;
-        try { this.callbacks.onError?.("nomatch"); } catch {}
-        try { this.removeListeners(); } catch {}
-        try { this.sendJson({ type: "end" }); } catch {}
-        try { this.forceCloseWs(); } catch {}
-      } else if (this.currentTranscript) {
-        this.dispatchFinalToBackend().catch((e: any) =>
-          console.log(`[VoiceClientSttSession] dispatchFinal error: ${e?.message || e}`)
-        );
-      } else {
-        try { this.sendJson({ type: "end" }); } catch {}
-      }
+      this.finalizeAfterStopRequested("grace");
     }
     // Safety timeout — se dopo 40s il server non manda done, chiudi WS
     setTimeout(() => {

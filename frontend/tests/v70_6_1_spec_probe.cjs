@@ -78,7 +78,9 @@ function check(name, ok, detail) {results.push({name, ok}); console.log(`${ok ? 
   h.result('Prendi il latte', true); h.result('e anche il pane');
   const t0 = h.now(); p = h.session.stop(); await h.drive(2000); await p;
   check('P2 stop() waited >=1500ms grace before deciding', h.now() - t0 >= 1500, `elapsed=${h.now() - t0}`);
-  check('P2 committed+partial w/o native final keeps tail', JSON.stringify(h.calls.dispatch) === JSON.stringify(['Prendi il latte e anche il pane']), `dispatched=${JSON.stringify(h.calls.dispatch)} (spec: safeText-only insufficient)`);
+  check('P2 committed+partial w/o native final → nomatch (no silent dispatch)',
+    h.calls.dispatch.length === 0 && h.calls.errors.includes('nomatch'),
+    `dispatched=${JSON.stringify(h.calls.dispatch)} errors=${JSON.stringify(h.calls.errors)}`);
 
   // P3 PTT held ~20s with NO speech, realistic Android: recognizer emits error no-speech + end
   h = harness(); h.session.autoEndpoint = false; await h.start(); h.emit('start');
@@ -119,8 +121,10 @@ function check(name, ok, detail) {results.push({name, ok}); console.log(`${ok ? 
   h.result('Ricordami domani', true); h.result('alle nove');
   p = h.session.stop(); await new Promise(r => setImmediate(r));
   h.emit('error', {error: 'client', message: 'Client side error'}); h.emit('end'); await h.drive(2000); await p;
-  check('P9 stop() + native "client" error during grace still dispatches committed text (no error banner)',
-    h.calls.dispatch.length === 1 && !h.calls.errors.some(e => e.startsWith('client_stt_')),
+  check('P9 stop() + native "client" error without final during grace → nomatch (no dispatch, no error banner)',
+    h.calls.dispatch.length === 0 &&
+    h.calls.errors.includes('nomatch') &&
+    !h.calls.errors.some(e => e.startsWith('client_stt_')),
     `dispatched=${JSON.stringify(h.calls.dispatch)} errors=${JSON.stringify(h.calls.errors)}`);
 
   const failed = results.filter(r => !r.ok).length;
