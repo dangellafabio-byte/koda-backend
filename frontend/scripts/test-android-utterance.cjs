@@ -54,7 +54,7 @@ function harness(os = 'android') {
   }
   function emit(name, evt) {for (const fn of [...(listeners.get(name) || [])]) fn(evt);}
   function result(text, final = false) {emit('result', {isFinal: final, results: [{transcript: text, confidence: .9}]});}
-  async function start() {const promise = session.startRecognition('it');tick(80);await promise;}
+  async function start() {const promise = session.startRecognition('it');tick(220);await promise;}
   return {session, calls, tick, emit, result, start};
 }
 
@@ -72,11 +72,11 @@ function harness(os = 'android') {
   h.emit('start');assert.equal(h.calls.ready, 1);
   h.tick(6000);assert.equal(h.calls.errors.length, 0, 'ready but quiet is not a dead mic');
   // Con AndroidUtterance ON (continuous=true) e autoEndpoint default=true,
-  // un final NON scatena dispatch immediato: aspetta quietMs (3000ms).
+  // un final NON scatena dispatch immediato: aspetta quietMs (v70.6.3: 1500ms).
   h.emit('speechstart');
   h.result('Perché lei cambia le impostazioni e non riesco a finire', true);
   assert.equal(h.calls.dispatch.length, 0, 'final non deve dispatch immediatamente');
-  h.tick(2999);
+  h.tick(1499);
   assert.equal(h.calls.dispatch.length, 0, 'quietMs non ancora scaduto');
   h.tick(1);
   assert.deepEqual(h.calls.dispatch, ['Perché lei cambia le impostazioni e non riesco a finire']);
@@ -92,7 +92,7 @@ function harness(os = 'android') {
 
 
   h = harness();const startup = h.session.startRecognition('it');
-  h.session.stopRequested = true;h.tick(80);await startup;
+  h.session.stopRequested = true;h.tick(220);await startup;
   assert.equal(h.calls.starts.length, 0, 'stop during pre-abort delay cannot start a mic later');
 
 

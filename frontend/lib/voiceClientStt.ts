@@ -545,7 +545,12 @@ export class VoiceClientSttSession {
       try {
         ExpoSpeechRecognitionModule.abort();
       } catch {}
-      await new Promise((r) => setTimeout(r, 80));
+      // v70.6.3 — alzato da 80 a 180 ms: su Honor/Xiaomi i Google
+      // SpeechRecognizer service impiegano più tempo a chiudere
+      // l'handle hw audio e riaprire il mic in modalità capture;
+      // con 80 ms il primo "Ciao" veniva mangiato. 180 ms resta
+      // impercettibile all'utente (< perception threshold ~250 ms).
+      await new Promise((r) => setTimeout(r, 180));
     }
     if (this.stopRequested || this.doneReceived || this.dispatched) return;
     if (Platform.OS === "android") {
@@ -562,13 +567,19 @@ export class VoiceClientSttSession {
     // In PTT (autoEndpoint=false): nessun timer, dispatch solo al release.
     // Il valore autoEndpoint=false DISATTIVA il timer quietMs internamente.
     if (Platform.OS === "android") {
+      // v70.6.3 — quietMs ridotto da 3000 a 1500 ms per rendere la
+      // chiusura della frase più reattiva (Honor/Xiaomi/tablet). Agisce
+      // SOLO in HF (autoEndpoint=true); in PTT il timer è disabilitato
+      // internamente da AndroidUtterance. Gli intent extras di Google
+      // restano invariati (il rollback 2026-11-13 ha dimostrato che
+      // abbassarli rompe la sensibilità Honor).
       this.androidUtterance = new AndroidUtterance((text) => {
         if (this.stopRequested || this.doneReceived || this.dispatched) return;
         this.currentTranscript = text;
         console.log("[OLLENYA_ANDROID_ENDPOINT] quiet interval complete → dispatch once");
         this.dispatchFinalToBackend().catch((e: any) =>
           console.log(`[${TAG}] dispatchFinal error: ${e?.message || e}`));
-      }, 3000, {
+      }, 1500, {
         autoEndpoint: this.autoEndpoint,
         onStalled: () => this.failAndroidRecognition("android_transcript_stalled"),
       });
@@ -973,7 +984,7 @@ export class VoiceClientSttSession {
       // Ri-controllo DOPO il delay: se nel frattempo è arrivato stop/abort
       // o il turno si è chiuso, non rilanciare.
       if (this.stopRequested || this.doneReceived || this.dispatched) {
-        console.log(`[${TAG}] PTT restart cancelled (state changed during 80ms delay)`);
+        console.log(`[${TAG}] PTT restart cancelled (state changed during 180ms delay)`);
         return;
       }
       if (this.autoEndpoint !== false) return;
@@ -986,7 +997,7 @@ export class VoiceClientSttSession {
       } catch (e: any) {
         console.log(`[${TAG}] PTT restart failed: ${e?.message || e}`);
       }
-    }, 80);
+    }, 180);
   }
 
   /**
@@ -1033,10 +1044,17 @@ export class VoiceClientSttSession {
       );
       return;
     }
+    // Fallback: niente committed, niente partial, niente currentTranscript.
+    // v70.6.3 — notifica esplicita all'UI: senza callback, nella APK la
+    // schermata restava in "recording" o passava a idle senza spiegazione.
+    // onError('no_speech') è lo stesso codice benigno già prodotto dal
+    // ramo HF end+no-speech → trigger un'azione pulita in index.tsx
+    // (HF: conteggio retry; PTT: idle immediato senza parlare).
     this.dispatched = true;
     this.doneReceived = true;
     this.notifiedUpperOnClose = true;
     try { this.sendJson({ type: "end" }); } catch {}
+    try { this.callbacks.onError?.("no_speech"); } catch {}
     try { this.removeListeners(); } catch {}
     try { this.stopKeepalive(); } catch {}
     try { this.forceCloseWs(); } catch {}

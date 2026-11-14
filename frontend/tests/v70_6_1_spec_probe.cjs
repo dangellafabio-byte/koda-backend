@@ -57,7 +57,7 @@ function harness(os = 'android') {
   }
   const emit = (name, evt) => {for (const fn of [...(listeners.get(name) || [])]) fn(evt);};
   const result = (text, final = false) => emit('result', {isFinal: final, results: [{transcript: text, confidence: .9}]});
-  async function start() {const p = session.startRecognition('it'); tick(80); await p;}
+  async function start() {const p = session.startRecognition('it'); tick(220); await p;}
   async function drive(ms) {for (let i = 0; i < ms / 50; i++) {tick(50); await new Promise(r => setImmediate(r));}}
   return {session, calls, tick, emit, result, start, drive, now: () => now};
 }
@@ -125,6 +125,15 @@ function check(name, ok, detail) {results.push({name, ok}); console.log(`${ok ? 
     h.calls.dispatch.length === 0 &&
     h.calls.errors.includes('nomatch') &&
     !h.calls.errors.some(e => e.startsWith('client_stt_')),
+    `dispatched=${JSON.stringify(h.calls.dispatch)} errors=${JSON.stringify(h.calls.errors)}`);
+
+  // P10 (v70.6.3) — PTT press & release WITHOUT speaking:
+  // finalizeAfterStopRequested fallback must emit no_speech so the UI
+  // never stays stuck in "recording" (APK bug reported by user).
+  h = harness(); h.session.autoEndpoint = false; await h.start(); h.emit('start');
+  p = h.session.stop(); await h.drive(2000); await p;
+  check('P10 PTT release without speech → onError(no_speech), no dispatch',
+    h.calls.dispatch.length === 0 && h.calls.errors.includes('no_speech'),
     `dispatched=${JSON.stringify(h.calls.dispatch)} errors=${JSON.stringify(h.calls.errors)}`);
 
   const failed = results.filter(r => !r.ok).length;

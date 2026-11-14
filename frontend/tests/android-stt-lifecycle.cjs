@@ -27,7 +27,7 @@ function harness(os = 'android') {
   const exports = {};
   const context = {
     exports, console: {log(){}}, WebSocket: {OPEN:1}, Date, Promise,
-    setTimeout(cb, ms) { const n=++id; if(ms === 80) queueMicrotask(cb); else timers.set(n,{cb,ms}); return n; },
+    setTimeout(cb, ms) { const n=++id; if(ms === 80 || ms === 180) queueMicrotask(cb); else timers.set(n,{cb,ms}); return n; },
     clearTimeout(n) {timers.delete(n)}, clearInterval() {}, setInterval(){return ++id},
     require(name) {
       if(name === 'react-native') return {Platform:{OS:os}, AppState:{currentState:'active'}};
