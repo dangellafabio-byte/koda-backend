@@ -475,6 +475,7 @@ export default function Taccuino() {
   const audioLifecycleGateRef = useRef(new AudioLifecycleGate());
   const observedAppStateRef = useRef(AppState.currentState);
   const pttGestureEpochRef = useRef(0);
+  const streamingGestureEpochRef = useRef<number | null>(null);
   const prewarmIdleAudio = useCallback(() => audioLifecycleGateRef.current.runIdle(
     () => observedAppStateRef.current === "active" && !SpeechMod.isSpeaking(),
     async current => { if (current()) await prewarmMic(); },
@@ -534,8 +535,8 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.6.1-final-spec";
-  const OLLENYA_BUILD_DATE = "2026-11-12";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.6.4-ptt-gesture-ios";
+  const OLLENYA_BUILD_DATE = "2026-11-16";
   useEffect(() => {
     console.log(
       `[OLLENYA_BUILDTAG] ${OLLENYA_BUILD_SHORT_TAG} v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=${OLLENYA_BUILD_DATE} ` +
@@ -3693,7 +3694,8 @@ export default function Taccuino() {
     const audioLease = audioLifecycleGateRef.current.claimVoice();
     if (!audioLease) return;
     const gesture = pttGestureEpochRef.current;
-    const cancelledGesture = () => !handsFreeRef.current &&
+    const manualGesture = !handsFreeRef.current;
+    const cancelledGesture = () => manualGesture &&
       (!pttRecordingRef.current || gesture !== pttGestureEpochRef.current);
     try {
     const turnEpoch = ++voiceTurnEpochRef.current;
@@ -3745,7 +3747,7 @@ export default function Taccuino() {
     try {
       const { voiceStreamConverse } = require("../lib/speech");
       const result = await voiceStreamConverse({
-        autoEndpoint: handsFreeRef.current,
+        autoEndpoint: !manualGesture,
         ephemeral: confessionalMode,
         profileLang: "it",
         // === FIX 2026-07-26 v64.4 — voiceId client-authoritative ===
@@ -3769,8 +3771,12 @@ export default function Taccuino() {
           try { setSpeechActive(!!active); } catch {}
         },
         onSession: (s: any) => {
-          if (!isCurrentTurn()) return;
+          if (!isCurrentTurn() || cancelledGesture()) {
+            if (s) { try { s.abort?.().catch?.(() => {}); } catch {} }
+            return;
+          }
           streamingSessionRef.current = s;
+          streamingGestureEpochRef.current = s && manualGesture ? gesture : null;
           // === FIX 2026-07-24 v63.5 (Fix B) — reset mic-active gate ===
           // Nuova sessione: il mic NON è ancora attivo (parte solo dopo
           // startRecognition, ~1s più tardi). Da qui in poi ignoriamo
@@ -3790,7 +3796,7 @@ export default function Taccuino() {
           // arrivato durante la preparazione). Entrambi i segnali portano
           // ad abortire immediatamente la sessione appena aperta.
           const shouldAbortImmediately =
-            s && (pendingTapStopRef.current || releaseIntentRef.current);
+            !manualGesture && s && pendingTapStopRef.current;
           if (shouldAbortImmediately) {
             pendingTapStopRef.current = false;
             releaseIntentRef.current = false;
@@ -3812,7 +3818,7 @@ export default function Taccuino() {
         },
         // === FIX 2026-07-24 v63.5 (Fix B) — mic really active ===
         onRecognitionActive: () => {
-          if (!isCurrentTurn()) return;
+          if (!isCurrentTurn() || cancelledGesture()) return;
           micReallyActiveRef.current = true;
           console.log(`[OLLENYA_MIC_GATE] mic really active — tap-stop now allowed`);
         },
@@ -3902,7 +3908,9 @@ export default function Taccuino() {
         // vengono gestiti dal loop no-speech standard (vedi logica più sotto).
         // NON incrementiamo wsFailureCountRef, NON settiamo close-session.
         const errCode = String(result.error || "");
-        const isBenignSttEvent = errCode === "no_speech" || errCode === "nomatch" || errCode === "client_stt_no-speech";
+        const cancelledPttStartup = manualGesture && cancelledGesture() &&
+          /voice_stream_start_cancelled|aborted_pre_recognition|^aborted$/.test(errCode);
+        const isBenignSttEvent = cancelledPttStartup || errCode === "no_speech" || errCode === "nomatch" || errCode === "client_stt_no-speech";
         if (isBenignSttEvent) {
           console.log(`[OLLENYA_STT_BENIGN] ${errCode} — turn ended cleanly, no network failure`);
           // Se nomatch, l'upper layer vedrà currentTranscript="" + un flag
@@ -3968,6 +3976,7 @@ export default function Taccuino() {
         // stantio: azzerarlo è idempotente e sicuro.
         streamingSessionRef.current = null;
         // === FIX 2026-07-24 v63.5 (Fix B) — reset mic-active gate ===
+        streamingGestureEpochRef.current = null;
         // Sessione terminata: il mic non è più attivo. Prossima sessione
         // dovrà re-triggerare onRecognitionActive per riautorizzare i tap.
         micReallyActiveRef.current = false;
@@ -4208,8 +4217,20 @@ export default function Taccuino() {
     return startTalkInternal(handsFreeRef.current);
   };
 
-  const stopTalk = async () => {
+  const stopTalk = async (releasedGesture?: number) => {
     const stream = streamingSessionRef.current;
+    if (releasedGesture !== undefined) {
+      if (pttGestureEpochRef.current !== releasedGesture + 1) return;
+      if (stream && streamingGestureEpochRef.current !== releasedGesture) return;
+      if (!stream && !recRef.current) return;
+      if (stream && !micReallyActiveRef.current) {
+        pendingTapStopRef.current = false;
+        releaseIntentRef.current = false;
+        try { SpeechMod.stop(); } catch {}
+        await stream.abort();
+        return;
+      }
+    }
     if (stream) {
       pendingTapStopRef.current = false;
       releaseIntentRef.current = false;
@@ -4684,13 +4705,17 @@ export default function Taccuino() {
     }
     // In HF OFF: start PTT immediately on press-in.
     userInteractedRef.current = true;
+    pendingTapStopRef.current = false;
+    releaseIntentRef.current = false;
+    lastPttReleaseEpochRef.current = -1;
     pttGestureEpochRef.current++;
+    const startedGesture = pttGestureEpochRef.current;
     pttRecordingRef.current = true;
     console.log(`[OLLENYA_PTT] press-in → start recording (status=${status})`);
-    if (status !== "idle") {
+    if (statusRef.current !== "idle") {
       try { onBigButton(); } catch {}
       setTimeout(() => {
-        if (pttRecordingRef.current) {
+        if (pttRecordingRef.current && pttGestureEpochRef.current === startedGesture) {
           lastStartTalkAtRef.current = 0;
           startTalk();
         }
@@ -4708,12 +4733,14 @@ export default function Taccuino() {
     // asincrono e trova entrambi i ref a false → return silenzioso →
     // sessione fantasma lasciata aperta. releaseIntentRef persiste
     // attraverso gli await e viene consumato da stopTalk o da onSession.
-    releaseIntentRef.current = true;
-    lastPttReleaseEpochRef.current = pttGestureEpochRef.current;
+    const releasedGesture = pttGestureEpochRef.current;
+    lastPttReleaseEpochRef.current = releasedGesture;
     pttGestureEpochRef.current++;
     pttRecordingRef.current = false;
+    pendingTapStopRef.current = false;
+    releaseIntentRef.current = false;
     console.log(`[OLLENYA_PTT] press-out → stop & send (status=${status}, HF=${handsFreeRef.current}, releasedEpoch=${lastPttReleaseEpochRef.current})`);
-    stopTalk().catch((e) => {
+    stopTalk(releasedGesture).catch((e) => {
       console.warn(`[OLLENYA_PTT] stopTalk failed:`, e);
     });
   };
