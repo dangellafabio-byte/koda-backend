@@ -72,6 +72,24 @@ import { kodaBackendWsUrl } from "./backendUrl";
 import { getAuthToken } from "./authToken";
 import { AndroidUtterance } from "./androidUtterance";
 
+/** Final-like segments on iOS 18+ are not the physical release of a PTT gesture. */
+class IosPttTurn {
+  private committed: string[] = [];
+  private current = "";
+  private final = false;
+  result(raw: string, isFinal: boolean): string {
+    const value = raw.trim();
+    if (!value) return this.text;
+    // expo-speech-recognition prefixes subsequent iOS segments with a space.
+    if (this.final && raw.startsWith(" ") && value !== this.current) this.committed.push(this.current);
+    this.current = value;
+    this.final = isFinal;
+    return this.text;
+  }
+  get text(): string { return [...this.committed, this.current].filter(Boolean).join(" "); }
+  get hasPendingPartial(): boolean { return !!this.current && !this.final; }
+}
+
 const TAG = "KODA_CLIENT_STT";
 
 // === FIX 2026-07-23 — Usa Railway hardcoded, NON il preview Emergent ===
@@ -177,6 +195,10 @@ export class VoiceClientSttSession {
   private noSpeechReceived = false;
   private androidUtterance: AndroidUtterance | null = null;
   private autoEndpoint = true;
+  private iosPttTurn: IosPttTurn | null = null;
+  private iosPttStopTimer: ReturnType<typeof setTimeout> | null = null;
+  private iosPttStopResolve: (() => void) | null = null;
+  private iosPttStopPromise: Promise<void> | null = null;
   private subVolume: { remove: () => void } | null = null;
 
   // v70.6.2 — Riavvio nativo in PTT mentre il dito è premuto.
@@ -553,6 +575,7 @@ export class VoiceClientSttSession {
       await new Promise((r) => setTimeout(r, 180));
     }
     if (this.stopRequested || this.doneReceived || this.dispatched) return;
+    if (Platform.OS === "ios" && !this.autoEndpoint) this.iosPttTurn = new IosPttTurn();
     if (Platform.OS === "android") {
       try {
         const module: any = ExpoSpeechRecognitionModule;
@@ -634,7 +657,9 @@ export class VoiceClientSttSession {
         const norm = this.normalizeResult(evt);
         if (!norm) return;
         // Salva la trascrizione corrente (verrà usata sia per interim che final)
-        this.currentTranscript = this.androidUtterance
+        this.currentTranscript = this.iosPttTurn
+          ? this.iosPttTurn.result(norm.transcript, norm.isFinal)
+          : this.androidUtterance
           ? this.androidUtterance.result(norm.transcript, norm.isFinal)
           : norm.transcript;
         this.currentConfidence = norm.confidence;
@@ -648,6 +673,10 @@ export class VoiceClientSttSession {
           console.log(
             `[${TAG}] result FINAL text="${norm.transcript}" conf=${norm.confidence}`
           );
+          if (this.iosPttTurn) {
+            if (this.stopRequested) this.finalizeIosPttStop();
+            return;
+          }
           if (this.androidUtterance) return; // final segment, not end of user turn
           this.dispatchFinalToBackend().catch((e: any) =>
             console.log(`[VoiceClientSttSession] dispatchFinal error: ${e?.message || e}`)
@@ -680,6 +709,10 @@ export class VoiceClientSttSession {
           return;
         }
         if (evt.error === "aborted") return;
+        if (this.iosPttTurn) {
+          this.finishIosPttWithoutDispatch(evt.error === "no-match" ? "nomatch" : `client_stt_${evt.error}`);
+          return;
+        }
         // === FIX 2026-11-14 — nomatch vs no-speech separation ===========
         // "no-match" = l'utente HA parlato ma la trascrizione è
         // incomprensibile per il recognizer. È DIVERSO da no-speech:
@@ -778,6 +811,12 @@ export class VoiceClientSttSession {
         return;
       }
       console.log(`[${TAG}] end event (noSpeech=${this.noSpeechReceived} stopReq=${this.stopRequested} autoEndpoint=${this.autoEndpoint})`);
+      if (this.iosPttTurn) {
+        if (this.stopRequested) {
+          if (!this.iosPttTurn.hasPendingPartial) this.finalizeIosPttStop();
+        } else this.finishIosPttWithoutDispatch("ios_ptt_recognition_ended");
+        return;
+      }
 
       // === v70.6.2 (P3+P4) — PTT ancora premuto: riavvia, non chiudere ===
       // Con autoEndpoint=false e stopRequested=false siamo ancora con il
@@ -874,7 +913,7 @@ export class VoiceClientSttSession {
       const startOpts: any = {
         lang,
         interimResults: true,
-        continuous: useContinuousAndroid && Platform.OS === "android",
+        continuous: (useContinuousAndroid && Platform.OS === "android") || (Platform.OS === "ios" && !this.autoEndpoint),
         maxAlternatives: 1,
         addsPunctuation: true,
         // On-device: preferito su entrambe, ma richiesto SOLO su iOS
@@ -1245,6 +1284,10 @@ export class VoiceClientSttSession {
   }
 
   async stop(): Promise<void> {
+    if (Platform.OS === "ios" && (this.dispatched || this.doneReceived)) {
+      await this.drainAudioTasks();
+      return;
+    }
     // No transcript/token: retain the caller needed to diagnose early stops.
     console.log(
       `[OLLENYA_STT_STOP] requested_before=${this.stopRequested} ` +
@@ -1255,6 +1298,19 @@ export class VoiceClientSttSession {
     this.warmupAbort?.abort();
     this.cancelWsOpen?.();
     console.log(`[${TAG}] stop() called`);
+    if (this.iosPttTurn && !this.dispatched && !this.doneReceived) {
+      if (!this.iosPttStopPromise) {
+        this.iosPttStopPromise = new Promise<void>((resolve) => {
+          this.iosPttStopResolve = resolve;
+          this.iosPttStopTimer = setTimeout(() => this.finalizeIosPttStop(), 1500);
+          try { ExpoSpeechRecognitionModule.stop(); }
+          catch { this.finishIosPttWithoutDispatch("client_stt_stop_failed"); }
+        });
+      }
+      await this.iosPttStopPromise;
+      await this.drainAudioTasks();
+      return;
+    }
     try {
       ExpoSpeechRecognitionModule.stop();
     } catch {}
@@ -1679,6 +1735,11 @@ export class VoiceClientSttSession {
   }
 
   private removeListeners(): void {
+    if (this.iosPttStopTimer !== null) clearTimeout(this.iosPttStopTimer);
+    this.iosPttStopTimer = null;
+    const resolveIosStop = this.iosPttStopResolve;
+    this.iosPttStopResolve = null;
+    resolveIosStop?.();
     this.androidUtterance?.cancel();
     this.androidUtterance = null;
     // === FIX 2026-07-26 v64.0 — Clear mic watchdog on teardown ===
@@ -1706,6 +1767,27 @@ export class VoiceClientSttSession {
     this.subSpeechStart = null;
     this.subRecognitionStart = null;
     this.subVolume = null;
+  }
+
+  private finalizeIosPttStop(): void {
+    if (this.doneReceived || this.dispatched || !this.stopRequested || !this.iosPttTurn) return;
+    if (this.iosPttTurn.hasPendingPartial) this.finishIosPttWithoutDispatch("nomatch");
+    else if (this.iosPttTurn.text) {
+      this.currentTranscript = this.iosPttTurn.text;
+      this.dispatchFinalToBackend().catch(() => this.finishIosPttWithoutDispatch("client_stt_dispatch_failed"));
+    } else this.finishIosPttWithoutDispatch("no_speech");
+  }
+
+  private finishIosPttWithoutDispatch(reason: string): void {
+    if (this.doneReceived || this.dispatched) return;
+    this.dispatched = true;
+    this.doneReceived = true;
+    this.notifiedUpperOnClose = true;
+    this.removeListeners();
+    this.stopKeepalive();
+    try { ExpoSpeechRecognitionModule.abort(); } catch {}
+    try { this.callbacks.onError?.(reason); } catch {}
+    this.forceCloseWs();
   }
 
   private failAndroidRecognition(reason: string): void {
