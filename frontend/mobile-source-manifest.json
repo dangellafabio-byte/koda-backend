@@ -1,18 +1,18 @@
 {
-  "source_base": "v70.6 PTT release-intent + nomatch separation + strict 2-attempt no-speech",
-  "build_tag": "build-v70.6.1-final-spec",
+  "source_base": "Actual Emergent export 17435e50eb1277be454e1d397d0bfebd4592fd3b (2026-11-16)",
+  "build_tag": "build-v70.6.4-ptt-gesture-ios",
   "files": {
-    "frontend/app/index.tsx": "0741598fcb941a9f6aea03928f0cbef716cb47a2444060767e1d4712cd384ee1",
+    "frontend/app/index.tsx": "cb7e6d4ae1b34913082b2415606a612aa679887618ac5aeb39b20832013a4658",
     "frontend/lib/speech.ts": "8bff1998f19d2a8d7b21afc7c1cca375f6eb366b4e4bdab28aadd198b9ce5b8e",
-    "frontend/lib/voiceClientStt.ts": "8c227c3e01643df939fc2e3ca0113a438f564ca287782117b1fef70e04cd99b6",
+    "frontend/lib/voiceClientStt.ts": "792cfb9658ebed618ed479d1fa9df40de646f69c6ed803dc0ac0394918494687",
     "frontend/lib/audioLifecycleGate.ts": "5a2f6a95ad6701729b5b9853a24a131a46cbf7c87475b5f793129d728465b2ec",
-    "frontend/lib/androidUtterance.ts": "198dc0ca3eda1eba66e3137ad07d002b280c5b682837a01f07b2d9a376b62517",
+    "frontend/lib/androidUtterance.ts": "f83d6846881498d4bbceabaf3a940d967c3cc6bb206703a8ae048d7030786e4f",
     "frontend/lib/diagLogger.ts": "c883fa5b7203dfb16da56b05aac29bebadd2c838eedb1247e68a9806e138af6f",
     "frontend/scripts/test-audio-startup.cjs": "2b78e1b221907fe04d4460a6fa2bed46f83c93b8e1fb224d20745ee8297f42b3",
     "frontend/scripts/test-stream-startup.cjs": "cba24639666741096518db31686c483c42af73145ebe1f8a8e7656d8dec1d79c",
-    "frontend/scripts/test-android-utterance.cjs": "3698c6ca5b7f7673a477438936da0c2dbb5b8bd27c851c62bcd65dd30d813154",
+    "frontend/scripts/test-android-utterance.cjs": "2147f3a0bf4723d7a43c10b2339b4dbb22535c78c42340f7e02c823e3cb749ca",
     "frontend/scripts/test-resume-recovery.cjs": "9997a77c1c50835a5942fdcc17b0b2f26233aafd4980a0bde6f346e68202f783"
   },
   "status": "prepared_locally_not_pushed_not_built",
-  "verification": "Real source executed with simulated native modules; no physical Honor acoustic test or APK build."
+  "verification": "7 existing suites plus current-source iOS PTT and gesture-isolation tests PASS; native events simulated, no physical-device certification."
 }
