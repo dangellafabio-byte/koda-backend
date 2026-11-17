@@ -523,7 +523,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.11-ptt-restore-v704";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.12-ptt-release-noop";
   const OLLENYA_BUILD_DATE = "2026-11-17";
   useEffect(() => {
     console.log(
@@ -4009,26 +4009,13 @@ export default function Taccuino() {
   };
 
   const stopTalk = async () => {
-    // === PTT v70.11 (2026-11-17 Fabio) — ripristino logica v70.4-ptt-stop ===
-    // In modalità WS stream (useVoiceStream=true) la registrazione NON passa
-    // da recRef, ma da streamingSessionRef. Se gestiamo solo recRef, il
-    // press-out è un no-op e il mic resta appeso all'auto-endpoint nativo.
-    // Replica bit-identica da commit cf1e6875 (build-v70.4-ptt-stop-timeouts).
-    const stream = streamingSessionRef.current;
-    if (stream) {
-      pendingTapStopRef.current = false;
-      setStatus("transcribing", "stopTalk:stream-release");
-      console.log("[OLLENYA_PTT] release → streaming stop");
-      await stream.stop();
-      return;
-    }
-    if (!recRef.current && statusRef.current === "recording") {
-      // Rilasciato mentre il transport è ancora in warmup. onSession/consumer
-      // leggeranno pendingTapStopRef e chiameranno stop() al primo ok.
-      pendingTapStopRef.current = true;
-      console.log("[OLLENYA_PTT] release queued during streaming startup");
-      return;
-    }
+    // === PTT v70.12 (2026-11-17 Fabio) — rilascio NO-OP in modalità WS stream =
+    // Logica di v70.5/v70.7 (commit d8a82176) che l'utente ha confermato
+    // funzionante: in modalità WS stream NON fermiamo la sessione sul
+    // press-out. Il motivo è che iOS 27 Pressable cancella spuriamente il
+    // touch a ~200-400ms, PRIMA che il WS (warmup ~1s) sia pronto. Se
+    // fermiamo lì, la sessione aborta con voice_stream_start_cancelled.
+    // Lasciando il mic libero, l'STT nativo chiude da solo sul silenzio.
     // Use recRef.current as single source of truth (status check would create
     // stale-closure bugs when called from the silence-detection callback)
     const current = recRef.current;
