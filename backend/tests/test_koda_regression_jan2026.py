@@ -130,7 +130,7 @@ class TestVoices:
         assert len(voices) == 2, f"expected exactly 2 voices, got {len(voices)}: {voices}"
 
         names = sorted(v.get("name", "") for v in voices)
-        assert names == ["Acqua", "Vento"], f"expected ['Acqua','Vento'], got {names}"
+        assert names == ["Cielo", "Vento"], f"expected ['Cielo','Vento'] (Acqua replaced 2026-07-13), got {names}"
 
         # required keys on each entry
         required = {"voice_id", "name", "description", "gender", "accent"}

@@ -1,0 +1,53 @@
+{
+  "summary": "Pre-EAS check of build-v70.12-ptt-release-noop. For PTT purposes the code is the same as v70.7 (ae508487): `git diff ae508487 HEAD` touches only index.tsx, and the only changes there are the build tag and comments. All requested static checks pass: (1) stopTalk only acts on recRef.current. On native, startTalkInternal goes to startTalkStreaming, recRef stays null and the release does nothing, so stream.stop() is never called on press-out. (2) The orb <Pressable testID=big-btn-voice> uses onPressIn/onPressOut, with no GestureDetector. onPress and onLongPress do nothing when hands-free is off. (3) voiceClientStt.ts has exactly one `continuous: Platform.OS === \"android\"`, without the v70.8 `|| !this.autoEndpoint` patch. index.tsx never passes autoEndpoint, so it defaults to true. Bundles: the web bundle (200, 9.9MB) and the iOS production Hermes bundle (platform=ios, dev=false, 200, 10MB) both compile, and both contain the v70.12 tag. The 'Unexpected reserved word await' entry in expo.out.log is from an older run; the latest bundles succeed. tsc --noEmit reports 47 type errors but no syntax errors; all of them already existed in v70.7. Backend, on BOTH the preview backend and Railway prod (which the native build actually calls; lib/backendUrl.ts hardcodes it): /api/transcribe-inworld returns 422 with no body, 400 for an empty file, and 200 with Italian text for a real wav. /api/profile returns 200 with no _id. WS /api/voice/stream with stt_source=client_apple returns `ready`. FAILING: Deepgram key is INVALID (401 INVALID_AUTH) on BOTH preview and Railway prod. The WS stream with stt_source=deepgram returns {type:error, 'STT unavailable: server rejected WebSocket connection: HTTP 401'}, and POST /api/transcribe-deepgram returns 502. Web UI: login screen renders. Dev login only works when the Railway calls are proxied, because Railway sends ACAO:* together with credentials, which browsers block. With the proxy, the main screen renders. With hands-free OFF, holding the orb logs [OLLENYA_PTT] press-in, and releasing logs press-out. The web path then uploads to /transcribe-inworld (428ms); the transcript is empty because the headless mic is silent, and the app shows 'Non ti ho sentito'. The native WS/SFSpeechRecognizer path and the physical iOS 27 gesture cannot be tested from web.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "WS /api/voice/stream (stt_source=deepgram) + POST /api/transcribe-deepgram", "issue": "DEEPGRAM_API_KEY returns 401 INVALID_AUTH on preview AND Railway prod (backend log: 'DG connect failed: server rejected WebSocket connection: HTTP 401'; 'Deepgram error 401 INVALID_AUTH'). iOS falls back to Deepgram whenever VoiceClientSttSession.isSupported() is false (lib/voiceClientStt.ts isSupported: recognition_unavailable / no_ondevice_it when supportsOnDeviceRecognition() is false), and also when EXPO_PUBLIC_USE_CLIENT_STT is not inlined in the bundle. In those cases every voice turn fails with 'STT unavailable'. This could explain 'PTT non funziona' independently of the gesture.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "Railway CORS", "issue": "Railway returns access-control-allow-origin:* together with allow-credentials:true, so browsers block every call from the web preview (dev login fails with 'Dev login non riuscito'). Native builds are not affected."},
+      {"endpoint": "WS /api/voice/stream auth-bridge", "issue": "A WS with no token is mapped to a uid by IP fingerprint ('auth-bridge fingerprint=IP → uid=7f701406...'). Anonymous test sessions get attributed to a real-looking uid."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "EAS build env", "issue": "eas.json env sets only EXPO_PUBLIC_BACKEND_URL. /app/.gitignore lines 102-104 ignore .env, .env.* and *.env (even though the comment above says not to), and frontend/.env is not git-tracked. speech.ts:2203 enables on-device Apple STT only when process.env.EXPO_PUBLIC_USE_CLIENT_STT === 'true' (default false). If EAS does not get this var (from expo.dev env or a local .env), iOS uses Deepgram, which now always returns 401. Same state as v70.7, but it is now fatal because the Deepgram key is invalid.", "affected_testIDs": ["big-btn-voice"]}
+    ],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "expo-av (deprecated)", "issue": "lib/quotaExhaustedAudio.ts:22 imports { Audio } from 'expo-av' (runtime warning: removed in SDK 54). Migrate to expo-audio. Reference: /app/frontend/lib/quotaExhaustedAudio.ts:22"},
+      {"component": "missing import getIntroAsset", "issue": "ReferenceError at runtime: getIntroAsset is used without being imported in app/paywall.tsx:164 and lib/quotaExhaustedAudio.ts:91 (tsc TS2304). The paywall voice intro and the quota-exhausted audio will throw. This bug already existed in v70.7, so it is not a regression. Reference: /app/frontend/app/paywall.tsx:164"}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter23_ptt_v70_12_smoke.py",
+    "/app/backend/tests/test_koda_regression_jan2026.py",
+    "/app/test_reports/pytest/iter23_ptt_v70_12.xml",
+    "/app/test_reports/pytest/iter23_ptt_v70_12_railway.xml"
+  ],
+  "action_items": [
+    "HIGH: Rotate or replace DEEPGRAM_API_KEY on Railway prod (and in the preview backend/.env). It currently returns 401, so the Deepgram fallback of the voice stream and /transcribe-deepgram are both dead.",
+    "HIGH: Before the EAS build, make sure EXPO_PUBLIC_USE_CLIENT_STT=true (and EXPO_PUBLIC_USE_WS_VOICE_STREAM=true) reach the bundle. Add them to eas.json build.*.env (production/preview) or to the EAS environment, because .env is gitignored. Ask Fabio for the [OLLENYA_STT_SOURCE] line from the last TestFlight log: if it says engine=deepgram, this is the real cause.",
+    "MEDIUM: UX in PTT mode (HF off). Releasing the orb does nothing. A second press during 'recording' goes to onBigButton, which HARD-ABORTS the session and discards what was said. The 60ms restart is then blocked by the stale status !== idle check in startTalkInternal:3863. If Fabio presses again 'to send', the turn is lost. Same as v70.7, but tell him: tap once, then wait for the 3s auto-end.",
+    "LOW: The comment/log in onBigButtonPressOut (index.tsx:4489-4492) says 'press-out → stop & send' and 'gestisce streamingSessionRef (vedi stopTalk v70.11)'. Both are wrong for v70.12, where the release does nothing in WS mode. Fix them so the TestFlight diag logs are not confusing.",
+    "LOW: Add the missing `import { getIntroAsset } from '../lib/introAssetProvider'` in app/paywall.tsx and lib/quotaExhaustedAudio.ts, and migrate quotaExhaustedAudio off expo-av.",
+    "LOW: Railway CORS: echo the request origin instead of '*' when credentials are allowed (only needed if web preview login matters)."
+  ],
+  "critical_code_review_comments": [
+    "PTT logic is identical to v70.7 (ae508487); the only diff is the build tag and comments. Not identical to d8a82176 (Oct 15): voiceClientStt.ts (+237 lines: autoEndpoint, AndroidUtterance, warmupAbort, the 'voice_stream_start_cancelled' throw) and speech.ts (abort wiring; native session.stop() with no 5s timeout race) changed in the 2026-11-11/12 'Add files via upload' commits. These changes are in v70.7 too.",
+    "Pressable big-btn-voice sits inside a horizontal paging ScrollView (index.tsx ~6936). On iOS the ScrollView pan recognizer can take over the touch responder, and that is a probable real cause of the 'spurious cancel at 200-400ms', more likely than the orb animation. v70.12 is immune to it only because the release does nothing.",
+    "speech.ts:1381 clearInterval(bridgeInterval) references a variable that is out of scope (TS2304). It is inside a try/catch, so harmless, but it is dead code.",
+    "index.tsx is 9474 lines and server.py 20631 lines, far above the maintainability limit."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter23_ptt_v70_12_smoke.py (new)",
+    "/app/backend/tests/test_koda_regression_jan2026.py (stale voice-name expectation Acqua→Cielo, intentional product change 2026-07-13)"
+  ],
+  "success_rate": {"backend": "preview 13/15 (87%), Railway 7/8 (1 skipped); both failures = Deepgram 401", "frontend": "100% of web-testable checks (bundle web+iOS, login render, main screen, PTT press-in/out handlers fire); native WS/STT path not testable"},
+  "seed_data_creation": "Used the dev@koda.local tester account via /api/auth/dev-login on the preview backend. Toggled hands-free off and back on. The regression /converse test wrote a memory under a fresh UUID and re-upserted the global key_facts 'Si chiama Mario' / 'Ha un cane di nome Luna' (dedup; these existed already). No prod (Railway) writes except ephemeral WS sessions that sent no transcript.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "The native app calls Railway (lib/backendUrl.ts hardcoded), not the preview backend. Run the smoke suite against prod with OLLENYA_TEST_BASE_URL=https://koda-backend-production-4a34.up.railway.app. Web preview login needs a Playwright page.route proxy from Railway to the preview URL with CORS headers rewritten. Hands-free is ON by default for the dev user; click hands-free-toggle to test PTT.",
+  "rca_of_issue": "PTT gesture logic in v70.12 is correct and matches v70.7. A separate risk for 'PTT non funziona' was found: the Deepgram fallback is dead (401). If the iOS 27 device reports supportsOnDeviceRecognition()=false, or the EAS bundle lacks EXPO_PUBLIC_USE_CLIENT_STT=true, every turn fails no matter what the gesture does. To check: look for the [OLLENYA_STT_SOURCE] log line on the device."
+}

@@ -31,7 +31,9 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app"
+        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app",
+        "EXPO_PUBLIC_USE_CLIENT_STT": "true",
+        "EXPO_PUBLIC_USE_WS_VOICE_STREAM": "true"
       },
       "channel": "preview"
     },
@@ -45,7 +47,9 @@
       "autoIncrement": true,
       "credentialsSource": "local",
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app"
+        "EXPO_PUBLIC_BACKEND_URL": "https://koda-backend-production-4a34.up.railway.app",
+        "EXPO_PUBLIC_USE_CLIENT_STT": "true",
+        "EXPO_PUBLIC_USE_WS_VOICE_STREAM": "true"
       },
       "channel": "preview"
     },

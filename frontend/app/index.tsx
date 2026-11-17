@@ -523,7 +523,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.12-ptt-release-noop";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.13-ptt-scrollview-fix";
   const OLLENYA_BUILD_DATE = "2026-11-17";
   useEffect(() => {
     console.log(
@@ -6887,6 +6887,18 @@ export default function Taccuino() {
         pagingEnabled
         showsHorizontalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        // === PTT iOS 27 fix v70.13 (2026-11-17 Fabio) =========================
+        // ROOT CAUSE del bug "press-out spurio a 200ms":
+        // Questa ScrollView orizzontale paginata, quando riceve il minimo
+        // pan sotto il dito dell'utente, chiede il responder e cancella il
+        // touch della Pressable sotto (orb). Il Pressable risponde con
+        // onPressOut spurio.
+        //  - canCancelContentTouches=false → la ScrollView NON ruba touch
+        //    attivi dai figli, anche se poi percepisce un pan
+        //  - delaysContentTouches=false → i touch arrivano IMMEDIATAMENTE
+        //    al bottone, senza il delay 130ms iOS che amplifica il bug
+        canCancelContentTouches={false}
+        delaysContentTouches={false}
         onScroll={(e) => {
           // === FIX FLASH ORB DURANTE SWIPE (richiesta utente 2026-06) ===
           // Prima viewMode si aggiornava SOLO al termine del momentum

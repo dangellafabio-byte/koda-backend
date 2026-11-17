@@ -37,6 +37,7 @@ import * as SecureStore from "expo-secure-store";
 import { useTheme } from "../lib/theme";
 import { api } from "../lib/api";
 import { kodaBackendHttpUrl } from "../lib/backendUrl";
+import { getIntroAsset } from "../lib/introAssetProvider";
 import { resetLastDecidedKey } from "../lib/routerGlobalState";
 import { saveProfileCache } from "../lib/localCache";
 

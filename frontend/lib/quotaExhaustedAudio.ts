@@ -21,6 +21,7 @@
  */
 import { Audio } from "expo-av";
 import * as Speech from "expo-speech";
+import { getIntroAsset } from "./introAssetProvider";
 
 // === STATO MODULE-LEVEL =====================================================
 // Un solo flag per l'intera sessione app (reset al restart).
