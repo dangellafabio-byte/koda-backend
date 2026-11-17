@@ -523,7 +523,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.9-ptt-gesture-handler";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.10-ptt-pan-race";
   const OLLENYA_BUILD_DATE = "2026-11-17";
   useEffect(() => {
     console.log(
@@ -4537,42 +4537,53 @@ export default function Taccuino() {
     });
   };
 
-  // === PTT v70.9 (2026-11-17 Fabio) — Gesto nativo PTT (RNGH) ================
-  // Problema: la Pressable di React Native su iOS 27 cancella il touch dopo
-  // ~150-220ms quando la view sotto è animata (orb pulse), facendo partire
-  // onPressOut spuriamente anche se il dito è ancora premuto.
-  // Fix: wrappiamo il bottone in GestureDetector con Gesture.LongPress() a
-  // minDuration=0. La libreria react-native-gesture-handler lavora a livello
-  // nativo e NON si fa cancellare dalle animazioni.
-  //  - onStart() → fire al touch-down (equivalente onPressIn)
-  //  - onEnd(_, success) → fire al touch-up REALE del dito (equivalente
-  //    onPressOut), sia che l'utente completi (success=true) sia che il
-  //    sistema interrompa (success=false)
-  // In HF ON il gesto è no-op (onBigButtonPressIn/Out già short-circuitano
-  // su handsFreeRef.current), quindi la Pressable gestisce il tap normale.
-  const pttGesture = React.useMemo(
-    () =>
-      Gesture.LongPress()
-        .minDuration(0)
-        .maxDistance(10000)
-        .shouldCancelWhenOutside(false)
-        .onStart(() => {
-          onBigButtonPressIn();
-        })
-        .onEnd((_e, _success) => {
+  // === PTT v70.10 (2026-11-17 Fabio) — Gesture.Pan + Tap in Race (RNGH) ======
+  // v70.9 usava Gesture.LongPress().minDuration(0) ma su iOS 27 NON si
+  // attivava (log vuoto di eventi PTT). Passiamo a:
+  //  - Gesture.Tap().maxDuration(300) → gestisce il tap singolo per HF ON
+  //  - Gesture.Pan().minDistance(0)   → gestisce il press-and-hold per PTT
+  //  - Gesture.Race(tap, pan) → tap vince per <300ms, pan continua per hold
+  //
+  // onBegin del Pan fire SUBITO al touch-down (press-in), onFinalize fire
+  // al touch-up REALE (press-out, sia success che cancellato: ci interessa
+  // comunque fermare la registrazione quando il dito si solleva).
+  //
+  // Dentro i callback controlliamo handsFreeRef per decidere cosa fare.
+  const pttGesture = React.useMemo(() => {
+    const tap = Gesture.Tap()
+      .maxDuration(300)
+      .onEnd((_e, success) => {
+        if (!success) return;
+        if (isFreeGate()) {
+          showPremiumTeaser();
+          return;
+        }
+        if (!handsFreeRef.current) {
+          // Tap breve in modalità PTT: niente da fare (serve hold)
+          return;
+        }
+        onBigButton();
+      });
+    const hold = Gesture.Pan()
+      .minDistance(0)
+      .shouldCancelWhenOutside(false)
+      .onBegin(() => {
+        if (handsFreeRef.current) return;
+        if (isFreeGate()) {
+          showPremiumTeaser();
+          return;
+        }
+        onBigButtonPressIn();
+      })
+      .onFinalize(() => {
+        if (handsFreeRef.current) return;
+        if (pttRecordingRef.current) {
           onBigButtonPressOut();
-        })
-        .onFinalize(() => {
-          // Safety net: se il gesto viene terminato senza passare da onEnd
-          // (es. multi-touch), ci assicuriamo di rilasciare comunque.
-          if (pttRecordingRef.current) {
-            onBigButtonPressOut();
-          }
-        })
-        .runOnJS(true),
+        }
+      });
+    return Gesture.Race(tap, hold).runOnJS(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    []
-  );
+  }, []);
 
   const onBigButton = () => {
     // === FIX v65.27 (2026-09-07) — DIMMER SWALLOW FIRST-TAP (deterministic) ==
@@ -7037,32 +7048,6 @@ export default function Taccuino() {
                 <GestureDetector gesture={pttGesture}>
                 <Pressable
                   ref={orbBtnRef}
-                  onPress={() => {
-                    // v66.1 (Fabio 2026-06-16): Free tier → paywall teaser.
-                    // Voce completa (STT + LLM + TTS) è funzione Premium.
-                    // Il tap non entra in onBigButton, non parte alcun turno voce.
-                    if (isFreeGate()) {
-                      showPremiumTeaser();
-                      return;
-                    }
-                    // v67.11 (Fabio 2026-06-24): se Mani libere è OFF,
-                    // il gesto è PTT (gestito da GestureDetector sopra).
-                    // onPress deve essere NO-OP in PTT, altrimenti dopo il
-                    // rilascio partirebbe un turno "fantasma" oltre a quello PTT.
-                    if (!handsFreeRef.current) return;
-                    onBigButton();
-                  }}
-                  onLongPress={() => {
-                    if (isFreeGate()) {
-                      showPremiumTeaser();
-                      return;
-                    }
-                    // v67.11: in PTT mode il long-press È il gesto normale di
-                    // registrazione (gestito dal GestureDetector). Il
-                    // kill-switch resta attivo SOLO quando mani libere è ON.
-                    if (!handsFreeRef.current) return;
-                    onBigButtonLongPress();
-                  }}
                   delayLongPress={500}
                   // === HARD STOP 2026-06-26: orb sempre tappabile ===
                   // Prima: disabled durante transcribing/thinking, ma l'utente
