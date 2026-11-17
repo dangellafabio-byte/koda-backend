@@ -1,0 +1,53 @@
+{
+  "summary": "THIRD/FINAL pre-EAS check of build-v70.13.1-ptt-scrollview-fix. FRONTEND BUILD IS CLEAN: git diff da7d8e4b..HEAD only changes the build tag, removes delaysContentTouches (comment updated) and adds the 2 EXPO_PUBLIC_USE_* flags to preview-android/inworld-ab-* profiles; voiceClientStt.ts and speech.ts are unchanged since v70.12. tsc --noEmit: 0 syntax errors, 0 'Cannot find name' in index.tsx/paywall.tsx/quotaExhaustedAudio.ts/voiceClientStt.ts (23 pre-existing type-only errors in index.tsx). Only TS2304 in scope is speech.ts:1381 bridgeInterval (pre-existing since June, inside try{}catch{} -> swallowed, harmless). Metro production bundles (dev=false, minify=true): iOS 200 4.5MB, Android 200 4.5MB; both parse with node --check; contain the v70.13.1 tag and canCancelContentTouches:!1, and no delaysContentTouches. Refs handsFreeRef(1568), recRef(1641), streamingSessionRef(1645), pagerRef(1737), pttRecordingRef(4452) are each declared once with useRef. onBigButtonPressIn/Out (4454/4485) are recreated every render and use refs, so there is no stale closure; stopTalk is still a NO-OP in WS mode. iOS Info.plist mic and speech usage strings plus usesAppleSignIn are present; .env is gitignored, so EAS uses eas.json env only. Backend preview: 15/15 pass (health, auth apple 422/401, dev-login + /auth/me, /profile with no _id, /subscription/status, /converse 400 on empty and 200 for an ephemeral demo voice turn, WS client_apple ready, static guards). Backend Railway PROD: CRITICAL, POST /api/auth/apple returns 500 Internal Server Error for any token (preview returns 401). Root cause: PyJWT is NOT in backend/requirements.txt, and the Railway Dockerfile installs only requirements.txt, so 'import jwt' at server.py:11004 (outside the try) raises ModuleNotFoundError. Apple Sign-In on the native build will FAIL on prod. Google /auth/google/session on prod returns 401 correctly. WS client_apple on prod returned voice_premium_only for our container: the IP fingerprint was bound to the Free dev@koda.local user after we called dev-login, so this is correct gating, not a bug. Web UI: login renders, dev login reaches the main screen, a tap in HF ON goes idle->recording, and PTT in HF OFF logs press-in -> recording -> press-out -> transcribing -> speaking -> idle. Settings sheet opens, /paywall renders (CTA and waiver present), no page errors.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/auth/apple (Railway PROD)", "issue": "Returns 500 'Internal Server Error' for every request, including malformed tokens (preview returns 401 'invalid apple token'). PyJWT is missing from backend/requirements.txt (no package depends on it transitively; it is only installed manually in the preview venv). The Railway Dockerfile runs pip install -r requirements.txt, so 'import jwt' / 'from jwt.algorithms import RSAAlgorithm' at server.py:11004-11005 (outside the try) fails. Native Apple Sign-In is broken in production. Anyone whose 7-day session expires, or who logs out, cannot log back in with Apple.", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/auth/dev-login (Railway PROD)", "issue": "Dev login bypass is enabled on the production backend. Anyone can get a session_token for dev@koda.local. The docstring says 'Da rimuovere prima della produzione'. This is a security risk, not a build blocker."},
+      {"endpoint": "WS /api/voice/stream stt_source=deepgram", "issue": "Deepgram key still 401 on preview+prod (known from iteration 29/30). Not blocking for iOS (client_apple), but breaks Android and the iOS fallback."},
+      {"endpoint": "GET /api/offline-clips/manifest (preview only)", "issue": "500 'No offline clips generated' on preview (ElevenLabs not configured). Prod returns 200. Preview-only, non-blocking."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "paywall.tsx:411 footnote", "issue": "The copy says '500 minuti al mese', but every plan card (paywall.tsx:60) says '300 minuti al mese'. Inconsistent pricing copy (pre-existing).", "testID": "paywall-purchase-cta", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Native Apple Sign-In -> Railway prod", "issue": "Backend returns 500 (PyJWT missing on Railway). LoginScreen login-apple will show a failure on iPhone.", "affected_testIDs": ["login-apple"]}
+    ],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "expo-av (deprecated)", "issue": "lib/quotaExhaustedAudio.ts:22 imports { Audio } from 'expo-av' (deprecated; runtime warning seen). Reference: /app/frontend/lib/quotaExhaustedAudio.ts:22"},
+      {"component": "Pager ScrollView canCancelContentTouches=false", "issue": "On iOS, UIScrollView will not begin a horizontal pan once a touch lands on any child view. The full-screen page content is a child, so swiping voice<->reading may stop working entirely, not only on the orb. The comment at index.tsx:6898-6900 claims swiping still works outside the orb; this is unverified and cannot be tested on web. The user has accepted this risk. Reference: /app/frontend/app/index.tsx:6902"}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter31_v70_13_1_final_preeas.py",
+    "/app/test_reports/pytest/iter31_preview.xml",
+    "/app/test_reports/pytest/iter31_prod.xml"
+  ],
+  "action_items": [
+    "CRITICAL (backend, no new EAS build needed): add 'PyJWT>=2.8' (and 'cryptography' explicitly) to backend/requirements.txt and redeploy Railway. Verify with: curl -X POST https://koda-backend-production-4a34.up.railway.app/api/auth/apple -H 'content-type: application/json' -d '{\"identity_token\":\"not.a.jwt\"}'. It must return 401, not 500. Optionally move the jwt imports to module top-level so a missing dependency fails at startup.",
+    "Disable /api/auth/dev-login on the prod backend (env-guard it), since it is a security risk.",
+    "Fix the stale comment at index.tsx:4490-4492 (says stopTalk handles streamingSessionRef in WS mode, but it is a NO-OP). Cosmetic, not a runtime issue.",
+    "Paywall copy: align '500 minuti al mese' (paywall.tsx:411) with the '300 minuti al mese' plan cards.",
+    "On device: verify that swiping voice<->reading still works with canCancelContentTouches=false.",
+    "Rotate DEEPGRAM_API_KEY (still 401) for Android and the iOS fallback.",
+    "Migrate lib/quotaExhaustedAudio.ts from expo-av to expo-audio (deprecated package)."
+  ],
+  "critical_code_review_comments": [
+    "server.py:11003-11005: imports json/jwt/RSAAlgorithm inside the handler but outside the try, so a missing dependency yields a 500 at request time instead of failing at deploy time.",
+    "speech.ts:1381 clearInterval(bridgeInterval): the variable is declared in an inner block scope (line 1179). This throws a ReferenceError that the surrounding try{}catch{} swallows. Harmless, but dead code.",
+    "index.tsx stays at 9488 lines and server.py at 20632 lines, far beyond maintainable size (pre-existing).",
+    "Settings footer shows 'Ollenya v1.0.150' while app.json version is 1.0.152 (web preview; check whether this string is hardcoded)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter31_v70_13_1_final_preeas.py"],
+  "success_rate": {"backend": "preview 100% (15/15); prod 82% (9/11 run: auth/apple 500 = real bug, WS voice_premium_only = test artifact of dev-login fingerprint, 1 skipped)", "frontend": "100% of executed web flows (login, main, HF tap, PTT hold/release, settings, paywall)"},
+  "seed_data_creation": "No new records except dev-login sessions for dev@koda.local on preview and prod. The dev user's hands_free was temporarily set OFF on preview for the PTT test, then restored to true (PUT /api/profile verified). The prod container IP fingerprint is now bound to dev@koda.local by the auth bridge.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/test_iter31_v70_13_1_final_preeas.py; for prod add OLLENYA_TEST_BASE_URL=https://koda-backend-production-4a34.up.railway.app -k 'not StaticGuards'. On prod, WS client_apple returns voice_premium_only once dev-login has been called from the same IP (fingerprint auth bridge -> Free dev user). Run the WS test before dev-login, or pass ?token of a premium user. The web app hardcodes the Railway URL (lib/backendUrl.ts); for UI tests, route Railway requests to the preview URL via page.route. Bundle check: curl 'localhost:3000/node_modules/expo-router/entry.bundle?platform=ios&dev=false&minify=true', then copy to .cjs and run node --check.",
+  "rca_of_issue": "Apple auth 500 on prod. Repro: POST {prod}/api/auth/apple {identity_token:'not.a.jwt'} returns 500 text/plain; the same request on preview returns 401 JSON. Both run the same code version (health version v65.36...). Only lines outside the try can raise unhandled: 'import jwt' / 'from jwt.algorithms import RSAAlgorithm'. pip show PyJWT locally gives Required-by: (none), and requirements.txt has no jwt entry, so the Railway Docker image lacks PyJWT. Mitigation: add PyJWT to requirements.txt and redeploy Railway. No app rebuild is needed."
+}
