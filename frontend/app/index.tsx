@@ -523,7 +523,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.7-ptt-hf-revert-1510";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.8-ptt-press-and-hold";
   const OLLENYA_BUILD_DATE = "2026-11-17";
   useEffect(() => {
     console.log(
@@ -3605,6 +3605,12 @@ export default function Taccuino() {
       const result = await voiceStreamConverse({
         ephemeral: confessionalMode,
         profileLang: "it",
+        // === PTT v70.7 (2026-11-17 Fabio) — endpoint manual su press-and-hold =
+        // Se handsFree è OFF siamo in PTT: il mic deve restare attivo finché
+        // l'utente tiene premuto l'orb. Disattiviamo l'auto-endpoint nativo
+        // (3s silence) e ci affidiamo a stop() da onBigButtonPressOut.
+        // In HF ON lasciamo l'auto-endpoint che chiude su silenzio.
+        autoEndpoint: handsFreeRef.current,
         // === FIX 2026-07-26 v64.4 — voiceId client-authoritative ===
         // Passiamo esplicitamente il voice_id corrente scelto dall'utente.
         // Il server lo usa per la TTS di questa sessione, bypassando la
@@ -4480,8 +4486,30 @@ export default function Taccuino() {
     if (!pttRecordingRef.current) return;
     pttRecordingRef.current = false;
     console.log(`[OLLENYA_PTT] press-out → stop & send (status=${status})`);
-    // stopTalk processa l'audio e lo invia. Se recRef è null (es.
-    // registrazione mai partita per permessi), è un no-op.
+    // === PTT v70.7 (2026-11-17 Fabio) — release ferma la sessione WS ========
+    // In modalità WS stream (useVoiceStream=true, iOS+Android) la registrazione
+    // è gestita dallo stream, NON da recRef. stopTalk() quindi non vedrebbe
+    // nulla da fermare e il mic resterebbe in ascolto fino all'auto-endpoint.
+    // Soluzione a due stadi:
+    //  1) Se la sessione stream è già pronta → s.stop() → native STT flush,
+    //     stt_final viene dispatchato e la pipeline TTS parte.
+    //  2) Se la sessione non è ancora stata registrata (press rapido durante
+    //     il warmup WS) → pendingTapStopRef=true. onSession consumerà il flag
+    //     non appena la sessione arriva.
+    const s = streamingSessionRef.current as any;
+    if (s && typeof s.stop === "function") {
+      console.log(`[OLLENYA_PTT] release → streamingSession.stop()`);
+      s.stop().catch((e: any) => {
+        console.warn(`[OLLENYA_PTT] streamingSession.stop failed:`, e);
+      });
+      return;
+    }
+    if (!recRef.current && (statusRef.current === "recording" || status === "recording")) {
+      pendingTapStopRef.current = true;
+      console.log(`[OLLENYA_PTT] release queued → pendingTapStopRef=true (stream warming)`);
+      return;
+    }
+    // Fallback legacy (useVoiceStream=false): stopTalk gestisce recRef.
     stopTalk().catch((e) => {
       console.warn(`[OLLENYA_PTT] stopTalk failed:`, e);
     });
