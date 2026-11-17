@@ -523,7 +523,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.13.1-ptt-scrollview-fix";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.14-fixes-pyjwt-devlogin-paywall";
   const OLLENYA_BUILD_DATE = "2026-11-17";
   useEffect(() => {
     console.log(
@@ -4487,9 +4487,10 @@ export default function Taccuino() {
     if (!pttRecordingRef.current) return;
     pttRecordingRef.current = false;
     console.log(`[OLLENYA_PTT] press-out → stop & send (status=${status})`);
-    // stopTalk processa il rilascio. In modalità WS stream gestisce
-    // streamingSessionRef (vedi stopTalk v70.11); in modalità recRef
-    // legacy ferma il recorder locale.
+    // v70.12+: stopTalk è NO-OP in modalità WS stream (recRef è null).
+    // Il mic chiude da solo sull'auto-endpoint STT nativo (silenzio ~3s).
+    // Scelta deliberata per evitare voice_stream_start_cancelled quando
+    // iOS 27 Pressable cancella il touch spuriamente prima che il WS apra.
     stopTalk().catch((e) => {
       console.warn(`[OLLENYA_PTT] stopTalk failed:`, e);
     });

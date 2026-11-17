@@ -405,10 +405,10 @@ export default function PaywallScreen() {
 
         {/* === CLAIM CARRYOVER (Fabio 2026-06) =================================
             Messaggio commerciale del meccanismo dei minuti che non si perdono.
-            "1000 min" = valore MAX teorico (500 base + 500 carryover slot). */}
+            "1000 min" = valore MAX teorico (300 base + 50 carryover). */}
         <View style={styles.carryoverClaim}>
           <Text style={[styles.carryoverClaimText, { color: theme.textDim }]}>
-            500 minuti al mese. Se non li usi tutti, puoi conservare
+            300 minuti al mese. Se non li usi tutti, puoi conservare
             fino a 50 min/mese come carryover (singolo per il bimestrale,
             fino a 6 mesi per l'annuale, non cumulabili).
           </Text>

@@ -10931,7 +10931,15 @@ async def auth_dev_login(response: Response):
     Solo per testing su preview web dove l'OAuth Google attraverso il
     proxy Emergent non riesce a persistere i cookie cross-domain.
     Crea/usa un utente fisso 'dev@koda.local' e ritorna un session_token.
-    Da rimuovere prima della produzione."""
+
+    === SECURITY GATE v70.14 (2026-11-17 Fabio) ===
+    Prima questo endpoint era aperto su qualunque host, inclusa la prod
+    Railway (iteration 31 segnalava che chiunque poteva prendersi una
+    sessione come dev@koda.local). Ora gated da ENV var:
+    ALLOW_DEV_LOGIN=true per i soli ambienti di preview/test.
+    """
+    if (os.getenv("ALLOW_DEV_LOGIN", "false").lower() not in ("1", "true", "yes", "on")):
+        raise HTTPException(status_code=404, detail="not found")
     email = "dev@koda.local"
     await _upsert_user(email, "Dev")
     tok = await _create_session(email)
