@@ -777,12 +777,7 @@ export class VoiceClientSttSession {
         // continuous: true solo su Android per bypassare il beep di sistema.
         // Su iOS resta false (comportamento invariato, SFSpeechRecognizer
         // non emette mai beep).
-        // === PTT v70.7 (2026-11-17 Fabio) ====================================
-        // In modalità PTT (autoEndpoint=false), forziamo continuous=true anche
-        // su iOS: SFSpeechRecognizer altrimenti auto-chiude dopo ~3s di
-        // silenzio, cosa che rompe il press-and-hold. Con continuous=true il
-        // riconoscimento resta attivo finché non arriva stop() esplicita.
-        continuous: Platform.OS === "android" || !this.autoEndpoint,
+        continuous: Platform.OS === "android",
         maxAlternatives: 1,
         addsPunctuation: true,
         // On-device: preferito su entrambe, ma richiesto SOLO su iOS

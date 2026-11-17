@@ -25,7 +25,7 @@ import {
   BackHandler,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { TouchableOpacity as GHTouchableOpacity, Gesture, GestureDetector } from "react-native-gesture-handler";
+import { TouchableOpacity as GHTouchableOpacity } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
 import HandsFreeOrb from "../components/HandsFreeOrb";
 import LasciaAndareIntroModal from "../components/LasciaAndareIntroModal";
@@ -523,7 +523,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.10-ptt-pan-race";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.11-ptt-restore-v704";
   const OLLENYA_BUILD_DATE = "2026-11-17";
   useEffect(() => {
     console.log(
@@ -3605,12 +3605,6 @@ export default function Taccuino() {
       const result = await voiceStreamConverse({
         ephemeral: confessionalMode,
         profileLang: "it",
-        // === PTT v70.7 (2026-11-17 Fabio) — endpoint manual su press-and-hold =
-        // Se handsFree è OFF siamo in PTT: il mic deve restare attivo finché
-        // l'utente tiene premuto l'orb. Disattiviamo l'auto-endpoint nativo
-        // (3s silence) e ci affidiamo a stop() da onBigButtonPressOut.
-        // In HF ON lasciamo l'auto-endpoint che chiude su silenzio.
-        autoEndpoint: handsFreeRef.current,
         // === FIX 2026-07-26 v64.4 — voiceId client-authoritative ===
         // Passiamo esplicitamente il voice_id corrente scelto dall'utente.
         // Il server lo usa per la TTS di questa sessione, bypassando la
@@ -3668,25 +3662,6 @@ export default function Taccuino() {
         onRecognitionActive: () => {
           micReallyActiveRef.current = true;
           console.log(`[OLLENYA_MIC_GATE] mic really active — tap-stop now allowed`);
-          // === PTT v70.9 (2026-11-17 Fabio) — consuma pendingTapStopRef ====
-          // Se il press-out iOS è arrivato prima che il mic fosse attivo
-          // (bug Pressable: onPressOut spurio ~200ms dopo onPressIn),
-          // onBigButtonPressOut ha settato pendingTapStopRef=true.
-          // Ora che il mic è attivo, se il flag è ancora true l'utente ha
-          // già rilasciato → fermiamo subito e dispatciamo l'eventuale
-          // transcript parziale raccolto nei primissimi ms.
-          const s = streamingSessionRef.current as any;
-          if (s && pendingTapStopRef.current) {
-            pendingTapStopRef.current = false;
-            console.log(
-              `[OLLENYA_PTT] onRecognitionActive: pendingTapStopRef consumed → s.stop()`
-            );
-            try {
-              if (typeof s.stop === "function") {
-                s.stop().catch?.(() => {});
-              }
-            } catch {}
-          }
         },
         onUserFinal: (userText: string, conf: number | null, _dur: number | null) => {
           // === FIX 2026-06-25 v8 ===
@@ -4034,6 +4009,26 @@ export default function Taccuino() {
   };
 
   const stopTalk = async () => {
+    // === PTT v70.11 (2026-11-17 Fabio) — ripristino logica v70.4-ptt-stop ===
+    // In modalità WS stream (useVoiceStream=true) la registrazione NON passa
+    // da recRef, ma da streamingSessionRef. Se gestiamo solo recRef, il
+    // press-out è un no-op e il mic resta appeso all'auto-endpoint nativo.
+    // Replica bit-identica da commit cf1e6875 (build-v70.4-ptt-stop-timeouts).
+    const stream = streamingSessionRef.current;
+    if (stream) {
+      pendingTapStopRef.current = false;
+      setStatus("transcribing", "stopTalk:stream-release");
+      console.log("[OLLENYA_PTT] release → streaming stop");
+      await stream.stop();
+      return;
+    }
+    if (!recRef.current && statusRef.current === "recording") {
+      // Rilasciato mentre il transport è ancora in warmup. onSession/consumer
+      // leggeranno pendingTapStopRef e chiameranno stop() al primo ok.
+      pendingTapStopRef.current = true;
+      console.log("[OLLENYA_PTT] release queued during streaming startup");
+      return;
+    }
     // Use recRef.current as single source of truth (status check would create
     // stale-closure bugs when called from the silence-detection callback)
     const current = recRef.current;
@@ -4505,85 +4500,13 @@ export default function Taccuino() {
     if (!pttRecordingRef.current) return;
     pttRecordingRef.current = false;
     console.log(`[OLLENYA_PTT] press-out → stop & send (status=${status})`);
-    // === PTT v70.9 (2026-11-17 Fabio) — release ferma SOLO se mic è attivo ===
-    // Il bug iOS Pressable fa partire onPressOut spuriamente ~200ms dopo
-    // onPressIn (animazione orb → touchCancel nativo). Se chiamiamo stop()
-    // prima che WS+STT siano pronti, la sessione aborta con
-    // voice_stream_start_cancelled e non viene catturato nulla.
-    //
-    // Soluzione: tracciamo micReallyActiveRef (settato a true da
-    // onRecognitionActive, ovvero quando ExpoSpeechRecognitionModule.start()
-    // ha realmente aperto il mic). SOLO allora release = stop() immediato.
-    // Altrimenti settiamo pendingTapStopRef=true: onRecognitionActive
-    // consumerà il flag non appena il mic sarà realmente attivo.
-    const s = streamingSessionRef.current as any;
-    if (s && micReallyActiveRef.current && typeof s.stop === "function") {
-      console.log(`[OLLENYA_PTT] release → streamingSession.stop() (mic active)`);
-      s.stop().catch((e: any) => {
-        console.warn(`[OLLENYA_PTT] streamingSession.stop failed:`, e);
-      });
-      return;
-    }
-    if (s || statusRef.current === "recording" || status === "recording") {
-      pendingTapStopRef.current = true;
-      console.log(
-        `[OLLENYA_PTT] release queued → pendingTapStopRef=true (mic not yet active, session=${!!s})`
-      );
-      return;
-    }
-    // Fallback legacy (useVoiceStream=false): stopTalk gestisce recRef.
+    // stopTalk processa il rilascio. In modalità WS stream gestisce
+    // streamingSessionRef (vedi stopTalk v70.11); in modalità recRef
+    // legacy ferma il recorder locale.
     stopTalk().catch((e) => {
       console.warn(`[OLLENYA_PTT] stopTalk failed:`, e);
     });
   };
-
-  // === PTT v70.10 (2026-11-17 Fabio) — Gesture.Pan + Tap in Race (RNGH) ======
-  // v70.9 usava Gesture.LongPress().minDuration(0) ma su iOS 27 NON si
-  // attivava (log vuoto di eventi PTT). Passiamo a:
-  //  - Gesture.Tap().maxDuration(300) → gestisce il tap singolo per HF ON
-  //  - Gesture.Pan().minDistance(0)   → gestisce il press-and-hold per PTT
-  //  - Gesture.Race(tap, pan) → tap vince per <300ms, pan continua per hold
-  //
-  // onBegin del Pan fire SUBITO al touch-down (press-in), onFinalize fire
-  // al touch-up REALE (press-out, sia success che cancellato: ci interessa
-  // comunque fermare la registrazione quando il dito si solleva).
-  //
-  // Dentro i callback controlliamo handsFreeRef per decidere cosa fare.
-  const pttGesture = React.useMemo(() => {
-    const tap = Gesture.Tap()
-      .maxDuration(300)
-      .onEnd((_e, success) => {
-        if (!success) return;
-        if (isFreeGate()) {
-          showPremiumTeaser();
-          return;
-        }
-        if (!handsFreeRef.current) {
-          // Tap breve in modalità PTT: niente da fare (serve hold)
-          return;
-        }
-        onBigButton();
-      });
-    const hold = Gesture.Pan()
-      .minDistance(0)
-      .shouldCancelWhenOutside(false)
-      .onBegin(() => {
-        if (handsFreeRef.current) return;
-        if (isFreeGate()) {
-          showPremiumTeaser();
-          return;
-        }
-        onBigButtonPressIn();
-      })
-      .onFinalize(() => {
-        if (handsFreeRef.current) return;
-        if (pttRecordingRef.current) {
-          onBigButtonPressOut();
-        }
-      });
-    return Gesture.Race(tap, hold).runOnJS(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const onBigButton = () => {
     // === FIX v65.27 (2026-09-07) — DIMMER SWALLOW FIRST-TAP (deterministic) ==
@@ -7045,9 +6968,36 @@ export default function Taccuino() {
                 l'utente swipa alla Page 1 (reading). */}
             {inputMode !== "text" ? (
               <>
-                <GestureDetector gesture={pttGesture}>
                 <Pressable
                   ref={orbBtnRef}
+                  onPressIn={() => {
+                    // v67.11 (Fabio 2026-06-24): Push-to-Talk quando
+                    // "Mani libere" è OFF. Handler no-op se HF è ON.
+                    onBigButtonPressIn();
+                  }}
+                  onPressOut={() => {
+                    // v67.11: rilascio = stop + invia (solo in HF OFF).
+                    onBigButtonPressOut();
+                  }}
+                  onPress={() => {
+                    // v66.1 (Fabio 2026-06-16): Free tier → paywall teaser.
+                    if (isFreeGate()) {
+                      showPremiumTeaser();
+                      return;
+                    }
+                    // v67.11: in PTT mode il gesto è gestito da onPressIn/Out.
+                    // onPress deve essere NO-OP, altrimenti partirebbe un turno fantasma.
+                    if (!handsFreeRef.current) return;
+                    onBigButton();
+                  }}
+                  onLongPress={() => {
+                    if (isFreeGate()) {
+                      showPremiumTeaser();
+                      return;
+                    }
+                    if (!handsFreeRef.current) return;
+                    onBigButtonLongPress();
+                  }}
                   delayLongPress={500}
                   // === HARD STOP 2026-06-26: orb sempre tappabile ===
                   // Prima: disabled durante transcribing/thinking, ma l'utente
@@ -7108,7 +7058,6 @@ export default function Taccuino() {
                   </View>
                 )}
               </Pressable>
-              </GestureDetector>
               </>
             ) : (
               <>
