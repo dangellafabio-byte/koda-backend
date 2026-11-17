@@ -1,0 +1,37 @@
+{
+  "summary": "Pre-EAS check of build-v70.13-ptt-scrollview-fix. All 4 v70.13 fixes are applied correctly, and the git diff a62f48e3..HEAD contains ONLY these changes plus the build tag, so there are no other regressions. (1) The pager ScrollView (index.tsx:6900-6901) has canCancelContentTouches={false} and delaysContentTouches={false}. (2) paywall.tsx:40 and (3) quotaExhaustedAudio.ts:24 import getIntroAsset, and introAssetProvider.ts:79 exports it. (4) eas.json preview and production both have EXPO_PUBLIC_USE_CLIENT_STT='true' and EXPO_PUBLIC_USE_WS_VOICE_STREAM='true'. Build tag = build-v70.13-ptt-scrollview-fix. stopTalk is a NO-OP in WS mode: recRef.current is only set in the legacy path (line 3932); native goes to startTalkStreaming at line 3884; stopTalk has no stream.stop or streamingSessionRef. Metro production bundles compile for iOS (200, 10.4MB) and Android (200, 10.4MB). Both contain the v70.13 tag, canCancelContentTouches:false, and the imported getIntroAsset calls. tsc: no 'Cannot find name' or missing-import errors in index.tsx, paywall.tsx or quotaExhaustedAudio.ts. Backend on preview AND Railway prod: /api/health 200; /api/transcribe-inworld returns 422 with no body, 400 for an empty file, and 200 with Italian text; WS /api/voice/stream with stt_source=client_apple returns ready. STILL FAILING: WS stt_source=deepgram returns 'STT unavailable: HTTP 401', because the Deepgram key is invalid on preview and prod (same as iteration 29). Web login screen renders with no page errors. RISK, NOT A CRASH: on iOS, canCancelContentTouches=false together with RN's built-in delaysContentTouches=NO means UIScrollView will not start a horizontal drag once a touch lands on a child view. Swiping voice<->reading ('scorri per scrivere') may stop working on iOS. This cannot be verified on web and needs an on-device check.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "WS /api/voice/stream (stt_source=deepgram) + POST /api/transcribe-deepgram", "issue": "The Deepgram key is rejected with 401 on preview AND Railway prod (startup warmup status 401; WS returns {type:error,'STT unavailable: server rejected WebSocket connection: HTTP 401'}). The iOS client_apple path is not affected. Android, and any iOS device where on-device STT is unsupported, fall back to Deepgram, so every voice turn there will fail. Unchanged since iteration 29.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Horizontal pager swipe voice<->reading (iOS only)", "issue": "canCancelContentTouches={false} is applied permanently (index.tsx:6900). RN iOS already forces delaysContentTouches=NO (RCTScrollViewComponentView.mm:132). With both NO, UIKit does not let the scroll view pan once a subview starts tracking the touch. Swipes that start on page content (orb, text, timeline) will probably not change page on iOS. Android ignores the prop. This needs an on-device check before or right after the build. Safer alternative: toggle it only while the PTT hold is active, e.g. state pttHolding set in onBigButtonPressIn/Out and then canCancelContentTouches={!pttHolding} or scrollEnabled={!pttHolding}.", "affected_testIDs": ["big-btn-voice"]}
+    ],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "ScrollView delaysContentTouches", "issue": "delaysContentTouches is not a React Native ScrollView prop (tsc TS2769). It is silently ignored, which is harmless because RN already sets it to NO natively. The fix effectively relies on canCancelContentTouches alone. Reference: /app/frontend/app/index.tsx:6901"}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter30_v70_13_scrollview_smoke.py", "/app/test_reports/pytest/iter30_preview.xml", "/app/test_reports/pytest/iter30_prod.xml"],
+  "action_items": [
+    "Verify on the iOS device that swiping voice<->reading still works. If it is broken, make canCancelContentTouches (or scrollEnabled) conditional on an active PTT hold instead of always false.",
+    "Rotate or fix DEEPGRAM_API_KEY on the Railway prod and preview backends (401 INVALID_AUTH). This breaks voice on Android and in the iOS fallback.",
+    "Optional: remove the ineffective delaysContentTouches prop (index.tsx:6901), and update the stale comment in onBigButtonPressOut (index.tsx:4490), which still says stopTalk handles streamingSessionRef.",
+    "Optional: the preview-android profile overrides env with only BACKEND_URL; add the two EXPO_PUBLIC_USE_* flags there too if that profile is used. The production profile uses channel 'preview' (pre-existing)."
+  ],
+  "critical_code_review_comments": [
+    "lib/speech.ts:1381 clearInterval(bridgeInterval) refers to an undeclared variable (TS2304). The ReferenceError is swallowed by the try/catch inside finally, so it is harmless but dead code.",
+    "index.tsx is 9.5k lines (pre-existing), far above the 700-line guideline."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter30_v70_13_scrollview_smoke.py"],
+  "success_rate": {"backend": "92% (11/12 preview, 5/6 prod; only failure = Deepgram 401)", "frontend": "100% of static/bundle checks; native gesture not testable on web"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/test_iter30_v70_13_scrollview_smoke.py; add OLLENYA_TEST_BASE_URL=https://koda-backend-production-4a34.up.railway.app -k 'Health or Transcribe or VoiceStream' for prod. hermesc in node_modules cannot run in this container (arch mismatch). Metro bundles: curl localhost:3000/node_modules/expo-router/entry.bundle?platform=ios&dev=false.",
+  "rca_of_issue": "Deepgram 401: the backend startup warmup logs status 401, so the key itself is invalid or revoked; this is not a code bug."
+}

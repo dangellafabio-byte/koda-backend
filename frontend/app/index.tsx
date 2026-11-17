@@ -523,7 +523,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.13-ptt-scrollview-fix";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.13.1-ptt-scrollview-fix";
   const OLLENYA_BUILD_DATE = "2026-11-17";
   useEffect(() => {
     console.log(
@@ -6895,10 +6895,11 @@ export default function Taccuino() {
         // onPressOut spurio.
         //  - canCancelContentTouches=false → la ScrollView NON ruba touch
         //    attivi dai figli, anche se poi percepisce un pan
-        //  - delaysContentTouches=false → i touch arrivano IMMEDIATAMENTE
-        //    al bottone, senza il delay 130ms iOS che amplifica il bug
+        //
+        // Nota: lo swipe voice↔reading continua a funzionare toccando aree
+        // esterne all'orb (title bar, sfondo, lista messaggi). Toccando
+        // direttamente l'orb il touch resta tuo → nessun pan interferisce.
         canCancelContentTouches={false}
-        delaysContentTouches={false}
         onScroll={(e) => {
           // === FIX FLASH ORB DURANTE SWIPE (richiesta utente 2026-06) ===
           // Prima viewMode si aggiornava SOLO al termine del momentum

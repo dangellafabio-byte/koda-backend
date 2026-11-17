@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="6" time="2.127" timestamp="2026-11-17T17:37:19.191454+00:00" hostname="agent-env-e8acd57f-8eb1-4b51-ad70-a766c09b25d0"><testcase classname="test_iter30_v70_13_scrollview_smoke.TestHealth" name="test_health" time="0.152" /><testcase classname="test_iter30_v70_13_scrollview_smoke.TestTranscribeInworld" name="test_no_body_422" time="0.094" /><testcase classname="test_iter30_v70_13_scrollview_smoke.TestTranscribeInworld" name="test_empty_file_400" time="0.091" /><testcase classname="test_iter30_v70_13_scrollview_smoke.TestTranscribeInworld" name="test_real_wav_200_text" time="0.570" /><testcase classname="test_iter30_v70_13_scrollview_smoke.TestVoiceStreamWS" name="test_ready_deepgram" time="0.756"><failure message="AssertionError: {'message': 'STT unavailable: server rejected WebSocket connection: HTTP 401', 'type': 'error'}&#10;assert 'error' == 'ready'&#10;  &#10;  - ready&#10;  + error">tests/test_iter30_v70_13_scrollview_smoke.py:90: in test_ready_deepgram
+    assert msg.get("type") == "ready", msg
+E   AssertionError: {'message': 'STT unavailable: server rejected WebSocket connection: HTTP 401', 'type': 'error'}
+E   assert 'error' == 'ready'
+E     
+E     - ready
+E     + error</failure></testcase><testcase classname="test_iter30_v70_13_scrollview_smoke.TestVoiceStreamWS" name="test_ready_client_apple" time="0.379" /></testsuite></testsuites>
