@@ -25,7 +25,7 @@ import {
   BackHandler,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { TouchableOpacity as GHTouchableOpacity, Gesture, GestureDetector } from "react-native-gesture-handler";
+import { TouchableOpacity as GHTouchableOpacity } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
 import HandsFreeOrb from "../components/HandsFreeOrb";
 import LasciaAndareIntroModal from "../components/LasciaAndareIntroModal";
@@ -523,7 +523,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.16.2-ptt-gesture-handler";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.19-ios-local-ptt";
   const OLLENYA_BUILD_DATE = "2026-11-18";
   useEffect(() => {
     console.log(
@@ -3917,7 +3917,8 @@ export default function Taccuino() {
   };
 
   // Push-to-talk (or hands-free)
-  const startTalkInternal = async (autoStopOnSilence: boolean) => {
+  const startTalkInternal = async (autoStopOnSilence: boolean, iosPress?: number) => {
+    const pressEnded = () => iosPress !== undefined && iosPttPressRef.current !== iosPress;
     // === PERMESSO SPEECH RECOGNITION (Fabio 2026-08-22) =====================
     // Chiamato PRIMA di qualunque debounce/mutex. Se il permesso non c'è
     // (o è stato negato durante l'Intro Premium), mostra il pre-prompt
@@ -3935,6 +3936,8 @@ export default function Taccuino() {
       console.warn("[OLLENYA_STT_PERM] ensureSpeechPermission threw:", e);
       // Fail-open: se l'helper esplode non blocchiamo l'utente
     }
+
+    if (pressEnded()) return;
 
     // === MUTEX 2026-06-28 — P0 race condition fix ===
     // KODA_HF_LOOP (useEffect+timeout 450ms) e KODA_HF_EXPLICIT (timeout 500ms
@@ -3976,7 +3979,7 @@ export default function Taccuino() {
       return;
     }
 
-    if (status !== "idle" && status !== "speaking") return;
+    if (statusRef.current !== "idle" && statusRef.current !== "speaking") return;
 
     // === FASE 1 STREAMING OPT-IN (env flag, giugno 2026) ===
     // === FIX 2026-06-27 v19 (Android Xiaomi: bundle OTA non propaga env) ===
@@ -3996,7 +3999,9 @@ export default function Taccuino() {
     // se il fallback hardcoded sta funzionando. Se vedi questa riga col
     // valore true significa che il nuovo bundle è arrivato sul device.
     console.log(`[OLLENYA_FLAG] useVoiceStream=${useVoiceStream} (env="${process.env.EXPO_PUBLIC_USE_WS_VOICE_STREAM ?? "<missing>"}", platform=${Platform.OS})`);
-    if (useVoiceStream && Platform.OS !== "web") {
+    // Use the original device recorder for iPhone push-to-talk. Only upload
+    // after release, so opening the voice socket cannot delay capture.
+    if (useVoiceStream && Platform.OS !== "web" && iosPress === undefined) {
       return startTalkStreaming();
     }
 
@@ -4044,8 +4049,17 @@ export default function Taccuino() {
       if (Platform.OS !== "web") {
         await prewarmMic();
       }
+      if (pressEnded()) return;
       const rec = await startRecording();
+      if (pressEnded()) {
+        await rec.cancel().catch(() => {});
+        return;
+      }
       recRef.current = rec;
+      if (iosPress !== undefined) {
+        setMicReady(true);
+        setStatus("recording");
+      }
       // === RECORDING DURATION (sprint v11) ===
       // Cattura timestamp avvio per misura recording_duration_ms nel SUMMARY.
       recordingStartedAtRef.current = Date.now();
@@ -4124,7 +4138,7 @@ export default function Taccuino() {
     return startTalkInternal(handsFreeRef.current);
   };
 
-  const stopTalk = async () => {
+  const stopTalk = async (useOctoberTranscription = false) => {
     // === PTT v70.15 (2026-11-18 Fabio) — gesto interrotto = abort pulito =====
     // SPEC esplicita utente (18/11): se rilascio PRIMA che il microfono sia
     // pronto, O se il gesto viene annullato dal sistema → torna in idle,
@@ -4424,11 +4438,12 @@ export default function Taccuino() {
       // si pianta (TLS cold-start, cellular ballerino, Deepgram down), dopo
       // 12s ABORT-iamo e cadiamo in fallback Whisper. Senza questo,
       // l'utente vedeva attese di 30-44s prima di un eventuale errore.
+      const sttProvider = useOctoberTranscription ? "deepgram" : "inworld";
       const _stt_controller = new AbortController();
       const _stt_timer = setTimeout(() => _stt_controller.abort(), 12000);
       let r: Response;
       try {
-        r = await fetch(`${API_BASE}/transcribe-inworld`, {
+        r = await fetch(`${API_BASE}/transcribe-${sttProvider}`, {
           method: "POST",
           body: fd,
           signal: _stt_controller.signal,
@@ -4436,7 +4451,7 @@ export default function Taccuino() {
       } catch (e: any) {
         clearTimeout(_stt_timer);
         const isAbort = e?.name === "AbortError";
-        console.warn(`[transcribe] Inworld ${isAbort ? "TIMEOUT 12s" : "network error"}: ${e?.message || e}`);
+        console.warn(`[transcribe] ${sttProvider} ${isAbort ? "TIMEOUT 12s" : "network error"}: ${e?.message || e}`);
         // Fallback rapido a Whisper con nuova FormData + nuovo timeout
         const fd_fb = buildFormData(res);
         const _wh_controller = new AbortController();
@@ -4456,7 +4471,7 @@ export default function Taccuino() {
       const _kt_deepgram_done = Date.now();
       console.log(`[OLLENYA_TIMING] UPLOAD_END+STT_END @${_kt_deepgram_done} (upload+stt_ms=${_kt_deepgram_done - _kt_upload_start})`);
       if (!r.ok) {
-        console.warn(`[transcribe] Inworld failed (${r.status}), fallback to Whisper`);
+        console.warn(`[transcribe] ${sttProvider} failed (${r.status}), fallback to Whisper`);
         // Ricreo FormData perché il body è già stato consumato
         const fd2 = buildFormData(res);
         const _wh2_controller = new AbortController();
@@ -4606,6 +4621,24 @@ export default function Taccuino() {
   // Guardia pttRecordingRef = true tra onPressIn e onPressOut → ci dice
   // SICURAMENTE se è stato un gesto PTT (non un tap in HF).
   const pttRecordingRef = useRef(false);
+  const iosPttPressRef = useRef(0);
+  const iosPttStartRef = useRef<Promise<void> | null>(null);
+
+  const startIosLocalPtt = (press: number) => {
+    const previous = iosPttStartRef.current;
+    const task = (async () => {
+      if (previous) await previous.catch(() => {});
+      if (iosPttPressRef.current !== press || !pttRecordingRef.current) return;
+      lastStartTalkAtRef.current = 0;
+      await startTalkInternal(false, press);
+    })();
+    iosPttStartRef.current = task;
+    void task.catch((error) => {
+      console.warn("[OLLENYA_PTT] iPhone recorder startup failed", error);
+    }).finally(() => {
+      if (iosPttStartRef.current === task) iosPttStartRef.current = null;
+    });
+  };
 
   const onBigButtonPressIn = () => {
     // In HF ON l'input è gestito da onPress (toggle classico). PressIn non-op.
@@ -4620,6 +4653,14 @@ export default function Taccuino() {
     }
     userInteractedRef.current = true;
     pttRecordingRef.current = true;
+    const iosPress = Platform.OS === "ios" ? ++iosPttPressRef.current : undefined;
+    const begin = () => {
+      if (iosPress !== undefined) startIosLocalPtt(iosPress);
+      else {
+        lastStartTalkAtRef.current = 0;
+        void startTalk();
+      }
+    };
     // v70.15: reset immediato micReady → UI mostra "Preparazione microfono..."
     // dal press-in; verrà messo a true quando onRecognitionActive arriva.
     setMicReady(false);
@@ -4630,122 +4671,31 @@ export default function Taccuino() {
       // onBigButton ha già tutta la logica di hard-stop → riusiamo.
       try { onBigButton(); } catch {}
       setTimeout(() => {
-        if (pttRecordingRef.current) {
-          // Reset debounce lock come fa il tap manuale.
-          lastStartTalkAtRef.current = 0;
-          startTalk();
-        }
+        if (pttRecordingRef.current &&
+          (iosPress === undefined || iosPttPressRef.current === iosPress)) begin();
       }, 60);
     } else {
-      lastStartTalkAtRef.current = 0;
-      startTalk();
+      begin();
     }
   };
 
   const onBigButtonPressOut = () => {
-    if (handsFreeRef.current) return;
     if (!pttRecordingRef.current) return;
     pttRecordingRef.current = false;
-    console.log(`[OLLENYA_PTT] press-out → stop & send (status=${status})`);
-    // v70.12+: stopTalk è NO-OP in modalità WS stream (recRef è null).
-    // Il mic chiude da solo sull'auto-endpoint STT nativo (silenzio ~3s).
-    // Scelta deliberata per evitare voice_stream_start_cancelled quando
-    // iOS 27 Pressable cancella il touch spuriamente prima che il WS apra.
-    stopTalk().catch((e) => {
-      console.warn(`[OLLENYA_PTT] stopTalk failed:`, e);
+    if (Platform.OS === "ios") {
+      iosPttPressRef.current += 1;
+      // During permission or recorder startup there is nothing to send.
+      if (!recRef.current || statusRef.current !== "recording") return;
+      void stopTalk(true).catch((error) => {
+        console.warn("[OLLENYA_PTT] iPhone recorder stop failed", error);
+      });
+      return;
+    }
+    if (handsFreeRef.current) return;
+    void stopTalk().catch((error) => {
+      console.warn("[OLLENYA_PTT] stopTalk failed", error);
     });
   };
-
-  // === v70.16.2 (Fabio 2026-11-18) — PTT via react-native-gesture-handler ===
-  //
-  // PROBLEMA v70.16.1: su iOS 27 `Pressable` fire `onPressOut` sia su rilascio
-  // reale sia su cancellazione spuria del gesto (iOS cancella la touch dopo
-  // ~200-560ms per animazioni di fratelli/parent, touch-slop, ecc.). I log
-  // reali mostrano press-out entro 250-560ms in 15 tentativi consecutivi
-  // mentre il dito è fermo. Impossibile distinguere con i soli onPressIn/Out.
-  //
-  // SOLUZIONE v70.16.2:
-  //   - `Gesture.LongPress()` con minDuration=0 (fire immediato), maxDistance
-  //     altissima (no cancel on finger movement), shouldCancelWhenOutside=false.
-  //   - Lo state-machine nativo di gesture-handler distingue:
-  //       * `onEnd(success=true)`: rilascio REALE del dito (gesture completata).
-  //       * `onFinalize(success=false)`: cancellazione del gesto da sistema OS,
-  //         animazione, scroll ancestor. In questo caso NON abortiamo → il
-  //         mic resta aperto e l'utente può parlare (deve poi ri-tappare
-  //         per forzare stop se vuole chiudere).
-  //   - `runOnJS` necessario perché onStart/onEnd girano in UI thread worklet.
-  //
-  // Questo bypassa completamente i quirks di `Pressable` su iOS 27.
-  const pttGesture = React.useMemo(() => {
-    return Gesture.LongPress()
-      .minDuration(0)
-      .maxDistance(10000)
-      .shouldCancelWhenOutside(false)
-      .runOnJS(true)
-      .onStart(() => {
-        if (handsFreeRef.current) return;
-        if (isFreeGate()) return;
-        if (Date.now() < swallowNextBigButtonTapUntilRef.current) {
-          swallowNextBigButtonTapUntilRef.current = 0;
-          console.log(`[OLLENYA_PTT_GH] swallow first-tap — screen dim`);
-          return;
-        }
-        userInteractedRef.current = true;
-        pttRecordingRef.current = true;
-        setMicReady(false);
-        micReallyActiveRef.current = false;
-        console.log(`[OLLENYA_PTT_GH] gesture.onStart → start recording (status=${statusRef.current})`);
-        if (statusRef.current !== "idle") {
-          try { onBigButton(); } catch {}
-          setTimeout(() => {
-            if (pttRecordingRef.current) {
-              lastStartTalkAtRef.current = 0;
-              startTalk();
-            }
-          }, 60);
-        } else {
-          lastStartTalkAtRef.current = 0;
-          startTalk();
-        }
-      })
-      .onEnd((_e, success) => {
-        // Rilascio del dito con gesto completato = utente ha ALZATO il dito.
-        if (handsFreeRef.current) return;
-        if (!pttRecordingRef.current) return;
-        pttRecordingRef.current = false;
-        console.log(
-          `[OLLENYA_PTT_GH] gesture.onEnd(success=${success}) → REAL release (status=${statusRef.current}, micReady=${micReallyActiveRef.current})`
-        );
-        stopTalk().catch((e) => {
-          console.warn(`[OLLENYA_PTT_GH] stopTalk failed:`, e);
-        });
-      })
-      .onFinalize((_e, success) => {
-        // Chiamato SEMPRE alla fine. Se `success=false` → gesto CANCELLATO
-        // dall'OS (non dall'utente). In quel caso NON vogliamo abortire:
-        // il mic è già stato aperto dall'onStart, lasciamolo lavorare.
-        // L'utente dovrà fare un secondo tap breve per fermarlo (onPress
-        // del Pressable interno). Se success=true onEnd è già partito.
-        if (!success && pttRecordingRef.current) {
-          console.log(
-            `[OLLENYA_PTT_GH] gesture CANCELED by OS → mic stays open (user did NOT release)`
-          );
-          // pttRecordingRef resta true: l'utente può comunque interagire con il
-          // big button per fermare (tap breve in HF OFF è no-op, ma potrà
-          // rilasciare in futuro). Per UX, dopo 30s di "orphan recording"
-          // chiudiamo la sessione come safety: se l'utente davvero stava tenendo
-          // premuto, è ragionevole che entro 30s abbia finito la frase.
-          setTimeout(() => {
-            if (pttRecordingRef.current) {
-              console.log(`[OLLENYA_PTT_GH] 30s safety → auto-stop orphan session`);
-              pttRecordingRef.current = false;
-              stopTalk().catch(() => {});
-            }
-          }, 30_000);
-        }
-      });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const onBigButton = () => {
     // === FIX v65.27 (2026-09-07) — DIMMER SWALLOW FIRST-TAP (deterministic) ==
@@ -7225,25 +7175,16 @@ export default function Taccuino() {
                 l'utente swipa alla Page 1 (reading). */}
             {inputMode !== "text" ? (
               <>
-                {/* === v70.16.2 (Fabio 2026-11-18) — GestureDetector wraps Pressable =====
-                    In HF OFF: gesture-handler LongPress gestisce press-in/press-out
-                    con distinzione OS-level fra rilascio reale e cancellazione del
-                    gesto (iOS 27 fire press-out spuri entro 200-560ms).
-                    Pressable interno gestisce: onPress (HF ON toggle, free-gate),
-                    onLongPress (HF ON kill-switch). onPressIn/Out sono NO-OP per
-                    HF OFF — il LongPress gesture ha priorità.
-                */}
-                <GestureDetector gesture={pttGesture}>
                 <Pressable
                   ref={orbBtnRef}
                   onPressIn={() => {
-                    // v70.16.2: in HF OFF il press-in/out è gestito da pttGesture
-                    // (gesture-handler), NON da Pressable. Qui no-op per HF OFF
-                    // per evitare doppio-fire. In HF ON resta no-op come prima.
-                    if (!handsFreeRef.current) return;
+                    // v67.11 (Fabio 2026-06-24): Push-to-Talk quando
+                    // "Mani libere" è OFF. Handler no-op se HF è ON.
+                    onBigButtonPressIn();
                   }}
                   onPressOut={() => {
-                    if (!handsFreeRef.current) return;
+                    // v67.11: rilascio = stop + invia (solo in HF OFF).
+                    onBigButtonPressOut();
                   }}
                   onPress={() => {
                     // v66.1 (Fabio 2026-06-16): Free tier → paywall teaser.
@@ -7324,7 +7265,6 @@ export default function Taccuino() {
                   </View>
                 )}
               </Pressable>
-              </GestureDetector>
               </>
             ) : (
               <>
