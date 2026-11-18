@@ -620,9 +620,25 @@ export class VoiceClientSttSession {
 
         if (norm.isFinal) {
           console.log(
-            `[${TAG}] result FINAL text="${norm.transcript}" conf=${norm.confidence}`
+            `[${TAG}] result FINAL text="${norm.transcript}" conf=${norm.confidence} ` +
+            `ptt=${!this.autoEndpoint} hasSpeech=${this.speechStartReceived}`
           );
           if (this.androidUtterance) return; // final segment, not end of user turn
+          // === v70.16 (Fabio 19/11/2026) — PTT: NO dispatch su isFinal =====
+          // In PTT (autoEndpoint=false) il risultato finale va CONSERVATO e
+          // inviato UNA SOLA volta al rilascio effettivo del dito (stop()).
+          // Qui aggiorniamo solo currentTranscript e aspettiamo stop().
+          // Se iOS continua in continuous mode non ci saranno altri isFinal
+          // finché non arriva stop(); se invece il recognizer si ferma da
+          // solo (fine stream), il safety-net nell'end handler + la logica
+          // in stop() si occuperanno del dispatch singolo via dispatched flag.
+          if (!this.autoEndpoint) {
+            console.log(
+              `[${TAG}] PTT mode → buffering final, awaiting stop() for dispatch`
+            );
+            return;
+          }
+          // HF ON: comportamento storico, dispatch immediato.
           this.dispatchFinalToBackend().catch((e: any) =>
             console.log(`[VoiceClientSttSession] dispatchFinal error: ${e?.message || e}`)
           );
@@ -698,12 +714,24 @@ export class VoiceClientSttSession {
         // Log molto leggero per non spammare
         return;
       }
-      console.log(`[${TAG}] end event (noSpeech=${this.noSpeechReceived})`);
+      console.log(`[${TAG}] end event (noSpeech=${this.noSpeechReceived} hasSpeech=${this.speechStartReceived} ptt=${!this.autoEndpoint})`);
       if (this.androidUtterance && !this.doneReceived && !this.stopRequested) {
         if (this.androidUtterance.serviceEnded()) return;
         // Native recognition really disconnected. Do not pretend an incomplete
         // utterance was final and do not trigger repeated HF retries.
         this.failAndroidRecognition("android_recognition_ended_early");
+        return;
+      }
+      // === v70.16 (Fabio 19/11/2026) — PTT: NO dispatch su end spontaneo ====
+      // In PTT (autoEndpoint=false) il dispatch deve avvenire SOLO al
+      // rilascio del dito (stop()). Se iOS chiude il recognizer da solo
+      // (es. 1-minute hard limit, interruzione), non dispatchare: aspetta
+      // stop(). Il flag dispatched impedisce comunque doppi dispatch se
+      // stop() arriva subito dopo.
+      if (!this.autoEndpoint && !this.stopRequested) {
+        console.log(
+          `[${TAG}] end during PTT hold → NOT dispatching (awaiting release)`
+        );
         return;
       }
       // Se non abbiamo ancora inviato final ma abbiamo un transcript accumulato,
@@ -731,22 +759,32 @@ export class VoiceClientSttSession {
       // la sessione. Il backend risponderà con `done` (o WS.close) →
       // pipelineDone=true → status torna idle → HF_LOOP può ripartire
       // per il prossimo turno (comportamento simile a iPhone "retry").
-      if (!this.currentTranscript && !this.doneReceived && this.noSpeechReceived) {
+      //
+      // === v70.16 (Fabio 19/11/2026) — Distinguere "parlato non capito" ======
+      // In HF ON, se end arriva con transcript VUOTO ma speechStartReceived=true
+      // (il mic HA sentito parlare, ma SFSpeechRecognizer non è riuscito a
+      // trascriverlo), è un caso diverso dal silenzio totale: Ollenya deve
+      // CHIEDERE DI RIPETERE invece di contarlo come no_speech.
+      // Emettiamo un codice distinto "speech_not_recognized" che speech.ts
+      // propagherà come onError → index.tsx lo differenzierà dal no_speech.
+      if (!this.currentTranscript && !this.doneReceived) {
+        const hadSpeech = this.speechStartReceived && !this.noSpeechReceived;
+        const errCode = hadSpeech ? "speech_not_recognized" : "no_speech";
         console.log(
-          `[${TAG}] end fired with empty transcript + no-speech → sending {type:end} for graceful close`
+          `[${TAG}] end fired with empty transcript → sending {type:end}, upper gets code="${errCode}"`
         );
         try {
           this.sendJson({ type: "end" });
         } catch {}
         // Notifica upper layer che la sessione va chiusa (turno vuoto,
-        // niente TTS in arrivo). Usa un codice speciale "no_speech" che
-        // speech.ts può interpretare per NON considerare come errore
-        // pipeline reale.
+        // niente TTS in arrivo). Codice differenziato:
+        //  - "speech_not_recognized": mic ha sentito ma non capito → ripeti
+        //  - "no_speech": silenzio totale → conta per il contatore HF stop
         this.dispatched = true;
         this.doneReceived = true;
         this.notifiedUpperOnClose = true;
         try {
-          this.callbacks.onError?.("no_speech");
+          this.callbacks.onError?.(errCode);
         } catch {}
         this.removeListeners();
         this.stopKeepalive();
@@ -771,13 +809,21 @@ export class VoiceClientSttSession {
       // Android continuous mode produces multiple final SEGMENTS. The
       // AndroidUtterance controller above accumulates those segments and
       // owns the conversational endpoint; native end is not a turn boundary.
+      //
+      // === v70.16 (Fabio 19/11/2026) — iOS PTT continuous ===
+      // In PTT (autoEndpoint=false) attiviamo continuous anche su iOS:
+      // SFSpeechRecognizer con continuous=false auto-finalizza dopo
+      // ~1.5-3s di silenzio, violando lo spec "tieni premuto = ascolta
+      // anche durante le pause". Con continuous=true, il recognizer resta
+      // in ascolto finché NON chiamiamo stop() esplicito al rilascio.
+      // Gli isFinal intermedi vengono bufferizzati in currentTranscript
+      // (vedi result handler) e dispatchati UNA SOLA VOLTA in stop().
+      const ptMode = !this.autoEndpoint; // PTT = manual endpointing
+      const continuousIOS = Platform.OS === "ios" && ptMode;
       const startOpts: any = {
         lang,
         interimResults: true,
-        // continuous: true solo su Android per bypassare il beep di sistema.
-        // Su iOS resta false (comportamento invariato, SFSpeechRecognizer
-        // non emette mai beep).
-        continuous: Platform.OS === "android",
+        continuous: Platform.OS === "android" || continuousIOS,
         maxAlternatives: 1,
         addsPunctuation: true,
         // On-device: preferito su entrambe, ma richiesto SOLO su iOS
@@ -1035,10 +1081,16 @@ export class VoiceClientSttSession {
   }
 
   async stop(): Promise<void> {
-    // No transcript/token: retain the caller needed to diagnose early stops.
+    // === v70.16 (Fabio 19/11/2026) — PTT: dispatch UNA SOLA VOLTA al rilascio
+    // In PTT (autoEndpoint=false) stop() è l'UNICO punto in cui il transcript
+    // viene inviato al backend. Il guard `dispatched` garantisce idempotenza
+    // (chiamate multiple a stop() o safety net dell'end handler diventano
+    // no-op). In HF (autoEndpoint=true) il dispatch può essere già avvenuto
+    // su isFinal; questo stop è solo cleanup WS/recognizer.
     console.log(
       `[OLLENYA_STT_STOP] requested_before=${this.stopRequested} ` +
       `dispatched=${this.dispatched} done=${this.doneReceived} ` +
+      `ptt=${!this.autoEndpoint} buffered_chars=${(this.currentTranscript || "").length} ` +
       `caller=${(new Error().stack || "").split("\n").slice(1, 4).join(" <- ")}`
     );
     this.stopRequested = true;
@@ -1049,12 +1101,18 @@ export class VoiceClientSttSession {
       ExpoSpeechRecognitionModule.stop();
     } catch {}
     // Se abbiamo trascritto qualcosa ma non lo abbiamo ancora inviato → invia
-    if (this.currentTranscript && !this.doneReceived) {
+    // UNA SOLA VOLTA (dispatchFinalToBackend è idempotente via `dispatched`).
+    if (this.currentTranscript && !this.dispatched && !this.doneReceived) {
+      console.log(`[${TAG}] stop() → dispatch buffered final (${this.currentTranscript.length} chars)`);
       this.dispatchFinalToBackend().catch((e: any) =>
         console.log(`[VoiceClientSttSession] dispatchFinal error: ${e?.message || e}`)
       );
-    } else {
-      // Nessuna trascrizione → manda solo type:end così il backend chiude
+    } else if (!this.dispatched && !this.doneReceived) {
+      // Nessuna trascrizione → manda solo type:end così il backend chiude.
+      // In PTT questo è il caso "rilascio prima di parlare" → upper layer
+      // va in idle senza mostrare errore (voice_stream_start_cancelled è
+      // già gestito dallo strato superiore).
+      console.log(`[${TAG}] stop() → no transcript, sending {type:end}`);
       try {
         this.sendJson({ type: "end" });
       } catch {}

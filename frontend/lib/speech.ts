@@ -2455,6 +2455,21 @@ export async function voiceStreamConverse(opts: {
         notify();
         return;
       }
+      // === v70.16 (Fabio 19/11/2026) — speech rilevato ma non riconosciuto ===
+      // SFSpeechRecognizer/Google STT hanno sentito l'utente parlare
+      // (speechstart) ma non sono riusciti a trascrivere nulla di valido.
+      // Non è un errore di pipeline: è un "non ho capito". Propaghiamo come
+      // graceful close con flag esplicito così index.tsx sa di chiedere
+      // "puoi ripetere?" in HF ON (distinto dal silenzio totale).
+      if (msg === "speech_not_recognized") {
+        pipelineError = "speech_not_recognized";
+        console.log(
+          "[OLLENYA_STREAM_CLIENT] speech_not_recognized from client — graceful close, ask-to-repeat upstream"
+        );
+        pipelineDone = true;
+        notify();
+        return;
+      }
       // Anche su errore: flush pending per non perdere audio già ricevuto.
       if (pendingByIdx.size > 0) {
         const sortedKeys = Array.from(pendingByIdx.keys()).sort((a, b) => a - b);

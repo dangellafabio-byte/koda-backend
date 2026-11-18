@@ -523,7 +523,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.15-ptt-abort-hf2";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.16-apple-ptt-single-dispatch";
   const OLLENYA_BUILD_DATE = "2026-11-18";
   useEffect(() => {
     console.log(
@@ -3797,6 +3797,41 @@ export default function Taccuino() {
           console.log(
             "[OLLENYA_HF_BACKOFF] skip: user-cancelled during warmup (not a network error)"
           );
+          return;
+        }
+
+        // === v70.16 (Fabio 19/11/2026) — speech_not_recognized (Apple path) =
+        // Il client STT ha rilevato parlato ma non è riuscito a trascriverlo.
+        // Non è un errore di rete e NON va contato nel backoff. In HF ON,
+        // Ollenya chiede di ripetere; in HF OFF (PTT) solo banner breve.
+        const isSpeechNotRecognized =
+          typeof result.error === "string" &&
+          result.error.includes("speech_not_recognized");
+        if (isSpeechNotRecognized) {
+          console.log(
+            "[OLLENYA_ASK_REPEAT] speech_not_recognized from client STT"
+          );
+          // Marchiamo "aveva parlato" così il no_speech counter NON incrementa
+          turnHadSpeechRef.current = true;
+          if (handsFreeRef.current) {
+            const line = pickLine(awarenessLinesGarbled);
+            console.log(`[OLLENYA_ASK_REPEAT] HF ON → speaking ripeti line`);
+            speakAwareness(line).catch(() => {});
+          } else {
+            setError("Non ti ho capito bene 👂 Riprova.");
+            setTimeout(() => setError(null), 2500);
+          }
+          return;
+        }
+
+        // === v70.16 — no_speech dal client STT (Apple/Android) ================
+        // Silenzio totale: NON è errore di rete, NON banner. Il no_speech
+        // counter in HF loop si occupa già del backoff/stop dopo 2 tentativi.
+        const isNoSpeech =
+          typeof result.error === "string" &&
+          (result.error === "no_speech" || result.error === "android_no_speech");
+        if (isNoSpeech) {
+          console.log("[OLLENYA_HF_BACKOFF] skip banner: no_speech (graceful)");
           return;
         }
 
