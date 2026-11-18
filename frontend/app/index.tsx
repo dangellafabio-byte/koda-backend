@@ -25,7 +25,7 @@ import {
   BackHandler,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { TouchableOpacity as GHTouchableOpacity } from "react-native-gesture-handler";
+import { TouchableOpacity as GHTouchableOpacity, Gesture, GestureDetector } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
 import HandsFreeOrb from "../components/HandsFreeOrb";
 import LasciaAndareIntroModal from "../components/LasciaAndareIntroModal";
@@ -523,7 +523,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.16.1-apple-ptt-release";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.16.2-ptt-gesture-handler";
   const OLLENYA_BUILD_DATE = "2026-11-18";
   useEffect(() => {
     console.log(
@@ -4656,6 +4656,97 @@ export default function Taccuino() {
     });
   };
 
+  // === v70.16.2 (Fabio 2026-11-18) — PTT via react-native-gesture-handler ===
+  //
+  // PROBLEMA v70.16.1: su iOS 27 `Pressable` fire `onPressOut` sia su rilascio
+  // reale sia su cancellazione spuria del gesto (iOS cancella la touch dopo
+  // ~200-560ms per animazioni di fratelli/parent, touch-slop, ecc.). I log
+  // reali mostrano press-out entro 250-560ms in 15 tentativi consecutivi
+  // mentre il dito è fermo. Impossibile distinguere con i soli onPressIn/Out.
+  //
+  // SOLUZIONE v70.16.2:
+  //   - `Gesture.LongPress()` con minDuration=0 (fire immediato), maxDistance
+  //     altissima (no cancel on finger movement), shouldCancelWhenOutside=false.
+  //   - Lo state-machine nativo di gesture-handler distingue:
+  //       * `onEnd(success=true)`: rilascio REALE del dito (gesture completata).
+  //       * `onFinalize(success=false)`: cancellazione del gesto da sistema OS,
+  //         animazione, scroll ancestor. In questo caso NON abortiamo → il
+  //         mic resta aperto e l'utente può parlare (deve poi ri-tappare
+  //         per forzare stop se vuole chiudere).
+  //   - `runOnJS` necessario perché onStart/onEnd girano in UI thread worklet.
+  //
+  // Questo bypassa completamente i quirks di `Pressable` su iOS 27.
+  const pttGesture = React.useMemo(() => {
+    return Gesture.LongPress()
+      .minDuration(0)
+      .maxDistance(10000)
+      .shouldCancelWhenOutside(false)
+      .runOnJS(true)
+      .onStart(() => {
+        if (handsFreeRef.current) return;
+        if (isFreeGate()) return;
+        if (Date.now() < swallowNextBigButtonTapUntilRef.current) {
+          swallowNextBigButtonTapUntilRef.current = 0;
+          console.log(`[OLLENYA_PTT_GH] swallow first-tap — screen dim`);
+          return;
+        }
+        userInteractedRef.current = true;
+        pttRecordingRef.current = true;
+        setMicReady(false);
+        micReallyActiveRef.current = false;
+        console.log(`[OLLENYA_PTT_GH] gesture.onStart → start recording (status=${statusRef.current})`);
+        if (statusRef.current !== "idle") {
+          try { onBigButton(); } catch {}
+          setTimeout(() => {
+            if (pttRecordingRef.current) {
+              lastStartTalkAtRef.current = 0;
+              startTalk();
+            }
+          }, 60);
+        } else {
+          lastStartTalkAtRef.current = 0;
+          startTalk();
+        }
+      })
+      .onEnd((_e, success) => {
+        // Rilascio del dito con gesto completato = utente ha ALZATO il dito.
+        if (handsFreeRef.current) return;
+        if (!pttRecordingRef.current) return;
+        pttRecordingRef.current = false;
+        console.log(
+          `[OLLENYA_PTT_GH] gesture.onEnd(success=${success}) → REAL release (status=${statusRef.current}, micReady=${micReallyActiveRef.current})`
+        );
+        stopTalk().catch((e) => {
+          console.warn(`[OLLENYA_PTT_GH] stopTalk failed:`, e);
+        });
+      })
+      .onFinalize((_e, success) => {
+        // Chiamato SEMPRE alla fine. Se `success=false` → gesto CANCELLATO
+        // dall'OS (non dall'utente). In quel caso NON vogliamo abortire:
+        // il mic è già stato aperto dall'onStart, lasciamolo lavorare.
+        // L'utente dovrà fare un secondo tap breve per fermarlo (onPress
+        // del Pressable interno). Se success=true onEnd è già partito.
+        if (!success && pttRecordingRef.current) {
+          console.log(
+            `[OLLENYA_PTT_GH] gesture CANCELED by OS → mic stays open (user did NOT release)`
+          );
+          // pttRecordingRef resta true: l'utente può comunque interagire con il
+          // big button per fermare (tap breve in HF OFF è no-op, ma potrà
+          // rilasciare in futuro). Per UX, dopo 30s di "orphan recording"
+          // chiudiamo la sessione come safety: se l'utente davvero stava tenendo
+          // premuto, è ragionevole che entro 30s abbia finito la frase.
+          setTimeout(() => {
+            if (pttRecordingRef.current) {
+              console.log(`[OLLENYA_PTT_GH] 30s safety → auto-stop orphan session`);
+              pttRecordingRef.current = false;
+              stopTalk().catch(() => {});
+            }
+          }, 30_000);
+        }
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const onBigButton = () => {
     // === FIX v65.27 (2026-09-07) — DIMMER SWALLOW FIRST-TAP (deterministic) ==
     // Se al momento del touch il dimmer era dimmed/dimming, il root View ha
@@ -7134,16 +7225,25 @@ export default function Taccuino() {
                 l'utente swipa alla Page 1 (reading). */}
             {inputMode !== "text" ? (
               <>
+                {/* === v70.16.2 (Fabio 2026-11-18) — GestureDetector wraps Pressable =====
+                    In HF OFF: gesture-handler LongPress gestisce press-in/press-out
+                    con distinzione OS-level fra rilascio reale e cancellazione del
+                    gesto (iOS 27 fire press-out spuri entro 200-560ms).
+                    Pressable interno gestisce: onPress (HF ON toggle, free-gate),
+                    onLongPress (HF ON kill-switch). onPressIn/Out sono NO-OP per
+                    HF OFF — il LongPress gesture ha priorità.
+                */}
+                <GestureDetector gesture={pttGesture}>
                 <Pressable
                   ref={orbBtnRef}
                   onPressIn={() => {
-                    // v67.11 (Fabio 2026-06-24): Push-to-Talk quando
-                    // "Mani libere" è OFF. Handler no-op se HF è ON.
-                    onBigButtonPressIn();
+                    // v70.16.2: in HF OFF il press-in/out è gestito da pttGesture
+                    // (gesture-handler), NON da Pressable. Qui no-op per HF OFF
+                    // per evitare doppio-fire. In HF ON resta no-op come prima.
+                    if (!handsFreeRef.current) return;
                   }}
                   onPressOut={() => {
-                    // v67.11: rilascio = stop + invia (solo in HF OFF).
-                    onBigButtonPressOut();
+                    if (!handsFreeRef.current) return;
                   }}
                   onPress={() => {
                     // v66.1 (Fabio 2026-06-16): Free tier → paywall teaser.
@@ -7224,6 +7324,7 @@ export default function Taccuino() {
                   </View>
                 )}
               </Pressable>
+              </GestureDetector>
               </>
             ) : (
               <>
