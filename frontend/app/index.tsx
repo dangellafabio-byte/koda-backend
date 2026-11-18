@@ -523,7 +523,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.16-apple-ptt-single-dispatch";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.16.1-apple-ptt-release";
   const OLLENYA_BUILD_DATE = "2026-11-18";
   useEffect(() => {
     console.log(
@@ -3559,6 +3559,7 @@ export default function Taccuino() {
   // e il TTS playback rimangono identici al flusso esistente.
   // ============================================================
   const startTalkStreaming = async () => {
+    const autoEndpoint = handsFreeRef.current;
     if (status !== "idle" && status !== "speaking") return;
     // === GUARD 2026-06-28 v26 — protezione cascata ===
     // Anche se startTalkInternal ha già fatto i suoi check, blocchiamo
@@ -3610,6 +3611,7 @@ export default function Taccuino() {
     try {
       const { voiceStreamConverse } = require("../lib/speech");
       const result = await voiceStreamConverse({
+        autoEndpoint,
         ephemeral: confessionalMode,
         profileLang: "it",
         // === FIX 2026-07-26 v64.4 — voiceId client-authoritative ===
@@ -3813,10 +3815,11 @@ export default function Taccuino() {
           );
           // Marchiamo "aveva parlato" così il no_speech counter NON incrementa
           turnHadSpeechRef.current = true;
+          noSpeechCountRef.current = 0;
           if (handsFreeRef.current) {
             const line = pickLine(awarenessLinesGarbled);
             console.log(`[OLLENYA_ASK_REPEAT] HF ON → speaking ripeti line`);
-            speakAwareness(line).catch(() => {});
+            await speakAwareness(line);
           } else {
             setError("Non ti ho capito bene 👂 Riprova.");
             setTimeout(() => setError(null), 2500);
@@ -3868,7 +3871,7 @@ export default function Taccuino() {
           turnHadUnrecognizedSpeechRef.current = false;
           const line = pickLine(awarenessLinesGarbled);
           console.log(`[OLLENYA_ASK_REPEAT] HF ON + speech unrecognized → speaking ripeti line`);
-          speakAwareness(line).catch(() => {});
+          await speakAwareness(line);
         }
       }
     } catch (e) {
