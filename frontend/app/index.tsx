@@ -523,8 +523,8 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.14-fixes-pyjwt-devlogin-paywall";
-  const OLLENYA_BUILD_DATE = "2026-11-17";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.14.1-ptt-real-release";
+  const OLLENYA_BUILD_DATE = "2026-11-18";
   useEffect(() => {
     console.log(
       `[OLLENYA_BUILDTAG] ${OLLENYA_BUILD_SHORT_TAG} v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=${OLLENYA_BUILD_DATE} ` +
@@ -1676,6 +1676,11 @@ export default function Taccuino() {
   // IGNORATO (log-only, no UI change per ora). Diventa false al termine
   // della sessione (onDone/onError/finally).
   const micReallyActiveRef = useRef<boolean>(false);
+  // v70.14.1 (Fabio 2026-11-18): mirror in state per far aggiornare la UI
+  // (statusLabel, bottone, orb) solo QUANDO il mic è davvero pronto.
+  // Senza questo, il bottone mostrava "Ti ascolto..." subito, ma il mic
+  // era ancora in warmup WS → l'utente parlava nel vuoto.
+  const [micReady, setMicReady] = useState<boolean>(false);
 
   // === FIX 2026-07-14 v56 — HF LOOP BACKOFF su WS failures consecutivi ===
   // Se il backend si riavvia o è irraggiungibile, il vecchio HF loop
@@ -3630,7 +3635,9 @@ export default function Taccuino() {
           // Nuova sessione: il mic NON è ancora attivo (parte solo dopo
           // startRecognition, ~1s più tardi). Da qui in poi ignoriamo
           // i tap sull'orb finché onRecognitionActive non arriva.
+          // v70.14.1: mirroring su micReady state per UI.
           micReallyActiveRef.current = false;
+          setMicReady(false);
           console.log(
             `[OLLENYA_STREAM_CLIENT] session ref ${s ? "stored" : "cleared"}`
           );
@@ -3661,7 +3668,26 @@ export default function Taccuino() {
         // === FIX 2026-07-24 v63.5 (Fix B) — mic really active ===
         onRecognitionActive: () => {
           micReallyActiveRef.current = true;
+          setMicReady(true);
           console.log(`[OLLENYA_MIC_GATE] mic really active — tap-stop now allowed`);
+          // === v70.14.1 (Fabio 2026-11-18) — consume pendingTapStopRef =====
+          // Se l'utente ha rilasciato PRIMA che il mic fosse attivo,
+          // stopTalk ha settato pendingTapStopRef=true invece di abortire.
+          // Ora che il mic è pronto, lo onoriamo: stop() pulito con
+          // dispatch del partial transcript (anche se cortissimo).
+          const s = streamingSessionRef.current as any;
+          if (s && pendingTapStopRef.current) {
+            pendingTapStopRef.current = false;
+            setStatus("transcribing", "onRecognitionActive:pendingTapStop");
+            console.log(
+              `[OLLENYA_PTT] onRecognitionActive: pendingTapStopRef consumed → s.stop()`
+            );
+            try {
+              if (typeof s.stop === "function") {
+                s.stop().catch?.(() => {});
+              }
+            } catch {}
+          }
         },
         onUserFinal: (userText: string, conf: number | null, _dur: number | null) => {
           // === FIX 2026-06-25 v8 ===
@@ -3738,6 +3764,21 @@ export default function Taccuino() {
         console.warn("[stream] failed:", result.error);
         // Se la bolla utente è ancora vuota, rimuoviamo l'optimistic.
         setTimeline((prev) => prev.filter((e) => e.id !== optimisticId || (e as any).text !== "…"));
+
+        // === v70.14.1 (Fabio 2026-11-18) — gesto interrotto ≠ errore rete ===
+        // voice_stream_start_cancelled significa che stop() è stato chiamato
+        // durante il warmup WS (utente ha rilasciato prestissimo o iOS ha
+        // interrotto il gesto). NON è un errore di rete, NON va contato
+        // nel backoff HF, e NON deve mostrare un messaggio allarmante.
+        const isUserCancel =
+          typeof result.error === "string" &&
+          result.error.includes("voice_stream_start_cancelled");
+        if (isUserCancel) {
+          console.log(
+            "[OLLENYA_HF_BACKOFF] skip: user-cancelled during warmup (not a network error)"
+          );
+          return;
+        }
 
         // === FIX 2026-07-14 v56 — Backoff HF loop su WS failures consecutivi ===
         wsFailureCountRef.current += 1;
@@ -4009,13 +4050,40 @@ export default function Taccuino() {
   };
 
   const stopTalk = async () => {
-    // === PTT v70.12 (2026-11-17 Fabio) — rilascio NO-OP in modalità WS stream =
-    // Logica di v70.5/v70.7 (commit d8a82176) che l'utente ha confermato
-    // funzionante: in modalità WS stream NON fermiamo la sessione sul
-    // press-out. Il motivo è che iOS 27 Pressable cancella spuriamente il
-    // touch a ~200-400ms, PRIMA che il WS (warmup ~1s) sia pronto. Se
-    // fermiamo lì, la sessione aborta con voice_stream_start_cancelled.
-    // Lasciando il mic libero, l'STT nativo chiude da solo sul silenzio.
+    // === PTT v70.14.1 (2026-11-18 Fabio) — gesto interrotto vs rilascio reale ==
+    // In v70.11 il press-out di iOS (~200ms dopo press-in, prima che il WS
+    // sia aperto) causava stream.stop() → abort del warmup HTTP →
+    // voice_stream_start_cancelled → conteggiato come WS failure.
+    // Dopo 3 falsi positivi HF_BACKOFF bloccava tutti i turni successivi.
+    //
+    // Nuovo comportamento:
+    //  (a) Se la sessione stream esiste MA il mic non è ancora realmente
+    //      attivo (micReallyActiveRef=false) → è un gesto interrotto da iOS,
+    //      NON un rilascio reale. Settiamo pendingTapStopRef=true.
+    //      onRecognitionActive (quando il mic apre) consumerà il flag e
+    //      chiuderà la sessione in modo pulito (STT parziale → dispatch).
+    //  (b) Se la sessione è attiva E micReallyActiveRef=true → rilascio
+    //      reale. Chiamiamo stream.stop() per finalizzare.
+    const stream = streamingSessionRef.current;
+    if (stream) {
+      if (!micReallyActiveRef.current) {
+        pendingTapStopRef.current = true;
+        console.log(
+          "[OLLENYA_PTT] release during warmup → pendingTapStopRef=true (NOT aborting)"
+        );
+        return;
+      }
+      pendingTapStopRef.current = false;
+      setStatus("transcribing", "stopTalk:stream-release");
+      console.log("[OLLENYA_PTT] release → streaming stop (mic was active)");
+      await stream.stop();
+      return;
+    }
+    if (!recRef.current && statusRef.current === "recording") {
+      pendingTapStopRef.current = true;
+      console.log("[OLLENYA_PTT] release queued during streaming startup (no session yet)");
+      return;
+    }
     // Use recRef.current as single source of truth (status check would create
     // stale-closure bugs when called from the silence-detection callback)
     const current = recRef.current;
@@ -5435,6 +5503,11 @@ export default function Taccuino() {
   const statusLabel = (() => {
     switch (status) {
       case "recording":
+        // v70.14.1 (Fabio 2026-11-18): differenziamo tra "mic sta per aprire"
+        // e "mic aperto davvero". Prima mostravamo "Ti ascolto..." subito
+        // dopo il press-in, ma il WS stava ancora facendo warmup (~1s):
+        // l'utente parlava e perdeva le prime parole.
+        if (!micReady) return "Preparazione microfono...";
         return "Ti ascolto...";
       case "transcribing":
         return "Sto leggendo...";
