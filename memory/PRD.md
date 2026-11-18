@@ -1,3 +1,31 @@
+# Ollenya — Product Requirements (snapshot 2026-11)
+
+## Current working item
+**v70.15 — PTT / Hands-Free spec Fabio 18/11/2026** — ✅ IMPLEMENTATO (in attesa di test fisico iPhone).
+
+### Comportamento HF OFF (tap-and-hold, push-to-talk)
+- Press-in → UI mostra immediatamente `"Preparazione microfono..."` finché il mic non è davvero pronto (gate `micReady`).
+- Mentre tieni premuto → il mic continua a registrare ANCHE durante le pause (`autoStopOnSilence=false`).
+- Rilascio dopo che il mic è pronto → `stream.stop()`: chiude e invia UNA SOLA volta → pipeline STT→LLM→TTS.
+- Rilascio prima che il mic sia pronto, o gesto cancellato da iOS → `abort()` pulito: torna in idle senza lasciare l'ascolto acceso e **senza** mostrare un errore di rete (`voice_stream_start_cancelled` è già classificato come user-cancel, non entra nel backoff HF).
+
+### Comportamento HF ON (hands-free)
+- Tap avvia l'ascolto. Il VAD/endpoint chiude da solo a fine frase.
+- Dopo **2 tentativi totalmente silenziosi consecutivi** → STOP **silenzioso** (`closeSessionPause=true`). Ollenya NON parla, l'utente deve ritappare per riprendere. Delay fra tentativi: `[450ms, 2000ms]`.
+- Se Deepgram emette `stt_final` con testo vuoto/garbled (parlato rilevato ma non riconosciuto) → `turnHadUnrecognizedSpeechRef=true`. A sessione chiusa, se in HF ON e il server non ha emesso meta, Ollenya parla una frase da `awarenessLinesGarbled` ("Ho sentito qualcosa ma non chiaro — puoi ripetere?").
+
+### Commit & tag
+- Commit main: `e2b7238a chore(v70.15): bump build tag to v70.15-ptt-abort-hf2`
+- Commit main: `60face2c feat(v70.15): PTT spec Fabio 18/11 — gesto interrotto = abort pulito, HF ON = 2 silent attempts + ask-to-repeat`
+- Tag build di prova: **`v70.15-prova`**
+- Build short tag: `build-v70.15-ptt-abort-hf2`
+
+### File modificati
+- `frontend/app/index.tsx`: `onBigButtonPressIn` (reset micReady), `stopTalk` (abort su rilascio prematuro), `onRecognitionActive` + `onSession` (abort su pendingTapStopRef), `onUserFinal` (classificazione garbled), finally di `startTalkStreaming` (ask-to-repeat in HF ON), costanti `MAX_NO_SPEECH_ATTEMPTS=2` + `NO_SPEECH_BACKOFF_DELAYS_MS=[450,2000]`.
+- `frontend/lib/speech.ts`: tipo `onSession` include `abort?`.
+
+---
+
 # Ollenya — Product Requirements (snapshot 2026-10)
 
 ## Current working item
