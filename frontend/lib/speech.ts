@@ -2042,7 +2042,7 @@ export async function voiceStreamConverse(opts: {
   onUserFinal?: (text: string, confidence: number | null, durationMs: number | null) => void;
   // Esposizione della sessione attiva al chiamante, per permettergli di
   // chiamare session.stop() da un tap sull'orb (barge-in / stop manuale).
-  onSession?: (session: { stop: () => Promise<void> } | null) => void;
+  onSession?: (session: { stop: () => Promise<void>; abort?: () => Promise<void> } | null) => void;
   // === FIX 2026-07-24 v63.5 (Fix B) — mic activation gate ===
   // Fired quando il microfono REALE è partito (dopo
   // ExpoSpeechRecognitionModule.start() OK, non solo dopo la WS

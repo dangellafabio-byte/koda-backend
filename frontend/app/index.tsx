@@ -3437,25 +3437,27 @@ export default function Taccuino() {
   const emptyTurnsRef = useRef(0); // n. vuoti consecutivi nel loop conversazione
   const lastAwarenessIdx = useRef(-1);
 
-  // === NO-SPEECH BACKOFF (Fabio 2026-07-29) =================================
+  // === NO-SPEECH BACKOFF (Fabio 2026-07-29, rivisto 2026-11-18 v70.15) ========
   // Se l'utente lascia l'app aperta ma smette di parlare, il loop hands-free
-  // rischia di ciclare all'infinito (open mic → 5s silenzio → no_speech →
-  // reopen mic → ...) consumando batteria e stressando l'AudioSession iOS
-  // (osservato errore `OSStatus 560557684` dopo troppi cicli rapidi).
+  // rischia di ciclare all'infinito (open mic → silenzio → no_speech →
+  // reopen mic → ...) consumando batteria e stressando l'AudioSession iOS.
   //
-  // SPEC (concordata con Fabio):
+  // SPEC v70.15 (Fabio 18/11/2026):
   //   - Contatore `noSpeechCountRef` incrementa ad ogni turno vuoto (no_speech)
   //   - Reset a 0 quando l'utente parla davvero (onUserFinal riceve testo)
-  //   - Delay progressivi per riaprire il mic dopo un no_speech:
-  //       1° → 450ms, 2° → 2s, 3° → 5s, 4° → 5s, 5° → 5s
-  //   - Dopo 5 no_speech consecutivi → STOP: torna idle, richiede tap utente.
-  //     (evita che il mic continui ad aprirsi per ore se dimentichi l'app aperta)
-  //   - `turnHadSpeechRef` è il flag interno: settato a false all'apertura di
-  //     ogni sessione, a true quando arriva un `onUserFinal` con testo valido.
-  const NO_SPEECH_BACKOFF_DELAYS_MS = [450, 2000, 5000, 5000, 5000] as const;
-  const MAX_NO_SPEECH_ATTEMPTS = 5;
+  //   - Dopo 2 no_speech consecutivi → STOP SILENZIOSO: torna idle,
+  //     richiede tap utente. Ollenya NON parla (no awareness line).
+  //   - Delay fra i tentativi: 1° → 450ms, 2° → 2s
+  //   - `turnHadSpeechRef` è il flag interno: settato a false all'apertura
+  //     di ogni sessione, a true quando arriva `onUserFinal` con testo.
+  //   - `turnHadUnrecognizedSpeechRef`: true quando Deepgram emette stt_final
+  //     ma il testo è vuoto/garbled → parlato rilevato ma non capito →
+  //     Ollenya chiede di ripetere (una volta) prima del prossimo turno.
+  const NO_SPEECH_BACKOFF_DELAYS_MS = [450, 2000] as const;
+  const MAX_NO_SPEECH_ATTEMPTS = 2;
   const noSpeechCountRef = useRef(0);
   const turnHadSpeechRef = useRef(false);
+  const turnHadUnrecognizedSpeechRef = useRef(false);
 
   // === OFFLINE CLIPS ANTI-LOOP (sprint 2026-06-20) ===
   // Conta clip offline consecutive riprodotte senza che la rete sia tornata.
@@ -3641,23 +3643,21 @@ export default function Taccuino() {
           console.log(
             `[OLLENYA_STREAM_CLIENT] session ref ${s ? "stored" : "cleared"}`
           );
-          // === FIX 2026-07-11 v52 — TAP_STOP EARLY consumption ===
-          // Se l'utente ha premuto tap-stop DURANTE la fase async pre-WS
-          // (mentre stream stava aprendo la connessione), onBigButton ha
-          // settato pendingTapStopRef=true perché non aveva ancora la
-          // sessione. Ora che l'abbiamo, fermiamo subito con stop() →
-          // il server processerà l'audio già inviato e risponderà,
-          // NON continuiamo a registrare chunk aggiuntivi.
+          // === v70.15 (Fabio 2026-11-18) — TAP_STOP EARLY = abort pulito =====
+          // Se l'utente ha rilasciato DURANTE la fase async pre-WS (mentre
+          // stream stava aprendo la connessione), stopTalk ha settato
+          // pendingTapStopRef=true e status=idle. Ora che la sessione
+          // è aperta, ABORT subito (no error, no transcript, back to idle).
           if (s && pendingTapStopRef.current) {
             pendingTapStopRef.current = false;
             console.log(
-              `[OLLENYA_STREAM_CLIENT] pendingTapStopRef consumed → calling s.stop() now`
+              `[OLLENYA_STREAM_CLIENT] pendingTapStopRef consumed on session open → abort`
             );
             try {
-              if (typeof s.stop === "function") {
-                s.stop().catch?.(() => {});
-              } else if (typeof s.abort === "function") {
+              if (typeof s.abort === "function") {
                 s.abort().catch?.(() => {});
+              } else if (typeof s.stop === "function") {
+                s.stop().catch?.(() => {});
               }
             } catch {}
           }
@@ -3670,20 +3670,22 @@ export default function Taccuino() {
           micReallyActiveRef.current = true;
           setMicReady(true);
           console.log(`[OLLENYA_MIC_GATE] mic really active — tap-stop now allowed`);
-          // === v70.14.1 (Fabio 2026-11-18) — consume pendingTapStopRef =====
-          // Se l'utente ha rilasciato PRIMA che il mic fosse attivo,
-          // stopTalk ha settato pendingTapStopRef=true invece di abortire.
-          // Ora che il mic è pronto, lo onoriamo: stop() pulito con
-          // dispatch del partial transcript (anche se cortissimo).
+          // === v70.15 (Fabio 2026-11-18) — consume pendingTapStopRef =========
+          // Se l'utente ha rilasciato PRIMA che il mic fosse pronto (o iOS
+          // ha annullato il gesto), stopTalk NON ha abortito (la sessione
+          // non esisteva ancora) e ha settato pendingTapStopRef=true.
+          // Ora che la sessione è aperta, ABORT pulito → nessun errore,
+          // nessun parlato catturato, torno in idle.
           const s = streamingSessionRef.current as any;
           if (s && pendingTapStopRef.current) {
             pendingTapStopRef.current = false;
-            setStatus("transcribing", "onRecognitionActive:pendingTapStop");
             console.log(
-              `[OLLENYA_PTT] onRecognitionActive: pendingTapStopRef consumed → s.stop()`
+              `[OLLENYA_PTT] onRecognitionActive: pendingTapStopRef consumed → abort (clean idle)`
             );
             try {
-              if (typeof s.stop === "function") {
+              if (typeof s.abort === "function") {
+                s.abort().catch?.(() => {});
+              } else if (typeof s.stop === "function") {
                 s.stop().catch?.(() => {});
               }
             } catch {}
@@ -3697,12 +3699,30 @@ export default function Taccuino() {
           // che impiega Claude a generare la risposta + TTS — l'utente
           // pensava che stesse ancora registrando.
           setStatus("thinking");
+          // === v70.15 — HF ON "ask to repeat" quando parlato non riconosciuto =
+          // Se Deepgram emette stt_final con testo vuoto/troppo corto/garbled
+          // significa che HA RILEVATO parlato ma NON è riuscito a trascriverlo.
+          // Non lo contiamo come "silenzio totale" (altrimenti il counter no_speech
+          // porta a stop anche quando l'utente sta provando a parlare), ma
+          // flagghiamo per chiedere "puoi ripetere?" dopo la chiusura sessione.
+          const cls = classifyTranscript(userText || "");
+          if (cls !== "ok") {
+            turnHadUnrecognizedSpeechRef.current = true;
+            // Marchiamo come "aveva parlato" così il contatore no_speech NON
+            // sale per i garbled (anche se Ollenya chiederà di ripetere).
+            turnHadSpeechRef.current = true;
+            console.log(
+              `[OLLENYA_STREAM_CLIENT] stt_final garbled/empty (cls=${cls}) → ask-to-repeat flag ON`
+            );
+            return;
+          }
           // === NO-SPEECH BACKOFF (2026-07-29) — parlato vero → reset ===
           // L'utente ha parlato davvero (transcript non vuoto arriva qui).
           // Marca il turno come "aveva parlato" così l'HF loop NON incrementa
           // il contatore no-speech, e resetta il contatore così i prossimi
           // eventuali no_speech ripartono dal delay più corto (450ms).
           turnHadSpeechRef.current = true;
+          turnHadUnrecognizedSpeechRef.current = false;
           if (noSpeechCountRef.current > 0) {
             console.log(`[OLLENYA_HF_BACKOFF_NOSPEECH] user parlato → reset counter (era ${noSpeechCountRef.current})`);
             noSpeechCountRef.current = 0;
@@ -3800,6 +3820,21 @@ export default function Taccuino() {
           console.log(`[OLLENYA_HF_BACKOFF] resetting counter (was ${wsFailureCountRef.current})`);
           wsFailureCountRef.current = 0;
         }
+        // === v70.15 — HF ON: parlato rilevato ma non capito → "ripeti" =======
+        // Se stt_final era vuoto/garbled E il server non ha emesso meta (nessuna
+        // risposta Ollenya), in HF ON chiediamo esplicitamente di ripetere.
+        // In HF OFF l'utente ha già il feedback "Non ti ho sentito bene" dai
+        // path file-based; qui siamo nel path streaming, idem per coerenza.
+        if (
+          turnHadUnrecognizedSpeechRef.current &&
+          !capturedMeta &&
+          handsFreeRef.current
+        ) {
+          turnHadUnrecognizedSpeechRef.current = false;
+          const line = pickLine(awarenessLinesGarbled);
+          console.log(`[OLLENYA_ASK_REPEAT] HF ON + speech unrecognized → speaking ripeti line`);
+          speakAwareness(line).catch(() => {});
+        }
       }
     } catch (e) {
       console.error("[stream] crash:", e);
@@ -3807,6 +3842,8 @@ export default function Taccuino() {
       setTimeout(() => setError(null), 4000);
     } finally {
       setStatus("idle");
+      // v70.15: reset dei flag di turno per la prossima sessione
+      turnHadUnrecognizedSpeechRef.current = false;
       // === FIX 2026-08-26 v65.2 — HF LOOP RESTART FIX (Fabio) ================
       // Azzeriamo esplicitamente streamingSessionRef.current. Prima veniva
       // pulito SOLO su tap-reset (riga ~4042) o back-button (~2676), MAI
@@ -4050,27 +4087,33 @@ export default function Taccuino() {
   };
 
   const stopTalk = async () => {
-    // === PTT v70.14.1 (2026-11-18 Fabio) — gesto interrotto vs rilascio reale ==
-    // In v70.11 il press-out di iOS (~200ms dopo press-in, prima che il WS
-    // sia aperto) causava stream.stop() → abort del warmup HTTP →
-    // voice_stream_start_cancelled → conteggiato come WS failure.
-    // Dopo 3 falsi positivi HF_BACKOFF bloccava tutti i turni successivi.
+    // === PTT v70.15 (2026-11-18 Fabio) — gesto interrotto = abort pulito =====
+    // SPEC esplicita utente (18/11): se rilascio PRIMA che il microfono sia
+    // pronto, O se il gesto viene annullato dal sistema → torna in idle,
+    // SENZA lasciare l'ascolto acceso e SENZA segnare un errore di rete.
     //
-    // Nuovo comportamento:
-    //  (a) Se la sessione stream esiste MA il mic non è ancora realmente
-    //      attivo (micReallyActiveRef=false) → è un gesto interrotto da iOS,
-    //      NON un rilascio reale. Settiamo pendingTapStopRef=true.
-    //      onRecognitionActive (quando il mic apre) consumerà il flag e
-    //      chiuderà la sessione in modo pulito (STT parziale → dispatch).
-    //  (b) Se la sessione è attiva E micReallyActiveRef=true → rilascio
-    //      reale. Chiamiamo stream.stop() per finalizzare.
+    // Comportamento:
+    //  (a) stream esiste MA mic NON ancora attivo → abort() pulito.
+    //      voiceStreamConverse ritorna "voice_stream_start_cancelled" che è
+    //      già classificato come user-cancel (NO error banner, NO HF backoff).
+    //      Il finally rimette status=idle, pulisce ref, mic resta spento.
+    //  (b) stream attivo E mic attivo → rilascio reale: stop() per finalizzare
+    //      lo stream e processare il parlato catturato (chiudi e invia una
+    //      sola volta).
     const stream = streamingSessionRef.current;
     if (stream) {
       if (!micReallyActiveRef.current) {
-        pendingTapStopRef.current = true;
+        pendingTapStopRef.current = false;
         console.log(
-          "[OLLENYA_PTT] release during warmup → pendingTapStopRef=true (NOT aborting)"
+          "[OLLENYA_PTT] release during warmup → ABORT (no error, back to idle)"
         );
+        try {
+          if (typeof (stream as any).abort === "function") {
+            await (stream as any).abort();
+          } else if (typeof stream.stop === "function") {
+            await stream.stop();
+          }
+        } catch {}
         return;
       }
       pendingTapStopRef.current = false;
@@ -4080,8 +4123,15 @@ export default function Taccuino() {
       return;
     }
     if (!recRef.current && statusRef.current === "recording") {
+      // Non c'è ancora una sessione stream ma lo status è "recording":
+      // la sessione sta per aprire. ANNULLA il bootstrap: appena onSession
+      // arriva, il flag pendingTapStopRef chiuderà subito la sessione.
+      // In parallelo settiamo lo status a idle così l'UI reagisce subito
+      // (no "resti in ascolto").
       pendingTapStopRef.current = true;
-      console.log("[OLLENYA_PTT] release queued during streaming startup (no session yet)");
+      setStatus("idle", "stopTalk:cancel-before-session");
+      setMicReady(false);
+      console.log("[OLLENYA_PTT] release before session opened → cancel bootstrap");
       return;
     }
     // Use recRef.current as single source of truth (status check would create
@@ -4532,6 +4582,10 @@ export default function Taccuino() {
     }
     userInteractedRef.current = true;
     pttRecordingRef.current = true;
+    // v70.15: reset immediato micReady → UI mostra "Preparazione microfono..."
+    // dal press-in; verrà messo a true quando onRecognitionActive arriva.
+    setMicReady(false);
+    micReallyActiveRef.current = false;
     console.log(`[OLLENYA_PTT] press-in → start recording (status=${status})`);
     if (status !== "idle") {
       // Ollenya sta parlando/pensando: hard-stop poi start.
