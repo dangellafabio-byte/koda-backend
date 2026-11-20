@@ -27,31 +27,7 @@ name: EAS Update OTA
 # ============================================================================
 
 on:
-  # Auto-trigger a ogni push su main. RIMOSSO il filtro paths="frontend/**"
-  # perché anche i commit "Auto-generated changes" di Emergent (che toccano
-  # solo .emergent/emergent.yml) devono far partire l'OTA — altrimenti il
-  # workflow non parte mai automaticamente col Publish button.
-  push:
-    branches:
-      - main
-  # Trigger manuale come backup (in caso serva ripubblicare senza modifiche).
   workflow_dispatch:
-    inputs:
-      channel:
-        description: "EAS Update channel (deve combaciare con quello della build installata)"
-        required: true
-        default: "preview"
-        type: choice
-        options:
-          - preview
-          - production
-          - development
-          - all-channels
-      message:
-        description: "Messaggio update (es. 'voce Cielo + UI polish')"
-        required: false
-        default: "OTA update"
-        type: string
 
 jobs:
   update:
@@ -100,46 +76,5 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           EXPO_PUBLIC_USE_CLIENT_STT: "true"
         run: |
-          # Per push auto: usa channel default "preview" + message dal commit
-          # Per workflow_dispatch: usa i parametri utente
-          if [ "${{ github.event_name }}" = "push" ]; then
-            CHANNEL="preview"
-            MESSAGE="auto: ${{ github.event.head_commit.message }}"
-            MESSAGE="${MESSAGE:0:200}"  # trim per limite eas message
-            echo "📦 Auto-push detected → publishing to all channels"
-            for ch in preview production development; do
-              echo "→ channel: $ch"
-              eas update \
-                --channel "$ch" \
-                --message "$MESSAGE [auto:$ch]" \
-                --non-interactive || echo "warn: channel $ch failed, continuing"
-            done
-          elif [ "${{ inputs.channel }}" = "all-channels" ]; then
-            echo "📦 Manual dispatch → all channels"
-            for ch in preview production development; do
-              echo "→ channel: $ch"
-              eas update \
-                --channel "$ch" \
-                --message "${{ inputs.message }} [multi:$ch]" \
-                --non-interactive || echo "warn: channel $ch failed, continuing"
-            done
-          else
-            echo "📦 Manual dispatch → channel: ${{ inputs.channel }}"
-            eas update \
-              --channel "${{ inputs.channel }}" \
-              --message "${{ inputs.message }}" \
-              --non-interactive
-          fi
-
-      - name: Summary
-        run: |
-          echo "## ✅ OTA Update pubblicato" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Channel**: \`${{ inputs.channel }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Messaggio**: ${{ inputs.message }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Prossimi passi (sul tuo iPhone):" >> $GITHUB_STEP_SUMMARY
-          echo "1. Force-quit dell'app Koda (swipe up dallo switcher)" >> $GITHUB_STEP_SUMMARY
-          echo "2. Riapri l'app → aspetta 30s (scarica il bundle)" >> $GITHUB_STEP_SUMMARY
-          echo "3. Force-quit di nuovo + riapri (applica il bundle)" >> $GITHUB_STEP_SUMMARY
-          echo "4. Vai in Impostazioni → in fondo verifica il nuovo BUILD_VERSION" >> $GITHUB_STEP_SUMMARY
+          test "$GITHUB_REF_NAME" = "android-v70-21"
+          eas update --platform android --channel preview --message "v70.21 Android local PTT" --non-interactive
