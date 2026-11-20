@@ -523,7 +523,7 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.19-ios-local-ptt";
+  const OLLENYA_BUILD_SHORT_TAG = "build-v70.20-hands-free-swipe";
   const OLLENYA_BUILD_DATE = "2026-11-18";
   useEffect(() => {
     console.log(
@@ -1630,7 +1630,13 @@ export default function Taccuino() {
     handsFreeRef.current = on;
     // Reset banner state: se riattiviamo dopo essere stati spenti, mostra
     // di nuovo "Dimmi, ti ascolto" al primo avvio.
-    if (on) firstListenShownRef.current = false;
+    if (on) {
+      firstListenShownRef.current = false;
+      if (Platform.OS === "ios") {
+        userInteractedRef.current = false;
+        noSpeechCountRef.current = 0;
+      }
+    }
     setHandsFreeToast(on ? "Hands-free attivo" : "Modalità manuale — tocca per parlare");
     setTimeout(() => setHandsFreeToast(null), 2500);
     try {
@@ -2868,13 +2874,10 @@ export default function Taccuino() {
       return;
     }
     // === NO-SPEECH BACKOFF LOGIC (Fabio 2026-07-29) =========================
-    // Se il turno appena chiuso NON ha avuto parlato reale (no_speech
-    // timeout, WS chiusa senza transcript), incrementa il counter e applica
-    // il delay progressivo. Dopo 5 no_speech consecutivi, FERMA il loop
-    // (richiede tap utente) — evita che il mic continui a riaprirsi per
-    // ore se l'utente ha dimenticato l'app aperta (batteria + AudioSession iOS).
+    // Conta i turni silenziosi completati, anche nel percorso locale.
+    // I fallimenti di streaming hanno un contatore separato.
     let scheduleDelayMs = 450;
-    const turnWasSilent = !turnHadSpeechRef.current;
+    const turnWasSilent = streamTurnSilentRef.current ?? !turnHadSpeechRef.current;
     if (turnWasSilent) {
       noSpeechCountRef.current += 1;
       if (noSpeechCountRef.current >= MAX_NO_SPEECH_ATTEMPTS) {
@@ -3457,6 +3460,7 @@ export default function Taccuino() {
   const MAX_NO_SPEECH_ATTEMPTS = 2;
   const noSpeechCountRef = useRef(0);
   const turnHadSpeechRef = useRef(false);
+  const streamTurnSilentRef = useRef<boolean | null>(null);
   const turnHadUnrecognizedSpeechRef = useRef(false);
 
   // === OFFLINE CLIPS ANTI-LOOP (sprint 2026-06-20) ===
@@ -3603,6 +3607,7 @@ export default function Taccuino() {
     };
     requestForceScroll();
     setTimeline((prev) => [...prev, optimistic]);
+    streamTurnSilentRef.current = false;
     setStatus("recording");
 
     let capturedMeta: any = null;
@@ -3834,6 +3839,7 @@ export default function Taccuino() {
           typeof result.error === "string" &&
           (result.error === "no_speech" || result.error === "android_no_speech");
         if (isNoSpeech) {
+          streamTurnSilentRef.current = true;
           console.log("[OLLENYA_HF_BACKOFF] skip banner: no_speech (graceful)");
           return;
         }
@@ -3853,6 +3859,7 @@ export default function Taccuino() {
           setTimeout(() => setError(null), 4000);
         }
       } else {
+        streamTurnSilentRef.current = !turnHadSpeechRef.current && !turnHadUnrecognizedSpeechRef.current;
         // Successo → azzera il counter dei fallimenti consecutivi
         if (wsFailureCountRef.current > 0) {
           console.log(`[OLLENYA_HF_BACKOFF] resetting counter (was ${wsFailureCountRef.current})`);
@@ -3969,6 +3976,7 @@ export default function Taccuino() {
     // senza transcript), il flag resta false e l'HF loop incrementerà il
     // counter e userà il delay progressivo alla prossima riapertura.
     turnHadSpeechRef.current = false;
+    streamTurnSilentRef.current = null;
 
     // === GUARD STREAMING SESSION (2026-06-28 v26 — diag log iPhone cascata) ===
     // Se una sessione WebSocket è già attiva, non aprirne un'altra. Questo
@@ -4621,6 +4629,7 @@ export default function Taccuino() {
   // Guardia pttRecordingRef = true tra onPressIn e onPressOut → ci dice
   // SICURAMENTE se è stato un gesto PTT (non un tap in HF).
   const pttRecordingRef = useRef(false);
+  const [iosPttGestureActive, setIosPttGestureActive] = useState(false);
   const iosPttPressRef = useRef(0);
   const iosPttStartRef = useRef<Promise<void> | null>(null);
 
@@ -4654,6 +4663,7 @@ export default function Taccuino() {
     userInteractedRef.current = true;
     pttRecordingRef.current = true;
     const iosPress = Platform.OS === "ios" ? ++iosPttPressRef.current : undefined;
+    if (iosPress !== undefined) setIosPttGestureActive(true);
     const begin = () => {
       if (iosPress !== undefined) startIosLocalPtt(iosPress);
       else {
@@ -4683,6 +4693,7 @@ export default function Taccuino() {
     if (!pttRecordingRef.current) return;
     pttRecordingRef.current = false;
     if (Platform.OS === "ios") {
+      setIosPttGestureActive(false);
       iosPttPressRef.current += 1;
       // During permission or recorder startup there is nothing to send.
       if (!recRef.current || statusRef.current !== "recording") return;
@@ -7094,19 +7105,9 @@ export default function Taccuino() {
         pagingEnabled
         showsHorizontalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        // === PTT iOS 27 fix v70.13 (2026-11-17 Fabio) =========================
-        // ROOT CAUSE del bug "press-out spurio a 200ms":
-        // Questa ScrollView orizzontale paginata, quando riceve il minimo
-        // pan sotto il dito dell'utente, chiede il responder e cancella il
-        // touch della Pressable sotto (orb). Il Pressable risponde con
-        // onPressOut spurio.
-        //  - canCancelContentTouches=false → la ScrollView NON ruba touch
-        //    attivi dai figli, anche se poi percepisce un pan
-        //
-        // Nota: lo swipe voice↔reading continua a funzionare toccando aree
-        // esterne all'orb (title bar, sfondo, lista messaggi). Toccando
-        // direttamente l'orb il touch resta tuo → nessun pan interferisce.
-        canCancelContentTouches={false}
+        // Keep the pager available except while the iOS voice button is held.
+        scrollEnabled={!iosPttGestureActive}
+        canCancelContentTouches={!iosPttGestureActive}
         onScroll={(e) => {
           // === FIX FLASH ORB DURANTE SWIPE (richiesta utente 2026-06) ===
           // Prima viewMode si aggiornava SOLO al termine del momentum
