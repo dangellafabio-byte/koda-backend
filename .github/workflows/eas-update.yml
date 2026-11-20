@@ -98,6 +98,7 @@ jobs:
         working-directory: frontend
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EXPO_PUBLIC_USE_CLIENT_STT: "true"
         run: |
           # Per push auto: usa channel default "preview" + message dal commit
           # Per workflow_dispatch: usa i parametri utente
