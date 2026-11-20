@@ -524,7 +524,7 @@ export default function Taccuino() {
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
   const OLLENYA_BUILD_SHORT_TAG = Platform.OS === "android"
-    ? "build-v70.21-android-local-ptt"
+    ? "build-v70.22-android-ptt-playback"
     : "build-v70.20-hands-free-swipe";
   const OLLENYA_BUILD_DATE = "2026-11-18";
   useEffect(() => {
@@ -2619,7 +2619,9 @@ export default function Taccuino() {
   useEffect(() => {
     const isThinking = status === "transcribing" || status === "thinking";
     const userIsInTextScreen = viewMode === "reading" || inputMode === "text";
-    if (isThinking && !userIsInTextScreen) {
+    // Keep the Android manual turn on a single playback owner.
+    const manualAndroid = Platform.OS === "android" && !handsFreeRef.current;
+    if (isThinking && !userIsInTextScreen && !manualAndroid) {
       startThinkingSound();
     } else {
       stopThinkingSound();
@@ -4252,7 +4254,7 @@ export default function Taccuino() {
       // playback fails silently → user hears no AI voice.
       if (Platform.OS !== "web") {
         try {
-          const { setAudioModeAsync } = require("expo-audio");
+          const { setAudioModeAsync, setIsAudioActiveAsync } = require("expo-audio");
           await setAudioModeAsync({
             allowsRecording: false,
             playsInSilentMode: true,
@@ -4260,6 +4262,10 @@ export default function Taccuino() {
             shouldPlayInBackground: false,
             shouldRouteThroughEarpiece: false,
           });
+          if (Platform.OS === "android" && useOctoberTranscription) {
+            await setIsAudioActiveAsync(true);
+            console.log("[OLLENYA_PTT] Android playback session active after recorder release");
+          }
         } catch {}
       }
       if (!res) {
