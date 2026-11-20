@@ -116,6 +116,30 @@ export function formatDiagEventsForExport(events?: DiagEvent[]): string {
   lines.push(`=== Ollenya diag log — ${new Date(now).toISOString()} ===`);
   lines.push(`Eventi catturati: ${evs.length} (max ${MAX_EVENTS})`);
   lines.push("");
+  const start = evs.map(event => event.line.includes("[OLLENYA_PTT] press-in")).lastIndexOf(true);
+  if (start >= 0) {
+    const turn = evs.slice(start);
+    const markers: Array<[string, RegExp]> = [
+      ["Registrazione terminata", /\[OLLENYA_STATUS\] recording → transcribing/],
+      ["Elaborazione", /\[OLLENYA_STATUS\] transcribing → thinking/],
+      ["Prima frase inviata al lettore", /\[OLLENYA_POLL\] first_play_kick/],
+      ["Risposta testuale ricevuta", /\[OLLENYA_LLM_OUT_CLIENT\]/],
+      ["Primo caricamento del lettore", /\[OLLENYA_TTS_PLAY\] android_first_loaded/],
+      ["Primo avanzamento rilevato", /\[OLLENYA_TTS_PLAY\] mp3_duration=/],
+      ["Esito prima riproduzione", /\[OLLENYA_CUTOFF_DIAG\] finish/],
+    ];
+    lines.push("Ultimo premi-per-parlare (tempi dalla pressione)");
+    for (const [label, pattern] of markers) {
+      const event = turn.find(item => pattern.test(item.line));
+      if (!event) {
+        lines.push(label + ": evento assente");
+        continue;
+      }
+      const details = event.line.match(/(?:playing|pos|dur|reason|played)=[^ ]+/g) || [];
+      lines.push(label + ": +" + (event.t - turn[0].t) + " ms " + details.join(" "));
+    }
+    lines.push("");
+  }
   for (const ev of evs) {
     const deltaMs = now - ev.t;
     // Formato relativo: "-MM:SS.mmm" così è leggibile a colpo d'occhio.
