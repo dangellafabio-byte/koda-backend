@@ -523,7 +523,9 @@ export default function Taccuino() {
   // rimaneva "v64.4-client-voice-id-ws" anche dopo aggiornamenti del vero
   // buildtag → l'utente pensava che la build non contenesse i fix mentre
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
-  const OLLENYA_BUILD_SHORT_TAG = "build-v70.20-hands-free-swipe";
+  const OLLENYA_BUILD_SHORT_TAG = Platform.OS === "android"
+    ? "build-v70.21-android-local-ptt"
+    : "build-v70.20-hands-free-swipe";
   const OLLENYA_BUILD_DATE = "2026-11-18";
   useEffect(() => {
     console.log(
@@ -3610,6 +3612,11 @@ export default function Taccuino() {
     streamTurnSilentRef.current = false;
     setStatus("recording");
 
+    const measureHf = Platform.OS === "android" && autoEndpoint;
+    let readyAt: number | null = null;
+    let endAt: number | null = null;
+    let receivedText = false;
+    let endListener: { remove(): void } | undefined;
     let capturedMeta: any = null;
     let aiEntryId: string | null = null;
 
@@ -3673,7 +3680,22 @@ export default function Taccuino() {
           setStatus("speaking");
         },
         // === FIX 2026-07-24 v63.5 (Fix B) — mic really active ===
+        onInterim: (text: string) => {
+          if (measureHf && readyAt !== null && !receivedText && text.trim()) {
+            receivedText = true;
+            console.log(`[OLLENYA_ANDROID_HF] ready_to_first_text_ms=${Date.now() - readyAt}`);
+          }
+        },
         onRecognitionActive: () => {
+          if (measureHf && readyAt === null) {
+            readyAt = Date.now();
+            try {
+              const { ExpoSpeechRecognitionModule } = require("expo-speech-recognition");
+              endListener = ExpoSpeechRecognitionModule.addListener("speechend", () => {
+                endAt = Date.now();
+              });
+            } catch {}
+          }
           micReallyActiveRef.current = true;
           setMicReady(true);
           console.log(`[OLLENYA_MIC_GATE] mic really active — tap-stop now allowed`);
@@ -3699,6 +3721,10 @@ export default function Taccuino() {
           }
         },
         onUserFinal: (userText: string, conf: number | null, _dur: number | null) => {
+          if (measureHf) {
+            const delay = endAt === null ? "unknown" : Date.now() - endAt;
+            console.log(`[OLLENYA_ANDROID_HF] speechend_to_dispatch_ms=${delay}`);
+          }
           // === FIX 2026-06-25 v8 ===
           // Quando Deepgram emette stt_final, il microfono di fatto si è già
           // fermato (chunkLoopActive=false dentro voiceStream.ts). Senza
@@ -3887,6 +3913,8 @@ export default function Taccuino() {
       setTimeout(() => setError(null), 4000);
     } finally {
       setStatus("idle");
+      endListener?.remove();
+      if (measureHf && !receivedText) console.log("[OLLENYA_ANDROID_HF] no interim text received");
       // v70.15: reset dei flag di turno per la prossima sessione
       turnHadUnrecognizedSpeechRef.current = false;
       // === FIX 2026-08-26 v65.2 — HF LOOP RESTART FIX (Fabio) ================
@@ -3924,8 +3952,8 @@ export default function Taccuino() {
   };
 
   // Push-to-talk (or hands-free)
-  const startTalkInternal = async (autoStopOnSilence: boolean, iosPress?: number) => {
-    const pressEnded = () => iosPress !== undefined && iosPttPressRef.current !== iosPress;
+  const startTalkInternal = async (autoStopOnSilence: boolean, localPress?: number) => {
+    const pressEnded = () => localPress !== undefined && localPttPressRef.current !== localPress;
     // === PERMESSO SPEECH RECOGNITION (Fabio 2026-08-22) =====================
     // Chiamato PRIMA di qualunque debounce/mutex. Se il permesso non c'è
     // (o è stato negato durante l'Intro Premium), mostra il pre-prompt
@@ -4009,7 +4037,7 @@ export default function Taccuino() {
     console.log(`[OLLENYA_FLAG] useVoiceStream=${useVoiceStream} (env="${process.env.EXPO_PUBLIC_USE_WS_VOICE_STREAM ?? "<missing>"}", platform=${Platform.OS})`);
     // Use the original device recorder for iPhone push-to-talk. Only upload
     // after release, so opening the voice socket cannot delay capture.
-    if (useVoiceStream && Platform.OS !== "web" && iosPress === undefined) {
+    if (useVoiceStream && Platform.OS !== "web" && localPress === undefined) {
       return startTalkStreaming();
     }
 
@@ -4064,7 +4092,7 @@ export default function Taccuino() {
         return;
       }
       recRef.current = rec;
-      if (iosPress !== undefined) {
+      if (localPress !== undefined) {
         setMicReady(true);
         setStatus("recording");
       }
@@ -4630,22 +4658,22 @@ export default function Taccuino() {
   // SICURAMENTE se è stato un gesto PTT (non un tap in HF).
   const pttRecordingRef = useRef(false);
   const [iosPttGestureActive, setIosPttGestureActive] = useState(false);
-  const iosPttPressRef = useRef(0);
-  const iosPttStartRef = useRef<Promise<void> | null>(null);
+  const localPttPressRef = useRef(0);
+  const localPttStartRef = useRef<Promise<void> | null>(null);
 
-  const startIosLocalPtt = (press: number) => {
-    const previous = iosPttStartRef.current;
+  const startLocalPtt = (press: number) => {
+    const previous = localPttStartRef.current;
     const task = (async () => {
       if (previous) await previous.catch(() => {});
-      if (iosPttPressRef.current !== press || !pttRecordingRef.current) return;
+      if (localPttPressRef.current !== press || !pttRecordingRef.current) return;
       lastStartTalkAtRef.current = 0;
       await startTalkInternal(false, press);
     })();
-    iosPttStartRef.current = task;
+    localPttStartRef.current = task;
     void task.catch((error) => {
-      console.warn("[OLLENYA_PTT] iPhone recorder startup failed", error);
+      console.warn("[OLLENYA_PTT] local recorder startup failed", error);
     }).finally(() => {
-      if (iosPttStartRef.current === task) iosPttStartRef.current = null;
+      if (localPttStartRef.current === task) localPttStartRef.current = null;
     });
   };
 
@@ -4662,10 +4690,10 @@ export default function Taccuino() {
     }
     userInteractedRef.current = true;
     pttRecordingRef.current = true;
-    const iosPress = Platform.OS === "ios" ? ++iosPttPressRef.current : undefined;
-    if (iosPress !== undefined) setIosPttGestureActive(true);
+    const localPress = (Platform.OS === "ios" || Platform.OS === "android") ? ++localPttPressRef.current : undefined;
+    if (Platform.OS === "ios") setIosPttGestureActive(true);
     const begin = () => {
-      if (iosPress !== undefined) startIosLocalPtt(iosPress);
+      if (localPress !== undefined) startLocalPtt(localPress);
       else {
         lastStartTalkAtRef.current = 0;
         void startTalk();
@@ -4682,7 +4710,7 @@ export default function Taccuino() {
       try { onBigButton(); } catch {}
       setTimeout(() => {
         if (pttRecordingRef.current &&
-          (iosPress === undefined || iosPttPressRef.current === iosPress)) begin();
+          (localPress === undefined || localPttPressRef.current === localPress)) begin();
       }, 60);
     } else {
       begin();
@@ -4692,13 +4720,13 @@ export default function Taccuino() {
   const onBigButtonPressOut = () => {
     if (!pttRecordingRef.current) return;
     pttRecordingRef.current = false;
-    if (Platform.OS === "ios") {
-      setIosPttGestureActive(false);
-      iosPttPressRef.current += 1;
+    if (Platform.OS === "ios" || Platform.OS === "android") {
+      if (Platform.OS === "ios") setIosPttGestureActive(false);
+      localPttPressRef.current += 1;
       // During permission or recorder startup there is nothing to send.
       if (!recRef.current || statusRef.current !== "recording") return;
       void stopTalk(true).catch((error) => {
-        console.warn("[OLLENYA_PTT] iPhone recorder stop failed", error);
+        console.warn("[OLLENYA_PTT] local recorder stop failed", error);
       });
       return;
     }
