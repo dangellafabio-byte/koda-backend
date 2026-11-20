@@ -506,7 +506,7 @@ export class VoiceStreamSession {
     // 1) Apri WS
     const url = buildWsUrl();
     console.log(
-      `[OLLENYA_STREAM_CLIENT] opening WS → ${url} loc=${opts?.locationCity || "<none>"} route=${audioRoute}`
+      `[OLLENYA_STREAM_CLIENT] opening voice WebSocket route=${audioRoute}`
     );
     await this.openWs(url);
 
@@ -930,6 +930,7 @@ export class VoiceStreamSession {
       this.callbacks.onDone?.();
       this.forceCloseWs();
     } else if (type === "error") {
+      this.notifiedUpperOnClose = true;
       console.warn(`[OLLENYA_STREAM_CLIENT] server error: ${evt.message}`);
       this.callbacks.onError?.(evt.message || "server error");
     }
