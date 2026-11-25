@@ -2165,11 +2165,10 @@ export async function voiceStreamConverse(opts: {
   // A suspended socket may never send another event. Cancel must also wake
   // the player waiting for its first sentence, not just abort HTTP/playback.
   let liveSession: any = null;
-  let nativeAbortTask: Promise<void> | null = null;
   const onStreamAbort = () => {
     pipelineDone = true;
     notify();
-    try { nativeAbortTask = Promise.resolve(liveSession?.abort?.()).catch(() => {}); } catch {}
+    try { Promise.resolve(liveSession?.abort?.()).catch(() => {}); } catch {}
   };
   ac.signal.addEventListener("abort", onStreamAbort, { once: true });
 
@@ -2527,14 +2526,8 @@ export async function voiceStreamConverse(opts: {
     // Ora il ref è disponibile IMMEDIATAMENTE dopo new VoiceStreamSession(),
     // così stop() può essere invocato in qualsiasi momento durante start().
     if (ac.signal.aborted) return cancelled();
-    try { opts.onSession?.({
-      stop: () => session.stop(),
-      abort: async () => {
-        if (!ac.signal.aborted) ac.abort();
-        await nativeAbortTask;
-      },
-    }); } catch {}
-    if (ac.signal.aborted) { await nativeAbortTask; return cancelled(); }
+    try { opts.onSession?.(session); } catch {}
+    if (ac.signal.aborted) return cancelled();
 
     await session.start({
       autoEndpoint: opts.autoEndpoint,
@@ -2546,8 +2539,7 @@ export async function voiceStreamConverse(opts: {
       voiceId: opts.voiceId,
     });
   } catch (e: any) {
-    try { if (ac.signal.aborted) await nativeAbortTask; else await session.abort?.(); } catch {}
-    if (ac.signal.aborted) return cancelled();
+    try { await session.abort?.(); } catch {}
     clearOwnership();
     try { opts.onSession?.(null); } catch {}
     ac.signal.removeEventListener("abort", onStreamAbort);
@@ -2751,8 +2743,7 @@ export async function voiceStreamConverse(opts: {
     // il prossimo tap può partire.
     try { opts.onSession?.(null); } catch {}
     try {
-      if (ac.signal.aborted) await nativeAbortTask;
-      else if (sttSource === "native") await session.stop();
+      if (sttSource === "native") await session.stop();
       else await Promise.race([
         session.stop(),
         new Promise<void>((_, reject) =>
