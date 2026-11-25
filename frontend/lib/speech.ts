@@ -2024,6 +2024,7 @@ export const SpeechMod = {
 //  - ritorna quando arriva onDone (o errore/timeout)
 // =============================================================
 export async function voiceStreamConverse(opts: {
+  geolocationEnabled?: boolean;
   autoEndpoint?: boolean;
   ephemeral?: boolean;
   profileLang?: string;
@@ -2496,7 +2497,7 @@ export async function voiceStreamConverse(opts: {
     let locCity: string | undefined;
     let locRegion: string | undefined;
     let locCountry: string | undefined;
-    try {
+    if (opts.geolocationEnabled && !opts.ephemeral) try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const geo = require("./geolocation");
       // === FIX 2026-07-24 v63.7 — parità iOS/Android (defense-in-depth) ===
