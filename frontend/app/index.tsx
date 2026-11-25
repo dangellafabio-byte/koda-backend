@@ -525,8 +525,8 @@ export default function Taccuino() {
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
   const OLLENYA_BUILD_SHORT_TAG = Platform.OS === "android"
     ? "build-v70.22-android-ptt-playback"
-    : "build-v70.23-ios-ptt-cancel";
-  const OLLENYA_BUILD_DATE = "2026-11-25";
+    : "build-v70.20-hands-free-swipe";
+  const OLLENYA_BUILD_DATE = "2026-11-18";
   useEffect(() => {
     console.log(
       `[OLLENYA_BUILDTAG] ${OLLENYA_BUILD_SHORT_TAG} v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=${OLLENYA_BUILD_DATE} ` +
@@ -3568,8 +3568,8 @@ export default function Taccuino() {
   // Cambia solo la fonte audio/STT — la timeline UI, la safety, le actions,
   // e il TTS playback rimangono identici al flusso esistente.
   // ============================================================
-  const startTalkStreaming = async (localPress?: number) => {
-    const autoEndpoint = localPress === undefined && handsFreeRef.current;
+  const startTalkStreaming = async () => {
+    const autoEndpoint = handsFreeRef.current;
     if (status !== "idle" && status !== "speaking") return;
     // === GUARD 2026-06-28 v26 — protezione cascata ===
     // Anche se startTalkInternal ha già fatto i suoi check, blocchiamo
@@ -3603,7 +3603,6 @@ export default function Taccuino() {
       console.warn(`[OLLENYA_STREAM_CLIENT] audio prep failed: ${e}`);
     }
 
-    if (localPress !== undefined && localPttPressRef.current !== localPress) return;
     // Placeholder optimistic (verrà aggiornato quando arriva stt_final)
     const optimisticId = `local-stream-${Date.now()}`;
     const optimistic: TimelineEntry = {
@@ -3618,7 +3617,6 @@ export default function Taccuino() {
     setStatus("recording");
 
     const measureHf = Platform.OS === "android" && autoEndpoint;
-    let localFinalAt: number | null = null;
     let readyAt: number | null = null;
     let endAt: number | null = null;
     let receivedText = false;
@@ -3684,7 +3682,6 @@ export default function Taccuino() {
           }
         },
         onAudioStart: () => {
-          if (localFinalAt !== null) console.log(`[OLLENYA_LOCAL_STT] final_to_first_audio_ms=${Date.now() - localFinalAt}`);
           setStatus("speaking");
         },
         // === FIX 2026-07-24 v63.5 (Fix B) — mic really active ===
@@ -3729,7 +3726,6 @@ export default function Taccuino() {
           }
         },
         onUserFinal: (userText: string, conf: number | null, _dur: number | null) => {
-          localFinalAt = Date.now();
           if (measureHf) {
             const delay = endAt === null ? "unknown" : Date.now() - endAt;
             console.log(`[OLLENYA_ANDROID_HF] speechend_to_dispatch_ms=${delay}`);
@@ -3827,12 +3823,6 @@ export default function Taccuino() {
         // Se la bolla utente è ancora vuota, rimuoviamo l'optimistic.
         setTimeline((prev) => prev.filter((e) => e.id !== optimisticId || (e as any).text !== "…"));
 
-        if (result.error === "offline_recognition_unavailable") {
-          setCloseSessionPause(true);
-          closeSessionPauseRef.current = true;
-          setError("Riconoscimento offline non disponibile su questo dispositivo.");
-          return;
-        }
         // === v70.14.1 (Fabio 2026-11-18) — gesto interrotto ≠ errore rete ===
         // voice_stream_start_cancelled significa che stop() è stato chiamato
         // durante il warmup WS (utente ha rilasciato prestissimo o iOS ha
@@ -3840,7 +3830,7 @@ export default function Taccuino() {
         // nel backoff HF, e NON deve mostrare un messaggio allarmante.
         const isUserCancel =
           typeof result.error === "string" &&
-          (result.error.includes("voice_stream_start_cancelled") || result.error === "aborted");
+          result.error.includes("voice_stream_start_cancelled");
         if (isUserCancel) {
           console.log(
             "[OLLENYA_HF_BACKOFF] skip: user-cancelled during warmup (not a network error)"
@@ -3927,7 +3917,6 @@ export default function Taccuino() {
       setError("Errore voce streaming.");
       setTimeout(() => setError(null), 4000);
     } finally {
-      setTimeline(prev => prev.filter(e => e.id !== optimisticId || e.text !== "…"));
       setStatus("idle");
       endListener?.remove();
       if (measureHf && !receivedText) console.log("[OLLENYA_ANDROID_HF] no interim text received");
@@ -4053,8 +4042,8 @@ export default function Taccuino() {
     console.log(`[OLLENYA_FLAG] useVoiceStream=${useVoiceStream} (env="${process.env.EXPO_PUBLIC_USE_WS_VOICE_STREAM ?? "<missing>"}", platform=${Platform.OS})`);
     // Use the original device recorder for iPhone push-to-talk. Only upload
     // after release, so opening the voice socket cannot delay capture.
-    if (Platform.OS !== "web") {
-      return startTalkStreaming(localPress);
+    if (useVoiceStream && Platform.OS !== "web" && localPress === undefined) {
+      return startTalkStreaming();
     }
 
     setError(null);
@@ -4677,6 +4666,7 @@ export default function Taccuino() {
   // Guardia pttRecordingRef = true tra onPressIn e onPressOut → ci dice
   // SICURAMENTE se è stato un gesto PTT (non un tap in HF).
   const pttRecordingRef = useRef(false);
+  const [iosPttGestureActive, setIosPttGestureActive] = useState(false);
   const localPttPressRef = useRef(0);
   const localPttStartRef = useRef<Promise<void> | null>(null);
 
@@ -4710,6 +4700,7 @@ export default function Taccuino() {
     userInteractedRef.current = true;
     pttRecordingRef.current = true;
     const localPress = (Platform.OS === "ios" || Platform.OS === "android") ? ++localPttPressRef.current : undefined;
+    if (Platform.OS === "ios") setIosPttGestureActive(true);
     const begin = () => {
       if (localPress !== undefined) startLocalPtt(localPress);
       else {
@@ -4739,9 +4730,10 @@ export default function Taccuino() {
     if (!pttRecordingRef.current) return;
     pttRecordingRef.current = false;
     if (Platform.OS === "ios" || Platform.OS === "android") {
+      if (Platform.OS === "ios") setIosPttGestureActive(false);
       localPttPressRef.current += 1;
       // During permission or recorder startup there is nothing to send.
-      if (!streamingSessionRef.current && statusRef.current !== "recording") return;
+      if (!recRef.current || statusRef.current !== "recording") return;
       void stopTalk(true).catch((error) => {
         console.warn("[OLLENYA_PTT] local recorder stop failed", error);
       });
@@ -7162,8 +7154,9 @@ export default function Taccuino() {
         pagingEnabled
         showsHorizontalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        // Keep gesture policy stable throughout a PTT press.
-        canCancelContentTouches={Platform.OS !== "ios" || handsFree}
+        // Keep the pager available except while the iOS voice button is held.
+        scrollEnabled={!iosPttGestureActive}
+        canCancelContentTouches={!iosPttGestureActive}
         onScroll={(e) => {
           // === FIX FLASH ORB DURANTE SWIPE (richiesta utente 2026-06) ===
           // Prima viewMode si aggiornava SOLO al termine del momentum
