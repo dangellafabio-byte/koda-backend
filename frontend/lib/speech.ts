@@ -2191,7 +2191,7 @@ export async function voiceStreamConverse(opts: {
   };
   // Lazy import per evitare cicli (voiceStream.ts → ... → speech.ts)
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { VoiceStreamSession } = require("./voiceStream");
+
 
   // === FASE B — STT ON-DEVICE (feature flag) ===
   // Se EXPO_PUBLIC_USE_CLIENT_STT=true E la piattaforma supporta STT
@@ -2201,35 +2201,16 @@ export async function voiceStreamConverse(opts: {
   //     su Android 12+ o cloud fallback su OS più vecchi)
   // Altrimenti fallback automatico al percorso Deepgram (voiceStream.ts,
   // comportamento pre-Fase B — usato solo come safety net legacy).
-  const useClientStt = process.env.EXPO_PUBLIC_USE_CLIENT_STT === "true";
-  let SessionCtor: any = VoiceStreamSession;
-  let sttSource: "native" | "deepgram" = "deepgram";
-  let sttEngine = "deepgram";
-  if (useClientStt) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { VoiceClientSttSession } = require("./voiceClientStt");
-      const support = await VoiceClientSttSession.isSupported();
-      if (support.supported) {
-        SessionCtor = VoiceClientSttSession;
-        sttSource = "native";
-        sttEngine =
-          Platform.OS === "ios" ? "apple_sfspeechrecognizer" : "google_speechrecognizer";
-        console.log(
-          `[OLLENYA_STT_SOURCE] engine=${sttEngine} platform=${Platform.OS} ondev=true`
-        );
-      } else {
-        console.log(
-          `[OLLENYA_STT_SOURCE] engine=deepgram (fallback, native unsupported: ${support.reason})`
-        );
-      }
-    } catch (e: any) {
-      console.log(
-        `[OLLENYA_STT_SOURCE] engine=deepgram (fallback, native probe failed: ${e?.message || e})`
-      );
-    }
-  } else {
-    console.log(`[OLLENYA_STT_SOURCE] engine=deepgram (feature flag off)`);
+  const sttSource = "native";
+  let SessionCtor: any;
+  try {
+    const { VoiceClientSttSession } = require("./voiceClientStt");
+    const support = await VoiceClientSttSession.isSupported();
+    if (!support.supported) throw new Error(support.reason);
+    SessionCtor = VoiceClientSttSession;
+  } catch {
+    clearOwnership();
+    return { ok: false, error: "offline_recognition_unavailable" };
   }
 
   if (ac.signal.aborted) return cancelled();
@@ -2514,7 +2495,7 @@ export async function voiceStreamConverse(opts: {
         new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3500)),
       ]);
       const geoT0 = Date.now();
-      try { await refreshWithTimeout; } catch {}
+      void refreshWithTimeout.catch(() => false);
       const geoElapsed = Date.now() - geoT0;
       if (geoElapsed > 300) {
         console.log(`[OLLENYA_GEO] refresh SLOW: ${geoElapsed}ms (cap 3500ms; expected <100ms cache-hit)`);

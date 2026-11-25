@@ -245,7 +245,7 @@ export class VoiceClientSttSession {
       //   è già molto meglio del path Deepgram+AAC attuale (che è ROTTO).
       //   L'utente potrebbe consumare data mobile per lo STT online, ma è
       //   l'unica cosa che funziona finché non ci sono modelli offline.
-      if (Platform.OS === "ios") {
+      {
         const ondev = ExpoSpeechRecognitionModule.supportsOnDeviceRecognition();
         if (!ondev) {
           return { supported: false, reason: "no_ondevice_it" };
@@ -434,44 +434,18 @@ export class VoiceClientSttSession {
     }
 
     if (this.stopRequested || this.doneReceived) throw new Error("voice_stream_start_cancelled");
-    // 4) Apri WS
-    const url = buildWsUrl();
-    // === FIX 2026-07-23 v5 — WARMUP AWAITED PRIMA DI WS =================
-    // Cold start Railway: se il backend è "andato a dormire" per inattività,
-    // il primo WebSocket handshake può prendere 5-12s (log 23/07: 11810ms).
-    // La funzione `prewarmMic()` chiamata da speech.ts già fa una POST a
-    // /api/voice/warmup fire-and-forget → sveglia Railway. Ma il WS parte
-    // in parallelo immediatamente dopo → i due arrivano insieme e Railway
-    // deve completare il boot prima di poter accettare l'upgrade WS.
-    //
-    // Qui aspettiamo esplicitamente il warmup HTTP (max 5s). Cold start:
-    // il POST completa in 5-8s, poi il WS apre in ~500ms → ~5-6s totali
-    // (dimezzato). Warm case: POST in 100-300ms → WS in 500ms → 500-800ms
-    // (invariato rispetto a prima).
-    try {
-      const httpUrl = url.split("?")[0].replace(/^ws/, "http").replace(/\/api\/voice\/stream$/, "/api/voice/warmup");
-      const ctrl = new AbortController();
-      this.warmupAbort = ctrl;
-      const t0 = Date.now();
-      const timer = setTimeout(() => ctrl.abort(), 5000);
-      try {
-        await fetch(httpUrl, { method: "POST", signal: ctrl.signal });
-        clearTimeout(timer);
-        console.log(`[${TAG}] warmup HTTP done in ${Date.now() - t0}ms`);
-      } catch (e: any) {
-        clearTimeout(timer);
-        console.log(`[${TAG}] warmup HTTP failed/timeout in ${Date.now() - t0}ms: ${e?.message || e}`);
-        // Non blocchiamo — proviamo comunque il WS. Se Railway è ancora
-        // freddo, il WS handshake attenderà quel che resta del boot.
-      }
-    } catch {}
-    if (this.stopRequested || this.doneReceived) throw new Error("voice_stream_start_cancelled");
-    this.warmupAbort = null;
-    console.log(`[${TAG}] opening WS route=${this.audioRoute}`);
-    await this.openWs(url);
-    if (this.stopRequested || this.doneReceived) throw new Error("voice_stream_start_cancelled");
+    // Start local recognition before any network operation.
+    this.connectionOptions = opts;
+    await this.startRecognition(opts?.profileLang || "it");
+  }
 
+  private androidReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+  private connectionOptions: Parameters<VoiceClientSttSession["start"]>[0];
 
+  private async connectForFinal(): Promise<void> {
+    const opts = this.connectionOptions;
+    await this.openWs(buildWsUrl());
+    if (this.doneReceived) throw new Error("voice_stream_start_cancelled");
     // 5) Frame start → dice al backend: NON aspettare audio binario, aspettare
     //    invece un transcript_from_client. Nuovo campo: stt_source dinamico
     //    per platform. Backend voice_stream.py accetta entrambe le varianti.
@@ -498,51 +472,12 @@ export class VoiceClientSttSession {
       console.log(`[${TAG}] WS start sent voice_id=${opts.voiceId} (client-authoritative)`);
     }
 
-    if (this.stopRequested) {
-      // === FIX 2026-07-24 v63.5 — Xiaomi cascata infinita (Fix A) ===
-      // BUG OSSERVATO nel log Xiaomi (24/07 19:47): startTalkInternal
-      // partiva, streamingSessionRef veniva stored, ma DURANTE la fase
-      // async pre-WS (setAudioModeAsync + detectAudioRoute + warmup +
-      // openWs, ~1s) qualcosa (tap utente impaziente o HF_LOOP che rifira)
-      // chiamava stop() → stopRequested=true. Quando la WS finalmente
-      // apriva, l'abort qui sotto mandava "end" pulito al server, il
-      // server rispondeva "done" pulito, voiceStreamConverse tornava
-      // result.ok=true, HF_BACKOFF azzerava il counter (was 2) e HF_LOOP
-      // ripartiva subito → nuova sessione, stesso abort, stesso "done"
-      // fasullo → CASCATA INFINITA di sessioni abortite senza che
-      // startRecognition() venisse MAI chiamata (mic mai partito, zero
-      // audio catturato). 156 eventi in 4 secondi = ~40 sessioni al sec.
-      //
-      // Fix: propaghiamo un ERRORE esplicito all'upper layer. Così
-      // pipelineError si popola, result.ok=false, HF_BACKOFF conta il
-      // fallimento (#1, #2, #3) e dopo la threshold mette in pausa il
-      // loop mostrando "Connessione persa. Tocca il cerchio per
-      // riprovare." → la cascata si spegne, l'utente vede il problema.
-      console.log(`[${TAG}] stopRequested=true after openWs → abort startup (propagating error, NOT clean done)`);
-      // Marca lo stato come già-notificato così il ws.onclose non genera
-      // un secondo onError/onDone spurii.
-      this.notifiedUpperOnClose = true;
-      this.doneReceived = true;
-      try {
-        this.callbacks.onError?.("aborted_pre_recognition");
-      } catch {}
-      try {
-        this.forceCloseWs();
-      } catch {}
-      return;
-    }
-
     this.startKeepalive();
-
-    // 6) Avvia SFSpeechRecognizer on-device (italiano)
-    this.startRecognition(opts?.profileLang || "it").catch((e: any) =>
-      console.log(`[${TAG}] startRecognition threw: ${e?.message || e}`)
-    );
   }
 
   private async startRecognition(profileLang: string): Promise<void> {
     const lang = profileLang === "it" ? "it-IT" : profileLang;
-    console.log(`[${TAG}] startRecognition lang=${lang} platform=${Platform.OS} requiresOnDevice=${Platform.OS === "ios"}`);
+    console.log(`[${TAG}] startRecognition lang=${lang} platform=${Platform.OS} requiresOnDevice=true`);
 
     // === FIX 2026-07-26 v64.0 — Pre-abort Android reset ===
     // Su Google SpeechRecognizer (Android), specialmente sui turni
@@ -653,7 +588,10 @@ export class VoiceClientSttSession {
             if (this.stopRequested && this.iosPttStopResolve) this.finalizeIosPttStop();
             return;
           }
-          if (this.androidUtterance) return; // final segment, not end of user turn
+          if (this.androidUtterance) {
+            if (!this.autoEndpoint && this.stopRequested) void this.dispatchFinalToBackend();
+            return;
+          }
           // === v70.16 (Fabio 19/11/2026) — PTT: NO dispatch su isFinal =====
           // In PTT (autoEndpoint=false) il risultato finale va CONSERVATO e
           // inviato UNA SOLA volta al rilascio effettivo del dito (stop()).
@@ -777,6 +715,7 @@ export class VoiceClientSttSession {
       // Se non abbiamo ancora inviato final ma abbiamo un transcript accumulato,
       // consideriamolo final (safety net per casi in cui iOS chiude senza
       // isFinal=true).
+      if (this.androidReleaseTimer !== null) return;
       if (this.currentTranscript && !this.doneReceived) {
         console.log(
           `[${TAG}] end fired without isFinal → treating currentTranscript as final`
@@ -869,7 +808,7 @@ export class VoiceClientSttSession {
         // On-device: preferito su entrambe, ma richiesto SOLO su iOS
         // (dove abbiamo già verificato in isSupported()). Su Android
         // lasciamo che il sistema decida (potrebbe non essercelo).
-        requiresOnDeviceRecognition: Platform.OS === "ios",
+        requiresOnDeviceRecognition: true,
       };
       if (Platform.OS === "ios") {
         startOpts.iosCategory = {
@@ -968,6 +907,7 @@ export class VoiceClientSttSession {
     // handler, timeout, ecc.) diventa no-op. Evita 30+ duplicati che iOS
     // può innescare emettendo "end" ripetutamente.
     this.dispatched = true;
+    const finalAt = Date.now();
     const text = (this.currentTranscript || "").trim();
     const conf = this.currentConfidence;
     const durMs = this.speechStartMs
@@ -984,28 +924,6 @@ export class VoiceClientSttSession {
     try {
       this.callbacks.onFinal?.(text, conf, durMs);
     } catch {}
-
-    // Manda il transcript al backend Ollenya
-    try {
-      this.sendJson({
-        type: "transcript_from_client",
-        text,
-        confidence: conf,
-        duration_ms: durMs,
-        lang: "it-IT",
-        route: this.audioRoute,
-        // === OPZIONE B (2026-07-24) — engine dinamico per platform ===
-        // Backend usa questo campo per skippare AUDIO_HONESTY (STT on-device
-        // ha già filtro acustico HW, la confidence è irrelevante). Google
-        // SpeechRecognizer on-device Android è affidabile quanto Apple.
-        stt_engine:
-          Platform.OS === "ios"
-            ? "apple_sfspeechrecognizer"
-            : "google_speechrecognizer",
-      });
-    } catch (e: any) {
-      console.log(`[${TAG}] sendJson(transcript_from_client) FAILED: ${e?.message || e}`);
-    }
 
     // Rimuovi listeners SUBITO dopo dispatch. Impedisce che ulteriori "end"
     // events di iOS re-innescano handler (anche col guard `dispatched`
@@ -1118,6 +1036,29 @@ export class VoiceClientSttSession {
         );
       }
     }
+    if (this.doneReceived) return;
+    if (!/[\p{L}\p{N}]/u.test(text)) {
+      this.doneReceived = true;
+      this.callbacks.onError?.("no_speech");
+      return;
+    }
+    try {
+      await this.connectForFinal();
+      if (this.doneReceived) return;
+      if (this.ws?.readyState !== 1) throw new Error("ws_not_open");
+      this.ws.send(JSON.stringify({type: "transcript_from_client", text,
+        confidence: conf, duration_ms: durMs, lang: "it-IT", route: this.audioRoute,
+        stt_engine: Platform.OS === "ios" ? "apple_sfspeechrecognizer" : "google_speechrecognizer"}));
+      console.log(`[OLLENYA_LOCAL_STT] final_to_send_ms=${Date.now() - finalAt}`);
+    } catch {
+      if (!this.doneReceived && !this.notifiedUpperOnClose) {
+        this.notifiedUpperOnClose = true;
+        this.doneReceived = true;
+        this.callbacks.onError?.("local_transcript_send_failed");
+      }
+      this.forceCloseWs();
+    }
+
   }
 
   async stop(): Promise<void> {
@@ -1138,6 +1079,7 @@ export class VoiceClientSttSession {
       `ptt=${!this.autoEndpoint} buffered_chars=${(this.currentTranscript || "").length} ` +
       `caller=${(new Error().stack || "").split("\n").slice(1, 4).join(" <- ")}`
     );
+    if (this.dispatched) return;
     this.stopRequested = true;
     this.warmupAbort?.abort();
     this.cancelWsOpen?.();
@@ -1152,6 +1094,14 @@ export class VoiceClientSttSession {
       }
       await this.iosPttStopPromise;
       await this.drainAudioTasks();
+      return;
+    }
+    if (Platform.OS === "android" && !this.autoEndpoint && this.androidUtterance) {
+      if (this.androidReleaseTimer !== null) return;
+      this.androidReleaseTimer = setTimeout(() => {
+        if (!this.dispatched && !this.doneReceived) this.finishIosPttWithoutDispatch("speech_not_recognized");
+      }, 1500);
+      try { ExpoSpeechRecognitionModule.stop(); } catch {}
       return;
     }
     try {
@@ -1171,7 +1121,9 @@ export class VoiceClientSttSession {
       // già gestito dallo strato superiore).
       console.log(`[${TAG}] stop() → no transcript, sending {type:end}`);
       try {
-        this.sendJson({ type: "end" });
+        this.callbacks.onError?.("no_speech");
+        this.doneReceived = true;
+        this.removeListeners();
       } catch {}
     }
     // Safety timeout — se dopo 40s il server non manda done, chiudi WS
@@ -1375,7 +1327,7 @@ export class VoiceClientSttSession {
       }, 10000);
       this.cancelWsOpen = cancel;
       ws.onopen = () => {
-        if (settled || this.stopRequested || this.doneReceived) { cancel(); return; }
+        if (settled || this.doneReceived) { cancel(); return; }
         console.log(`[${TAG}] WS opened in ${Date.now() - opened}ms`);
         finish();
       };
@@ -1564,6 +1516,8 @@ export class VoiceClientSttSession {
   }
 
   private removeListeners(): void {
+    if (this.androidReleaseTimer !== null) clearTimeout(this.androidReleaseTimer);
+    this.androidReleaseTimer = null;
     if (this.iosPttStopTimer !== null) clearTimeout(this.iosPttStopTimer);
     this.iosPttStopTimer = null;
     const resolveIosStop = this.iosPttStopResolve;
