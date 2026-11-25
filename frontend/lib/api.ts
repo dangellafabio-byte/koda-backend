@@ -287,7 +287,7 @@ export const api = {
   converse: (
     text: string,
     audio_duration_ms?: number,
-    opts?: { ephemeral?: boolean; bridged_secrets?: string[]; is_voice_turn?: boolean; demo_mode?: boolean }
+    opts?: { ephemeral?: boolean; bridged_secrets?: string[]; is_voice_turn?: boolean; demo_mode?: boolean; location_city?: string }
   ) =>
     jsonReq<{
       user_entry: TimelineEntry;
@@ -307,6 +307,7 @@ export const api = {
         // True SOLO nei demo dell'onboarding. Backend forza ephemeral=true + skip
         // recent_docs → Ollenya risponde SENZA memoria pregressa dell'utente.
         demo_mode: !!opts?.demo_mode,
+        location_city: opts?.ephemeral || opts?.demo_mode ? undefined : opts?.location_city,
         // PORTA FUORI: segreti DECRIFRATI dal client con la parola segreta,
         // inviati one-shot al backend solo per questo turno (forza ephemeral).
         // La parola segreta NON viene mai inviata.
