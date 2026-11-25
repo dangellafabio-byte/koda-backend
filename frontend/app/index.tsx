@@ -525,8 +525,8 @@ export default function Taccuino() {
   // in realtà erano dentro. Ora l'unica fonte di verità è QUI SOPRA.
   const OLLENYA_BUILD_SHORT_TAG = Platform.OS === "android"
     ? "build-v70.22-android-ptt-playback"
-    : "build-v70.20-hands-free-swipe";
-  const OLLENYA_BUILD_DATE = "2026-11-18";
+    : "build-v70.23-ios-ptt-cancel";
+  const OLLENYA_BUILD_DATE = "2026-11-25";
   useEffect(() => {
     console.log(
       `[OLLENYA_BUILDTAG] ${OLLENYA_BUILD_SHORT_TAG} v64.3-voice-change-diag+railway-hardcoded+diag-card+ws-piggyback build=${OLLENYA_BUILD_DATE} ` +
@@ -3840,7 +3840,7 @@ export default function Taccuino() {
         // nel backoff HF, e NON deve mostrare un messaggio allarmante.
         const isUserCancel =
           typeof result.error === "string" &&
-          result.error.includes("voice_stream_start_cancelled");
+          (result.error.includes("voice_stream_start_cancelled") || result.error === "aborted");
         if (isUserCancel) {
           console.log(
             "[OLLENYA_HF_BACKOFF] skip: user-cancelled during warmup (not a network error)"
@@ -4677,7 +4677,6 @@ export default function Taccuino() {
   // Guardia pttRecordingRef = true tra onPressIn e onPressOut → ci dice
   // SICURAMENTE se è stato un gesto PTT (non un tap in HF).
   const pttRecordingRef = useRef(false);
-  const [iosPttGestureActive, setIosPttGestureActive] = useState(false);
   const localPttPressRef = useRef(0);
   const localPttStartRef = useRef<Promise<void> | null>(null);
 
@@ -4711,7 +4710,6 @@ export default function Taccuino() {
     userInteractedRef.current = true;
     pttRecordingRef.current = true;
     const localPress = (Platform.OS === "ios" || Platform.OS === "android") ? ++localPttPressRef.current : undefined;
-    if (Platform.OS === "ios") setIosPttGestureActive(true);
     const begin = () => {
       if (localPress !== undefined) startLocalPtt(localPress);
       else {
@@ -4741,7 +4739,6 @@ export default function Taccuino() {
     if (!pttRecordingRef.current) return;
     pttRecordingRef.current = false;
     if (Platform.OS === "ios" || Platform.OS === "android") {
-      if (Platform.OS === "ios") setIosPttGestureActive(false);
       localPttPressRef.current += 1;
       // During permission or recorder startup there is nothing to send.
       if (!streamingSessionRef.current && statusRef.current !== "recording") return;
@@ -7165,9 +7162,8 @@ export default function Taccuino() {
         pagingEnabled
         showsHorizontalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        // Keep the pager available except while the iOS voice button is held.
-        scrollEnabled={!iosPttGestureActive}
-        canCancelContentTouches={!iosPttGestureActive}
+        // Keep gesture policy stable throughout a PTT press.
+        canCancelContentTouches={Platform.OS !== "ios" || handsFree}
         onScroll={(e) => {
           // === FIX FLASH ORB DURANTE SWIPE (richiesta utente 2026-06) ===
           // Prima viewMode si aggiornava SOLO al termine del momentum
