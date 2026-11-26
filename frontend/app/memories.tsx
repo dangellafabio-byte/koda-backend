@@ -39,6 +39,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import { api } from "../lib/api";
+import { useLocalMemory } from "../lib/localMemorySession";
 
 // Tipo semantic memory allineato all'API
 type Memory = {
@@ -86,6 +87,7 @@ function importanceDots(importance: number): string {
 
 export default function MemoriesScreen() {
   const router = useRouter();
+  const { enabled: localMemoryEnabled } = useLocalMemory();
   const insets = useSafeAreaInsets();
 
   const [loading, setLoading] = useState(true);
@@ -277,6 +279,12 @@ export default function MemoriesScreen() {
         dai vostri scambi. Sono tuoi: puoi esportarli, cancellarne uno singolo,
         oppure cancellarli tutti in un colpo solo.
       </Text>
+
+      {localMemoryEnabled && (
+        <TouchableOpacity style={styles.pillBtn} onPress={() => router.push("/local-memories" as never)}>
+          <Text style={styles.subtitle}>Ricordi su questo dispositivo</Text>
+        </TouchableOpacity>
+      )}
 
       {/* Controls */}
       {items.length > 0 && (

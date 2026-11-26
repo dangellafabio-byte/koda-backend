@@ -1,3 +1,5 @@
+import {getAuthToken as activeVoiceToken} from '../lib/authToken';
+import { useLocalMemory } from "../lib/localMemorySession";
 import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import {
   View,
@@ -387,6 +389,7 @@ function detectCloseSessionClientSide(text: string | null | undefined): boolean 
 
 
 export default function Taccuino() {
+  const { beginTurn: beginLocalMemoryTurn, deviceText, deviceVoice, converseOnDevice } = useLocalMemory();
   // === v64.14 PROFILING — conta render del root e attiva FPS monitor
   // (attivi solo con EXPO_PUBLIC_KODA_PERF_DIAG=1)
   useRenderCounter("KODA_PERF_ROOT");
@@ -3021,6 +3024,7 @@ export default function Taccuino() {
       const fromText = !!opts?.fromText;
       const txt = text.trim();
       if (!txt) return;
+      const observeLocalMemory = beginLocalMemoryTurn(fromText ? "text" : "ptt", confessionalMode);
       setError(null);
 
       // === FREEMIUM GATE DISABILITATO (richiesta utente giugno 2026) ========
@@ -3062,7 +3066,7 @@ export default function Taccuino() {
       if (!isFortezzaTurn) {
         try {
           traceMark("safety:request");
-          const sc = await api.safetyCheck(txt, false);
+          const sc = (fromText ? deviceText : deviceVoice) ? await api.deviceSafety(txt) : await api.safetyCheck(txt, false);
           traceMark("safety:response");
           if (sc.risk_detected) {
             // Rimuovi la bolla optimistic (l'utente vedrà la sua bolla
@@ -3075,6 +3079,12 @@ export default function Taccuino() {
             return; // STOP: niente invio a Claude, niente counter increment
           }
         } catch (e) {
+          if (fromText ? deviceText : deviceVoice) {
+            setTimeline(prev => prev.filter(entry => entry.id !== optimistic.id));
+            setStatus("idle");
+            setError("Controllo della conversazione non disponibile. Riprova.");
+            return;
+          }
           // Safety check fallisce → degradiamo gracefully (continuiamo).
           // Il prompt injection lato server.py rimane attivo come failsafe.
         }
@@ -3100,7 +3110,8 @@ export default function Taccuino() {
         //
         // Funziona sia in normale che in confessionale-soft (ephemeral).
         // Sealed/cifrato passa per il branch sopra (mai per qui).
-        const useFastPath = !fromText && (profile?.settings.voice_response !== false);
+        const privateVoice = !fromText && deviceVoice && !confessionalMode;
+        const useFastPath = !privateVoice && !fromText && (profile?.settings.voice_response !== false);
         if (useFastPath) {
           try {
             // Watchdog: se entro 25s non parte l'audio, abortiamo.
@@ -3255,6 +3266,7 @@ export default function Taccuino() {
               setStatus("thinking");
               // Continua col blocco standard sotto.
             } else {
+              observeLocalMemory(txt);
               // === BUG FIX 2026-06-26 ROOT CAUSE ===
               // PRIMA qui c'era `setProfile(await api.getProfile())` dopo
               // OGNI conversazione per sincronizzare counters/memory_summary
@@ -3289,21 +3301,30 @@ export default function Taccuino() {
         // solo sui turni voce. Chat scritta (fromText=true) resta sempre
         // illimitata come da policy prodotto (Fabio 2026-06).
         const geo = (profile?.settings as any)?.geolocation_enabled === true ? await import("../lib/geolocation") : null;
-        const res = await api.converse(txt, undefined, {
+        const res = (fromText && deviceText) || privateVoice ? await converseOnDevice(txt, privateVoice) : await api.converse(txt, undefined, {
           ephemeral: false,
           is_voice_turn: !fromText,
           location_city: geo?.getCachedLocation()?.city,
         });
+        observeLocalMemory(txt);
         traceMark("converse:response");
         // Replace optimistic with real, then add AI entry.
         setTimeline((prev) => {
           const filtered = prev.filter((e) => e.id !== optimistic.id);
           return [...filtered, res.user_entry, res.ai_entry];
         });
-        setProfile(res.profile);
+        if ("profile" in res) setProfile(res.profile as Profile);
         // Execute any actions (notifications, etc.) requested by the AI
         runActions(res.ai_entry.actions || []);
-        await speakIfEnabled(res.ai_entry.voice_text || res.ai_entry.text, res.ai_entry.tone || "neutral", { fromText });
+        if (privateVoice) {
+          const audio = "audio_mp3" in res ? res.audio_mp3 : undefined;
+          if (typeof audio === "string" && audio) {
+            setStatus("speaking");
+            try {
+              if (!await SpeechMod.playPrivateVoice(audio)) setError("Audio non disponibile. La risposta è in chat.");
+            } finally { setStatus("idle"); }
+          } else { setStatus("idle"); }
+        } else await speakIfEnabled(res.ai_entry.voice_text || res.ai_entry.text, res.ai_entry.tone || "neutral", { fromText });
         // === FREEMIUM COUNTER (standard flow) ===
         if (!isFortezzaTurn) {
           api.freemiumIncrement()
@@ -3437,7 +3458,7 @@ export default function Taccuino() {
         setTimeline((prev) => prev.filter((e) => e.id !== optimistic.id));
       }
     },
-    [speakIfEnabled, runActions, profile]
+    [speakIfEnabled, runActions, profile, beginLocalMemoryTurn, deviceText, deviceVoice, converseOnDevice]
   );
 
   // === CODA CONSAPEVOLE ===
@@ -3579,6 +3600,8 @@ export default function Taccuino() {
       console.log("[OLLENYA_STREAM_GUARD] startTalkStreaming aborted: session already active");
       return;
     }
+    const observeLocalMemory = beginLocalMemoryTurn(autoEndpoint ? "hands-free" : "ptt", confessionalMode);
+    let localFinalText = "";
     setError(null);
     if (!convActiveRef.current) emptyTurnsRef.current = 0;
     unlockSpeech().catch(() => {});
@@ -3626,7 +3649,10 @@ export default function Taccuino() {
 
     try {
       const { voiceStreamConverse } = require("../lib/speech");
+      const captureToken = activeVoiceToken();
+      const localCapture = deviceVoice && !confessionalMode;
       const result = await voiceStreamConverse({
+        localTranscriptOnly: localCapture,
         autoEndpoint,
         ephemeral: confessionalMode,
         geolocationEnabled: (profile?.settings as any)?.geolocation_enabled === true,
@@ -3760,6 +3786,7 @@ export default function Taccuino() {
           // il contatore no-speech, e resetta il contatore così i prossimi
           // eventuali no_speech ripartono dal delay più corto (450ms).
           turnHadSpeechRef.current = true;
+          localFinalText = userText;
           turnHadUnrecognizedSpeechRef.current = false;
           if (noSpeechCountRef.current > 0) {
             console.log(`[OLLENYA_HF_BACKOFF_NOSPEECH] user parlato → reset counter (era ${noSpeechCountRef.current})`);
@@ -3774,7 +3801,7 @@ export default function Taccuino() {
           if (typeof conf === "number") {
             lastSttConfidenceRef.current = conf;
             console.log(
-              `[OLLENYA_STREAM_CLIENT] user_final conf=${conf.toFixed(3)} text=${JSON.stringify(userText)}`
+              `[OLLENYA_STREAM_CLIENT] user_final conf=${conf.toFixed(3)} chars=${userText.length}`
             );
           }
           // === FIX 2026-07-03 v45 CLIENT-SIDE close_session heuristic ===
@@ -3784,7 +3811,7 @@ export default function Taccuino() {
           // Questo funziona sempre appena c'è il testo trascritto.
           if (detectCloseSessionClientSide(userText)) {
             console.log(
-              `[OLLENYA_CLOSE_SESSION] (client heuristic) matched → pausing HF loop | text=${JSON.stringify(userText)}`
+              `[OLLENYA_CLOSE_SESSION] (client heuristic) matched → pausing HF loop | chars=${userText.length}`
             );
             setCloseSessionPause(true);
             closeSessionPauseRef.current = true;
@@ -3890,6 +3917,12 @@ export default function Taccuino() {
           setTimeout(() => setError(null), 4000);
         }
       } else {
+        if (localCapture && localFinalText) {
+          setTimeline(prev => prev.filter(entry => entry.id !== optimisticId));
+          if (captureToken && captureToken === activeVoiceToken()) await sendText(localFinalText);
+          return;
+        }
+        observeLocalMemory(localFinalText);
         streamTurnSilentRef.current = !turnHadSpeechRef.current && !turnHadUnrecognizedSpeechRef.current;
         // Successo → azzera il counter dei fallimenti consecutivi
         if (wsFailureCountRef.current > 0) {
@@ -4497,6 +4530,7 @@ export default function Taccuino() {
         clearTimeout(_stt_timer);
         const isAbort = e?.name === "AbortError";
         console.warn(`[transcribe] ${sttProvider} ${isAbort ? "TIMEOUT 12s" : "network error"}: ${e?.message || e}`);
+        if (deviceVoice) throw new Error("Transcription unavailable");
         // Fallback rapido a Whisper con nuova FormData + nuovo timeout
         const fd_fb = buildFormData(res);
         const _wh_controller = new AbortController();
@@ -4516,6 +4550,7 @@ export default function Taccuino() {
       const _kt_deepgram_done = Date.now();
       console.log(`[OLLENYA_TIMING] UPLOAD_END+STT_END @${_kt_deepgram_done} (upload+stt_ms=${_kt_deepgram_done - _kt_upload_start})`);
       if (!r.ok) {
+        if (deviceVoice) throw new Error("Transcription unavailable");
         console.warn(`[transcribe] ${sttProvider} failed (${r.status}), fallback to Whisper`);
         // Ricreo FormData perché il body è già stato consumato
         const fd2 = buildFormData(res);
@@ -4552,11 +4587,11 @@ export default function Taccuino() {
       // pannello diagnostics dell'app. Se vediamo:
       //   [OLLENYA_STT_CLIENT] text="hola como estas" → Deepgram sbaglia foneticamente
       //   [OLLENYA_STT_CLIENT] text="ciao come stai" → STT OK, problema nel prompt LLM
-      console.log(`[OLLENYA_STT_CLIENT] text=${JSON.stringify(txt)} chars=${txt.length}`);
+      console.log(`[OLLENYA_STT_CLIENT] chars=${txt.length}`);
       const cls = classifyTranscript(txt);
       if (cls !== "ok") {
         // === DIAGNOSTIC LOG (fix 2026-06 cold-start) ===
-        console.warn(`[stopTalk] empty/garbled transcript. convActive=${convActiveRef.current}, txt="${txt}", cls=${cls}`);
+        console.warn(`[stopTalk] empty/garbled transcript. convActive=${convActiveRef.current}, chars=${txt.length}, cls=${cls}`);
         // CODA CONSAPEVOLE: spiegale all'utente cosa è successo
         if (convActiveRef.current) emptyTurnsRef.current += 1;
         let line: string;

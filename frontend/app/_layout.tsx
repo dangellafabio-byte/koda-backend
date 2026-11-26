@@ -13,6 +13,7 @@ import { api } from "../lib/api";
 import { prewarmAudio } from "../lib/speech";
 import { loadProfileCache } from "../lib/localCache";
 import { AuthProvider, useAuth } from "../lib/auth";
+import { LocalMemoryProvider } from "../lib/localMemorySession";
 // === INWORLD TTS A/B (dev, 2026-10 Fabio) ===============================
 // Idratazione sincrona della preferenza TTS prima di qualsiasi componente
 // che carichi asset audio statici (intro, LA, microdemo, paywall, quota).
@@ -267,15 +268,17 @@ function RootLayout() {
           >
             <ThemedShell>
               <AuthGate>
-                <TrialWatcher>
-                  <Stack
-                    screenOptions={{
-                      headerShown: false,
-                      contentStyle: { backgroundColor: "transparent" },
-                      animation: "fade",
-                    }}
-                  />
-                </TrialWatcher>
+                <LocalMemoryProvider>
+                  <TrialWatcher>
+                    <Stack
+                      screenOptions={{
+                        headerShown: false,
+                        contentStyle: { backgroundColor: "transparent" },
+                        animation: "fade",
+                      }}
+                    />
+                  </TrialWatcher>
+                </LocalMemoryProvider>
               </AuthGate>
               {/* Overlay offline globale — sopra qualsiasi screen ma
                   pointer-events="none" quindi non blocca nulla.
