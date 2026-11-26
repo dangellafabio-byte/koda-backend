@@ -1,0 +1,4 @@
+const a=require('node:assert/strict');const {recall}=require('./build/memoryRetrieval');
+const f=[{key:'friend.teo',value:'amico',revision:2,deleted:false},{key:'home.city',value:'Milano',revision:1,deleted:false},{key:'friend.old',value:'segreto',revision:3,deleted:true},{key:'hobby',value:'🎵'.repeat(100),revision:1,deleted:false}];
+const r=(q,o={})=>JSON.parse(recall(f,q,{ephemeral:false,...o}));
+a.deepEqual(r('Teo'),[{key:'friend.teo',value:'amico'}]);a.deepEqual(r('Milano',{ephemeral:true}),[]);a.deepEqual(r(''),[]);a.deepEqual(r('ignoto'),[]);a.deepEqual(r('ignoto',{semanticKeys:['friend.old','missing']}),[]);a.equal(r('ignoto',{semanticKeys:['friend.teo','friend.teo']}).length,1);a.equal(r('Teo Milano',{maxFacts:1}).length,1);a.deepEqual(r('hobby',{maxBytes:100}),[]);a.ok(Buffer.byteLength(recall(f,'Teo Milano',{ephemeral:false,maxBytes:45}))<=45);a.throws(()=>r('Teo',{maxBytes:1}));console.log('10 retrieval assertions passed');
