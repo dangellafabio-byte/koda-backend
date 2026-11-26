@@ -63,6 +63,26 @@ function harness(os = 'android') {
 const assert = require('node:assert/strict');
 
 (async () => {
+  for (const os of ['ios', 'android']) {
+    const privateTurn = harness(os);
+    const session = privateTurn.session;
+    const transcripts = [];
+    let finished = 0;
+    let connections = 0;
+    session.connectionOptions = {localTranscriptOnly: true};
+    session.currentTranscript = 'Il mio gatto si chiama Nina';
+    session.callbacks.onFinal = text => transcripts.push(text);
+    session.callbacks.onDone = () => finished++;
+    session.connectForFinal = async () => { connections++; };
+    const firstFinal = session.dispatchFinalAndReleaseFocus();
+    await privateTurn.drive(500);
+    await firstFinal;
+    await session.dispatchFinalAndReleaseFocus();
+    assert.deepEqual(transcripts, ['Il mio gatto si chiama Nina']);
+    assert.equal(finished, 1);
+    assert.equal(connections, 0);
+  }
+  console.log('PASS iOS/Android simulated final dispatch: one transcript, no legacy socket');
   const h = harness('ios');
   h.session.autoEndpoint = false;
   await h.start();
