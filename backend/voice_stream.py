@@ -313,7 +313,7 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
         if text and any(m in low for m in _HALLUCINATION_MARKERS):
             logger.info(
                 f"[voice_stream sess={session_short}] STT hallucination "
-                f"(marker) detected → fallback Deepgram (was: {text!r})"
+                f"(marker) detected → fallback Deepgram (chars={len(text or '')})"
             )
             return None
         # === FIX 2026-07-11 (Fabio) — Progressive enumeration hallucination ===
@@ -330,8 +330,8 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
                 if is_progressive and nums[0] <= 3:  # inizia da 1, 2 o 3
                     logger.info(
                         f"[voice_stream sess={session_short}] STT hallucination "
-                        f"(progressive enumeration {nums}) → fallback Deepgram "
-                        f"(was: {text!r})"
+                        f"(progressive enumeration {len(nums)}) → fallback Deepgram "
+                        f"(chars={len(text or '')})"
                     )
                     return None
         except Exception:
@@ -359,7 +359,7 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
                     logger.info(
                         f"[voice_stream sess={session_short}] STT hallucination "
                         f"(sentence-level repetition) → fallback Deepgram "
-                        f"(was: {text!r})"
+                        f"(chars={len(text or '')})"
                     )
                     return None
         except Exception:
@@ -389,7 +389,7 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
                     logger.info(
                         f"[voice_stream sess={session_short}] STT hallucination "
                         f"(repetition run={max_run}) → fallback Deepgram "
-                        f"(was: {text!r})"
+                        f"(chars={len(text or '')})"
                     )
                     return None
         except Exception:
@@ -452,7 +452,7 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
                     logger.info(
                         f"[voice_stream sess={session_short}] STT hallucination "
                         f"(nonsense: {n} long words, no functional) → fallback Deepgram "
-                        f"(was: {text!r})"
+                        f"(chars={len(text or '')})"
                     )
                     return None
         except Exception:
@@ -460,7 +460,7 @@ async def transcribe_pcm_with_whisper(pcm_bytes: bytes, session_short: str = "?"
         logger.info(
             f"[voice_stream sess={session_short}] STT_MODEL=whisper-1 "
             f"pcm={len(pcm_bytes)}B ({len(pcm_bytes)/32000:.1f}s) "
-            f"ms={elapsed_ms} text={text!r}"
+            f"ms={elapsed_ms} chars={len(text or '')}"
         )
         return text if text else None
     except asyncio.TimeoutError:
@@ -516,8 +516,6 @@ DG_PARAMS = {
         "autista", "furgone", "camion", "autostrada",
         "consegna", "consegne", "pacco", "pacchi", "corriere",
         "uscita", "ingresso", "casello", "svincolo",
-        # Nomi luoghi ricorrenti nei log Fabio
-        "Fiano", "Capena", "Monterotondo", "Roma", "Lazio",
     ],
 }
 
@@ -1367,8 +1365,11 @@ async def voice_stream_handler(
         except json.JSONDecodeError:
             await emit_to_client({"type": "error", "message": "invalid start JSON"})
             return
-        if start_req.get("type") != "start":
+        if not isinstance(start_req, dict) or start_req.get("type") != "start":
             await emit_to_client({"type": "error", "message": "expected type=start as first frame"})
+            return
+        if start_req.get("local_memory_context") is not None:
+            await emit_to_client({"type": "error", "message": "Local memory unavailable on voice transport"})
             return
         profile_lang = (start_req.get("profile_lang") or "it").lower()
         ephemeral = bool(start_req.get("ephemeral", False))
@@ -1422,7 +1423,7 @@ async def voice_stream_handler(
             f"ephemeral={ephemeral} container={container} "
             f"stt_source={stt_source} "
             f"audio_route={audio_route!r} "
-            f"city={location_city!r} region={location_region!r} country={location_country!r} "
+            f"location_present={bool(location_city)} "
             f"client_voice_id={client_voice_id!r}"
         )
 
@@ -1463,6 +1464,11 @@ async def voice_stream_handler(
                     msg = json.loads(raw_msg)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(msg, dict):
+                    continue
+                if msg.get("local_memory_context") is not None:
+                    await emit_to_client({"type": "error", "message": "Local memory unavailable on voice transport"})
+                    return
                 mtype = msg.get("type")
                 if mtype == "ping":
                     # keepalive → ignora silenziosamente
@@ -1491,7 +1497,7 @@ async def voice_stream_handler(
                     logger.info(
                         f"[KODA_STREAM sess={short_id}] transcript_from_client engine={engine} "
                         f"lang={lang} conf={conf_num} dur_ms={dur_int} "
-                        f"text_len={len(text_raw)} text={text_raw!r}"
+                        f"text_len={len(text_raw)}"
                     )
                     transcript_received = True
                     # Emetti stt_final subito così il client passa in "thinking"
@@ -1560,40 +1566,15 @@ async def voice_stream_handler(
         client_key = _get_client_key_from_ws(websocket)
         quality_hint = get_adaptive_quality_hint(client_key)
         logger.info(
-            f"[KODA_STREAM sess={short_id}] adaptive: client_key={client_key} "
+            f"[KODA_STREAM sess={short_id}] adaptive: "
             f"quality_hint={quality_hint!r}"
         )
         # Params Deepgram tunati per la audio route corrente + quality hint.
         dg_params_dyn = dg_params_for_route(audio_route, quality_hint=quality_hint)
 
-        # === P2 USER-ADAPTIVE VOCAB (2026-07-15, richiesta utente) ===
-        # Estrae le parole ricorrenti dal `taccuino_timeline` dell'utente
-        # e le aggiunge ai `keyterm` di Deepgram Nova-3. Boosta il
-        # riconoscimento di nomi propri, termini tecnici del suo dominio
-        # e gergo personale. Vedi user_vocab_service.py per dettagli.
-        try:
-            if uid and uid != "me":
-                from user_vocab_service import get_user_keyterms
-                user_terms = await get_user_keyterms(db, uid, max_words=25)
-                if user_terms:
-                    existing = list(dg_params_dyn.get("keyterm", []) or [])
-                    # Dedup case-insensitive: se una parola c'è già nei keyterm
-                    # statici (es. "furgone" nel preset Fabio) non la ripetiamo.
-                    existing_lower = {str(x).lower() for x in existing}
-                    new_terms = [t for t in user_terms if t.lower() not in existing_lower]
-                    if new_terms:
-                        dg_params_dyn["keyterm"] = existing + new_terms
-                        logger.info(
-                            f"[KODA_STREAM sess={short_id}] user_vocab injected: "
-                            f"+{len(new_terms)} personal keyterms "
-                            f"(top5={new_terms[:5]})"
-                        )
-        except Exception as _uv_err:
-            logger.warning(
-                f"[KODA_STREAM sess={short_id}] user_vocab injection failed: {_uv_err}"
-            )
-
+        # Keep recognition hints independent of personal history.
         dg = DeepgramLiveSession(session_id=session_id, dg_params=dg_params_dyn)
+
         try:
             await dg.connect()
         except Exception as e:
@@ -1723,7 +1704,7 @@ async def voice_stream_handler(
                         # v58.3: pipeline triggerata anche su testo vuoto → canned reply
                         logger.info(
                             f"[KODA_STREAM sess={short_id}] "
-                            f"UtteranceEnd → trigger pipeline (text={final_text!r})"
+                            f"UtteranceEnd → trigger pipeline (chars={len(final_text or '')})"
                         )
                         pcm_snapshot = bytes(utterance_pcm_buffer)
                         utterance_pcm_buffer.clear()
@@ -1768,7 +1749,7 @@ async def voice_stream_handler(
             if pipeline_in_flight:
                 logger.info(
                     f"[KODA_STREAM sess={short_id}] _trigger_pipeline SKIP "
-                    f"(already in flight) — caller text={final_text!r}"
+                    f"(already in flight) — caller chars={len(final_text or '')}"
                 )
                 return
             pipeline_in_flight = True
@@ -1842,19 +1823,19 @@ async def voice_stream_handler(
                     transcript_used = whisper_text
                     logger.info(
                         f"[KODA_STT_OVERRIDE sess={short_id}] "
-                        f"deepgram={final_text!r} conf={conf_snapshot} "
-                        f"whisper={whisper_text!r} "
+                        f"deepgram={len(final_text or '')} conf={conf_snapshot} "
+                        f"whisper={len(whisper_text or '')} "
                         f"→ using WHISPER (suspicious={suspicious})"
                     )
                 else:
                     logger.info(
                         f"[KODA_STT_OVERRIDE sess={short_id}] "
-                        f"whisper unavailable → using DEEPGRAM: {final_text!r}"
+                        f"whisper unavailable → using DEEPGRAM: {len(final_text or '')}"
                     )
             elif skip_whisper:
                 logger.info(
                     f"[KODA_STT_OVERRIDE sess={short_id}] "
-                    f"skip whisper (dg_conf={conf_snapshot} high) → deepgram={final_text!r}"
+                    f"skip whisper (dg_conf={conf_snapshot} high) → deepgram={len(final_text or '')}"
                 )
                 logger.info(
                     f"[KODA_PIPELINE_STT sess={short_id}] "
@@ -1983,7 +1964,7 @@ async def voice_stream_handler(
                 # safety-net.
                 logger.info(
                     f"[KODA_STREAM sess={short_id}] quick-quality OK: "
-                    f"text={partial_text!r} conf={conf_now} → normal flow"
+                    f"chars={len(partial_text or '')} conf={conf_now} → normal flow"
                 )
                 return
 
@@ -1992,7 +1973,7 @@ async def voice_stream_handler(
             # in _fast_pipeline_task che emetterà la frase "non ti ho sentito".
             logger.warning(
                 f"[KODA_STREAM sess={short_id}] QUICK_QUALITY_FAIL after "
-                f"{QUICK_QUALITY_CHECK_S}s: text={partial_text!r} "
+                f"{QUICK_QUALITY_CHECK_S}s: chars={len(partial_text or '')} "
                 f"conf={conf_now} → canned reply now (skip Whisper, skip 25s watchdog)"
             )
             pcm_snapshot = bytes(utterance_pcm_buffer)
@@ -2037,7 +2018,7 @@ async def voice_stream_handler(
                 logger.warning(
                     f"[KODA_STREAM sess={short_id}] WATCHDOG: no stt_final "
                     f"in {elapsed:.1f}s buffer={buf_size}B "
-                    f"partial_text={partial_text!r} → forcing fallback transcribe"
+                    f"partial_chars={len(partial_text or '')} → forcing fallback transcribe"
                 )
                 pcm_snapshot = bytes(utterance_pcm_buffer)
                 utterance_pcm_buffer.clear()
@@ -2102,7 +2083,7 @@ async def voice_stream_handler(
                     continue
                 logger.info(
                     f"[KODA_STREAM sess={short_id}] SENTENCE_END punct-triggered "
-                    f"(quiet={elapsed_ms:.0f}ms, text={final_text!r})"
+                    f"(quiet={elapsed_ms:.0f}ms, chars={len(final_text or '')})"
                 )
                 pcm_snapshot = bytes(utterance_pcm_buffer)
                 utterance_pcm_buffer.clear()
