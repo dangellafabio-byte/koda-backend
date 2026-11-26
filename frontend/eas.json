@@ -94,6 +94,20 @@
         "EXPO_PUBLIC_USE_WS_VOICE_STREAM": "true"
       },
       "channel": "inworld-ab"
+    },
+    "memoria-device-ios": {
+      "distribution": "internal",
+      "environment": "preview",
+      "ios": {
+        "simulator": false,
+        "buildConfiguration": "Release"
+      },
+      "env": {
+        "OLLENYA_LOCAL_MEMORY_APP_CANDIDATE": "1",
+        "OLLENYA_ISOLATED_BUILD": "1",
+        "EXPO_PUBLIC_USE_CLIENT_STT": "true",
+        "EXPO_PUBLIC_USE_WS_VOICE_STREAM": "true"
+      }
     }
   },
   "submit": {
