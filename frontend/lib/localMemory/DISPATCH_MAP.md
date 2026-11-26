@@ -1,0 +1,6 @@
+# Phase 16 — dispatch audit, stable 97dbf4d candidate
+- `app/index.tsx` sendText: after safety preflight; standard `api.converse` supports local_memory_context. Fast path uses `speech.ts` fastConverseWS / fastConverse; fallback must not produce duplicate proposals.
+- `app/index.tsx` stopTalk legacy PTT transcribes uploaded audio then calls sendText. Native PTT/HF bypass sendText: `voiceClientStt.ts` dispatchFinalAndReleaseFocus sends transcript_from_client after connectForFinal. Use session-bound authenticated account and ephemeral state, not a global current-account lookup. Never use onFinal before successful dispatch as a persistence trigger.
+- Backend FastStartRequest and voice_stream.py transcript_from_client do not yet accept local context. Add explicit validated fields and pass to fast pipeline before enabling voice. Existing server flag only covers /converse.
+- Lascia andare must never import dispatch adapter or speech/network modules. Demo, ephemeral, logout and stale sessions excluded.
+- Adapter is not yet invoked by production call sites. Default deadline 40ms is provisional; timeout does not cancel underlying read. No writes or native initialization. Do not enable until authenticated account binding, server parity and native build verified.
