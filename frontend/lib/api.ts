@@ -245,6 +245,11 @@ async function jsonReq<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  deviceMemoryText: (text: string, context: string, token: string, voice = false) =>
+    jsonReq<{user_entry: TimelineEntry; ai_entry: TimelineEntry; audio_mp3?: string}>(voice ? '/local-memory/converse-fast' : '/local-memory/converse', {
+      method: 'POST', headers: {Authorization: 'Bearer ' + token},
+      body: JSON.stringify({text, context}),
+    }),
   getProfile: async () => {
     // === DEV BYPASS v65.21 (Fabio) ==========================================
     // Se SecureStore ha `koda_dev_force_free_tier=1`, aggiungiamo ?force_free=1
@@ -287,7 +292,7 @@ export const api = {
   converse: (
     text: string,
     audio_duration_ms?: number,
-    opts?: { ephemeral?: boolean; bridged_secrets?: string[]; is_voice_turn?: boolean; demo_mode?: boolean; location_city?: string }
+    opts?: { ephemeral?: boolean; bridged_secrets?: string[]; is_voice_turn?: boolean; demo_mode?: boolean; location_city?: string; local_memory_context?: string }
   ) =>
     jsonReq<{
       user_entry: TimelineEntry;
@@ -308,6 +313,7 @@ export const api = {
         // recent_docs → Ollenya risponde SENZA memoria pregressa dell'utente.
         demo_mode: !!opts?.demo_mode,
         location_city: opts?.ephemeral || opts?.demo_mode ? undefined : opts?.location_city,
+        local_memory_context: opts?.ephemeral || opts?.demo_mode ? undefined : opts?.local_memory_context,
         // PORTA FUORI: segreti DECRIFRATI dal client con la parola segreta,
         // inviati one-shot al backend solo per questo turno (forza ephemeral).
         // La parola segreta NON viene mai inviata.
@@ -501,6 +507,10 @@ export const api = {
 
   /** Ricordi semantici (long-term memory, giugno 2026).
    *  source ora è sempre "chat" (Confessionale rimosso in Blocco B). */
+  listLocalMemoryImport: (sessionToken: string) =>
+    jsonReq<{ candidates: unknown }>("/local-memory/import-preview", {
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    }),
   listMemories: (limit = 50, source?: "chat") => {
     const q = source ? `?limit=${limit}&source=${source}` : `?limit=${limit}`;
     return jsonReq<{
@@ -650,6 +660,9 @@ export const api = {
    *   2. Mostrare Eclissi in stato AMBRA
    *   3. Riprodurre advisory_message via TTS
    *   4. Mostrare le resources nella UI con numeri cliccabili */
+  deviceSafety: (text: string) => jsonReq<SafetyCheckResult>('/local-memory/safety', {
+    method: 'POST', body: JSON.stringify({text}),
+  }),
   safetyCheck: (text: string, skip_llm: boolean = false) =>
     jsonReq<SafetyCheckResult>("/safety/check", {
       method: "POST",

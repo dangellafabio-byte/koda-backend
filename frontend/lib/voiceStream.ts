@@ -857,7 +857,7 @@ export class VoiceStreamSession {
       this.callbacks.onInterim?.(evt.text || "", !!evt.is_final);
     } else if (type === "stt_final") {
       console.log(
-        `[OLLENYA_STREAM_CLIENT] stt_final text=${(evt.text || "").slice(0, 60)}... ` +
+        `[OLLENYA_STREAM_CLIENT] stt_final chars=${(evt.text || "").length} ` +
           `conf=${evt.confidence} dur=${evt.audio_duration_ms}ms`
       );
       this.callbacks.onFinal?.(
@@ -881,7 +881,7 @@ export class VoiceStreamSession {
       // Salva header → il prossimo binary frame conterrà l'audio
       console.log(
         `[OLLENYA_STREAM_CLIENT] sentence_header i=${evt.i} ` +
-          `text="${(evt.text || "").slice(0, 40)}" bytes=${evt.audio_bytes}`
+          `chars=${(evt.text || "").length} bytes=${evt.audio_bytes}`
       );
       this.pendingSentenceHeader = {
         i: evt.i,

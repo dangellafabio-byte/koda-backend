@@ -23,12 +23,16 @@
  *   3. Fine.
  */
 
+import Constants from "expo-constants";
+
 // === Backend hardcoded — Railway ==============================
 // Verificato online e responsive il 2026-07-19 (WS ready, /api ok).
 // NON toccare senza aver testato prima con:
 //   curl https://<new-url>/api/  → deve rispondere 200 con status:ok
-export const KODA_BACKEND_URL =
-  "https://koda-backend-production-4a34.up.railway.app";
+const extra = Constants.expoConfig?.extra;
+export const KODA_BACKEND_URL = extra?.ollenyaLocalMemoryReview === true
+  ? extra.ollenyaMemoryReviewBackend || "http://localhost:8001"
+  : "https://koda-backend-production-4a34.up.railway.app";
 
 /**
  * Costruisce l'URL WebSocket per l'endpoint /api/voice/stream.

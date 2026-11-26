@@ -277,6 +277,7 @@ export class VoiceClientSttSession {
   }
 
   async start(opts?: {
+    localTranscriptOnly?: boolean;
     ephemeral?: boolean;
     profileLang?: string;
     locationCity?: string;
@@ -612,8 +613,7 @@ export class VoiceClientSttSession {
           );
         } else {
           // Log leggero per ridurre spam. Solo primi 40 char.
-          const short = norm.transcript.slice(0, 40);
-          console.log(`[${TAG}] result partial="${short}${norm.transcript.length > 40 ? "…" : ""}"`);
+          console.log(`[${TAG}] result partial_chars=${norm.transcript.length}`);
         }
       }
     );
@@ -915,7 +915,7 @@ export class VoiceClientSttSession {
       : null;
 
     console.log(
-      `[${TAG}] dispatch → backend text="${text.slice(0, 60)}${text.length > 60 ? "…" : ""}" ` +
+      `[${TAG}] dispatch → backend chars=${text.length} ` +
         `conf=${conf} dur=${durMs}ms route=${this.audioRoute}`
     );
 
@@ -1040,6 +1040,11 @@ export class VoiceClientSttSession {
     if (!/[\p{L}\p{N}]/u.test(text)) {
       this.doneReceived = true;
       this.callbacks.onError?.("no_speech");
+      return;
+    }
+    if (this.connectionOptions?.localTranscriptOnly) {
+      this.doneReceived = true;
+      this.callbacks.onDone?.();
       return;
     }
     try {
@@ -1409,7 +1414,7 @@ export class VoiceClientSttSession {
         // ri-innescare onFinal qui causerebbe doppio recording→thinking
         // e possibili glitch UI. Quindi LOG-ONLY, no callback.
         console.log(
-          `[${TAG}] stt_final echo (server confirm) text="${(msg.text || "").slice(0, 40)}" — ignoring (already dispatched client-side)`
+          `[${TAG}] stt_final echo (server confirm) chars=${(msg.text || "").length} — ignoring (already dispatched client-side)`
         );
         break;
       case "sentence":
@@ -1431,7 +1436,7 @@ export class VoiceClientSttSession {
           mime: msg.mime || "audio/mpeg",
         };
         console.log(
-          `[${TAG}] sentence i=${msg.i || 0} text="${(msg.text || "").slice(0, 40)}${(msg.text || "").length > 40 ? "…" : ""}" bytes=${msg.audio_bytes || 0}`
+          `[${TAG}] sentence i=${msg.i || 0} chars=${(msg.text || "").length} bytes=${msg.audio_bytes || 0}`
         );
         break;
       case "meta":

@@ -1254,7 +1254,7 @@ export async function fastConverse(
                   `tts_voice_id=${(ev.tts_voice_id ?? "?").toString().slice(0, 12)}... ` +
                   `tts_lang=${ev.tts_lang ?? "?"} ` +
                   `tts_model=${ev.tts_model ?? "?"} ` +
-                  `reply_preview=${JSON.stringify(ev.reply_preview ?? "").slice(0, 160)}`
+                  `reply_chars=${(ev.reply || "").length}`
                 );
               }
               meta = {
@@ -1531,6 +1531,10 @@ async function _writeMp3ToFile(bytes: Uint8Array, idx: number): Promise<string |
  *  Se la scrittura su FS hanga o fallisce, riproduciamo il MP3 direttamente
  *  da memoria via data URI. Più lento del FS path normalmente, ma non
  *  dipende dal lock del FileSystem iOS → bypassa il hang. */
+export async function playPrivateVoice(mp3: string): Promise<boolean> {
+  return playElevenLabsNativeFromUrl('data:audio/mpeg;base64,' + mp3);
+}
+
 async function _playMp3FromMemoryFallback(
   bytes: Uint8Array,
   onStart?: () => void,
@@ -1865,6 +1869,7 @@ export async function fastConverseWS(
 
 // ---------- Public API ----------
 export const SpeechMod = {
+  playPrivateVoice,
   isSpeaking(): boolean {
     return speakingNow;
   },
@@ -2028,6 +2033,7 @@ export async function voiceStreamConverse(opts: {
   autoEndpoint?: boolean;
   ephemeral?: boolean;
   profileLang?: string;
+  localTranscriptOnly?: boolean;
   timeoutMs?: number;
   // === FIX 2026-07-26 v64.4 — voiceId client-authoritative ===
   // Se fornito, viene passato al server nel frame `start` del WS.
@@ -2506,7 +2512,7 @@ export async function voiceStreamConverse(opts: {
         locRegion = cached.region;
         locCountry = cached.country;
         console.log(
-          `[OLLENYA_GEO] voiceStreamConverse → injecting ${locCity} (${locRegion || "?"}, ${locCountry || "?"})`
+          `[OLLENYA_GEO] voiceStreamConverse → location available`
         );
       } else {
         console.log(`[OLLENYA_GEO] voiceStreamConverse → no cached location (Ollenya non saprà la città)`);
@@ -2531,6 +2537,7 @@ export async function voiceStreamConverse(opts: {
 
     await session.start({
       autoEndpoint: opts.autoEndpoint,
+      localTranscriptOnly: opts.localTranscriptOnly,
       ephemeral: opts.ephemeral,
       profileLang: opts.profileLang || "it",
       locationCity: locCity,
