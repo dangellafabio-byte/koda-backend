@@ -26,6 +26,13 @@ class TestCacheBoundary(unittest.TestCase):
                         OLLENYA_PRODUCT_NAME='Ollenya',
                         CLAUDE_MODEL_ID='claude-haiku-5-5',
                         logger=logging.getLogger(__name__))
+        policy = next(
+            node.value for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == '_CONVERSATION_FLOW_POLICY'
+                    for target in node.targets)
+        )
+        self.env['_CONVERSATION_FLOW_POLICY'] = ast.literal_eval(policy)
         exec(compile(ast.Module(body=nodes, type_ignores=[]), 'server_functions', 'exec'), self.env)
 
     def messages(self, memory, recent, trial='active', extra=''):
